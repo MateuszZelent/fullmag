@@ -33,12 +33,14 @@ struct FdmRegionLegendEntryIR { numeric_id: u32, object_id: String, region_id: S
 - [x] Dodać posortowaną legendę i digest do `FdmGridCertificateIR`; planner single-grid materializuje ją deterministycznie z canonical region IDs.
 - [x] Walidować każdy mask ID względem legendy; brak legendy lub nieznany numeric ID kończy się stabilnym fail-closed błędem w certyfikacie.
 - [x] Opublikować legendę i digest w `mesh_runtime_metadata` jako mały, inspekcyjny kontrakt.
-- [ ] Zapisać mask/legend/grid-certificate identity w artefakcie i udostępnić scoped binary endpoint z ETag membership revision.
+- [x] Zapisać mask/legend/grid-certificate identity w artefaktach `mesh/fdm_region_membership.v1.{json,bin}`; binary payload używa wersjonowanego formatu `FMRM:u32_le`.
+- [ ] Udostępnić scoped binary endpoint z ETag membership revision.
 - [ ] Viewport i Inspector używają realized mask dla aktywnego gridu; preview jest jawnie oznaczony.
 
 ### Task 3: proof
 
 - [x] Uruchomić focused IR/planner/runner tests: legend digest, object-region materialization oraz runtime metadata (1/1 każdy).
+- [x] Runner artifact test potwierdza descriptor, legendę, `FMRM` header i mask length.
 - [ ] Uruchomić planner/runner/API binary codec tests, OpenAPI hygiene, focused viewport tests i browser smoke dla mask switching.
 - [ ] Commit: `git add crates/fullmag-ir crates/fullmag-plan crates/fullmag-runner crates/fullmag-api apps/control-room && git commit -m "feat(fdm): publish realized region membership"`.
 

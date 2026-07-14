@@ -1122,6 +1122,9 @@ pub(crate) fn write_artifacts(
         &execution_provenance,
     ));
     auxiliary_artifacts.extend(crate::fdm::artifacts::transfer_provenance_artifacts(plan));
+    let fdm_region_membership_artifacts = crate::fdm::artifacts::region_membership_artifacts(plan)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    auxiliary_artifacts.extend(fdm_region_membership_artifacts);
     for artifact in &auxiliary_artifacts {
         let artifact_path = output_dir.join(&artifact.relative_path);
         if let Some(parent) = artifact_path.parent() {
@@ -3144,6 +3147,55 @@ mod tests {
         assert_eq!(value["resolved"]["padded_counts"], serde_json::json!([4, 4, 2]));
         assert_eq!(value["resolved"]["fft_backend"], "rustfft");
         assert_eq!(value["resolved"]["periodic_images"]["kernel"], "newell_truncated_images_fft");
+    }
+
+    #[test]
+    fn fdm_region_membership_artifact_persists_binary_mask_and_legend_identity() {
+        let mut plan = test_execution_plan(None);
+        let BackendPlanIR::Fdm(fdm) = &mut plan.backend_plan else {
+            panic!("expected FDM plan");
+        };
+        fdm.region_mask = vec![1, 1, 2, 2, 0, 0, 1, 2];
+        fdm.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_masks(
+                fdm.origin_m,
+                fdm.grid.cells,
+                fdm.cell_size,
+                8,
+                1024,
+                None,
+                &fdm.region_mask,
+            )
+            .expect("FDM region certificate should be valid")
+            .with_region_legend(vec![
+                fullmag_ir::FdmRegionLegendEntryIR {
+                    numeric_id: 1,
+                    object_id: "body".to_string(),
+                    region_id: "body:core".to_string(),
+                    priority: 0,
+                },
+                fullmag_ir::FdmRegionLegendEntryIR {
+                    numeric_id: 2,
+                    object_id: "body".to_string(),
+                    region_id: "body:shell".to_string(),
+                    priority: -1,
+                },
+            ]),
+        );
+
+        let artifacts = crate::fdm::artifacts::region_membership_artifacts(&plan)
+            .expect("membership artifacts should be produced");
+        assert_eq!(artifacts.len(), 2);
+        assert_eq!(artifacts[0].relative_path, "mesh/fdm_region_membership.v1.json");
+        assert_eq!(artifacts[1].relative_path, "mesh/fdm_region_membership.v1.bin");
+        let descriptor: serde_json::Value = serde_json::from_slice(&artifacts[0].bytes)
+            .expect("membership descriptor should be JSON");
+        assert_eq!(descriptor["schema_version"], "fdm_region_membership.v1");
+        assert_eq!(descriptor["cell_count"], 8);
+        assert_eq!(descriptor["region_legend"].as_array().unwrap().len(), 2);
+        assert_eq!(&artifacts[1].bytes[..4], b"FMRM");
+        assert_eq!(artifacts[1].bytes[4], 1);
+        assert_eq!(artifacts[1].bytes.len(), 64 + 8 * std::mem::size_of::<u32>());
     }
 
     #[test]

@@ -30,6 +30,101 @@ pub(crate) fn grid_certificate_artifacts(
     }]
 }
 
+/// Persist realized single-grid FDM region membership on the data plane.
+///
+/// The numeric mask is intentionally kept out of thin JSON metadata.  The
+/// companion JSON document contains only the grid/legend identity needed to
+/// decode and scope the binary payload.
+pub(crate) fn region_membership_artifacts(
+    plan: &ExecutionPlanIR,
+) -> Result<Vec<AuxiliaryArtifact>, String> {
+    let BackendPlanIR::Fdm(fdm) = &plan.backend_plan else {
+        return Ok(Vec::new());
+    };
+    if fdm.region_mask.is_empty() {
+        return Ok(Vec::new());
+    }
+    let certificate = fdm
+        .grid_certificate
+        .as_ref()
+        .ok_or_else(|| "FDM region membership requires a grid certificate".to_string())?;
+    certificate.validate_against_masks(fdm.active_mask.as_deref(), &fdm.region_mask)?;
+    let expected_cells = usize::try_from(
+        u64::from(fdm.grid.cells[0])
+            .checked_mul(u64::from(fdm.grid.cells[1]))
+            .and_then(|value| value.checked_mul(u64::from(fdm.grid.cells[2])))
+            .ok_or_else(|| "FDM region membership cell count overflows u64".to_string())?,
+    )
+    .map_err(|_| "FDM region membership cell count is not addressable".to_string())?;
+    if fdm.region_mask.len() != expected_cells {
+        return Err(format!(
+            "FDM region membership mask length {} disagrees with grid cell count {}",
+            fdm.region_mask.len(), expected_cells
+        ));
+    }
+
+    let fingerprint = decode_grid_fingerprint(&certificate.grid_fingerprint)?;
+    let mut binary = Vec::with_capacity(64 + fdm.region_mask.len() * std::mem::size_of::<u32>());
+    binary.extend_from_slice(b"FMRM");
+    binary.push(1); // format version
+    binary.push(1); // payload kind: u32 region IDs
+    binary.extend_from_slice(&0u16.to_le_bytes());
+    for count in fdm.grid.cells {
+        binary.extend_from_slice(&count.to_le_bytes());
+    }
+    binary.extend_from_slice(&(fdm.region_mask.len() as u32).to_le_bytes());
+    binary.extend_from_slice(&(certificate.region_legend.len() as u32).to_le_bytes());
+    binary.extend_from_slice(&fingerprint);
+    binary.extend_from_slice(&[0u8; 4]);
+    for region_id in &fdm.region_mask {
+        binary.extend_from_slice(&region_id.to_le_bytes());
+    }
+
+    let descriptor = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": "fdm_region_membership.v1",
+        "binary_path": "mesh/fdm_region_membership.v1.bin",
+        "grid_fingerprint": certificate.grid_fingerprint,
+        "region_legend_fingerprint": certificate.region_legend_fingerprint,
+        "origin_m": certificate.origin_m,
+        "counts": certificate.counts,
+        "cell_m": certificate.cell_m,
+        "cell_count": fdm.region_mask.len(),
+        "region_legend": certificate.region_legend,
+        "encoding": "FMRM:u32_le",
+    }))
+    .map_err(|error| format!("FDM region membership descriptor serialization failed: {error}"))?;
+    Ok(vec![
+        AuxiliaryArtifact {
+            relative_path: "mesh/fdm_region_membership.v1.json".to_string(),
+            bytes: descriptor,
+        },
+        AuxiliaryArtifact {
+            relative_path: "mesh/fdm_region_membership.v1.bin".to_string(),
+            bytes: binary,
+        },
+    ])
+}
+
+fn decode_grid_fingerprint(value: &str) -> Result<[u8; 32], String> {
+    if value.len() != 64 {
+        return Err(format!(
+            "FDM grid fingerprint must contain 64 hexadecimal characters, got {}",
+            value.len()
+        ));
+    }
+    let mut bytes = [0u8; 32];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let high = (chunk[0] as char)
+            .to_digit(16)
+            .ok_or_else(|| "FDM grid fingerprint contains non-hexadecimal data".to_string())?;
+        let low = (chunk[1] as char)
+            .to_digit(16)
+            .ok_or_else(|| "FDM grid fingerprint contains non-hexadecimal data".to_string())?;
+        bytes[index] = ((high << 4) | low) as u8;
+    }
+    Ok(bytes)
+}
+
 /// Persist the resolved native-to-convolution transfer contract for a
 /// multilayer FDM run.  The artifact is intentionally derived from the
 /// planner certificate and periodicity, never from runtime-local grid state.
