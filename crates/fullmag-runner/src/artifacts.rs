@@ -1128,7 +1128,11 @@ pub(crate) fn write_artifacts(
     }
 
     if should_write_plan_periodic_pairs_artifact(plan, executed) {
-        write_periodic_pairs_artifact(output_dir, plan)?;
+        write_periodic_pairs_artifact(
+            output_dir,
+            plan,
+            problem_source_scene_revision(problem),
+        )?;
     }
     write_fem_supercell_node_geometry_artifact(output_dir, problem, plan)?;
     write_static_pbc_demag_seam_diagnostics_artifact(
@@ -1400,9 +1404,25 @@ fn material_field_unit(parameter: fullmag_ir::MaterialParameterNameIR) -> &'stat
     }
 }
 
+fn problem_source_scene_revision(problem: &fullmag_ir::ProblemIR) -> Option<u64> {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("mesh_source_scene_revision")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            problem
+                .problem_meta
+                .runtime_metadata
+                .get("source_scene_revision")
+                .and_then(serde_json::Value::as_u64)
+        })
+}
+
 fn write_periodic_pairs_artifact(
     output_dir: &Path,
     plan: &fullmag_ir::ExecutionPlanIR,
+    source_scene_revision: Option<u64>,
 ) -> std::io::Result<()> {
     let Some(mesh) = periodic_mesh(plan) else {
         return Ok(());
@@ -1543,6 +1563,7 @@ fn write_periodic_pairs_artifact(
         "artifact_path": "mesh/periodic_pairs.v1.json",
         "topology_fingerprint": mesh_topology_fingerprint,
         "mesh_generation_id": solver_mesh_signature(mesh),
+        "source_scene_revision": source_scene_revision,
         "certificate_status": certificate_status,
         "certificate_fingerprint": certificate.as_ref().ok().and_then(|certificate| {
             serde_json::to_vec(certificate).ok().map(|payload| {
@@ -5081,7 +5102,7 @@ mod tests {
             unique_suffix
         ));
 
-        write_periodic_pairs_artifact(&output_dir, &plan)
+        write_periodic_pairs_artifact(&output_dir, &plan, Some(46))
             .expect("periodic pairs artifact should be written");
 
         let artifact: serde_json::Value = serde_json::from_str(
@@ -5093,6 +5114,7 @@ mod tests {
         assert_eq!(artifact["artifact_path"], "mesh/periodic_pairs.v1.json");
         assert_eq!(artifact["validation_status"], "ok");
         assert!(artifact["mesh_generation_id"].as_str().is_some());
+        assert_eq!(artifact["source_scene_revision"], 46);
         assert!(artifact["certificate_fingerprint"].as_str().is_some());
         assert_eq!(artifact["certificate_status"], "accepted");
         assert!(artifact["certificate"]["marker_map_fingerprint"]
@@ -5243,7 +5265,7 @@ mod tests {
             "fullmag-artifacts-periodic-uncertified-{}",
             std::process::id()
         ));
-        write_periodic_pairs_artifact(&output_dir, &plan)
+        write_periodic_pairs_artifact(&output_dir, &plan, None)
             .expect("periodic pairs artifact should record failed certificate evidence");
         let artifact: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(output_dir.join("mesh/periodic_pairs.v1.json"))
@@ -5442,7 +5464,7 @@ mod tests {
             unique_suffix
         ));
 
-        write_periodic_pairs_artifact(&output_dir, &plan)
+        write_periodic_pairs_artifact(&output_dir, &plan, None)
             .expect("frequency-response periodic pairs artifact should be written");
 
         let artifact: serde_json::Value = serde_json::from_str(

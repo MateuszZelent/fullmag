@@ -51,3 +51,11 @@ fn periodic_pairs_artifact(cert: &PeriodicMeshCertificateV6) -> Result<PeriodicP
 - `validate_periodic_certificate_identity` ma focused stale-topology rejection test; persisted artifact zapisuje `mesh_generation_id` i `certificate_fingerprint`.
 - API `mesh_periodic_pairs` suite — 7 passed; matching persisted artifact is preferred for a live mesh, mismatched artifact is never used.
 - Otwarte: pełne source-scene revision w artifact manifest, binary scoped data-plane contract i managed runtime evidence.
+
+### Evidence update (2026-07-14, source-scene artifact identity)
+
+- [x] `periodic_pairs.v1.json` now persists `source_scene_revision` from the mesh realization metadata; the runner artifact test asserts the field and value.
+- [x] API artifact fallback compares source-scene identity with the current scene/build provenance. A stale artifact is returned as `stale` without being presented as `valid`; a live mesh falls back to the authoritative resource builder.
+- [x] RED/GREEN evidence: the stale matching-topology artifact test failed before (`valid` instead of `stale`), then `cargo test -p fullmag-api mesh_periodic_pairs --no-fail-fast -- --nocapture` passed 8/8 and `cargo test -p fullmag-runner periodic_pairs_artifact --lib --no-fail-fast -- --nocapture` passed 3/3.
+- [x] Manual remesh orchestration carries the command's geometry source revision into problem runtime metadata for artifact emission.
+- [ ] CLI focused test is currently blocked by unrelated pre-existing missing `FemMeshPayload.build_report` and `FemFrequencyResponsePlanIR.mesh_build_report` initializers; binary/scoped PBC data-plane contract and managed runtime remain open.

@@ -2093,6 +2093,18 @@ fn mesh_geometry_realization_json(mesh_options: &serde_json::Value) -> Option<se
         .cloned()
 }
 
+fn mesh_source_scene_revision(mesh_options: &serde_json::Value) -> Option<u64> {
+    mesh_options
+        .get("geometry_realization")
+        .and_then(|value| value.get("source_scene_revision"))
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            mesh_options
+                .get("source_scene_revision")
+                .and_then(serde_json::Value::as_u64)
+        })
+}
+
 fn mesh_build_intent_json(
     mesh_target: &MeshCommandTarget,
     mesh_reason: &str,
@@ -3008,6 +3020,15 @@ fn execute_manual_interactive_remesh(
     let mut remesh_problem_source = base_problem;
     if let Some(patch) = scene_problem_patch.as_ref() {
         apply_scene_problem_patch(&mut remesh_problem_source, patch);
+    }
+    if let Some(source_scene_revision) = mesh_source_scene_revision(&opts) {
+        remesh_problem_source
+            .problem_meta
+            .runtime_metadata
+            .insert(
+                "mesh_source_scene_revision".to_string(),
+                serde_json::json!(source_scene_revision),
+            );
     }
     let mesh_reason = command
         .mesh_reason
@@ -8876,6 +8897,7 @@ mod tests {
         initial_step_update, interactive_session_should_stay_alive,
         live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
         live_step_ingest_preview_len, mesh_build_pipeline_status_json,
+        mesh_source_scene_revision,
         resolved_shared_domain_object_region_markers, scripted_stage_execution_state,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
@@ -8884,6 +8906,23 @@ mod tests {
         SceneProblemPatch, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
         LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
+
+    #[test]
+    fn mesh_source_scene_revision_reads_geometry_realization_contract() {
+        assert_eq!(
+            mesh_source_scene_revision(&serde_json::json!({
+                "geometry_realization": {"source_scene_revision": 46}
+            })),
+            Some(46)
+        );
+        assert_eq!(
+            mesh_source_scene_revision(&serde_json::json!({
+                "source_scene_revision": 47
+            })),
+            Some(47)
+        );
+        assert_eq!(mesh_source_scene_revision(&serde_json::json!({})), None);
+    }
 
     #[test]
     fn cumulative_rhs_evals_sums_all_step_records() {

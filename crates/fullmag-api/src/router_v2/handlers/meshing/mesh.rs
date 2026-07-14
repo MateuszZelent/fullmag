@@ -1411,6 +1411,30 @@ fn periodic_pairs_resource_from_artifact(
             return Ok(None);
         }
     }
+    let artifact_source_scene_revision = value
+        .get("source_scene_revision")
+        .and_then(Value::as_u64);
+    let current_scene_revision = snapshot
+        .scene_document
+        .as_ref()
+        .map(|scene| scene.revision);
+    let expected_build_scene_revision = mesh_build_provenance(snapshot).source_scene_revision;
+    let artifact_stale_reason = match current_scene_revision {
+        Some(current) if artifact_source_scene_revision != Some(current) => Some(format!(
+            "periodic pairs artifact source scene revision {:?} does not match current scene revision {}",
+            artifact_source_scene_revision, current
+        )),
+        _ => match expected_build_scene_revision {
+            Some(expected) if artifact_source_scene_revision != Some(expected) => Some(format!(
+                "periodic pairs artifact source scene revision {:?} does not match mesh build revision {}",
+                artifact_source_scene_revision, expected
+            )),
+            _ => None,
+        },
+    };
+    if live_mesh.is_some() && artifact_stale_reason.is_some() {
+        return Ok(None);
+    }
     if let Some(object) = value.as_object_mut() {
         object
             .entry("revision".to_string())
@@ -1443,6 +1467,17 @@ fn periodic_pairs_resource_from_artifact(
                 "certificate_revision".to_string(),
                 json!(snapshot.mesh_revision),
             );
+        }
+        if let Some(reason) = artifact_stale_reason {
+            if object.get("status").and_then(Value::as_str) == Some("valid") {
+                object.insert("status".to_string(), json!("stale"));
+            }
+            let reasons = object
+                .entry("status_reasons".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Some(reasons) = reasons.as_array_mut() {
+                reasons.push(json!(reason));
+            }
         }
     }
     let resource = serde_json::from_value::<MeshPeriodicPairsResource>(value).map_err(|error| {

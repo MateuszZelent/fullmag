@@ -6932,6 +6932,55 @@ async fn mesh_periodic_pairs_falls_back_to_artifact_file() {
 }
 
 #[tokio::test]
+async fn mesh_periodic_pairs_rejects_artifact_from_stale_scene_revision() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.revision = 46;
+        snapshot.scene_document = Some(scene);
+        snapshot.mesh_workspace = Some(serde_json::json!({
+            "last_build_summary": {"source_scene_revision": 45}
+        }));
+    }
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("mesh artifact dir should be created");
+    fs::write(
+        mesh_dir.join("periodic_pairs.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "periodic_pairs.v1",
+            "source_scene_revision": 45,
+            "validation_status": "ok",
+            "certificate_status": "accepted",
+            "pairs": []
+        }))
+        .expect("stale periodic pairs fixture should serialize"),
+    )
+    .expect("stale periodic pairs artifact should be written");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["status"], "stale");
+    assert_eq!(json["source_scene_revision"], 45);
+    assert!(json["status_reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn eigen_v2_artifact_endpoints_return_json_and_csv_contracts() {
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let eigen_dir = artifact_dir.join("eigen");
