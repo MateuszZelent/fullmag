@@ -2887,6 +2887,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fem_mesh_metadata_preserves_shared_domain_build_report() {
+        let mut plan = test_fem_execution_plan();
+        let report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(
+            serde_json::json!({
+                "build_mode": "generated_shared_domain_mesh",
+                "degraded": false,
+                "authored_regions_count": 2,
+                "realized_regions_count": 2
+            }),
+        )
+        .expect("minimal FEM build report should deserialize");
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+            panic!("expected FEM plan");
+        };
+        fem.mesh_build_report = Some(report.clone());
+
+        let metadata = mesh_runtime_metadata(&plan);
+        assert_eq!(metadata["mesh_build_report"], serde_json::to_value(report).unwrap());
+    }
+
     fn test_multilayer_execution_plan() -> ExecutionPlanIR {
         let layer_material = FdmMaterialIR {
             name: "Py".to_string(),
