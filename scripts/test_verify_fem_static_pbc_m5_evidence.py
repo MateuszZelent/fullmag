@@ -37,6 +37,12 @@ def base_manifest() -> dict:
                 "artifact_fingerprint": fingerprint,
                 "engine": engine,
                 "metrics": {"max_relative_error": 1.0e-3},
+                "observables": {
+                    "H_demag": {"relative_error": 1.0e-3},
+                    "phi": {"relative_error": 1.0e-3},
+                    "energy": {"relative_error": 1.0e-3},
+                    "central_cell": {"relative_error": 1.0e-3},
+                },
             }
             for name, engine in (
                 ("primitive_cell", "cpu"),

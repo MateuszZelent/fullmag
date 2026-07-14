@@ -90,6 +90,20 @@ def validate_manifest(path: Path) -> list[str]:
             error(errors, "case_metric_invalid", case_id)
         elif float(relative_error) < 0.0 or float(relative_error) > MAX_STRICT_RELATIVE_ERROR:
             error(errors, "case_metric_exceeds_strict_limit", case_id)
+        observables = case.get("observables")
+        if not isinstance(observables, dict):
+            error(errors, "case_observables_missing", case_id)
+            continue
+        for observable in ("H_demag", "phi", "energy", "central_cell"):
+            sample = observables.get(observable)
+            if not isinstance(sample, dict):
+                error(errors, "observable_missing", f"{case_id}.{observable}")
+                continue
+            value = sample.get("relative_error")
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                error(errors, "observable_metric_invalid", f"{case_id}.{observable}")
+            elif float(value) < 0.0 or float(value) > MAX_STRICT_RELATIVE_ERROR:
+                error(errors, "observable_metric_exceeds_strict_limit", f"{case_id}.{observable}")
     return errors
 
 
