@@ -45,3 +45,13 @@ pub struct PeriodicFacePairResponse { pub source_face_id: u64, pub destination_f
 
 - `cargo test -p fullmag-api router_v2::tests::mesh_periodic_pairs --no-fail-fast -- --nocapture` — 5 passed, 0 failed.
 - Current API still lacks upstream v6 certified face IDs/residuals; the present guard is fail-closed protection against false positives, not final certificate mapping.
+
+### Evidence update (2026-07-14, certificate-backed API slice)
+
+- [x] API no longer contains nearest-centroid face reconstruction; it rebuilds the backend-neutral `MeshIR` certificate from explicit node/face topology and publishes only v6-certified pairs.
+- [x] Face resources expose stable global IDs, explicit vertex bijections, translation/area residuals, normal orientation and marker identity.
+- [x] Pair resources expose source/destination unpaired-face counts and explicit `unpaired_boundary_faces` status while preserving node diagnostics.
+- [x] Legacy artifact fallback remains deserializable via serde defaults for the new diagnostics fields.
+- [x] `cargo test -p fullmag-api mesh_periodic_pairs --no-fail-fast -- --nocapture` — 5 passed.
+- [x] Generated OpenAPI v2 JSON and Control Room TypeScript schema were updated.
+- [ ] Upstream `FemMeshPayload` does not yet carry the persisted certificate object/identity; current API certificate recomputation must be replaced with artifact/session certificate provenance before MESH-API-002 can be closed.

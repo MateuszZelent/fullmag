@@ -5288,6 +5288,10 @@ export interface components {
             transition_realization?: string | null;
         };
         MeshPeriodicBoundaryFacePairResource: {
+            /** Format: double */
+            area_residual_m2?: number;
+            /** Format: int32 */
+            destination_marker?: number;
             /** Format: int32 */
             face_a: number;
             /** Format: int32 */
@@ -5295,7 +5299,12 @@ export interface components {
             /** Format: double */
             normal_dot?: number | null;
             orientation: string;
+            /** Format: int32 */
+            source_marker?: number;
             translation_m: number[];
+            /** Format: double */
+            translation_residual_m?: number;
+            vertex_pairs?: number[][];
         };
         MeshPeriodicDomainNodePairCountsResource: {
             /** Format: int32 */
@@ -5324,7 +5333,11 @@ export interface components {
             /** Format: int32 */
             unpaired_destination_node_count: number;
             /** Format: int32 */
+            unpaired_destination_face_count?: number;
+            /** Format: int32 */
             unpaired_source_node_count: number;
+            /** Format: int32 */
+            unpaired_source_face_count?: number;
         };
         MeshPeriodicPairsResource: {
             pairs: components["schemas"]["MeshPeriodicPairResource"][];

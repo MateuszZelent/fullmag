@@ -9721,6 +9721,15 @@
       },
       "MeshPeriodicBoundaryFacePairResource": {
         "properties": {
+          "area_residual_m2": {
+            "format": "double",
+            "type": "number"
+          },
+          "destination_marker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "face_a": {
             "format": "int32",
             "minimum": 0,
@@ -9741,10 +9750,30 @@
           "orientation": {
             "type": "string"
           },
+          "source_marker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "translation_m": {
             "items": {
               "format": "double",
               "type": "number"
+            },
+            "type": "array"
+          },
+          "translation_residual_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "vertex_pairs": {
+            "items": {
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
             },
             "type": "array"
           }
@@ -9851,7 +9880,17 @@
           "status": {
             "type": "string"
           },
+          "unpaired_destination_face_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "unpaired_destination_node_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unpaired_source_face_count": {
             "format": "int32",
             "minimum": 0,
             "type": "integer"

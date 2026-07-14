@@ -474,6 +474,10 @@ pub struct MeshPeriodicPairResource {
     pub domain_node_pair_counts: Option<MeshPeriodicDomainNodePairCountsResource>,
     pub unpaired_source_node_count: u32,
     pub unpaired_destination_node_count: u32,
+    #[serde(default)]
+    pub unpaired_source_face_count: u32,
+    #[serde(default)]
+    pub unpaired_destination_face_count: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boundary_face_pairs: Vec<MeshPeriodicBoundaryFacePairResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -493,7 +497,17 @@ pub struct MeshPeriodicDomainNodePairCountsResource {
 pub struct MeshPeriodicBoundaryFacePairResource {
     pub face_a: u32,
     pub face_b: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vertex_pairs: Vec<[u32; 2]>,
     pub translation_m: [f64; 3],
+    #[serde(default)]
+    pub translation_residual_m: f64,
+    #[serde(default)]
+    pub area_residual_m2: f64,
+    #[serde(default)]
+    pub source_marker: u32,
+    #[serde(default)]
+    pub destination_marker: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normal_dot: Option<f64>,
     pub orientation: String,

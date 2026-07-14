@@ -6625,6 +6625,8 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
     assert_eq!(json["pairs"][0]["paired_node_count"], 3);
     assert_eq!(json["pairs"][0]["unpaired_source_node_count"], 0);
     assert_eq!(json["pairs"][0]["unpaired_destination_node_count"], 0);
+    assert_eq!(json["pairs"][0]["unpaired_source_face_count"], 0);
+    assert_eq!(json["pairs"][0]["unpaired_destination_face_count"], 0);
     assert_eq!(
         json["pairs"][0]["domain_node_pair_counts"],
         serde_json::json!({"magnetic": 2, "airbox": 1})
@@ -6634,7 +6636,12 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
         serde_json::json!([{
             "face_a": 0,
             "face_b": 1,
+            "vertex_pairs": [[0, 1], [2, 3], [4, 5]],
             "translation_m": [1.0e-6, 0.0, 0.0],
+            "translation_residual_m": 0.0,
+            "area_residual_m2": 0.0,
+            "source_marker": 10,
+            "destination_marker": 11,
             "normal_dot": -1.0,
             "orientation": "opposed_normals"
         }])
@@ -6669,6 +6676,8 @@ async fn mesh_periodic_pairs_marks_unpaired_boundary_nodes_invalid() {
     let json = body_json(response).await;
     assert_eq!(json["pairs"][0]["unpaired_source_node_count"], 1);
     assert_eq!(json["pairs"][0]["unpaired_destination_node_count"], 1);
+    assert_eq!(json["pairs"][0]["unpaired_source_face_count"], 1);
+    assert_eq!(json["pairs"][0]["unpaired_destination_face_count"], 1);
     assert_eq!(
         json["pairs"][0]["status"],
         "unpaired_boundary_nodes"
@@ -6729,6 +6738,9 @@ async fn mesh_periodic_pairs_does_not_publish_nearest_face_with_excessive_residu
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert!(json["pairs"][0]["boundary_face_pairs"].is_null());
+    assert_eq!(json["pairs"][0]["unpaired_source_face_count"], 1);
+    assert_eq!(json["pairs"][0]["unpaired_destination_face_count"], 1);
+    assert_eq!(json["pairs"][0]["status"], "unpaired_boundary_nodes");
 }
 
 #[tokio::test]
