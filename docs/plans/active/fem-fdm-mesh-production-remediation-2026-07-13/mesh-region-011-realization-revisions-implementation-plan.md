@@ -97,3 +97,10 @@ struct RegionRealizationRevisions {
 - [x] OpenAPI v2 was regenerated through `pnpm --dir apps/control-room generate:api`; generated types keep the new lane fields optional for backward-compatible fixtures while active responses publish numeric values.
 - [x] Control Room resource resolvers now key region-owned resources by the independent tuple/coefficient revision; focused Vitest passes 7/7, typecheck passes, and focused ESLint passes.
 - [ ] Exact ETags, initial-state resource identity, consumed tuple in all runtime artifacts/plans, managed/native/browser gates and full inspector propagation remain open.
+
+### Evidence update (2026-07-14, initial-state resource identity)
+
+- [x] `MagnetizationAssetResource` now publishes `region_initial_state_revision` for GET and PATCH responses, sourced from the live session tuple rather than the scene journal revision.
+- [x] RED/GREEN evidence: `authoring_magnetization_asset_patch_commits_transform_and_params` asserts the initial-state lane on the GET resource; focused API test passes 1/1.
+- [x] OpenAPI v2 JSON and generated Control Room types were regenerated with the optional initial-state lane field.
+- [ ] A dedicated initial-state resource hook/ETag, consumed tuple in run artifacts/plans, managed/browser gates and full Inspector propagation remain open.

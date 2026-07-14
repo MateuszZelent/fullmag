@@ -11622,6 +11622,7 @@ async fn authoring_magnetization_asset_patch_commits_transform_and_params() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
+        snapshot.region_realization_revisions.initial_state = 44;
     }
     let app = build_v2_router().with_state(state);
     let asset_path_id = asset_id.replace(':', "%3A");
@@ -11642,6 +11643,7 @@ async fn authoring_magnetization_asset_patch_commits_transform_and_params() {
     assert_eq!(get_response.status(), StatusCode::OK);
     let get_json = body_json(get_response).await;
     assert_eq!(get_json["asset"]["id"], asset_id);
+    assert_eq!(get_json["region_initial_state_revision"], 44);
 
     let patch_response = app
         .clone()

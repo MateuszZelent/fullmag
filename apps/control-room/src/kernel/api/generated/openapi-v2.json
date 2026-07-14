@@ -8114,6 +8114,14 @@
             "additionalProperties": true,
             "type": "object"
           },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "scene_revision": {
             "format": "int64",
             "minimum": 0,

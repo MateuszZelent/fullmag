@@ -284,6 +284,7 @@ pub struct MaterialResource {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MagnetizationAssetResource {
     pub scene_revision: u64,
+    pub region_initial_state_revision: Option<u64>,
     #[schema(additional_properties)]
     pub asset: BTreeMap<String, Value>,
 }

@@ -1764,7 +1764,10 @@ pub async fn get_authoring_magnetization_asset(
         .iter()
         .find(|entry| entry.id == asset_id)
         .ok_or_else(|| ApiError::not_found(format!("magnetization asset not found: {asset_id}")))?;
-    build_magnetization_asset_resource(&scene, asset).map(Json)
+    let initial_state_revision = current_region_realization_revisions(&state)
+        .await
+        .initial_state;
+    build_magnetization_asset_resource(&scene, asset, initial_state_revision).map(Json)
 }
 
 #[utoipa::path(
@@ -1808,7 +1811,10 @@ pub async fn patch_authoring_magnetization_asset(
         .ok_or_else(|| {
             ApiError::internal(format!("committed magnetization asset missing: {asset_id}"))
         })?;
-    build_magnetization_asset_resource(&committed, asset).map(Json)
+    let initial_state_revision = current_region_realization_revisions(&state)
+        .await
+        .initial_state;
+    build_magnetization_asset_resource(&committed, asset, initial_state_revision).map(Json)
 }
 
 #[utoipa::path(
@@ -3649,6 +3655,7 @@ fn build_material_resource(
 fn build_magnetization_asset_resource(
     scene: &SceneDocument,
     asset: &MagnetizationAsset,
+    region_initial_state_revision: u64,
 ) -> Result<MagnetizationAssetResource, ApiError> {
     let asset = serde_json::to_value(asset).map_err(|error| {
         ApiError::internal(format!("failed to serialize magnetization asset: {error}"))
@@ -3658,6 +3665,7 @@ fn build_magnetization_asset_resource(
     })?;
     Ok(MagnetizationAssetResource {
         scene_revision: scene.revision,
+        region_initial_state_revision: Some(region_initial_state_revision),
         asset: asset.into_iter().collect(),
     })
 }

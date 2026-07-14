@@ -4950,6 +4950,8 @@ export interface components {
                 [key: string]: unknown;
             };
             /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
             scene_revision: number;
         };
         MaterialParameterFieldDataListResource: {
