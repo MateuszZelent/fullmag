@@ -24,6 +24,7 @@ use fullmag_ir::{
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::artifacts::select_state_observable_field;
+use crate::fdm::validate_multilayer_grid_budget;
 use crate::fdm::gpu::cuda::native::{is_cuda_available, DeviceInfo, NativeFdmBackend};
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
@@ -106,6 +107,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
     live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_multilayer_grid_budget(plan)?;
     if !is_cuda_available() {
         return Err(RunError {
             message: "FULLMAG_FDM_EXECUTION=cuda requested for multilayer FDM, but CUDA backend is not available".to_string(),
@@ -958,7 +960,21 @@ fn build_native_stacked_cuda_plan(
         global_grid[1] as usize,
         global_grid[2] as usize,
     ];
-    let total_cells = global_grid_usize[0] * global_grid_usize[1] * global_grid_usize[2];
+    let total_cells = fullmag_plan::checked_fdm_grid_cost(
+        global_grid,
+        fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+    )
+    .map_err(|error| RunError {
+        message: format!("native stacked global grid budget rejected before allocation: {error}"),
+    })
+    .and_then(|cost| {
+        usize::try_from(cost.cells).map_err(|_| RunError {
+            message: format!(
+                "native stacked global grid cell count {} is not addressable",
+                cost.cells
+            ),
+        })
+    })?;
     let mut active_mask = vec![false; total_cells];
     let mut region_mask = vec![0u32; total_cells];
     let mut initial_magnetization = vec![[0.0, 0.0, 0.0]; total_cells];
@@ -1461,7 +1477,12 @@ fn build_multilayer_demag_runtime(
         .first()
         .map(|layer| layer.convolution_cell_size)
         .unwrap_or([1.0, 1.0, 1.0]);
-    let mut kernel_pairs = Vec::with_capacity(plan.layers.len() * plan.layers.len());
+    let pair_capacity = plan.layers.len().checked_mul(plan.layers.len()).ok_or_else(|| {
+        RunError {
+            message: "FDM multilayer kernel-pair count overflow before allocation".to_string(),
+        }
+    })?;
+    let mut kernel_pairs = Vec::with_capacity(pair_capacity);
     for (src_index, src_layer) in plan.layers.iter().enumerate() {
         for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
             let z_shift = dst_layer.native_origin[2] - src_layer.native_origin[2];
@@ -1504,7 +1525,12 @@ fn build_multilayer_demag_runtime_f32(
         .first()
         .map(|layer| layer.convolution_cell_size)
         .unwrap_or([1.0, 1.0, 1.0]);
-    let mut kernel_pairs = Vec::with_capacity(plan.layers.len() * plan.layers.len());
+    let pair_capacity = plan.layers.len().checked_mul(plan.layers.len()).ok_or_else(|| {
+        RunError {
+            message: "FDM multilayer f32 kernel-pair count overflow before allocation".to_string(),
+        }
+    })?;
+    let mut kernel_pairs = Vec::with_capacity(pair_capacity);
     for (src_index, src_layer) in plan.layers.iter().enumerate() {
         for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
             let z_shift = dst_layer.native_origin[2] - src_layer.native_origin[2];

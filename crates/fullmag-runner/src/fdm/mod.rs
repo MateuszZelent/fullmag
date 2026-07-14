@@ -65,7 +65,16 @@ pub(crate) fn validate_multilayer_grid_budget(
     .map_err(|error| RunError {
         message: format!("FDM common grid budget rejected before allocation: {error}"),
     })?;
+    let mut aggregate_bytes = cost.estimated_bytes;
     for layer in &plan.layers {
+        if layer.convolution_grid != plan.common_cells {
+            return Err(RunError {
+                message: format!(
+                    "FDM multilayer convolution grid mismatch: magnet='{}' layer_grid={:?} common_grid={:?}",
+                    layer.magnet_name, layer.convolution_grid, plan.common_cells
+                ),
+            });
+        }
         let layer_cost = fullmag_plan::checked_fdm_grid_cost(
             layer.native_grid,
             fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
@@ -73,6 +82,12 @@ pub(crate) fn validate_multilayer_grid_budget(
         .map_err(|error| RunError {
             message: format!("FDM native layer grid budget rejected before allocation: {error}"),
         })?;
+        aggregate_bytes = aggregate_bytes
+            .checked_add(layer_cost.estimated_bytes)
+            .ok_or_else(|| RunError {
+                message: "FDM multilayer aggregate grid memory overflow before allocation"
+                    .to_string(),
+            })?;
         let native_cells = usize::try_from(layer_cost.cells).map_err(|_| RunError {
             message: format!(
                 "FDM native layer cell count {} is not addressable on this runtime",
@@ -100,6 +115,20 @@ pub(crate) fn validate_multilayer_grid_budget(
                 ),
             });
         }
+    }
+    aggregate_bytes = aggregate_bytes
+        .checked_add(plan.planner_summary.estimated_kernel_bytes)
+        .ok_or_else(|| RunError {
+            message: "FDM multilayer aggregate kernel memory overflow before allocation"
+                .to_string(),
+        })?;
+    if aggregate_bytes > fullmag_plan::FDM_GRID_MAX_BYTES {
+        return Err(RunError {
+            message: format!(
+                "FDM multilayer aggregate memory budget exceeded: estimated_bytes={aggregate_bytes} max_bytes={}",
+                fullmag_plan::FDM_GRID_MAX_BYTES
+            ),
+        });
     }
     Ok(cost.cells)
 }
