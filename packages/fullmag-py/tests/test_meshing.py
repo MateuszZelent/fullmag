@@ -5540,6 +5540,23 @@ class MeshScaffoldTests(unittest.TestCase):
                 },
             )
 
+    def test_authored_mesh_operation_without_executor_fails_closed(self) -> None:
+        film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="film")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "mesh operation executor unavailable: kind='refine' scope='film'",
+        ):
+            realize_fem_domain_mesh_asset_from_components_with_report(
+                [film],
+                fm.FEM(order=1, hmax=20e-9),
+                mesh_workflow={
+                    "operations": [
+                        {"geometry": "film", "kind": "refine", "params": {"steps": 1}}
+                    ],
+                },
+            )
+
     def test_frozen_magnetic_submesh_source_loads_mesh_markers_and_interface_faces(self) -> None:
         frozen_mesh = MeshData(
             nodes=np.asarray(
