@@ -44,6 +44,7 @@ pub struct PeriodicMeshCertificateV6 {
 - v6 axis evidence zawiera teraz certyfikowane globalne face IDs, explicit vertex bijections, area/translation residuals i rzeczywiste normal dots; `corner_edge_cycle_unique` jest wyliczane przez fail-closed validator z testem kolizji/closure.
 - `cargo test -p fullmag-plan --lib fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs` — passed; accepted certificate identity is copied into planner provenance.
 - v6 now also carries `marker_map_fingerprint`, `material_realization_fingerprint`, `region_class_count` and `max_material_residual`; planner and native runner use the material-aware validation lane when DG0 fields are present.
+- Planner binds the marker-map fingerprint to serialized `ProblemIR.object_regions` owner/region identity via `periodic_certificate_with_region_identity`; controlled identity-change test passes 1/1.
 - `cargo test -p fullmag-ir --lib --no-fail-fast` — 30 passed; focused mirrored DG0 mismatch/acceptance tests — 2 passed.
 - Native managed contract, Python generator, separate magnetic/scalar FE class hashes, owner/material realization hash and pełne explicit edge/corner fixtures remain open.
 

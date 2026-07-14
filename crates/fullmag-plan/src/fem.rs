@@ -2358,6 +2358,12 @@ pub(crate) fn plan_fem(
                 ms_element_field.as_deref(),
                 a_element_field.as_deref(),
             )
+            .map(|certificate| {
+                fullmag_ir::MeshIR::periodic_certificate_with_region_identity(
+                    certificate,
+                    &problem.object_regions,
+                )
+            })
             .map_err(|certificate_errors| PlanError {
                 reasons: certificate_errors
                     .into_iter()

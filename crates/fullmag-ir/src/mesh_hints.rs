@@ -1052,6 +1052,27 @@ impl MeshIR {
         Ok(certificate)
     }
 
+    /// Bind the certificate to the canonical authored region/owner identity.
+    /// Marker numbers alone are not sufficient: a remesh that reuses numeric
+    /// markers for a different owner or region must produce a different seam
+    /// identity. The caller supplies the serialized ProblemIR region list.
+    pub fn periodic_certificate_with_region_identity<T: Serialize>(
+        mut certificate: PeriodicMeshCertificateV6IR,
+        region_identity: &T,
+    ) -> PeriodicMeshCertificateV6IR {
+        let payload = serde_json::json!({
+            "marker_map_fingerprint": certificate.marker_map_fingerprint,
+            "region_identity": region_identity,
+        });
+        let encoded = serde_json::to_vec(&payload).unwrap_or_default();
+        certificate.marker_map_fingerprint = format!("sha256:{:x}", Sha256::digest(encoded));
+        certificate.region_class_count = serde_json::to_value(region_identity)
+            .ok()
+            .and_then(|value| value.as_array().map(|items| items.len() as u64))
+            .unwrap_or(certificate.region_class_count);
+        certificate
+    }
+
     /// Certify semantic boundary roles from volume adjacency.
     ///
     /// Marker values are treated as opaque IDs.  The outer air-box role is
@@ -1687,6 +1708,24 @@ mod mesh_validation_tests {
             .expect("equal DG0 material values must certify");
         assert!(certificate.material_realization_fingerprint.starts_with("sha256:"));
         assert_eq!(certificate.max_material_residual, 0.0);
+    }
+
+    #[test]
+    fn periodic_certificate_binds_authored_region_identity() {
+        let mesh = mirrored_periodic_mesh();
+        let certificate = mesh
+            .periodic_mesh_certificate_v6()
+            .expect("structural certificate should certify");
+        let first = MeshIR::periodic_certificate_with_region_identity(
+            certificate.clone(),
+            &serde_json::json!([{"owner": "magnet", "region": "core", "marker": 1}]),
+        );
+        let second = MeshIR::periodic_certificate_with_region_identity(
+            certificate,
+            &serde_json::json!([{"owner": "magnet", "region": "shell", "marker": 1}]),
+        );
+        assert_ne!(first.marker_map_fingerprint, second.marker_map_fingerprint);
+        assert_eq!(first.region_class_count, 1);
     }
 
     #[test]

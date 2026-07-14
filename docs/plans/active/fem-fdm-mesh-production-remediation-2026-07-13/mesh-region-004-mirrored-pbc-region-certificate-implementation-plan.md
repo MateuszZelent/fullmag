@@ -54,5 +54,6 @@ struct PeriodicRegionMaterialCertificate {
 - `PeriodicMeshCertificateV6IR` now carries marker-map and material-realization fingerprints, region-class count and normalized seam material residual.
 - `MeshIR::periodic_mesh_certificate_v6_with_material_fields` compares paired adjacent elements by marker and rejects mismatched DG0 `Ms`/`A` values with stable reason text.
 - Planner invokes the material-aware certificate after conformal element fields are realized; runner persists the fingerprints in `periodic_pairs.v1.json` and revalidates immediately before native allocation.
+- Planner now binds the marker-map fingerprint to the canonical serialized `ProblemIR.object_regions` owner/region declarations; a controlled owner/region rename produces a different certificate identity (`periodic_certificate_binds_authored_region_identity`, 1/1).
 - `cargo test -p fullmag-ir --lib --no-fail-fast` — 30 passed; focused mirrored material mismatch/acceptance tests — 2 passed; periodic planner and runner artifact tests pass.
 - Remaining open: owner/region identity beyond numeric marker map, nodal coefficient arrays, persisted certificate comparison against an independent build generation, managed CPU/GPU mirrored gates and M5 primitive/supercell evidence. MESH-REGION-004 remains open.
