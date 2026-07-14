@@ -81,6 +81,11 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
                 .periodicity
                 .as_ref()
                 .and_then(|pbc| pbc.resolve_demag_boundary(fdm.enable_demag).ok()),
+            "resolved_periodic_images": fdm
+                .periodicity
+                .as_ref()
+                .and_then(|pbc| pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision).ok())
+                .flatten(),
             "grid_cells": fdm.grid.cells,
         }),
         BackendPlanIR::FdmMultilayer(fdm) => serde_json::json!({
@@ -90,6 +95,11 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
                 .periodicity
                 .as_ref()
                 .and_then(|pbc| pbc.resolve_demag_boundary(fdm.enable_demag).ok()),
+            "resolved_periodic_images": fdm
+                .periodicity
+                .as_ref()
+                .and_then(|pbc| pbc.resolve_periodic_images(fdm.common_cells, fdm.precision).ok())
+                .flatten(),
             "transfer_boundary_policy": fdm
                 .periodicity
                 .as_ref()
@@ -3055,6 +3065,14 @@ mod tests {
         assert_eq!(
             metadata["resolved_demag_boundary"]["periodic_truncated_images"]["image_counts"],
             serde_json::json!([4, 0, 0])
+        );
+        assert_eq!(
+            metadata["resolved_periodic_images"]["resolved_image_counts"],
+            serde_json::json!([4, 0, 0])
+        );
+        assert_eq!(
+            metadata["resolved_periodic_images"]["padded_counts"],
+            serde_json::json!([4, 4, 2])
         );
     }
 

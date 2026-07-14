@@ -21,8 +21,8 @@
 
 ### Task 1: RED budget boundaries
 
-- [ ] Dodać testy zero/negative-equivalent, max legal, first illegal, overflow padded counts i excessive bytes dla CPU/GPU lanes.
-- [ ] Uruchomić planner `fdm_pbc_images` tests; excessive cases mają obecnie nie failować we właściwym miejscu.
+- [x] Dodać testy zero/negative-equivalent, max legal, first illegal, overflow padded counts i excessive bytes dla wspólnego IR budgetu; CPU/GPU lane-specific managed cases pozostają otwarte.
+- [x] Uruchomić `cargo test -p fullmag-ir periodic_workspace --lib --no-fail-fast` (4/4) oraz `cargo test -p fullmag-plan --lib fdm --no-fail-fast` (42/42).
 
 ### Task 2: resolved cost
 
@@ -33,8 +33,9 @@ pub struct ResolvedPeriodicImages {
 }
 ```
 
-- [ ] Materializować checked plan, egzekwować lane budget i przekazywać go do FFT workspace.
-- [ ] Publikować requested/resolved counts oraz rejection reason; uruchomić planner/engine tests, PASS.
+- [x] Materializować checked plan w `FdmPeriodicityIR::resolve_periodic_images`, z checked image terms, paddingiem `N`/`2N` i limitem 8 GiB; planner odrzuca przed runtime dla single-grid i multilayer.
+- [x] Publikować requested/resolved counts, padded counts, bytes i kernel w `mesh_runtime_metadata`; focused artifact test 1/1.
+- [ ] Przekazać resolved workspace do rzeczywistego CPU/CUDA FFT allocatora i dodać lane-specific allocation guards.
 
 ### Task 3: production gate
 
@@ -42,3 +43,10 @@ pub struct ResolvedPeriodicImages {
 - [ ] Commit: `git add crates/fullmag-ir crates/fullmag-plan crates/fullmag-engine crates/fullmag-runner justfile && git commit -m "fix(fdm): bound periodic image workspaces"`.
 
 **Exit:** runtime nie alokuje periodic workspace bez checked resolved cost; każdy fallback lub rejection jest jawny.
+
+### Evidence (2026-07-14)
+
+- `cargo test -p fullmag-ir periodic_workspace --lib --no-fail-fast`: 4/4.
+- `cargo test -p fullmag-plan --lib fdm --no-fail-fast`: 42/42.
+- `cargo test -p fullmag-runner fdm_mesh_metadata_preserves_requested_and_resolved_pbc_demag --no-fail-fast -- --nocapture`: 1/1.
+- Remaining gap: the engine/CPU/CUDA workspace allocator still needs to consume the serialized resolved cost, plus managed `just` production proof.

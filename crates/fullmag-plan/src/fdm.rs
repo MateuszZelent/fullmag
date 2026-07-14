@@ -608,6 +608,15 @@ pub(crate) fn plan_fdm(
         );
     }
 
+    if let Some(pbc) = problem.pbc.as_ref() {
+        if let Err(reason) = pbc.resolve_periodic_images(
+            grid_cells,
+            problem.backend_policy.execution_precision,
+        ) {
+            errors.push(reason);
+        }
+    }
+
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
@@ -1950,6 +1959,15 @@ pub(crate) fn plan_fdm_multilayer(
         }
     };
     let common_grid_cost = checked_fdm_grid_cost(common_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
+
+    if let Some(pbc) = problem.pbc.as_ref() {
+        if let Err(reason) = pbc.resolve_periodic_images(
+            common_cells,
+            problem.backend_policy.execution_precision,
+        ) {
+            errors.push(reason);
+        }
+    }
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
     let mut integrator = controls.integrator;
