@@ -44,3 +44,9 @@
   `region_mesh_policy_order_unsupported`.
 - `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_meshing.py -k 'region_mesh_policy' -q` — 4 passed, 0 failed.
 - Physical measured size histograms, full operation certificate and managed FEM proof remain open.
+
+### Evidence update (2026-07-14, stale regression corrected)
+
+- [x] The production meshing gate exposed a stale assertion that expected a region minimum to lower global `hmin`; the regression now asserts global `hmin=3e-9` and local scoped field `MinimumElementSize=0.15e-9`.
+- [x] Full Python meshing suite after correction: `245 passed, 1 skipped`.
+- [ ] Physical measured size histograms, full operation certificate and managed FEM proof remain open.

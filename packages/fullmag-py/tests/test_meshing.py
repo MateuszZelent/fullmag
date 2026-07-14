@@ -9569,7 +9569,7 @@ class RegionMeshPolicyTests(unittest.TestCase):
         self.assertEqual(region_fields[0]["params"]["Radius"], hole_radius + 30e-9)
         self.assertEqual(region_fields[0]["params"]["VIn"], 5e-9)
 
-    def test_region_local_refinement_lowers_global_hmin_clamp(self) -> None:
+    def test_region_local_refinement_stays_local_to_size_field(self) -> None:
         hole_radius = 25e-9
         geometry = fm.Difference(
             base=fm.Box(200e-9, 200e-9, 10e-9),
@@ -9612,7 +9612,14 @@ class RegionMeshPolicyTests(unittest.TestCase):
             object_regions=object_regions,
         )
 
-        self.assertEqual(mesh_options.hmin, 0.15e-9)
+        self.assertEqual(mesh_options.hmin, 3e-9)
+        region_fields = [
+            field
+            for field in mesh_options.size_fields
+            if field.get("params", {}).get("Source") == "region_mesh_policy"
+        ]
+        self.assertEqual(len(region_fields), 1)
+        self.assertEqual(region_fields[0]["params"]["MinimumElementSize"], 0.15e-9)
 
     def test_region_mesh_policy_fields_and_axes(self) -> None:
         # Create waveguide geometry
