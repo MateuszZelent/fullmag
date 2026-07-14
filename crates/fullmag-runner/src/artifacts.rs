@@ -107,8 +107,42 @@ fn mesh_runtime_metadata(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Valu
                 &fem.mesh.periodic_node_pairs,
                 |pair| pair.pair_id.as_str(),
             ),
+            "mesh_build_report": fem.mesh_build_report,
         }),
-        _ => serde_json::Value::Null,
+        BackendPlanIR::FemEigen(fem) => serde_json::json!({
+            "mesh_name": fem.mesh.mesh_name,
+            "node_count": fem.mesh.nodes.len(),
+            "element_count": fem.mesh.elements.len(),
+            "boundary_face_count": fem.mesh.boundary_faces.len(),
+            "periodic_boundary_pair_count": fem.mesh.periodic_boundary_pairs.len(),
+            "periodic_node_pair_count": fem.mesh.periodic_node_pairs.len(),
+            "periodic_boundary_pair_counts_by_id": count_periodic_pairs_by_id(
+                &fem.mesh.periodic_boundary_pairs,
+                |pair| pair.pair_id.as_str(),
+            ),
+            "periodic_node_pair_counts_by_id": count_periodic_pairs_by_id(
+                &fem.mesh.periodic_node_pairs,
+                |pair| pair.pair_id.as_str(),
+            ),
+            "mesh_build_report": fem.mesh_build_report,
+        }),
+        BackendPlanIR::FemFrequencyResponse(fem) => serde_json::json!({
+            "mesh_name": fem.mesh.mesh_name,
+            "node_count": fem.mesh.nodes.len(),
+            "element_count": fem.mesh.elements.len(),
+            "boundary_face_count": fem.mesh.boundary_faces.len(),
+            "periodic_boundary_pair_count": fem.mesh.periodic_boundary_pairs.len(),
+            "periodic_node_pair_count": fem.mesh.periodic_node_pairs.len(),
+            "periodic_boundary_pair_counts_by_id": count_periodic_pairs_by_id(
+                &fem.mesh.periodic_boundary_pairs,
+                |pair| pair.pair_id.as_str(),
+            ),
+            "periodic_node_pair_counts_by_id": count_periodic_pairs_by_id(
+                &fem.mesh.periodic_node_pairs,
+                |pair| pair.pair_id.as_str(),
+            ),
+            "mesh_build_report": fem.mesh_build_report,
+        }),
     }
 }
 

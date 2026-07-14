@@ -10309,9 +10309,21 @@
             },
             "type": "array"
           },
+          "object_region_markers": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
           "operation_statuses": {
             "items": {
               "$ref": "#/components/schemas/MeshOperationStatusResource"
+            },
+            "type": "array"
+          },
+          "orphan_entities": {
+            "items": {
+              "type": "object"
             },
             "type": "array"
           },
@@ -10326,6 +10338,18 @@
           "region_markers": {
             "items": {
               "$ref": "#/components/schemas/MeshDomainRegionMarkerResource"
+            },
+            "type": "array"
+          },
+          "rejected_element_types": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "selector_resolution": {
+            "items": {
+              "type": "object"
             },
             "type": "array"
           },
@@ -10486,10 +10510,14 @@
       "MeshSolverMeshResource": {
         "properties": {
           "build_report": {
-            "description": "Immutable requested-vs-realized report for this mesh build revision.",
-            "type": [
-              "object",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshSharedDomainBuildReportResource",
+                "description": "Immutable requested-vs-realized report for this mesh build revision."
+              }
             ]
           },
           "domain_mesh_mode": {

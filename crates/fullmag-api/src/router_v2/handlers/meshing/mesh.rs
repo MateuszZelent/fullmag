@@ -193,7 +193,8 @@ pub async fn get_mesh_semantics(
             build_report: mesh
                 .build_report
                 .as_ref()
-                .and_then(|report| serde_json::to_value(report).ok()),
+                .and_then(|report| serde_json::to_value(report).ok())
+                .and_then(|value| serde_json::from_value(value).ok()),
         });
     let mesh_build_diagnostics =
         snapshot
@@ -4103,6 +4104,7 @@ mod tests {
             domain_frame: None,
             generation_id: None,
             per_domain_quality: HashMap::new(),
+            build_report: None,
         };
 
         let part_mesh =
@@ -4151,6 +4153,7 @@ mod tests {
             domain_frame: None,
             generation_id: None,
             per_domain_quality: HashMap::new(),
+            build_report: None,
         };
 
         let part_mesh = subset_part_mesh(&mesh, "part:interface:0:1")
@@ -4194,6 +4197,7 @@ mod tests {
             domain_frame: None,
             generation_id: None,
             per_domain_quality: HashMap::new(),
+            build_report: None,
         };
 
         let object_mesh = subset_object_mesh(&mesh, "body").expect("object topology should remap");

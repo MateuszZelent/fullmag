@@ -979,6 +979,8 @@ pub struct FemEigenPlanIR {
     pub object_segments: Vec<FemObjectSegmentIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_parts: Vec<FemMeshPartIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_build_report: Option<FemSharedDomainBuildReportIR>,
     #[serde(default)]
     pub domain_mesh_mode: FemDomainMeshModeIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1035,6 +1037,8 @@ pub struct FemFrequencyResponsePlanIR {
     pub object_segments: Vec<FemObjectSegmentIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_parts: Vec<FemMeshPartIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_build_report: Option<FemSharedDomainBuildReportIR>,
     #[serde(default)]
     pub domain_mesh_mode: FemDomainMeshModeIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]

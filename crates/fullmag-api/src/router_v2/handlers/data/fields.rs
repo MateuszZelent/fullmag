@@ -4822,6 +4822,7 @@ mod tests {
             domain_frame: None,
             generation_id: Some("multi-airbox-generation".to_string()),
             per_domain_quality: Default::default(),
+            build_report: None,
         };
         let request: CurrentLiveSnapshotRequest =
             serde_json::from_value(serde_json::json!({ "session_id": "scope-test" }))
@@ -5118,6 +5119,7 @@ mod tests {
             per_domain_quality: std::collections::HashMap::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
+            build_report: None,
         });
         let values = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 

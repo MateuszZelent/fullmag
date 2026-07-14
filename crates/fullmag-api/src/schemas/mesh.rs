@@ -62,9 +62,8 @@ pub struct MeshSolverMeshResource {
     pub object_segment_count: u32,
     pub mesh_part_count: u32,
     /// Immutable requested-vs-realized report for this mesh build revision.
-    #[schema(value_type = Object, nullable)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_report: Option<Value>,
+    pub build_report: Option<MeshSharedDomainBuildReportResource>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

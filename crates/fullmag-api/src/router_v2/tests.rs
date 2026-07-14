@@ -187,6 +187,7 @@ fn sample_fem_mesh_payload() -> FemMeshPayload {
         domain_frame: None,
         generation_id: Some("42".to_string()),
         per_domain_quality: Default::default(),
+        build_report: None,
     }
 }
 
@@ -222,6 +223,7 @@ fn regular_tetra_fem_mesh_payload() -> FemMeshPayload {
         domain_frame: None,
         generation_id: Some("regular-tetra-gen".to_string()),
         per_domain_quality: Default::default(),
+        build_report: None,
     }
 }
 
@@ -402,6 +404,7 @@ fn sample_scoped_fem_mesh_payload() -> FemMeshPayload {
         domain_frame: None,
         generation_id: Some("42".to_string()),
         per_domain_quality: Default::default(),
+        build_report: None,
     }
 }
 
@@ -500,6 +503,7 @@ fn sample_fem_neel_skyrmion_mesh_and_values(
         domain_frame: None,
         generation_id: Some("9001".to_string()),
         per_domain_quality: HashMap::new(),
+        build_report: None,
     };
     (mesh, values)
 }
@@ -556,6 +560,7 @@ fn sample_shared_node_airbox_mesh_payload() -> FemMeshPayload {
         domain_frame: None,
         generation_id: Some("shared-node-generation".to_string()),
         per_domain_quality: Default::default(),
+        build_report: None,
     }
 }
 
@@ -5058,7 +5063,16 @@ async fn mesh_semantics_returns_three_level_projection() {
             "mesh_pipeline_status": [{ "id": "meshing", "status": "active" }],
             "last_build_error": "quality threshold not met"
         }));
-        snapshot.fem_mesh = Some(sample_fem_mesh_payload_with_manifest());
+        let mut fem_mesh = sample_fem_mesh_payload_with_manifest();
+        fem_mesh.build_report = serde_json::from_value(serde_json::json!({
+            "build_mode": "component_aware",
+            "object_region_markers": [{"geometry_name": "body", "marker": 17}],
+            "selector_resolution": [{"selector": "body", "resolved": true}],
+            "orphan_entities": [],
+            "rejected_element_types": []
+        }))
+        .expect("mesh build report fixture should deserialize");
+        snapshot.fem_mesh = Some(fem_mesh);
         snapshot.mesh_revision = 73;
     }
     let app = build_v2_router().with_state(state);
@@ -5082,6 +5096,18 @@ async fn mesh_semantics_returns_three_level_projection() {
     assert_eq!(json["object_configs"][0]["config"]["mode"], "override");
     assert_eq!(json["solver_mesh"]["mesh_name"], "test-mesh");
     assert_eq!(json["solver_mesh"]["object_segment_count"], 1);
+    assert_eq!(
+        json["solver_mesh"]["build_report"]["build_mode"],
+        "component_aware"
+    );
+    assert_eq!(
+        json["solver_mesh"]["build_report"]["object_region_markers"][0]["marker"],
+        17
+    );
+    assert_eq!(
+        json["solver_mesh"]["build_report"]["selector_resolution"][0]["resolved"],
+        true
+    );
     assert_eq!(
         json["mesh_build_diagnostics"]["last_build_error"],
         "quality threshold not met"
@@ -15631,6 +15657,7 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                     domain_frame: None,
                     generation_id: Some("shared-node-test".to_string()),
                     per_domain_quality: Default::default(),
+                    build_report: None,
                 }),
                 magnetization: Some(vec![
                     10.0, 0.0, 0.0, 1.0, 0.0, 0.0, 20.0, 0.0, 0.0, 3.0, 0.0, 0.0, 30.0, 0.0, 0.0,
@@ -17572,6 +17599,7 @@ async fn test_router_with_mock_field_fem_without_topology() -> axum::Router {
             domain_frame: None,
             generation_id: Some("101".to_string()),
             per_domain_quality: Default::default(),
+            build_report: None,
         });
     }
     build_v2_router().with_state(state)

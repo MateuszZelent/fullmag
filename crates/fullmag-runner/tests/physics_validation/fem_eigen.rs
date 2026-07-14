@@ -14,6 +14,7 @@ fn fem_eigen_smoke_completes_without_errors() {
     let m0: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; n_nodes];
 
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: mesh.mesh_name.clone(),
         mesh_source: None,
         mesh,
@@ -107,6 +108,7 @@ fn fem_eigen_lowest_mode_order_of_magnitude() {
     let gamma = 2.211e5_f64;
 
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: "cube_20nm".to_string(),
         mesh_source: None,
         mesh,
@@ -178,6 +180,7 @@ fn fem_eigen_modes_are_non_trivial() {
     let m0: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0]; n_nodes];
 
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: "cube_20nm_orth".to_string(),
         mesh_source: None,
         mesh,
@@ -292,6 +295,7 @@ fn fem_eigen_frequency_is_stable_across_resolutions() {
         let n = mesh.nodes.len();
         let m0 = vec![[1.0_f64, 0.0, 0.0]; n];
         let plan = FemEigenPlanIR {
+    mesh_build_report: None,
             mesh_name: format!("cube_{side_nm}nm"),
             mesh_source: None,
             mesh,
@@ -364,6 +368,7 @@ fn fem_eigen_periodic_k_zero_runs_with_periodic_node_pairs() {
     let mut mesh = cube_mesh(20.0);
     mesh.mesh_name = "periodic_cube".to_string();
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: "periodic_cube".to_string(),
         mesh_source: None,
         mesh,
@@ -436,6 +441,7 @@ fn fem_eigen_floquet_runs_with_phase_aware_metadata() {
     let mut mesh = cube_mesh(20.0);
     mesh.mesh_name = "floquet_cube".to_string();
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: "floquet_cube".to_string(),
         mesh_source: None,
         mesh,
@@ -511,6 +517,7 @@ fn fem_eigen_floquet_runs_with_phase_aware_metadata() {
 fn fem_eigen_damping_include_emits_nonzero_imaginary_frequency() {
     let mesh = cube_mesh(20.0);
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: mesh.mesh_name.clone(),
         mesh_source: None,
         mesh,
@@ -566,6 +573,7 @@ fn fem_eigen_damping_include_emits_nonzero_imaginary_frequency() {
 fn fem_eigen_surface_anisotropy_runs_and_reports_term() {
     let mesh = cube_mesh(20.0);
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: mesh.mesh_name.clone(),
         mesh_source: None,
         mesh,
@@ -637,6 +645,7 @@ fn fem_eigen_floquet_exchange_only_is_reciprocal_for_plus_minus_k() {
             if kx >= 0.0 { "plus" } else { "minus" }
         );
         FemEigenPlanIR {
+    mesh_build_report: None,
             mesh_name: mesh.mesh_name.clone(),
             mesh_source: None,
             mesh,
@@ -722,6 +731,7 @@ fn fem_eigen_floquet_bulk_dmi_is_nonreciprocal_for_plus_minus_k() {
             if kx >= 0.0 { "plus" } else { "minus" }
         );
         FemEigenPlanIR {
+    mesh_build_report: None,
             mesh_name: mesh.mesh_name.clone(),
             mesh_source: None,
             mesh,
@@ -820,6 +830,7 @@ fn fem_eigen_demag_lowers_frequency() {
         let mesh = cube_mesh(20.0);
         let m0 = vec![[1.0_f64, 0.0, 0.0]; mesh.nodes.len()];
         FemEigenPlanIR {
+    mesh_build_report: None,
             mesh_name: format!("cube_20nm_demag_{include_demag}"),
             mesh_source: None,
             mesh,
@@ -917,6 +928,7 @@ fn fem_eigen_poisson_robin_demag_runs_on_shared_domain_mesh() {
     };
 
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: mesh.mesh_name.clone(),
         mesh_source: None,
         mesh,
@@ -999,6 +1011,7 @@ fn eigen_bc_free_baseline() {
 
     let mesh = cube_mesh(20.0);
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: "bc_free_baseline".to_string(),
         mesh_source: None,
         mesh,
@@ -1091,6 +1104,7 @@ fn eigen_bc_pinned_higher_frequency() {
     let make_plan = |pinned: bool| {
         let mesh = cube_mesh(20.0);
         FemEigenPlanIR {
+    mesh_build_report: None,
             mesh_name: format!("bc_pinned_{pinned}"),
             mesh_source: None,
             mesh,
@@ -1204,6 +1218,7 @@ fn eigen_bc_periodic_requires_pairs_error() {
     mesh.mesh_name = "cube_no_periodic_pairs".to_string();
 
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: "cube_no_periodic_pairs".to_string(),
         mesh_source: None,
         mesh,
@@ -1283,6 +1298,7 @@ fn eigen_bc_periodic_k_zero_matches_free() {
     let make_plan = |periodic: bool| {
         let mesh = cube_mesh(20.0);
         FemEigenPlanIR {
+    mesh_build_report: None,
             mesh_name: format!("bc_periodic_k0_{periodic}"),
             mesh_source: None,
             mesh,
@@ -1382,6 +1398,7 @@ fn floquet_k0_equals_periodic() {
     let make_plan = |kind: fullmag_ir::SpinWaveBoundaryKindIR| {
         let mesh = cube_mesh(20.0);
         FemEigenPlanIR {
+    mesh_build_report: None,
             mesh_name: format!("bc_{kind:?}_k0").to_lowercase(),
             mesh_source: None,
             mesh,
@@ -1461,6 +1478,7 @@ fn fem_eigen_path_writes_v2_dispersion_artifacts() {
     let mut mesh = cube_mesh(20.0);
     mesh.mesh_name = "path_dispersion_cube".to_string();
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: "path_dispersion_cube".to_string(),
         mesh_source: None,
         mesh,
@@ -1594,6 +1612,7 @@ fn fem_eigen_single_k_dispersion_request_writes_v2_dispersion_artifact() {
     let mut mesh = cube_mesh(20.0);
     mesh.mesh_name = "single_k_dispersion_cube".to_string();
     let plan = FemEigenPlanIR {
+    mesh_build_report: None,
         mesh_name: "single_k_dispersion_cube".to_string(),
         mesh_source: None,
         mesh,

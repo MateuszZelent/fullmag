@@ -5414,6 +5414,7 @@ export interface components {
             /** Format: int32 */
             authored_regions_count?: number | null;
             build_mode: string;
+            object_region_markers?: unknown[];
             degraded?: boolean;
             /** Format: double */
             effective_airbox_maximum_element_size?: number | null;
@@ -5423,10 +5424,13 @@ export interface components {
             };
             fallbacks_triggered?: string[];
             operation_statuses?: components["schemas"]["MeshOperationStatusResource"][];
+            orphan_entities?: unknown[];
+            rejected_element_types?: unknown[];
             /** Format: int32 */
             realized_regions_count?: number | null;
             region_markers?: components["schemas"]["MeshDomainRegionMarkerResource"][];
             size_fields_realized?: components["schemas"]["MeshRealizedSizeFieldResource"][];
+            selector_resolution?: unknown[];
             thin_film_diagnostics?: components["schemas"]["MeshThinFilmDiagnosticResource"][];
             used_size_field_kinds?: string[];
         };
@@ -5470,7 +5474,7 @@ export interface components {
         };
         MeshSolverMeshResource: {
             /** Immutable requested-vs-realized report for this mesh build revision. */
-            build_report?: unknown;
+            build_report?: null | components["schemas"]["MeshSharedDomainBuildReportResource"];
             domain_mesh_mode?: string | null;
             generation_id?: string | null;
             mesh_id: string;

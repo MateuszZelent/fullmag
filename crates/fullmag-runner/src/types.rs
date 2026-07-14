@@ -1564,7 +1564,7 @@ impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
                 .iter()
                 .map(|(k, v)| (*k, MeshQualityPayload::from(v)))
                 .collect(),
-            build_report: None,
+            build_report: plan.mesh_build_report.clone(),
         }
     }
 }
@@ -1618,7 +1618,7 @@ impl From<&fullmag_ir::FemFrequencyResponsePlanIR> for FemMeshPayload {
                 .iter()
                 .map(|(k, v)| (*k, MeshQualityPayload::from(v)))
                 .collect(),
-            build_report: None,
+            build_report: plan.mesh_build_report.clone(),
         }
     }
 }

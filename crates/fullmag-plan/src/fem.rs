@@ -3157,6 +3157,9 @@ pub(crate) fn plan_fem_eigen(
             (mesh, object_segments, mesh_source, merged_equilibrium)
         };
     let object_segments = remap_segment_object_ids(&raw_object_segments, &geometry_to_object_id)?;
+    let mesh_build_report = resolved_domain_mesh_asset
+        .as_ref()
+        .and_then(|asset| asset.build_report.clone());
     let mesh_name = mesh.mesh_name.clone();
     let n_nodes = mesh.nodes.len();
     let n_elements = mesh.elements.len();
@@ -3257,6 +3260,7 @@ pub(crate) fn plan_fem_eigen(
         mesh,
         object_segments,
         mesh_parts: resolved_mesh_parts,
+        mesh_build_report,
         domain_mesh_mode,
         domain_frame,
         fe_order: fem_hints.order,
@@ -3477,6 +3481,7 @@ pub(crate) fn plan_fem_frequency_response(
         mesh: eigen.mesh,
         object_segments: eigen.object_segments,
         mesh_parts: eigen.mesh_parts,
+        mesh_build_report: eigen.mesh_build_report,
         domain_mesh_mode: eigen.domain_mesh_mode,
         domain_mesh_workflow_mode: domain_mesh_workflow_mode(problem),
         domain_frame: eigen.domain_frame,
