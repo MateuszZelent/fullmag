@@ -20,14 +20,14 @@
 
 ### Task 1: RED capability matrix
 
-- [ ] Dodać przypadki CPU/GPU x single/double dla region mask, Ms field, Aex field, Alpha field i texture; obecnie żądania GPU z fields mają przechodzić planner i dać RED.
+- [x] Dodano RED/GREEN planner regression dla CUDA + region `Ms` override; przed zmianą żądanie docierało do native guardu, po zmianie kończy się przed startem CUDA.
+- [ ] Dodać pełną macierz CPU/GPU x single/double dla Ms/Aex/Alpha/texture i region mask.
 - [ ] Dodać API/UI snapshot reason `fdm_cuda_region_material_fields_unsupported`.
 
 ### Task 2: planner legality
 
-- [ ] Rozszerzyć canonical capability vocabulary i planner predicates o osobne region field capabilities.
-- [ ] W strict odrzucić plan przed runtime; w auto rozwiązać do CPU wyłącznie zgodnie z execution-selection doctrine i zapisać requested/resolved.
-- [ ] Zachować runtime guard jako defense-in-depth z tym samym kodem błędu.
+- [x] Planner odrzuca FDM CUDA cellwise `Ms/Aex/Alpha` z reason `fdm_cuda_region_material_fields_unsupported`; runtime guard pozostaje defense-in-depth.
+- [ ] Rozszerzyć capability vocabulary, auto-resolution/provenance oraz osobne predicates dla mask/fields/texture.
 
 ### Task 3: cross-layer gates
 
@@ -35,3 +35,9 @@
 - [ ] Commit: `git add docs/specs crates/fullmag-plan crates/fullmag-runner crates/fullmag-api apps/control-room && git commit -m "fix(planner): resolve CUDA region field legality"`.
 
 **Exit:** żadna konfiguracja znana jako unsupported nie dociera do startu CUDA context.
+
+### Evidence (2026-07-14, partial)
+
+- `cargo test -p fullmag-plan fdm_cuda_region_material_fields_fail_in_planner_before_native_start --lib` — PASS.
+- `cargo test -p fullmag-plan --lib --no-fail-fast` — 206 passed, 0 failed.
+- Otwarte: capability matrix/OpenAPI/UI reason, auto GPU→CPU policy, complete precision matrix and managed CUDA gate.

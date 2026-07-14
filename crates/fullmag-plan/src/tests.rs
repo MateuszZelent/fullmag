@@ -1376,6 +1376,36 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
 }
 
 #[test]
+fn fdm_cuda_region_material_fields_fail_in_planner_before_native_start() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    let mut region = default_test_object_region();
+    region.material_overrides = vec![fullmag_ir::RegionMaterialOverrideIR {
+        parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+        value: fullmag_ir::MaterialParameterFieldIR::Constant {
+            value: serde_json::json!(750e3),
+            unit: Some("A/m".to_string()),
+        },
+        priority: 10,
+        conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+    }];
+    ir.object_regions.push(region);
+
+    let error = plan(&ir).expect_err("CUDA region material fields must fail before native start");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("fdm_cuda_region_material_fields_unsupported")
+                && reason.contains("cellwise material fields")
+        }),
+        "unexpected planner errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
 fn disabled_object_region_policies_do_not_block_executable_planning() {
     let mut ir = ProblemIR::bootstrap_example();
     let mut region = default_test_object_region();
