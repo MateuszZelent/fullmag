@@ -93,7 +93,7 @@ fn shared_domain_segmentation_remaps_periodic_node_pairs() {
             [0.0, 1.0, 0.0],
             [10.0, 1.0, 0.0],
             [10.0, 0.0, 1.0],
-            [10.0, 1.0, 1.0],
+            [11.0, 1.0, 1.0],
             [0.0, 0.0, 1.0],
         ],
         elements: vec![[0, 4, 5, 6], [1, 2, 3, 7]],
@@ -375,7 +375,7 @@ fn mesh_part_node_indices_cover_air_elements_with_shared_interface_nodes() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 0],
         boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
         boundary_markers: vec![10, 99],
@@ -513,7 +513,7 @@ fn analyze_detects_interface_between_touching_markers() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
         boundary_markers: vec![10, 20],
@@ -578,8 +578,9 @@ fn reorder_shared_domain_mesh_materializes_interface_and_outer_boundary_parts() 
             [0, 1, 4],
             [0, 2, 4],
             [1, 2, 4],
+            [0, 1, 2],
         ],
-        boundary_markers: vec![10, 10, 10, 99, 99, 99],
+        boundary_markers: vec![10, 10, 10, 99, 99, 99, 77],
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
         per_domain_quality: std::collections::HashMap::new(),
@@ -663,7 +664,7 @@ fn validate_rejects_shared_nodes_for_now() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
         boundary_markers: vec![10, 20],
@@ -702,7 +703,7 @@ fn validate_accepts_shared_nodes_when_solver_supports_conformal() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
         boundary_markers: vec![10, 20],
@@ -740,7 +741,7 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
         boundary_markers: vec![10, 20],
@@ -765,7 +766,7 @@ fn pack_duplicates_shared_interface_nodes_per_region() {
         .expect("packing should duplicate shared interface nodes");
 
     assert_eq!(packed.nodes.len(), 8);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [4, 5, 6, 7]]);
+    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [4, 6, 5, 7]]);
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "left");
     assert_eq!(segments[0].node_count, 4);
@@ -790,7 +791,7 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: Vec::new(),
         boundary_markers: Vec::new(),
@@ -824,7 +825,7 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         .expect("packing should preserve one H1 field within an object");
 
     assert_eq!(packed.nodes.len(), 5);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
+    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "body");
     assert_eq!(segments[1].object_id, "body");
@@ -916,7 +917,7 @@ fn pack_merges_coincident_interface_nodes_within_one_object() {
             [0.0, 1.0, 0.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
+        elements: vec![[0, 1, 2, 3], [4, 6, 5, 7]],
         element_markers: vec![1, 2],
         boundary_faces: Vec::new(),
         boundary_markers: Vec::new(),
@@ -947,7 +948,7 @@ fn pack_merges_coincident_interface_nodes_within_one_object() {
         .expect("same-object coincident region nodes should merge");
 
     assert_eq!(packed.nodes.len(), 5);
-    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
+    assert_eq!(packed.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
     assert_eq!(segments.len(), 2);
     assert_eq!(segments[0].object_id, "body");
     assert_eq!(segments[1].object_id, "body");
@@ -997,7 +998,7 @@ fn fem_plan_maps_geometry_and_object_region_to_one_continuous_object() {
             [0.0, 0.0, 1.0],
             [0.0, 0.0, -1.0],
         ],
-        elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
         element_markers: vec![1, 2],
         boundary_faces: Vec::new(),
         boundary_markers: Vec::new(),
@@ -1019,7 +1020,7 @@ fn fem_plan_maps_geometry_and_object_region_to_one_continuous_object() {
     };
 
     assert_eq!(fem.mesh.nodes.len(), 5);
-    assert_eq!(fem.mesh.elements, vec![[0, 1, 2, 3], [0, 1, 2, 4]]);
+    assert_eq!(fem.mesh.elements, vec![[0, 1, 2, 3], [0, 2, 1, 4]]);
     assert_eq!(fem.initial_magnetization.len(), 5);
     assert_eq!(fem.object_segments.len(), 2);
     assert!(fem
@@ -2385,6 +2386,14 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![fullmag_ir::EnergyTermIR::Exchange];
 
     let err = plan(&ir)
@@ -2785,6 +2794,63 @@ fn certified_airbox_test_mesh(outer_marker: u32) -> fullmag_ir::MeshIR {
         periodic_boundary_pairs: Vec::new(),
         periodic_node_pairs: Vec::new(),
         per_domain_quality: std::collections::HashMap::new(),
+    }
+}
+
+fn complete_test_airbox_boundaries(mesh: &mut fullmag_ir::MeshIR) {
+    use std::collections::BTreeMap;
+
+    let mut topology: BTreeMap<[u32; 3], Vec<bool>> = BTreeMap::new();
+    for (index, element) in mesh.elements.iter().enumerate() {
+        let is_air = mesh.element_markers.get(index).copied().unwrap_or(1) == 0;
+        for mut face in [
+            [element[0], element[1], element[2]],
+            [element[0], element[1], element[3]],
+            [element[0], element[2], element[3]],
+            [element[1], element[2], element[3]],
+        ] {
+            face.sort_unstable();
+            topology.entry(face).or_default().push(is_air);
+        }
+    }
+    let existing = mesh
+        .boundary_faces
+        .iter()
+        .map(|face| {
+            let mut key = *face;
+            key.sort_unstable();
+            key
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut next_marker = mesh
+        .boundary_markers
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    let outer_marker = if mesh.boundary_markers.contains(&99) {
+        99
+    } else {
+        let marker = next_marker;
+        next_marker = next_marker.saturating_add(1);
+        marker
+    };
+    let magnetic_marker = next_marker;
+    next_marker = next_marker.saturating_add(1);
+    let interface_marker = next_marker;
+    for (face, adjacent) in topology {
+        if existing.contains(&face) {
+            continue;
+        }
+        let marker = match adjacent.as_slice() {
+            [is_air] if *is_air => outer_marker,
+            [is_air] if !*is_air => magnetic_marker,
+            [first, second] if first != second => interface_marker,
+            _ => continue,
+        };
+        mesh.boundary_faces.push(face);
+        mesh.boundary_markers.push(marker);
     }
 }
 
@@ -4141,7 +4207,7 @@ fn fem_plan_conformal_shared_domain_duplicates_interface_nodes_for_cuda() {
                     [0.0, 0.0, 1.0],
                     [0.0, 0.0, -1.0],
                 ],
-                elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+                elements: vec![[0, 1, 2, 3], [0, 2, 1, 4]],
                 element_markers: vec![1, 2],
                 boundary_faces: vec![[0, 1, 3], [0, 1, 4]],
                 boundary_markers: vec![10, 20],
@@ -4242,7 +4308,7 @@ fn fem_plan_four_body_shared_domain_populates_region_materials_on_cuda() {
         [0, 4, 2, 3],
         [0, 1, 5, 3],
         [0, 1, 2, 6],
-        [0, 7, 2, 8],
+        [0, 7, 8, 2],
     ];
     let element_markers = vec![1, 2, 3, 4, 0];
 
@@ -6134,6 +6200,14 @@ fn fem_eigen_allows_k0_kittel_synthetic_demag_factor_floquet_path() {
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
         fullmag_ir::EnergyTermIR::Demag {
@@ -6283,6 +6357,14 @@ fn fem_eigen_allows_k0_kittel_periodic_airbox_shared_domain_path() {
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
         fullmag_ir::EnergyTermIR::Demag {
@@ -6649,6 +6731,14 @@ fn fem_eigen_auto_demag_resolves_to_poisson_robin_on_shared_domain_mesh_with_air
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
         fullmag_ir::EnergyTermIR::Demag {
@@ -7029,6 +7119,14 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
         fullmag_ir::EnergyTermIR::Demag {
@@ -7439,7 +7537,7 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
     let err = plan(&nonzero_k).expect_err("nonzero-k response should be gated");
     assert!(err.reasons.iter().any(|reason| {
         reason.contains("supported frequency-domain slices")
-            && reason.contains("nonzero-k driven response requires spin_wave_bc=floquet")
+            && reason.contains("nonzero-k Floquet/Bloch driven response requires spin_wave_bc=floquet")
     }));
 
     let mut periodic_without_pairs = fem_frequency_response_mesh_asset_problem();
@@ -8132,6 +8230,13 @@ fn fem_frequency_response_periodic_airbox_domain_problem() -> ProblemIR {
         object_region_markers: Vec::new(),
         build_report: None,
     });
+    if let Some(mesh) = geometry_assets
+        .fem_domain_mesh_asset
+        .as_mut()
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
     ir.energy_terms = vec![
         fullmag_ir::EnergyTermIR::Exchange,
         fullmag_ir::EnergyTermIR::Demag {
@@ -8505,6 +8610,14 @@ fn fem_plan_succeeds_when_shared_domain_has_domain_mesh_asset() {
             build_report: None,
         }),
     });
+    if let Some(mesh) = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .and_then(|asset| asset.mesh.as_mut())
+    {
+        complete_test_airbox_boundaries(mesh);
+    }
 
     let result = plan(&ir);
     assert!(

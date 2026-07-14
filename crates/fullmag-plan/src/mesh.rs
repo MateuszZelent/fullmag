@@ -871,13 +871,32 @@ pub(crate) fn pack_mesh_by_analysis(
         part.node_indices = node_indices;
     }
 
-    let (outer_boundary_marker, _marker_source) = certified_airbox_boundary_marker(&reordered_mesh)?;
+    // Boundary-role certification is required by airbox demag configuration,
+    // but shared-domain segmentation is also used by non-demag studies.  Do
+    // not make those studies fail merely because their mesh has no certified
+    // outer boundary; materialize the outer-boundary part whenever the role is
+    // available and let build_air_box_config enforce the strict contract for
+    // demag paths.
     let outer_boundary_face_indices = reordered_mesh
-        .boundary_markers
-        .iter()
-        .enumerate()
-        .filter_map(|(index, marker)| (*marker == outer_boundary_marker).then_some(index as u32))
-        .collect::<Vec<_>>();
+        .certify_airbox_boundary_roles()
+        .ok()
+        .and_then(|roles| {
+            roles
+                .iter()
+                .find(|entry| entry.role == fullmag_ir::BoundaryRole::GammaOut)
+                .and_then(|entry| u32::try_from(entry.marker).ok())
+        })
+        .map(|outer_boundary_marker| {
+            reordered_mesh
+                .boundary_markers
+                .iter()
+                .enumerate()
+                .filter_map(|(index, marker)| {
+                    (*marker == outer_boundary_marker).then_some(index as u32)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     if !outer_boundary_face_indices.is_empty() {
         let node_indices =
             collect_boundary_face_node_indices(&reordered_mesh, &outer_boundary_face_indices);
