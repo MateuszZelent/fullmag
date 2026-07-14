@@ -5,9 +5,7 @@
 //! initial-state field.  This module provides the backend-neutral classifier
 //! used by those consumers to derive the smallest invalidation set.
 
-use crate::{
-    SceneDocument, SceneInitialMagnetization, SceneObject, SceneObjectRegion, SceneTextureOverride,
-};
+use crate::{SceneDocument, SceneObject, SceneObjectRegion};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

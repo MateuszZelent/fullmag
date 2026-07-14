@@ -11899,6 +11899,26 @@
             "minimum": 0,
             "type": "integer"
           },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "scene_revision": {
             "format": "int64",
             "minimum": 0,
@@ -11907,6 +11927,10 @@
         },
         "required": [
           "scene_revision",
+          "region_topology_revision",
+          "region_membership_revision",
+          "region_coefficients_revision",
+          "region_initial_state_revision",
           "authored_region_count",
           "material_parameter_field_count",
           "coupling_count",
@@ -12202,6 +12226,26 @@
             "minimum": 0,
             "type": "integer"
           },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "scalars_revision": {
             "format": "int64",
             "minimum": 0,
@@ -12265,7 +12309,11 @@
           "mesh_build_revision",
           "commands_revision",
           "stages_revision",
-          "visualization_state_revision"
+          "visualization_state_revision",
+          "region_topology_revision",
+          "region_membership_revision",
+          "region_coefficients_revision",
+          "region_initial_state_revision"
         ],
         "type": "object"
       },

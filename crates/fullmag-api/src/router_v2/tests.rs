@@ -723,6 +723,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -1307,6 +1308,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -1458,6 +1460,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
     *state.current_live_state.write().await = Some(snapshot);
@@ -1891,6 +1894,10 @@ async fn status_returns_200_with_live_session() {
     assert_eq!(json["resources"]["workspace_revision"], 0);
     assert_eq!(json["resources"]["mesh_revision"], 0);
     assert_eq!(json["resources"]["mesh_build_revision"], 0);
+    assert_eq!(json["resources"]["region_topology_revision"], 0);
+    assert_eq!(json["resources"]["region_membership_revision"], 0);
+    assert_eq!(json["resources"]["region_coefficients_revision"], 0);
+    assert_eq!(json["resources"]["region_initial_state_revision"], 0);
     assert_eq!(json["resources"]["commands_revision"], 0);
     assert_eq!(json["resources"]["stages_revision"], 0);
     assert!(json["resources"]["scene_revision"].is_null());
@@ -8156,10 +8163,11 @@ async fn mesh_universe_config_put_commits_scene_projection() {
     assert_eq!(json["config"]["airbox_grading"], "linear");
 
     let guard = state.current_live_state.read().await;
-    let committed = guard
+    let committed_ref = guard
         .as_ref()
         .and_then(|snapshot| snapshot.scene_document.as_ref())
         .expect("scene document committed");
+    let committed = (*committed_ref).clone();
     let universe = committed
         .study
         .universe_mesh
@@ -8247,7 +8255,8 @@ async fn mesh_shared_domain_config_put_commits_scene_projection() {
     let committed = guard
         .as_ref()
         .and_then(|snapshot| snapshot.scene_document.as_ref())
-        .expect("scene document committed");
+        .expect("scene document committed")
+        .clone();
     assert_eq!(committed.study.shared_domain_mesh.algorithm_3d, 10);
     assert_eq!(committed.study.shared_domain_mesh.hmax, "3e-9");
     assert_eq!(
@@ -8309,7 +8318,8 @@ async fn mesh_object_config_put_commits_scene_projection() {
     let committed = guard
         .as_ref()
         .and_then(|snapshot| snapshot.scene_document.as_ref())
-        .expect("scene document committed");
+        .expect("scene document committed")
+        .clone();
     let object = committed
         .objects
         .iter()
@@ -8461,6 +8471,9 @@ async fn authoring_scene_put_commits_scene_document() {
     let mut updated = sample_scene_document();
     updated.revision = 5;
     updated.scene.name = "Authoring Scene".to_string();
+    updated.objects[0].geometry.geometry_params = serde_json::json!({
+        "size": [2.0, 1.0, 1.0]
+    });
 
     let response = app
         .oneshot(
@@ -8484,8 +8497,42 @@ async fn authoring_scene_put_commits_scene_document() {
     let committed = guard
         .as_ref()
         .and_then(|snapshot| snapshot.scene_document.as_ref())
-        .expect("scene document committed");
+        .expect("scene document committed")
+        .clone();
     assert_eq!(committed.scene.name, "Authoring Scene");
+    let revisions_after_topology = guard
+        .as_ref()
+        .map(|snapshot| snapshot.region_realization_revisions)
+        .expect("region revisions should be present");
+    assert!(revisions_after_topology.topology > 0);
+    assert_eq!(revisions_after_topology.membership, 0);
+    assert_eq!(revisions_after_topology.coefficients, 0);
+    assert_eq!(revisions_after_topology.initial_state, 0);
+    drop(guard);
+
+    let mut metadata_only = committed;
+    metadata_only.scene.name = "Metadata Only".to_string();
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v2/sessions/current/model/scene")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::to_string(&metadata_only).expect("serialize metadata-only scene"),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let guard = state.current_live_state.read().await;
+    let revisions_after_metadata = guard
+        .as_ref()
+        .map(|snapshot| snapshot.region_realization_revisions)
+        .expect("region revisions should remain present");
+    assert_eq!(revisions_after_metadata, revisions_after_topology);
 }
 
 #[tokio::test]

@@ -2726,6 +2726,15 @@ pub(crate) async fn commit_current_live_scene_document(
             snapshot.scene_document = Some(current_scene);
         }
         let previous_scene = snapshot.scene_document.clone();
+        let region_impact = previous_scene
+            .as_ref()
+            .map(|before| fullmag_authoring::classify_region_realization_impact(before, &scene_document))
+            .unwrap_or(fullmag_authoring::RegionRealizationImpact {
+                topology: true,
+                membership: true,
+                coefficients: true,
+                initial_state: true,
+            });
         let previous_mesh_signature = previous_scene.as_ref().map(scene_mesh_signature);
         let next_revision = snapshot
             .scene_document
@@ -2751,6 +2760,9 @@ pub(crate) async fn commit_current_live_scene_document(
         snapshot.builder_adapter = Some(builder_state);
         let next_mesh_signature = scene_mesh_signature(&scene_document);
         snapshot.scene_document = Some(scene_document.clone());
+        snapshot.region_realization_revisions = snapshot
+            .region_realization_revisions
+            .advance(region_impact);
         let allow_live_magnetization_rebuild = snapshot
             .live_state
             .as_ref()

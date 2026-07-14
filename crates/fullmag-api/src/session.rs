@@ -930,6 +930,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     }
 }
 

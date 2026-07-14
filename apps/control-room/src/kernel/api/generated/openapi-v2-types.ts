@@ -5834,6 +5834,14 @@ export interface components {
             /** Format: int64 */
             material_parameter_field_count: number;
             /** Format: int64 */
+            region_coefficients_revision: number;
+            /** Format: int64 */
+            region_initial_state_revision: number;
+            /** Format: int64 */
+            region_membership_revision: number;
+            /** Format: int64 */
+            region_topology_revision: number;
+            /** Format: int64 */
             scene_revision: number;
         };
         RegionPatchRequest: {
@@ -5902,6 +5910,14 @@ export interface components {
             mesh_build_revision: number;
             /** Format: int64 */
             mesh_revision: number;
+            /** Format: int64 */
+            region_coefficients_revision: number;
+            /** Format: int64 */
+            region_initial_state_revision: number;
+            /** Format: int64 */
+            region_membership_revision: number;
+            /** Format: int64 */
+            region_topology_revision: number;
             /** Format: int64 */
             scalars_revision: number;
             /** Format: int64 */

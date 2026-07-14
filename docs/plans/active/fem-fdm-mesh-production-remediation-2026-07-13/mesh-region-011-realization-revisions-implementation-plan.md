@@ -53,3 +53,13 @@ struct RegionRealizationRevisions {
 - [x] Testy jednostkowe: `cargo test -p fullmag-authoring region_revisions --lib` — 3 passed.
 - [ ] Session/API status, plans, artifacts, ETags/cache keys i run preconditions nie konsumują jeszcze tuple; pozostają do wdrożenia w Tasks 2–3.
 - [ ] Brak jeszcze atomicznego commit/classifiera używanego przez istniejące API mutacji regionów; obecny moduł jest kontraktem backend-neutralnym i nie zmienia dotychczasowego lifecycle.
+
+## Evidence update (2026-07-14, API/session slice)
+
+- [x] `SessionStateResponse` oraz persisted live snapshot przechowują niezależny tuple rewizji; pierwszy commit sceny zwiększa wszystkie lane'y, a kolejne commity używają classifiera i aktualizują tylko zależne lane'y.
+- [x] Thin status publikuje `region_topology_revision`, `region_membership_revision`, `region_coefficients_revision` i `region_initial_state_revision`; `RegionOwnedArtifactProvenance` zapisuje ten sam tuple.
+- [x] OpenAPI v2 JSON i wygenerowane typy Control Room zawierają cztery pola rewizji.
+- [x] `cargo test -p fullmag-api router_v2::tests::authoring_scene_put_commits_scene_document --no-fail-fast -- --nocapture` — 1 passed.
+- [x] `cargo test -p fullmag-api router_v2::tests::status_returns_200_with_live_session --no-fail-fast -- --nocapture` — 1 passed.
+- [x] `cargo check -p fullmag-api` — passed; only pre-existing `FrequencyResponseProgressMetadata` dead-code warning.
+- [ ] Cache keys/ETags, plans, runtime artifacts, stale-run preconditions and Control Room consumers do not yet consume the tuple; managed/API hygiene and browser gates remain open.
