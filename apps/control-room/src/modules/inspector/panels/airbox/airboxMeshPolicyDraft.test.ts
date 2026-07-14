@@ -9,9 +9,9 @@ import {
   draftIdentityKeyForUniverseMeshPolicyResource,
   draftKeyForUniverseMeshPolicyResource,
   formatUniverseMeshPolicyConfig,
-} from "./AirboxMeshPolicyPanelModel";
+} from "./airboxMeshPolicyDraft";
 
-describe("AirboxMeshPolicyPanelModel", () => {
+describe("Airbox mesh policy draft", () => {
   it("formats nullable universe mesh config as an editable object draft", () => {
     expect(formatUniverseMeshPolicyConfig(null)).toBe("{}");
     expect(
@@ -67,7 +67,7 @@ describe("AirboxMeshPolicyPanelModel", () => {
     ).toBe(true);
   });
 
-  it("shows effective defaults without copying them into raw universe policy JSON", () => {
+  it("never hydrates the authored draft from backend-effective values", () => {
     const resource = {
       config: null,
       effective_config: {
@@ -80,22 +80,63 @@ describe("AirboxMeshPolicyPanelModel", () => {
     };
 
     expect(
-      draftFromUniverseMeshPolicyResource(resource, {
-        effectiveTarget: {
-          maximum_element_size: 2e-7,
-          minimum_element_size: 5e-8,
-        },
-      }),
+      draftFromUniverseMeshPolicyResource(resource),
     ).toMatchObject({
-      airboxGrading: "geometric",
-      airboxGrowthRate: "1.3",
-      airboxHmax: "2e-7",
-      airboxHmin: "5e-8",
-      airboxMode: "auto",
+      airboxGrading: "auto",
+      airboxGrowthRate: "",
+      airboxHmax: "",
+      airboxHmin: "",
+      airboxMode: "",
+      authoredConfigPresent: false,
       configText: "{}",
-      paddingX: "0",
-      paddingY: "0",
-      paddingZ: "0",
+      paddingX: "",
+      paddingY: "",
+      paddingZ: "",
+    });
+  });
+
+  it("does not materialize backend-effective values when null authored config is applied untouched", () => {
+    const draft = draftFromUniverseMeshPolicyResource({
+      config: null,
+      effective_config: {
+        airbox_grading: "geometric",
+        airbox_growth_rate: 1.3,
+        mode: "auto",
+        padding: [0, 0, 0],
+      },
+      revision: 15,
+    });
+
+    expect(buildAirboxMeshPolicyReplaceRequest(draft)).toEqual({ request: null });
+  });
+
+  it("preserves omitted grading when unrelated JSON is authored from null config", () => {
+    const draft = {
+      ...draftFromUniverseMeshPolicyResource({
+        config: null,
+        effective_config: { airbox_grading: "geometric" },
+        revision: 16,
+      }),
+      configText: '{"optimize":true}',
+    };
+
+    expect(buildAirboxMeshPolicyReplaceRequest(draft)).toEqual({
+      request: { config: { optimize: true } },
+    });
+  });
+
+  it("preserves omitted grading when unrelated authored JSON changes", () => {
+    const draft = {
+      ...draftFromUniverseMeshPolicyResource({
+        config: { optimize: true },
+        effective_config: { airbox_grading: "geometric" },
+        revision: 17,
+      }),
+      configText: '{"optimize":true,"smoothing_steps":4}',
+    };
+
+    expect(buildAirboxMeshPolicyReplaceRequest(draft)).toEqual({
+      request: { config: { optimize: true, smoothing_steps: 4 } },
     });
   });
 
@@ -120,6 +161,8 @@ describe("AirboxMeshPolicyPanelModel", () => {
 
   it("builds a replace request while preserving unrelated universe mesh config keys", () => {
     const result = buildAirboxMeshPolicyReplaceRequest({
+      authoredConfigPresent: true,
+      airboxGradingAuthored: true,
       airboxGrading: "geometric",
       airboxGrowthRate: "1.35",
       airboxHmax: "5e-9",

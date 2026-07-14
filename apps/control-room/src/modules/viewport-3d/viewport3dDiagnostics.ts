@@ -67,6 +67,7 @@ export interface Viewport3DDiagnosticsInput {
   objectCount: number;
   manifestCarrierDegradedCount?: number;
   manifestCarrierKind?: string | null;
+  manifestCarrierRejectedCount?: number;
   pipelineDiagnostics?: readonly Viewport3DPipelineDiagnosticSummary[];
   quantityId: string;
   surfaceColorStatus?: string | null;
@@ -407,6 +408,11 @@ export function buildViewport3DDiagnostics(
     ...(input.manifestCarrierKind
       ? [
           `carrier:${input.manifestCarrierKind}/${input.manifestCarrierDegradedCount ?? 0}`,
+        ]
+      : []),
+    ...((input.manifestCarrierRejectedCount ?? 0) > 0
+      ? [
+          `unaddressable-render-target:${input.manifestCarrierRejectedCount}`,
         ]
       : []),
     `obj:${input.objectCount}`,

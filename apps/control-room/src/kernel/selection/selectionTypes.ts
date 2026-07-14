@@ -17,6 +17,7 @@ type ObjectSelectionKind =
   | "object.region.material"
   | "object.region.texture"
   | "object.region.visualization"
+  | "object.region.visualization.debug"
   | "object.region.regions"
   | "object.region.diagnostics"
   | "object.region-magnetic-texture"
@@ -28,6 +29,7 @@ type ObjectSelectionKind =
   | "object.mesh"
   | "object.extension.topological-charge"
   | "object.visualization"
+  | "object.visualization.debug"
   | "object.mode_visualization"
   | "object.mode_visualization.group"
   | "object.mode_visualization.field"
@@ -68,6 +70,8 @@ export function visualizationObjectIdForMeshPartLike(part: {
 
 export type SelectionRef =
   | {
+      boundaryFaceIndex?: number | null;
+      carrierPartId?: string;
       kind: ObjectSelectionKind;
       nodeId: string;
       objectId: string;
@@ -77,18 +81,30 @@ export type SelectionRef =
       visualizationTargetId: `object:${string}` | RegionVisualizationTargetId;
     }
   | {
-      kind: "airbox.mesh" | "airbox.mesh-quality" | "airbox.visualization";
+      boundaryFaceIndex?: number | null;
+      carrierPartId?: string;
+      kind:
+        | "airbox.root"
+        | "airbox.mesh"
+        | "airbox.mesh.parameters"
+        | "airbox.mesh.quality-gates"
+        | "airbox.mesh.statistics"
+        | "airbox.mesh.topology"
+        | "airbox.mesh.build"
+        | "airbox.visualization"
+        | "airbox.visualization.debug";
       nodeId: string;
       type: "airbox";
       visualizationTargetId: "airbox";
     }
   | {
       boundaryFaceIndex?: number | null;
+      carrierPartId?: string;
       kind: "mesh-part" | "mesh-part-airbox";
       nodeId: string;
       objectId: string | null;
       type: "mesh-part";
-      visualizationTargetId: `mesh-part:${string}`;
+      visualizationTargetId: string;
     }
   | {
       centroid: [number, number, number] | null;
@@ -310,6 +326,9 @@ export function selectionRefEquals(
         left.objectId === right.objectId &&
         nullableStringEquals(left.extensionId, right.extensionId) &&
         nullableStringEquals(left.regionId, right.regionId) &&
+        nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
+        (left.boundaryFaceIndex ?? null) ===
+          (right.boundaryFaceIndex ?? null) &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "airbox":
@@ -317,6 +336,9 @@ export function selectionRefEquals(
         right.type === "airbox" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
+        (left.boundaryFaceIndex ?? null) ===
+          (right.boundaryFaceIndex ?? null) &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "mesh-part":
@@ -324,6 +346,7 @@ export function selectionRefEquals(
         right.type === "mesh-part" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
         nullableStringEquals(left.objectId, right.objectId) &&
         (left.boundaryFaceIndex ?? null) ===
           (right.boundaryFaceIndex ?? null) &&

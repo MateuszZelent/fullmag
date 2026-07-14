@@ -113,7 +113,8 @@ describe("resolveViewport3DMeshQualityLegend", () => {
       "utf8",
     );
 
-    expect(source).toContain('type: "mesh-part"');
+    expect(source).toContain("viewportSelectionForMeshPart(address");
+    expect(source).toContain("carrierPartId: partSelection.carrierPartId");
     expect(source).toContain("boundaryFaceIndex: partSelection.boundaryFaceIndex");
   });
 

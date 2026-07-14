@@ -91,6 +91,7 @@ void observable_copy_prefers_visual_demag_and_effective_fields() {
     ctx.demag.h_visual_xyz = {11.0, 12.0, 13.0, 14.0, 15.0, 16.0};
     ctx.effective_field.h_xyz = {21.0, 22.0, 23.0, 24.0, 25.0, 26.0};
     ctx.effective_field.h_visual_xyz = {31.0, 32.0, 33.0, 34.0, 35.0, 36.0};
+    ctx.gpu_state.device.lifecycle.allocated = true;
 
     double out[6] = {};
     std::string error;
@@ -101,7 +102,7 @@ void observable_copy_prefers_visual_demag_and_effective_fields() {
             out,
             6,
             error) == FULLMAG_FEM_OK,
-        "visual demag field copy should succeed");
+        "visual demag field copy should succeed without downloading the masked GPU field");
     check(out[0] == 11.0 && out[5] == 16.0, "demag copy must prefer visual field");
     check(
         ctx.transfer_audit.audit.counters.d2h_bytes == sizeof(out) &&
@@ -115,7 +116,7 @@ void observable_copy_prefers_visual_demag_and_effective_fields() {
             out,
             6,
             error) == FULLMAG_FEM_OK,
-        "visual effective field copy should succeed");
+        "visual effective field copy should succeed without downloading the masked GPU field");
     check(out[0] == 31.0 && out[5] == 36.0, "effective field copy must prefer visual field");
 }
 

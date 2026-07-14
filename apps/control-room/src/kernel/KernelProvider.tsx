@@ -68,6 +68,7 @@ import { CameraRegistryController } from "./visualization/CameraRegistryControll
 import { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOverlayCommandContributions";
 import { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
+import { VisualizationDebugController } from "./visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
 import { resolveControlRoomModules } from "@/modules";
@@ -115,6 +116,7 @@ function createKernel(): KernelApi {
   });
   const analysisFieldOverlay = new AnalysisFieldOverlayController();
   const visualization = new ObjectVisualizationController();
+  const visualizationDebug = new VisualizationDebugController();
   const visualizationSync = new VisualizationRegistrySyncController({
     api: api.visualization,
     resources,
@@ -173,6 +175,7 @@ function createKernel(): KernelApi {
     resources,
     selection,
     visualization,
+    visualizationDebug,
     visualizationSync,
   };
 }

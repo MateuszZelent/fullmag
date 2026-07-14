@@ -118,6 +118,35 @@ export function expandExplorerNodes(tabId: ExplorerTabId, nodeIds: readonly stri
   });
 }
 
+export function revealExplorerNode(
+  tabId: ExplorerTabId,
+  nodeId: string,
+  ancestorIds: readonly string[],
+): void {
+  const state = explorerStore.getSnapshot();
+  const expanded = new Set(state.expandedIds[tabId]);
+  let expansionChanged = false;
+  for (const ancestorId of ancestorIds) {
+    if (expanded.has(ancestorId)) continue;
+    expanded.add(ancestorId);
+    expansionChanged = true;
+  }
+  if (
+    state.activeTab === tabId &&
+    state.keyboardRow === nodeId &&
+    !expansionChanged
+  ) {
+    return;
+  }
+  explorerStore.setState({
+    activeTab: tabId,
+    expandedIds: expansionChanged
+      ? { ...state.expandedIds, [tabId]: expanded }
+      : state.expandedIds,
+    keyboardRow: nodeId,
+  });
+}
+
 export function activateTextureLoadNode(objectId: string): void {
   const state = explorerStore.getSnapshot();
   explorerStore.setState({

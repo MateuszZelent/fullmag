@@ -1,5 +1,13 @@
 # 06. Performance, WebGL, workery i pamięć
 
+## Stan reaudytu 2026-07-14
+
+F3D-019–F3D-025 pozostają **naprawione w pierwotnie zdefiniowanym zakresie**.
+W szczególności F3D-022 potwierdza współdzielenie uploadu positions na
+syntetycznym FEM, ale nie obejmuje kosztu wyliczania surface colors i vector
+segments dla około 833–909 tys. tetraedrów. Ten brak budżetu i progresywnego
+renderowania jest nowym F3D-029.
+
 Findings oznaczone **M** opisują realną lukę ownership lub brak ograniczenia w
 kodzie, ale rozmiar efektu musi zostać potwierdzony pomiarem prawdziwego WebGL.
 Plan naprawy zaczyna się wtedy od instrumentacji, nie od obniżania jakości obrazu.

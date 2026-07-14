@@ -3239,6 +3239,83 @@ describe("viewport3dRenderModel", () => {
     expect(segments?.[10]).toBeCloseTo(9.5);
   });
 
+  it("renders sampled airbox vectors from the canonical target field buffer", () => {
+    const positions: number[] = [];
+    for (let node = 0; node < 12; node += 1) {
+      positions.push(node, 0, 0);
+    }
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        boundaryFaceCount: 0,
+        boundaryFaces: new Uint32Array(),
+        boundaryMarkers: new Uint32Array(),
+        elementCount: 0,
+        elementMarkers: new Uint32Array(),
+        indices: new Uint32Array(),
+        nodeCount: 12,
+        positions: new Float64Array(positions),
+      },
+      [],
+      [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          id: "airbox",
+          label: "Airbox",
+          node_indices: Array.from({ length: 12 }, (_, index) => index),
+          role: "air",
+        },
+      ],
+      undefined,
+      {
+        meshGenerationId: "generation-1",
+        meshRevision: 7,
+        meshTopologyHash: "topology-hash-1",
+      },
+    );
+    const fieldVector: DecodedFieldVector = {
+      domainGenerationId: "generation-1",
+      dtype: "float64",
+      grid: [2, 1, 1],
+      indexing: "sampled_node_indices",
+      meshTopologyHash: "topology-hash-1",
+      nComp: 3,
+      nodeIndices: new Uint32Array([6, 9]),
+      pointCount: 2,
+      quantityId: "H_demag",
+      valueCount: 6,
+      values: new Float64Array([1, 0, 0, 1, 0, 0]),
+    };
+    const targetBuffer = buildViewport3DTargetFieldBuffer({
+      domain: {
+        domainGenerationId: "generation-1",
+        meshTopologyHash: "topology-hash-1",
+        meshTopologyRevision: "7",
+        pointCount: 12,
+      },
+      fieldVector,
+      query: {
+        component: "full",
+        max_samples: 2,
+        scope_id: "part:__air__",
+        scope_kind: "airbox",
+      },
+      targetIds: ["airbox"],
+      topologyRevision: "7",
+    });
+
+    const fieldModel = buildViewport3DFieldRenderModel(topologyModel, null, 1, {
+      partQuantityIds: new Map([["airbox", "H_demag"]]),
+      partTargetFieldBuffers: new Map([["airbox", targetBuffer]]),
+      partVectorBudgets: new Map([["airbox", 2]]),
+      scalarColorsVisible: false,
+    });
+
+    expect(targetBuffer.capability).toBe("full-vector-sampled");
+    expect(fieldModel?.partVectorSegments.get("airbox")?.length).toBe(14);
+    expect(fieldModel?.targetPasses.get("airbox")?.vectors.degradation).toBeNull();
+  });
+
   it("builds sampled magnetic part vectors at matching global topology positions", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       {

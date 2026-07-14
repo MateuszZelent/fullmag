@@ -25,6 +25,7 @@ import type { KernelApi } from "@/kernel/types";
 import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { CameraRegistryController } from "@/kernel/visualization/CameraRegistryController";
 import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisualizationController";
+import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
 
 import { selectExplorerNode } from "./explorerSelection";
@@ -62,6 +63,7 @@ function makeKernel(): KernelApi {
     resources,
     selection: new SelectionController(bus),
     visualization: new ObjectVisualizationController(),
+    visualizationDebug: new VisualizationDebugController(),
     visualizationSync: new VisualizationRegistrySyncController({
       api: api.visualization,
       resources,
@@ -70,6 +72,32 @@ function makeKernel(): KernelApi {
 }
 
 describe("selectExplorerNode", () => {
+  it("selects an orphan mesh fallback using its Explorer address and carrier metadata", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:mesh:unassigned:part%3Aorphan",
+      kind: "mesh.unassigned.part",
+      label: "Recovered volume",
+      meshPartId: "part:orphan",
+      parentId: "model:mesh:unassigned",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "mesh-part",
+      nodeId: node.id,
+      ref: {
+        carrierPartId: "part:orphan",
+        kind: "mesh-part",
+        nodeId: node.id,
+        objectId: null,
+        type: "mesh-part",
+        visualizationTargetId: "part:orphan",
+      },
+    });
+  });
+
   it("sets kernel selection and emits workspace selection change", () => {
     const kernel = makeKernel();
     const events: KernelEventMap["workspace:selection-changed"][] = [];
@@ -129,6 +157,82 @@ describe("selectExplorerNode", () => {
         type: "airbox",
         visualizationTargetId: "airbox",
       },
+    });
+  });
+
+  it.each([
+    ["airbox.root", "model:airbox"],
+    ["airbox.mesh.parameters", "model:airbox:mesh:parameters"],
+    ["airbox.mesh.quality-gates", "model:airbox:mesh:quality-gates"],
+    ["airbox.mesh.statistics", "model:airbox:mesh:statistics"],
+    ["airbox.mesh.topology", "model:airbox:mesh:topology"],
+    ["airbox.mesh.build", "model:airbox:mesh:build"],
+    ["airbox.visualization.debug", "model:airbox:visualization:debug"],
+  ] as const)("selects %s with canonical Airbox identity", (kind, id) => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id,
+      kind,
+      label: kind,
+      parentId: "model:airbox",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind,
+      nodeId: id,
+      objectId: null,
+      ref: {
+        kind,
+        nodeId: id,
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    });
+  });
+
+  it("canonicalizes object visualization Debug targets ending in _geom", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:object:free-layer_geom:visualization:debug",
+      kind: "object.visualization.debug",
+      label: "Debug",
+      objectId: "free-layer_geom",
+      parentId: "model:object:free-layer_geom:visualization",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      kind: "object.visualization.debug",
+      nodeId: node.id,
+      objectId: "free-layer_geom",
+      type: "scene-object",
+      visualizationTargetId: "object:free-layer",
+    });
+  });
+
+  it("URL-encodes region visualization Debug target IDs", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:object:free-layer:regions:core:visualization:debug",
+      kind: "object.region.visualization.debug",
+      label: "Debug",
+      objectId: "free-layer",
+      parentId: "model:object:free-layer:regions:core:visualization",
+      regionId: "core/shell:top",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      kind: "object.region.visualization.debug",
+      nodeId: node.id,
+      objectId: "free-layer",
+      regionId: "core/shell:top",
+      type: "scene-object",
+      visualizationTargetId: "region:free-layer:core%2Fshell%3Atop",
     });
   });
 
@@ -236,31 +340,6 @@ describe("selectExplorerNode", () => {
         stageId: "hysteresis-1",
         stageIndex: 0,
         type: "study-stage",
-      },
-    });
-  });
-
-  it("selects Airbox quality nodes as realized airbox mesh selections", () => {
-    const kernel = makeKernel();
-    const node: ExplorerNode = {
-      id: "model:mesh:airbox-quality",
-      kind: "airbox.mesh-quality",
-      label: "Airbox Quality",
-      parentId: "model:mesh",
-    };
-
-    selectExplorerNode(kernel, node, "explorer");
-
-    expect(kernel.selection.get()).toMatchObject({
-      kind: "airbox.mesh-quality",
-      label: "Airbox Quality",
-      nodeId: "model:mesh:airbox-quality",
-      objectId: null,
-      ref: {
-        kind: "airbox.mesh-quality",
-        nodeId: "model:mesh:airbox-quality",
-        type: "airbox",
-        visualizationTargetId: "airbox",
       },
     });
   });

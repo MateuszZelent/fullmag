@@ -1503,6 +1503,8 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
     const std::string stage_compute =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
+    const std::string runtime_snapshot =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "snapshot.cpp");
 
     check(
         cmake.find("gpu/cuda/demag_poisson/poisson.cpp") != std::string::npos,
@@ -1553,8 +1555,24 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         stage_compute_header.find("GPU CUDA Poisson demag stage compute header") !=
                 std::string::npos &&
             stage_compute_header.find("bool compute_device_demag_for_device_stage(") !=
+                std::string::npos &&
+            stage_compute_header.find("bool recover_device_demag_visual_field(") !=
                 std::string::npos,
-        "GPU CUDA Poisson demag stage compute header must declare stage compute");
+        "GPU CUDA Poisson demag stage compute header must declare stage compute and snapshot-only full-domain visual recovery");
+    check(
+        stage_compute.find("bool recover_device_demag_visual_field(") !=
+                std::string::npos &&
+            stage_compute.find("auto &visual = gpu.demag_poisson.poisson_gradient;") !=
+                std::string::npos &&
+            stage_compute.find("nullptr,\n        visual.x") != std::string::npos &&
+            stage_compute.find("ctx.demag.h_visual_xyz") != std::string::npos &&
+            runtime_snapshot.find("recover_device_demag_visual_field(") !=
+                std::string::npos,
+        "strict GPU snapshots must recover full-domain H_demag into the dedicated Poisson gradient buffer before observable readback");
+    check(
+        runtime_snapshot.find("ctx.demag.h_visual_xyz = ctx.demag.h_xyz;") ==
+            std::string::npos,
+        "GPU snapshot readback must not replace full-domain visual H_demag with the material-masked solver field");
     check(
         demag_state_header.find("GPU CUDA Poisson demag device-state module header") !=
                 std::string::npos &&

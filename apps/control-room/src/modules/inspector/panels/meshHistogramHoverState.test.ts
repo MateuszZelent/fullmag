@@ -1,8 +1,39 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMeshSizeDistributionHoverBin, resolveActiveHistogramBinIndex } from "./meshHistogramHoverState";
+import {
+  buildMeshSizeDistributionHoverBin,
+  meshSizeDistributionHoverKey,
+  resolveActiveHistogramBinIndex,
+} from "./meshHistogramHoverState";
 
 describe("resolveActiveHistogramBinIndex", () => {
+  it("uses the same semantic key for equivalent Recharts payload allocations", () => {
+    expect(
+      meshSizeDistributionHoverKey({
+        binLabel: "4 nm to 8 nm",
+        count: 20,
+        distributionId: "tetra_size",
+        distributionLabel: "Tetra size",
+        fraction: 0.4,
+        hi: 8e-9,
+        lo: 4e-9,
+        binIndex: 4,
+      }),
+    ).toBe(
+      meshSizeDistributionHoverKey({
+        binLabel: "4 nm to 8 nm",
+        count: 20,
+        distributionId: "tetra_size",
+        distributionLabel: "Tetra size",
+        fraction: 0.4,
+        hi: 8e-9,
+        lo: 4e-9,
+        binIndex: 4,
+      }),
+    );
+    expect(meshSizeDistributionHoverKey(null)).toBe("none");
+  });
+
   it("returns the active tooltip index for hovered histogram columns", () => {
     expect(
       resolveActiveHistogramBinIndex(

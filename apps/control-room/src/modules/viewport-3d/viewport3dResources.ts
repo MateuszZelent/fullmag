@@ -23,6 +23,7 @@ import {
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
   BinaryResourceResult,
+  FieldVectorResponseMetadata,
   FieldVectorQuery,
   ResourceRevision,
 } from "@/kernel/api/apiTypes";
@@ -47,14 +48,17 @@ import { viewport3DFieldUpdateHoldActive } from "./viewport3dFieldUpdateHold";
 const topologyCache = new ResourceCache<DecodedTopology>({
   maxBytes: 96 * 1024 * 1024,
 });
-const fieldVectorCache = new ResourceCache<DecodedFieldVector>({
+const fieldVectorCache = new ResourceCache<
+  DecodedFieldVector,
+  FieldVectorResponseMetadata
+>({
   maxBytes: 128 * 1024 * 1024,
 });
 const qualityDataCache = new ResourceCache<DecodedMeshQualityData>({
   maxBytes: 48 * 1024 * 1024,
 });
 const binaryResourceInflight = new WeakMap<
-  ResourceCache<unknown>,
+  ResourceCache<unknown, unknown>,
   Map<string, InflightBinaryResource<unknown>>
 >();
 
@@ -215,13 +219,13 @@ export function getViewport3DCacheStats() {
   };
 }
 
-export async function loadCachedBinaryResource<TData>(
-  cache: ResourceCache<TData>,
+export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
+  cache: ResourceCache<TData, TMetadata>,
   key: string,
   request: (
     etag?: string | null,
     signal?: AbortSignal,
-  ) => Promise<BinaryResourceResult<TData>>,
+  ) => Promise<BinaryResourceResult<TData, TMetadata>>,
   options: {
     pauseRequest?: () => boolean;
     preferCached?: boolean;
@@ -236,7 +240,7 @@ export async function loadCachedBinaryResource<TData>(
     return cached?.data ?? null;
   }
 
-  const inflight = getInflightBinaryResource<TData>(cache, key);
+  const inflight = getInflightBinaryResource(cache, key);
   if (inflight) {
     retainInflightBinaryResource(inflight, options.signal);
     return inflight.promise;
@@ -267,6 +271,7 @@ export async function loadCachedBinaryResource<TData>(
       byteLength: result.byteLength,
       data: result.data,
       etag: result.etag,
+      metadata: result.responseMetadata,
     });
     return result.data;
   })();
@@ -286,22 +291,22 @@ export async function loadCachedBinaryResource<TData>(
   }
 }
 
-function getInflightBinaryResource<TData>(
-  cache: ResourceCache<TData>,
+function getInflightBinaryResource<TData, TMetadata>(
+  cache: ResourceCache<TData, TMetadata>,
   key: string,
 ): InflightBinaryResource<TData> | null {
   const inflight = binaryResourceInflight
-    .get(cache as ResourceCache<unknown>)
+    .get(cache as ResourceCache<unknown, unknown>)
     ?.get(key);
   return (inflight as InflightBinaryResource<TData> | undefined) ?? null;
 }
 
-function setInflightBinaryResource<TData>(
-  cache: ResourceCache<TData>,
+function setInflightBinaryResource<TData, TMetadata>(
+  cache: ResourceCache<TData, TMetadata>,
   key: string,
   inflight: InflightBinaryResource<TData>,
 ): void {
-  const typedCache = cache as ResourceCache<unknown>;
+  const typedCache = cache as ResourceCache<unknown, unknown>;
   let cacheInflight = binaryResourceInflight.get(typedCache);
   if (!cacheInflight) {
     cacheInflight = new Map<string, InflightBinaryResource<unknown>>();
@@ -310,12 +315,12 @@ function setInflightBinaryResource<TData>(
   cacheInflight.set(key, inflight as InflightBinaryResource<unknown>);
 }
 
-function clearInflightBinaryResource<TData>(
-  cache: ResourceCache<TData>,
+function clearInflightBinaryResource<TData, TMetadata>(
+  cache: ResourceCache<TData, TMetadata>,
   key: string,
   inflight: InflightBinaryResource<TData>,
 ): void {
-  const typedCache = cache as ResourceCache<unknown>;
+  const typedCache = cache as ResourceCache<unknown, unknown>;
   const cacheInflight = binaryResourceInflight.get(typedCache);
   if (!cacheInflight || cacheInflight.get(key) !== inflight) return;
   releaseInflightBinaryResourceListeners(inflight);
@@ -359,8 +364,8 @@ function releaseInflightBinaryResourceListeners<TData>(
   inflight.consumerSignals.clear();
 }
 
-export function cachedBinaryResourceMatchesRevision<TData>(
-  cache: ResourceCache<TData>,
+export function cachedBinaryResourceMatchesRevision<TData, TMetadata>(
+  cache: ResourceCache<TData, TMetadata>,
   key: string,
   revision: ResourceRevision | null,
 ): boolean {

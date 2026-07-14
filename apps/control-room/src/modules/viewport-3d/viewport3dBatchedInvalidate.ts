@@ -49,7 +49,7 @@ function cancelBatchedViewportInvalidate(invalidate: () => void): void {
  * `useThree(s => s.invalidate)` directly in layer components.
  */
 export function useBatchedInvalidate(): () => void {
-  const { invalidate } = useThree();
+  const invalidate = useThree((state) => state.invalidate);
   const invalidateRef = useRef(invalidate);
 
   useEffect(() => {

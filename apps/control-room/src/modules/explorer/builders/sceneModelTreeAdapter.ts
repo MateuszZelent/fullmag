@@ -73,6 +73,7 @@ export function modelTreeSnapshotFromScene(
     materials,
     objects: Array.isArray(scene?.objects)
       ? scene.objects.reduce<ModelTreeObjectSnapshot[]>((objects, object) => {
+          if (isSyntheticAirboxSceneObject(object)) return objects;
           const snapshot = sceneObjectSnapshot(
             object,
             materialById,
@@ -90,6 +91,14 @@ export function modelTreeSnapshotFromScene(
     study: sceneStudySnapshot(scene?.study),
     universe: sceneUniverseSnapshot(scene?.universe),
   };
+}
+
+function isSyntheticAirboxSceneObject(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const object = value as Record<string, unknown>;
+  const id = stringValue(object.id);
+  const role = stringValue(object.role);
+  return id === "__air__" || role === "air" || role === "airbox";
 }
 
 export function modelTreeSnapshotWithStageExecution(

@@ -108,9 +108,12 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("checkMeshDetailsPanelSessionStatusSelector");
     expect(auditScript).toContain("selectMeshDetailsRuntimeStatus");
     expect(auditScript).toContain("meshDetailsRuntimeStatusEquals");
-    expect(auditScript).toContain("checkAirboxMeshPolicyPanelSessionStatusSelector");
-    expect(auditScript).toContain("selectAirboxMeshPolicyRuntimeStatus");
-    expect(auditScript).toContain("airboxMeshPolicyRuntimeStatusEquals");
+    expect(auditScript).toContain("checkAirboxInspectorPanelsResourceOwnership");
+    expect(auditScript).toContain("AirboxMeshBuildPanel build gates");
+    expect(auditScript).toContain("shouldLoadRuntimeMeshBuild");
+    expect(auditScript).toContain("shouldLoadRuntimeMeshSummary");
+    expect(auditScript).toContain("shouldLoadRuntimeMeshManifest");
+    expect(auditScript).toContain("useMeshSharedDomainTopologyResource");
     expect(auditScript).toContain("checkStudyInspectorPanelSessionStatusSelector");
     expect(auditScript).toContain("selectStudyInspectorRuntimeStatus");
     expect(auditScript).toContain("studyInspectorRuntimeStatusEquals");

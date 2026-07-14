@@ -3,6 +3,32 @@ import { describe, expect, it, vi } from "vitest";
 import { ResourceCache } from "./ResourceCache";
 
 describe("ResourceCache", () => {
+  it("stores, replaces, evicts, and preserves typed metadata", () => {
+    const cache = new ResourceCache<string, { revision: number }>({ maxBytes: 2 });
+    cache.set("a", { byteLength: 1, data: "a", metadata: { revision: 1 } });
+    expect(cache.get("a")?.metadata).toEqual({ revision: 1 });
+
+    cache.set("a", { byteLength: 1, data: "b", metadata: { revision: 2 } });
+    expect(cache.get("a")?.metadata).toEqual({ revision: 2 });
+
+    cache.set("b", { byteLength: 2, data: "b", metadata: { revision: 3 } });
+    expect(cache.peek("a")).toBeNull();
+    expect(cache.get("b")?.metadata).toEqual({ revision: 3 });
+
+    cache.set("oversize", {
+      byteLength: 3,
+      data: "large",
+      metadata: { revision: 4 },
+    });
+    expect(cache.get("oversize")?.metadata).toEqual({ revision: 4 });
+  });
+
+  it("keeps metadata absent for caches that do not declare it", () => {
+    const cache = new ResourceCache<string>({ maxBytes: 1 });
+    cache.set("a", { byteLength: 1, data: "a" });
+    expect(cache.get("a")).not.toHaveProperty("metadata");
+  });
+
   it("reuses cached entries and refreshes their LRU position", () => {
     const cache = new ResourceCache<string>({ maxBytes: 3 });
     const evictedA = vi.fn();

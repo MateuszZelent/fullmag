@@ -766,6 +766,29 @@ def write_static_equilibrium_supercell_report(
     payload: dict[str, object] = {
         "schema_version": "fem_static_pbc_supercell_validation.v1",
         "status": status,
+        "comparison_state": "final",
+        "unit_comparison_state": "final",
+        "supercell_comparison_state": "final",
+        "comparison_contract": {
+            "purpose": "independent_relaxed_supercell_convergence",
+            "precision_class": "physical_convergence",
+            "primitive_supercell_equivalence": "not_exact_unless_state_periodicity_is_constrained",
+            "independent_supercell_relaxation": True,
+            "status_semantics": "acceptance_gate_not_exact_equality",
+        },
+        "artifact_provenance": {
+            "unit_cell": {
+                "runtime_solve": True,
+                "diagnostic_fixture": False,
+                "not_a_runtime_solve": False,
+            },
+            "supercell": {
+                "runtime_solve": True,
+                "diagnostic_fixture": False,
+                "not_a_runtime_solve": False,
+            },
+        },
+        "acceptance_basis": "same_local_mapped",
         "unit_cell_artifacts": "unit/artifacts",
         "supercell_artifacts": "supercell/artifacts",
         "repeat_x": 3,
@@ -1846,6 +1869,52 @@ def test_validator_rejects_bad_required_supercell_report_status(tmp_path: Path) 
     assert "supercell comparison report status must be ok" in result.stderr
 
 
+def test_validator_rejects_diagnostic_tiled_fixture_as_physical_supercell_report(
+    tmp_path: Path,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    payload["artifact_provenance"]["supercell"] = {
+        "runtime_solve": False,
+        "diagnostic_fixture": True,
+        "not_a_runtime_solve": True,
+        "fixture_schema_version": "fem_static_pbc_tiled_supercell_fixture.v1",
+    }
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert "must prove an independent runtime solve" in result.stderr
+
+
+def test_validator_rejects_supercell_report_with_nonphysical_comparison_contract(
+    tmp_path: Path,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    payload["comparison_contract"]["purpose"] = "frozen_repeated_state_operator_equivalence"
+    payload["comparison_contract"]["independent_supercell_relaxation"] = False
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert "comparison_contract.purpose must be independent_relaxed_supercell_convergence" in result.stderr
+
+
 def test_validator_rejects_required_z_padding_report_with_excessive_metric(tmp_path: Path) -> None:
     log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
     z_padding_report = tmp_path / "reports" / "z_padding_validation.v1.json"
@@ -1880,6 +1949,41 @@ def test_validator_rejects_required_z_padding_report_with_excessive_robust_h_met
 
     assert result.returncode != 0
     assert "z-padding comparison report metrics.h_demag_p99_relative_error exceeds" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("target", "expected_error"),
+    [
+        ("central_index", "central_cell_extraction.central_cell_index[0] must be an integer"),
+        ("central_count", "central_cell_extraction.magnetic_node_count must be positive"),
+        ("mapped_count", "mapped_central_cell_comparability.magnetic_pair_count must be positive"),
+    ],
+)
+def test_validator_rejects_boolean_supercell_indices_and_counts(
+    tmp_path: Path,
+    target: str,
+    expected_error: str,
+) -> None:
+    log_path = write_summary_fixture(tmp_path, scenario="exchange_coupled", coupled=True)
+    supercell_report = tmp_path / "reports" / "supercell_validation.v1.json"
+    write_static_equilibrium_supercell_report(supercell_report)
+    payload = json.loads(supercell_report.read_text(encoding="utf-8"))
+    if target == "central_index":
+        payload["central_cell_extraction"]["central_cell_index"][0] = True
+    elif target == "central_count":
+        payload["central_cell_extraction"]["magnetic_node_count"] = True
+    else:
+        payload["mapped_central_cell_comparability"]["magnetic_pair_count"] = True
+    supercell_report.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_validator_with_args(
+        log_path,
+        "exchange_coupled",
+        ["--require-supercell-report", str(supercell_report)],
+    )
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
 
 
 def test_validator_rejects_required_supercell_report_with_excessive_metric(tmp_path: Path) -> None:

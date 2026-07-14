@@ -668,6 +668,31 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toMatchObject({ id: "part-film", kind: "part" });
   });
 
+  it("uses the semantic target id rather than an Explorer node id when an orphan manifest is unavailable", () => {
+    expect(
+      resolveObjectVisualizationPanelSelectionTarget({
+        selectedMeshPart: null,
+        selection: {
+          kind: "mesh-part",
+          label: "Recovered volume",
+          nodeId: "model:mesh:unassigned:part%3Aorphan",
+          objectId: null,
+          ref: {
+            carrierPartId: "part:orphan",
+            kind: "mesh-part",
+            nodeId: "model:mesh:unassigned:part%3Aorphan",
+            objectId: null,
+            type: "mesh-part",
+            visualizationTargetId: "part:orphan",
+          },
+        } as never,
+        selectionTarget: { id: "part:orphan", kind: "part" },
+        sceneObjectIds: new Set(),
+        visualizationState: null,
+      }),
+    ).toMatchObject({ id: "part:orphan", kind: "part" });
+  });
+
   it("maps a selected degraded object-segment carrier back to its object target", () => {
     expect(
       resolveObjectVisualizationPanelSelectionTarget({

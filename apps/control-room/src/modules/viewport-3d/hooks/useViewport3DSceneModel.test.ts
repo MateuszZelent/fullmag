@@ -1985,6 +1985,16 @@ describe("useViewport3DSceneModel", () => {
       {
         bounds_max: [1, 1, 1],
         bounds_min: [0, 0, 0],
+        element_count: 24,
+        mesh_part_ids: ["part:film_geom"],
+        name: "Film",
+        region_id: "film",
+        source_object_ids: ["film"],
+        source_region_candidate_id: "film",
+      },
+      {
+        bounds_max: [1, 1, 1],
+        bounds_min: [0, 0, 0],
         element_count: 12,
         mesh_part_ids: ["part:film:core"],
         name: "Core",
@@ -1995,7 +2005,7 @@ describe("useViewport3DSceneModel", () => {
     ] as never;
 
     expect(resolveViewport3DMeshBackedRegionKeys(regions)).toEqual(
-      new Set(["film\u0000film:core"]),
+      new Set(["film\u0000film", "film\u0000film:core"]),
     );
     expect(resolveViewport3DRegionTargetByPartId(regions)).toEqual(
       new Map([

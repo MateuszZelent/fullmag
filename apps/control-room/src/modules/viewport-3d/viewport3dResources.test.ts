@@ -681,6 +681,25 @@ describe("viewport3dResources", () => {
     expect(request.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
   });
 
+  it("preserves field response metadata when a conditional request returns 304", async () => {
+    const cache = new ResourceCache<string, { topologyHash: string }>({
+      maxBytes: 32,
+    });
+    cache.set("field:m", {
+      byteLength: 4,
+      data: "cached",
+      etag: '"field-1"',
+      metadata: { topologyHash: "abc123" },
+    });
+
+    await loadCachedBinaryResource(cache, "field:m", async () => ({
+      etag: '"field-1"',
+      status: "not-modified",
+    }));
+
+    expect(cache.get("field:m")?.metadata).toEqual({ topologyHash: "abc123" });
+  });
+
   it("restores a cached binary entry when it was evicted during a 304 request", async () => {
     const cache = new ResourceCache<string>({ maxBytes: 8 });
     cache.set("topology", {

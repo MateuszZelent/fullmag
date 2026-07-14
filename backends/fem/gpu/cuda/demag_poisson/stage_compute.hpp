@@ -28,6 +28,11 @@ bool compute_device_demag_for_device_stage_fresh(
     void *stream,
     std::string &reason);
 
+bool recover_device_demag_visual_field(
+    Context &ctx,
+    void *stream,
+    std::string &reason);
+
 bool reduce_device_demag_robin_boundary_energy(
     Context &ctx,
     double *result,

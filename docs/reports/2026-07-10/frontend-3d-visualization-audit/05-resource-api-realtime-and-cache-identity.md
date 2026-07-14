@@ -1,5 +1,11 @@
 # 05. Resource-first API, realtime i tożsamość cache
 
+## Stan reaudytu 2026-07-14
+
+F3D-018 pozostaje **naprawione** dla canonical query identity i invalidation.
+Niezależna utrata precyzji `domain_generation_id` w JSON/OpenAPI pozostaje
+niezamkniętą częścią F3D-003.
+
 ## F3D-018 — invalidation pola jest zbyt szerokie, a query identity niespójne
 
 **Priorytet:** P2 — średni

@@ -232,6 +232,44 @@ def write_periodic_pairs_artifact(root: Path) -> None:
     )
 
 
+def fragment_periodic_pairs_artifact(root: Path) -> None:
+    pairs_path = root / "mesh" / "periodic_pairs.v1.json"
+    payload = json.loads(pairs_path.read_text(encoding="utf-8"))
+    original_pairs = payload["pairs"]
+    payload["pairs"] = [
+        json.loads(json.dumps(pair))
+        for pair in original_pairs
+        for _ in range(3)
+    ]
+    payload["pair_count"] = 6
+    payload["paired_node_count"] = 12
+    pairs_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    metadata_path = root / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["mesh"]["periodic_boundary_pair_count"] = 6
+    metadata["mesh"]["periodic_boundary_pair_counts_by_id"] = {
+        "x_faces": 3,
+        "y_faces": 3,
+    }
+    reduction = metadata["demag_runtime"]["periodic_reduction"]
+    reduction["boundary_pair_count"] = 6
+    reduction["boundary_pair_counts_by_id"] = {"x_faces": 3, "y_faces": 3}
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+
+def add_authoritative_mesh_topology(root: Path) -> None:
+    metadata_path = root / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.setdefault("execution_plan", {}).setdefault("backend_plan", {})["mesh"] = {
+        "nodes": [[0.0, 0.0, 0.0] for _ in range(4)],
+        "elements": [[0, 1, 2, 3]],
+        "element_markers": [1],
+        "boundary_faces": [[0, 1, 2] for _ in range(22)],
+    }
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+
 def write_artifacts(
     root: Path,
     *,
@@ -440,6 +478,143 @@ def test_z_padding_report_rejects_candidate_without_periodic_pairs_artifact(
     assert "mesh/periodic_pairs.v1.json" in result.stderr
 
 
+def test_z_padding_report_accepts_fragmented_boundary_pair_definitions(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(
+        reference,
+        e_demag=1.0e-18,
+        universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7],
+    )
+    write_artifacts(
+        candidate,
+        e_demag=1.001e-18,
+        universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8],
+    )
+    fragment_periodic_pairs_artifact(reference)
+    fragment_periodic_pairs_artifact(candidate)
+
+    result = run_report(
+        "z-padding",
+        "--reference",
+        str(reference),
+        "--candidate",
+        str(candidate),
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(report_path.read_text(encoding="utf-8"))["status"] == "ok"
+
+
+def test_z_padding_report_rejects_fragmented_definition_with_different_node_mapping(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    fragment_periodic_pairs_artifact(reference)
+    fragment_periodic_pairs_artifact(candidate)
+    pairs_path = candidate / "mesh" / "periodic_pairs.v1.json"
+    payload = json.loads(pairs_path.read_text(encoding="utf-8"))
+    x_fragments = [pair for pair in payload["pairs"] if pair["pair_id"] == "x_faces"]
+    x_fragments[1]["node_pairs"] = [
+        {"node_a": 0, "node_b": 2},
+        {"node_a": 1, "node_b": 3},
+    ]
+    pairs_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_report(
+        "z-padding", "--reference", str(reference), "--candidate", str(candidate), "--report", str(report_path)
+    )
+
+    assert result.returncode != 0
+    assert "node_pairs must match every fragmented definition" in result.stderr
+
+
+def test_z_padding_report_accepts_last_valid_periodic_node_and_face_indices(tmp_path: Path) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    add_authoritative_mesh_topology(reference)
+    add_authoritative_mesh_topology(candidate)
+
+    result = run_report(
+        "z-padding", "--reference", str(reference), "--candidate", str(candidate), "--report", str(report_path)
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_z_padding_report_rejects_first_periodic_node_index_outside_mesh(tmp_path: Path) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    add_authoritative_mesh_topology(reference)
+    add_authoritative_mesh_topology(candidate)
+    pairs_path = candidate / "mesh" / "periodic_pairs.v1.json"
+    payload = json.loads(pairs_path.read_text(encoding="utf-8"))
+    payload["pairs"][0]["node_pairs"][0]["node_a"] = 4
+    pairs_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_report(
+        "z-padding", "--reference", str(reference), "--candidate", str(candidate), "--report", str(report_path)
+    )
+
+    assert result.returncode != 0
+    assert "node_a must be less than mesh node count 4" in result.stderr
+
+
+def test_z_padding_report_rejects_first_periodic_face_index_outside_mesh(tmp_path: Path) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    add_authoritative_mesh_topology(reference)
+    add_authoritative_mesh_topology(candidate)
+    pairs_path = candidate / "mesh" / "periodic_pairs.v1.json"
+    payload = json.loads(pairs_path.read_text(encoding="utf-8"))
+    payload["pairs"][1]["boundary_face_pairs"][0]["face_b"] = 22
+    pairs_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = run_report(
+        "z-padding", "--reference", str(reference), "--candidate", str(candidate), "--report", str(report_path)
+    )
+
+    assert result.returncode != 0
+    assert "face_b must be less than mesh boundary face count 22" in result.stderr
+
+
+def test_z_padding_report_rejects_boolean_periodic_count(tmp_path: Path) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(reference, e_demag=1.0e-18, universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7])
+    write_artifacts(candidate, e_demag=1.001e-18, universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8])
+    metadata_path = candidate / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["mesh"]["periodic_node_pair_count"] = True
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = run_report(
+        "z-padding", "--reference", str(reference), "--candidate", str(candidate), "--report", str(report_path)
+    )
+
+    assert result.returncode != 0
+    assert "periodic_node_pair_count must be positive" in result.stderr
+
+
 def test_z_padding_report_rejects_candidate_with_periodic_pairs_count_drift(
     tmp_path: Path,
 ) -> None:
@@ -549,6 +724,39 @@ def test_z_padding_report_rejects_candidate_with_bad_seam_flux_diagnostics(
     assert "b_normal_flux_seam_max_T" in result.stderr
 
 
+def test_z_padding_report_rejects_boolean_seam_metric(tmp_path: Path) -> None:
+    reference = tmp_path / "reference" / "artifacts"
+    candidate = tmp_path / "candidate" / "artifacts"
+    report_path = tmp_path / "reports" / "z_padding_validation.v1.json"
+    write_artifacts(
+        reference,
+        e_demag=1.0e-18,
+        universe_size_m=[2.0e-7, 2.0e-7, 1.3e-7],
+    )
+    write_artifacts(
+        candidate,
+        e_demag=1.001e-18,
+        universe_size_m=[2.0e-7, 2.0e-7, 9.0e-8],
+    )
+    seam_path = candidate / "diagnostics" / "fem_static_pbc_demag_seams.v1.json"
+    seams = json.loads(seam_path.read_text(encoding="utf-8"))
+    seams["pair_diagnostics"][0]["m_seam_max"] = False
+    seam_path.write_text(json.dumps(seams), encoding="utf-8")
+
+    result = run_report(
+        "z-padding",
+        "--reference",
+        str(reference),
+        "--candidate",
+        str(candidate),
+        "--report",
+        str(report_path),
+    )
+
+    assert result.returncode != 0
+    assert "m_seam_max must be numeric" in result.stderr
+
+
 def test_z_padding_report_uses_robust_field_stats_not_global_max_outlier(tmp_path: Path) -> None:
     reference = tmp_path / "reference" / "artifacts"
     candidate = tmp_path / "candidate" / "artifacts"
@@ -627,6 +835,9 @@ def test_supercell_report_compares_scaled_demag_density(tmp_path: Path) -> None:
     assert contract["independent_supercell_relaxation"] is True
     assert contract["recommended_h_demag_p99_relative_error_band"] == [0.01, 0.05]
     assert contract["status_semantics"] == "acceptance_gate_not_exact_equality"
+    assert report["artifact_provenance"]["unit_cell"]["runtime_solve"] is True
+    assert report["artifact_provenance"]["supercell"]["runtime_solve"] is True
+    assert report["artifact_provenance"]["supercell"]["diagnostic_fixture"] is False
     assert report["metrics"]["e_demag_density_relative_error"] < 2.0e-2
     assert report["metrics"]["relaxation_state_mean_deviation_relative_error"] == 0.0
     assert report["metrics"]["magnetic_node_count_relative_error"] == 0.0

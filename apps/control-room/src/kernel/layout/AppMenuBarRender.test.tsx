@@ -46,6 +46,17 @@ describe("AppMenuBar", () => {
     expect(html).toContain('aria-label="Switch to light theme"');
   });
 
+  it("connects the API error dialog to its accessible description", () => {
+    const source = readFileSync(appMenuBarSourceUrl, "utf8");
+
+    expect(source).toContain(
+      'aria-describedby="fm-api-connection-error-description"',
+    );
+    expect(source).toContain(
+      '<DialogDescription id="fm-api-connection-error-description">',
+    );
+  });
+
   it("derives the header title and runtime badge from session status", () => {
     expect(
       resolveHeaderSessionDisplay({

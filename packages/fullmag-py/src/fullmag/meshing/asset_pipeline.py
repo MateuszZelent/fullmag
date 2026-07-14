@@ -2366,26 +2366,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 )
                                 break
                             except ValueError as exc:
-                                if "degenerate tetra volume" in str(exc):
-                                    cleanup_fallbacks = list(fallbacks_triggered)
-                                    try:
-                                        cleaned_mesh = _drop_degenerate_tetrahedra(
-                                            result.mesh,
-                                            context="Conformal OCC mesh",
-                                            fallbacks_triggered=cleanup_fallbacks,
-                                        )
-                                        if cleaned_mesh is not result.mesh:
-                                            cleaned_mesh.validate_strict(
-                                                require_positive_orientation=True
-                                            )
-                                            result = _dc_replace(
-                                                result,
-                                                mesh=cleaned_mesh,
-                                            )
-                                            fallbacks_triggered[:] = cleanup_fallbacks
-                                            break
-                                    except ValueError:
-                                        pass
                                 retry = (
                                     _conformal_occ_degenerate_retry(
                                         mesh_options,
@@ -2584,11 +2564,12 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             )
             raise
 
-    mesh = _drop_degenerate_tetrahedra(
-        mesh,
-        context=f"{build_mode} shared-domain mesh",
-        fallbacks_triggered=fallbacks_triggered,
-    )
+    if build_mode != "conformal_occ":
+        mesh = _drop_degenerate_tetrahedra(
+            mesh,
+            context=f"{build_mode} shared-domain mesh",
+            fallbacks_triggered=fallbacks_triggered,
+        )
 
     # Classify elements back to geometries
     source_markers = np.asarray(mesh.element_markers, dtype=np.int32)

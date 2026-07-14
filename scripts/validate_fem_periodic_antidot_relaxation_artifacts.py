@@ -1762,7 +1762,7 @@ def validate_supercell_central_cell_extraction_summary(
     )
     for axis, (value, repeat) in enumerate(zip(central_index, [repeat_x, repeat_y])):
         require(
-            isinstance(value, int),
+            isinstance(value, int) and not isinstance(value, bool),
             f"supercell comparison report central_cell_extraction.central_cell_index[{axis}] must be an integer",
         )
         require(
@@ -1772,7 +1772,7 @@ def validate_supercell_central_cell_extraction_summary(
     for key in ("magnetic_node_count", "field_cell_count"):
         value = extraction.get(key)
         require(
-            isinstance(value, int) and value > 0,
+            isinstance(value, int) and not isinstance(value, bool) and value > 0,
             f"supercell comparison report central_cell_extraction.{key} must be positive",
         )
     for key in ("central_cell_demag_energy_j", "central_cell_torque_apm"):
@@ -1846,7 +1846,7 @@ def validate_supercell_mapped_comparability(report: dict[str, Any]) -> dict[str,
     for key in ("magnetic_pair_count", "field_pair_count"):
         value = mapped.get(key)
         require(
-            isinstance(value, int) and value > 0,
+            isinstance(value, int) and not isinstance(value, bool) and value > 0,
             f"supercell comparison report mapped_central_cell_comparability.{key} must be positive",
         )
     same_local = mapped.get("same_local_discretization")
@@ -2037,6 +2037,47 @@ def validate_supercell_interpolated_comparability(report: dict[str, Any]) -> dic
     return interpolated
 
 
+def validate_physical_supercell_evidence(report: dict[str, Any]) -> None:
+    require(report.get("comparison_state") == "final", "supercell comparison report comparison_state must be final")
+    require(report.get("unit_comparison_state") == "final", "supercell comparison report unit_comparison_state must be final")
+    require(report.get("supercell_comparison_state") == "final", "supercell comparison report supercell_comparison_state must be final")
+    contract = require_object(
+        report.get("comparison_contract"),
+        "supercell comparison report comparison_contract",
+    )
+    require(
+        contract.get("purpose") == "independent_relaxed_supercell_convergence",
+        "supercell comparison report comparison_contract.purpose must be independent_relaxed_supercell_convergence",
+    )
+    require(
+        contract.get("precision_class") == "physical_convergence",
+        "supercell comparison report comparison_contract.precision_class must be physical_convergence",
+    )
+    require(
+        contract.get("independent_supercell_relaxation") is True,
+        "supercell comparison report comparison_contract.independent_supercell_relaxation must be true",
+    )
+    require(
+        contract.get("status_semantics") == "acceptance_gate_not_exact_equality",
+        "supercell comparison report comparison_contract.status_semantics must be acceptance_gate_not_exact_equality",
+    )
+    provenance = require_object(
+        report.get("artifact_provenance"),
+        "supercell comparison report artifact_provenance",
+    )
+    for root_name in ("unit_cell", "supercell"):
+        root = require_object(
+            provenance.get(root_name),
+            f"supercell comparison report artifact_provenance.{root_name}",
+        )
+        require(
+            root.get("runtime_solve") is True
+            and root.get("diagnostic_fixture") is False
+            and root.get("not_a_runtime_solve") is False,
+            f"supercell comparison report artifact_provenance.{root_name} must prove an independent runtime solve",
+        )
+
+
 def validate_static_supercell_report_structure(
     report: dict[str, Any],
     *,
@@ -2063,10 +2104,10 @@ def validate_static_supercell_report_structure(
     repeat_x = report.get("repeat_x")
     repeat_y = report.get("repeat_y")
     cell_count = report.get("cell_count")
-    require(isinstance(repeat_x, int) and repeat_x > 0, "supercell comparison report repeat_x must be positive")
-    require(isinstance(repeat_y, int) and repeat_y > 0, "supercell comparison report repeat_y must be positive")
+    require(isinstance(repeat_x, int) and not isinstance(repeat_x, bool) and repeat_x > 0, "supercell comparison report repeat_x must be positive")
+    require(isinstance(repeat_y, int) and not isinstance(repeat_y, bool) and repeat_y > 0, "supercell comparison report repeat_y must be positive")
     require(
-        isinstance(cell_count, int) and cell_count == repeat_x * repeat_y and cell_count > 1,
+        isinstance(cell_count, int) and not isinstance(cell_count, bool) and cell_count == repeat_x * repeat_y and cell_count > 1,
         "supercell comparison report cell_count must equal repeat_x * repeat_y and be greater than one",
     )
     validate_supercell_central_cell_extraction_summary(
@@ -2081,6 +2122,7 @@ def validate_static_supercell_report_structure(
 
 
 def validate_static_supercell_report(report: dict[str, Any], *, expected_workload: dict[str, Any]) -> None:
+    validate_physical_supercell_evidence(report)
     mapped, _ = validate_static_supercell_report_structure(report, expected_workload=expected_workload)
     relaxation_state = validate_supercell_relaxation_state_comparability(report)
     metrics = require_object(report.get("metrics"), "supercell comparison report metrics")
@@ -2170,7 +2212,10 @@ def validate_interpolated_supercell_report(
     report: dict[str, Any],
     *,
     expected_workload: dict[str, Any],
+    require_physical_evidence: bool = True,
 ) -> None:
+    if require_physical_evidence:
+        validate_physical_supercell_evidence(report)
     _, interpolated = validate_static_supercell_report_structure(report, expected_workload=expected_workload)
     require(
         report.get("acceptance_basis") == "interpolated_remesh",
@@ -2224,7 +2269,11 @@ def validate_repeated_state_supercell_report(
     *,
     expected_workload: dict[str, Any],
 ) -> None:
-    validate_interpolated_supercell_report(report, expected_workload=expected_workload)
+    validate_interpolated_supercell_report(
+        report,
+        expected_workload=expected_workload,
+        require_physical_evidence=False,
+    )
     override = require_object(
         report.get("supercell_initial_magnetization_state_override"),
         "supercell comparison report supercell_initial_magnetization_state_override",
@@ -2252,7 +2301,7 @@ def validate_repeated_state_supercell_report(
     )
     vector_count = override.get("vector_count")
     require(
-        isinstance(vector_count, int) and vector_count > 0,
+        isinstance(vector_count, int) and not isinstance(vector_count, bool) and vector_count > 0,
         (
             "supercell comparison report supercell_initial_magnetization_state_override.vector_count "
             "must be positive"

@@ -1448,7 +1448,22 @@ fn sample_unscoped_field_values(
         FieldVectorQuery,
     ),
     responses(
-        (status = 200, description = "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads.", content_type = "application/octet-stream"),
+        (status = 200, description = "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads.", content_type = "application/octet-stream", headers(
+            ("x-fullmag-field-revision" = String, description = "Field revision"),
+            ("x-fullmag-domain-generation-id" = String, description = "Domain generation identity"),
+            ("x-fullmag-quantity-id" = String, description = "Canonical quantity identifier"),
+            ("x-fullmag-component" = String, description = "Resolved component projection"),
+            ("x-fullmag-encoding" = String, description = "FMVP encoding and version"),
+            ("x-fullmag-point-count" = usize, description = "Decoded point count"),
+            ("x-fullmag-value-count" = usize, description = "Scalar value count"),
+            ("x-fullmag-n-comp" = usize, description = "Components per point"),
+            ("x-fullmag-scope-kind" = String, description = "Resolved scope kind"),
+            ("x-fullmag-scope-id" = String, description = "Resolved optional scope identifier"),
+            ("x-fullmag-snapshot-id" = String, description = "Optional persisted snapshot identifier"),
+            ("x-fullmag-mesh-topology-hash" = String, description = "Optional FMVP v3 mesh topology hash"),
+            ("x-fullmag-field-indexing" = String, description = "Optional FMVP v3 field indexing"),
+            ("x-fullmag-node-index-count" = usize, description = "Optional FMVP v3 node-index count")
+        )),
         (status = 204, description = "Recognized field quantity is not available yet"),
         (status = 304, description = "Not modified — ETag matched"),
         (status = 400, description = "Invalid component or snapshot parameter"),
@@ -1610,8 +1625,12 @@ pub async fn get_field_vector(
     let snapshot_token = requested_snapshot_id
         .map(|snapshot_id| format!(":snapshot={snapshot_id}"))
         .unwrap_or_default();
+    let topology_etag_token = topology_hash
+        .as_ref()
+        .map(|hash| format!(":topology_revision={topology_revision}:topology_hash={hash}"))
+        .unwrap_or_default();
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{}:{scope_token}{sample_token}{snapshot_token}",
+        "{}:{scope_token}{sample_token}{snapshot_token}{topology_etag_token}",
         component_etag_token(quantity_id, field_revision, gen_id, &component)
     ));
     let scoped_grid = resolved_scope

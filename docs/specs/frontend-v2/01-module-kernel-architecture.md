@@ -97,6 +97,8 @@ The root component is a thin adapter. It subscribes to module-local stores and r
 `KernelApi` is constructed once and provided through context as an immutable object:
 
 ```typescript
+import type { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
+
 export interface KernelApi {
   readonly api: ControlRoomApi;
   readonly bus: EventBus;
@@ -104,10 +106,34 @@ export interface KernelApi {
   readonly modules: ModuleRegistry;
   readonly layout: LayoutController;
   readonly diagnostics: DiagnosticsController;
+  readonly visualizationDebug: VisualizationDebugController;
 }
 ```
 
 `KernelApi` is allowed in React context because it is an immutable service locator. Mutable application state does not live in this context.
+
+### 6.1 Visualization Debug Observation Service
+
+`VisualizationDebugController` is a kernel-owned, opt-in diagnostic observation
+service. The Inspector registers demand for one canonical visualization target;
+the mounted `viewport-3d` may then publish a small immutable observation of the
+field buffer and render passes it actually adopted. The controller exposes a
+`useSyncExternalStore`-compatible subscribe/getSnapshot boundary and removes the
+target snapshot when the final demand is released.
+
+The controller is not a module, slot contribution, server-state owner,
+resource cache, transport, profiler loop, or persistence model. It does not
+store full typed arrays, topology, Three.js objects, materials, or response
+bodies. It enforces bounded lists and a 64 KiB serialized snapshot limit.
+Without active demand it performs no scans, sampling, requests, polling,
+periodic memory measurement, or viewport invalidation.
+
+HTTP v2 remains the source of server truth. Existing resource hooks provide
+field metadata and the existing field-vector request provides heavy data;
+WebSocket events remain revision/invalidation notifications. The controller
+must not add fields to the status resource or carry snapshots through realtime
+events. `diagnostics:*` events may announce bounded observation lifecycle only;
+consumers needing a snapshot subscribe to the controller.
 
 ## 7. Event Bus
 

@@ -166,6 +166,8 @@ import type {
   DomainMetaResource,
   EngineLogResource,
   FieldCatalogResource,
+  FieldVectorIdentityIssue,
+  FieldVectorResponseMetadata,
   FieldMetaResource,
   FieldMetaQuery,
   FieldStateExportRequest,
@@ -298,6 +300,74 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "./apiTypes";
+
+function optionalIntegerHeader(headers: Headers, name: string): number | null {
+  const raw = headers.get(name);
+  if (raw === null || raw.trim() === "") return null;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+export function parseFieldVectorResponseMetadata(
+  headers: Headers,
+): FieldVectorResponseMetadata {
+  return {
+    component: headers.get("x-fullmag-component"),
+    domainGenerationId: headers.get("x-fullmag-domain-generation-id"),
+    encoding: headers.get("x-fullmag-encoding"),
+    fieldIndexing: headers.get("x-fullmag-field-indexing"),
+    fieldRevision: headers.get("x-fullmag-field-revision"),
+    identityIssues: [],
+    meshTopologyHash: headers.get("x-fullmag-mesh-topology-hash"),
+    nComp: optionalIntegerHeader(headers, "x-fullmag-n-comp"),
+    nodeIndexCount: optionalIntegerHeader(headers, "x-fullmag-node-index-count"),
+    pointCount: optionalIntegerHeader(headers, "x-fullmag-point-count"),
+    quantityId: headers.get("x-fullmag-quantity-id"),
+    scopeId: headers.get("x-fullmag-scope-id"),
+    scopeKind: headers.get("x-fullmag-scope-kind"),
+    snapshotId: headers.get("x-fullmag-snapshot-id"),
+    valueCount: optionalIntegerHeader(headers, "x-fullmag-value-count"),
+  };
+}
+
+export function collectFieldVectorIdentityIssues(
+  payload: DecodedFieldVector,
+  metadata: FieldVectorResponseMetadata,
+): FieldVectorIdentityIssue[] {
+  const issues: FieldVectorIdentityIssue[] = [];
+  const compare = (
+    field: string,
+    headerValue: number | string | null,
+    payloadValue: number | string | null,
+  ) => {
+    if (headerValue !== null && String(headerValue) !== String(payloadValue)) {
+      issues.push({ field, headerValue, payloadValue });
+    }
+  };
+  compare("quantityId", metadata.quantityId, payload.quantityId);
+  compare("pointCount", metadata.pointCount, payload.pointCount);
+  compare("valueCount", metadata.valueCount, payload.valueCount);
+  compare("nComp", metadata.nComp, payload.nComp);
+  compare("scopeKind", metadata.scopeKind, payload.scopeKind ?? null);
+  compare("scopeId", metadata.scopeId, payload.scopeId ?? null);
+  compare(
+    "meshTopologyHash",
+    metadata.meshTopologyHash,
+    payload.meshTopologyHash ?? null,
+  );
+  compare("fieldIndexing", metadata.fieldIndexing, payload.indexing ?? null);
+  compare(
+    "nodeIndexCount",
+    metadata.nodeIndexCount,
+    payload.nodeIndices?.length ?? 0,
+  );
+  compare(
+    "domainGenerationId",
+    metadata.domainGenerationId,
+    payload.domainGenerationId ?? null,
+  );
+  return issues;
+}
 import {
   decodeCrossSection,
   decodeCrossSectionQuality,
@@ -2089,7 +2159,7 @@ export class ControlRoomApi {
     pathParams: PathParams,
     query: QueryParams,
     options: BinaryRequestOptions = {},
-  ): Promise<BinaryResourceResult<DecodedFieldVector>> {
+  ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
     return this.requestBinaryResource(
       path,
       "field-vector",
@@ -2097,6 +2167,13 @@ export class ControlRoomApi {
       options,
       pathParams,
       query,
+      (response, data) => {
+        const metadata = parseFieldVectorResponseMetadata(response.headers);
+        return {
+          ...metadata,
+          identityIssues: collectFieldVectorIdentityIssues(data, metadata),
+        };
+      },
     );
   }
 
@@ -2106,7 +2183,7 @@ export class ControlRoomApi {
     pathParams: PathParams,
     query: QueryParams,
     options: BinaryRequestOptions = {},
-  ): Promise<BinaryResourceResult<DecodedFieldVector>> {
+  ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
     const result = await this.requestFieldVector(path, pathParams, query, options);
     if (result.status !== "not-applicable") {
       return result;
@@ -2186,9 +2263,9 @@ export class ControlRoomApi {
     pathParams: PathParams,
     query: QueryParams,
     options: BinaryRequestOptions,
-  ): Promise<BinaryResourceResult<DecodedFieldVector>> {
+  ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
     const deadline = Date.now() + FIELD_MATERIALIZATION_TIMEOUT_MS;
-    let lastResult: BinaryResourceResult<DecodedFieldVector> | null = null;
+    let lastResult: BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata> | null = null;
     while (Date.now() <= deadline) {
       throwIfAborted(options.signal);
       await delay(FIELD_MATERIALIZATION_RETRY_MS, options.signal);
@@ -2207,14 +2284,15 @@ export class ControlRoomApi {
     );
   }
 
-  private async requestBinaryResource<TData>(
+  private async requestBinaryResource<TData, TMetadata = undefined>(
     path: OpenApiV2Path,
     decoderKind: BinaryDecoderKind,
     decode: (buffer: ArrayBuffer) => TData,
     options: BinaryRequestOptions = {},
     pathParams?: PathParams,
     query?: QueryParams,
-  ): Promise<BinaryResourceResult<TData>> {
+    responseMetadata?: (response: Response, data: TData) => TMetadata,
+  ): Promise<BinaryResourceResult<TData, TMetadata>> {
     const measureBase = `fullmag.api.requestBinaryResource.${decoderKind}`;
     return measureControlRoomApiPerformance(
       measureBase,
@@ -2332,8 +2410,11 @@ export class ControlRoomApi {
           contentRange: response.headers.get("content-range"),
           data,
           etag,
+          ...(responseMetadata
+            ? { responseMetadata: responseMetadata(response, data) }
+            : {}),
           status: "ready",
-        };
+        } as BinaryResourceResult<TData, TMetadata>;
       },
     );
   }

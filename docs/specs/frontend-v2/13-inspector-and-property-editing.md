@@ -37,6 +37,29 @@ Examples:
 - `run-provenance-panel`;
 - `field-resource-panel`.
 
+The Airbox subtree has one panel owner per semantic selection:
+
+| Selection | Panel owner |
+|---|---|
+| `airbox.root` | `AirboxOverviewPanel` |
+| `airbox.mesh` | `AirboxMeshOverviewPanel` |
+| `airbox.mesh.parameters` | `AirboxMeshParametersPanel` |
+| `airbox.mesh.quality-gates` | `AirboxMeshQualityGatesPanel` |
+| `airbox.mesh.statistics` | `AirboxMeshStatisticsPanel` |
+| `airbox.mesh.topology` | `AirboxMeshTopologyPanel` |
+| `airbox.mesh.build` | `AirboxMeshBuildPanel` |
+| `airbox.visualization` | existing Airbox visualization control panel |
+| `airbox.visualization.debug` | `VisualizationDebugPanel` |
+| `object.visualization.debug` | `VisualizationDebugPanel` |
+| `object.region.visualization.debug` | `VisualizationDebugPanel` |
+
+The mesh panels may share pure adapters and formatters, but each panel fetches
+only the resources required by its selection. They must not route distinct
+Airbox selections through one multi-purpose policy panel. The ordinary
+Visualization panel remains the owner of display controls. The shared Debug
+panel is read-only observation/export UI and resolves exactly the canonical
+target selected by its parent Visualization node.
+
 The inspector host chooses the best panel from selection, active context, and capability gates.
 
 ## 3. Draft Transaction Flow

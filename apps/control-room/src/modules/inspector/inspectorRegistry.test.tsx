@@ -229,15 +229,26 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("resolves Airbox mesh policy selections to the Airbox mesh policy panel", () => {
-    expect(resolveInspectorPanel({ kind: "airbox.mesh" })?.id).toBe(
-      "airbox-mesh-policy",
-    );
-  });
+  it("gives every Airbox mesh branch a distinct single-purpose panel", () => {
+    const expected = new Map([
+      ["airbox.root", "airbox-overview"],
+      ["airbox.mesh", "airbox-mesh-overview"],
+      ["airbox.mesh.parameters", "airbox-mesh-parameters"],
+      ["airbox.mesh.quality-gates", "airbox-mesh-quality-gates"],
+      ["airbox.mesh.statistics", "airbox-mesh-statistics"],
+      ["airbox.mesh.topology", "airbox-mesh-topology"],
+      ["airbox.mesh.build", "airbox-mesh-build"],
+    ]);
 
-  it("resolves Airbox mesh quality selections to the Airbox mesh quality panel", () => {
-    expect(resolveInspectorPanel({ kind: "airbox.mesh-quality" })?.id).toBe(
-      "airbox-mesh-quality",
+    for (const [kind, panelId] of expected) {
+      expect(resolveInspectorPanel({ kind })?.id).toBe(panelId);
+    }
+    expect(new Set(expected.values()).size).toBe(expected.size);
+    expect(resolveInspectorPanel({ kind: "airbox.visualization" })?.id).toBe(
+      "object-visualization",
+    );
+    expect(resolveInspectorPanel({ kind: "airbox.visualization.debug" })?.id).not.toBe(
+      "object-visualization",
     );
   });
 

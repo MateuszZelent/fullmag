@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import csv
+import hashlib
 import json
 import math
 import struct
@@ -34,10 +35,17 @@ def require_list(value: Any, name: str) -> list[Any]:
 
 
 def finite_number(value: Any, name: str) -> float:
-    require(isinstance(value, (int, float)), f"{name} must be numeric")
+    require(
+        isinstance(value, (int, float)) and not isinstance(value, bool),
+        f"{name} must be numeric",
+    )
     number = float(value)
     require(math.isfinite(number), f"{name} must be finite")
     return number
+
+
+def json_integer(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -90,7 +98,7 @@ def parse_elements(mesh: dict[str, Any], node_count: int) -> list[list[int]]:
         require(len(element) == 4, f"metadata mesh elements[{element_index}] must be a tetrahedron")
         parsed: list[int] = []
         for local_index, raw_node in enumerate(element):
-            require(isinstance(raw_node, int), f"metadata mesh elements[{element_index}][{local_index}] must be integer")
+            require(json_integer(raw_node), f"metadata mesh elements[{element_index}][{local_index}] must be integer")
             require(0 <= raw_node < node_count, f"metadata mesh elements[{element_index}][{local_index}] out of range")
             parsed.append(raw_node)
         elements.append(parsed)
@@ -107,7 +115,7 @@ def magnetic_mask_from_metadata(mesh: dict[str, Any], node_count: int) -> list[b
     require(len(markers) == len(elements), "metadata mesh element_markers length must match elements")
     marker_values = []
     for index, marker in enumerate(markers):
-        require(isinstance(marker, int), f"metadata mesh element_markers[{index}] must be integer")
+        require(json_integer(marker), f"metadata mesh element_markers[{index}] must be integer")
         marker_values.append(marker)
     has_mixed_airbox = any(marker == 0 for marker in marker_values) and any(marker != 0 for marker in marker_values)
     magnetic = [False for _ in range(node_count)]
@@ -161,7 +169,7 @@ def scale_final_energy_terms(metadata: dict[str, Any], cell_count: int) -> tuple
     energy_terms = require_object(qual.get("final_energy_terms_j"), "final_energy_terms_j")
     unit_e_demag = finite_number(energy_terms.get("E_demag"), "final_energy_terms_j.E_demag")
     for key, value in list(energy_terms.items()):
-        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
             energy_terms[key] = float(value) * float(cell_count)
     torque = finite_number(qual.get("final_torque_apm"), "final_torque_apm")
     return unit_e_demag, torque
@@ -199,6 +207,280 @@ def tile_list(values: list[Any], repeat_x: int, repeat_y: int) -> list[Any]:
     for _ in range(repeat_x * repeat_y):
         tiled.extend(copy.deepcopy(values))
     return tiled
+
+
+def tile_periodic_pairs_artifact(
+    unit_root: Path,
+    *,
+    nodes: list[list[float]],
+    elements: list[list[int]],
+    node_count: int,
+    boundary_face_count: int | None,
+    repeat_x: int,
+    repeat_y: int,
+) -> dict[str, Any]:
+    path = unit_root / "mesh" / "periodic_pairs.v1.json"
+    payload = load_json(path)
+    require(payload.get("schema_version") == "periodic_pairs.v1", f"{path}.schema_version must be periodic_pairs.v1")
+    require(payload.get("validation_status") == "ok", f"{path}.validation_status must be ok")
+    raw_pairs = require_list(payload.get("pairs"), f"{path}.pairs")
+    require(raw_pairs, f"{path}.pairs must be non-empty")
+    pair_count = payload.get("pair_count")
+    require(json_integer(pair_count), f"{path}.pair_count must be an integer")
+    require(pair_count == len(raw_pairs), f"{path}.pair_count must match pairs length")
+
+    tile_count = repeat_x * repeat_y
+    face_stride = boundary_face_count if boundary_face_count is not None else 0
+    for pair_index, raw_pair in enumerate(raw_pairs):
+        pair = require_object(raw_pair, f"{path}.pairs[{pair_index}]")
+        raw_face_pairs = require_list(pair.get("boundary_face_pairs"), f"{path}.pairs[{pair_index}].boundary_face_pairs")
+        require(raw_face_pairs, f"{path}.pairs[{pair_index}].boundary_face_pairs must be non-empty")
+        for face_index, raw_face_pair in enumerate(raw_face_pairs):
+            face_pair = require_object(raw_face_pair, f"{path}.pairs[{pair_index}].boundary_face_pairs[{face_index}]")
+            for key in ("face_a", "face_b"):
+                value = face_pair.get(key)
+                require(
+                    json_integer(value) and value >= 0,
+                    f"{path}.pairs[{pair_index}].boundary_face_pairs[{face_index}].{key} must be non-negative integer",
+                )
+                if boundary_face_count is not None:
+                    require(
+                        value < boundary_face_count,
+                        f"{path}.pairs[{pair_index}].boundary_face_pairs[{face_index}].{key} out of unit mesh boundary face range",
+                    )
+                else:
+                    face_stride = max(face_stride, value + 1)
+    require(face_stride > 0, f"{path} must contain non-negative boundary face ids")
+
+    source_identity = {
+        key: copy.deepcopy(payload[key])
+        for key in (
+            "topology_fingerprint",
+            "mesh_generation_id",
+            "source_scene_revision",
+            "certificate_status",
+            "certificate_fingerprint",
+        )
+        if key in payload
+    }
+    tiled_pairs: list[dict[str, Any]] = []
+    for pair_index, raw_pair in enumerate(raw_pairs):
+        pair = require_object(raw_pair, f"{path}.pairs[{pair_index}]")
+        pair_id = pair.get("pair_id")
+        require(isinstance(pair_id, str) and pair_id, f"{path}.pairs[{pair_index}].pair_id must be non-empty")
+
+        raw_node_pairs = require_list(pair.get("node_pairs"), f"{path}.{pair_id}.node_pairs")
+        paired_node_count = pair.get("paired_node_count")
+        require(json_integer(paired_node_count), f"{path}.{pair_id}.paired_node_count must be an integer")
+        require(
+            paired_node_count == len(raw_node_pairs),
+            f"{path}.{pair_id}.paired_node_count must match node_pairs length",
+        )
+        tiled_node_pairs: list[dict[str, Any]] = []
+        for tile in range(tile_count):
+            node_offset = tile * node_count
+            for node_pair_index, raw_node_pair in enumerate(raw_node_pairs):
+                node_pair = require_object(raw_node_pair, f"{path}.{pair_id}.node_pairs[{node_pair_index}]")
+                node_a = node_pair.get("node_a")
+                node_b = node_pair.get("node_b")
+                require(
+                    json_integer(node_a) and 0 <= node_a < node_count,
+                    f"{path}.{pair_id}.node_pairs[{node_pair_index}].node_a out of unit mesh range",
+                )
+                require(
+                    json_integer(node_b) and 0 <= node_b < node_count,
+                    f"{path}.{pair_id}.node_pairs[{node_pair_index}].node_b out of unit mesh range",
+                )
+                tiled_node_pair = copy.deepcopy(node_pair)
+                tiled_node_pair["node_a"] = node_a + node_offset
+                tiled_node_pair["node_b"] = node_b + node_offset
+                tiled_node_pairs.append(tiled_node_pair)
+
+        raw_face_pairs = require_list(pair.get("boundary_face_pairs"), f"{path}.{pair_id}.boundary_face_pairs")
+        tiled_face_pairs: list[dict[str, Any]] = []
+        for tile in range(tile_count):
+            node_offset = tile * node_count
+            face_offset = tile * face_stride
+            for face_index, raw_face_pair in enumerate(raw_face_pairs):
+                face_pair = require_object(raw_face_pair, f"{path}.{pair_id}.boundary_face_pairs[{face_index}]")
+                tiled_face_pair = copy.deepcopy(face_pair)
+                tiled_face_pair["face_a"] = int(face_pair["face_a"]) + face_offset
+                tiled_face_pair["face_b"] = int(face_pair["face_b"]) + face_offset
+                raw_vertex_pairs = face_pair.get("vertex_pairs")
+                if raw_vertex_pairs is not None:
+                    vertex_pairs = require_list(raw_vertex_pairs, f"{path}.{pair_id}.boundary_face_pairs[{face_index}].vertex_pairs")
+                    tiled_vertex_pairs: list[list[int]] = []
+                    for vertex_pair_index, raw_vertex_pair in enumerate(vertex_pairs):
+                        vertex_pair = require_list(
+                            raw_vertex_pair,
+                            f"{path}.{pair_id}.boundary_face_pairs[{face_index}].vertex_pairs[{vertex_pair_index}]",
+                        )
+                        require(
+                            len(vertex_pair) == 2
+                            and all(json_integer(value) and 0 <= value < node_count for value in vertex_pair),
+                            f"{path}.{pair_id}.boundary_face_pairs[{face_index}].vertex_pairs[{vertex_pair_index}] invalid",
+                        )
+                        tiled_vertex_pairs.append([vertex_pair[0] + node_offset, vertex_pair[1] + node_offset])
+                    tiled_face_pair["vertex_pairs"] = tiled_vertex_pairs
+                tiled_face_pairs.append(tiled_face_pair)
+
+        domain_counts = require_object(pair.get("domain_node_pair_counts"), f"{path}.{pair_id}.domain_node_pair_counts")
+        magnetic_count = domain_counts.get("magnetic")
+        airbox_count = domain_counts.get("airbox")
+        require(
+            json_integer(magnetic_count) and magnetic_count >= 0,
+            f"{path}.{pair_id}.domain_node_pair_counts.magnetic must be non-negative",
+        )
+        require(
+            json_integer(airbox_count) and airbox_count >= 0,
+            f"{path}.{pair_id}.domain_node_pair_counts.airbox must be non-negative",
+        )
+        require(
+            magnetic_count + airbox_count == len(raw_node_pairs),
+            f"{path}.{pair_id}.domain_node_pair_counts must sum to paired_node_count",
+        )
+        tiled_pair = copy.deepcopy(pair)
+        tiled_pair["node_pairs"] = tiled_node_pairs
+        tiled_pair["paired_node_count"] = len(tiled_node_pairs)
+        tiled_pair["domain_node_pair_counts"] = {
+            "magnetic": magnetic_count * tile_count,
+            "airbox": airbox_count * tile_count,
+        }
+        tiled_pair["boundary_face_pairs"] = tiled_face_pairs
+        for key in ("unpaired_source_node_count", "unpaired_destination_node_count"):
+            if key in tiled_pair:
+                value = tiled_pair[key]
+                require(json_integer(value) and value >= 0, f"{path}.{pair_id}.{key} must be non-negative")
+                tiled_pair[key] = value * tile_count
+        tiled_pairs.append(tiled_pair)
+
+    identity_payload = {
+        "realization": "independent_primitive_tiles",
+        "repeat": [repeat_x, repeat_y],
+        "nodes": nodes,
+        "elements": elements,
+        "pairs": tiled_pairs,
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    tiled_payload = copy.deepcopy(payload)
+    tiled_payload["artifact_path"] = "mesh/periodic_pairs.v1.json"
+    tiled_payload["topology_fingerprint"] = f"sha256:{digest}"
+    tiled_payload["mesh_generation_id"] = digest
+    tiled_payload["certificate_status"] = "diagnostic_tiled_fixture"
+    tiled_payload["certificate_fingerprint"] = None
+    tiled_payload.pop("certificate", None)
+    tiled_payload["certificate_errors"] = []
+    tiled_payload["validation_status"] = "ok"
+    tiled_payload["pair_count"] = len(tiled_pairs)
+    tiled_payload["paired_node_count"] = sum(int(pair["paired_node_count"]) for pair in tiled_pairs)
+    tiled_payload["pairs"] = tiled_pairs
+    tiled_payload["diagnostic_fixture_identity"] = {
+        "realization": "independent_primitive_tiles",
+        "repeat": [repeat_x, repeat_y],
+        "sha256": digest,
+        "source_certificate_identity": source_identity,
+    }
+    return tiled_payload
+
+
+def update_periodic_fixture_metadata(metadata: dict[str, Any], periodic_pairs: dict[str, Any]) -> None:
+    pairs = require_list(periodic_pairs.get("pairs"), "tiled periodic pairs")
+    node_counts: dict[str, int] = {}
+    boundary_counts: dict[str, int] = {}
+    node_pair_keys: set[tuple[str, int, int]] = set()
+    flattened_node_pairs: list[dict[str, Any]] = []
+    for index, raw_pair in enumerate(pairs):
+        pair = require_object(raw_pair, f"tiled periodic pairs[{index}]")
+        pair_id = str(pair["pair_id"])
+        boundary_counts[pair_id] = boundary_counts.get(pair_id, 0) + 1
+        for raw_node_pair in require_list(pair.get("node_pairs"), f"tiled periodic pairs.{pair_id}.node_pairs"):
+            node_pair = require_object(raw_node_pair, f"tiled periodic pairs.{pair_id}.node_pair")
+            node_pair_key = (pair_id, int(node_pair["node_a"]), int(node_pair["node_b"]))
+            if node_pair_key in node_pair_keys:
+                continue
+            node_pair_keys.add(node_pair_key)
+            node_counts[pair_id] = node_counts.get(pair_id, 0) + 1
+            flattened_node_pairs.append(
+                {"pair_id": pair_id, "node_a": node_pair_key[1], "node_b": node_pair_key[2]}
+            )
+
+    mesh_metadata = require_object(metadata.get("mesh"), "metadata.mesh")
+    mesh_metadata["periodic_node_pair_count"] = sum(node_counts.values())
+    mesh_metadata["periodic_node_pair_counts_by_id"] = node_counts
+    mesh_metadata["periodic_boundary_pair_count"] = sum(boundary_counts.values())
+    mesh_metadata["periodic_boundary_pair_counts_by_id"] = boundary_counts
+    identity = require_object(periodic_pairs.get("diagnostic_fixture_identity"), "diagnostic_fixture_identity")
+    mesh_metadata["topology_fingerprint"] = identity["sha256"]
+    mesh_metadata["mesh_generation_id"] = identity["sha256"]
+
+    demag_runtime = require_object(metadata.get("demag_runtime"), "metadata.demag_runtime")
+    reduction = require_object(demag_runtime.get("periodic_reduction"), "metadata.demag_runtime.periodic_reduction")
+    reduction["node_pair_count"] = sum(node_counts.values())
+    reduction["node_pair_counts_by_id"] = node_counts
+    reduction["boundary_pair_count"] = sum(boundary_counts.values())
+    reduction["boundary_pair_counts_by_id"] = boundary_counts
+
+    backend_mesh(metadata)["periodic_node_pairs"] = flattened_node_pairs
+
+
+def write_tiled_seam_diagnostics(
+    unit_root: Path,
+    output: Path,
+    periodic_pairs: dict[str, Any],
+) -> None:
+    source_path = unit_root / "diagnostics" / "fem_static_pbc_demag_seams.v1.json"
+    payload = load_json(source_path)
+    require(
+        payload.get("schema_version") == "fem_static_pbc_demag_seams.v1",
+        f"{source_path}.schema_version must be fem_static_pbc_demag_seams.v1",
+    )
+    require(payload.get("status") == "ok", f"{source_path}.status must be ok")
+    pair_node_keys: dict[str, set[tuple[int, int]]] = {}
+    pair_boundary_counts: dict[str, int] = {}
+    for pair in require_list(periodic_pairs.get("pairs"), "tiled periodic pairs"):
+        pair_id = str(pair["pair_id"])
+        node_keys = pair_node_keys.setdefault(pair_id, set())
+        for node_pair in require_list(pair.get("node_pairs"), f"{source_path}.{pair_id}.node_pairs"):
+            node_keys.add((int(node_pair["node_a"]), int(node_pair["node_b"])))
+        pair_boundary_counts[pair_id] = pair_boundary_counts.get(pair_id, 0) + len(
+            require_list(pair.get("boundary_face_pairs"), f"{source_path}.{pair_id}.boundary_face_pairs")
+        )
+    pair_counts = {
+        pair_id: (len(node_keys), pair_boundary_counts[pair_id])
+        for pair_id, node_keys in pair_node_keys.items()
+    }
+    identity = require_object(periodic_pairs.get("diagnostic_fixture_identity"), "diagnostic_fixture_identity")
+    repeat = require_list(identity.get("repeat"), "diagnostic_fixture_identity.repeat")
+    require(len(repeat) == 2, "diagnostic_fixture_identity.repeat must have two entries")
+    tile_count = int(repeat[0]) * int(repeat[1])
+    diagnostics = require_list(payload.get("pair_diagnostics"), f"{source_path}.pair_diagnostics")
+    seen: set[str] = set()
+    for index, raw_diagnostic in enumerate(diagnostics):
+        diagnostic = require_object(raw_diagnostic, f"{source_path}.pair_diagnostics[{index}]")
+        pair_id = diagnostic.get("pair_id")
+        require(isinstance(pair_id, str) and pair_id in pair_counts, f"{source_path}.pair_diagnostics[{index}].pair_id invalid")
+        seen.add(pair_id)
+        paired_node_count = diagnostic.get("paired_node_count")
+        if paired_node_count is None:
+            diagnostic["paired_node_count"] = pair_counts[pair_id][0]
+        else:
+            require(json_integer(paired_node_count) and paired_node_count > 0, f"{source_path}.{pair_id}.paired_node_count must be positive")
+            diagnostic["paired_node_count"] = paired_node_count * tile_count
+        boundary_face_pair_count = diagnostic.get("boundary_face_pair_count")
+        if boundary_face_pair_count is None:
+            diagnostic["boundary_face_pair_count"] = pair_counts[pair_id][1]
+        else:
+            require(json_integer(boundary_face_pair_count) and boundary_face_pair_count > 0, f"{source_path}.{pair_id}.boundary_face_pair_count must be positive")
+            diagnostic["boundary_face_pair_count"] = boundary_face_pair_count * tile_count
+    require(seen == set(pair_counts), f"{source_path}.pair_diagnostics must cover every tiled pair id")
+    payload["artifact_path"] = "diagnostics/fem_static_pbc_demag_seams.v1.json"
+    payload["diagnostic_fixture_identity"] = {
+        "periodic_pairs_sha256": periodic_pairs["diagnostic_fixture_identity"]["sha256"],
+        "realization": "independent_primitive_tiles",
+    }
+    write_json(output / "diagnostics" / "fem_static_pbc_demag_seams.v1.json", payload)
 
 
 def write_node_geometry(
@@ -239,9 +521,9 @@ def tile_zarr_field(unit_root: Path, output: Path, observable: str, node_count: 
     shape = require_list(array.get("shape"), f"{observable}.shape")
     require(
         len(shape) == 3
-        and isinstance(shape[0], int)
-        and isinstance(shape[1], int)
-        and isinstance(shape[2], int),
+        and json_integer(shape[0])
+        and json_integer(shape[1])
+        and json_integer(shape[2]),
         f"{observable}.shape must be [samples, components, cells]",
     )
     sample_count = int(shape[0])
@@ -328,6 +610,29 @@ def update_metadata(
     mesh["elements"] = elements
     if tiled_markers is not None:
         mesh["element_markers"] = tiled_markers
+    raw_boundary_faces = mesh.get("boundary_faces")
+    if raw_boundary_faces is not None:
+        boundary_faces = require_list(raw_boundary_faces, "metadata mesh boundary_faces")
+        tiled_boundary_faces: list[list[int]] = []
+        for tile in range(repeat_x * repeat_y):
+            node_offset = tile * node_count
+            for face_index, raw_face in enumerate(boundary_faces):
+                face = require_list(raw_face, f"metadata mesh boundary_faces[{face_index}]")
+                require(face, f"metadata mesh boundary_faces[{face_index}] must be non-empty")
+                require(
+                    all(json_integer(index) and 0 <= index < node_count for index in face),
+                    f"metadata mesh boundary_faces[{face_index}] contains an invalid unit node index",
+                )
+                tiled_boundary_faces.append([index + node_offset for index in face])
+        mesh["boundary_faces"] = tiled_boundary_faces
+        raw_boundary_markers = mesh.get("boundary_markers")
+        if raw_boundary_markers is not None:
+            boundary_markers = require_list(raw_boundary_markers, "metadata mesh boundary_markers")
+            require(
+                len(boundary_markers) == len(boundary_faces),
+                "metadata mesh boundary_markers length must match boundary_faces",
+            )
+            mesh["boundary_markers"] = tile_list(boundary_markers, repeat_x, repeat_y)
 
     material = backend_material(metadata)
     if material is not None and isinstance(material.get("ms_field"), list):
@@ -423,6 +728,21 @@ def write_tiled_artifact(args: argparse.Namespace) -> Path:
     if "element_markers" in mesh:
         tiled_markers = tile_list(require_list(mesh.get("element_markers"), "metadata mesh element_markers"), args.repeat_x, args.repeat_y)
 
+    boundary_face_count = None
+    if "boundary_faces" in mesh:
+        boundary_face_count = len(
+            require_list(mesh.get("boundary_faces"), "metadata mesh boundary_faces")
+        )
+    periodic_pairs_payload = tile_periodic_pairs_artifact(
+        args.unit_cell,
+        nodes=tiled_nodes,
+        elements=tiled_elements,
+        node_count=node_count,
+        boundary_face_count=boundary_face_count,
+        repeat_x=args.repeat_x,
+        repeat_y=args.repeat_y,
+    )
+
     output_metadata = copy.deepcopy(metadata)
     unit_e_demag, unit_torque = update_metadata(
         output_metadata,
@@ -434,9 +754,12 @@ def write_tiled_artifact(args: argparse.Namespace) -> Path:
         periods=periods,
         tiled_markers=tiled_markers,
     )
+    update_periodic_fixture_metadata(output_metadata, periodic_pairs_payload)
 
     args.output.mkdir(parents=True, exist_ok=True)
     write_json(args.output / "metadata.json", output_metadata)
+    write_json(args.output / "mesh" / "periodic_pairs.v1.json", periodic_pairs_payload)
+    write_tiled_seam_diagnostics(args.unit_cell, args.output, periodic_pairs_payload)
     m_payload = copy.deepcopy(m_payload)
     m_payload["values"] = tile_list(require_list(m_payload.get("values"), "m_final.values"), args.repeat_x, args.repeat_y)
     write_json(args.output / "m_final.json", m_payload)

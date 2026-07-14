@@ -1770,6 +1770,10 @@ async fn contract_version_header_is_exposed_to_browser_clients() {
         "x-fullmag-n-comp",
         "x-fullmag-scope-kind",
         "x-fullmag-scope-id",
+        "x-fullmag-snapshot-id",
+        "x-fullmag-mesh-topology-hash",
+        "x-fullmag-field-indexing",
+        "x-fullmag-node-index-count",
     ] {
         assert!(
             exposed_headers.contains(header_name),
@@ -2992,6 +2996,73 @@ async fn visualization_state_exposes_effective_scene_object_targets() {
 }
 
 #[tokio::test]
+async fn visualization_state_exposes_one_canonical_airbox_and_only_orphan_part_fallbacks() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    let mut synthetic_air = scene.objects[0].clone();
+    synthetic_air.id = "__air__".to_string();
+    synthetic_air.name = "__air__".to_string();
+    synthetic_air.role = "air".to_string();
+    scene.objects.push(synthetic_air);
+
+    let mut mesh = sample_fem_mesh_payload_with_manifest();
+    mesh.mesh_parts[0].id = "part:__air__".to_string();
+    mesh.mesh_parts[0].label = "Airbox".to_string();
+    let mut orphan_part = mesh.mesh_parts[1].clone();
+    orphan_part.id = "part:interface".to_string();
+    orphan_part.label = "Interface".to_string();
+    orphan_part.role = "interface".to_string();
+    orphan_part.object_id = None;
+    orphan_part.geometry_id = None;
+    mesh.mesh_parts.push(orphan_part);
+    let mut stale_owner_part = mesh.mesh_parts[1].clone();
+    stale_owner_part.id = "part:stale-owner".to_string();
+    stale_owner_part.label = "Recovered volume".to_string();
+    stale_owner_part.object_id = Some("deleted-object".to_string());
+    stale_owner_part.geometry_id = None;
+    mesh.mesh_parts.push(stale_owner_part);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["targets"]["airbox"]["scope"], "airbox");
+    assert_eq!(json["targets"]["airbox"]["scope_id"], "airbox");
+    assert_eq!(
+        json["targets"]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|target| target["scope_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["body"]
+    );
+    assert_eq!(
+        json["targets"]["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|target| target["scope_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["part:interface", "part:stale-owner"]
+    );
+}
+
+#[tokio::test]
 async fn visualization_state_patch_accepts_nested_v2_controls() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -3218,6 +3289,85 @@ async fn visualization_target_overrides_resolve_vector_budget_and_length_scale()
     assert_eq!(target["settings"]["vector_length_scale"], 1.75);
     assert_eq!(target["override"]["style"]["vector_budget"], 384);
     assert_eq!(target["override"]["style"]["vector_length_scale"], 1.75);
+}
+
+#[tokio::test]
+async fn visualization_state_normalizes_legacy_airbox_overrides_with_canonical_precedence() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "overrides": [
+                            {
+                                "scope": "object",
+                                "scope_id": "__air__",
+                                "style": { "vector_budget": 128 }
+                            },
+                            {
+                                "scope": "part",
+                                "scope_id": "part:__air__",
+                                "style": { "vector_budget": 256 }
+                            },
+                            {
+                                "scope": "airbox",
+                                "scope_id": "airbox",
+                                "display": { "vectors": { "visible": true } },
+                                "style": { "vector_budget": 512 }
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    let overrides = json["overrides"].as_array().unwrap();
+    assert_eq!(overrides.len(), 1);
+    assert_eq!(overrides[0]["scope"], "airbox");
+    assert_eq!(overrides[0]["scope_id"], "airbox");
+    assert_eq!(overrides[0]["style"]["vector_budget"], 512);
+    assert_eq!(json["targets"]["airbox"]["settings"]["vectors_visible"], true);
+    assert_eq!(json["targets"]["airbox"]["settings"]["vector_budget"], 512);
+}
+
+#[tokio::test]
+async fn visualization_state_migrates_a_legacy_synthetic_object_airbox_override() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "overrides": [{
+                            "scope": "object",
+                            "scope_id": "__air__",
+                            "style": { "vector_length_scale": 1.5 }
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["overrides"][0]["scope"], "airbox");
+    assert_eq!(json["overrides"][0]["scope_id"], "airbox");
+    assert_eq!(json["targets"]["airbox"]["settings"]["vector_length_scale"], 1.5);
 }
 
 #[tokio::test]
@@ -23087,6 +23237,17 @@ async fn v2_field_vector_object_scope_prefers_mesh_part_node_indices() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    for required_header in [
+        "x-fullmag-field-revision", "x-fullmag-domain-generation-id",
+        "x-fullmag-quantity-id", "x-fullmag-component", "x-fullmag-encoding",
+        "x-fullmag-point-count", "x-fullmag-value-count", "x-fullmag-n-comp",
+        "x-fullmag-scope-kind", "x-fullmag-scope-id",
+        "x-fullmag-mesh-topology-hash", "x-fullmag-field-indexing",
+        "x-fullmag-node-index-count",
+    ] {
+        assert!(response.headers().get(required_header).is_some(), "missing {required_header}");
+    }
+    assert!(response.headers().get("x-fullmag-snapshot-id").is_none());
     assert_eq!(
         response
             .headers()
@@ -23583,6 +23744,15 @@ async fn field_vector_component_etag_304() {
         .unwrap();
 
     assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(first.headers().get("x-fullmag-encoding").unwrap(), "FMVP;version=2");
+    for optional_header in [
+        "x-fullmag-mesh-topology-hash",
+        "x-fullmag-field-indexing",
+        "x-fullmag-node-index-count",
+        "x-fullmag-snapshot-id",
+    ] {
+        assert!(first.headers().get(optional_header).is_none());
+    }
     let etag = first
         .headers()
         .get("etag")
@@ -23604,6 +23774,36 @@ async fn field_vector_component_etag_304() {
     assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
     let body = body_bytes(second).await;
     assert!(body.is_empty(), "304 body must be empty");
+}
+
+#[tokio::test]
+async fn field_vector_topology_change_invalidates_etag_without_field_revision_change() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": { "values": [
+                [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0]
+            ], "layout": { "grid_cells": [8, 1, 1] } }
+        })).unwrap();
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let uri = "/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=body";
+    let first = app.clone().oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first.headers().get("etag").unwrap().to_str().unwrap().to_string();
+    let field_revision = first.headers().get("x-fullmag-field-revision").unwrap().clone();
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh.as_mut().unwrap().nodes[0][0] = 0.125;
+    }
+    let second = app.oneshot(
+        Request::builder().uri(uri).header("if-none-match", &etag).body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(second.headers().get("x-fullmag-field-revision"), Some(&field_revision));
+    assert_ne!(second.headers().get("etag").unwrap().to_str().unwrap(), etag);
 }
 
 #[tokio::test]
@@ -24432,6 +24632,19 @@ fn openapi_contains_field_slice_contract() {
         }),
         "vector GET should expose query param `component`"
     );
+    let response_headers = vector_get["responses"]["200"]["headers"]
+        .as_object()
+        .expect("vector 200 response headers missing");
+    for header_name in [
+        "x-fullmag-field-revision", "x-fullmag-domain-generation-id",
+        "x-fullmag-quantity-id", "x-fullmag-component", "x-fullmag-encoding",
+        "x-fullmag-point-count", "x-fullmag-value-count", "x-fullmag-n-comp",
+        "x-fullmag-scope-kind", "x-fullmag-scope-id", "x-fullmag-snapshot-id",
+        "x-fullmag-mesh-topology-hash", "x-fullmag-field-indexing",
+        "x-fullmag-node-index-count",
+    ] {
+        assert!(response_headers.contains_key(header_name), "missing documented response header {header_name}");
+    }
 
     let slice_meta_get = paths
         .get("/v2/sessions/current/data/fields/{quantity_id}/samples/slice/meta")

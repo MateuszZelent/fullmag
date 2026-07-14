@@ -59,6 +59,7 @@ import {
   canonicalVisualizationSceneObjectId,
   visualizationTargetIdForSceneObject,
 } from "@/kernel/selection/selectionTypes";
+import { buildSemanticRenderTargetCatalog } from "@/kernel/selection/semanticRenderTargetCatalog";
 import {
   resolveVisualizationTargetForMeshPart,
   visualizationSceneObjectIds,
@@ -1155,12 +1156,18 @@ export function resolveViewport3DRegionTargetByPartId(
     if (!regionId || !region.mesh_part_ids || region.mesh_part_ids.length === 0) {
       continue;
     }
-    let objectId: string | null = null;
-    for (const sourceObjectId of region.source_object_ids ?? []) {
-      objectId = asNonEmptyString(sourceObjectId);
-      if (objectId) break;
-    }
+    const sourceObjectIds = (region.source_object_ids ?? [])
+      .map((sourceObjectId) => asNonEmptyString(sourceObjectId))
+      .filter((sourceObjectId): sourceObjectId is string => sourceObjectId !== null);
+    const objectId = sourceObjectIds[0] ?? null;
     if (!objectId) continue;
+    if (
+      sourceObjectIds.length === 1 &&
+      canonicalVisualizationSceneObjectId(regionId) ===
+        canonicalVisualizationSceneObjectId(objectId)
+    ) {
+      continue;
+    }
     const target: VisualizationTargetRef = {
       id: visualizationTargetIdForSceneObject(objectId, regionId),
       kind: "region",
@@ -2320,6 +2327,14 @@ export function useViewport3DSceneModel({
   const femDomain = useMemo(
     () => adaptFemSharedDomainManifest(sharedDomainManifest.data),
     [sharedDomainManifest.data],
+  );
+  const semanticTargetCatalog = useMemo(
+    () =>
+      buildSemanticRenderTargetCatalog({
+        parts: [...femDomain.partsById.values()],
+        sceneObjectIds,
+      }),
+    [femDomain.partsById, sceneObjectIds],
   );
   const topologyIndexBundle = useViewport3DTopologyIndexBundle({
     airboxParts: femDomain.airboxParts,
@@ -3780,6 +3795,8 @@ export function useViewport3DSceneModel({
     manifestCarrierDegradedCount:
       femDomain.renderCarrierDiagnostics?.degradedCarrierCount,
     manifestCarrierKind: femDomain.renderCarrierDiagnostics?.kind,
+    manifestCarrierRejectedCount:
+      femDomain.renderCarrierDiagnostics?.rejectedCarrierCount,
     objectCount: femDomain.objectPartIds.size,
     pipelineDiagnostics: buildPipelineDiagnostics,
     quantityId: primaryFieldQuantityId,
@@ -3970,6 +3987,7 @@ export function useViewport3DSceneModel({
     selectedRegionId,
     selectionBounds,
     scalarColorPalette,
+    semanticTargetCatalog,
     status,
     renderedMeshRevision: topologyRenderModelForGeometry?.meshRevision ?? null,
     topology: topology.data,

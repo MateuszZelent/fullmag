@@ -1345,7 +1345,11 @@ function useObjectVisualizationPanelState(
     () =>
       selection.ref?.type === "mesh-part"
         ? manifestRenderableCarriers(manifest.data).find(
-            (part) => part.id === selection.ref?.nodeId,
+            (part) =>
+              part.id ===
+              (selection.ref?.type === "mesh-part"
+                ? selection.ref.carrierPartId ?? selection.ref.nodeId
+                : null),
           ) ?? null
         : null,
     [manifest.data, selection.ref],

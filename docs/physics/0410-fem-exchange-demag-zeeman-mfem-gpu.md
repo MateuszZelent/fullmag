@@ -240,6 +240,33 @@ These are the continuum identities that any FEM realization must respect.
   matrix assembly first.
 - Future eigenmode support must reuse the same operators and their linearizations.
 
+### 2.4 Full-domain visualization observables
+
+For a shared-domain Poisson-airbox realization, the solver keeps two distinct
+field products with the same SI unit of A/m:
+
+- the magnetic-domain `H_demag` and `H_eff` buffers consumed by LLG, and
+- full-domain visualization buffers in which recovered `H_demag = -grad(u)`
+  is retained on both magnetic and airbox nodes.
+
+The observable-copy contract must publish the full-domain visualization buffer
+for `H_demag` and `H_eff` whenever it is available, independently of whether
+the resolved FEM runtime is CPU- or GPU-resident. The GPU working buffer may
+remain masked on non-magnetic nodes for LLG and step metrics, but it is not a
+valid replacement for the full-domain visualization product. On magnetic
+nodes, the full-domain `H_eff` remains the ordinary effective field; on airbox
+nodes it contains the recovered demagnetizing field plus any field contribution
+that is physically defined on the full domain. Exchange and other
+magnetic-only contributions are not extended into air.
+
+For strict device-Poisson execution, the full-domain recovery is an observable
+operation, not part of the RK hot loop. A snapshot must reuse the current
+Poisson solution and recovery operators to evaluate the unmasked gradient into
+the dedicated device Poisson-gradient buffer, then read that buffer back as the
+visual `H_demag`. The material-masked device `H_demag` remains the only field
+consumed by LLG. Snapshot readback must never overwrite the unmasked visual
+product with that masked solver field.
+
 ## 3. Numerical interpretation
 
 ### 3.1 FDM

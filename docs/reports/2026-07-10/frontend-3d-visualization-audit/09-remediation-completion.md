@@ -1,6 +1,17 @@
 # 09. Zakończenie remediacji audytu 3D
 
-**Stan:** zamknięte w gałęzi `codex/frontend-3d-visualization-remediation`.
+**Stan historyczny:** zamknięte w gałęzi
+`codex/frontend-3d-visualization-remediation` i zmergowane jako `79bb92eb`.
+
+> **Aktualizacja 2026-07-14:** ten dokument nie opisuje już stanu najnowszego
+> `mastera`. Reaudyt na `9f0c64f5bd14d0b47e84727179b817bd6f1d1830`
+> wykazał częściowe domknięcie F3D-003 i F3D-013 oraz dodał F3D-029–F3D-032.
+> F3D-026 i F3D-028 pozostają zamknięte według swoich pierwotnych kryteriów;
+> reprezentatywny gate CoFeB i dowód awarii pre-canvas należą do nowego
+> zakresu F3D-031.
+> Bieżąca macierz i dowody znajdują się w
+> `10-reaudyt-najnowszej-wersji-2026-07-14.md`. Poniższa tabela pozostaje
+> zapisem historycznym implementacji, a nie aktualnym certyfikatem produkcyjnym.
 
 Ten dokument jest końcową macierzą dowodową dla audytu z 10 lipca 2026.
 Każdy punkt zachowuje osobny opis i plan naprawy w plikach `01`–`08`; poniżej

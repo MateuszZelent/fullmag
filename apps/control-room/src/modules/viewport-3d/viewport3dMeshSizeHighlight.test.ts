@@ -4,7 +4,10 @@ import type { DecodedTopology } from "@/kernel/api/codecs";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 
 import type { FemManifestRenderDomain } from "./viewport3dDomainAdapter";
-import { buildViewport3DMeshSizeHighlightModel } from "./viewport3dMeshSizeHighlight";
+import {
+  buildViewport3DMeshSizeHighlightModel,
+  retainViewport3DMeshSizeHighlight,
+} from "./viewport3dMeshSizeHighlight";
 import type { Viewport3DTopologyRenderModel } from "./viewport3dRenderModel";
 
 function topologyFixture(): DecodedTopology {
@@ -119,6 +122,30 @@ function highlight(
 }
 
 describe("buildViewport3DMeshSizeHighlightModel", () => {
+  it("retains the previous state object for a semantically identical hover event", () => {
+    const previous = highlight({
+      resource: {
+        binIndex: 2,
+        meshId: "study_domain",
+        metric: "characteristic_size",
+        partId: "part:__air__",
+      },
+      scope: { kind: "airbox" },
+    });
+    const next = highlight({
+      resource: {
+        binIndex: 2,
+        meshId: "study_domain",
+        metric: "characteristic_size",
+        partId: "part:__air__",
+      },
+      scope: { kind: "airbox" },
+    });
+
+    expect(retainViewport3DMeshSizeHighlight(previous, next)).toBe(previous);
+    expect(retainViewport3DMeshSizeHighlight(previous, null)).toBeNull();
+  });
+
   it("highlights only airbox tetrahedra inside the hovered size bin", () => {
     const model = buildViewport3DMeshSizeHighlightModel(
       topologyFixture(),

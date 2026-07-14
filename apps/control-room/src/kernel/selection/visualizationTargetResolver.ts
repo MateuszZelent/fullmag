@@ -16,6 +16,10 @@ export function resolveVisualizationTargetForMeshPart({
   sceneObjectIds: ReadonlySet<string>;
   targetRegistry: VisualizationStateResource["targets"] | null | undefined;
 }): VisualizationTargetRef {
+  if (part.role === "air" || part.role === "airbox") {
+    return { id: "airbox", kind: "airbox", label: "Airbox" };
+  }
+
   if (
     targetRegistry?.parts.some(
       (target) => target.scope === "part" && target.scope_id === part.id,
@@ -27,7 +31,9 @@ export function resolveVisualizationTargetForMeshPart({
   const objectId = visualizationObjectIdForMeshPartLike({
     object_id: part.object_id,
   });
-  if (objectId) return objectTarget(objectId, part.label);
+  if (objectId && sceneObjectIds.has(objectId)) {
+    return objectTarget(objectId, part.label);
+  }
 
   const geometryId = part.geometry_id
     ? canonicalVisualizationSceneObjectId(part.geometry_id)

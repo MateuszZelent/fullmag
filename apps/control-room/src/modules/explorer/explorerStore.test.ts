@@ -4,6 +4,7 @@ import {
   collapseExplorerNodes,
   expandExplorerNodes,
   explorerStore,
+  revealExplorerNode,
   resetExplorerStoreForTests,
   setExplorerActiveTab,
   setExplorerFilterText,
@@ -35,5 +36,25 @@ describe("explorerStore", () => {
     collapseExplorerNodes("resources", ["resources:fields"]);
     expect(explorerStore.getSnapshot().expandedIds.resources.has("resources:fields")).toBe(false);
     expect(explorerStore.getSnapshot().expandedIds.resources.has("resources:mesh")).toBe(false);
+  });
+
+  it("reveals a viewport selection without clearing the user's filter", () => {
+    setExplorerActiveTab("results");
+    setExplorerFilterText("energy");
+    collapseExplorerNodes("model", ["model:session", "model:mesh"]);
+
+    revealExplorerNode("model", "model:mesh:unassigned:part%3Aorphan", [
+      "model:session",
+      "model:mesh",
+      "model:mesh:unassigned",
+    ]);
+
+    const state = explorerStore.getSnapshot();
+    expect(state.activeTab).toBe("model");
+    expect(state.filterText).toBe("energy");
+    expect(state.keyboardRow).toBe("model:mesh:unassigned:part%3Aorphan");
+    expect(state.expandedIds.model.has("model:session")).toBe(true);
+    expect(state.expandedIds.model.has("model:mesh")).toBe(true);
+    expect(state.expandedIds.model.has("model:mesh:unassigned")).toBe(true);
   });
 });

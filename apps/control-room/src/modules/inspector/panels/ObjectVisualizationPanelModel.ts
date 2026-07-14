@@ -380,7 +380,9 @@ export function resolveObjectVisualizationPanelSelectionTarget({
     });
   }
   return {
-    id: selection.ref.nodeId,
+    id: selection.ref.carrierPartId
+      ? selection.ref.visualizationTargetId
+      : selection.ref.nodeId,
     kind: "part",
     label: selection.label,
   };

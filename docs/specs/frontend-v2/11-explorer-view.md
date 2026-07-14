@@ -128,6 +128,45 @@ Every scene object node has a `Visualization` child. The child selects the per-o
 
 The explorer does not own visibility or display style. It only exposes the node that lets the inspector focus the target-specific controls.
 
+`Debug` is the last semantic child of each supported `Visualization` node. It
+selects an observation-only inspector for the same canonical target as its
+parent; it is not another appearance-settings page and does not create a second
+target for a mesh carrier. In particular, Airbox Debug selects target `airbox`
+and must report `part:__air__` separately as its data-plane carrier.
+
+The Model tree and stable node ids are:
+
+```text
+Session Model
+└── Universe
+    └── Airbox                                      model:airbox
+        ├── Mesh                                    model:airbox:mesh
+        │   ├── Parameters                          model:airbox:mesh:parameters
+        │   ├── Quality Gates                       model:airbox:mesh:quality-gates
+        │   ├── Statistics                          model:airbox:mesh:statistics
+        │   ├── Topology                            model:airbox:mesh:topology
+        │   └── Build & Provenance                  model:airbox:mesh:build
+        └── Visualization                           model:airbox:visualization
+            └── Debug                               model:airbox:visualization:debug
+
+Objects
+└── <Object>
+    └── Visualization                               <object-parent-id>:visualization
+        └── Debug                                   <object-parent-id>:visualization:debug
+    └── Regions
+        └── <Region>
+            └── Visualization                       <region-node-id>:visualization
+                └── Debug                           <region-node-id>:visualization:debug
+```
+
+`model:airbox:mesh` and `model:airbox:visualization` remain stable because
+existing commands and ribbon tests address them. The former global
+`model:mesh:airbox-quality` node is replaced by
+`model:airbox:mesh:quality-gates`; the two must never be visible together.
+Debug badges are static or derived from an already-published bounded debug
+snapshot. Building the Explorer tree must not fetch visualization or field
+resources merely to populate a Debug badge.
+
 ## 10. Geometry Object Nodes
 
 Scene objects come from the `model/scene` resource. A micromagnetic model is object-first: material parameters, regions, magnetization texture, mesh policy, and visualization are focused through the selected ferromagnetic object. Material and magnetization entries may remain reusable backend assets, but the Model explorer must not expose them as standalone primary branches.
@@ -152,3 +191,22 @@ Objects
 The Geometry child focuses primitive dimensions and transform. Regions focuses the object-derived region resource and future per-object region gradients. Magnetic Parameters owns material assignment, material scalar/tensor parameters, and object interaction stack. Magnetic Texture owns the object magnetization reference and texture mapping/transform inspection. The Mesh child focuses object mesh settings, build state, reports, and quality. Newly created objects should be selected immediately after the backend commits the create transaction, then shown as primitive-only or mesh-stale until meshing resources publish current topology.
 
 Object rows expose mesh/geometry badges derived from resources: primitive-only, mesh stale, mesh building, mesh ready, mesh failed, validation blocked. Deleting an object clears selection if the deleted object or one of its children was selected.
+
+## 11. Renderer addressability invariant
+
+Every semantic and pickable 3D render target must have exactly one stable Model
+Explorer node. Viewport picking stores that Explorer node id, never a topology
+carrier id. A selection originating in the viewport switches to the Model tab,
+expands the full ancestor path, remains visible under an active filter, scrolls
+into view, and becomes the active tree row.
+
+Airbox carriers (`__air__`, `part:__air__`, and roles `air`/`airbox`) map only
+to `model:airbox`. A magnetic carrier maps to its existing authored object.
+Renderable parts without an existing scene owner appear under
+`Mesh -> Unassigned mesh parts`; their node ids use
+`model:mesh:unassigned:<encoded-part-id>`. Grid, axes, lights, gizmos, bounds
+helpers, and selection shells are non-semantic and non-pickable.
+
+The viewport must reject blank, duplicate, or otherwise unaddressable carriers
+before creating scientific passes or picking handlers and publish the bounded
+diagnostic `unaddressable-render-target:<count>`.

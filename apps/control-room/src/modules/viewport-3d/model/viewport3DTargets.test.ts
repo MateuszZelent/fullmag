@@ -40,7 +40,7 @@ describe("viewport3DTargets", () => {
         id: "mesh-part:free-layer",
         label: "Free layer",
         object_id: "free-layer",
-      } as Parameters<typeof targetForMeshPart>[0]),
+      } as Parameters<typeof targetForMeshPart>[0], new Set(["free-layer"])),
     ).toEqual({
       id: "object:free-layer",
       kind: "object",
@@ -54,7 +54,7 @@ describe("viewport3DTargets", () => {
         id: "mesh-part:free-layer",
         label: "Free layer",
         object_id: "free-layer_geom",
-      } as Parameters<typeof targetForMeshPart>[0]),
+      } as Parameters<typeof targetForMeshPart>[0], new Set(["free-layer"])),
     ).toEqual({
       id: "object:free-layer",
       kind: "object",

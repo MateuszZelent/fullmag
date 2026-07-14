@@ -1,6 +1,12 @@
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
-import { AirboxMeshPolicyPanel } from "./panels/AirboxMeshPolicyPanel";
+import { AirboxOverviewPanel } from "./panels/airbox/AirboxOverviewPanel";
+import { AirboxMeshBuildPanel } from "./panels/airbox/AirboxMeshBuildPanel";
+import { AirboxMeshOverviewPanel } from "./panels/airbox/AirboxMeshOverviewPanel";
+import { AirboxMeshParametersPanel } from "./panels/airbox/AirboxMeshParametersPanel";
+import { AirboxMeshQualityGatesPanel } from "./panels/airbox/AirboxMeshQualityGatesPanel";
+import { AirboxMeshStatisticsPanel } from "./panels/airbox/AirboxMeshStatisticsPanel";
+import { AirboxMeshTopologyPanel } from "./panels/airbox/AirboxMeshTopologyPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
 import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
@@ -464,6 +470,12 @@ const PANELS: InspectorPanelContribution[] = [
     component: AntennaObjectPanel,
   },
   {
+    id: "airbox-overview",
+    title: "Airbox Overview",
+    selectionKinds: ["airbox.root"],
+    component: AirboxOverviewPanel,
+  },
+  {
     id: "object-visualization",
     title: "Visualization",
     selectionKinds: [
@@ -473,6 +485,12 @@ const PANELS: InspectorPanelContribution[] = [
       "mesh-part",
     ],
     component: ObjectVisualizationPanel,
+  },
+  {
+    id: "airbox-visualization-debug",
+    title: "Airbox Visualization Debug",
+    selectionKinds: ["airbox.visualization.debug"],
+    component: PlaceholderPanel,
   },
   {
     id: "object-mode-visualization",
@@ -572,16 +590,40 @@ const PANELS: InspectorPanelContribution[] = [
     component: ObjectMagneticTexturePanel,
   },
   {
-    id: "airbox-mesh-policy",
-    title: "Airbox Mesh Policy",
+    id: "airbox-mesh-overview",
+    title: "Airbox Mesh Overview",
     selectionKinds: ["airbox.mesh"],
-    component: AirboxMeshPolicyPanel,
+    component: AirboxMeshOverviewPanel,
   },
   {
-    id: "airbox-mesh-quality",
-    title: "Airbox Mesh Quality",
-    selectionKinds: ["airbox.mesh-quality"],
-    component: AirboxMeshPolicyPanel,
+    id: "airbox-mesh-parameters",
+    title: "Airbox Mesh Parameters",
+    selectionKinds: ["airbox.mesh.parameters"],
+    component: AirboxMeshParametersPanel,
+  },
+  {
+    id: "airbox-mesh-quality-gates",
+    title: "Airbox Mesh Quality Gates",
+    selectionKinds: ["airbox.mesh.quality-gates"],
+    component: AirboxMeshQualityGatesPanel,
+  },
+  {
+    id: "airbox-mesh-statistics",
+    title: "Airbox Mesh Statistics",
+    selectionKinds: ["airbox.mesh.statistics"],
+    component: AirboxMeshStatisticsPanel,
+  },
+  {
+    id: "airbox-mesh-topology",
+    title: "Airbox Mesh Topology",
+    selectionKinds: ["airbox.mesh.topology"],
+    component: AirboxMeshTopologyPanel,
+  },
+  {
+    id: "airbox-mesh-build",
+    title: "Airbox Mesh Build",
+    selectionKinds: ["airbox.mesh.build"],
+    component: AirboxMeshBuildPanel,
   },
   {
     id: "object-mesh-policy",

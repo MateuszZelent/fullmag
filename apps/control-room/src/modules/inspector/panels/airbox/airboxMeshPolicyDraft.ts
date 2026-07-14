@@ -9,6 +9,8 @@ export const AIRBOX_GRADING_MODES = ["auto", "geometric", "linear"] as const;
 type AirboxGradingMode = (typeof AIRBOX_GRADING_MODES)[number];
 
 export interface AirboxMeshPolicyDraft {
+  authoredConfigPresent: boolean;
+  airboxGradingAuthored: boolean;
   airboxGrading: AirboxGradingMode;
   airboxGrowthRate: string;
   airboxHmax: string;
@@ -45,18 +47,12 @@ export function formatUniverseMeshPolicyConfig(
 
 export function draftFromUniverseMeshPolicyResource(
   resource: MeshUniverseConfigResource,
-  options: {
-    effectiveTarget?: JsonObject | null | undefined;
-  } = {},
 ): AirboxMeshPolicyDraft {
-  const config = {
-    ...defaultUniverseMeshPolicyConfig(),
-    ...targetConfigFromEffectiveAirbox(options.effectiveTarget),
-    ...(resource.effective_config ?? {}),
-    ...(resource.config ?? {}),
-  };
+  const config = resource.config ?? {};
 
   return {
+    authoredConfigPresent: resource.config !== null && resource.config !== undefined,
+    airboxGradingAuthored: Object.hasOwn(config, "airbox_grading"),
     airboxGrading: readAirboxGrading(config.airbox_grading),
     airboxGrowthRate: readNumberText(config.airbox_growth_rate),
     airboxHmax: readNumberText(config.airbox_hmax),
@@ -77,41 +73,12 @@ export function draftFromUniverseMeshPolicyResource(
   };
 }
 
-function defaultUniverseMeshPolicyConfig(): JsonObject {
-  return {
-    airbox_grading: "geometric",
-    airbox_growth_rate: 1.3,
-    mode: "auto",
-    padding: [0, 0, 0],
-  };
-}
-
-function targetConfigFromEffectiveAirbox(
-  target: JsonObject | null | undefined,
-): JsonObject {
-  if (!target) return {};
-  const config: JsonObject = {};
-  const hmax = target.maximum_element_size ?? target.hmax;
-  const hmin = target.minimum_element_size ?? target.hmin;
-  const growthRate = target.growth_rate ?? target.maximum_element_growth_rate;
-  if (isFiniteNumberLike(hmax)) config.airbox_hmax = hmax;
-  if (isFiniteNumberLike(hmin)) config.airbox_hmin = hmin;
-  if (isFiniteNumberLike(growthRate)) config.airbox_growth_rate = growthRate;
-  return config;
-}
-
 export function draftKeyForUniverseMeshPolicyResource(
   resource: MeshUniverseConfigResource,
-  options: {
-    effectiveTarget?: JsonObject | null | undefined;
-  } = {},
 ): string {
-  const effectiveTarget = targetConfigFromEffectiveAirbox(options.effectiveTarget);
   return [
     resource.revision,
     formatUniverseMeshPolicyConfig(resource.config),
-    formatUniverseMeshPolicyConfig(resource.effective_config),
-    formatUniverseMeshPolicyConfig(effectiveTarget),
   ].join(":");
 }
 
@@ -133,12 +100,23 @@ export function buildAirboxMeshPolicyReplaceRequest(
   draft: AirboxMeshPolicyDraft,
 ):
   | { error: string }
-  | { request: MeshUniverseConfigReplaceRequest } {
+  | { request: MeshUniverseConfigReplaceRequest | null } {
   const parsed = parseConfig(draft.configText);
   if (!parsed.ok) return { error: parsed.error };
 
+  if (
+    !draft.authoredConfigPresent &&
+    isUntouchedNullAuthoredDraft(draft, parsed.value)
+  ) {
+    return { request: null };
+  }
+
   const config = { ...parsed.value };
-  config.airbox_grading = draft.airboxGrading;
+  if (draft.airboxGradingAuthored) {
+    config.airbox_grading = draft.airboxGrading;
+  } else {
+    delete config.airbox_grading;
+  }
 
   const hmax = parsePositiveNumber(
     draft.airboxHmax,
@@ -225,17 +203,36 @@ export function buildAirboxMeshPolicyReplaceRequest(
   return { request: { config } };
 }
 
+function isUntouchedNullAuthoredDraft(
+  draft: AirboxMeshPolicyDraft,
+  parsedConfig: JsonObject,
+): boolean {
+  return (
+    draft.airboxGrading === "auto" &&
+    !draft.airboxGradingAuthored &&
+    draft.airboxGrowthRate === "" &&
+    draft.airboxHmax === "" &&
+    draft.airboxHmin === "" &&
+    Object.keys(parsedConfig).length === 0 &&
+    draft.curvatureFactor === "" &&
+    draft.narrowRegionResolution === "" &&
+    draft.paddingX === "" &&
+    draft.paddingY === "" &&
+    draft.paddingZ === "" &&
+    draft.airboxMode === "" &&
+    draft.airboxSizeX === "" &&
+    draft.airboxSizeY === "" &&
+    draft.airboxSizeZ === "" &&
+    draft.airboxCenterX === "" &&
+    draft.airboxCenterY === "" &&
+    draft.airboxCenterZ === ""
+  );
+}
+
 function readAirboxGrading(value: unknown): AirboxGradingMode {
   return AIRBOX_GRADING_MODES.includes(value as AirboxGradingMode)
     ? (value as AirboxGradingMode)
     : "auto";
-}
-
-function isFiniteNumberLike(value: unknown): value is number | string {
-  if (typeof value === "number") return Number.isFinite(value);
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  return trimmed.length > 0 && Number.isFinite(Number(trimmed));
 }
 
 function readNumberText(value: unknown): string {

@@ -50,6 +50,7 @@ export type Viewport3DManifestRenderableCarrier =
 export interface ManifestRenderableCarrierDiagnostics {
   degradedCarrierCount: number;
   kind: ManifestRenderableCarrierKind;
+  rejectedCarrierCount: number;
   renderableCarrierCount: number;
 }
 
@@ -78,9 +79,9 @@ export interface FemManifestRenderDomain {
 
 export interface Viewport3DPartSelection {
   boundaryFaceIndex?: number | null;
+  carrierPartId: string;
   kind: "mesh-part" | "mesh-part-airbox";
   label: string;
-  nodeId: string;
   objectId: string | null;
   part: Viewport3DMeshPart;
 }
@@ -154,7 +155,7 @@ export function adaptFemSharedDomainManifest(
 
   for (const part of carriers) {
     partsById.set(part.id, part);
-    if (part.role === "air") {
+    if (part.role === "air" || part.role === "airbox") {
       airboxParts.push(part);
     } else if (isMagneticRenderablePart(part)) {
       magneticParts.push(part);
@@ -197,11 +198,18 @@ export function manifestRenderableCarriers(
 ): Viewport3DManifestRenderableCarrier[] & {
   diagnostics: ManifestRenderableCarrierDiagnostics;
 } {
-  const meshParts = (manifest?.mesh_parts ?? []).map((part) => ({
+  const rawMeshParts = (manifest?.mesh_parts ?? []).map((part) => ({
     ...part,
     carrierKind: "mesh-part" as const,
     fieldCapable: true as const,
   }));
+  const seenMeshPartIds = new Set<string>();
+  const meshParts = rawMeshParts.filter((part) => {
+    const id = part.id.trim();
+    if (!id || seenMeshPartIds.has(id)) return false;
+    seenMeshPartIds.add(id);
+    return true;
+  });
   const meshOwnership = new Set<string>();
   for (const part of meshParts) {
     for (const alias of manifestCarrierOwnershipAliases(part)) meshOwnership.add(alias);
@@ -220,6 +228,7 @@ export function manifestRenderableCarriers(
       meshPartCount: meshParts.length,
       objectSegmentCount: segments.length,
     }),
+    rejectedCarrierCount: rawMeshParts.length - meshParts.length,
     renderableCarrierCount: carriers.filter(
       (carrier) =>
         carrier.carrierKind === "object-segment" ||
@@ -392,9 +401,12 @@ export function selectionForMeshPart(
   const objectId = visualizationObjectIdForMeshPartLike(part);
   return {
     boundaryFaceIndex,
-    kind: part.role === "air" ? "mesh-part-airbox" : "mesh-part",
+    carrierPartId: part.id,
+    kind:
+      part.role === "air" || part.role === "airbox"
+        ? "mesh-part-airbox"
+        : "mesh-part",
     label: part.label,
-    nodeId: part.id,
     objectId,
     part,
   };

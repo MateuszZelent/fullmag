@@ -128,9 +128,9 @@ const meshDetailsModelPath = path.join(
   appRoot,
   "src/modules/inspector/panels/mesh-details/useMeshDetailsModel.ts",
 );
-const airboxMeshPolicyPanelPath = path.join(
+const airboxInspectorPanelsPath = path.join(
   appRoot,
-  "src/modules/inspector/panels/AirboxMeshPolicyPanel.tsx",
+  "src/modules/inspector/panels/airbox",
 );
 const studyInspectorPanelPath = path.join(
   appRoot,
@@ -284,7 +284,7 @@ checkObjectVisualizationPanelSessionStatusSelector();
 checkObjectVisualizationPanelVisualizationSelector();
 checkObjectVisualizationPanelNumberFieldCommitBoundary();
 checkMeshDetailsPanelSessionStatusSelector();
-checkAirboxMeshPolicyPanelSessionStatusSelector();
+checkAirboxInspectorPanelsResourceOwnership();
 checkStudyInspectorPanelSessionStatusSelector();
 checkMeshBuildDialogSessionStatusSelector();
 checkShellSelectorHooks();
@@ -842,19 +842,100 @@ function checkMeshDetailsPanelSessionStatusSelector() {
   ]);
 }
 
-function checkAirboxMeshPolicyPanelSessionStatusSelector() {
-  const source = readFileSync(airboxMeshPolicyPanelPath, "utf8");
-  requireTokens(source, "AirboxMeshPolicyPanel session status selector", [
-    "selectAirboxMeshPolicyRuntimeStatus",
-    "airboxMeshPolicyRuntimeStatusEquals",
-    "useSessionStatusSelector",
-    "runtimeStatus",
-    "shouldLoadRuntimeMeshSummary(true, runtimeStatus)",
+function checkAirboxInspectorPanelsResourceOwnership() {
+  const readPanel = (file) =>
+    readFileSync(path.join(airboxInspectorPanelsPath, file), "utf8");
+  const manifestPattern = /useMeshSharedDomainManifestResource\s*\(\s*\{\s*enabled:\s*shouldLoadRuntimeMeshManifest\s*\(\s*true\s*,\s*runtimeStatus\s*\)\s*,?\s*\}\s*\)/s;
+  for (const file of [
+    "AirboxOverviewPanel.tsx",
+    "AirboxMeshOverviewPanel.tsx",
+    "AirboxMeshTopologyPanel.tsx",
+  ]) {
+    requirePatterns(readPanel(file), `${file} manifest gate`, [
+      [manifestPattern, "manifest hook gated by shouldLoadRuntimeMeshManifest"],
+    ]);
+  }
+
+  requirePatterns(
+    readPanel("AirboxMeshQualityGatesPanel.tsx"),
+    "AirboxMeshQualityGatesPanel summary gate",
+    [[
+      /useMeshUniverseQualityResource\s*\(\s*\{\s*enabled:\s*shouldLoadRuntimeMeshSummary\s*\(\s*true\s*,\s*runtimeStatus\s*\)\s*,?\s*\}\s*\)/s,
+      "quality hook gated by shouldLoadRuntimeMeshSummary",
+    ]],
+  );
+
+  requirePatterns(
+    readPanel("AirboxMeshStatisticsPanel.tsx"),
+    "AirboxMeshStatisticsPanel resource gates",
+    [
+      [/const\s+summaryEnabled\s*=\s*shouldLoadRuntimeMeshSummary\s*\(\s*true\s*,\s*runtimeStatus\s*\)/, "summaryEnabled from runtime summary gate"],
+      [/useMeshUniverseQualityResource\s*\(\s*\{\s*enabled:\s*summaryEnabled\s*\}\s*\)/, "quality hook uses summaryEnabled"],
+      [/useMeshUniverseReportResource\s*\(\s*\{\s*enabled:\s*summaryEnabled\s*\}\s*\)/, "report hook uses summaryEnabled"],
+      [manifestPattern, "manifest hook uses manifest gate"],
+    ],
+  );
+  forbidTokens(readPanel("AirboxMeshStatisticsPanel.tsx"), "Airbox bounded statistics", [
+    "MeshQualityStatisticsView",
   ]);
-  forbidTokens(source, "AirboxMeshPolicyPanel session status selector", [
+  requireTokens(readPanel("AirboxOverviewPanel.tsx"), "Airbox canonical policy keys", [
+    "authored.mode",
+    "authored.size",
+    "authored.padding",
+    "authored.center",
+  ]);
+  forbidTokens(readPanel("AirboxOverviewPanel.tsx"), "Airbox canonical policy keys", [
+    "authored.airbox_mode",
+    "authored.airbox_size",
+    "authored.airbox_padding",
+    "authored.airbox_center",
+  ]);
+  requireTokens(readPanel("AirboxMeshTopologyPanel.tsx"), "Airbox topology marker honesty", [
+    'label="Canonical marker" value="not published"',
+  ]);
+
+  requirePatterns(
+    readPanel("AirboxMeshBuildPanel.tsx"),
+    "AirboxMeshBuildPanel build gates",
+    [
+      [/const\s+buildEnabled\s*=\s*shouldLoadRuntimeMeshBuild\s*\(\s*true\s*,\s*runtimeStatus\s*\)/, "buildEnabled from mesh build gate"],
+      [/useMeshUniverseReportResource\s*\(\s*\{\s*enabled:\s*buildEnabled\s*\}\s*\)/, "universe report uses buildEnabled"],
+      [/useMeshBuildCurrent\s*\(\s*\{\s*enabled:\s*buildEnabled\s*\}\s*\)/, "current build uses buildEnabled"],
+      [/useMeshBuildLatestSuccessful\s*\(\s*\{\s*enabled:\s*buildEnabled\s*\}\s*\)/, "latest successful build uses buildEnabled"],
+      [/<pre\s+className="fm-mesh-json-preview">\{lifecycle\.rawDetails\.serialized\}<\/pre>/, "one aggregate bounded raw detail renders"],
+    ],
+  );
+  requirePatterns(readPanel("AirboxMeshOverviewPanel.tsx"), "AirboxMeshOverviewPanel build gate", [
+    [/useMeshBuildCurrent\s*\(\s*\{\s*enabled:\s*shouldLoadRuntimeMeshBuild\s*\(\s*true\s*,\s*runtimeStatus\s*\)/, "current build uses build gate"],
+  ]);
+  forbidTokens(
+    readPanel("AirboxMeshBuildPanel.tsx"),
+    "AirboxMeshBuildPanel raw report ownership",
+    ["value={report.data}", "JsonResourceSection", "JSON.stringify("],
+  );
+
+  const sources = [
+    "AirboxOverviewPanel.tsx",
+    "AirboxMeshOverviewPanel.tsx",
+    "AirboxMeshQualityGatesPanel.tsx",
+    "AirboxMeshStatisticsPanel.tsx",
+    "AirboxMeshTopologyPanel.tsx",
+    "AirboxMeshBuildPanel.tsx",
+    "AirboxMeshParametersPanel.tsx",
+  ].map(readPanel).join("\n");
+  if ((sources.match(/fm-mesh-json-preview/g) ?? []).length !== 1) {
+    failures.push("Airbox inspector panels must contain exactly one raw preview, owned by Build.");
+  }
+  forbidTokens(sources, "Airbox inspector raw render ownership", [
+    "JsonResourceSection",
+    "{JSON.stringify(",
+    "{ JSON.stringify(",
+  ]);
+  forbidTokens(sources, "Airbox inspector resource ownership", [
     "import { useSessionStatus }",
     "const sessionStatus = useSessionStatus()",
     "sessionStatus.data",
+    "useMeshSharedDomainTopologyResource",
   ]);
 }
 

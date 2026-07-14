@@ -522,6 +522,112 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("keeps an orphan part target separate from its Explorer node address", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "mesh-part",
+        label: "Recovered volume",
+        nodeId: "model:mesh:unassigned:part%3Aorphan",
+        objectId: null,
+        ref: {
+          carrierPartId: "part:orphan",
+          kind: "mesh-part",
+          nodeId: "model:mesh:unassigned:part%3Aorphan",
+          objectId: null,
+          type: "mesh-part",
+          visualizationTargetId: "part:orphan",
+        },
+      }),
+    ).toEqual({
+      id: "part:orphan",
+      kind: "part",
+      label: "Recovered volume",
+    });
+  });
+
+  it("resolves visualization Debug selections without changing canonical targets", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "airbox.visualization.debug",
+        label: "Debug",
+        nodeId: "model:airbox:visualization:debug",
+        objectId: null,
+        ref: {
+          kind: "airbox.visualization.debug",
+          nodeId: "model:airbox:visualization:debug",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
+      }),
+    ).toEqual(AIRBOX_VISUALIZATION_TARGET);
+
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "object.visualization.debug",
+        label: "Debug",
+        nodeId: "model:object:free-layer_geom:visualization:debug",
+        objectId: "free-layer_geom",
+        ref: {
+          kind: "object.visualization.debug",
+          nodeId: "model:object:free-layer_geom:visualization:debug",
+          objectId: "free-layer_geom",
+          type: "scene-object",
+          visualizationTargetId: "object:free-layer",
+        },
+      }),
+    ).toEqual({ id: "object:free-layer", kind: "object", label: "Debug" });
+
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "object.region.visualization.debug",
+        label: "Debug",
+        nodeId: "model:object:free-layer:regions:core:visualization:debug",
+        objectId: "free-layer",
+        ref: {
+          kind: "object.region.visualization.debug",
+          nodeId: "model:object:free-layer:regions:core:visualization:debug",
+          objectId: "free-layer",
+          regionId: "core/shell:top",
+          type: "scene-object",
+          visualizationTargetId: "region:free-layer:core%2Fshell%3Atop",
+        },
+      }),
+    ).toEqual({
+      id: "region:free-layer:core%2Fshell%3Atop",
+      kind: "region",
+      label: "Debug",
+    });
+  });
+
+  it.each([
+    "airbox.root",
+    "airbox.mesh",
+    "airbox.mesh.parameters",
+    "airbox.mesh.quality-gates",
+    "airbox.mesh.statistics",
+    "airbox.mesh.topology",
+    "airbox.mesh.build",
+  ] as const)(
+    "does not resolve %s as a display-edit target",
+    (kind) => {
+      const nodeId = `model:${kind.replaceAll(".", ":")}`;
+      expect(
+        resolveVisualizationTargetFromSelection({
+          kind,
+          label: kind,
+          nodeId,
+          objectId: null,
+          ref: {
+            kind,
+            nodeId,
+            type: "airbox",
+            visualizationTargetId: "airbox",
+          },
+        }),
+      ).toBeNull();
+    },
+  );
+
   it("patches and clears target overrides without storing resource data", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "free-layer", kind: "object" as const };

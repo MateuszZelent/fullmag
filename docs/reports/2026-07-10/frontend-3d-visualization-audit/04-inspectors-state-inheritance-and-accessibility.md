@@ -1,5 +1,16 @@
 # 04. Inspektory, stan, dziedziczenie i dostępność
 
+## Stan reaudytu 2026-07-14
+
+F3D-014–F3D-017 pozostają **naprawione w swoim pierwotnym zakresie**. F3D-013
+jest **częściowo naprawione**: optimistic overlay jest revision-aware i znika po
+ACK, ale trwałe 4xx nadal mogą być ponawiane bez terminalnego, widocznego stanu
+odrzucenia. Backendowy effective registry i kontrolki mogą poprawnie raportować
+pass jako aktywny, podczas gdy niższa warstwa budowy buforów nie dostarcza danych
+do renderera; dlatego stan Inspektora nie może być użyty jako dowód widocznego
+wyniku. F3D-032 dodatkowo wymaga, aby Inspector, Explorer i viewport zawsze
+otrzymywały ten sam kanoniczny `SelectionRef`.
+
 ## F3D-013 — nieuzgadniany local overlay wygrywa do clear albo reload
 
 **Priorytet:** P1 — wysoki

@@ -34,6 +34,8 @@ import {
 import {
   buildExplorerTree,
   buildModelTree,
+  filterExplorerNodes,
+  findExplorerNodePath,
   flattenExplorerNodes,
 } from "./buildModelTree";
 import {
@@ -309,6 +311,18 @@ const FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED: FrequencyDomainSweepProgressRe
 };
 
 describe("buildModelTree", () => {
+  it("removes synthetic air-role scene objects before they can become Explorer nodes", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      objects: [
+        { id: "film", name: "Film", role: "magnet" },
+        { id: "__air__", name: "Synthetic air", role: "air" },
+        { id: "compat-air", name: "Legacy Airbox", role: "airbox" },
+      ],
+    } as SceneResource);
+
+    expect(snapshot.objects?.map((object) => object.id)).toEqual(["film"]);
+  });
+
   it("builds a typed model tree from a scene snapshot without storing API data", () => {
     const nodes = buildModelTree({
       universe: {
@@ -369,10 +383,17 @@ describe("buildModelTree", () => {
         "model:object:free-layer:magnetic-texture:asset",
         "model:object:free-layer:mesh",
         "model:object:free-layer:visualization",
+        "model:object:free-layer:visualization:debug",
+        "model:airbox",
         "model:airbox:mesh",
+        "model:airbox:mesh:parameters",
+        "model:airbox:mesh:quality-gates",
+        "model:airbox:mesh:statistics",
+        "model:airbox:mesh:topology",
+        "model:airbox:mesh:build",
         "model:airbox:visualization",
+        "model:airbox:visualization:debug",
         "model:mesh",
-        "model:mesh:airbox-quality",
         "model:study",
       ]),
     );
@@ -380,13 +401,9 @@ describe("buildModelTree", () => {
       flattened.find((node) => node.id === "model:object:free-layer:mesh")
         ?.status,
     ).toBe("stale");
-    expect(
-      flattened.find((node) => node.id === "model:mesh:airbox-quality"),
-    ).toMatchObject({
-      kind: "airbox.mesh-quality",
-      label: "Airbox Quality",
-      parentId: "model:mesh",
-    });
+    expect(flattened.map((node) => node.id)).not.toContain(
+      "model:mesh:airbox-quality",
+    );
     expect(
       flattened.find((node) => node.id === "model:object:free-layer:regions"),
     ).toMatchObject({
@@ -398,6 +415,158 @@ describe("buildModelTree", () => {
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:object:free-layer:regions:primary",
     );
+  });
+
+  it("builds the exact stable Airbox subtree in semantic order", () => {
+    const [session] = buildModelTree();
+    const universe = session?.children?.find((node) => node.id === "model:universe");
+    const airbox = universe?.children?.find((node) => node.id === "model:airbox");
+
+    expect(airbox).toMatchObject({
+      id: "model:airbox",
+      kind: "airbox.root",
+      label: "Airbox",
+      parentId: "model:universe",
+    });
+    expect(airbox?.children?.map(({ id, kind, label, parentId }) => ({
+      id,
+      kind,
+      label,
+      parentId,
+    }))).toEqual([
+      {
+        id: "model:airbox:mesh",
+        kind: "airbox.mesh",
+        label: "Mesh",
+        parentId: "model:airbox",
+      },
+      {
+        id: "model:airbox:visualization",
+        kind: "airbox.visualization",
+        label: "Visualization",
+        parentId: "model:airbox",
+      },
+    ]);
+
+    const mesh = airbox?.children?.[0];
+    expect(mesh?.children?.map(({ id, kind, label, parentId }) => ({
+      id,
+      kind,
+      label,
+      parentId,
+    }))).toEqual([
+      {
+        id: "model:airbox:mesh:parameters",
+        kind: "airbox.mesh.parameters",
+        label: "Parameters",
+        parentId: "model:airbox:mesh",
+      },
+      {
+        id: "model:airbox:mesh:quality-gates",
+        kind: "airbox.mesh.quality-gates",
+        label: "Quality Gates",
+        parentId: "model:airbox:mesh",
+      },
+      {
+        id: "model:airbox:mesh:statistics",
+        kind: "airbox.mesh.statistics",
+        label: "Statistics",
+        parentId: "model:airbox:mesh",
+      },
+      {
+        id: "model:airbox:mesh:topology",
+        kind: "airbox.mesh.topology",
+        label: "Topology",
+        parentId: "model:airbox:mesh",
+      },
+      {
+        id: "model:airbox:mesh:build",
+        kind: "airbox.mesh.build",
+        label: "Build & Provenance",
+        parentId: "model:airbox:mesh",
+      },
+    ]);
+
+    expect(airbox?.children?.[1]?.children?.at(-1)).toMatchObject({
+      badge: "debug",
+      id: "model:airbox:visualization:debug",
+      kind: "airbox.visualization.debug",
+      label: "Debug",
+      parentId: "model:airbox:visualization",
+    });
+  });
+
+  it("exposes every orphan render target as an explicit unassigned mesh-part node", () => {
+    const nodes = buildModelTree({
+      mesh: {
+        partCount: 1,
+        visualizationPartFallbacks: [
+          { id: "part:orphan", label: "Recovered volume" },
+        ],
+      },
+    });
+    const flattened = flattenExplorerNodes(nodes);
+
+    expect(flattened.find((node) => node.id === "model:mesh:unassigned")).toMatchObject({
+      kind: "mesh.unassigned",
+      label: "Unassigned mesh parts",
+      parentId: "model:mesh",
+    });
+    expect(
+      flattened.find(
+        (node) => node.id === "model:mesh:unassigned:part%3Aorphan",
+      ),
+    ).toMatchObject({
+      kind: "mesh.unassigned.part",
+      label: "Recovered volume",
+      meshPartId: "part:orphan",
+      parentId: "model:mesh:unassigned",
+    });
+  });
+
+  it("retains and resolves the selected path even when the active filter does not match it", () => {
+    const nodes = buildModelTree({
+      mesh: {
+        visualizationPartFallbacks: [
+          { id: "part:orphan", label: "Recovered volume" },
+        ],
+      },
+    });
+    const selectedNodeId = "model:mesh:unassigned:part%3Aorphan";
+    const filtered = filterExplorerNodes(nodes, "energy", selectedNodeId);
+
+    expect(flattenExplorerNodes(filtered).map((node) => node.id)).toContain(
+      selectedNodeId,
+    );
+    expect(findExplorerNodePath(nodes, selectedNodeId)).toEqual([
+      "model:session",
+      "model:mesh",
+      "model:mesh:unassigned",
+      selectedNodeId,
+    ]);
+  });
+
+  it("puts Debug last under antenna and ordinary object Visualization", () => {
+    const flattened = flattenExplorerNodes(buildModelTree({
+      objects: [
+        { id: "film", label: "Film" },
+        { id: "antenna", label: "Antenna", objectRole: "antenna" },
+      ],
+    }));
+
+    for (const objectId of ["film", "antenna"]) {
+      const visualization = flattened.find(
+        (node) => node.id === `model:object:${objectId}:visualization`,
+      );
+      expect(visualization?.children?.at(-1)).toMatchObject({
+        badge: "debug",
+        id: `model:object:${objectId}:visualization:debug`,
+        kind: "object.visualization.debug",
+        label: "Debug",
+        objectId,
+        parentId: `model:object:${objectId}:visualization`,
+      });
+    }
   });
 
   it("adds active object extension nodes below the owning object", () => {
@@ -802,6 +971,20 @@ describe("buildModelTree", () => {
           node.id === "model:object:film:regions:reg-core:visualization",
       ),
     ).toMatchObject({ kind: "object.region.visualization", badge: "display" });
+    expect(
+      flattened.find(
+        (node) =>
+          node.id === "model:object:film:regions:reg-core:visualization",
+      )?.children?.at(-1),
+    ).toMatchObject({
+      badge: "debug",
+      id: "model:object:film:regions:reg-core:visualization:debug",
+      kind: "object.region.visualization.debug",
+      label: "Debug",
+      objectId: "film",
+      parentId: "model:object:film:regions:reg-core:visualization",
+      regionId: "reg-core",
+    });
     expect(
       flattened.find(
         (node) => node.id === "model:object:film:regions:reg-core:regions",

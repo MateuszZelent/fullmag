@@ -526,14 +526,42 @@ export type HysteresisSaturationResource =
 export type HysteresisSettleTraceEntrySchema =
   components["schemas"]["HysteresisSettleTraceEntrySchema"];
 
-export type BinaryResourceResult<TData> =
-  | {
+export interface FieldVectorIdentityIssue {
+  field: string;
+  headerValue: number | string | null;
+  payloadValue: number | string | null;
+}
+
+export interface FieldVectorResponseMetadata {
+  component: string | null;
+  domainGenerationId: string | null;
+  encoding: string | null;
+  fieldIndexing: string | null;
+  fieldRevision: string | null;
+  identityIssues: FieldVectorIdentityIssue[];
+  meshTopologyHash: string | null;
+  nComp: number | null;
+  nodeIndexCount: number | null;
+  pointCount: number | null;
+  quantityId: string | null;
+  scopeId: string | null;
+  scopeKind: string | null;
+  snapshotId: string | null;
+  valueCount: number | null;
+}
+
+type ReadyBinaryResourceResult<TData, TMetadata> = {
       byteLength: number;
       contentRange?: string | null;
       data: TData;
       etag: string | null;
       status: "ready";
-    }
+    } & (unknown extends TMetadata
+      ? { responseMetadata?: TMetadata }
+      : { responseMetadata: TMetadata });
+
+export type BinaryResourceResult<TData, TMetadata = unknown> =
+  | ReadyBinaryResourceResult<TData, TMetadata>
   | {
       etag: string | null;
       status: "not-applicable";

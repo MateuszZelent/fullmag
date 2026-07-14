@@ -2,18 +2,18 @@
   "after": {
     "diagnostics": {
       "cacheBytes": 0,
-      "frames": 369,
+      "frames": 352,
       "geo": 5,
-      "raw": "q:H_ex top:none field:none surface:idle field-demands:1[primary-field{vector-glyph:full:complete=>quantity=H_ex component=full scope=full:none consumers=primary-field:vector-glyph}] pipeline:1[fdm-cuboid{queue=0ms worker=4ms transfer=0ms adopt=0ms upload=0ms}] carrier:unavailable/0 obj:0 air:0 geo:5 cache:0B glyph-cache:0/0B/0B worker-runtime:1/1/0 frames:369"
+      "raw": "q:H_ex top:none field:none surface:idle field-demands:1[primary-field{vector-glyph:full:complete=>quantity=H_ex component=full scope=full:none consumers=primary-field:vector-glyph}] pipeline:1[fdm-cuboid{queue=0ms worker=6ms transfer=0ms adopt=0ms upload=0ms}] carrier:unavailable/0 obj:0 air:0 geo:5 cache:0B glyph-cache:0/0B/0B worker-runtime:1/1/0 frames:352"
     },
-    "heapBytes": 20090704
+    "heapBytes": 20734596
   },
   "afterUnmount": {
-    "bufferBytesUploaded": 10194340,
-    "buffersCreated": 4711,
-    "buffersDeleted": 4707,
-    "drawCalls": 46731,
-    "frames": 666
+    "bufferBytesUploaded": 9846340,
+    "buffersCreated": 4684,
+    "buffersDeleted": 4680,
+    "drawCalls": 45525,
+    "frames": 648
   },
   "afterUnmountRuntime": {
     "listenerCounts": {
@@ -22,6 +22,7 @@
       "/v2/sessions/current/simulation/solver/status": 7,
       "/v2/sessions/current/visualization/state": 2,
       "/v2/sessions/current/model/geometry/capabilities": 1,
+      "/v2/sessions/current/meshing/capabilities": 1,
       "/v2/sessions/current/meshing/semantics": 1,
       "/v2/sessions/current/persistence/checkpoints": 2,
       "/v2/sessions/current/model/scene": 3,
@@ -35,11 +36,11 @@
       "/v2/sessions/current/diagnostics/solver-profile": 1
     },
     "resources": {
-      "entryCount": 16,
+      "entryCount": 17,
       "inflightCount": 0,
-      "listenerCount": 55,
+      "listenerCount": 56,
       "pendingRequestCount": 0,
-      "readyCount": 16
+      "readyCount": 17
     },
     "visualizationRevision": 127,
     "workers": {
@@ -55,14 +56,14 @@
       "cacheBytes": 0,
       "frames": 38,
       "geo": 5,
-      "raw": "q:H_ex top:none field:none surface:idle field-demands:1[primary-field{vector-glyph:full:complete=>quantity=H_ex component=full scope=full:none consumers=primary-field:vector-glyph}] pipeline:1[fdm-cuboid{queue=0ms worker=113ms transfer=0ms adopt=0ms upload=0ms}] carrier:unavailable/0 obj:0 air:0 geo:5 cache:0B glyph-cache:0/0B/0B worker-runtime:1/1/0 frames:38"
+      "raw": "q:H_ex top:none field:none surface:idle field-demands:1[primary-field{vector-glyph:full:complete=>quantity=H_ex component=full scope=full:none consumers=primary-field:vector-glyph}] pipeline:1[fdm-cuboid{queue=0ms worker=1ms transfer=0ms adopt=0ms upload=0ms}] carrier:unavailable/0 obj:0 air:0 geo:5 cache:0B glyph-cache:0/0B/0B worker-runtime:1/1/0 frames:38"
     },
     "gpu": {
-      "bufferBytesUploaded": 324672,
-      "buffersCreated": 514,
-      "buffersDeleted": 16,
-      "drawCalls": 3633,
-      "frames": 41
+      "bufferBytesUploaded": 326688,
+      "buffersCreated": 518,
+      "buffersDeleted": 20,
+      "drawCalls": 4393,
+      "frames": 45
     },
     "runtime": {
       "listenerCounts": {
@@ -71,6 +72,7 @@
         "/v2/sessions/current/simulation/solver/status": 7,
         "/v2/sessions/current/visualization/state": 2,
         "/v2/sessions/current/model/geometry/capabilities": 1,
+        "/v2/sessions/current/meshing/capabilities": 1,
         "/v2/sessions/current/meshing/semantics": 1,
         "/v2/sessions/current/persistence/checkpoints": 2,
         "/v2/sessions/current/model/scene": 4,
@@ -84,14 +86,15 @@
         "/v2/sessions/current/simulation/stages/execution": 1,
         "/v2/sessions/current/simulation/runs/current": 1,
         "/v2/sessions/current/meshing/builds/current": 1,
-        "/v2/sessions/current/diagnostics/solver-profile": 1
+        "/v2/sessions/current/diagnostics/solver-profile": 1,
+        "/v2/sessions/current/data/fdm-region-memberships": 1
       },
       "resources": {
-        "entryCount": 19,
+        "entryCount": 21,
         "inflightCount": 0,
-        "listenerCount": 62,
+        "listenerCount": 64,
         "pendingRequestCount": 0,
-        "readyCount": 19
+        "readyCount": 21
       },
       "visualizationRevision": 4,
       "workers": {
@@ -102,7 +105,7 @@
         "workers": 1
       }
     },
-    "heapBytes": 18405804
+    "heapBytes": 18774436
   },
   "unmountedBaselineRuntime": {
     "listenerCounts": {
@@ -111,6 +114,7 @@
       "/v2/sessions/current/simulation/solver/status": 7,
       "/v2/sessions/current/visualization/state": 2,
       "/v2/sessions/current/model/geometry/capabilities": 1,
+      "/v2/sessions/current/meshing/capabilities": 1,
       "/v2/sessions/current/meshing/semantics": 1,
       "/v2/sessions/current/persistence/checkpoints": 2,
       "/v2/sessions/current/model/scene": 3,
@@ -124,11 +128,11 @@
       "/v2/sessions/current/diagnostics/solver-profile": 1
     },
     "resources": {
-      "entryCount": 16,
+      "entryCount": 17,
       "inflightCount": 0,
-      "listenerCount": 55,
+      "listenerCount": 56,
       "pendingRequestCount": 0,
-      "readyCount": 16
+      "readyCount": 17
     },
     "visualizationRevision": 4,
     "workers": {
@@ -150,20 +154,22 @@
     "GET /v2/sessions/current/simulation/solver/status",
     "GET /v2/sessions/current/visualization/state",
     "GET /v2/sessions/current/model/geometry/capabilities",
+    "GET /v2/sessions/current/meshing/capabilities",
     "GET /v2/sessions/current/meshing/semantics",
     "GET /v2/sessions/current/model/scene",
+    "GET /v2/sessions/current/model/regions",
+    "GET /v2/sessions/current/model/material-fields",
     "GET /v2/sessions/current/data/domain/meta",
     "GET /v2/sessions/current/model/universe",
     "GET /v2/sessions/current/meshing/meshes/shared-domain/manifest",
     "GET /v2/sessions/current/data/domain/topology",
     "GET /v2/sessions/current/meshing/builds/current",
-    "GET /v2/sessions/current/persistence/checkpoints",
-    "GET /v2/sessions/current/model/regions",
     "GET /v2/sessions/current/simulation/stages/execution",
-    "GET /v2/sessions/current/simulation/runs/current",
     "GET /v2/sessions/current/diagnostics/solver-profile",
-    "GET /v2/sessions/current/model/material-fields",
     "GET /v2/sessions/current/model/couplings",
+    "GET /v2/sessions/current/simulation/runs/current",
+    "GET /v2/sessions/current/persistence/checkpoints",
+    "GET /v2/sessions/current/data/fdm-region-memberships",
     "POST /v2/sessions/current/visualization/client-acks",
     "POST /v2/sessions/current/visualization/client-acks",
     "PATCH /v2/sessions/current/visualization/state",
@@ -179,6 +185,7 @@
     "GET /v2/sessions/current/model/universe",
     "GET /v2/sessions/current/data/domain/topology",
     "POST /v2/sessions/current/visualization/client-acks",
+    "GET /v2/sessions/current/data/fdm-region-memberships",
     "POST /v2/sessions/current/visualization/client-acks",
     "POST /v2/sessions/current/visualization/client-acks",
     "POST /v2/sessions/current/visualization/client-acks",
@@ -429,26 +436,26 @@
     "GET /v2/sessions/current/visualization/state"
   ],
   "gpuAfterStress": {
-    "bufferBytesUploaded": 10194340,
-    "buffersCreated": 4711,
-    "buffersDeleted": 4266,
-    "drawCalls": 46731,
-    "frames": 666
+    "bufferBytesUploaded": 9846340,
+    "buffersCreated": 4684,
+    "buffersDeleted": 4239,
+    "drawCalls": 45525,
+    "frames": 648
   },
   "idle": {
     "after": {
-      "bufferBytesUploaded": 10067088,
-      "buffersCreated": 4650,
-      "buffersDeleted": 4150,
-      "drawCalls": 45816,
-      "frames": 651
+      "bufferBytesUploaded": 9719088,
+      "buffersCreated": 4623,
+      "buffersDeleted": 4123,
+      "drawCalls": 44610,
+      "frames": 633
     },
     "before": {
-      "bufferBytesUploaded": 10067088,
-      "buffersCreated": 4650,
-      "buffersDeleted": 4150,
-      "drawCalls": 45816,
-      "frames": 651
+      "bufferBytesUploaded": 9719088,
+      "buffersCreated": 4623,
+      "buffersDeleted": 4123,
+      "drawCalls": 44610,
+      "frames": 633
     },
     "deltas": {
       "bufferBytesUploaded": 0,
@@ -467,5 +474,5 @@
     "width": 731
   },
   "topologyRequests": [],
-  "url": "http://localhost:42347/workspace"
+  "url": "http://localhost:34903/workspace"
 }

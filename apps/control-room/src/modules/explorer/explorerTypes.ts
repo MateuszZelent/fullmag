@@ -30,6 +30,7 @@ type ExplorerNodeKind =
   | "object.region.material"
   | "object.region.texture"
   | "object.region.visualization"
+  | "object.region.visualization.debug"
   | "object.region.regions"
   | "object.region.diagnostics"
   | "object.region-magnetic-texture"
@@ -41,19 +42,28 @@ type ExplorerNodeKind =
   | "object.mesh"
   | "object.extension.topological-charge"
   | "object.visualization"
+  | "object.visualization.debug"
   | "object.mode_visualization"
   | "object.mode_visualization.group"
   | "object.mode_visualization.field"
   | "object.mode_visualization.view"
+  | "airbox.root"
   | "airbox.mesh"
-  | "airbox.mesh-quality"
+  | "airbox.mesh.parameters"
+  | "airbox.mesh.quality-gates"
+  | "airbox.mesh.statistics"
+  | "airbox.mesh.topology"
+  | "airbox.mesh.build"
   | "airbox.visualization"
+  | "airbox.visualization.debug"
   | "mesh.root"
   | "mesh.shared-domain"
   | "mesh.builds"
   | "mesh.quality"
   | "mesh.size-fields"
   | "mesh.regions"
+  | "mesh.unassigned"
+  | "mesh.unassigned.part"
   | "visualizations-2d.root"
   | "visualizations-2d.draft"
   | "visualizations-2d.parameter"
@@ -253,6 +263,7 @@ export interface ExplorerNode {
   hysteresisSnapshotId?: string;
   measurementAxis?: string;
   meshIdentity?: string;
+  meshPartId?: string;
   modeIndex?: number;
   objectId?: string;
   observableId?: string;
@@ -469,4 +480,5 @@ export interface ModelTreeMeshSnapshot {
   realizedSizeFieldCount?: number | null;
   regionCount?: number | null;
   sourceSceneRevision?: number | string | null;
+  visualizationPartFallbacks?: readonly { id: string; label: string }[];
 }

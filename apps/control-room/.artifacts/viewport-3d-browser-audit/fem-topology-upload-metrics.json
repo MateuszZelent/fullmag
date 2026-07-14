@@ -1,0 +1,196 @@
+{
+  "measurements": [
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:2 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:18"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 166140,
+        "bufferBytesUploaded": 218856,
+        "buffersCreated": 493,
+        "drawCalls": 1310,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 1,
+      "pass": "surface"
+    },
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:20 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:18"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 166140,
+        "bufferBytesUploaded": 218856,
+        "buffersCreated": 493,
+        "drawCalls": 1310,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 10,
+      "pass": "surface"
+    },
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:200 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:20"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 167964,
+        "bufferBytesUploaded": 220680,
+        "buffersCreated": 497,
+        "drawCalls": 1680,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 100,
+      "pass": "surface"
+    },
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:2 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:18"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 166140,
+        "bufferBytesUploaded": 218856,
+        "buffersCreated": 493,
+        "drawCalls": 1495,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 1,
+      "pass": "wireframe"
+    },
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:20 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:16"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 166140,
+        "bufferBytesUploaded": 218856,
+        "buffersCreated": 493,
+        "drawCalls": 1471,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 10,
+      "pass": "wireframe"
+    },
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:200 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:20"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 166956,
+        "bufferBytesUploaded": 219672,
+        "buffersCreated": 495,
+        "drawCalls": 1680,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 100,
+      "pass": "wireframe"
+    },
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:2 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:18"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 166140,
+        "bufferBytesUploaded": 218856,
+        "buffersCreated": 493,
+        "drawCalls": 1310,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 1,
+      "pass": "points"
+    },
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:20 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:18"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 166140,
+        "bufferBytesUploaded": 218856,
+        "buffersCreated": 493,
+        "drawCalls": 1310,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 10,
+      "pass": "points"
+    },
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:200 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:16"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 166140,
+        "bufferBytesUploaded": 218856,
+        "buffersCreated": 493,
+        "drawCalls": 1471,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 100,
+      "pass": "points"
+    },
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:2 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:18"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 166140,
+        "bufferBytesUploaded": 218856,
+        "buffersCreated": 493,
+        "drawCalls": 1310,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 1,
+      "pass": "surface-wireframe-points"
+    },
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:20 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:18"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 166140,
+        "bufferBytesUploaded": 218856,
+        "buffersCreated": 493,
+        "drawCalls": 1310,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 10,
+      "pass": "surface-wireframe-points"
+    },
+    {
+      "expectedPositionBytes": 49152,
+      "diagnostics": {
+        "geo": 2,
+        "raw": "q:m top:none field:none surface:idle carrier:mesh-parts/0 obj:200 air:0 geo:2 cache:0B glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:18"
+      },
+      "gpu": {
+        "arrayBufferBytesUploaded": 166140,
+        "bufferBytesUploaded": 218856,
+        "buffersCreated": 493,
+        "drawCalls": 1310,
+        "elementArrayBufferBytesUploaded": 52716
+      },
+      "partCount": 100,
+      "pass": "surface-wireframe-points"
+    }
+  ]
+}

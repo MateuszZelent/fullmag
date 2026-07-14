@@ -33,6 +33,10 @@ import {
   useSelectionActions,
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
+import {
+  resolveSemanticTargetForMeshPart,
+  type SemanticRenderTargetCatalog,
+} from "@/kernel/selection/semanticRenderTargetCatalog";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import type { ModuleProps } from "@/kernel/types";
 import {
@@ -106,6 +110,7 @@ import {
 } from "./viewport3dDiagnostics";
 import { useViewport3DWorkerRuntime } from "./viewport3dWorkerRuntime";
 import { createViewport3DEventManager } from "./viewport3dEventManager";
+import { retainViewport3DMeshSizeHighlight } from "./viewport3dMeshSizeHighlight";
 import {
   formatViewport3DInspectComponents,
   type Viewport3DInspectSample,
@@ -116,6 +121,8 @@ import {
 } from "./viewport3dPrimitiveModel";
 import { toCameraTuple } from "./viewport3dCameraModel";
 import {
+  viewportSelectionForMeshPart,
+  viewportSelectionForDomain,
   viewportSelectionForObject,
   viewportSelectionForRegion,
 } from "./viewport3dSelection";
@@ -989,7 +996,9 @@ function useMeshSizeHistogramHighlight(
   useEffect(
     () =>
       bus.on("viewport:mesh-size-bin-hovered", (event) => {
-        setHighlight(event.highlight);
+        setHighlight((current) =>
+          retainViewport3DMeshSizeHighlight(current, event.highlight),
+        );
       }),
     [bus],
   );
@@ -1076,6 +1085,7 @@ export default function Viewport3DModule({
   const { onSelectDomain, onSelectObject, onSelectPart, onSelectRegion } =
     useViewport3DSelectionHandlers({
       domainId,
+      semanticTargetCatalog: sceneModel.semanticTargetCatalog,
       select,
   });
   const patchCameraState = useCallback(
@@ -1181,37 +1191,32 @@ export default function Viewport3DModule({
 
 function useViewport3DSelectionHandlers({
   domainId,
+  semanticTargetCatalog,
   select,
 }: {
   domainId: string | null | undefined;
+  semanticTargetCatalog: SemanticRenderTargetCatalog;
   select: ReturnType<typeof useSelectionActions>["select"];
 }) {
   const onSelectDomain = useCallback(() => {
-    select({
-      kind: "domain",
-      label: domainId ?? "Domain",
-      nodeId: "domain",
-      objectId: domainId ?? null,
-    });
+    select(viewportSelectionForDomain(domainId));
   }, [domainId, select]);
   const onSelectPart = useCallback(
     (partSelection: Viewport3DPartSelection) => {
-      select({
-        kind: partSelection.kind,
-        label: partSelection.label,
-        nodeId: partSelection.nodeId,
-        objectId: partSelection.objectId,
-        ref: {
+      const address = resolveSemanticTargetForMeshPart(
+        semanticTargetCatalog,
+        partSelection.part,
+      );
+      if (!address) return;
+      select(
+        viewportSelectionForMeshPart(address, {
           boundaryFaceIndex: partSelection.boundaryFaceIndex,
-          kind: partSelection.kind,
-          nodeId: partSelection.nodeId,
-          objectId: partSelection.objectId,
-          type: "mesh-part",
-          visualizationTargetId: `mesh-part:${partSelection.nodeId}`,
-        },
-      });
+          carrierPartId: partSelection.carrierPartId,
+          label: partSelection.label,
+        }),
+      );
     },
-    [select],
+    [select, semanticTargetCatalog],
   );
   const onSelectObject = useCallback(
     (object: Viewport3DPrimitiveObject) => {

@@ -46,6 +46,22 @@ const std::vector<double> *effective_field_source(const Context &ctx, uint64_t e
                : &ctx.effective_field.h_xyz;
 }
 
+const std::vector<double> *full_domain_visual_field_source(
+    const Context &ctx,
+    fullmag_fem_observable observable,
+    uint64_t expected_len)
+{
+    if (observable == FULLMAG_FEM_OBSERVABLE_H_DEMAG &&
+        ctx.demag.h_visual_xyz.size() == static_cast<size_t>(expected_len)) {
+        return &ctx.demag.h_visual_xyz;
+    }
+    if (observable == FULLMAG_FEM_OBSERVABLE_H_EFF &&
+        ctx.effective_field.h_visual_xyz.size() == static_cast<size_t>(expected_len)) {
+        return &ctx.effective_field.h_visual_xyz;
+    }
+    return nullptr;
+}
+
 int copy_torque_observable_f64(
     const Context &ctx,
     double *out_xyz,
@@ -189,6 +205,14 @@ int context_copy_field_f64(
 
     if (observable == FULLMAG_FEM_OBSERVABLE_TORQUE) {
         return copy_torque_observable_f64(ctx, out_xyz, out_len, error);
+    }
+
+    if (const auto *visual_source =
+            full_domain_visual_field_source(ctx, observable, expected_len)) {
+        const uint64_t bytes = sizeof(double) * out_len;
+        record_device_to_host(ctx.transfer_audit.audit, bytes);
+        std::memcpy(out_xyz, visual_source->data(), static_cast<size_t>(bytes));
+        return FULLMAG_FEM_OK;
     }
 
     if (ctx.gpu_state.device.lifecycle.allocated) {

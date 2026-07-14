@@ -23373,7 +23373,97 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads."
+            "description": "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads.",
+            "headers": {
+              "x-fullmag-component": {
+                "description": "Resolved component projection",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-domain-generation-id": {
+                "description": "Domain generation identity",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-encoding": {
+                "description": "FMVP encoding and version",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-field-indexing": {
+                "description": "Optional FMVP v3 field indexing",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-field-revision": {
+                "description": "Field revision",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-mesh-topology-hash": {
+                "description": "Optional FMVP v3 mesh topology hash",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-n-comp": {
+                "description": "Components per point",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "x-fullmag-node-index-count": {
+                "description": "Optional FMVP v3 node-index count",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "x-fullmag-point-count": {
+                "description": "Decoded point count",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "x-fullmag-quantity-id": {
+                "description": "Canonical quantity identifier",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-scope-id": {
+                "description": "Resolved optional scope identifier",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-scope-kind": {
+                "description": "Resolved scope kind",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-snapshot-id": {
+                "description": "Optional persisted snapshot identifier",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-value-count": {
+                "description": "Scalar value count",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "204": {
             "description": "Recognized field quantity is not available yet"

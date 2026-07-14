@@ -16,6 +16,7 @@
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
 #include "fem_common.hpp"
+#include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
@@ -44,6 +45,15 @@ bool strict_gpu_snapshot_path(const fullmag::fem::Context &ctx)
 bool download_gpu_snapshot_fields(fullmag::fem::Context &ctx, std::string &error)
 {
     auto &gpu = ctx.gpu_state.device;
+    if (ctx.demag.enabled &&
+        ctx.poisson_demag.gpu_demag_mode == FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON &&
+        !fullmag::fem::recover_device_demag_visual_field(
+            ctx,
+            ctx.gpu_state.cuda.compute_stream,
+            error)) {
+        error = "GPU snapshot full-domain demag recovery failed: " + error;
+        return false;
+    }
     if (!fullmag::fem::gpu_state_download_component_aos(
             gpu, gpu.fields.h_ex, ctx.exchange.h_xyz, ctx.transfer_audit.audit, "h_ex", error) ||
         !fullmag::fem::gpu_state_download_component_aos(
@@ -69,8 +79,10 @@ bool download_gpu_snapshot_fields(fullmag::fem::Context &ctx, std::string &error
         error = "GPU snapshot field readback failed: " + error;
         return false;
     }
-    ctx.demag.h_visual_xyz = ctx.demag.h_xyz;
-    ctx.effective_field.h_visual_xyz = ctx.effective_field.h_xyz;
+    fullmag::fem::update_demag_poisson_visual_effective_field(
+        ctx,
+        ctx.effective_field.h_xyz,
+        ctx.demag.h_xyz);
     return true;
 }
 #endif

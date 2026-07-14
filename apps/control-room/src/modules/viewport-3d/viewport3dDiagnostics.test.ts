@@ -102,6 +102,31 @@ describe("viewport3dDiagnostics", () => {
     ).toBe("q:m top:7 field:8 surface:stale-visible obj:3 air:1 geo:1 cache:2KB glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:2");
   });
 
+  it("reports rejected unaddressable render carriers as a bounded diagnostic", () => {
+    const diagnostics = buildViewport3DDiagnostics({
+      airboxPartCount: 0,
+      cache: { byteLength: 0, entryCount: 0 },
+      fieldRevision: null,
+      manifestCarrierRejectedCount: 2,
+      objectCount: 0,
+      quantityId: "m",
+      topologyRevision: null,
+      tracker: {
+        contextLosses: 0,
+        contextRestores: 0,
+        dirtyReason: null,
+        frames: 0,
+        geometries: 0,
+        materials: 0,
+        renderTargets: 0,
+        textures: 0,
+        workers: 0,
+      },
+    });
+
+    expect(diagnostics).toContain("unaddressable-render-target:2");
+  });
+
   it("reports both visible and requested field revisions while syncing", () => {
     expect(
       buildViewport3DDiagnostics({

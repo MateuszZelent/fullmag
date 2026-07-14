@@ -462,8 +462,18 @@ export function buildViewport3DPrimitiveRenderModel(
   const objects = sceneRecord.objects.flatMap((value): Viewport3DPrimitiveObject[] => {
     const object = asRecord(value);
     const objectId = asString(object?.id);
+    const objectRole = asString(object?.role);
     const geometry = asRecord(object?.geometry);
-    if (!object || !objectId || !geometry) return [];
+    if (
+      !object ||
+      !objectId ||
+      objectId === "__air__" ||
+      objectRole === "air" ||
+      objectRole === "airbox" ||
+      !geometry
+    ) {
+      return [];
+    }
 
     const state = objectMeshState(objectId, sceneRevision, manifest, object);
     const transform = asRecord(object.transform);

@@ -7,10 +7,12 @@ import type { KernelApi } from "@/kernel/types";
 import type { MeshSizeDistributionHoverBin } from "./MeshQualityChart";
 
 export function emitMeshSizeHistogramHover({
+  airboxPartId,
   bin,
   kernel,
   scope,
 }: {
+  airboxPartId?: string | null;
   bin: MeshSizeDistributionHoverBin | null;
   kernel: KernelApi;
   scope: MeshSizeHistogramHighlightScope;
@@ -25,7 +27,7 @@ export function emitMeshSizeHistogramHover({
           distributionLabel: bin.distributionLabel,
           hi: bin.hi,
           lo: bin.lo,
-          resource: resolveMeshHistogramHoverResource(bin, scope),
+          resource: resolveMeshHistogramHoverResource(bin, scope, airboxPartId),
           scope,
         }
       : null,
@@ -35,20 +37,21 @@ export function emitMeshSizeHistogramHover({
 function resolveMeshHistogramHoverResource(
   bin: MeshSizeDistributionHoverBin,
   scope: MeshSizeHistogramHighlightScope,
+  airboxPartId: string | null | undefined,
 ): {
   binIndex: number;
   meshId: string;
   metric: MeshHistogramMetric;
   partId: string;
 } | null {
-  if (scope.kind !== "airbox") return null;
+  if (scope.kind !== "airbox" || !airboxPartId) return null;
   const metric = meshHistogramMetricForDistribution(bin.distributionId);
   if (!metric) return null;
   return {
     binIndex: bin.binIndex,
     meshId: "study_domain",
     metric,
-    partId: "airbox",
+    partId: airboxPartId,
   };
 }
 

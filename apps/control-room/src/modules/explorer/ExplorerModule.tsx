@@ -37,6 +37,10 @@ import {
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import {
+  buildSemanticRenderTargetCatalog,
+  semanticRenderTargetCarriersFromManifest,
+} from "@/kernel/selection/semanticRenderTargetCatalog";
 import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import {
   resolveActiveObjectExtensionExplorerItems,
@@ -56,6 +60,7 @@ import {
   buildExplorerTree,
   buildModelTree,
   filterExplorerNodes,
+  findExplorerNodePath,
 } from "./builders/buildModelTree";
 import {
   modelTreeSnapshotFromScene,
@@ -70,6 +75,7 @@ import {
 import {
   activateTextureLoadNode,
   expandExplorerNodes,
+  revealExplorerNode,
   setExplorerActiveTab,
   setExplorerFilterText,
   useExplorerStoreSelector,
@@ -301,6 +307,12 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     const latestSuccessfulBuildRecord = record(latestSuccessfulBuild.data);
     const latestBuildProvenance = record(latestSuccessfulBuildRecord?.provenance);
     const modelResourceRecord = record(modelResource.data);
+    const semanticTargetCatalog = buildSemanticRenderTargetCatalog({
+      parts: semanticRenderTargetCarriersFromManifest(manifest.data),
+      sceneObjectIds: new Set(
+        (modelSnapshot.objects ?? []).map((object) => object.id),
+      ),
+    });
     const mesh: ModelTreeMeshSnapshot = {
       activeBuildStatus: meshPipelineStatusIsActive(activeBuildStatus)
         ? activeBuildStatus
@@ -322,15 +334,20 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         realizedSizeFields.data?.realized_size_fields?.fields?.length ?? null,
       regionCount: manifest.data?.regions?.length ?? null,
       sourceSceneRevision: revisionValue(modelResourceRecord?.revision),
+      visualizationPartFallbacks: semanticTargetCatalog.entries
+        .filter((entry) => entry.targetKind === "part")
+        .map((entry) => ({ id: entry.targetId, label: entry.label })),
     };
-    const objects = modelSnapshot.objects?.map((object) => ({
-      ...object,
-      extensions: resolveActiveObjectExtensionExplorerItems(
-        object.id,
-        objectExtensionActivation,
-      ),
-      textureLoadEnabled: textureLoadObjectIds.has(object.id),
-    }));
+    const objects = modelSnapshot.objects
+      ?.filter((object) => object.id !== "__air__")
+      .map((object) => ({
+        ...object,
+        extensions: resolveActiveObjectExtensionExplorerItems(
+          object.id,
+          objectExtensionActivation,
+        ),
+        textureLoadEnabled: textureLoadObjectIds.has(object.id),
+      }));
     const baseNodes =
       activeTab === "model"
         ? buildModelTree(
@@ -352,12 +369,13 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
             frequencyDomainSpectrum: frequencyDomainSpectrum.data,
           });
-    return filterExplorerNodes(baseNodes, filterText);
+    return filterExplorerNodes(baseNodes, filterText, selectedNodeId);
   }, [
     activeBuild.data,
     latestSuccessfulBuild.data,
     activeTab,
     filterText,
+    selectedNodeId,
     crossSections,
     manifest.data,
     meshSummary.data,
@@ -381,6 +399,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     frequencyDomainResponseSweep.data,
     frequencyDomainSpectrum.data,
   ]);
+
+  useEffect(() => {
+    if (!selectedNodeId?.startsWith("model:") || activeTab === "model") return;
+    setExplorerActiveTab("model");
+  }, [activeTab, selectedNodeId]);
+
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    const path = findExplorerNodePath(nodes, selectedNodeId);
+    if (!path) return;
+    revealExplorerNode(activeTab, selectedNodeId, path.slice(0, -1));
+  }, [activeTab, nodes, selectedNodeId]);
 
   useEffect(() => {
     const unsubscribe = subscribeExplorerTextureLoadNodeRequested(

@@ -73,10 +73,11 @@ export function targetForFdmDomain(
 
 export function targetForMeshPart(
   part: Viewport3DMeshPart,
+  sceneObjectIds: ReadonlySet<string> = new Set(),
 ): VisualizationTargetRef {
   return resolveVisualizationTargetForMeshPart({
     part,
-    sceneObjectIds: new Set(),
+    sceneObjectIds,
     targetRegistry: null,
   });
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import type {
   MeshQualityHistogramBin,
@@ -11,6 +11,7 @@ import type {
 
 import {
   buildMeshSizeDistributionHoverBin,
+  meshSizeDistributionHoverKey,
   resolveActiveHistogramBinIndex,
 } from "./meshHistogramHoverState";
 
@@ -143,28 +144,38 @@ function SizeDistributionTooltipContent({
   onHoverBin?: (bin: MeshSizeDistributionHoverBin | null) => void;
   payload?: ReadonlyArray<{ payload?: BinPayload }>;
 }) {
+  const activeIndexFromTooltip = resolveActiveHistogramBinIndex(
+    {
+      activeTooltipIndex: activeIndex,
+      isTooltipActive: active ?? false,
+    },
+    distribution.histogram.length,
+  );
+  const activeIndexFromPayload =
+    typeof payload?.[0]?.payload?.binIndex === "number"
+      ? payload[0].payload.binIndex
+      : null;
+  const index = activeIndexFromTooltip ?? activeIndexFromPayload;
+  const hoverBin = useMemo(
+    () =>
+      index === null
+        ? null
+        : buildMeshSizeDistributionHoverBin(distribution, index),
+    [distribution, index],
+  );
+  const hoverKey = meshSizeDistributionHoverKey(hoverBin);
+  const lastEmittedHoverKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!onHoverBin) {
       return;
     }
-    const activeIndexFromTooltip = resolveActiveHistogramBinIndex(
-      {
-        activeTooltipIndex: activeIndex,
-        isTooltipActive: active ?? false,
-      },
-      distribution.histogram.length,
-    );
-    const activeIndexFromPayload =
-      typeof payload?.[0]?.payload?.binIndex === "number"
-        ? payload[0].payload.binIndex
-        : null;
-    const index = activeIndexFromTooltip ?? activeIndexFromPayload;
-    onHoverBin(
-      index === null
-        ? null
-        : buildMeshSizeDistributionHoverBin(distribution, index),
-    );
-  }, [active, activeIndex, distribution, onHoverBin, payload]);
+    if (lastEmittedHoverKeyRef.current === hoverKey) {
+      return;
+    }
+    lastEmittedHoverKeyRef.current = hoverKey;
+    onHoverBin(hoverBin);
+  }, [hoverBin, hoverKey, onHoverBin]);
 
   return <ChartTooltipContent active={active} payload={payload} />;
 }

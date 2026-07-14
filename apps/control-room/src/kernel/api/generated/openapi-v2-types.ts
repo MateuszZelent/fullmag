@@ -1396,6 +1396,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1_bin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/meshing/meshes/interfaces/{interface_id}/quality": {
         parameters: {
             query?: never;
@@ -10193,6 +10209,34 @@ export interface operations {
             /** @description Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads. */
             200: {
                 headers: {
+                    /** @description Resolved component projection */
+                    "x-fullmag-component"?: string;
+                    /** @description Domain generation identity */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description FMVP encoding and version */
+                    "x-fullmag-encoding"?: string;
+                    /** @description Optional FMVP v3 field indexing */
+                    "x-fullmag-field-indexing"?: string;
+                    /** @description Field revision */
+                    "x-fullmag-field-revision"?: string;
+                    /** @description Optional FMVP v3 mesh topology hash */
+                    "x-fullmag-mesh-topology-hash"?: string;
+                    /** @description Components per point */
+                    "x-fullmag-n-comp"?: number;
+                    /** @description Optional FMVP v3 node-index count */
+                    "x-fullmag-node-index-count"?: number;
+                    /** @description Decoded point count */
+                    "x-fullmag-point-count"?: number;
+                    /** @description Canonical quantity identifier */
+                    "x-fullmag-quantity-id"?: string;
+                    /** @description Resolved optional scope identifier */
+                    "x-fullmag-scope-id"?: string;
+                    /** @description Resolved scope kind */
+                    "x-fullmag-scope-kind"?: string;
+                    /** @description Optional persisted snapshot identifier */
+                    "x-fullmag-snapshot-id"?: string;
+                    /** @description Scalar value count */
+                    "x-fullmag-value-count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -10936,6 +10980,68 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1_bin: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous periodic-pairs binary response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for chunked FMPP reads */
+                Range?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versioned binary FEM periodic node/face pairs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.fullmag.periodic-pairs.v1": unknown;
+                };
+            };
+            /** @description No FEM mesh available */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Partial binary FEM periodic node/face pairs */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.fullmag.periodic-pairs.v1": unknown;
+                };
+            };
+            /** @description Periodic mesh-pair binary not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested byte range is not satisfiable */
+            416: {
                 headers: {
                     [name: string]: unknown;
                 };

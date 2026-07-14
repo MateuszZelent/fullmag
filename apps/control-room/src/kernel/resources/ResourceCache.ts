@@ -1,8 +1,9 @@
-export interface ResourceCacheEntry<TData> {
+export interface ResourceCacheEntry<TData, TMetadata = unknown> {
   byteLength: number;
   data: TData;
   dispose?: () => void;
   etag?: string | null;
+  metadata?: TMetadata;
 }
 
 export interface ResourceCacheOptions {
@@ -29,9 +30,9 @@ interface ResourceCacheEvent {
 
 export type ResourceCacheEventListener = (event: ResourceCacheEvent) => void;
 
-export class ResourceCache<TData> {
-  private readonly entries = new Map<string, ResourceCacheEntry<TData>>();
-  private readonly inflight = new Map<string, Promise<ResourceCacheEntry<TData>>>();
+export class ResourceCache<TData, TMetadata = unknown> {
+  private readonly entries = new Map<string, ResourceCacheEntry<TData, TMetadata>>();
+  private readonly inflight = new Map<string, Promise<ResourceCacheEntry<TData, TMetadata>>>();
   private readonly listeners = new Set<ResourceCacheEventListener>();
   private readonly retained = new Map<string, number>();
   private byteLength = 0;
@@ -60,7 +61,7 @@ export class ResourceCache<TData> {
     return true;
   }
 
-  get(key: string): ResourceCacheEntry<TData> | null {
+  get(key: string): ResourceCacheEntry<TData, TMetadata> | null {
     const entry = this.entries.get(key);
     if (!entry) {
       this.emit("miss", key, null);
@@ -73,14 +74,14 @@ export class ResourceCache<TData> {
     return entry;
   }
 
-  peek(key: string): ResourceCacheEntry<TData> | null {
+  peek(key: string): ResourceCacheEntry<TData, TMetadata> | null {
     return this.entries.get(key) ?? null;
   }
 
   getOrLoad(
     key: string,
-    load: () => Promise<ResourceCacheEntry<TData>>,
-  ): Promise<ResourceCacheEntry<TData>> {
+    load: () => Promise<ResourceCacheEntry<TData, TMetadata>>,
+  ): Promise<ResourceCacheEntry<TData, TMetadata>> {
     const cached = this.get(key);
     if (cached) {
       return Promise.resolve(cached);
@@ -103,7 +104,7 @@ export class ResourceCache<TData> {
     });
   }
 
-  set(key: string, entry: ResourceCacheEntry<TData>): boolean {
+  set(key: string, entry: ResourceCacheEntry<TData, TMetadata>): boolean {
     if (entry.byteLength > this.options.maxBytes) {
       this.delete(key);
       for (const existingKey of Array.from(this.entries.keys())) {

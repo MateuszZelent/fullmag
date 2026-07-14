@@ -202,6 +202,7 @@ describe("viewport3dDomainAdapter", () => {
     expect(domain.renderCarrierDiagnostics).toEqual({
       degradedCarrierCount: 0,
       kind: "mesh-parts",
+      rejectedCarrierCount: 0,
       renderableCarrierCount: 2,
     });
   });
@@ -233,15 +234,15 @@ describe("viewport3dDomainAdapter", () => {
     const domain = adaptFemSharedDomainManifest(manifestFixture());
 
     expect(resolveFemPartSelectionByBoundaryFace(domain, 30)).toMatchObject({
+      carrierPartId: "part-air",
       kind: "mesh-part-airbox",
       label: "Airbox",
-      nodeId: "part-air",
       objectId: null,
     });
     expect(resolveFemPartSelectionByBoundaryFace(domain, 3)).toMatchObject({
+      carrierPartId: "part-magnet",
       kind: "mesh-part",
       label: "Magnet",
-      nodeId: "part-magnet",
       objectId: "object-1",
     });
     expect(resolveFemPartSelectionByBoundaryFace(domain, 999)).toBeNull();
@@ -251,11 +252,38 @@ describe("viewport3dDomainAdapter", () => {
     const domain = adaptFemSharedDomainManifest(manifestFixture());
 
     expect(selectionForMeshPart(domain.airboxParts[0])).toMatchObject({
+      carrierPartId: "part-air",
       kind: "mesh-part-airbox",
       label: "Airbox",
-      nodeId: "part-air",
       objectId: null,
     });
+  });
+
+  it("treats the legacy airbox role as the canonical Airbox carrier", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts![0]!.role = "airbox";
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.airboxParts.map((part) => part.id)).toContain("part-air");
+    expect(selectionForMeshPart(domain.airboxParts[0])).toMatchObject({
+      carrierPartId: "part-air",
+      kind: "mesh-part-airbox",
+    });
+  });
+
+  it("rejects blank and duplicate carrier identities before render or picking", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts!.push({ ...manifest.mesh_parts![1]! });
+    manifest.mesh_parts!.push({
+      ...manifest.mesh_parts![1]!,
+      id: "",
+      label: "Missing identity",
+    });
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.magneticParts.filter((part) => part.id === "part-magnet")).toHaveLength(1);
+    expect(domain.partsById.has("")).toBe(false);
+    expect(domain.renderCarrierDiagnostics?.rejectedCarrierCount).toBe(2);
   });
 
   it("preserves geometry-only object ownership in mesh part selections", () => {
@@ -268,8 +296,8 @@ describe("viewport3dDomainAdapter", () => {
         role: "magnetic",
       } as Parameters<typeof selectionForMeshPart>[0]),
     ).toMatchObject({
+      carrierPartId: "part:free-layer",
       kind: "mesh-part",
-      nodeId: "part:free-layer",
       objectId: "free-layer",
     });
   });

@@ -1558,7 +1558,11 @@ export function hasVisualizationStatePatch(
 export function resolveVisualizationTargetFromSelection(
   selection: Pick<Selection, "kind" | "label" | "nodeId" | "objectId" | "ref">,
 ): VisualizationTargetRef | null {
-  if (selection.kind === "airbox.visualization" || selection.kind === "mesh-part-airbox") {
+  if (
+    selection.kind === "airbox.visualization" ||
+    selection.kind === "airbox.visualization.debug" ||
+    selection.kind === "mesh-part-airbox"
+  ) {
     return AIRBOX_VISUALIZATION_TARGET;
   }
 
@@ -1583,7 +1587,12 @@ export function resolveVisualizationTargetFromSelection(
 
   if (selection.kind === "mesh-part" && selection.nodeId) {
     return {
-      id: selection.nodeId,
+      id:
+        selection.ref?.type === "mesh-part"
+          ? selection.ref.carrierPartId
+            ? selection.ref.visualizationTargetId
+            : selection.ref.nodeId
+          : selection.nodeId,
       kind: "part",
       label: selection.label,
     };

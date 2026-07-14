@@ -27,6 +27,23 @@ Canonical target ids:
 | Future 2D mode-specific override | `<target_id>:2d:<mode>` if required by the 2D backend |
 
 Object ids come from scene/model resources and mesh manifests. Airbox is never treated as a scene object.
+The synthetic mesh object `__air__` and the mesh part `part:__air__` are data-plane
+carriers only and must not be published as additional visualization targets.
+Selection of an air-role mesh carrier resolves to the canonical `airbox` target.
+When loading persisted state, the backend canonicalizes legacy
+`object:__air__`, `part:__air__`, and bare `__air__` overrides to `airbox` and
+keeps at most one override, with an existing canonical `airbox` entry taking
+precedence. A mesh part is published as a fallback target only when it is an
+orphan carrier with no scene-object mapping.
+
+This identity repair is a prerequisite for Visualization Debug. Debug always
+observes the canonical user-facing target (`airbox` for Airbox) and reports its
+mesh/data-plane carriers separately (`part:__air__` for the current Airbox
+manifest). It must not expose the carrier as a second selectable target or
+reintroduce synthetic `object:__air__` identity. The target registry filtering,
+role-first mesh-part resolver, and canonical Airbox scoped vector path must be
+in place before the Debug inspector is enabled.
+
 Region target ids refer to authored object-region intent, but physical field
 visualization for a region is available only when the current mesh manifest maps
 that region to realized `mesh_part_ids`. The near-term data-plane carrier for a
@@ -49,6 +66,13 @@ silently enable a region-colored overlay.
 The owner is the v2 visualization resource. Object and part display/style overrides are stored in `visualization/state.overrides`, including `vector_budget` and `vector_length_scale`. Airbox display reads and writes `visualization/state.layers.airbox` through the typed v2 facade; airbox arrow budget is `layers.airbox.vectors.density`, while airbox arrow length and vector thickness are persisted as the `airbox` target override style (`vector_length_scale`, `vector_thickness`) rather than global `vector_style`.
 
 The kernel visualization controller is only the UI-side resolver/cache around the v2 resource. It may preserve immediate local feedback while a revision-driven refetch is pending, but it must not become a second persistence model for fields already present in the v2 contract.
+
+The separate `VisualizationDebugController` is likewise not a visualization
+state owner or server-resource cache. It holds only bounded, immutable,
+opt-in observations of the currently mounted renderer. HTTP v2 resources remain
+the source of truth; realtime events remain invalidation-only. Debug must not
+extend the status resource or WebSocket payload with field, topology, render,
+or snapshot data.
 
 Global camera state is not a per-target override. It belongs to `visualization/state.camera`, is shared by all clients in the session, and changes through HTTP patches followed by WebSocket resource invalidation.
 
@@ -134,6 +158,15 @@ Viewport:
   membership and authored primitive overlays are diagnostic-only unless a future
   API explicitly promotes them to a field-capable carrier.
 - no-session smoke must allow an absent runtime API only when `CONTROL_ROOM_SMOKE_ALLOW_MISSING_SESSION=1`; active-session smoke may tolerate explicitly enumerated optional 404 resources for primitive-only sessions that have not built a mesh or run yet, but must still fail on missing `model/scene`, failed scene transactions, or websocket invalidation.
+- renderer, Inspector, picker, and Explorer consume one semantic target address:
+  `visualizationTargetId` identifies display state, `nodeId` identifies exactly
+  one Explorer row, and `carrierPartId` is data-plane metadata only;
+- a semantic/pickable target without an Explorer address fails closed before
+  surface, shader, wireframe, point, vector, or picking passes are created;
+- `__air__` and air-role scene objects never create object/part targets beside
+  canonical `airbox`; stale object ownership is accepted only when the owner
+  exists in the current scene, otherwise the part becomes an explicit Explorer
+  fallback.
 
 ## 5. 2D Extension
 

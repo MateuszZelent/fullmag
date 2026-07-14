@@ -53,3 +53,18 @@ export function buildMeshSizeDistributionHoverBin(
     lo: bin.lo,
   };
 }
+
+export function meshSizeDistributionHoverKey(
+  bin: MeshSizeDistributionHoverBin | null,
+): string {
+  if (!bin) return "none";
+  return [
+    bin.distributionId,
+    bin.binIndex,
+    bin.binLabel,
+    bin.count,
+    bin.fraction,
+    bin.lo ?? "",
+    bin.hi ?? "",
+  ].join(":");
+}

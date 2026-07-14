@@ -1,10 +1,173 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { ControlRoomApi } from "./ControlRoomApi";
-import type { AuthoringTransactionRequest, LiveStatusResource } from "./apiTypes";
+import {
+  collectFieldVectorIdentityIssues,
+  ControlRoomApi,
+  parseFieldVectorResponseMetadata,
+} from "./ControlRoomApi";
+import type {
+  AuthoringTransactionRequest,
+  BinaryResourceResult,
+  FieldVectorResponseMetadata,
+  LiveStatusResource,
+} from "./apiTypes";
+import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 
 const contractHeaders = { "x-api-contract-version": "1.0.0" };
+
+describe("field vector response metadata", () => {
+  it("requires response metadata for ready typed field-vector results", () => {
+    type Ready = Extract<
+      BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>,
+      { status: "ready" }
+    >;
+    expectTypeOf<Ready["responseMetadata"]>().toEqualTypeOf<
+      FieldVectorResponseMetadata
+    >();
+    expectTypeOf<Ready["responseMetadata"]["identityIssues"]>().toEqualTypeOf<
+      FieldVectorResponseMetadata["identityIssues"]
+    >();
+  });
+
+  it("parses every documented response header and reports invalid numbers", () => {
+    const headers = new Headers({
+      "x-fullmag-component": "full",
+      "x-fullmag-domain-generation-id": "12",
+      "x-fullmag-encoding": "FMVP;version=3",
+      "x-fullmag-field-indexing": "explicit_node_indices",
+      "x-fullmag-field-revision": "7",
+      "x-fullmag-mesh-topology-hash": "abc",
+      "x-fullmag-n-comp": "3",
+      "x-fullmag-node-index-count": "2",
+      "x-fullmag-point-count": "2",
+      "x-fullmag-quantity-id": "m",
+      "x-fullmag-scope-id": "body",
+      "x-fullmag-scope-kind": "object",
+      "x-fullmag-snapshot-id": "point-1",
+      "x-fullmag-value-count": "not-a-number",
+    });
+    expect(parseFieldVectorResponseMetadata(headers)).toMatchObject({
+      component: "full",
+      domainGenerationId: "12",
+      encoding: "FMVP;version=3",
+      fieldIndexing: "explicit_node_indices",
+      fieldRevision: "7",
+      meshTopologyHash: "abc",
+      nComp: 3,
+      nodeIndexCount: 2,
+      pointCount: 2,
+      quantityId: "m",
+      scopeId: "body",
+      scopeKind: "object",
+      snapshotId: "point-1",
+      valueCount: null,
+    });
+    expect(parseFieldVectorResponseMetadata(new Headers())).toMatchObject({
+      pointCount: null,
+      quantityId: null,
+    });
+  });
+
+  it("returns null independently for every absent response header", () => {
+    const mappings = [
+      ["x-fullmag-component", "component"],
+      ["x-fullmag-domain-generation-id", "domainGenerationId"],
+      ["x-fullmag-encoding", "encoding"],
+      ["x-fullmag-field-indexing", "fieldIndexing"],
+      ["x-fullmag-field-revision", "fieldRevision"],
+      ["x-fullmag-mesh-topology-hash", "meshTopologyHash"],
+      ["x-fullmag-n-comp", "nComp"],
+      ["x-fullmag-node-index-count", "nodeIndexCount"],
+      ["x-fullmag-point-count", "pointCount"],
+      ["x-fullmag-quantity-id", "quantityId"],
+      ["x-fullmag-scope-id", "scopeId"],
+      ["x-fullmag-scope-kind", "scopeKind"],
+      ["x-fullmag-snapshot-id", "snapshotId"],
+      ["x-fullmag-value-count", "valueCount"],
+    ] as const;
+    for (const [header, property] of mappings) {
+      const headers = new Headers(
+        Object.fromEntries(mappings.map(([name]) => [name, "1"])),
+      );
+      headers.delete(header);
+      expect(parseFieldVectorResponseMetadata(headers)[property], header).toBeNull();
+    }
+  });
+
+  it("returns null independently for every invalid numeric response header", () => {
+    const mappings = [
+      ["x-fullmag-n-comp", "nComp"],
+      ["x-fullmag-node-index-count", "nodeIndexCount"],
+      ["x-fullmag-point-count", "pointCount"],
+      ["x-fullmag-value-count", "valueCount"],
+    ] as const;
+    for (const invalid of ["NaN", "1.5", "-1", "", "9007199254740992"]) {
+      for (const [header, property] of mappings) {
+        expect(
+          parseFieldVectorResponseMetadata(new Headers({ [header]: invalid }))[
+            property
+          ],
+          `${header}=${invalid}`,
+        ).toBeNull();
+      }
+    }
+  });
+
+  it("reports header versus FMVP identity mismatches without rejecting legacy v2", () => {
+    const decoded = {
+      dtype: "float64" as const,
+      formatVersion: 3 as const,
+      grid: [1, 1, 1] as [number, number, number],
+      indexing: "full_domain" as const,
+      meshTopologyHash: "payload-hash",
+      nComp: 3,
+      nodeIndices: null,
+      pointCount: 1,
+      quantityId: "m",
+      scopeId: "body",
+      scopeKind: "object" as const,
+      valueCount: 3,
+      values: new Float64Array(3),
+    };
+    const issues = collectFieldVectorIdentityIssues(decoded, {
+      component: null,
+      domainGenerationId: null,
+      encoding: null,
+      identityIssues: [],
+      fieldIndexing: "explicit_node_indices",
+      fieldRevision: null,
+      meshTopologyHash: "header-hash",
+      nComp: 1,
+      nodeIndexCount: 2,
+      pointCount: 2,
+      quantityId: "H_demag",
+      scopeId: "air",
+      scopeKind: "airbox",
+      snapshotId: null,
+      valueCount: 2,
+    });
+    expect(issues.map((issue) => issue.field)).toEqual(
+      expect.arrayContaining([
+        "quantityId",
+        "pointCount",
+        "valueCount",
+        "nComp",
+        "scopeKind",
+        "scopeId",
+        "meshTopologyHash",
+        "fieldIndexing",
+        "nodeIndexCount",
+      ]),
+    );
+    expect(
+      collectFieldVectorIdentityIssues(
+        { ...decoded, formatVersion: 2, indexing: "legacy_count_only" },
+        parseFieldVectorResponseMetadata(new Headers()),
+      ),
+    ).toEqual([]);
+  });
+});
 
 const resourceRevisions: LiveStatusResource["resources"] = {
   artifact_revision: 0,

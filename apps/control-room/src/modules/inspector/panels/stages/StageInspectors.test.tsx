@@ -52,6 +52,7 @@ import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { sharedResourceRuntimeStore } from "@/kernel/resources/ResourceRuntimeStore";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
+import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 
 const selection = new SelectionController(new EventBus<KernelEventMap>());
 
@@ -134,6 +135,7 @@ const mockKernel = {
     read: () => null,
   },
   selection,
+  visualizationDebug: new VisualizationDebugController(),
 } as unknown as KernelApi;
 
 import { createDefaultStudyStageDraft } from "../StudyStageAuthoringModel";

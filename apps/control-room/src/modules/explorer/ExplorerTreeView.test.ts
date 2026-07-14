@@ -13,6 +13,7 @@ import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import { STUDY_RUNTIME_COMMANDS } from "@/kernel/runtime/studyRuntimeCommandContributions";
 import type { KernelApi } from "@/kernel/types";
+import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 
 import type { ExplorerNode } from "./explorerTypes";
 import {
@@ -20,6 +21,7 @@ import {
   flattenVisibleExplorerRows,
   resolveExplorerFocusableRowId,
   resolveExplorerKeyboardTargetRowId,
+  resolveExplorerRevealScrollTop,
   sliceVisibleExplorerRows,
 } from "./ExplorerTreeView";
 import { explorerStatusClassName } from "./explorerStatusClass";
@@ -97,6 +99,29 @@ describe("flattenVisibleExplorerRows", () => {
       start: 24,
       topPadding: 240,
     });
+  });
+
+  it("scrolls an offscreen active node into the visible tree window", () => {
+    const rowIds = Array.from({ length: 100 }, (_, index) => `node-${index}`);
+
+    expect(
+      resolveExplorerRevealScrollTop({
+        activeNodeId: "node-50",
+        rowHeight: 28,
+        rowIds,
+        scrollTop: 0,
+        viewportHeight: 280,
+      }),
+    ).toBe(1148);
+    expect(
+      resolveExplorerRevealScrollTop({
+        activeNodeId: "node-5",
+        rowHeight: 28,
+        rowIds,
+        scrollTop: 0,
+        viewportHeight: 280,
+      }),
+    ).toBeNull();
   });
 
   it("chooses a single focusable row for roving tree tabindex", () => {
@@ -180,6 +205,7 @@ describe("flattenVisibleExplorerRows", () => {
     const kernel = {
       api: { commands: { submit: async () => ({ accepted: true }) } },
       commands,
+      visualizationDebug: new VisualizationDebugController(),
     } as unknown as KernelApi;
     const node: ExplorerNode = {
       contextCommands: ["study.pause", "study.run"],
@@ -256,6 +282,7 @@ describe("flattenVisibleExplorerRows", () => {
     });
     const kernel = {
       commands,
+      visualizationDebug: new VisualizationDebugController(),
     } as unknown as KernelApi;
     const node: ExplorerNode = {
       contextCommands: ["test.input-gated"],
@@ -289,6 +316,7 @@ describe("flattenVisibleExplorerRows", () => {
     const kernel = {
       api: { commands: { submit: async () => ({ accepted: true }) } },
       commands,
+      visualizationDebug: new VisualizationDebugController(),
     } as unknown as KernelApi;
     const node: ExplorerNode = {
       contextCommands: ["study.run"],
