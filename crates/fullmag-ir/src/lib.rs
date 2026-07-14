@@ -83,6 +83,27 @@ pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> 
         }
     }
 
+    if let Some(entries) = object
+        .get_mut("geometry")
+        .and_then(Value::as_object_mut)
+        .and_then(|geometry| geometry.get_mut("entries"))
+        .and_then(Value::as_array_mut)
+    {
+        for entry in entries {
+            let Some(entry_object) = entry.as_object_mut() else {
+                continue;
+            };
+            if entry_object.get("kind").and_then(Value::as_str) == Some("cylinder")
+                && !entry_object.contains_key("axis")
+            {
+                entry_object.insert(
+                    "axis".to_string(),
+                    serde_json::json!([0.0, 0.0, 1.0]),
+                );
+            }
+        }
+    }
+
     Ok(true)
 }
 #[derive(Debug, Clone, Serialize, PartialEq)]

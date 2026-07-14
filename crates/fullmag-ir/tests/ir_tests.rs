@@ -71,6 +71,28 @@ fn problem_ir_deserialize_migrates_previous_public_version() {
 }
 
 #[test]
+fn previous_public_cylinder_without_axis_migrates_explicitly() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
+        .expect("bootstrap ProblemIR should serialize");
+    value["ir_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["script_api_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["serializer_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["geometry"]["entries"] = serde_json::json!([{
+        "kind": "cylinder",
+        "name": "legacy",
+        "radius": 1.0,
+        "height": 2.0
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value)
+        .expect("legacy cylinder should migrate its axis explicitly");
+    match &decoded.geometry.entries[0] {
+        GeometryEntryIR::Cylinder { axis, .. } => assert_eq!(*axis, [0.0, 0.0, 1.0]),
+        other => panic!("expected migrated cylinder, got {other:?}"),
+    }
+}
+
+#[test]
 fn previous_public_ir_golden_fixture_migrates_to_current() {
     let fixture = include_str!("../../../tests/golden/problem_ir/bootstrap_v0_1_read_compat.json");
     let decoded: ProblemIR =

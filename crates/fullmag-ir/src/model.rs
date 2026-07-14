@@ -34,10 +34,6 @@ pub struct GeometryIR {
     pub entries: Vec<GeometryEntryIR>,
 }
 
-fn default_cylinder_axis() -> [f64; 3] {
-    [0.0, 0.0, 1.0]
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GeometryEntryIR {
@@ -56,7 +52,6 @@ pub enum GeometryEntryIR {
         name: String,
         radius: f64,
         height: f64,
-        #[serde(default = "default_cylinder_axis")]
         axis: [f64; 3],
     },
     SinWaveguide {
