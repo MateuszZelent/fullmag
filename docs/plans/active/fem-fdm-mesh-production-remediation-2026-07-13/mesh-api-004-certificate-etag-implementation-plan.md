@@ -40,3 +40,9 @@ fn periodic_pairs_etag(mesh_generation: &str, certificate_fingerprint: &str) -> 
 
 **Exit:** każda semantyczna zmiana certificate unieważnia cache; 304 występuje wyłącznie dla identycznego snapshotu.
 
+## Evidence update (2026-07-14)
+
+- [x] Periodic-pairs ETag is now derived from canonical serialized resource content plus source identity; pair count alone is no longer an identity input.
+- [x] `mesh_periodic_pairs_etag_changes_when_residual_changes` proves a same-cardinality residual change rejects the old conditional request and returns a fresh 200 snapshot.
+- [x] Focused API test — 1 passed.
+- [ ] Certificate fingerprint should be carried as persisted upstream provenance rather than recomputed in the API; UI invalidation/browser and managed resource gates remain open.

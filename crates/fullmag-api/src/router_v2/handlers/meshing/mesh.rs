@@ -1304,10 +1304,11 @@ pub async fn get_mesh_periodic_pairs(
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
 
+    let body_identity = serde_json::to_string(&body).map_err(|error| {
+        ApiError::internal(format!("failed to canonicalize periodic-pairs resource: {error}"))
+    })?;
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "mesh-periodic-pairs:{source_id}:{}:{}",
-        snapshot.mesh_revision,
-        body.pairs.len()
+        "mesh-periodic-pairs:{source_id}:{body_identity}"
     ));
     Ok(crate::router_v2::handlers::shared::conditional_json_response(&headers, &etag, &body))
 }

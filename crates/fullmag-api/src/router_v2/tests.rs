@@ -6652,6 +6652,52 @@ async fn mesh_periodic_pairs_returns_v1_diagnostics() {
 }
 
 #[tokio::test]
+async fn mesh_periodic_pairs_etag_changes_when_residual_changes() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_periodic_fem_mesh_payload());
+        snapshot.mesh_revision = 41;
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let first = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_etag = first
+        .headers()
+        .get("etag")
+        .expect("periodic-pairs response should include etag")
+        .clone();
+    let _ = body_json(first).await;
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot
+            .fem_mesh
+            .as_mut()
+            .expect("periodic mesh should remain present")
+            .nodes[1][0] += 1.0e-15;
+    }
+    let app = build_v2_router().with_state(state);
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/mesh/periodic_pairs.v1")
+                .header("if-none-match", first_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn mesh_periodic_pairs_marks_unpaired_boundary_nodes_invalid() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
