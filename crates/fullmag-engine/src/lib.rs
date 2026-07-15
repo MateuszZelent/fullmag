@@ -724,6 +724,15 @@ mod tests {
         EvaluationRequest,
     ) -> Result<StepReport>;
 
+    type PersistentSoAStepper = fn(
+        &ExchangeLlgProblem,
+        &mut ExchangeLlgStateSoA,
+        f64,
+        &mut FftWorkspace,
+        &mut IntegratorBuffers,
+        EvaluationRequest,
+    ) -> Result<StepReport>;
+
     fn assert_stepper_aos_soa_direct_torque_match(
         problem: &ExchangeLlgProblem,
         magnetization: Vec<Vector3>,
@@ -2463,6 +2472,48 @@ mod tests {
         assert_vector_close(soa_inactive, [1.0, 0.0, 0.0], 1.0e-15);
     }
 
+    fn assert_dynamic_oersted_persistent_soa_stage_time(
+        integrator: TimeIntegrator,
+        stage_fraction: f64,
+        step: PersistentSoAStepper,
+    ) {
+        let dt = 1.0e-3;
+        let half_width = 1.0e-6;
+        let active_problem = dynamic_oersted_problem(
+            integrator,
+            stage_fraction * dt - half_width,
+            stage_fraction * dt + half_width,
+        );
+        let inactive_problem = dynamic_oersted_problem(integrator, 2.0 * dt, 3.0 * dt);
+
+        let run = |problem: &ExchangeLlgProblem| {
+            let mut state = problem
+                .new_state(vec![[1.0, 0.0, 0.0]])
+                .expect("state should build")
+                .to_soa();
+            let mut ws = problem.create_workspace();
+            let mut bufs = problem.create_integrator_buffers();
+            step(
+                problem,
+                &mut state,
+                dt,
+                &mut ws,
+                &mut bufs,
+                EvaluationRequest::Minimal,
+            )
+            .expect("persistent SoA dynamic Oersted step should succeed");
+            state.magnetization().gather_to_aos()[0]
+        };
+
+        let active = run(&active_problem);
+        let inactive = run(&inactive_problem);
+        assert!(
+            (active[1].abs() + active[2].abs()) > 1.0e-12,
+            "{integrator:?} persistent SoA path must evaluate the Oersted pulse at stage time"
+        );
+        assert_vector_close(inactive, [1.0, 0.0, 0.0], 1.0e-15);
+    }
+
     #[test]
     fn dynamic_oersted_uses_stage_time_in_every_cpu_integrator_and_layout() {
         assert_dynamic_oersted_stage_time(
@@ -2498,6 +2549,35 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_oersted_uses_stage_time_in_every_persistent_soa_integrator() {
+        assert_dynamic_oersted_persistent_soa_stage_time(
+            TimeIntegrator::Heun,
+            1.0,
+            ExchangeLlgProblem::heun_step_soa_state_buf,
+        );
+        assert_dynamic_oersted_persistent_soa_stage_time(
+            TimeIntegrator::RK4,
+            0.5,
+            ExchangeLlgProblem::rk4_step_soa_state_buf,
+        );
+        assert_dynamic_oersted_persistent_soa_stage_time(
+            TimeIntegrator::RK23,
+            0.75,
+            ExchangeLlgProblem::rk23_step_soa_state_buf,
+        );
+        assert_dynamic_oersted_persistent_soa_stage_time(
+            TimeIntegrator::RK45,
+            0.8,
+            ExchangeLlgProblem::rk45_step_soa_state_buf,
+        );
+        assert_dynamic_oersted_persistent_soa_stage_time(
+            TimeIntegrator::ABM3,
+            1.0,
+            ExchangeLlgProblem::abm3_step_soa_state_buf,
+        );
+    }
+
+    #[test]
     fn dynamic_oersted_final_report_is_refreshed_at_accepted_time() {
         let dt = 1.0e-3;
         let problem = dynamic_oersted_problem(TimeIntegrator::Heun, dt, 2.0 * dt);
@@ -2513,6 +2593,33 @@ mod tests {
         let mut final_field = vec![[0.0; 3]; 1];
         problem.effective_field_into_ws_at_time(
             state.magnetization(),
+            &mut ws,
+            &mut final_field,
+            state.time_seconds,
+        );
+
+        assert!(report.max_effective_field_amplitude > 0.0);
+        assert!((report.max_effective_field_amplitude - norm(final_field[0])).abs() <= 1.0e-12);
+    }
+
+    #[test]
+    fn dynamic_oersted_persistent_soa_final_report_is_refreshed_at_accepted_time() {
+        let dt = 1.0e-3;
+        let problem = dynamic_oersted_problem(TimeIntegrator::Heun, dt, 2.0 * dt);
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]])
+            .expect("state should build")
+            .to_soa();
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+
+        let report = problem
+            .heun_step_soa_state_buf(&mut state, dt, &mut ws, &mut bufs, EvaluationRequest::Full)
+            .expect("persistent SoA dynamic Oersted step should succeed");
+        let final_m = state.magnetization().gather_to_aos();
+        let mut final_field = vec![[0.0; 3]; 1];
+        problem.effective_field_into_ws_at_time(
+            &final_m,
             &mut ws,
             &mut final_field,
             state.time_seconds,
@@ -2544,6 +2651,33 @@ mod tests {
             .expect("dynamic Oersted RK45 step should succeed");
 
         assert!((state.magnetization()[0][1].abs() + state.magnetization()[0][2].abs()) > 1.0e-12);
+        assert!(state.k_fsal.is_none());
+    }
+
+    #[test]
+    fn dynamic_oersted_invalidates_persistent_soa_rk45_fsal_cache() {
+        let dt = 1.0e-3;
+        let problem = dynamic_oersted_problem(TimeIntegrator::RK45, 0.0, 1.0e-6);
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]])
+            .expect("state should build")
+            .to_soa();
+        state.k_fsal = Some(VectorFieldSoA::zeros(1));
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+
+        problem
+            .rk45_step_soa_state_buf(
+                &mut state,
+                dt,
+                &mut ws,
+                &mut bufs,
+                EvaluationRequest::Minimal,
+            )
+            .expect("persistent SoA dynamic Oersted RK45 step should succeed");
+
+        let magnetization = state.magnetization().gather_to_aos()[0];
+        assert!((magnetization[1].abs() + magnetization[2].abs()) > 1.0e-12);
         assert!(state.k_fsal.is_none());
     }
 
