@@ -109,23 +109,32 @@ The normative physics sources are 0960–0980 and the runtime target is
 `docs/specs/spin-transport-runtime-contract-v1.md`. Existing rows below retain
 their historical executable-slice meaning. They must not be widened by name:
 
-| Capability id | PR-00 status | Promotion rule |
-|---|---|---|
-| `spin_torque.zhang_li` | existing lane-specific executable slices; validation remains workload-scoped | signed-current, formula-v1, convergence and lane parity gates |
-| `spin_torque.slonczewski` | existing single-module executable slices; validation remains workload-scoped | oriented `J_n`, realization identity, macrospin/current-scaling gates |
-| `spin_torque.prescribed_sot` | legacy FDM executable slice; canonical M0 reconciliation pending | must be named prescribed SOT, pass SI/Gilbert/signed-current gates, and never imply SHE solve |
-| `transport.charge.ohmic` | `semantic_only` until M1 implementation evidence | conservative charge solve, electrode balance, gauge and managed lane evidence |
-| `transport.charge.magnetoresistive` | `semantic_only` until M2 | full AMR/PHE/AHE and reciprocal nonlinear gates |
-| `transport.spin.steady_drift_diffusion` | `semantic_only` until M1 | analytic spin profile, reaction, interface-balance, FDM/FEM convergence and runtime evidence |
-| `transport.spin.direct_she` | `semantic_only` until M1 | signed tensor-source oracle and charge-to-spin coupling evidence |
-| `transport.spin.inverse_she` | `semantic_only` until M2 | reciprocal constitutive/Onsager and nonlinear-coupling gates |
-| `transport.spin.mixing_conductance` | `semantic_only` until M1 | oriented two-trace interface law, backflow and absorbed-flux/torque balance |
-| `transport.spin.transient_drift_diffusion` | `semantic_only` until M3 | physical capacitance, IMEX order, rollback and restart gates |
-| `field.oersted.dynamic` | existing prescribed/cylinder/midpoint slices are not general validation | same signed `J_charge`, closed circuit, stage consistency, direct oracle and convergence |
-| `field.oersted.fdm_fft` | `semantic_only` target capability at PR-00 | M1 cell-integrated antisymmetric FFT kernel, direct oracle and open-boundary convergence |
-| `field.oersted.fem_vector_potential` | `semantic_only` target capability at PR-00 | M1 H(curl)+H1 gauge solve, direct oracle and airbox convergence |
-| `coupling.transport_llg.one_way` | `semantic_only` until M1 | stage-consistent torque/Oersted and accepted-state observables |
-| `coupling.transport_llg.bidirectional` | `semantic_only` until M2 | coupled residual/LTE and rejected-step behavior |
+The following rows are normative PR-00 snapshots. A row is identified by the
+tuple `(capability_id, formula/operator/realization version, discretization,
+device, precision, execution mode, workload)`, never by capability name alone.
+An omitted tuple is `unsupported`.
+
+| Capability id | Version scope | Backend / device / precision / mode | Workload scope | Status | Promotion rule |
+|---|---|---|---|---|---|
+| `spin_torque.prescribed_sot` | `prescribed_sot.legacy_fullmag.v0` | FDM / CPU / double / strict | existing single-grid local SOT payload | `reference_executable` | compatibility only; no v1 or SHE claim |
+| `spin_torque.prescribed_sot` | `prescribed_sot.legacy_fullmag.v0` | FDM / GPU / double or single / strict | existing single-grid native CUDA integrators | `production_executable` | compatibility only; no v1 or validated claim |
+| `spin_torque.prescribed_sot` | `prescribed_sot.fullmag.v1` | FDM or FEM / CPU or GPU / any precision / any mode | canonical signed-current macrospin | `semantic_only` | SI/Gilbert/signed-current/mask/stage-time gates and lane proof |
+| `spin_torque.zhang_li` | `zhang_li.fullmag.v1` | FDM or FEM / CPU or GPU / any precision / any mode | canonical domain-wall/PBC workloads | `semantic_only` | signed-current, operator-version, convergence and lane parity gates; legacy executable slices are not v1 evidence |
+| `spin_torque.slonczewski` | `slonczewski.fullmag.v1` plus one registered realization | FDM or FEM / CPU or GPU / any precision / any mode | canonical macrospin/current-scaling workloads | `semantic_only` | oriented `J_n`, realization identity, SI/Gilbert and lane gates; legacy slices are not v1 evidence |
+| `transport.charge.ohmic` | `current_transport.fullmag.v1` + `fv_charge_face_flux.v1` or FEM operator | FDM/FEM / CPU/GPU / double / strict | M1 uniform/layered bar with declared BC/gauge | `semantic_only` | conservative solve, balance, convergence and managed lane evidence |
+| `transport.charge.magnetoresistive` | `transport_constitutive.reciprocal.fullmag.v1` | FDM/FEM / CPU/GPU / double / strict | M2 AMR/PHE/AHE and reciprocal workloads | `semantic_only` | complete material schema, positivity, Onsager and nonlinear gates |
+| `transport.spin.steady_drift_diffusion` | `transport_constitutive.one_way.fullmag.v1` | FDM/FEM / CPU/GPU / double / strict | M1 `spin_1d_diffusion_v1`, interface BC explicitly scoped | `semantic_only` | analytic profile, balance, FDM/FEM convergence and managed proof |
+| `transport.spin.direct_she` | `transport_constitutive.one_way.fullmag.v1` | FDM/FEM / CPU/GPU / double / strict | M1 `she_1d_film_v1` with declared BC | `semantic_only` | signed tensor-source oracle and charge-to-spin evidence |
+| `transport.spin.inverse_she` | `transport_constitutive.reciprocal.fullmag.v1` | FDM/FEM / CPU/GPU / double / strict | M2 reciprocal benchmark | `semantic_only` | Onsager, dissipation and nonlinear-coupling gates |
+| `transport.spin.mixing_conductance` | `magnetoelectronic.fullmag.v1` | FDM/FEM / CPU/GPU / double / strict | `mixing_flux_balance_v1` | `semantic_only` | oriented two-trace law, backflow and torque balance |
+| `transport.spin.transient_drift_diffusion` | `coupled_imex_ark2.v1` | FDM/FEM / CPU/GPU / double / strict | M3 decay/order/restart workloads | `semantic_only` | physical capacitance, IMEX order, rollback and restart gates |
+| `field.oersted.dynamic` | existing legacy cylinder/midpoint realization | FDM / CPU / double / strict | documented prescribed-current single-grid slices only | `reference_executable` | not `current_transport.fullmag.v1` general closed-circuit/stage-consistent validation |
+| `field.oersted.dynamic` | existing legacy cylinder/midpoint realization | FDM / GPU / double or single / strict | documented prescribed-current single-grid slices only | `production_executable` | executable is not `validated` and is not the M1 FFT realization |
+| `field.oersted.dynamic` | existing legacy cylinder/midpoint realization | FEM / CPU or GPU / double / strict | documented prescribed-current native FEM slices only | `production_executable` | executable is not general H(curl)/airbox validation |
+| `field.oersted.fdm_fft` | `fdm_oersted_cell_integrated_open.v1` + `oersted_fdm_fft_open.v1` | FDM / CPU or GPU / double / strict | M1 closed open-boundary circuit | `semantic_only` | direct cell-integrated oracle and convergence |
+| `field.oersted.fem_vector_potential` | `fem_oersted_hcurl_h1_gauge.v1` + `oersted_fem_vector_potential.v1` | FEM / CPU or GPU / double / strict | M1 conductor+airbox | `semantic_only` | direct oracle, curl/div/gauge and airbox convergence |
+| `coupling.transport_llg.one_way` | `transport_constitutive.one_way.fullmag.v1` | FDM/FEM / CPU/GPU / double / strict | M1 stage-consistent LLG workloads | `semantic_only` | accepted-state equality and temporal-order proof |
+| `coupling.transport_llg.bidirectional` | `transport_constitutive.reciprocal.fullmag.v1` | FDM/FEM / CPU/GPU / double / strict | M2 nonlinear stage solve | `semantic_only` | residual/LTE, rejection and rollback proof |
 
 No PR-00 documentation change promotes a runtime lane. `validated` always
 requires a named workload, discretization, device, precision, boundary scope,

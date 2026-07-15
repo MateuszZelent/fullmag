@@ -5,9 +5,15 @@
 - Last updated: 2026-07-15
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
-- Formula versions: `spin_transport_constitutive.fullmag.v1`,
-  `magnetoelectronic.fullmag.v1`, `sml_surface_conductance.v1`,
-  `fv_spin_upwind_v1`, `structured_cross_gradient_v1`
+- Formula versions: `transport_constitutive.one_way.fullmag.v1`,
+  `transport_constitutive.reciprocal.fullmag.v1`,
+  `magnetoelectronic.fullmag.v1`,
+  `sml_surface_conductance.fullmag.v1`
+- Operator versions: `fv_spin_upwind_v1`, `structured_cross_gradient_v1`,
+  `fem_charge_spin_broken_h1_mortar.v1`
+
+The normative identifier categories and exact spellings are frozen by section
+8.1 of the runtime contract.
 
 ## 1. Problem statement
 
@@ -80,6 +86,13 @@ Q_ia  = sigma_s G_ia
         + P sigma E_i m_a
         + theta_SH sigma epsilon_ika E_k.
 ```
+
+Here `sigma` is the scalar reciprocal reference conductivity from the complete
+base charge material. In a magnetoresistive material it is exactly
+`MagnetoresistiveMaterial.base.sigma_Spm`; `sigma_parallel`, `sigma_perp`, and
+`sigma_AHE` define `J_mr` but do not silently replace that reciprocal scalar or
+add a second isotropic current. The same base material owns relative
+permittivity and quasistatic validity bounds.
 
 These terms are one constitutive block; iSHE is not a separately chosen sign.
 Contraction with `(E,G)` makes the `P` block symmetric and SHE/iSHE block
@@ -354,9 +367,13 @@ not accept a private current or polarization shortcut.
 Typed IR includes `SpinTransportModuleIR`, charge/spin materials,
 `SpinInterfaceIR`, `SpinBoundaryIR`, `DriftDiffusionTorqueIR`, and resolved
 transport/integrator plans. It stores formula/interface versions, full units,
-oriented region/surface references, BC, tolerances, source identity, coupling,
-and requested execution. A legacy placeholder lacking domains/materials/BCs
-cannot migrate automatically and fails with a versioned diagnostic.
+oriented region/surface references, BC, tolerances, source identity, derived
+resolved coupling, and requested execution. Public coupling is owned only by
+the referenced `CurrentTransport`; the spin module has no independent coupling
+field. Lowering copies and validates the source value, while normalization
+rejects a conflicting legacy spin-side value. A legacy placeholder lacking
+domains/materials/BCs cannot migrate automatically and fails with a versioned
+diagnostic.
 
 ### 4.3 Planner and capability matrix
 

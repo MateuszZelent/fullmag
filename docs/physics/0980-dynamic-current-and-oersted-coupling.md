@@ -5,9 +5,16 @@
 - Last updated: 2026-07-15
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
-- Formula/operator versions: `current_transport.fullmag.v1`,
-  `fdm_face_to_cell_current_v1`, `fdm_oersted_fft_open_v1`,
-  `fem_oersted_vector_potential_v1`
+- Formula version: `current_transport.fullmag.v1`
+- Operator versions: `fdm_face_to_cell_current.v1`,
+  `fdm_oersted_cell_integrated_open.v1`,
+  `fem_oersted_hcurl_h1_gauge.v1`
+- Realization versions: `oersted_fdm_fft_open.v1`,
+  `oersted_fem_vector_potential.v1`
+
+Executable engines such as `fdm_oersted_fft_open_v1` are distinct from those
+formula/operator/realization identifiers. Section 8.1 of the runtime contract
+is the normative registry.
 
 ## 1. Problem statement
 
@@ -60,7 +67,7 @@ drive. Its arguments have one frozen interpretation:
 | `offset` | additive multiplier offset | 1, finite |
 | `frequency_hz` | sinusoidal cycles per second | Hz, finite and `>=0` |
 | `phase_rad` | phase added to `2 pi frequency_hz t` | rad (dimensionless), finite |
-| `t_on`, `t_off` | pulse half-open interval bounds | s, finite and `t_off>=t_on` |
+| `t_on`, `t_off` | pulse half-open interval bounds | s, finite and `t_on<t_off` |
 | `(t_i,y_i)` | PWL knot time and dimensionless multiplier | s and 1; finite, strictly increasing `t_i` |
 | `center` | time origin of the sinc argument | s, finite |
 | `bandwidth_hz` | sinc bandwidth and declared significant source bandwidth | Hz, finite and `>0` |
@@ -227,7 +234,7 @@ map consumed by Oersted and published as `J_charge` is
 J_K,x=0.5(J_x,K-1/2+J_x,K+1/2),
 ```
 
-and analogously for `y,z`, under `fdm_face_to_cell_current_v1`. A future
+and analogously for `y,z`, under `fdm_face_to_cell_current.v1`. A future
 non-Cartesian source requires a conservative least-squares reconstruction with
 a new version. Oersted must not recompute `sigma E`.
 
@@ -250,13 +257,17 @@ independent oracles. Plans/buffers are persistent, never rebuilt per RHS.
 
 Cache identity includes cell size, shape, origin, conductor/magnet union grid,
 mask and source revisions, closure, cutoff, layout, method, and precision.
-CPU double `fdm_oersted_fft_open_v1` is reference/production baseline; CUDA
+The resolved operator is `fdm_oersted_cell_integrated_open.v1` and the
+realization is `oersted_fdm_fft_open.v1`. CPU double engine
+`fdm_oersted_fft_open_v1` is the reference/production baseline; CUDA engine
 `fdm_oersted_cufft_open_v1` must preserve kernel/layout/crop semantics with no
 strict hot-loop vector transfers.
 
-`analytic_cylinder` is a special geometry oracle and must support an arbitrary
-declared axis by a covariant rotation or reject it. `direct_biot_savart` is the
-small independent O(N^2) oracle with controlled near-field quadrature.
+`analytic_cylinder` resolves to `oersted_analytic_cylinder.v1`; it is a special
+geometry oracle and must support an arbitrary declared axis by a covariant
+rotation or reject it. `direct_biot_savart` is the small independent O(N^2)
+oracle with controlled near-field quadrature and realization
+`oersted_direct_biot_savart.v1`.
 
 ### 3.2 FEM vector-potential contract
 
@@ -292,6 +303,11 @@ potential solve or hidden transfer fallback.
 
 Material `mu_r != 1` requires a separate coupled publication to prevent double
 counting micromagnetic response.
+
+This path resolves operator `fem_oersted_hcurl_h1_gauge.v1`, realization
+`oersted_fem_vector_potential.v1`, and CPU/GPU engines
+`fem_oersted_hcurl_h1_gauge_v1` /
+`fem_oersted_hcurl_h1_gauge_device_v1` respectively.
 
 ### 3.3 Hybrid and coupling cadence
 

@@ -6,7 +6,11 @@
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `zhang_li.fullmag.v1`, `slonczewski.fullmag.v1`,
-  `prescribed_sot.fullmag.v1`, `transport_torque.fullmag.v1`
+  `prescribed_sot.fullmag.v1`, `transport_absorption.fullmag.v1`
+
+Formula, operator, realization, and engine identifiers are classified by the
+normative registry in section 8.1 of the runtime contract; this note never uses
+an engine identifier as a formula or operator version.
 
 ## 1. Problem statement
 

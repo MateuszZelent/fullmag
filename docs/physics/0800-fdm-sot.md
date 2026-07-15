@@ -1,7 +1,9 @@
 # 0800 — Prescribed Spin-Orbit Torque (SOT) — FDM CPU
 
-**Status:** ✅ Implemented (FDM CPU Rust)  
-**Backends:** FDM CPU Rust | FDM CUDA: deferred | FEM: deferred  
+**Status:** legacy-v0 executable; not conformant with canonical prescribed-SOT v1
+**Backends:** FDM CPU Rust: `reference_executable` legacy v0 | FDM CUDA:
+`production_executable` legacy v0 on the existing single-grid lanes | FEM:
+`unsupported` for prescribed SOT
 **Date:** 2026-04-04
 
 > **Normative status (2026-07-15).** This note records the historical FDM CPU
@@ -12,6 +14,13 @@
 > `docs/physics/0970-spin-hall-drift-diffusion-transport.md`. Any discrepancy
 > with those notes is an implementation defect to be closed in M0, not an
 > alternate convention.
+> The executable CPU/CUDA code uses
+> `formula_version=prescribed_sot.legacy_fullmag.v0`: it takes current
+> magnitude, lacks the canonical `gamma0`/rate conversion, and does not apply
+> the Gilbert-source transform. It is retained for trajectory compatibility,
+> is not `prescribed_sot.fullmag.v1`, is not validated physics, and must never
+> satisfy a direct/inverse SHE capability. The identifier classification is the
+> normative registry in runtime-contract section 8.1.
 
 ---
 
@@ -120,7 +129,8 @@ SOT is active when `sot_current_density.is_some() && sot_sigma.is_some() && sot_
 
 ## 7. Deferred work
 
-- CUDA GPU FDM kernel for SOT (same `combine_effective_field_*` pattern)
+- canonical signed-current `prescribed_sot.fullmag.v1` on FDM CPU/CUDA,
+  including SI rate, Gilbert conversion, active mask, stage time, and parity
 - FEM support
 - Self-consistent spin-diffusion transport
 - Per-cell efficiency tensors (anisotropic ξ_DL, ξ_FL)

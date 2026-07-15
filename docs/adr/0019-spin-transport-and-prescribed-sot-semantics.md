@@ -98,6 +98,12 @@ resolved plan retains the choice; a backend may not infer one from mesh shape.
 
 ### 4. Coupling cadence is milestone-specific and stage-consistent
 
+`CurrentTransport.coupling` is the sole public owner. Spin transport derives
+its resolved coupling from its named current source; Python, UI, SceneDocument,
+and normalized `SpinTransportModuleIR` do not expose a second independently
+authorable value. A legacy duplicate is removed only if equal and otherwise
+fails closed.
+
 M1 is one-way quasistatic: charge drives spin, torque, and Oersted without
 spin-to-charge feedback. Strict execution evaluates the common source,
 Oersted, steady spin solve, and torque at every required LLG stage time and
@@ -162,6 +168,11 @@ Solver defaults are part of the versioned runtime contract, not backend
 library defaults. The contract freezes per-milestone/lane/precision engines,
 preconditioners, iteration limits, physical residual normalizations,
 FP64/qualified-FP32 tolerances, Picard defaults, and unsupported single lanes.
+
+Formula, operator, realization, and engine identifiers occupy disjoint
+namespaces. The single normative registry is runtime-contract section 8.1;
+physics notes, defaults, plan provenance, capability evidence, and legacy notes
+must use its exact spellings.
 
 ### 8. Execution and capability claims are truthful and scoped
 
