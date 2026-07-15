@@ -38,6 +38,14 @@ solve charge or spin transport and must never advertise a SHE solver
 capability. SHE/iSHE belong to `SpinTransportModuleIR`; transport-derived
 torque belongs to `DriftDiffusionSpinTorque` and consumes a named solve.
 
+Migrated `SpinOrbitTorque` payloads keep
+`formula_version=prescribed_sot.legacy_fullmag.v0`. Canonical export changes
+the class name but explicitly retains that formula, including the historical
+absolute current, missing `gamma0`/rate conversion, and lack of Gilbert-source
+transform. Only an explicit upgrade command with confirmed signed drive data
+may create `prescribed_sot.fullmag.v1`; ordinary reading/export never changes
+an old trajectory silently.
+
 ### 2. Signs, indices, and units are frozen once
 
 `e>0`; `J_c` is signed conventional current. `gamma_e>0` has angular-frequency
@@ -53,6 +61,11 @@ Direct torques are stored as Gilbert-source rates `T_G` in `1/s`. One shared
 formula converts them exactly once to explicit RHS form. A backend may not mix
 Gilbert-source, already transformed RHS, and field-in-`A/m` representations.
 
+The legacy Slonczewski `fixed_layer_position` adapter preserves
+`top/omitted -> +|J|` and `bottom -> -|J|` by deriving `stack_normal` from the
+nonzero uniform current direction. Zero or direction-nonuniform sources fail
+closed; geometry axes and averaged directions are not substitutes.
+
 ### 3. Source binding is named and single-owner
 
 Current transport owns the committed `V_electric` and `J_charge` state. Spin
@@ -64,6 +77,14 @@ Consumers do not reconstruct or independently solve their source.
 Source envelopes belong to the current source, not separately to each
 consumer. A general Oersted solve requires an explicit closed circuit or
 versioned return-path extension; an open truncated current is rejected.
+Every `TimeEnvelope` value is a dimensionless multiplier (`1`) applied to a
+dimensionful base drive. Tabulated envelopes require time in seconds and a
+dimensionless value column; they cannot hide current or voltage units.
+
+Slonczewski execution resolves exactly one versioned realization:
+`slonczewski_thin_layer_homogenized.v1` with explicit thickness conversion or
+`slonczewski_interface_flux.v1` with an oriented surface weak functional. The
+resolved plan retains the choice; a backend may not infer one from mesh shape.
 
 ### 4. Coupling cadence is milestone-specific and stage-consistent
 
@@ -105,21 +126,32 @@ flow/spin axis metadata, not a vector.
 
 ### 7. ProblemIR and native plan ABI migrate explicitly
 
-The first implementation increments the concrete ProblemIR serializer version
-and native plan ABI version and assigns named v1 schema identities. The numeric
-values are selected from the then-current code, not guessed in this ADR.
+The target `ProblemIR` version is exactly `0.3.0`. Its standard reader accepts
+current `0.3.0` and previous public `0.2.0`; writers emit only `0.3.0`.
+Historical `0.1.0` requires the explicit, audited chain
+`0.1.0 -> 0.2.0 -> 0.3.0` and is not silently accepted by the normal reader.
 
-Readers support the immediately previous published ProblemIR and the new v1
-spin-transport schema; writers emit only canonical v1. Legacy flat `stt_*` and
+Native spin transport uses new independent descriptor families with exact
+`abi_version=1` and `struct_version=1` for both FDM and FEM. These values start
+at one because the current wide time-domain descriptors are unversioned; the
+unrelated FEM frequency-domain ABI version 12 is not reused. Descriptors also
+carry exact `struct_size`, validated before any field access.
+
+Readers support exactly `0.3.0` and previous public `0.2.0`; writers emit only
+canonical `0.3.0`. Legacy flat `stt_*` and
 `sot_*` fields are accepted only by a dedicated old-ABI input adapter and lower
 to typed torque vectors. Legacy Zhang–Li behavior keeps an explicit legacy
 formula version; upgrading results is an opt-in migration. Incomplete
 placeholder drift-diffusion cannot be migrated without domains, materials,
 boundaries, and source binding and therefore fails closed.
 
-Native descriptors carry ABI version and structure size. ABI mismatch fails
-before execution. Removing compatibility readers requires a later ADR and
-usage/migration evidence.
+ABI or structure-version/size mismatch fails before execution. Removing
+compatibility readers requires a later ADR and usage/migration evidence.
+
+Solver defaults are part of the versioned runtime contract, not backend
+library defaults. The contract freezes per-milestone/lane/precision engines,
+preconditioners, iteration limits, physical residual normalizations,
+FP64/qualified-FP32 tolerances, Picard defaults, and unsupported single lanes.
 
 ### 8. Execution and capability claims are truthful and scoped
 

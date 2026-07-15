@@ -72,12 +72,77 @@ TimeEnvelope =
      bandwidth_hz?}
 ```
 
+Every envelope value is a dimensionless multiplier with UCUM unit `1`.
+Dimensionful source amplitudes remain on the drive or boundary record. The
+instantaneous source is always `source_SI(t)=source_base_SI*a(t)`. For a
+tabulated envelope the artifact MUST expose one strictly increasing time
+column with unit `s` and one finite multiplier column with unit `1`; other
+column units, implicit milliseconds, and dimensionful current/voltage columns
+are rejected. Interpolation is `linear` or `previous`; extrapolation is
+`zero`, `hold`, or `error`. Canonical defaults are `linear` and `error`.
+
 Pulse, piecewise-linear, and tabulated drives used by quasistatic Oersted MUST
 provide finite rise-time information or a finite `bandwidth_hz` sufficient for
 the quasistatic validity gate. The envelope belongs to the current source. A
 consumer MUST NOT define a second independent copy.
 
 ### 3.2 Current transport
+
+```text
+CurrentDensityDrive =
+  | {kind:"uniform_vector", current_density_Apm2:Vector3}
+  | {kind:"field_artifact", artifact_ref, domain_ref,
+     location:"cell"|"face"|"node", component_order:["x","y","z"],
+     unit:"A/m^2", projection_operator_version?}
+
+ChargeTransportMaterial = {
+  sigma_Spm:finite>0,
+  relative_permittivity:finite>=1,
+  validity:{max_displacement_ratio:finite>0}
+}
+
+MagnetoresistiveMaterial = {
+  sigma_parallel_Spm:finite>0,
+  sigma_perp_Spm:finite>0,
+  sigma_ahe_Spm:finite,
+  parameterization:"conductivity_tensor_3d.fullmag.v1"
+}
+
+ElectrodeDrive =
+  | {kind:"voltage", driven_boundary_ids:[id,...],
+     reference_boundary_ids:[id,...]}
+  | {kind:"total_current", driven_boundary_id:id,
+     return_boundary_ids:[id,...]}
+  | {kind:"periodic_potential_drop", periodic_boundary_id:id}
+
+ChargeBoundary =
+  | {kind:"voltage_electrode", id, surface:SurfaceRef, potential_V:finite}
+  | {kind:"ground", id, surface:SurfaceRef}
+  | {kind:"total_current_electrode", id, surface:SurfaceRef,
+     total_current_A:finite, equipotential:true}
+  | {kind:"insulating", id, surfaces:[SurfaceRef,...] nonempty}
+  | {kind:"periodic_potential_drop", id, minus_surface:SurfaceRef,
+     plus_surface:SurfaceRef, translation_m:Vector3 nonzero, drop_V:finite}
+
+ChargeGauge =
+  | {kind:"boundary_reference", boundary_id:id}
+  | {kind:"zero_mean_potential", weighted_by:"cell_volume"|"fem_mass"}
+
+ChargeSolverPolicy = {
+  engine:"auto"|named_engine,
+  linear:LinearSolverPolicy,
+  physical_residual_version:"transport_balance_integrated_l2.v1"
+}
+```
+
+An `ElectrodeDrive` references boundaries from the same module and selects the
+single independent excitation family. Referenced boundary kinds MUST match the
+drive kind. Ground has exactly `0 V`; all other base voltage/current values are
+multiplied by the module `TimeEnvelope`. A surface may have at most one charge
+boundary assignment, except that the two members of one periodic pair are one
+logical assignment. `boundary_reference` must reference `ground` or a voltage
+electrode whose potential fixes the nullspace. `zero_mean_potential` is legal
+only when no fixed-potential boundary already removes the gauge.
 
 ```text
 CurrentTransportModule = {
@@ -88,10 +153,10 @@ CurrentTransportModule = {
        divergence_policy:"reject"|"explicit_projection"}
     | {kind:"ohmic_quasistatic", drive:ElectrodeDrive,
        materials:{RegionRef:ChargeTransportMaterial},
-       electrodes:[ChargeBoundary, ...], gauge:ChargeGauge}
+       boundaries:[ChargeBoundary, ...], gauge:ChargeGauge}
     | {kind:"magnetoresistive", drive:ElectrodeDrive,
        materials:{RegionRef:MagnetoresistiveMaterial},
-       electrodes:[ChargeBoundary, ...], gauge:ChargeGauge},
+       boundaries:[ChargeBoundary, ...], gauge:ChargeGauge},
   envelope:TimeEnvelope,
   coupling:"one_way"|"bidirectional",
   solver:ChargeSolverPolicy,
@@ -116,6 +181,33 @@ insulating, and periodic-potential-drop conditions. Conflicting boundary
 conditions and a missing gauge MUST be rejected.
 
 ### 3.3 Spin transport
+
+```text
+SpinBoundary =
+  | {kind:"spin_insulating", id, surfaces:[SurfaceRef,...] nonempty}
+  | {kind:"spin_sink", id, surfaces:[SurfaceRef,...] nonempty}
+  | {kind:"specified_spin_potential", id, surfaces:[SurfaceRef,...],
+     spin_potential_V:Vector3, envelope:TimeEnvelope?}
+  | {kind:"specified_spin_flux", id, surfaces:[SurfaceRef,...],
+     normal_spin_flux_Apm2:Vector3, envelope:TimeEnvelope?}
+  | {kind:"periodic_spin", id, minus_surface:SurfaceRef,
+     plus_surface:SurfaceRef, translation_m:Vector3 nonzero}
+
+SpinSolverPolicy = {
+  engine:"auto"|named_engine,
+  linear:LinearSolverPolicy,
+  nonlinear:NonlinearSolverPolicy?,
+  physical_residual_version:"transport_balance_integrated_l2.v1",
+  default_external_boundary:"spin_insulating"|"reject_unassigned"
+}
+```
+
+Optional boundary envelopes are dimensionless and multiply all three
+components of the base vector. Per-component envelopes require a future schema
+version. A surface receives exactly one spin boundary or one side of an
+interface. Periodic spin pairs cannot overlap a sink, potential, flux, or
+mixing boundary. `nonlinear` is absent for linear M1 and required for M2/M3
+when the resolved constitutive/operator block is nonlinear.
 
 ```text
 SpinTransportModule = {
@@ -196,8 +288,10 @@ SlonczewskiTorque = {
   stack_normal:UnitVector3,
   polarization_p in [0,1], lambda>=1, epsilon_prime:finite,
   realization:
-    | {kind:"thin_layer_homogenized", free_layer_thickness_m>0}
-    | {kind:"interface_flux", interface_id},
+    | {kind:"thin_layer_homogenized", free_layer_thickness_m>0,
+       realization_version:"slonczewski_thin_layer_homogenized.v1"}
+    | {kind:"interface_flux", interface_id,
+       realization_version:"slonczewski_interface_flux.v1"},
   formula_version:"slonczewski.fullmag.v1"
 }
 
@@ -235,6 +329,27 @@ Slonczewski derives `J_n=J_c dot stack_normal`; `stack_normal` is not a hidden
 current-sign switch. Homogenized and interface-flux realizations are mutually
 exclusive for the same target/interface, and only the homogenized realization
 contains the explicit `1/free_layer_thickness_m` rate conversion.
+`ResolvedSpinTorquePlanIR::Slonczewski` MUST retain the selected realization,
+its realization version, resolved target/interface identity, thickness source
+(`authored` or `geometry_derived`) and value for homogenized execution, and
+the oriented surface plus flux-to-weak-form projection version for interface
+execution. A missing or ambiguous realization is invalid; no backend default
+may select between them.
+
+`ZhangLiTorque.boundary_policy` is exactly:
+
+```text
+ZhangLiBoundaryPolicy = {
+  inflow:{kind:"specified_m", value:UnitVector3}|{kind:"interior_trace"},
+  outflow:"zero_gradient",
+  mask_boundary:"no_inflow"|"specified_m",
+  periodic_axes:["x"|"y"|"z", ...]
+}
+```
+
+The shorthand field in the torque schema has this record type. Periodic axes
+must match the domain PBC; `interior_trace` is legal only when the signed
+velocity is outflow at that face. Ambiguous inflow fails planning.
 
 ### 3.6 Oersted source
 
@@ -248,9 +363,27 @@ OerstedSource = {
   method:"auto"|"analytic_cylinder"|"fdm_fft_cell_integrated"
          |"direct_biot_savart"|"fem_vector_potential",
   refresh:"stage_consistent"|"separable_scale"|"accepted_step_approx",
+  solver:OerstedSolverPolicy?,
   requested_execution:RequestedExecution
 }
 ```
+
+```text
+OerstedSolverPolicy = {
+  engine:"fem_oersted_hcurl_h1_gauge_v1"
+         |"fem_oersted_hcurl_h1_gauge_device_v1",
+  relative_tolerance>0,
+  absolute_tolerance_Am>=0,
+  max_iterations>0,
+  krylov_restart>0,
+  preconditioner:"ams_boomeramg_block.v1",
+  gauge_solver:"h1_zero_mean_boomeramg.v1"
+}
+```
+
+`OerstedSolverPolicy` is absent for analytic, direct-quadrature, and FFT
+realizations. FEM vector potential requires the record above and uses the
+frozen defaults in 8.4 unless explicitly overridden.
 
 General Biot–Savart/Oersted execution without a globally closed circuit model
 MUST be rejected. `accepted_step_approx` is a degraded approximation, never a
@@ -260,19 +393,54 @@ strict default, and requires a workload-specific temporal-order qualification.
 
 ### 4.1 Serializer versions
 
-The first contract implementation MUST introduce named constants rather than
+The repository currently writes `ProblemIR 0.2.0` and reads `0.2.0` plus the
+previous public `0.1.0`. Spin-transport semantics are a public meaning change,
+so the exact target matrix is:
+
+| Payload | `0.3.0` reader | Canonical writer |
+|---|---|---|
+| `0.3.0` | read directly | writes `0.3.0` |
+| `0.2.0` | read through the `0.2.0 -> 0.3.0` migrator | never writes `0.2.0` |
+| `0.1.0` | not a direct supported-read version | never writes `0.1.0` |
+| any other version | reject | n/a |
+
+The standard reader continues the current-plus-one-previous policy:
+`CURRENT_IR_VERSION="0.3.0"`,
+`PREVIOUS_PUBLIC_IR_VERSION="0.2.0"`, and
+`SUPPORTED_READ_IR_VERSIONS=["0.3.0","0.2.0"]`. A `0.1.0` payload must use
+the explicit migration-chain tool, which runs the archived, fixture-locked
+`0.1.0 -> 0.2.0` transform and then the current `0.2.0 -> 0.3.0` transform.
+The normal deserializer MUST NOT silently chain or directly accept `0.1.0`.
+The chain tool emits the intermediate digest, both migration versions, all
+warnings, and the final `0.3.0` digest.
+
+The first implementation introduces these exact constants rather than
 implicit serde shape changes:
 
 ```text
-problem_ir_schema = "fullmag.problem_ir.spin_transport.v1"
+CURRENT_IR_VERSION = "0.3.0"
+problem_ir_schema = "fullmag.problem_ir.0.3.0"
 plan_abi_schema   = "fullmag.plan_abi.spin_transport.v1"
-native_descriptor_abi = "fullmag.spin_transport_descriptor.v1"
 checkpoint_schema = "fullmag.spin_transport_checkpoint.v1"
+
+FULLMAG_FDM_SPIN_TRANSPORT_ABI_VERSION    = 1u
+FULLMAG_FDM_SPIN_TRANSPORT_STRUCT_VERSION = 1u
+FULLMAG_FEM_SPIN_TRANSPORT_ABI_VERSION    = 1u
+FULLMAG_FEM_SPIN_TRANSPORT_STRUCT_VERSION = 1u
+FDM descriptor schema = "fullmag.fdm.spin_transport_descriptor.v1"
+FEM descriptor schema = "fullmag.fem.spin_transport_descriptor.v1"
 ```
 
-The concrete numeric `ir_version` and ABI integer assigned during
-implementation MUST be monotonically greater than the then-current published
-values. Numeric values are intentionally not guessed in this docs-only PR.
+The new spin-transport descriptors are independent ABI families and therefore
+start at version `1`; they do not inherit frequency-domain ABI `12`. Each C
+descriptor begins, in order, with `uint32_t abi_version`,
+`uint32_t struct_version`, and `uint64_t struct_size`. All three fields are
+mandatory and nonzero. FDM rejects values other than `(1,1,sizeof(v1 FDM
+descriptor))`; FEM applies the corresponding exact FEM size. Rust FFI mirrors
+the layout and constants with compile-time size/offset assertions. The existing
+unversioned wide time-domain plan structs may reference these descriptors by
+pointer/count during migration, but spin-transport fields MUST NOT be appended
+flat to those structs.
 
 `ProblemIR` owns typed authored semantics:
 
@@ -473,7 +641,9 @@ At minimum, resolved plans name versions for:
 gilbert_transform.fullmag.v1
 zhang_li.fullmag.v1 | zhang_li.legacy_fullmag.v0
 slonczewski.fullmag.v1
-prescribed_sot.fullmag.v1
+slonczewski_thin_layer_homogenized.v1
+slonczewski_interface_flux.v1
+prescribed_sot.fullmag.v1 | prescribed_sot.legacy_fullmag.v0
 transport_constitutive.one_way.fullmag.v1
 transport_constitutive.reciprocal.fullmag.v1
 magnetoelectronic.fullmag.v1
@@ -499,15 +669,17 @@ is a new version.
 ```text
 LinearSolverPolicy = {
   engine:"auto"|named_engine,
-  relative_tolerance>0, absolute_tolerance>=0,
-  max_iterations>0, preconditioner, residual_norm_version,
+  relative_tolerance>0, absolute_tolerance_A>=0,
+  max_iterations>0, krylov_restart?, preconditioner,
+  algebraic_residual_norm_version, physical_residual_norm_version,
   deterministic_reductions?:bool
 }
 
 NonlinearSolverPolicy = {
   engine:"picard"|"newton"|"jfnk",
-  relative_tolerance>0, absolute_tolerance>=0,
-  max_iterations>0, line_search?, eta_transport in (0,1),
+  relative_state_tolerance>0, absolute_spin_potential_tolerance_V>=0,
+  absolute_current_tolerance_Apm2>=0, max_iterations>0,
+  relaxation in (0,1], line_search?, eta_transport in (0,1),
   linear:LinearSolverPolicy
 }
 ```
@@ -523,7 +695,138 @@ CG is legal only for a proven symmetric positive-definite operator. Hall,
 iSHE, mixing, and full M2 blocks resolve to nonsymmetric block solvers such as
 GMRES. The plan records the actual preconditioner and stopping norm.
 
-### 8.3 Residual and balance telemetry
+### 8.3 Physical residual normalization
+
+All charge/spin linear policies use
+`physical_residual_norm_version="transport_balance_integrated_l2.v1"`.
+For each control volume or FEM test-function row `K`, after essential-row
+elimination, define integrated residuals in amperes:
+
+```text
+R_c,K = sum_f A_f (J_c,f dot n_Kf) - b_c,K
+D_c,K = sum_f A_f |J_c,f dot n_Kf| + |b_c,K|
+
+R_s,K,a = C_s V_K delta_t(mu_s,K,a)
+          + sum_f A_f q_s,f,a + V_K R_K,a - b_s,K,a
+D_s,K,a = |C_s V_K delta_t(mu_s,K,a)|
+          + sum_f A_f |q_s,f,a| + V_K |R_K,a| + |b_s,K,a|
+```
+
+For steady solves the accumulation term is zero. FEM uses the assembled weak
+row and the same decomposition of accumulation, flux, reaction, and source.
+The reported physical norms are
+
+```text
+rho_charge = sqrt(sum_K R_c,K^2) /
+             max(sqrt(sum_K D_c,K^2), 1e-30 A)
+rho_spin   = sqrt(sum_K,a R_s,K,a^2) /
+             max(sqrt(sum_K,a D_s,K,a^2), 1e-30 A)
+abs_charge = max_K |R_c,K|                    [A]
+abs_spin   = max_K,a |R_s,K,a|                [A]
+```
+
+Interface rows are counted once per oriented interface; their paired
+normal-flux mismatch is additionally normalized by the sum of incoming and
+outgoing absolute integrated flux with the same `1e-30 A` floor. Electrode
+balance is `|sum_e I_e|/max(sum_e|I_e|,1e-30 A)`. Library residual norms are
+reported separately and cannot satisfy a physical gate by themselves.
+
+Linear convergence requires both the algebraic relative tolerance and either
+the physical relative tolerance or the physical absolute tolerance. The
+absolute check prevents a zero-source system from dividing by a numerical
+floor; it does not waive interface or electrode balance.
+
+### 8.4 Frozen v1 default profiles
+
+The default precision profiles are exhaustive for the v1 operators below:
+
+| Profile | algebraic rtol | physical relative gate | physical absolute gate | interface/electrode balance |
+|---|---:|---:|---:|---:|
+| `transport_solver_fp64.v1` | `1e-10` | `1e-10` | `1e-18 A` | `1e-10` and interface `<=10*rtol` |
+| `transport_solver_fp32.v1` | `1e-6` | `1e-6` | `1e-12 A` | `1e-6` and interface `<=10*rtol` |
+
+FDM CPU and FEM CPU are double-only for this contract. GPU single rows are
+`unsupported` unless a capability row explicitly qualifies the operator and
+workload; qualifying them uses the frozen FP32 profile, not a backend-library
+default. `auto` resolves exactly to the row selected by milestone, lane, and
+precision:
+
+| Milestone | Lane/precision | Operator/engine | Krylov and preconditioner | restart / max iterations | Profile |
+|---|---|---|---|---:|---|
+| M0 | all legal direct lanes | direct algebra; no transport linear solve | none | n/a | FP64 vector oracle `rtol=atol=1e-12` by quantity scale; FP32 `rtol=5e-5` after qualification |
+| M1 charge | FDM CPU/double | `fdm_charge_cg_matrix_free_v1` | CG + geometric AMG | n/a / `500` | FP64 |
+| M1 charge | FDM GPU/double | `fdm_charge_cg_cuda_v1` | device CG + device AMG | n/a / `500` | FP64 |
+| M1 charge | FDM GPU/single | `fdm_charge_cg_cuda_v1` | device CG + device AMG | n/a / `500` | FP32, qualified workloads only |
+| M1 charge | FEM CPU/double | `fem_charge_h1_hypre_v1` | hypre PCG + BoomerAMG | n/a / `500` | FP64 |
+| M1 charge | FEM GPU/double | `fem_charge_h1_hypre_device_v1` | device hypre PCG + device BoomerAMG | n/a / `500` | FP64 |
+| M1 spin | FDM CPU/double | `fdm_spin_block_gmres_csr_v1` | GMRES + component geometric-MG/ILU(0) | `50` / `1000` | FP64 |
+| M1 spin | FDM GPU/double | `fdm_spin_block_gmres_cuda_v1` | device GMRES + component AMG/block-Jacobi | `50` / `1000` | FP64 |
+| M1 spin | FDM GPU/single | `fdm_spin_block_gmres_cuda_v1` | device GMRES + component AMG/block-Jacobi | `50` / `1000` | FP32, qualified workloads only |
+| M1 spin | FEM CPU/double | `fem_spin_broken_h1_mortar_v1` | hypre GMRES + field-split BoomerAMG/interface Jacobi | `50` / `1000` | FP64 |
+| M1 spin | FEM GPU/double | `fem_spin_broken_h1_mortar_device_v1` | device hypre GMRES + device field-split AMG/interface Jacobi | `50` / `1000` | FP64 |
+| M1 Oersted | FDM CPU/double | `fdm_oersted_fft_open_v1` | FFT; no Krylov/preconditioner | n/a | kernel/direct-oracle gates |
+| M1 Oersted | FDM GPU/double | `fdm_oersted_cufft_open_v1` | cuFFT; no Krylov/preconditioner | n/a | FP64 parity gates |
+| M1 Oersted | FDM GPU/single | `fdm_oersted_cufft_open_v1` | cuFFT; no Krylov/preconditioner | n/a | qualified FP32 parity gates only |
+| M1 Oersted | FEM CPU/double | `fem_oersted_hcurl_h1_gauge_v1` | block GMRES + AMS(`A`)/BoomerAMG(`p`) | `100` / `2000` | algebraic `1e-10`; physical curl/div `1e-8` |
+| M1 Oersted | FEM GPU/double | `fem_oersted_hcurl_h1_gauge_device_v1` | device block GMRES + device AMS/BoomerAMG | `100` / `2000` | algebraic `1e-10`; physical curl/div `1e-8` |
+| M2 coupled | FDM CPU/double | `fdm_charge_spin_block_gmres_v1` | FGMRES + charge-AMG/spin-MG-ILU field split | `50` / `1500` | FP64 |
+| M2 coupled | FDM GPU/double | `fdm_charge_spin_block_gmres_cuda_v1` | device FGMRES + device charge/spin AMG field split | `50` / `1500` | FP64 |
+| M2 coupled | FEM CPU/double | `fem_charge_spin_block_gmres_v1` | hypre FGMRES + BoomerAMG field split/interface Jacobi | `50` / `1500` | FP64 |
+| M2 coupled | FEM GPU/double | `fem_charge_spin_block_gmres_device_v1` | device hypre FGMRES + device AMG field split/interface Jacobi | `50` / `1500` | FP64 |
+| M3 IMEX | FDM CPU/double | `coupled_imex_ark2.v1` + `fdm_charge_spin_block_gmres_v1` | M2 CPU implicit-stage preconditioner | `50` / `1500` per implicit stage | FP64 |
+| M3 IMEX | FDM GPU/double | `coupled_imex_ark2.v1` + `fdm_charge_spin_block_gmres_cuda_v1` | M2 device implicit-stage preconditioner | `50` / `1500` per implicit stage | FP64 |
+| M3 IMEX | FEM CPU/double | `coupled_imex_ark2.v1` + `fem_charge_spin_block_gmres_v1` | M2 CPU implicit-stage preconditioner | `50` / `1500` per implicit stage | FP64 |
+| M3 IMEX | FEM GPU/double | `coupled_imex_ark2.v1` + `fem_charge_spin_block_gmres_device_v1` | M2 device implicit-stage preconditioner | `50` / `1500` per implicit stage | FP64 |
+| M3 oracle | CPU double | `coupled_bdf2_small_oracle.v1` | sparse direct when `dofs<=20000`, otherwise M2 FGMRES | n/a or `50` / `2000` | FP64 |
+
+FEM single, all M2 single, and all M3 single are unsupported in v1 until a
+new qualification entry supplies an error budget; `auto` cannot select them.
+Oersted FFT qualification additionally enforces direct cell-integrated
+Biot–Savart parity, while FEM Oersted enforces `curl(H)-J`, `div(B)`, gauge,
+and airbox convergence; the displayed curl/div gate is a starting solver gate,
+not a substitute for the continuum study.
+
+FEM Oersted uses `oersted_maxwell_residual.v1`:
+
+```text
+rho_curl = ||curl(H_oe)-J_c||_L2 /
+           max(||J_c||_L2, 1e-30 A/m^2)
+rho_div  = L_ref ||div(mu0 H_oe)||_L2 /
+           max(||mu0 H_oe||_L2, 1e-30 T)
+rho_gauge = ||div(A)||_L2 /
+            max(||A||_L2/L_ref, 1e-30 T m / L_ref)
+```
+
+`L_ref` is the conductor-plus-airbox bounding-box diagonal recorded in the
+plan. The FP64 starting gates are `rho_curl<=1e-8`, `rho_div<=1e-8`, and
+`rho_gauge<=1e-8`; all are reported independently. FDM FFT reports the same
+curl/div definitions on the qualified interior stencil, with excluded boundary
+width and `L_ref` in provenance, but acceptance is primarily direct-integral
+parity plus convergence because open-boundary truncation controls the stencil
+residual.
+
+The frozen nonlinear default is `transport_nonlinear_picard.v1`:
+
+| Setting | FP64 | FP32 if later qualified |
+|---|---:|---:|
+| engine | Picard | Picard |
+| maximum iterations | `25` | `25` |
+| relaxation | `1.0` | `0.7` |
+| relative state change for both `J_c` and `mu_s` | `1e-8` | `1e-5` |
+| absolute `mu_s` change | `1e-12 V` | `1e-7 V` |
+| absolute `J_c` change | `1e-6 A/m^2` | `1e0 A/m^2` |
+| `eta_transport` | `0.1` | `0.1` |
+| line search | halve on residual growth; minimum factor `1/64`; at most `6` cuts | same |
+| inner forcing | `min(1e-2, max(1e-10, 0.5*r_nonlinear))` | `min(1e-2, max(1e-6, 0.5*r_nonlinear))` |
+
+M2 uses this Picard profile as baseline. Newton/JFNK are explicit named
+overrides and cannot be selected by `auto` until separately qualified. M3 uses
+the same nonlinear profile independently at every implicit stage and rejects
+the outer step after any stage exhausts it. Warm start is enabled only when all
+source/operator/state revisions match; otherwise the zero/equilibrium initial
+guess specified by the milestone is used.
+
+### 8.5 Residual and balance telemetry
 
 Each solve record includes:
 
@@ -667,28 +970,99 @@ lane promises determinism, otherwise within an explicit workload tolerance.
 
 ## 13. ABI/schema migration and compatibility
 
+### 13.1 Sign-preserving Slonczewski migration
+
+The legacy runtime computes `current_sign*|J_c|`, where `top` (and an omitted
+legacy field) means `+1` and `bottom` means `-1`. Migration to oriented
+`stack_normal` is therefore exact only for a nonzero, direction-uniform source:
+
+```text
+d = J_ref/|J_ref|
+top or omitted: stack_normal =  d
+bottom:         stack_normal = -d
+J_n = J_c dot stack_normal = current_sign*|J_c|
+```
+
+For a constant vector, `J_ref` is that vector. For a field source, every sample
+on the torque target must be finite, satisfy `|J_k|>0`, and satisfy
+`1-(J_k/|J_k|) dot d <= 1e-12` against the first sample. A zero vector, a zero
+target sample, a direction reversal, a nonuniform direction outside this
+tolerance, a missing source, or an unresolved target fails with
+`legacy_fixed_layer_position_not_migratable`. The migrator MUST NOT choose a
+geometry axis, use the largest component, average opposing currents, or retain
+`fixed_layer_position` in normalized `0.3.0` IR. It records the derived normal,
+source digest, maximum angular residual, and legacy position in provenance.
+
+If the source has a `TimeEnvelope`, its dimensionless multiplier must be
+nonnegative over the declared execution interval. Isolated/pulse-off zeros are
+allowed because both legacy and canonical torque are zero there, but a negative
+interval would reverse canonical `J_n` while legacy `|J_c|` would not; such a
+source is therefore not automatically migratable. Unbounded/tabulated support
+whose sign cannot be certified also fails closed.
+
+### 13.2 Prescribed-SOT legacy formula
+
+Every `0.2.0` `SpinOrbitTorque` payload lowers to canonical class
+`PrescribedSpinOrbitTorque` but retains
+`formula_version="prescribed_sot.legacy_fullmag.v0"`. That version is defined
+exactly by the executable FDM behavior at the `0.2.0` boundary:
+
+```text
+J_legacy = abs(charge_current_density_a_per_m2)
+           or norm(J_charge) for a current_source
+sigma_legacy = sigma/|sigma| when |sigma|>1e-30, otherwise (0,0,0)
+A_legacy = hbar J_legacy/(2 e mu0 M_s t_F)
+T_legacy,explicit = A_legacy [
+    -xi_DL m x (m x sigma_legacy) + xi_FL m x sigma_legacy]
+```
+
+`T_legacy,explicit` is added directly to `dm/dt`: it has the historical missing
+`gamma0`/rate conversion and receives no Gilbert-source transform. It also
+loses current sign by construction. These defects are reproduced only to keep
+old trajectories reproducible; they are never described as canonical physics.
+A finite zero polarization preserves the historical exact-zero contribution
+under v0 with a deprecation diagnostic; v1 rejects a zero axis.
+
+Canonical `0.3.0` scene and Python export always use the canonical class name
+and explicitly emit `formula_version="prescribed_sot.legacy_fullmag.v0"` for a
+migrated old payload. Export MUST NOT relabel it as
+`prescribed_sot.fullmag.v1`, inject `gamma0`, infer a current sign, or silently
+change the trajectory. Provenance preserves authored alias, old fields, source
+resolution, and migration warning.
+
+The explicit `fullmag migrate --upgrade-prescribed-sot-v1` operation requires
+the user to provide or confirm signed `J_signed` plus `sigma_hat`, or a
+`current_source`, `drive_direction`, and `interface_normal`. It emits a new
+`prescribed_sot.fullmag.v1` module and a before/after macrospin comparison. It
+never promises trajectory identity and does not overwrite input without the
+normal migration transaction/backup. Normal deserialization and canonical
+export do not perform this physics upgrade.
+
+### 13.3 Compatibility matrix
+
 The v1 migration matrix is:
 
 | Legacy input | Canonical result | Rule |
 |---|---|---|
-| `SpinOrbitTorque` / `spin_orbit_torque` | `PrescribedSpinOrbitTorque` / `prescribed_sot` | read alias; emit deprecation; canonical export uses new name |
-| `fixed_layer_position` | oriented `n_stack` | deterministic conversion with migration warning |
+| `SpinOrbitTorque` / `spin_orbit_torque` | `PrescribedSpinOrbitTorque` / `prescribed_sot` | read alias; preserve `prescribed_sot.legacy_fullmag.v0`; canonical export uses new name and explicit legacy formula |
+| `fixed_layer_position` | oriented `n_stack` | exact directional conversion from 13.1 or fail closed |
 | legacy Zhang–Li prefactor | `formula_version=zhang_li.legacy_fullmag.v0` | preserve result; explicit upgrade tool is required for v1 |
 | flat `stt_*`/`sot_*` plan fields | `Vec<ResolvedSpinTorquePlanIR>` | old plan ABI input adapter only |
 | placeholder drift diffusion | none | fail closed unless domains, materials, BCs, and source binding are complete |
 
-Readers support the immediately previous published ProblemIR version and the
-new spin-transport v1 version. Writers emit only the new canonical version.
+Readers support `0.3.0` and immediately previous `0.2.0`; `0.1.0` uses the
+explicit two-step chain defined in 4.1. Writers emit only `0.3.0`.
 Unknown fields in a physics module, unknown formula/operator versions, or
 conflicting alias and canonical fields are errors. Alias use is recorded in
 scene diagnostics and run provenance. Removal of a legacy reader requires a
 new ADR, usage telemetry evidence, fixtures proving canonical export, and a
 declared release boundary.
 
-Native C ABI descriptors carry `struct_size`, numeric ABI version, schema id,
-required feature bits, and reserved zero fields. The wrapper validates all of
-them before access. Old and new ABI translation occurs in a dedicated adapter,
-not in solver hot paths. ABI mismatch MUST fail before execution with
+Native C ABI descriptors carry the exact `(abi_version=1, struct_version=1,
+struct_size=sizeof(v1 lane descriptor))` triplet, schema id, required feature
+bits, and reserved zero fields. The wrapper validates all of them before
+access. Old and new ABI translation occurs in a dedicated adapter, not in
+solver hot paths. ABI mismatch MUST fail before execution with
 `incompatible_spin_transport_abi`.
 
 Required migration fixtures cover deserialize legacy, normalize, canonical
