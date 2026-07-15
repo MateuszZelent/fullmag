@@ -196,6 +196,7 @@ if(FULLMAG_USE_MFEM_STACK)
 
     list(APPEND FEM_SOURCES
         src/mfem_bridge.cpp
+        cpu/mfem/transport/steady_transport.cpp
     )
 
     # S11: CUDA fused kernels (LLG RHS, normalize, accumulate)
@@ -348,6 +349,27 @@ set_target_properties(fullmag_fem PROPERTIES
 
 # ── Tests ──
 enable_testing()
+
+if(FULLMAG_USE_MFEM_STACK)
+    add_executable(
+        fem_steady_transport_contract
+        tests/steady_transport_contract.cpp
+        cpu/mfem/transport/steady_transport.cpp
+    )
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_steady_transport_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_steady_transport_contract PRIVATE mfem)
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        target_link_libraries(fem_steady_transport_contract PRIVATE CUDA::cusparse)
+    endif()
+    target_include_directories(fem_steady_transport_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(NAME fem_steady_transport_contract COMMAND fem_steady_transport_contract)
+endif()
 
 add_executable(fem_gpu_state_info tests/gpu_state_info.cpp)
 target_link_libraries(fem_gpu_state_info PRIVATE fullmag_fem)

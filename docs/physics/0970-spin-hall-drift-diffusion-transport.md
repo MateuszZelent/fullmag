@@ -476,6 +476,28 @@ physics, spin pumping, eddy/displacement currents, higher-order FEM, and hybrid
 domain coupling require separate notes. Spin pumping cannot be hidden in
 `alpha`; dimensionless SML parameters need explicit conversion.
 
+### 7.1 FEM CPU M1.3 implementation evidence
+
+The native module `backends/fem/cpu/mfem/transport/steady_transport.*`
+implements the CPU-double, conforming `H1 P1` M1 oracle for transparent
+interfaces under formula
+`transport_constitutive.one_way.fullmag.v1` and operator
+`fem_charge_spin_conforming_h1_p1.transparent.v1`. It owns charge/spin spaces,
+assembly, essential voltage/spin-potential boundary data, insulating natural
+boundaries, charge gauge validation, CG/GMRES solves, consistent `L2` torque
+projection, independently reassembled weak residuals, and global conservative
+flux/reaction balance outside `Context` and `mfem_bridge.cpp`.
+
+The managed gate `just verify-fem-steady-transport-native-contract` executes a
+linear charge bar, an aligned two-material series-resistance interface, missing
+gauge rejection, the one-dimensional spin-diffusion `sinh` profile, direct-SHE
+sign and balance, torque projection, and fail-closed mixing-interface behavior.
+This evidence does **not** publish a public capability: total-current and
+periodic electrodes, specified spin flux, broken-H1 mortar mixing/SML,
+hypre/libCEED production preconditioners, GPU residency, stage coupling,
+ProblemIR/runner wiring, quantities, and cross-backend convergence remain
+unchecked work in sections 5 and 6.
+
 ## 8. References
 
 1. T. Valet and A. Fert, Phys. Rev. B 48, 7099 (1993), DOI: 10.1103/PhysRevB.48.7099.
