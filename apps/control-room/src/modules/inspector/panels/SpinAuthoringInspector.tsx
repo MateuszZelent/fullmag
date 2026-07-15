@@ -97,6 +97,26 @@ export function SpinAuthoringInspector({ family }: { family: Extract<PhysicsInte
     }
   }
 
+  async function remove(): Promise<void> {
+    if (!selectedId || active.data?.scene_revision === undefined) return;
+    setPending(true);
+    setFeedback(null);
+    try {
+      const request = { base_revision: active.data.scene_revision };
+      if (family === "current_transport") await api.model.deleteCurrentTransport(selectedId, request);
+      else if (family === "spin_torque") await api.model.deleteSpinTorque(selectedId, request);
+      else await api.model.deleteOerstedField(selectedId, request);
+      resources.invalidate(family === "current_transport" ? CURRENT_TRANSPORTS_RESOURCE_KEY : family === "spin_torque" ? SPIN_TORQUES_RESOURCE_KEY : OERSTED_FIELDS_RESOURCE_KEY, Date.now());
+      setSelectedId("");
+      setDraft(JSON.stringify(DEFAULTS[family], null, 2));
+      setFeedback({ kind: "success", message: "Authoring resource deleted." });
+    } catch (error) {
+      setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setPending(false);
+    }
+  }
+
   return (
     <div className="fm-inspector-panel">
       <InspectorSection title="Authoring resources">
@@ -131,6 +151,11 @@ export function SpinAuthoringInspector({ family }: { family: Extract<PhysicsInte
         <Button disabled={pending || active.status !== "ready"} onClick={() => void save()}>
           {pending ? "Committing…" : selected ? "Replace" : "Create"}
         </Button>
+        {selected ? (
+          <Button disabled={pending} variant="danger" onClick={() => void remove()}>
+            Delete
+          </Button>
+        ) : null}
       </InspectorSection>
     </div>
   );
