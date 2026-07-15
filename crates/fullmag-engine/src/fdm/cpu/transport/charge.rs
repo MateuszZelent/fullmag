@@ -404,6 +404,38 @@ impl StructuredChargeProblem {
         })
     }
 
+    /// Reconstructs a cell-centered conventional current density from the
+    /// conservative oriented face fluxes by symmetric face averaging.
+    pub fn cell_centered_current_density(
+        &self,
+        fluxes: &OrientedFaceFluxes,
+    ) -> Result<Vec<[f64; 3]>> {
+        // Reuse the dimension validation and avoid maintaining a second shape
+        // contract for the same face arrays.
+        self.conservative_divergence(fluxes)?;
+        let GridShape { nx, ny, nz } = self.grid;
+        let mut current = vec![[0.0; 3]; self.grid.cell_count()];
+        for z in 0..nz {
+            for y in 0..ny {
+                for x in 0..nx {
+                    let cell = self.grid.index(x, y, z);
+                    if !self.active_cells[cell] {
+                        continue;
+                    }
+                    let x0 = x + (nx + 1) * (y + ny * z);
+                    let y0 = x + nx * (y + (ny + 1) * z);
+                    let z0 = x + nx * (y + ny * z);
+                    current[cell] = [
+                        0.5 * (fluxes.x[x0] + fluxes.x[x0 + 1]),
+                        0.5 * (fluxes.y[y0] + fluxes.y[y0 + nx]),
+                        0.5 * (fluxes.z[z0] + fluxes.z[z0 + nx * ny]),
+                    ];
+                }
+            }
+        }
+        Ok(current)
+    }
+
     fn validate_cell_values(&self, values: &[f64], name: &str) -> Result<()> {
         if values.len() != self.grid.cell_count() {
             return Err(EngineError::new(format!(
@@ -621,6 +653,14 @@ mod tests {
         }
         for &jx in &solution.current_density.x {
             assert_close(jx, expected_jx, expected_jx.abs() * 1.0e-10);
+        }
+        for current in problem
+            .cell_centered_current_density(&solution.current_density)
+            .unwrap()
+        {
+            assert_close(current[0], expected_jx, expected_jx.abs() * 1.0e-10);
+            assert_eq!(current[1], 0.0);
+            assert_eq!(current[2], 0.0);
         }
         let cross_section = 3.0e-9 * 4.0e-9;
         assert_close(
