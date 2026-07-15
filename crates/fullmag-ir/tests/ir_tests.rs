@@ -163,7 +163,8 @@ fn canonical_prescribed_sot_v1_round_trips_signed_scalar() {
         "drive": {"kind": "signed_scalar", "current_density_Apm2": -5.0e10,
                   "sigma_hat": [0.0, 2.0, 0.0],
                   "envelope": {"kind": "piecewise_linear",
-                               "points": [[0.0, 0.0], [1.0e-9, 1.0]]}},
+                               "points": [{"time_s": 0.0, "value": 0.0},
+                                          {"time_s": 1.0e-9, "value": 1.0}]}},
         "xi_dl": 0.12,
         "xi_fl": -0.03,
         "free_layer_thickness_m": 1.5e-9
@@ -174,6 +175,109 @@ fn canonical_prescribed_sot_v1_round_trips_signed_scalar() {
     assert!(decoded.validate().is_ok());
     let encoded = serde_json::to_value(decoded).expect("canonical v1 should encode");
     assert_eq!(encoded["spin_torque_modules"], value["spin_torque_modules"]);
+}
+
+#[test]
+fn prescribed_sot_time_envelope_round_trips_every_canonical_variant() {
+    let envelopes = vec![
+        serde_json::json!({"kind": "constant", "value": 0.5}),
+        serde_json::json!({"kind": "sinusoidal", "amplitude": 2.0,
+            "frequency_hz": 0.0, "phase_rad": 0.25, "offset": -0.5}),
+        serde_json::json!({"kind": "pulse", "amplitude": 3.0,
+            "t_on_s": 1.0e-12, "t_off_s": 2.0e-12}),
+        serde_json::json!({"kind": "piecewise_linear", "points": [
+            {"time_s": 0.0, "value": 0.0}, {"time_s": 1.0e-9, "value": 1.0}]}),
+        serde_json::json!({"kind": "sinc", "amplitude": 1.5,
+            "center_s": 2.0e-9, "bandwidth_hz": 3.0e9, "offset": 0.1}),
+        serde_json::json!({"kind": "tabulated", "artifact_ref": "artifact://drive.csv",
+            "interpolation": "previous", "extrapolation": "hold", "bandwidth_hz": 1.0e9}),
+    ];
+
+    for envelope in envelopes {
+        let mut value = problem_ir_value_with_version("0.3.0");
+        value["spin_torque_modules"] = serde_json::json!([{
+            "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+            "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+            "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                      "sigma_hat": [0.0, 2.0, 0.0], "envelope": envelope},
+            "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+        }]);
+        let decoded: ProblemIR = serde_json::from_value(value.clone())
+            .expect("canonical TimeEnvelopeIR variant should decode");
+        assert!(decoded.validate().is_ok());
+        let encoded = serde_json::to_value(decoded).expect("TimeEnvelopeIR should encode");
+        assert_eq!(encoded["spin_torque_modules"], value["spin_torque_modules"]);
+    }
+}
+
+#[test]
+fn prescribed_sot_tabulated_envelope_serializes_canonical_defaults() {
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+        "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                  "sigma_hat": [0.0, 2.0, 0.0],
+                  "envelope": {"kind": "tabulated", "artifact_ref": "artifact://drive.csv"}},
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+    }]);
+    let decoded: ProblemIR = serde_json::from_value(value).expect("defaults should decode");
+    assert!(decoded.validate().is_ok());
+    let encoded = serde_json::to_value(decoded).expect("defaults should encode");
+    let envelope = &encoded["spin_torque_modules"][0]["drive"]["envelope"];
+    assert_eq!(envelope["interpolation"], "linear");
+    assert_eq!(envelope["extrapolation"], "error");
+}
+
+#[test]
+fn prescribed_sot_time_envelope_rejects_invalid_boundaries() {
+    let invalid = [
+        (serde_json::json!({"kind": "sinusoidal", "amplitude": 1.0,
+            "frequency_hz": -1.0, "phase_rad": 0.0, "offset": 0.0}), "frequency_hz"),
+        (serde_json::json!({"kind": "pulse", "amplitude": 1.0,
+            "t_on_s": 1.0, "t_off_s": 1.0}), "t_off_s"),
+        (serde_json::json!({"kind": "piecewise_linear", "points": [
+            {"time_s": 1.0, "value": 0.0}, {"time_s": 0.0, "value": 1.0}]}), "strictly increasing"),
+        (serde_json::json!({"kind": "sinc", "amplitude": 1.0,
+            "center_s": 0.0, "bandwidth_hz": 0.0, "offset": 0.0}), "bandwidth_hz"),
+        (serde_json::json!({"kind": "tabulated", "artifact_ref": "",
+            "interpolation": "linear", "extrapolation": "error"}), "artifact_ref"),
+        (serde_json::json!({"kind": "tabulated", "artifact_ref": "artifact://drive.csv",
+            "interpolation": "linear", "extrapolation": "error", "bandwidth_hz": 0.0}), "bandwidth_hz"),
+    ];
+
+    for (envelope, expected) in invalid {
+        let mut value = problem_ir_value_with_version("0.3.0");
+        value["spin_torque_modules"] = serde_json::json!([{
+            "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+            "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+            "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                      "sigma_hat": [0.0, 2.0, 0.0], "envelope": envelope},
+            "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+        }]);
+        let decoded: ProblemIR = serde_json::from_value(value).expect("invalid value shape should decode");
+        let errors = decoded.validate().expect_err("invalid envelope must fail validation");
+        assert!(errors.iter().any(|error| error.contains(expected)), "missing {expected}: {errors:?}");
+    }
+
+    for envelope in [
+        serde_json::json!({"kind": "tabulated", "artifact_ref": "a",
+            "interpolation": "cubic", "extrapolation": "error"}),
+        serde_json::json!({"kind": "tabulated", "artifact_ref": "a",
+            "interpolation": "linear", "extrapolation": "periodic"}),
+        serde_json::json!({"kind": "constant", "value": 1.0,
+            "unknown_backend_field": true}),
+    ] {
+        let mut value = problem_ir_value_with_version("0.3.0");
+        value["spin_torque_modules"] = serde_json::json!([{
+            "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+            "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+            "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                      "sigma_hat": [0.0, 2.0, 0.0], "envelope": envelope},
+            "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+        }]);
+        assert!(serde_json::from_value::<ProblemIR>(value).is_err());
+    }
 }
 
 #[test]
@@ -295,12 +399,75 @@ fn prescribed_sot_v1_rejects_invalid_signed_scalar_envelope() {
         "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
         "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
                   "sigma_hat": [0.0, 2.0, 0.0],
-                  "envelope": {"kind": "piecewise_linear", "points": [[1.0, 0.0], [0.0, 1.0]]}},
+                  "envelope": {"kind": "piecewise_linear", "points": [
+                      {"time_s": 1.0, "value": 0.0}, {"time_s": 0.0, "value": 1.0}]}},
         "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
     }]);
     let decoded: ProblemIR = serde_json::from_value(value).expect("envelope shape should decode");
     let errors = decoded.validate().expect_err("non-monotone envelope must fail");
     assert!(errors.iter().any(|error| error.contains("envelope") && error.contains("strictly increasing")));
+}
+
+#[test]
+fn prescribed_sot_time_envelope_rejects_nonfinite_numbers_in_every_variant() {
+    let envelopes = vec![
+        TimeEnvelopeIR::Constant { value: f64::NAN },
+        TimeEnvelopeIR::Sinusoidal {
+            amplitude: f64::NAN,
+            frequency_hz: 0.0,
+            phase_rad: 0.0,
+            offset: 0.0,
+        },
+        TimeEnvelopeIR::Pulse {
+            amplitude: 1.0,
+            t_on_s: f64::NAN,
+            t_off_s: 1.0,
+        },
+        TimeEnvelopeIR::PiecewiseLinear {
+            points: vec![TimeEnvelopePointIR {
+                time_s: 0.0,
+                value: f64::NAN,
+            }],
+        },
+        TimeEnvelopeIR::Sinc {
+            amplitude: 1.0,
+            center_s: f64::NAN,
+            bandwidth_hz: 1.0,
+            offset: 0.0,
+        },
+        TimeEnvelopeIR::Tabulated {
+            artifact_ref: "artifact://drive.csv".to_string(),
+            interpolation: TimeEnvelopeInterpolationIR::Linear,
+            extrapolation: TimeEnvelopeExtrapolationIR::Error,
+            bandwidth_hz: Some(f64::NAN),
+        },
+    ];
+
+    for envelope in envelopes {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
+            schema_version: "prescribed_sot.v1".to_string(),
+            id: "sot".to_string(),
+            target: Some(RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula: PrescribedSotFormulaIR::FullmagV1 {
+                drive: PrescribedSotV1DriveIR::SignedScalar {
+                    current_density_apm2: 1.0,
+                    sigma_hat: [0.0, 2.0, 0.0],
+                    envelope: Some(envelope),
+                },
+                xi_dl: 0.1,
+                xi_fl: 0.0,
+                free_layer_thickness_m: 1.0e-9,
+            },
+        }];
+        let errors = problem
+            .validate()
+            .expect_err("nonfinite envelope value must fail validation");
+        assert!(errors.iter().any(|error| error.contains("finite")), "{errors:?}");
+    }
 }
 
 #[test]

@@ -214,6 +214,77 @@ pub struct RegionRefIR {
 pub const PRESCRIBED_SOT_V1_EPSILON_AXIS: f64 = 1e-12;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TimeEnvelopePointIR {
+    pub time_s: f64,
+    pub value: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeEnvelopeInterpolationIR {
+    Linear,
+    Previous,
+}
+
+impl Default for TimeEnvelopeInterpolationIR {
+    fn default() -> Self {
+        Self::Linear
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeEnvelopeExtrapolationIR {
+    Zero,
+    Hold,
+    Error,
+}
+
+impl Default for TimeEnvelopeExtrapolationIR {
+    fn default() -> Self {
+        Self::Error
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TimeEnvelopeIR {
+    Constant {
+        value: f64,
+    },
+    Sinusoidal {
+        amplitude: f64,
+        frequency_hz: f64,
+        phase_rad: f64,
+        offset: f64,
+    },
+    Pulse {
+        amplitude: f64,
+        t_on_s: f64,
+        t_off_s: f64,
+    },
+    PiecewiseLinear {
+        points: Vec<TimeEnvelopePointIR>,
+    },
+    Sinc {
+        amplitude: f64,
+        center_s: f64,
+        bandwidth_hz: f64,
+        offset: f64,
+    },
+    Tabulated {
+        artifact_ref: String,
+        #[serde(default)]
+        interpolation: TimeEnvelopeInterpolationIR,
+        #[serde(default)]
+        extrapolation: TimeEnvelopeExtrapolationIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bandwidth_hz: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "formula_version", deny_unknown_fields)]
 pub enum PrescribedSotFormulaIR {
     #[serde(rename = "prescribed_sot.fullmag.v1")]
@@ -242,7 +313,7 @@ pub enum PrescribedSotV1DriveIR {
         current_density_apm2: f64,
         sigma_hat: [f64; 3],
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        envelope: Option<TimeDependenceIR>,
+        envelope: Option<TimeEnvelopeIR>,
     },
     VectorCurrentSource {
         current_source_id: String,

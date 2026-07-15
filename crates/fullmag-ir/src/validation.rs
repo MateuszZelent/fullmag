@@ -69,6 +69,94 @@ fn validate_time_dependence(label: &str, value: &TimeDependenceIR, errors: &mut 
     }
 }
 
+fn validate_time_envelope(
+    label: &str,
+    value: &crate::TimeEnvelopeIR,
+    errors: &mut Vec<String>,
+) {
+    match value {
+        crate::TimeEnvelopeIR::Constant { value } => {
+            if !value.is_finite() {
+                errors.push(format!("{label} value must be finite"));
+            }
+        }
+        crate::TimeEnvelopeIR::Sinusoidal {
+            amplitude,
+            frequency_hz,
+            phase_rad,
+            offset,
+        } => {
+            if !amplitude.is_finite() || !phase_rad.is_finite() || !offset.is_finite() {
+                errors.push(format!(
+                    "{label} amplitude, phase_rad, and offset must be finite"
+                ));
+            }
+            if !frequency_hz.is_finite() || *frequency_hz < 0.0 {
+                errors.push(format!("{label} frequency_hz must be finite and >= 0"));
+            }
+        }
+        crate::TimeEnvelopeIR::Pulse {
+            amplitude,
+            t_on_s,
+            t_off_s,
+        } => {
+            if !amplitude.is_finite() {
+                errors.push(format!("{label} amplitude must be finite"));
+            }
+            if !t_on_s.is_finite() || !t_off_s.is_finite() || t_off_s <= t_on_s {
+                errors.push(format!(
+                    "{label} requires finite t_on_s and t_off_s with t_off_s > t_on_s"
+                ));
+            }
+        }
+        crate::TimeEnvelopeIR::PiecewiseLinear { points } => {
+            for point in points {
+                if !point.time_s.is_finite() || !point.value.is_finite() {
+                    errors.push(format!(
+                        "{label} piecewise_linear time_s and value must be finite"
+                    ));
+                }
+            }
+            for window in points.windows(2) {
+                if window[1].time_s <= window[0].time_s {
+                    errors.push(format!(
+                        "{label} piecewise_linear time_s values must be strictly increasing"
+                    ));
+                }
+            }
+        }
+        crate::TimeEnvelopeIR::Sinc {
+            amplitude,
+            center_s,
+            bandwidth_hz,
+            offset,
+        } => {
+            if !amplitude.is_finite() || !center_s.is_finite() || !offset.is_finite() {
+                errors.push(format!(
+                    "{label} amplitude, center_s, and offset must be finite"
+                ));
+            }
+            if !bandwidth_hz.is_finite() || *bandwidth_hz <= 0.0 {
+                errors.push(format!("{label} bandwidth_hz must be finite and > 0"));
+            }
+        }
+        crate::TimeEnvelopeIR::Tabulated {
+            artifact_ref,
+            bandwidth_hz,
+            ..
+        } => {
+            if artifact_ref.trim().is_empty() {
+                errors.push(format!("{label} artifact_ref must not be empty"));
+            }
+            if bandwidth_hz.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+                errors.push(format!(
+                    "{label} bandwidth_hz must be finite and > 0 when provided"
+                ));
+            }
+        }
+    }
+}
+
 fn validate_antenna_spatial_profile(
     index: usize,
     profile: &AntennaSpatialProfileIR,
@@ -763,7 +851,7 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                                     ));
                                 }
                                 if let Some(envelope) = envelope {
-                                    validate_time_dependence(
+                                    validate_time_envelope(
                                         &format!(
                                             "spin_torque_modules[{index}] prescribed_sot signed_scalar envelope"
                                         ),
