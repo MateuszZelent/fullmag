@@ -663,6 +663,27 @@ static void free_active_mask(Context &ctx) {
     }
 }
 
+static bool alloc_sot_active_mask(Context &ctx) {
+    if (!ctx.has_sot_active_mask) {
+        return true;
+    }
+    const size_t bytes = ctx.cell_count * sizeof(uint8_t);
+    const cudaError_t err =
+        cudaMalloc(reinterpret_cast<void **>(&ctx.sot_active_mask), bytes);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(sot_active_mask)", err);
+        return false;
+    }
+    return true;
+}
+
+static void free_sot_active_mask(Context &ctx) {
+    if (ctx.sot_active_mask) {
+        cudaFree(ctx.sot_active_mask);
+        ctx.sot_active_mask = nullptr;
+    }
+}
+
 static bool alloc_region_mask(Context &ctx) {
     if (!ctx.has_region_mask) {
         return true;
@@ -1303,6 +1324,7 @@ static DeviceMultilayerFftWorkspace *ensure_multilayer_fft_workspace(
 bool context_alloc_device(Context &ctx) {
     if (!context_create_compute_stream(ctx)) return false;
     if (!alloc_active_mask(ctx)) return false;
+    if (!alloc_sot_active_mask(ctx)) return false;
     if (!alloc_region_mask(ctx)) return false;
     if (!alloc_exchange_lut(ctx)) return false;
     if (!alloc_reduction_scratch(ctx)) return false;
@@ -1415,6 +1437,7 @@ void context_free_device(Context &ctx) {
     free_fft_workspace(ctx);
     free_demag_kernel(ctx);
     free_active_mask(ctx);
+    free_sot_active_mask(ctx);
     free_region_mask(ctx);
     free_exchange_lut(ctx);
     free_boundary_correction(ctx);
@@ -1439,6 +1462,26 @@ bool context_upload_active_mask(Context &ctx, const uint8_t *mask, uint64_t len)
         cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
         set_cuda_error(ctx, "cudaMemcpy(active_mask)", err);
+        return false;
+    }
+    return true;
+}
+
+bool context_upload_sot_active_mask(Context &ctx, const uint8_t *mask, uint64_t len) {
+    if (!ctx.has_sot_active_mask) {
+        return true;
+    }
+    if (!mask || len != ctx.cell_count) {
+        ctx.last_error = "sot_active_mask length mismatch";
+        return false;
+    }
+    const cudaError_t err = cudaMemcpy(
+        ctx.sot_active_mask,
+        mask,
+        ctx.cell_count * sizeof(uint8_t),
+        cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMemcpy(sot_active_mask)", err);
         return false;
     }
     return true;

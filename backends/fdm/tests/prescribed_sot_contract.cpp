@@ -31,7 +31,9 @@ int main() {
     constexpr double thickness = 1.0e-9;
     constexpr double hbar = 1.054571817e-34;
     constexpr double elementary_charge = 1.602176634e-19;
-    constexpr double mu0 = 1.25663706212e-6;
+    // Independent CODATA/SI literals shared with the Rust CPU oracle.  These
+    // intentionally do not read constants from the production CUDA helper.
+    constexpr double mu0 = 1.2566370614359173e-6;
 
     const double expected_prefactor =
         (gamma0 / mu0) * hbar * current_density /
@@ -64,6 +66,25 @@ int main() {
     check_close(reversed.x, -explicit_rhs.x, 5.0e-13, "reversed x component");
     check_close(reversed.y, -explicit_rhs.y, 5.0e-13, "reversed y component");
     check_close(reversed.z, -explicit_rhs.z, 5.0e-13, "reversed z component");
+
+    const auto explicit_rhs_fp32 = fullmag::fdm::prescribed_sot_explicit_rhs(
+        PrescribedSotVector<float>{1.0f, 0.0f, 0.0f},
+        PrescribedSotVector<float>{0.0f, 0.0f, 1.0f},
+        static_cast<float>(expected_prefactor),
+        static_cast<float>(xi_dl),
+        static_cast<float>(xi_fl),
+        static_cast<float>(alpha));
+    constexpr double fp32_algebra_relative_budget = 5.0e-5;
+    check_close(
+        explicit_rhs_fp32.y,
+        expected_prefactor * (0.1 - alpha * 0.2) / denominator,
+        fp32_algebra_relative_budget,
+        "fp32 Gilbert algebra y component must meet the qualified 5e-5 budget");
+    check_close(
+        explicit_rhs_fp32.z,
+        expected_prefactor * (0.2 + alpha * 0.1) / denominator,
+        fp32_algebra_relative_budget,
+        "fp32 Gilbert algebra z component must meet the qualified 5e-5 budget");
 
     std::printf("prescribed SOT algebra contract: PASS\n");
     return 0;

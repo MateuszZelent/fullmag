@@ -87,6 +87,12 @@ typedef enum {
 } fullmag_fdm_snapshot_scalar_type;
 
 typedef enum {
+    /* Zero preserves the historical unversioned ABI behavior. */
+    FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0 = 0,
+    FULLMAG_FDM_PRESCRIBED_SOT_V1 = 1,
+} fullmag_fdm_prescribed_sot_formula;
+
+typedef enum {
     FULLMAG_FDM_BOUNDARY_NONE   = 0,  /* binary active_mask (current) */
     FULLMAG_FDM_BOUNDARY_VOLUME = 1,  /* T0: face-link + φ weighting */
     FULLMAG_FDM_BOUNDARY_FULL   = 2,  /* T1: ECB stencil + H_corr    */
@@ -282,11 +288,14 @@ typedef struct {
 
     /* Spin-Orbit Torque (SOT) — Manchon-Zhang damping-like + field-like model */
     int                        has_sot;                /* 1 = enabled */
-    double                     sot_je;                 /* signed conventional charge-current density [A/m²] */
+    fullmag_fdm_prescribed_sot_formula sot_formula;   /* explicit formula discriminator */
+    double                     sot_je;                 /* v1: signed conventional J; legacy v0: historical |J| */
     double                     sot_xi_dl;              /* damping-like SOT efficiency (≈ θ_SH) */
     double                     sot_xi_fl;              /* field-like SOT efficiency (Rashba term) */
     double                     sot_sigma[3];           /* σ̂ spin polarisation unit vector */
     double                     sot_thickness;          /* t_F ferromagnet layer thickness [m] */
+    const uint8_t             *sot_active_mask;        /* target mask: 1 = prescribed SOT applies */
+    uint64_t                   sot_active_mask_len;    /* = cell_count when has_sot */
 
     /* Oersted field from cylindrical conductor (STNO / MTJ) */
     int                        has_oersted_cylinder;   /* 1 = enabled */

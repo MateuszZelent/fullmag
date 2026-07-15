@@ -43,7 +43,7 @@ FULLMAG_FDM_HOST_DEVICE inline double prescribed_sot_rate_prefactor(
 {
     constexpr double hbar = 1.054571817e-34;
     constexpr double elementary_charge = 1.602176634e-19;
-    constexpr double mu0 = 1.25663706212e-6;
+    constexpr double mu0 = 1.2566370614359173e-6;
     return (gamma0 / mu0) * hbar * signed_current_density /
            (2.0 * elementary_charge * saturation_magnetisation * free_layer_thickness);
 }

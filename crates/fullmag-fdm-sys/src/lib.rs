@@ -77,6 +77,13 @@ pub enum fullmag_fdm_snapshot_scalar_type {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fdm_prescribed_sot_formula {
+    FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0 = 0,
+    FULLMAG_FDM_PRESCRIBED_SOT_V1 = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fdm_boundary_correction {
     FULLMAG_FDM_BOUNDARY_NONE = 0,
     FULLMAG_FDM_BOUNDARY_VOLUME = 1,
@@ -290,11 +297,14 @@ pub struct fullmag_fdm_plan_desc {
 
     // Spin-Orbit Torque (SOT)
     pub has_sot: i32,
+    pub sot_formula: fullmag_fdm_prescribed_sot_formula,
     pub sot_je: f64,
     pub sot_xi_dl: f64,
     pub sot_xi_fl: f64,
     pub sot_sigma: [f64; 3],
     pub sot_thickness: f64,
+    pub sot_active_mask: *const u8,
+    pub sot_active_mask_len: u64,
 
     // Oersted field (cylindrical conductor)
     pub has_oersted_cylinder: i32,
