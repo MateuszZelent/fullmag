@@ -251,6 +251,10 @@ fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<SlonczewskiSttConfig
         _ => return None,
     };
     Some(SlonczewskiSttConfig {
+        formula: match plan.slonczewski_formula_version.as_deref() {
+            Some("slonczewski.fullmag.v1") => fullmag_engine::SlonczewskiFormula::FullmagV1,
+            _ => fullmag_engine::SlonczewskiFormula::LegacyFullmagV0,
+        },
         current_density_magnitude,
         spin_polarization_axis: p_axis,
         lambda: lam,
@@ -4245,6 +4249,8 @@ mod tests {
 
         assert_eq!(top.current_sign, 1.0);
         assert_eq!(bottom.current_sign, -1.0);
+        assert_eq!(top.formula, fullmag_engine::SlonczewskiFormula::LegacyFullmagV0);
+        assert_eq!(bottom.formula, fullmag_engine::SlonczewskiFormula::LegacyFullmagV0);
     }
 
     #[test]
@@ -4270,6 +4276,8 @@ mod tests {
         assert_eq!(reversed.current_density_magnitude, 4.0e10);
         assert_eq!(forward.current_sign, 1.0);
         assert_eq!(reversed.current_sign, -1.0);
+        assert_eq!(forward.formula, fullmag_engine::SlonczewskiFormula::FullmagV1);
+        assert_eq!(reversed.formula, fullmag_engine::SlonczewskiFormula::FullmagV1);
         assert_eq!(forward.active_mask, plan.slonczewski_active_mask);
     }
 

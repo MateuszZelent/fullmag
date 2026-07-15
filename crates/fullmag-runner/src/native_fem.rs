@@ -4611,6 +4611,7 @@ mod tests {
                 },
                 slonczewski_stt: if has_slonczewski_stt(plan) {
                     Some(fullmag_engine::SlonczewskiSttConfig {
+                        formula: fullmag_engine::SlonczewskiFormula::LegacyFullmagV0,
                         current_density_magnitude: {
                             let j = plan.current_density.expect("current density");
                             (j[0] * j[0] + j[1] * j[1] + j[2] * j[2]).sqrt()

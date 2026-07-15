@@ -42,8 +42,9 @@ pub use fdm::{
     ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy,
     FdmDemagBoundary, FftWorkspace, ResolvedFdmPeriodicWorkspace,
     GridShape, IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
-    OerstedCylinderConfig, ReferenceDemoReport, Result, RhsEvaluation, SlonczewskiSttConfig,
-    SolverSession, SotConfig, SotFormula, StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA,
+    OerstedCylinderConfig, ReferenceDemoReport, Result, RhsEvaluation, SlonczewskiFormula,
+    SlonczewskiSttConfig, SolverSession, SotConfig, SotFormula, StepReport, TimeIntegrator,
+    UniaxialAnisotropyConfig, VectorFieldSoA,
     ZhangLiSttConfig,
 };
 
@@ -2005,6 +2006,7 @@ mod tests {
                 exchange: false,
                 demag: false,
                 slonczewski_stt: Some(SlonczewskiSttConfig {
+                    formula: SlonczewskiFormula::LegacyFullmagV0,
                     current_density_magnitude: 1.0e6,
                     spin_polarization_axis: [0.0, 1.0, 0.0],
                     lambda: 1.0,
@@ -2043,6 +2045,7 @@ mod tests {
                 exchange: false,
                 demag: false,
                 slonczewski_stt: Some(SlonczewskiSttConfig {
+                    formula: SlonczewskiFormula::LegacyFullmagV0,
                     current_density_magnitude: 1.0e6,
                     spin_polarization_axis: [0.0, 1.0, 0.0],
                     lambda: 1.0,
@@ -2203,6 +2206,7 @@ mod tests {
                     non_adiabaticity: 0.2,
                 }),
                 slonczewski_stt: Some(SlonczewskiSttConfig {
+                    formula: SlonczewskiFormula::LegacyFullmagV0,
                     current_density_magnitude: 1.0e6,
                     spin_polarization_axis: [0.0, 1.0, 0.0],
                     lambda: 1.0,

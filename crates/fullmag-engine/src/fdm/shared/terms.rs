@@ -69,6 +69,8 @@ pub struct ZhangLiSttConfig {
 /// Slonczewski (CPP) spin-transfer torque configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SlonczewskiSttConfig {
+    /// Versioned evaluator contract.
+    pub formula: SlonczewskiFormula,
     /// Current density magnitude |j| [A/m²].
     pub current_density_magnitude: f64,
     /// Spin-polarization axis (unit vector p̂).
@@ -86,6 +88,12 @@ pub struct SlonczewskiSttConfig {
     pub current_sign: f64,
     /// Optional resolved target mask; canonical v1 requires it.
     pub active_mask: Option<Vec<bool>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlonczewskiFormula {
+    FullmagV1,
+    LegacyFullmagV0,
 }
 
 /// Spin-Orbit Torque (SOT) configuration.

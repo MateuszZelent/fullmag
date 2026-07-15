@@ -2,8 +2,8 @@
 
 use fullmag_engine::{
     magnetoelastic::{MagnetoelasticParams, PrescribedStrainField},
-    MagnetoelasticTermConfig, OerstedCylinderConfig, SlonczewskiSttConfig,
-    SotConfig, SotFormula, ZhangLiSttConfig,
+    MagnetoelasticTermConfig, OerstedCylinderConfig, SlonczewskiFormula,
+    SlonczewskiSttConfig, SotConfig, SotFormula, ZhangLiSttConfig,
 };
 use fullmag_ir::FdmPlanIR;
 
@@ -117,6 +117,10 @@ pub(super) fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<Slonczews
         _ => return None,
     };
     Some(SlonczewskiSttConfig {
+        formula: match plan.slonczewski_formula_version.as_deref() {
+            Some("slonczewski.fullmag.v1") => SlonczewskiFormula::FullmagV1,
+            _ => SlonczewskiFormula::LegacyFullmagV0,
+        },
         current_density_magnitude,
         spin_polarization_axis: p_axis,
         lambda: lam,
