@@ -51,10 +51,6 @@ import {
   useObjectVisualizationSelector,
 } from "@/kernel/visualization/useObjectVisualization";
 import {
-  useVisualizationDebugController,
-  useVisualizationDebugSnapshots,
-} from "@/kernel/visualization/useVisualizationDebug";
-import {
   useVisualizationStateResource,
 } from "@/kernel/visualization/useVisualizationStateResource";
 import { Button } from "@/shared/ui/Button";
@@ -95,7 +91,6 @@ import {
   formatScalarColorbarValueWithDisplayUnit,
   geometryScopeVectorBudgetPatch,
   resolveVisualizationVectorBudgetRange,
-  resolveVisualizationVectorAccounting,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
   resolveChildRegionOverrideTargetIds,
@@ -128,7 +123,6 @@ import {
   visualizationOverrideStateLabel,
   VISUALIZATION_COLOR_MODE_ITEMS,
   type VisualizationVectorBudgetRange,
-  type VisualizationVectorAccounting,
   type RegionVisualizationCarrier,
   visualizationQuantityItems,
   visualizationResetActionLabel,
@@ -136,6 +130,7 @@ import {
   type ScalarColorbarDisplayUnit,
 } from "./ObjectVisualizationPanelModel";
 import { formatCount } from "./MeshResourceView";
+import { VisualizationVectorAccountingRows } from "./VisualizationVectorAccountingRows";
 import {
   nextVisualizationRadioValue,
   visualizationSectionDisabledDescription,
@@ -1341,7 +1336,6 @@ function useObjectVisualizationPanelState(
   const target = resolveVisualizationTargetFromSelection(selection);
   const { visualizationSync } = useKernel();
   const visualization = useObjectVisualizationController();
-  const visualizationDebug = useVisualizationDebugController();
   const activeModuleTab = useLayoutSelector((layout) => layout.activeModuleTab);
   const visualizationState = useVisualizationStateResource();
   const manifestStatus = useSessionStatusSelector(
@@ -1394,14 +1388,6 @@ function useObjectVisualizationPanelState(
       visualizationState.data,
     ],
   );
-  const visualizationDebugTargetId = resolvedTarget?.id ?? "";
-  const visualizationDebugSnapshots = useVisualizationDebugSnapshots(
-    visualizationDebugTargetId,
-  );
-  useEffect(() => {
-    if (!visualizationDebugTargetId) return;
-    return visualizationDebug.request(visualizationDebugTargetId);
-  }, [visualizationDebug, visualizationDebugTargetId]);
   const airboxPartIds =
     manifest.data?.mesh_parts?.flatMap((part) =>
       isVisualizationAirboxIdentity(part) ? [part.id] : [],
@@ -1778,13 +1764,6 @@ function useObjectVisualizationPanelState(
   >;
   const vectorBudgetRange =
     vectorBudgetRanges[settings?.geometryScope ?? "full"];
-  const vectorAccounting = resolveVisualizationVectorAccounting({
-    availableNodeCount: vectorBudgetRange.exact
-      ? vectorBudgetRange.availableNodeCount
-      : null,
-    currentTopologyHash: manifest.data?.topology_fingerprint,
-    snapshots: visualizationDebugSnapshots,
-  });
   function onTogglePartVectors(visible: boolean) {
     if (!resolvedTarget || !visualizationState.data) return;
     queueTargetVectorVisibilityPatch({
@@ -1825,10 +1804,10 @@ function useObjectVisualizationPanelState(
     setPatchChildRegions,
     primitiveDisplayToggleVisible,
     vectorDomain,
-    vectorAccounting,
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorMeshParts,
+    vectorTopologyHash: manifest.data?.topology_fingerprint ?? null,
   } as const;
 }
 
@@ -1898,10 +1877,10 @@ function ObjectVisualizationPanelView({
     target,
     primitiveDisplayToggleVisible,
     vectorDomain,
-    vectorAccounting,
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorMeshParts,
+    vectorTopologyHash,
   } = panel;
 
   return (
@@ -2005,9 +1984,9 @@ function ObjectVisualizationPanelView({
         sectionDisabled={sectionDisabled}
         settings={settings}
         targetKind={target.kind}
-        vectorAccounting={vectorAccounting}
         vectorBudgetRange={vectorBudgetRange}
         vectorBudgetRanges={vectorBudgetRanges}
+        vectorTopologyHash={vectorTopologyHash}
       />
       <VisualizationGeometryScopeSection
         passControlsDisabled={passControlsDisabled}
