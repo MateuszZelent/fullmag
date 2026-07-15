@@ -253,16 +253,6 @@ typedef struct {
     double                     stt_epsilon_prime;
     double                     stt_free_layer_thickness; /* free layer thickness [m]; 0 = geometry-derived */
     double                     stt_current_sign;         /* +1 top, -1 bottom for Slonczewski */
-    uint32_t                   stt_formula_version;
-    uint32_t                   stt_realization_version;
-    uint32_t                   stt_operator_version;
-    double                     stt_stack_normal[3];
-    double                     stt_lande_g;
-    const uint8_t             *stt_active_node_mask;
-    uint64_t                   stt_active_node_mask_len;
-    const uint8_t             *stt_active_element_mask;
-    uint64_t                   stt_active_element_mask_len;
-
     /* Oersted field from cylindrical conductor */
     int                        has_oersted_cylinder;
     double                     oersted_current;
@@ -308,6 +298,17 @@ typedef struct {
        precession_enabled=1 = full Gilbert LLG, 0 = pure damping relaxation. */
     int                        has_precession_enabled;
     int                        precession_enabled;
+
+    /* Append-only versioned STT extension. Keep after the established plan prefix. */
+    uint32_t                   stt_formula_version;
+    uint32_t                   stt_realization_version;
+    uint32_t                   stt_operator_version;
+    double                     stt_stack_normal[3];
+    double                     stt_lande_g;
+    const uint8_t             *stt_active_node_mask;
+    uint64_t                   stt_active_node_mask_len;
+    const uint8_t             *stt_active_element_mask;
+    uint64_t                   stt_active_element_mask_len;
 } fullmag_fem_plan_desc;
 
 typedef struct {

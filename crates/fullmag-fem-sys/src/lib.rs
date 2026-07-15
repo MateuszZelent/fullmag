@@ -265,15 +265,6 @@ pub struct fullmag_fem_plan_desc {
     pub stt_epsilon_prime: f64,
     pub stt_free_layer_thickness: f64,
     pub stt_current_sign: f64,
-    pub stt_formula_version: u32,
-    pub stt_realization_version: u32,
-    pub stt_operator_version: u32,
-    pub stt_stack_normal: [f64; 3],
-    pub stt_lande_g: f64,
-    pub stt_active_node_mask: *const u8,
-    pub stt_active_node_mask_len: u64,
-    pub stt_active_element_mask: *const u8,
-    pub stt_active_element_mask_len: u64,
     // Oersted field (cylindrical conductor)
     pub has_oersted_cylinder: i32,
     pub oersted_current: f64,
@@ -314,6 +305,16 @@ pub struct fullmag_fem_plan_desc {
     pub has_precession_enabled: i32,
     /// 1 = full Gilbert LLG, 0 = pure damping relaxation.
     pub precession_enabled: i32,
+    // Append-only versioned STT extension. Keep after the established plan prefix.
+    pub stt_formula_version: u32,
+    pub stt_realization_version: u32,
+    pub stt_operator_version: u32,
+    pub stt_stack_normal: [f64; 3],
+    pub stt_lande_g: f64,
+    pub stt_active_node_mask: *const u8,
+    pub stt_active_node_mask_len: u64,
+    pub stt_active_element_mask: *const u8,
+    pub stt_active_element_mask_len: u64,
 }
 
 #[repr(C)]
@@ -1334,6 +1335,19 @@ mod tests {
         assert_eq!(plan.eager_initial_effective_field, 0);
         assert_eq!(plan.has_precession_enabled, 0);
         assert_eq!(plan.precession_enabled, 0);
+    }
+
+    #[test]
+    fn versioned_stt_extension_is_append_only_after_legacy_plan_prefix() {
+        let legacy_tail = std::mem::offset_of!(fullmag_fem_plan_desc, precession_enabled);
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, stt_formula_version) > legacy_tail,
+            "versioned STT fields must not shift the established time-domain plan ABI prefix"
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_plan_desc, stt_active_element_mask_len)
+                > std::mem::offset_of!(fullmag_fem_plan_desc, stt_formula_version)
+        );
     }
 
     /// Verify plan desc carries optional discontinuous per-element A/Ms coefficients.
