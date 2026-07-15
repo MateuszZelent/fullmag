@@ -49,6 +49,31 @@ function vectorFixture(overrides: Partial<DecodedFieldVector> = {}): DecodedFiel
 }
 
 describe("viewport3DTargetFieldBuffer", () => {
+  it("rejects a decoded FMVP v3 scope that does not match the request", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: vectorFixture({
+        formatVersion: 3,
+        indexing: "sampled_node_indices",
+        meshTopologyHash: "mesh-1",
+        nodeIndices: new Uint32Array([0, 1, 2, 3]),
+        scopeId: "part:wrong",
+        scopeKind: "part",
+      }),
+      query: {
+        component: "full",
+        max_samples: 4,
+        scope_id: "part:__air__",
+        scope_kind: "airbox",
+      },
+      targetIds: ["part:__air__"],
+    });
+
+    expect(buffer.requestIdentityCompatible).toBe(false);
+    expect(buffer.scopeKind).toBe("part");
+    expect(buffer.scopeId).toBe("part:wrong");
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer, "m")).toBe(false);
+  });
+
   it("classifies unsampled full vectors as complete full-vector buffers", () => {
     const fieldVector = vectorFixture();
     const buffer = buildViewport3DTargetFieldBuffer({

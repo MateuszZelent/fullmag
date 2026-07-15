@@ -41,4 +41,11 @@ describe("viewport3dPointGeometry", () => {
     expect(geometry?.getAttribute("position").array).toBe(source.positions);
     expect(Array.from(geometry?.getIndex()?.array ?? [])).toEqual([1, 3]);
   });
+
+  it("preserves an explicit empty effective selection", () => {
+    expect(buildViewport3DPointPositions(source, { nodeIndices: [] })).toBeNull();
+    expect(
+      createViewport3DIndexedPointGeometry(source, { nodeIndices: [] }),
+    ).toBeNull();
+  });
 });

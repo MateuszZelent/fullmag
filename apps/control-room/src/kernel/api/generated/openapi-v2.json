@@ -4458,6 +4458,13 @@
               "null"
             ]
           },
+          "geometry_scope": {
+            "description": "Optional geometric subset for scoped vector samples.\n\nAccepted values: `full` (default) and `surface`. `surface` is currently\nsupported for `airbox` scope and is resolved from the selected mesh\npart's canonical surface-node membership before `max_samples` is applied.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "max_samples": {
             "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses are valid for vector glyph placement only; surface\nshader coloring requires either full-domain data or an explicit complete\nnode-index mapping for the target surface.",
             "format": "int32",
@@ -9737,6 +9744,17 @@
               "type": "array"
             },
             "type": "array"
+          },
+          "surface_node_indices": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -23276,6 +23294,18 @@
             "description": "Scope identifier for `object` and `part` scopes.",
             "in": "query",
             "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional geometric subset for scoped vector samples.\n\nAccepted values: `full` (default) and `surface`. `surface` is currently\nsupported for `airbox` scope and is resolved from the selected mesh\npart's canonical surface-node membership before `max_samples` is applied.",
+            "in": "query",
+            "name": "geometry_scope",
             "required": false,
             "schema": {
               "type": [

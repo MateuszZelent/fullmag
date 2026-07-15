@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use axum::body::Body;
 use axum::http::header::{
     ACCEPT_RANGES, CACHE_CONTROL, CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_NONE_MATCH, RANGE,
@@ -7,6 +9,42 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::response::Response;
 use serde::Serialize;
+
+use fullmag_runner::{FemMeshPartPayload, FemMeshPayload};
+
+pub(crate) fn mesh_part_surface_node_indices(
+    mesh: &FemMeshPayload,
+    part: &FemMeshPartPayload,
+) -> Option<Vec<u32>> {
+    let mut node_indices = BTreeSet::new();
+    if !part.surface_faces.is_empty() {
+        for face in &part.surface_faces {
+            node_indices.extend(face);
+        }
+        return Some(node_indices.into_iter().collect());
+    }
+
+    let boundary_face_indices = if !part.boundary_face_indices.is_empty() {
+        Some(part.boundary_face_indices.iter().copied().collect::<Vec<_>>())
+    } else if part.boundary_face_count > 0 {
+        Some(
+            (part.boundary_face_start
+                ..part
+                    .boundary_face_start
+                    .saturating_add(part.boundary_face_count))
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        None
+    }?;
+
+    for face_index in boundary_face_indices {
+        if let Some(face) = mesh.boundary_faces.get(face_index as usize) {
+            node_indices.extend(face);
+        }
+    }
+    Some(node_indices.into_iter().collect())
+}
 
 pub(crate) fn stable_strong_etag(token: &str) -> String {
     format!("\"{}\"", token.replace('\\', "\\\\").replace('"', "\\\""))

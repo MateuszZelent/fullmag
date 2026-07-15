@@ -5,6 +5,7 @@ import { resolveCanonicalQuantityId } from "./quantityIds";
 export interface CanonicalFieldVectorQuery {
   readonly component: string;
   readonly componentExplicit: boolean;
+  readonly geometryScope?: string;
   readonly maxSamples?: number;
   readonly phaseRad?: number;
   readonly quantityId: string;
@@ -18,6 +19,7 @@ export interface CanonicalFieldVectorQuery {
 
 const FIELD_VECTOR_QUERY_ORDER = [
   "component",
+  "geometry_scope",
   "max_samples",
   "phase_rad",
   "scope_id",
@@ -51,6 +53,7 @@ export function canonicalFieldVectorQuery(
   return {
     component: component ?? "full",
     componentExplicit: component !== undefined,
+    geometryScope: nonEmptyString(query.geometry_scope),
     maxSamples: finiteNumber(query.max_samples),
     phaseRad: finiteNumber(query.phase_rad),
     quantityId: resolveCanonicalQuantityId(quantityId),
@@ -68,6 +71,7 @@ export function canonicalFieldVectorQueryParams(
 ): Record<(typeof FIELD_VECTOR_QUERY_ORDER)[number], string | undefined> {
   return {
     component: query.componentExplicit ? query.component : undefined,
+    geometry_scope: query.geometryScope,
     max_samples: query.maxSamples === undefined ? undefined : String(query.maxSamples),
     phase_rad: query.phaseRad === undefined ? undefined : String(query.phaseRad),
     scope_id: query.scopeId,
@@ -84,6 +88,7 @@ export function canonicalFieldVectorQueriesEqual(
 ): boolean {
   return (
     left.component === right.component &&
+    left.geometryScope === right.geometryScope &&
     left.maxSamples === right.maxSamples &&
     left.phaseRad === right.phaseRad &&
     left.quantityId === right.quantityId &&
@@ -151,6 +156,7 @@ export function parseCanonicalFieldVectorResourceKey(
   const phaseRad = url.searchParams.get("phase_rad");
   return canonicalFieldVectorQuery(quantityId, {
     component: url.searchParams.get("component") ?? undefined,
+    geometry_scope: url.searchParams.get("geometry_scope") ?? undefined,
     max_samples:
       maxSamples === null || maxSamples.length === 0 ? undefined : Number(maxSamples),
     phase_rad:

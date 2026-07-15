@@ -15,6 +15,8 @@ const browserApiBase = (
 ).replace(/\/$/, "");
 const browserHostResolverIp =
   process.env.CONTROL_ROOM_BROWSER_HOST_RESOLVER_IP?.trim() ?? "";
+const browserExecutablePath =
+  process.env.CONTROL_ROOM_BROWSER_EXECUTABLE_PATH?.trim() ?? "";
 const timeoutMs = Number(
   process.env.CONTROL_ROOM_AIRBOX_FIELD_SMOKE_TIMEOUT_MS ?? 180_000,
 );
@@ -23,8 +25,8 @@ const objectQuantityId =
   process.env.CONTROL_ROOM_AIRBOX_FIELD_OBJECT_QUANTITY_ID ?? "m";
 const airboxQuantityId =
   process.env.CONTROL_ROOM_AIRBOX_FIELD_AIRBOX_QUANTITY_ID ?? "h_demag";
-const vectorBudget = Number(
-  process.env.CONTROL_ROOM_AIRBOX_FIELD_VECTOR_BUDGET ?? 192,
+let vectorBudget = Number(
+  process.env.CONTROL_ROOM_AIRBOX_FIELD_VECTOR_BUDGET ?? 0,
 );
 const visualizationDebugArtifactDir =
   process.env.CONTROL_ROOM_VISUALIZATION_DEBUG_ARTIFACT_DIR ??
@@ -60,6 +62,13 @@ async function main() {
     requestedRegionId,
   });
   const availableAirOnlyNodeCount = resolveAirOnlyNodeCount(manifest);
+  if (!Number.isFinite(vectorBudget) || vectorBudget <= 0) {
+    vectorBudget = availableAirOnlyNodeCount;
+  }
+  const expectedAirboxSampleCount = Math.min(
+    Math.floor(vectorBudget),
+    availableAirOnlyNodeCount,
+  );
 
   await ensureBinaryVectorEndpointsReady([
     {
@@ -108,15 +117,16 @@ async function main() {
     );
   }
 
-  const browser = await playwright.chromium.launch(
-    browserHostResolverIp
+  const browser = await playwright.chromium.launch({
+    ...(browserExecutablePath ? { executablePath: browserExecutablePath } : {}),
+    ...(browserHostResolverIp
       ? {
           args: [
             `--host-resolver-rules=MAP localhost ${browserHostResolverIp}`,
           ],
         }
-      : undefined,
-  );
+      : {}),
+  });
   const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
   const fieldRequests = [];
   const fieldMetaRequests = [];
@@ -203,6 +213,7 @@ async function main() {
       fieldRequests,
       fieldResponses,
       airboxPartId,
+      expectedAirboxSampleCount,
       objectPartId,
     });
     const debugIdleProof = await assertVisualizationDebugIdleBudgets({
@@ -212,6 +223,7 @@ async function main() {
     const accountingProof = await assertAirboxInspectorAccounting({
       airboxPartId,
       availableAirOnlyNodeCount,
+      expectedAirboxSampleCount,
       fieldRequests,
       page,
       proof,
@@ -469,6 +481,7 @@ async function waitForFieldRoutingProof({
   fieldRequests,
   fieldResponses,
   airboxPartId,
+  expectedAirboxSampleCount,
   objectPartId,
 }) {
   return poll("viewport field routing proof", async () => {
@@ -484,7 +497,8 @@ async function waitForFieldRoutingProof({
       (entry) =>
         normalizeQuantityId(entry.quantityId) === "h_demag" &&
         entry.params.scope_kind === "airbox" &&
-        entry.params.scope_id === airboxPartId,
+        entry.params.scope_id === airboxPartId &&
+        Number(entry.params.max_samples) === expectedAirboxSampleCount,
     );
     const forbiddenHdemagRequests = fieldRequests.filter(
       (entry) =>
@@ -533,6 +547,7 @@ async function waitForFieldRoutingProof({
 async function assertAirboxInspectorAccounting({
   airboxPartId,
   availableAirOnlyNodeCount,
+  expectedAirboxSampleCount,
   fieldRequests,
   page,
   proof,
@@ -564,27 +579,38 @@ async function assertAirboxInspectorAccounting({
       `Inspector decoded samples ${accounting.decoded} != FMVP ${proof.airboxPointCount}.`,
     );
   }
+  if (accounting.decoded !== expectedAirboxSampleCount) {
+    throw new Error(
+      `Inspector decoded samples ${accounting.decoded} != requested full-budget samples ${expectedAirboxSampleCount}.`,
+    );
+  }
   if (accounting.adopted !== accounting.decoded) {
     throw new Error(
       `Inspector adopted arrows ${accounting.adopted} != decoded samples ${accounting.decoded}.`,
     );
   }
-  const matchingRequests = fieldRequests.filter(
+  const allAirboxRequests = fieldRequests.filter(
     (entry) =>
       normalizeQuantityId(entry.quantityId) === "h_demag" &&
       entry.params.scope_kind === "airbox" &&
       entry.params.scope_id === airboxPartId,
   );
-  if (matchingRequests.length !== 1) {
+  if (allAirboxRequests.length !== 1) {
     throw new Error(
-      `Expected one exact Airbox FMVP request, observed ${matchingRequests.length}.`,
+      `Expected one Airbox FMVP request, observed ${allAirboxRequests.length}.`,
+    );
+  }
+  const [matchingRequest] = allAirboxRequests;
+  if (Number(matchingRequest.params.max_samples) !== expectedAirboxSampleCount) {
+    throw new Error(
+      `Airbox FMVP max_samples ${matchingRequest.params.max_samples} != exact budget ${expectedAirboxSampleCount}.`,
     );
   }
   return {
     inspectorAdoptedArrowCount: accounting.adopted,
     inspectorAvailableAirOnlyNodeCount: accounting.available,
     inspectorDecodedSampleCount: accounting.decoded,
-    matchingAirboxFieldRequestCount: matchingRequests.length,
+    matchingAirboxFieldRequestCount: allAirboxRequests.length,
   };
 }
 

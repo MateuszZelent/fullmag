@@ -126,6 +126,49 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
+  it.each([
+    "scope-kind-mismatch",
+    "scope-id-mismatch",
+    "quantity-mismatch",
+  ])("rejects blocked %s payload identity from vector accounting", (code) => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: { pointCount: 10_586 },
+        request: { resourceKey: "field-key" },
+        revisions: { meshTopologyHash: "topology-a" },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build" },
+          adoption: {
+            adoptedFieldBufferId: "field-buffer",
+            adoptedResourceKey: "field-key",
+            adoptedVectorBuildKey: "vector-build",
+            adoptedVectorItemCount: 10_586,
+          },
+        },
+      }],
+      disposition: "blocked",
+      issues: [{
+        code,
+        evidence: [],
+        message: "Decoded field identity does not match its request.",
+        severity: "error",
+        source: "decoded-payload",
+      }],
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-a",
+      snapshots: [snapshot],
+    })).toEqual({
+      adoptedGlyphCount: null,
+      availableNodeCount: 10_586,
+      decodedSampleCount: null,
+    });
+  });
+
   it("reports waiting until a current debug snapshot exists", () => {
     expect(resolveVisualizationVectorAccounting({
       availableNodeCount: 10_586,
@@ -374,6 +417,7 @@ describe("ObjectVisualizationPanelModel", () => {
       "Target: airbox",
       "Target: airbox",
     ]);
+    expect(airboxRows.map((row) => row.label)).toEqual(["Airbox", "Airbox"]);
   });
 
   it("patches the selected region target instead of a listed mesh-part carrier", () => {
@@ -1295,6 +1339,39 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
+  it("preserves an exact zero budget when magnetic membership covers the Airbox carrier", () => {
+    const sharedNodes = [0, 1, 2, 3];
+    const meshParts: MeshPart[] = [
+      meshPart({
+        id: "part:__air__",
+        label: "Airbox",
+        node_count: sharedNodes.length,
+        node_indices: sharedNodes,
+        role: "carrier",
+      }),
+      meshPart({
+        id: "magnet",
+        label: "Magnet",
+        node_count: sharedNodes.length,
+        node_indices: sharedNodes,
+        role: "magnetic",
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        meshParts,
+        target: { id: "airbox", kind: "airbox" },
+      }),
+    ).toEqual({
+      availableNodeCount: 0,
+      exact: true,
+      max: 0,
+      min: 0,
+      step: 1,
+    });
+  });
+
   it("scales object and part arrow budgets to their mesh node counts", () => {
     const meshParts: MeshPart[] = [
       meshPart({
@@ -1621,6 +1698,60 @@ describe("ObjectVisualizationPanelModel", () => {
       min: 0,
       step: 1,
     });
+  });
+
+  it("uses canonical surface-node membership when inline surface faces are absent", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        id: "part:__air__",
+        label: "Airbox",
+        node_count: 8,
+        node_indices: [0, 1, 2, 3, 4, 5, 6, 7],
+        role: "carrier",
+        surface_faces: [],
+        surface_node_indices: [0, 1, 4, 5, 6],
+      }),
+      meshPart({
+        id: "magnet",
+        label: "Magnet",
+        node_count: 4,
+        node_indices: [0, 1, 2, 3],
+        role: "magnetic",
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        geometryScope: "surface",
+        meshParts,
+        target: { id: "airbox", kind: "airbox" },
+      }),
+    ).toMatchObject({
+      availableNodeCount: 3,
+      exact: true,
+      max: 3,
+    });
+  });
+
+  it("keeps Airbox Surface accounting non-exact without canonical membership", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        id: "part:__air__",
+        label: "Airbox",
+        node_count: 8,
+        node_indices: [0, 1, 2, 3, 4, 5, 6, 7],
+        role: "air",
+        surface_faces: [],
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        geometryScope: "surface",
+        meshParts,
+        target: { id: "airbox", kind: "airbox" },
+      }),
+    ).toMatchObject({ exact: false });
   });
 
   it("expands full arrow budgets from the current surface coverage", () => {

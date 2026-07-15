@@ -76,6 +76,7 @@ export interface Viewport3DSurfacePart extends Viewport3DNodeSelection {
   boundary_face_start: number;
   element_count?: number;
   element_start?: number;
+  surface_node_indices?: readonly number[] | null;
   surface_faces?: readonly (readonly number[])[];
 }
 
@@ -118,6 +119,9 @@ export interface Viewport3DTopologyRenderModel<
 }
 
 export const EMPTY_VIEWPORT_3D_TOPOLOGY_INDICES = new Uint32Array();
+const EMPTY_VIEWPORT_3D_NODE_SELECTION: Viewport3DNodeSelection = {
+  nodeIndices: [],
+};
 
 export type Viewport3DTopologyIndexState =
   | "pending"
@@ -774,7 +778,7 @@ export function buildViewport3DFieldRenderModel(
       targetRenderPlan?.vectors.scope ?? options.partVectorScopes?.get(partId) ?? "full";
     const vectorSelection =
       vectorScope === "surface"
-        ? partModel.surfaceNodeSelection ?? partModel.part
+        ? partModel.surfaceNodeSelection ?? EMPTY_VIEWPORT_3D_NODE_SELECTION
         : partModel.fullNodeSelection;
     const partScale =
       targetRenderPlan?.vectors.lengthScale ??
@@ -2210,6 +2214,9 @@ function buildPartTopologyModel(
   );
   const surfaceNodeSelection = lazyValue(() => {
     if (preparedIndices) return preparedIndices.surfaceNodeSelection;
+    if (part.surface_node_indices != null) {
+      return { nodeIndices: Array.from(part.surface_node_indices) };
+    }
     if (topologyIndexPending) return null;
     const indices = surfaceIndices();
     const nodeIndices = buildCachedSurfaceNodeIndices(indices);
@@ -2217,6 +2224,9 @@ function buildPartTopologyModel(
   });
   const surfaceNodeIndices = lazyValue(() => {
     if (preparedIndices) return preparedIndices.surfaceNodeIndices;
+    if (part.surface_node_indices != null) {
+      return Uint32Array.from(part.surface_node_indices);
+    }
     if (topologyIndexPending) return null;
     const indices = surfaceIndices();
     return buildCachedSurfaceNodeIndices(indices);
@@ -2915,11 +2925,9 @@ export function resolveNodeSelectionCount(
   selection: Viewport3DNodeSelection | null | undefined,
   topology: Pick<Viewport3DPositionSource, "nodeCount">,
 ): number {
-  if (selection?.nodeIndices?.length) {
-    return selection.nodeIndices.length;
-  }
-  if (selection?.node_indices?.length) {
-    return selection.node_indices.length;
+  const explicitIndices = selection?.nodeIndices ?? selection?.node_indices;
+  if (explicitIndices !== undefined) {
+    return explicitIndices.length;
   }
 
   const start = Math.max(
@@ -2942,11 +2950,9 @@ export function resolveNodeSelectionIndex(
   selection: Viewport3DNodeSelection | null | undefined,
   offset: number,
 ): number | null {
-  if (selection?.nodeIndices?.length) {
-    return selection.nodeIndices[offset] ?? null;
-  }
-  if (selection?.node_indices?.length) {
-    return selection.node_indices[offset] ?? null;
+  const explicitIndices = selection?.nodeIndices ?? selection?.node_indices;
+  if (explicitIndices !== undefined) {
+    return explicitIndices[offset] ?? null;
   }
 
   return (selection?.nodeStart ?? selection?.node_start ?? 0) + offset;

@@ -4009,6 +4009,14 @@ export interface components {
              */
             component?: string | null;
             /**
+             * @description Optional geometric subset for scoped vector samples.
+             *
+             *     Accepted values: `full` (default) and `surface`. `surface` is currently
+             *     supported for `airbox` scope and is resolved from the selected mesh
+             *     part's canonical surface-node membership before `max_samples` is applied.
+             */
+            geometry_scope?: string | null;
+            /**
              * Format: int32
              * @description Optional hard cap for vector samples returned by the binary payload.
              *
@@ -5353,6 +5361,7 @@ export interface components {
             object_id?: string | null;
             role: string;
             surface_faces?: number[][];
+            surface_node_indices?: number[] | null;
         };
         MeshPerObjectTargetResource: {
             /** Format: double */
@@ -10152,6 +10161,14 @@ export interface operations {
                 scope_kind?: string | null;
                 /** @description Scope identifier for `object` and `part` scopes. */
                 scope_id?: string | null;
+                /**
+                 * @description Optional geometric subset for scoped vector samples.
+                 *
+                 *     Accepted values: `full` (default) and `surface`. `surface` is currently
+                 *     supported for `airbox` scope and is resolved from the selected mesh
+                 *     part's canonical surface-node membership before `max_samples` is applied.
+                 */
+                geometry_scope?: string | null;
                 /**
                  * @description Optional hard cap for vector samples returned by the binary payload.
                  *

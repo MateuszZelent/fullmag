@@ -24,6 +24,7 @@ describe("airbox field routing smoke script", () => {
     expect(smokeScript).toContain("CONTROL_ROOM_AIRBOX_FIELD_AIRBOX_QUANTITY_ID");
     expect(smokeScript).toContain("CONTROL_ROOM_BROWSER_API_BASE_URL");
     expect(smokeScript).toContain("CONTROL_ROOM_BROWSER_HOST_RESOLVER_IP");
+    expect(smokeScript).toContain("CONTROL_ROOM_BROWSER_EXECUTABLE_PATH");
     expect(smokeScript).toContain("compute_fields");
     expect(smokeScript).toContain("scope_kind: \"part\"");
     expect(smokeScript).toContain("scope_kind: \"airbox\"");
@@ -44,6 +45,11 @@ describe("airbox field routing smoke script", () => {
     expect(smokeScript).toContain("Decoded field samples");
     expect(smokeScript).toContain("Adopted arrows");
     expect(smokeScript).toContain("matchingAirboxFieldRequestCount");
+    expect(smokeScript).toContain("allAirboxRequests");
+    expect(smokeScript).toContain("expectedAirboxSampleCount");
+    expect(smokeScript).toContain(
+      "Number(entry.params.max_samples) === expectedAirboxSampleCount",
+    );
     expect(smokeScript).toContain("x-fullmag-point-count");
     expect(smokeScript).toContain("visualization/state");
     expect(smokeScript).toContain("data/fields/");

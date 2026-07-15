@@ -6688,6 +6688,34 @@ async fn mesh_shared_domain_manifest_includes_topology_fingerprint() {
 }
 
 #[tokio::test]
+async fn mesh_shared_domain_manifest_includes_derived_surface_node_membership() {
+    let state = test_app_state_with_live_session().await;
+    let mut mesh = sample_scoped_fem_mesh_payload();
+    mesh.mesh_parts[1].surface_faces.clear();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/meshing/meshes/shared-domain/manifest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["mesh_parts"][1]["surface_node_indices"],
+        serde_json::json!([4, 5, 6])
+    );
+}
+
+#[tokio::test]
 async fn mesh_shared_domain_topology_includes_mesh_topology_hash_header() {
     let state = test_app_state_with_live_session().await;
     let mesh = sample_fem_mesh_payload();
@@ -23225,6 +23253,115 @@ async fn v2_field_vector_airbox_scope_excludes_shared_magnetic_nodes() {
     assert_eq!(&bytes[..4], b"FMVP");
     let values = decode_fmvp_payload_f64(&bytes);
     assert_eq!(values, vec![4.0, 4.1, 4.2, 5.0, 5.1, 5.2]);
+}
+
+#[tokio::test]
+async fn v2_field_vector_airbox_surface_scope_samples_only_surface_nodes() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [
+                    [0.0, 0.1, 0.2],
+                    [1.0, 1.1, 1.2],
+                    [2.0, 2.1, 2.2],
+                    [3.0, 3.1, 3.2],
+                    [4.0, 4.1, 4.2],
+                    [5.0, 5.1, 5.2],
+                    [6.0, 6.1, 6.2],
+                    [7.0, 7.1, 7.2]
+                ],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped H_demag latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox&geometry_scope=surface&max_samples=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![4, 5]);
+    assert_eq!(
+        decode_fmvp_payload_f64(&bytes),
+        vec![4.0, 4.1, 4.2, 5.0, 5.1, 5.2]
+    );
+}
+
+#[tokio::test]
+async fn v2_field_vector_rejects_surface_geometry_for_full_scope() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=full&geometry_scope=surface")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn v2_field_vector_rejects_airbox_surface_without_surface_membership() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut mesh = sample_scoped_fem_mesh_payload();
+        let airbox = mesh
+            .mesh_parts
+            .iter_mut()
+            .find(|part| part.role == "air")
+            .expect("sample mesh should include airbox");
+        airbox.surface_faces.clear();
+        airbox.boundary_face_indices.clear();
+        airbox.boundary_face_count = 0;
+        snapshot.fem_mesh = Some(mesh);
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0]
+                ],
+                "layout": { "grid_cells": [8, 1, 1] }
+            }
+        }))
+        .expect("scoped H_demag latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox&geometry_scope=surface")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

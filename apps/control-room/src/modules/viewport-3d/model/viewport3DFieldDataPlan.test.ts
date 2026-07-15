@@ -614,5 +614,33 @@ describe("viewport3DFieldDataPlan", () => {
       },
       quantityId: "H_demag",
     });
+
+    const surfaceAirbox = resolveViewport3DAirboxFieldVectorDemandPlan({
+      airboxParts: [{ id: "airbox-surface", label: "Surface Airbox" }],
+      fieldQuery: {
+        component: "full",
+        geometry_scope: "surface",
+        max_samples: 32,
+        scope_kind: "full",
+      },
+      quantityId: "H_demag",
+      vectorBudget: 32,
+      vectorsVisible: true,
+    });
+    expect(surfaceAirbox.requests.get("airbox-surface")?.query).toMatchObject({
+      geometry_scope: "surface",
+      max_samples: 32,
+      scope_id: "airbox-surface",
+      scope_kind: "airbox",
+    });
+
+    const emptyAirbox = resolveViewport3DAirboxFieldVectorDemandPlan({
+      airboxParts: [{ id: "airbox-empty", label: "Empty Airbox" }],
+      quantityId: "H_demag",
+      vectorBudget: 0,
+      vectorsVisible: true,
+    });
+    expect(emptyAirbox.demands).toEqual([]);
+    expect(emptyAirbox.requests.size).toBe(0);
   });
 });

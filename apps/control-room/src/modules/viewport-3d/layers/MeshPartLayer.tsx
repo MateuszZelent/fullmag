@@ -818,7 +818,7 @@ export function resolveMeshPartPointNodeSelection(
 ): Viewport3DNodeSelection {
   return geometryScope === "full"
     ? partModel.fullNodeSelection
-    : partModel.surfaceNodeSelection ?? partModel.fullNodeSelection;
+    : partModel.surfaceNodeSelection ?? { nodeIndices: [] };
 }
 
 export function recordMeshPartSurfaceAdoption({

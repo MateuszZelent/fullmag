@@ -68,7 +68,7 @@ export function createViewport3DIndexedPointGeometry(
   );
 
   const explicitIndices = selection?.nodeIndices ?? selection?.node_indices;
-  if (explicitIndices?.length) {
+  if (explicitIndices !== undefined) {
     geometry.setIndex(new BufferAttribute(ensureUint32IndexArray(explicitIndices), 1));
   } else {
     geometry.setDrawRange(resolveIndexedPointSelectionStart(selection), pointCount);
@@ -91,8 +91,8 @@ function resolveIndexedPointSelectionCount(
   selection: Viewport3DIndexedPointSelection | null | undefined,
   topology: Pick<Viewport3DPointPositionSource, "nodeCount">,
 ): number {
-  if (selection?.nodeIndices?.length) return selection.nodeIndices.length;
-  if (selection?.node_indices?.length) return selection.node_indices.length;
+  const explicitIndices = selection?.nodeIndices ?? selection?.node_indices;
+  if (explicitIndices !== undefined) return explicitIndices.length;
 
   const start = resolveIndexedPointSelectionStart(selection);
   if (start >= topology.nodeCount) return 0;

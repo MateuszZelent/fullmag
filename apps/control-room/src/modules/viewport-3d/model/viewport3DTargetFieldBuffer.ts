@@ -38,6 +38,7 @@ export interface Viewport3DTargetFieldBuffer {
   pointCount: number;
   quantityId: string;
   requestId: string | null;
+  requestIdentityCompatible: boolean;
   resourceKey: string | null;
   sampled: boolean;
   scopeId: string | null;
@@ -87,6 +88,23 @@ export function buildViewport3DTargetFieldBuffer({
   const sampled = indexing === "sampled_node_indices" || query.max_samples != null;
   const meshTopologyHash = fieldVector.meshTopologyHash ?? null;
   const domainGenerationId = fieldVector.domainGenerationId ?? null;
+  const requestedScopeKind = resolveTargetFieldBufferScopeKind(query.scope_kind);
+  const requestedScopeId = canonicalTargetFieldBufferScopeId(
+    requestedScopeKind,
+    query.scope_id ?? null,
+  );
+  const hasDecodedScopeIdentity = fieldVector.formatVersion === 3;
+  const scopeKind = hasDecodedScopeIdentity
+    ? resolveTargetFieldBufferScopeKind(fieldVector.scopeKind)
+    : requestedScopeKind;
+  const scopeId = hasDecodedScopeIdentity
+    ? canonicalTargetFieldBufferScopeId(scopeKind, fieldVector.scopeId ?? null)
+    : requestedScopeId;
+  const requestIdentityCompatible = Boolean(
+    synthetic ||
+      !hasDecodedScopeIdentity ||
+      (scopeKind === requestedScopeKind && scopeId === requestedScopeId),
+  );
   const domainCompatibility = resolveViewport3DFieldDomainCompatibility({
     domain: domain ?? {
       domainGenerationId: null,
@@ -107,8 +125,8 @@ export function buildViewport3DTargetFieldBuffer({
       component,
       fieldRevision,
       quantityId: fieldVector.quantityId,
-      scopeId: query.scope_id ?? null,
-      scopeKind: resolveTargetFieldBufferScopeKind(query.scope_kind),
+      scopeId,
+      scopeKind,
       targetIds,
       meshTopologyHash,
       domainGenerationId,
@@ -134,10 +152,11 @@ export function buildViewport3DTargetFieldBuffer({
     requestId: synthetic
       ? null
       : buildViewport3DFieldResourceRequestId(fieldVector.quantityId, query),
+    requestIdentityCompatible,
     resourceKey,
     sampled,
-    scopeId: query.scope_id ?? null,
-    scopeKind: resolveTargetFieldBufferScopeKind(query.scope_kind),
+    scopeId,
+    scopeKind,
     targetIds: [...targetIds].sort(),
     topologyRevision,
     values: fieldVector.values,
@@ -198,6 +217,7 @@ export function viewport3DTargetFieldBufferCanServeSurface(
   quantityId?: string | null,
 ): boolean {
   if (!buffer || !colorMode) return false;
+  if (!buffer.requestIdentityCompatible) return false;
   if (buffer.domainCompatibility.status === "mismatch") return false;
   if (!viewport3DTargetFieldBufferMatchesQuantity(buffer, quantityId)) {
     return false;
@@ -223,6 +243,7 @@ export function viewport3DTargetFieldBufferCanServeVectors(
   quantityId?: string | null,
 ): boolean {
   if (!buffer) return false;
+  if (!buffer.requestIdentityCompatible) return false;
   if (buffer.domainCompatibility.status === "mismatch") return false;
   if (!viewport3DTargetFieldBufferMatchesQuantity(buffer, quantityId)) {
     return false;
@@ -312,6 +333,16 @@ function resolveTargetFieldBufferScopeKind(
     return scopeKind;
   }
   return "full";
+}
+
+function canonicalTargetFieldBufferScopeId(
+  scopeKind: Viewport3DFieldScopeKind,
+  scopeId: string | null,
+): string | null {
+  if (!scopeId || scopeKind !== "object") return scopeId;
+  return scopeId.startsWith("object:")
+    ? scopeId.slice("object:".length)
+    : scopeId;
 }
 
 export function viewport3DTargetFieldBufferMatchesQuantity(

@@ -101,6 +101,7 @@ describe("airbox vector sample budget", () => {
     expect(resolveViewport3DAirboxVectorSampleBudget(384, 10_586)).toBe(384);
 
     const query = resolveViewport3DScopedVectorFieldQuery({
+      geometryScope: "full",
       maxSamples: resolveViewport3DAirboxVectorSampleBudget(16_940, 10_586),
       surfaceColorMode: null,
       vectorsVisible: true,
@@ -112,6 +113,18 @@ describe("airbox vector sample budget", () => {
         scope_kind: "airbox",
       }),
     ).toContain("max_samples=10586");
+
+    expect(
+      resolveViewport3DScopedVectorFieldQuery({
+        geometryScope: "surface",
+        maxSamples: 1024,
+        surfaceColorMode: null,
+        vectorsVisible: true,
+      }),
+    ).toMatchObject({
+      geometry_scope: "surface",
+      max_samples: 1024,
+    });
   });
 });
 
@@ -2713,6 +2726,7 @@ describe("useViewport3DSceneModel", () => {
   it("adds sample limits only for scoped vector-only field queries", () => {
     expect(
       resolveViewport3DScopedVectorFieldQuery({
+        geometryScope: "full",
         maxSamples: 384,
         surfaceColorMode: null,
         vectorsVisible: true,
@@ -2724,6 +2738,7 @@ describe("useViewport3DSceneModel", () => {
     });
     expect(
       resolveViewport3DScopedVectorFieldQuery({
+        geometryScope: "full",
         maxSamples: 384,
         surfaceColorMode: "magnitude",
         vectorsVisible: true,
