@@ -46,6 +46,16 @@ transform. Only an explicit upgrade command with confirmed signed drive data
 may create `prescribed_sot.fullmag.v1`; ordinary reading/export never changes
 an old trajectory silently.
 
+The runtime schema is a formula-discriminated union. The v1 variant alone
+requires signed drives and nonzero unit axes. The legacy-v0 compatibility
+variant retains a raw possibly-zero polarization plus either the raw scalar
+consumed through `abs` or a source consumed through `norm(J)`. It is accepted
+only with migration-origin metadata and may be read/re-exported losslessly, but
+cannot be created by new Python/UI authoring.
+Canonical Python round-trip uses the migration-origin-gated
+`PrescribedSpinOrbitTorque.from_legacy_v0(...)` compatibility classmethod;
+the ordinary constructor remains v1-only.
+
 ### 2. Signs, indices, and units are frozen once
 
 `e>0`; `J_c` is signed conventional current. `gamma_e>0` has angular-frequency

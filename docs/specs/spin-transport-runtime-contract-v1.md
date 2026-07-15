@@ -295,15 +295,30 @@ SlonczewskiTorque = {
   formula_version:"slonczewski.fullmag.v1"
 }
 
-PrescribedSpinOrbitTorque = {
+PrescribedSpinOrbitTorque = PrescribedSotV1 | PrescribedSotLegacyV0
+
+PrescribedSotV1 = {
   schema_version:"prescribed_sot.v1", id, target:RegionRef,
+  formula_version:"prescribed_sot.fullmag.v1",
   drive:
     | {kind:"signed_scalar", current_density_Apm2, sigma_hat:UnitVector3,
        envelope:TimeEnvelope?}
     | {kind:"vector_current_source", current_source_id,
        drive_direction:UnitVector3, interface_normal:UnitVector3},
+  xi_dl:finite, xi_fl:finite, free_layer_thickness_m>0
+}
+
+PrescribedSotLegacyV0 = {
+  schema_version:"prescribed_sot.v1", id, target:RegionRef,
+  formula_version:"prescribed_sot.legacy_fullmag.v0",
+  drive:
+    | {kind:"legacy_scalar_magnitude",
+       raw_charge_current_density_Apm2:finite}
+    | {kind:"legacy_current_source_norm", current_source_id},
+  raw_spin_polarization:Vector3 finite, zero permitted,
   xi_dl:finite, xi_fl:finite, free_layer_thickness_m>0,
-  formula_version:"prescribed_sot.fullmag.v1"
+  compatibility_origin:{source_ir_version:"0.2.0",
+                        authored_kind:"spin_orbit_torque"}
 }
 
 DriftDiffusionSpinTorque = {
@@ -320,6 +335,31 @@ deprecation metadata; canonical script and scene export MUST use the canonical
 name. A module MUST NOT combine `signed_scalar` and `vector_current_source`.
 The vector-source form derives signed amplitude and polarization once; current
 reversal MUST NOT also reverse the authored drive axis.
+
+`formula_version` is the discriminator and MUST be decoded before validating
+the drive. Only `PrescribedSotV1` applies `UnitVector3`, signed-current,
+drive-direction, interface-normal, and nonzero-axis validation.
+`PrescribedSotLegacyV0` instead preserves the raw finite polarization,
+including zero, and the raw signed scalar even though its evaluator applies
+`abs`, or preserves a source reference whose evaluator applies `norm(J)`.
+The two drive unions are disjoint; a legacy drive cannot appear with v1 and a
+v1 drive cannot appear with legacy v0.
+
+New Python/UI authoring MUST NOT create `PrescribedSotLegacyV0`. It is legal
+only as the output of the `0.2.0 -> 0.3.0` migrator and for subsequent lossless
+read/export of that canonical `0.3.0` document, proven by the required
+`compatibility_origin`. Removing that origin, normalizing raw sigma to a unit
+axis, rejecting zero sigma under v1 validation, or converting the legacy drive
+to `signed_scalar` during ordinary export is semantic loss and MUST fail the
+round-trip gate.
+
+Canonical Python export represents this read-only bridge as
+`fm.PrescribedSpinOrbitTorque.from_legacy_v0(...)`, including the raw drive,
+raw polarization, and compatibility origin verbatim. The ordinary
+`fm.PrescribedSpinOrbitTorque(...)` constructor creates only v1. The classmethod
+rejects missing/invalid migration origin and exists solely so exported migrated
+scripts execute and lower back to the same legacy tagged node; it is not shown
+in UI commands or normal API documentation.
 
 `DriftDiffusionSpinTorque` references a solved spin transport. It MUST NOT own
 an independent current density, polarization, or spin solver.
@@ -1005,7 +1045,14 @@ whose sign cannot be certified also fails closed.
 Every `0.2.0` `SpinOrbitTorque` payload lowers to canonical class
 `PrescribedSpinOrbitTorque` but retains
 `formula_version="prescribed_sot.legacy_fullmag.v0"`. That version is defined
-exactly by the executable FDM behavior at the `0.2.0` boundary:
+exactly by the executable FDM behavior at the `0.2.0` boundary.
+
+The normalized node is the `PrescribedSotLegacyV0` tagged variant from 3.5.
+Its legacy scalar drive stores the original signed scalar in
+`raw_charge_current_density_Apm2`; evaluation alone takes `abs`. Its source
+drive stores the source id and evaluation alone takes `norm(J_charge)`. Its
+`raw_spin_polarization` is not a `UnitVector3` and is not subjected to v1 axis
+validation.
 
 ```text
 J_legacy = abs(charge_current_density_a_per_m2)
