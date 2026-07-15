@@ -85,4 +85,3 @@
 - [ ] Run focused Python round-trip and validation tests.
 - [ ] Run `just check`.
 - [ ] Inspect `git diff`, `git status`, and commit boundaries; confirm no Oersted changes.
-

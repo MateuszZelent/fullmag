@@ -47,4 +47,3 @@ source. They cover nonzero independent `epsilon_prime`, exact SI scaling,
 signed-current reversal, target masking, and AoS/SoA parity. Separate tests
 prove legacy regression behavior, InterfaceFlux FDM rejection, nonfinite input
 rejection, normalization, and CUDA canonical fail-closed behavior.
-
