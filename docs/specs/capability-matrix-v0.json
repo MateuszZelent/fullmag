@@ -143,21 +143,38 @@
       "notes": "Deferred until current transport and spin accumulation are modeled explicitly."
     },
     {
-      "id": "spin_torque.prescribed_sot.legacy_fullmag.v0",
+      "id": "spin_torque.prescribed_sot.legacy_fullmag.v0.fdm_cpu_fp64",
       "capability_id": "spin_torque.prescribed_sot",
       "formula_version": "prescribed_sot.legacy_fullmag.v0",
-      "label": "PrescribedSpinOrbitTorque legacy compatibility",
+      "label": "PrescribedSpinOrbitTorque legacy compatibility FDM CPU FP64",
       "lanes": {
         "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "precision_scope": ["double"],
+      "execution_mode_scope": ["strict"],
+      "workload_scope": "Existing single-grid local prescribed-SOT payload on the FDM CPU reference lane only.",
+      "validated_workloads": [],
+      "notes": "Compatibility execution reproduces magnitude-only current, missing gamma0/rate conversion, and missing Gilbert-source transform. It is not canonical v1, not validated, and never proves direct or inverse SHE."
+    },
+    {
+      "id": "spin_torque.prescribed_sot.legacy_fullmag.v0.fdm_gpu_fp64_fp32",
+      "capability_id": "spin_torque.prescribed_sot",
+      "formula_version": "prescribed_sot.legacy_fullmag.v0",
+      "label": "PrescribedSpinOrbitTorque legacy compatibility FDM GPU FP64/FP32",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
         "fdm_gpu_production": "production_executable",
         "fem_cpu_public": "unsupported",
         "fem_gpu_public": "unsupported"
       },
-      "precision_scope": ["double", "single on the existing CUDA lane"],
+      "precision_scope": ["double", "single"],
       "execution_mode_scope": ["strict"],
-      "workload_scope": "Existing single-grid local prescribed-SOT payload and native CUDA integrators only.",
+      "workload_scope": "Existing single-grid native CUDA prescribed-SOT integrators only.",
       "validated_workloads": [],
-      "notes": "Compatibility execution reproduces magnitude-only current, missing gamma0/rate conversion, and missing Gilbert-source transform. It is not canonical v1, not validated, and never proves direct or inverse SHE."
+      "notes": "Compatibility execution reproduces magnitude-only current, missing gamma0/rate conversion, and missing Gilbert-source transform. CPU inference from this row is forbidden; it is not canonical v1, not validated, and never proves direct or inverse SHE."
     },
     {
       "id": "spin_torque.prescribed_sot.fullmag.v1",
@@ -216,6 +233,18 @@
     {
       "id":"transport.spin.transient_drift_diffusion.fullmag.v1", "capability_id":"transport.spin.transient_drift_diffusion", "operator_version":"coupled_imex_ark2.v1",
       "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M3 decay, temporal-order, rollback and restart workloads.", "validated_workloads":[], "notes":"PR-00 contract only."
+    },
+    {
+      "id":"field.oersted.dynamic.legacy_fdm_cpu_fp64", "capability_id":"field.oersted.dynamic", "formula_version":"current_transport.fullmag.v1", "realization_versions":["oersted_analytic_cylinder.v1","oersted_direct_biot_savart.v1"],
+      "lanes":{"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"unsupported","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Documented prescribed-current single-grid cylinder/midpoint slices only.", "validated_workloads":[], "notes":"Bounded legacy execution; not general closed-circuit/stage-consistent validation."
+    },
+    {
+      "id":"field.oersted.dynamic.legacy_fdm_gpu_fp64_fp32", "capability_id":"field.oersted.dynamic", "formula_version":"current_transport.fullmag.v1", "realization_versions":["oersted_analytic_cylinder.v1","oersted_direct_biot_savart.v1"],
+      "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"production_executable","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double","single"], "execution_mode_scope":["strict"], "workload_scope":"Documented prescribed-current single-grid cylinder/midpoint native CUDA slices only.", "validated_workloads":[], "notes":"Bounded legacy execution; not validated and not the M1 FFT realization."
+    },
+    {
+      "id":"field.oersted.dynamic.legacy_fem_cpu_gpu_fp64", "capability_id":"field.oersted.dynamic", "formula_version":"current_transport.fullmag.v1", "realization_versions":["oersted_analytic_cylinder.v1","oersted_direct_biot_savart.v1"],
+      "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"unsupported","fem_cpu_public":"production_executable","fem_gpu_public":"production_executable"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Documented prescribed-current native FEM cylinder/midpoint slices only.", "validated_workloads":[], "notes":"Bounded legacy execution; not general H(curl)/airbox validation."
     },
     {
       "id":"field.oersted.fdm_fft.fullmag.v1", "capability_id":"field.oersted.fdm_fft", "operator_version":"fdm_oersted_cell_integrated_open.v1", "realization_version":"oersted_fdm_fft_open.v1",
