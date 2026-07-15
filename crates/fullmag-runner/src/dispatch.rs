@@ -824,7 +824,15 @@ pub(crate) fn resolve_fem_engine_with_trail(
     apply_runtime_gpu_index(problem, "fem");
     let ir_policy = runtime_fem_policy(problem);
     let fe_order = runtime_fem_order(problem);
+    let strict_gpu = strict_fem_gpu_requested(problem);
     let (policy, env_override) = match std::env::var("FULLMAG_FEM_EXECUTION") {
+        Ok(env_val) if strict_gpu && !fem_policy_requires_gpu(&env_val) => {
+            runtime_warn_once(&format!(
+                "ignoring FULLMAG_FEM_EXECUTION={} because ProblemIR requests device=gpu in strict execution mode",
+                env_val
+            ));
+            ("gpu".to_string(), false)
+        }
         Ok(env_val) => {
             if env_val != ir_policy {
                 let message = format!(
@@ -843,6 +851,11 @@ pub(crate) fn resolve_fem_engine_with_trail(
     resolve_fem_engine_with_availability(problem, &policy, env_override, fe_order, &availability)
 }
 
+fn strict_fem_gpu_requested(problem: &ProblemIR) -> bool {
+    problem.validation_profile.execution_mode == fullmag_ir::ExecutionMode::Strict
+        && runtime_device(problem).is_some_and(|device| matches!(device, "gpu" | "cuda"))
+}
+
 fn native_fem_cpu_unavailable_error(
     availability: &native_fem::GpuAvailability,
     context: &str,
@@ -856,6 +869,7 @@ fn native_fem_cpu_unavailable_error(
 }
 
 const FEM_GPU_RELAXATION_CPU_ONLY_FALLBACK_REASON: &str = "fem_gpu_relaxation_algorithm_cpu_only";
+const FEM_GPU_RK_PLAN_INELIGIBLE_FALLBACK_REASON: &str = "fem_gpu_rk_plan_ineligible";
 
 fn fem_gpu_cpu_only_relaxation_algorithm(plan: &FemPlanIR) -> Option<RelaxationAlgorithmIR> {
     let algorithm = plan.relaxation.as_ref()?.algorithm;
@@ -886,6 +900,21 @@ fn fem_gpu_relaxation_cpu_only_error(algorithm: RelaxationAlgorithmIR) -> RunErr
     }
 }
 
+fn fem_gpu_rk_plan_ineligible_message(plan: &FemPlanIR) -> Option<String> {
+    crate::fem::engine::gpu_rk_plan_preflight_block_reason(plan).map(|reason| {
+        format!(
+            "native FEM GPU explicit RK plan is ineligible: {reason} \
+             (fallback_reason={FEM_GPU_RK_PLAN_INELIGIBLE_FALLBACK_REASON})"
+        )
+    })
+}
+
+fn fem_gpu_rk_plan_ineligible_error(message: String) -> RunError {
+    RunError {
+        message: format!("native FEM GPU execution was requested, but {message}"),
+    }
+}
+
 fn apply_fem_gpu_plan_constraints(
     plan: &FemPlanIR,
     mut resolution: EngineResolution<FemEngine>,
@@ -911,7 +940,31 @@ fn apply_fem_gpu_plan_constraints(
         return Ok(resolution);
     }
 
+    if let Some(message) = fem_gpu_rk_plan_ineligible_message(plan) {
+        if forced_gpu {
+            return Err(fem_gpu_rk_plan_ineligible_error(message));
+        }
+        runtime_warn_once(&message);
+        resolution.engine = FemEngine::CpuNative;
+        resolution.fallback = Some(runtime_fallback(
+            fem_engine_id(FemEngine::NativeGpu),
+            fem_engine_id(FemEngine::CpuNative),
+            FEM_GPU_RK_PLAN_INELIGIBLE_FALLBACK_REASON,
+            message,
+        ));
+        return Ok(resolution);
+    }
+
     if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(plan) {
+        if forced_gpu {
+            return Err(RunError {
+                message: format!(
+                    "native FEM GPU execution was requested, but plan has {} nodes below FULLMAG_FEM_GPU_MIN_NODES={} (fallback_reason=fem_gpu_small_mesh_policy)",
+                    plan.mesh.nodes.len(),
+                    min_nodes
+                ),
+            });
+        }
         let message = format!(
             "FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — falling back to MFEM/libCEED/hypre CPU FEM engine",
             plan.mesh.nodes.len(),
@@ -936,8 +989,11 @@ fn resolve_fem_engine_with_availability(
     fe_order: u32,
     availability: &native_fem::GpuAvailability,
 ) -> Result<EngineResolution<FemEngine>, RunError> {
+    let strict_gpu = strict_fem_gpu_requested(problem);
+    let policy = if strict_gpu { "gpu" } else { policy };
+    let forced_gpu = env_override || strict_gpu;
     if has_any_antenna_field_source(problem) {
-        if fem_policy_requires_gpu(&policy) {
+        if fem_policy_requires_gpu(policy) {
             return Err(RunError {
                 message:
                     "FEM GPU execution was requested, but native FEM GPU currently does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)"
@@ -978,11 +1034,12 @@ fn resolve_fem_engine_with_availability(
         }
         "gpu" | "all_in_gpu" => {
             if !availability.native_fem_gpu_available {
-                if env_override {
+                if forced_gpu {
                     Err(RunError {
                         message: format!(
-                            "FULLMAG_FEM_EXECUTION=gpu but the native FEM GPU backend is not available: {}",
-                            availability.reason
+                            "{} requested FEM GPU execution, but the native FEM GPU backend is not available: {}",
+                            if strict_gpu { "strict ProblemIR" } else { "FULLMAG_FEM_EXECUTION=gpu" },
+                            availability.reason,
                         ),
                     })
                 } else {
@@ -1017,10 +1074,10 @@ fn resolve_fem_engine_with_availability(
                     ),
                 })
             } else if fe_order != 1 {
-                if env_override {
+                if forced_gpu {
                     Err(RunError {
                         message: format!(
-                            "FULLMAG_FEM_EXECUTION=gpu requested native FEM GPU execution, \
+                            "forced FEM GPU execution requested native FEM GPU execution, \
                              but the current native backend supports fe_order=1 only \
                              (requested order={}, fallback_reason=fem_gpu_fe_order_unsupported)",
                             fe_order
@@ -1123,6 +1180,7 @@ fn resolve_fem_engine_with_registry(
     plan: Option<&FemPlanIR>,
 ) -> Result<DispatchEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fem");
+    let forced_gpu = explicit_selection || strict_fem_gpu_requested(problem);
     let requested_device = requested_registry_device_for_fem(problem);
     let requested_precision = runtime_precision(problem).to_string();
     let resolved = resolve_registry_runtime_for_backend(
@@ -1146,7 +1204,7 @@ fn resolve_fem_engine_with_registry(
 
     if engine == FemEngine::NativeGpu {
         if has_any_antenna_field_source(problem) {
-            if explicit_selection {
+            if forced_gpu {
                 return Err(RunError {
                     message:
                         "FEM GPU execution was requested, but native FEM GPU currently does not support antenna_field_source current_modules (fallback_reason=current_modules_force_cpu)"
@@ -1181,7 +1239,7 @@ fn resolve_fem_engine_with_registry(
 
         let fe_order = runtime_fem_order(problem);
         if fe_order != 1 {
-            if explicit_selection {
+            if forced_gpu {
                 return Err(RunError {
                     message: format!(
                         "native FEM GPU execution was requested, but the current native backend supports fe_order=1 only (requested order={}, fallback_reason=fem_gpu_fe_order_unsupported)",
@@ -1220,7 +1278,7 @@ fn resolve_fem_engine_with_registry(
 
         if let Some(fem_plan) = plan {
             if let Some(algorithm) = fem_gpu_cpu_only_relaxation_algorithm(fem_plan) {
-                if explicit_selection {
+                if forced_gpu {
                     return Err(fem_gpu_relaxation_cpu_only_error(algorithm));
                 }
                 let cpu_resolved = resolve_registry_runtime_for_backend(
@@ -1254,8 +1312,42 @@ fn resolve_fem_engine_with_registry(
         }
 
         if let Some(fem_plan) = plan {
+            if let Some(message) = fem_gpu_rk_plan_ineligible_message(fem_plan) {
+                if forced_gpu {
+                    return Err(fem_gpu_rk_plan_ineligible_error(message));
+                }
+                let cpu_resolved = resolve_registry_runtime_for_backend(
+                    registry,
+                    "fem",
+                    "cpu",
+                    &requested_precision,
+                )
+                .ok_or_else(|| RunError {
+                    message:
+                        "FEM GPU runtime cannot fall back because no CPU FEM runtime is advertised"
+                            .to_string(),
+                })?;
+                fallback = Some(runtime_fallback(
+                    fem_engine_id(FemEngine::NativeGpu),
+                    fem_engine_id(FemEngine::CpuNative),
+                    FEM_GPU_RK_PLAN_INELIGIBLE_FALLBACK_REASON,
+                    message,
+                ));
+                return Ok(DispatchEngineResolution {
+                    engine: DispatchEngine::Fem(FemEngine::CpuNative),
+                    fallback,
+                    runtime_family: Some(cpu_resolved.runtime_family),
+                    worker: Some(cpu_resolved.worker),
+                    resolved_backend: "fem".to_string(),
+                    resolved_device: "cpu".to_string(),
+                    resolved_precision: requested_precision,
+                });
+            }
+        }
+
+        if let Some(fem_plan) = plan {
             if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(fem_plan) {
-                if explicit_selection {
+                if forced_gpu {
                     return Err(RunError {
                         message: format!(
                             "native FEM GPU execution was requested, but plan has {} nodes below FULLMAG_FEM_GPU_MIN_NODES={} (fallback_reason=fem_gpu_small_mesh_policy)",
@@ -1412,7 +1504,7 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
     apply_fem_gpu_plan_constraints(
         plan,
         resolve_fem_engine_with_trail(problem)?,
-        fem_gpu_execution_forced(),
+        fem_gpu_execution_forced() || strict_fem_gpu_requested(problem),
     )
 }
 
@@ -1888,6 +1980,9 @@ pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
 }
 
 pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
+    if strict_fem_gpu_requested(problem) {
+        return "gpu".to_string();
+    }
     if all_in_gpu_fem_env_requested() {
         return "gpu".to_string();
     }
@@ -2205,26 +2300,6 @@ pub(crate) fn execute_fem<'a>(
             )
         }
         FemEngine::NativeGpu => {
-            if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(&normalized_plan) {
-                eprintln!(
-                    "warning: FEM plan has {} nodes, below FULLMAG_FEM_GPU_MIN_NODES={} — \
-                     falling back to MFEM/libCEED/hypre CPU FEM engine \
-                     (fallback_reason=fem_gpu_small_mesh_policy; \
-                     set FULLMAG_FEM_EXECUTION=gpu to force GPU or \
-                     FULLMAG_FEM_GPU_MIN_NODES=0 to disable this policy)",
-                    normalized_plan.mesh.nodes.len(),
-                    min_nodes
-                );
-                let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
-                return execute_native_fem(
-                    FemEngine::CpuNative,
-                    &cpu_plan,
-                    until_seconds,
-                    outputs,
-                    live,
-                    artifact_writer,
-                );
-            }
             let gpu_plan = fem_plan_for_native_gpu(&normalized_plan);
             execute_native_fem(
                 FemEngine::NativeGpu,
@@ -5082,6 +5157,26 @@ fn validate_all_in_gpu_fem_runtime_contract(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn validate_native_fem_gpu_engine_runtime_contract(
+    engine: FemEngine,
+    gpu_rk_plan: &NativeFemGpuRkPlanInfo,
+) -> Result<(), RunError> {
+    if engine == FemEngine::NativeGpu && !gpu_rk_plan.exchange_only_enabled {
+        return Err(RunError {
+            message: format!(
+                "native FEM GPU execution was selected, but the native GPU RK plan is disabled: {} (fallback_reason=gpu_rk_plan_disabled)",
+                if gpu_rk_plan.reason.is_empty() {
+                    "unspecified prerequisite failure"
+                } else {
+                    gpu_rk_plan.reason.as_str()
+                }
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
 fn native_fem_gpu_rk_plan_is_strict_device_resident(gpu_rk_plan: &NativeFemGpuRkPlanInfo) -> bool {
     gpu_rk_plan.exchange_only_enabled
         && gpu_rk_plan.stage_exchange_device_resident
@@ -5333,6 +5428,7 @@ fn execute_native_fem(
     let device_info = backend.device_info()?;
     let gpu_state_info = backend.gpu_state_info()?;
     let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
+    validate_native_fem_gpu_engine_runtime_contract(engine, &gpu_rk_plan_info)?;
     let execution_engine = native_fem_execution_engine(plan);
     let execution_mode = native_fem_execution_mode(plan);
     validate_all_in_gpu_fem_runtime_contract(execution_mode, &gpu_rk_plan_info)?;
@@ -6077,6 +6173,25 @@ mod tests {
         }
     }
 
+    fn stt_only_fem_plan() -> FemPlanIR {
+        let mut plan = tiny_fem_plan();
+        plan.enable_exchange = false;
+        plan.current_density = Some([1.0e11, 0.0, 0.0]);
+        plan.stt_beta = Some(0.1);
+        plan
+    }
+
+    fn oersted_only_fem_plan() -> FemPlanIR {
+        let mut plan = tiny_fem_plan();
+        plan.enable_exchange = false;
+        let mut field = vec![0.0; plan.mesh.nodes.len() * 3];
+        for value in field.iter_mut().skip(1).step_by(3) {
+            *value = 1.0e3;
+        }
+        plan.oersted_field_xyz = Some(field);
+        plan
+    }
+
     fn tiny_fem_eigen_plan(k_sampling: Option<fullmag_ir::KSamplingIR>) -> FemEigenPlanIR {
         let plan = tiny_fem_plan();
         FemEigenPlanIR {
@@ -6718,6 +6833,60 @@ mod tests {
 
     #[cfg(feature = "fem-gpu")]
     #[test]
+    fn gpu_engine_rejects_stt_only_disabled_gpu_rk_plan() {
+        let rk_plan = NativeFemGpuRkPlanInfo {
+            exchange_only_enabled: false,
+            stage_count: 2,
+            uses_cuda_kernels: false,
+            allows_exchange_host_sync: false,
+            stage_exchange_device_resident: false,
+            uses_gpu_poisson: false,
+            exchange_operator_mode: "unsupported".to_string(),
+            demag_operator_mode: "none".to_string(),
+            hypre_execution_policy: "none".to_string(),
+            demag_residency: "none".to_string(),
+            reason: "GPU RK device-resident path requires enable_exchange=true".to_string(),
+        };
+
+        let err = validate_native_fem_gpu_engine_runtime_contract(
+            FemEngine::NativeGpu,
+            &rk_plan,
+        )
+        .expect_err("STT-only GPU plan must not execute through host RK");
+
+        assert!(err.message.contains("gpu_rk_plan_disabled"));
+        assert!(err.message.contains("enable_exchange=true"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn gpu_engine_rejects_oersted_only_disabled_gpu_rk_plan() {
+        let rk_plan = NativeFemGpuRkPlanInfo {
+            exchange_only_enabled: false,
+            stage_count: 4,
+            uses_cuda_kernels: false,
+            allows_exchange_host_sync: false,
+            stage_exchange_device_resident: false,
+            uses_gpu_poisson: false,
+            exchange_operator_mode: "unsupported".to_string(),
+            demag_operator_mode: "none".to_string(),
+            hypre_execution_policy: "none".to_string(),
+            demag_residency: "none".to_string(),
+            reason: "GPU RK device-resident path requires enable_exchange=true".to_string(),
+        };
+
+        let err = validate_native_fem_gpu_engine_runtime_contract(
+            FemEngine::NativeGpu,
+            &rk_plan,
+        )
+        .expect_err("Oersted-only GPU plan must not execute through host RK");
+
+        assert!(err.message.contains("gpu_rk_plan_disabled"));
+        assert!(err.message.contains("enable_exchange=true"));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
     fn native_fem_runtime_contract_treats_cpu_mfem_variants_as_unsupported() {
         let mut plan = tiny_fem_plan();
         plan.enable_demag = true;
@@ -6963,8 +7132,109 @@ mod tests {
     }
 
     #[test]
+    fn strict_problem_gpu_request_cannot_be_overridden_to_cpu() {
+        let mut problem = fem_policy_problem();
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+
+        let resolution = resolve_fem_engine_with_availability(
+            &problem,
+            "cpu",
+            true,
+            1,
+            &native_fem_availability_for_test(
+                true,
+                true,
+                "native FEM CPU and GPU backends are available",
+            ),
+        )
+        .expect("strict requested GPU must remain on GPU independent of env override");
+
+        assert_eq!(resolution.engine, FemEngine::NativeGpu);
+        assert!(resolution.fallback.is_none());
+    }
+
+    #[test]
+    fn strict_problem_gpu_request_cannot_be_overridden_in_runtime_registry_lookup() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let mut problem = fem_policy_problem();
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_EXECUTION", "cpu");
+        }
+
+        let requested = requested_registry_device_for_fem(&problem);
+
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        assert_eq!(requested, "gpu");
+    }
+
+    #[test]
+    fn strict_problem_gpu_request_rejects_cpu_only_runtime_registry() {
+        let _guard = env_lock().lock().expect("env mutex");
+        let mut problem = fem_policy_problem();
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+        let temp = TempDirGuard::new();
+        let cpu_pack = temp.path.join("runtimes").join("fem-cpu");
+        fs::create_dir_all(cpu_pack.join("bin")).expect("create fem cpu runtime");
+        fs::write(cpu_pack.join("bin").join("fullmag-fem-cpu-bin"), b"stub")
+            .expect("write fem cpu worker");
+        fs::write(
+            cpu_pack.join("manifest.json"),
+            r#"{
+                "family": "fem-cpu",
+                "version": "0.1.0",
+                "worker": "bin/fullmag-fem-cpu-bin",
+                "engines": [{"backend":"fem","device":"cpu","precision":"double"}]
+            }"#,
+        )
+        .expect("write fem cpu manifest");
+        let registry = RuntimeRegistry::discover(&temp.path.join("runtimes"));
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_EXECUTION", "cpu");
+        }
+
+        let result = resolve_fem_engine_with_registry(
+            &problem,
+            &registry,
+            false,
+            Some(&tiny_fem_plan()),
+        );
+
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        let err = result.expect_err("strict GPU must reject a CPU-only registry");
+        assert!(err.message.contains("no advertised FEM runtime matches device=gpu"));
+    }
+
+    #[test]
+    fn strict_problem_gpu_request_fails_when_gpu_is_unavailable() {
+        let mut problem = fem_policy_problem();
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+
+        let err = resolve_fem_engine_with_availability(
+            &problem,
+            "gpu",
+            false,
+            1,
+            &native_fem_availability_for_test(
+                true,
+                false,
+                "native FEM GPU backend is unavailable in this test",
+            ),
+        )
+        .expect_err("strict requested GPU must fail closed instead of selecting CPU");
+
+        assert!(err.message.contains("native FEM GPU backend is not available"));
+        assert!(err.message.contains("strict"));
+    }
+
+    #[test]
     fn requested_fem_gpu_without_backend_records_fallback_trail() {
-        let problem = fem_policy_problem();
+        let mut problem = fem_policy_problem();
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
         let resolution = resolve_fem_engine_with_availability(
             &problem,
             "gpu",
@@ -7025,7 +7295,15 @@ mod tests {
 
     #[test]
     fn cpu_availability_policy_uses_cpu_probe_without_gpu() {
-        let problem = fem_policy_problem();
+        let mut problem = fem_policy_problem();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            Value::Object(
+                [("device".to_string(), Value::String("cpu".to_string()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
         let resolution = resolve_fem_engine_with_availability(
             &problem,
             "cpu",
@@ -7045,7 +7323,8 @@ mod tests {
 
     #[test]
     fn cpu_availability_gpu_fallback_requires_cpu_probe() {
-        let problem = fem_policy_problem();
+        let mut problem = fem_policy_problem();
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
         let err = resolve_fem_engine_with_availability(
             &problem,
             "gpu",
@@ -7066,7 +7345,8 @@ mod tests {
 
     #[test]
     fn cpu_availability_auto_without_any_native_runtime_fails() {
-        let problem = fem_policy_problem();
+        let mut problem = fem_policy_problem();
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
         let err = resolve_fem_engine_with_availability(
             &problem,
             "auto",
@@ -8923,6 +9203,7 @@ mod tests {
     #[test]
     fn prescribed_current_transport_does_not_force_cpu_fallback() {
         let mut problem = fem_policy_problem();
+        problem.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Extended;
         problem
             .current_modules
             .push(CurrentModuleIR::CurrentTransport {
@@ -8977,6 +9258,178 @@ mod tests {
         unsafe {
             std::env::remove_var("FULLMAG_FEM_GPU_MIN_NODES");
         }
+    }
+
+    #[test]
+    fn strict_fem_gpu_rejects_small_mesh_policy_instead_of_falling_back() {
+        let _guard = env_lock().lock().expect("env mutex");
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+            std::env::set_var("FULLMAG_FEM_GPU_MIN_NODES", "10");
+        }
+
+        let result = apply_fem_gpu_plan_constraints(
+            &tiny_fem_plan(),
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            true,
+        );
+
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_GPU_MIN_NODES");
+        }
+        let err = result.expect_err("strict GPU must fail closed for small-mesh policy");
+        assert!(err.message.contains("fem_gpu_small_mesh_policy"));
+        assert!(err.message.contains("requested"));
+    }
+
+    #[test]
+    fn extended_fem_gpu_small_mesh_fallback_is_provenanced() {
+        let _guard = env_lock().lock().expect("env mutex");
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+            std::env::set_var("FULLMAG_FEM_GPU_MIN_NODES", "10");
+        }
+
+        let resolution = apply_fem_gpu_plan_constraints(
+            &tiny_fem_plan(),
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            false,
+        )
+        .expect("extended GPU may explicitly resolve to CPU for small mesh");
+
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_GPU_MIN_NODES");
+        }
+        assert_eq!(resolution.engine, FemEngine::CpuNative);
+        let fallback = resolution.fallback.expect("fallback provenance");
+        assert_eq!(fallback.reason, "fem_gpu_small_mesh_policy");
+        assert_eq!(fallback.original_engine, "fem_native_gpu");
+        assert_eq!(fallback.fallback_engine, "fem_cpu_native");
+    }
+
+    #[test]
+    fn auto_fem_stt_only_plan_falls_back_to_cpu_with_gpu_rk_reason() {
+        let resolution = apply_fem_gpu_plan_constraints(
+            &stt_only_fem_plan(),
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            false,
+        )
+        .expect("auto FEM must resolve a GPU-RK-ineligible STT-only plan to CPU");
+
+        assert_eq!(resolution.engine, FemEngine::CpuNative);
+        let fallback = resolution.fallback.expect("auto fallback provenance");
+        assert_eq!(fallback.reason, "fem_gpu_rk_plan_ineligible");
+        assert!(fallback.message.contains("enable_exchange=true"));
+    }
+
+    #[test]
+    fn auto_fem_oersted_only_plan_falls_back_to_cpu_with_gpu_rk_reason() {
+        let resolution = apply_fem_gpu_plan_constraints(
+            &oersted_only_fem_plan(),
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            false,
+        )
+        .expect("auto FEM must resolve a GPU-RK-ineligible Oersted-only plan to CPU");
+
+        assert_eq!(resolution.engine, FemEngine::CpuNative);
+        let fallback = resolution.fallback.expect("auto fallback provenance");
+        assert_eq!(fallback.reason, "fem_gpu_rk_plan_ineligible");
+        assert!(fallback.message.contains("enable_exchange=true"));
+    }
+
+    #[test]
+    fn strict_fem_stt_only_gpu_plan_fails_closed_before_execution() {
+        let err = apply_fem_gpu_plan_constraints(
+            &stt_only_fem_plan(),
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            true,
+        )
+        .expect_err("strict GPU must reject a GPU-RK-ineligible STT-only plan");
+
+        assert!(err.message.contains("fem_gpu_rk_plan_ineligible"));
+        assert!(err.message.contains("enable_exchange=true"));
+    }
+
+    #[test]
+    fn strict_fem_oersted_only_gpu_plan_fails_closed_before_execution() {
+        let err = apply_fem_gpu_plan_constraints(
+            &oersted_only_fem_plan(),
+            EngineResolution {
+                engine: FemEngine::NativeGpu,
+                fallback: None,
+            },
+            true,
+        )
+        .expect_err("strict GPU must reject a GPU-RK-ineligible Oersted-only plan");
+
+        assert!(err.message.contains("fem_gpu_rk_plan_ineligible"));
+        assert!(err.message.contains("enable_exchange=true"));
+    }
+
+    #[test]
+    fn fem_execution_does_not_repeat_post_selection_cpu_fallback() {
+        let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("dispatch.rs should be readable");
+        let start = source
+            .find("pub(crate) fn execute_fem")
+            .expect("execute_fem should exist");
+        let end = source[start..]
+            .find("pub(crate) fn execute_fem_eigen")
+            .map(|offset| start + offset)
+            .expect("execute_fem_eigen should follow execute_fem");
+        let execute_fem_source = &source[start..end];
+
+        assert!(
+            !execute_fem_source.contains("should_fallback_to_cpu_for_small_fem_gpu"),
+            "engine selection must be the sole owner of GPU-to-CPU small-mesh fallback"
+        );
+        assert!(
+            !execute_fem_source.contains("FemEngine::CpuNative,\n                    &cpu_plan"),
+            "the NativeGpu execution branch must never invoke the CPU engine"
+        );
+    }
+
+    #[test]
+    fn native_gpu_plan_validation_precedes_execution_provenance_publication() {
+        let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/dispatch.rs"))
+            .expect("dispatch.rs should be readable");
+        let start = source
+            .find("fn execute_native_fem(")
+            .expect("execute_native_fem should exist");
+        let end = source[start..]
+            .find("fn execute_fem_with_registry")
+            .map(|offset| start + offset)
+            .expect("execute_fem_with_registry should follow execute_native_fem");
+        let execute_native_source = &source[start..end];
+        let validation = execute_native_source
+            .find("validate_native_fem_gpu_engine_runtime_contract")
+            .expect("native FEM must validate the selected GPU execution contract");
+        let execution_engine = execute_native_source
+            .find("let execution_engine")
+            .expect("native FEM must materialize execution-engine provenance");
+        let provenance = execute_native_source
+            .find("let mut provenance")
+            .expect("native FEM must materialize execution provenance");
+
+        assert!(
+            validation < execution_engine && execution_engine < provenance,
+            "a disabled native GPU plan must fail before GPU execution or provenance is published"
+        );
     }
 
     #[cfg(feature = "fem-gpu")]

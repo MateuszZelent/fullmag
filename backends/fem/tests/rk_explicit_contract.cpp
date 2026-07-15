@@ -433,6 +433,7 @@ fullmag::fem::Context make_oersted_only_rk_context(fullmag_fem_integrator integr
     ctx.state.current_time = 0.071;
     ctx.base_plan.integrator = integrator;
     ctx.base_plan.precession_enabled = true;
+    ctx.mfem_device.device_string_override = "cpu";
     ctx.exchange.enabled = false;
     ctx.demag.enabled = false;
     ctx.material_fields.material.gyromagnetic_ratio = 1.7;
@@ -597,6 +598,24 @@ void deterministic_oersted_fsal_requires_an_identical_next_source_state() {
     check(stats.fsal_reused == 0u, "source-state mismatch must not report FSAL reuse");
 }
 
+void gpu_requested_oersted_only_step_rejects_host_rk_fallback() {
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_HEUN);
+    ctx.mfem_device.device_string_override = "cuda";
+    const auto &tableau = fullmag::fem::tableau_for_integrator(
+        FULLMAG_FEM_INTEGRATOR_HEUN);
+    fullmag_fem_step_stats stats{};
+    std::string error;
+
+    const bool step_ok = fullmag::fem::context_step_explicit_rk_mfem(
+        ctx, tableau, 0.01, stats, error);
+
+    check(!step_ok, "GPU-requested Oersted-only step must fail when GPU RK plan is disabled");
+    check(
+        error.find("GPU RK plan is disabled") != std::string::npos &&
+            error.find("allocated FemGpuState") != std::string::npos,
+        "GPU-requested Oersted-only step must report the disabled GPU plan prerequisite");
+}
+
 void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
     auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK23_BS);
     const auto &tableau = fullmag::fem::tableau_for_integrator(
@@ -704,6 +723,19 @@ void gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal() {
         "GPU adaptive rejection must restore m and invalidate FSAL before retry");
 }
 
+void gpu_requested_rk_never_falls_through_to_host_stepper() {
+    const auto source = read_text_file(
+        fem_source_root() / "cpu" / "mfem" / "integrators" / "rk_explicit_step.cpp");
+
+    check(
+        source.find("#include \"cpu/mfem/runtime/mfem_device.hpp\"") != std::string::npos,
+        "explicit RK owner must inspect the resolved MFEM device request");
+    check(
+        source.find("if (mfem_device_requests_gpu(ctx))") != std::string::npos &&
+            source.find("GPU RK plan is disabled") != std::string::npos,
+        "a GPU-requested native step must fail closed when its GPU RK plan is disabled");
+}
+
 void progress_report_marks_integrator_split_contract_covered() {
     const std::string progress = read_text_file(
         repo_root() / "docs" / "reports" / "16.05.2026" /
@@ -733,9 +765,11 @@ int main() {
     fsal_reuse_requires_matching_source_state();
     rk_rhs_passes_explicit_stage_and_endpoint_times();
     gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal();
+    gpu_requested_rk_never_falls_through_to_host_stepper();
 #if FULLMAG_HAS_MFEM_STACK
     executed_cpu_rk_steps_sample_all_stage_times_and_publish_endpoint_field();
     deterministic_oersted_fsal_requires_an_identical_next_source_state();
+    gpu_requested_oersted_only_step_rejects_host_rk_fallback();
     rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal();
 #endif
     progress_report_marks_integrator_split_contract_covered();

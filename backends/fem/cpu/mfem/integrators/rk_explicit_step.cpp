@@ -18,6 +18,7 @@
 #include "cpu/mfem/integrators/rk_stage_rhs.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
+#include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
 #include "fem_common.hpp"
@@ -84,20 +85,21 @@ bool context_step_explicit_rk_mfem(
         return false;
     }
 
-    if ((ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_HEUN && tab.stages == 2) ||
-        (ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK4 && tab.stages == 4) ||
-        (ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK23_BS && tab.stages == 4) ||
-        (ctx.base_plan.integrator == FULLMAG_FEM_INTEGRATOR_RK45_DP54 && tab.stages == 7)) {
+    if (mfem_device_requests_gpu(ctx)) {
         std::string gpu_rk_reason;
         const auto gpu_rk_plan = gpu_rk_plan_device_resident(ctx, gpu_rk_reason);
-        if (gpu_rk_plan.enabled) {
-            if (!gpu_rk_device_resident_step(ctx, tab, dt_seconds, stats, gpu_rk_reason)) {
-                error = gpu_rk_reason;
-                return false;
-            }
-            stats.wall_time_ns = elapsed_ns(wall_start);
-            return true;
+        if (!gpu_rk_plan.enabled) {
+            error = "GPU RK plan is disabled for a GPU-requested native FEM step: " +
+                (gpu_rk_reason.empty() ? std::string("unspecified prerequisite failure")
+                                       : gpu_rk_reason);
+            return false;
         }
+        if (!gpu_rk_device_resident_step(ctx, tab, dt_seconds, stats, gpu_rk_reason)) {
+            error = gpu_rk_reason;
+            return false;
+        }
+        stats.wall_time_ns = elapsed_ns(wall_start);
+        return true;
     }
 
     ctx.adaptive_dt.current_dt = dt_seconds;
