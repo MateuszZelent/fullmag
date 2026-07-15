@@ -191,6 +191,77 @@ pub enum SpinTorqueModuleIR {
         spin_polarization: [f64; 3],
         ferromagnet_thickness_m: f64,
     },
+    PrescribedSot {
+        schema_version: String,
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<RegionRefIR>,
+        #[serde(flatten)]
+        formula: PrescribedSotFormulaIR,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RegionRefIR {
+    pub object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "formula_version", deny_unknown_fields)]
+pub enum PrescribedSotFormulaIR {
+    #[serde(rename = "prescribed_sot.fullmag.v1")]
+    FullmagV1 {
+        drive: PrescribedSotV1DriveIR,
+        xi_dl: f64,
+        xi_fl: f64,
+        free_layer_thickness_m: f64,
+    },
+    #[serde(rename = "prescribed_sot.legacy_fullmag.v0")]
+    LegacyFullmagV0 {
+        drive: PrescribedSotLegacyDriveIR,
+        raw_spin_polarization: [f64; 3],
+        xi_dl: f64,
+        xi_fl: f64,
+        free_layer_thickness_m: f64,
+        compatibility_origin: PrescribedSotCompatibilityOriginIR,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PrescribedSotV1DriveIR {
+    SignedScalar {
+        #[serde(rename = "current_density_Apm2")]
+        current_density_apm2: f64,
+        sigma_hat: [f64; 3],
+    },
+    VectorCurrentSource {
+        current_source_id: String,
+        drive_direction: [f64; 3],
+        interface_normal: [f64; 3],
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PrescribedSotLegacyDriveIR {
+    LegacyScalarMagnitude {
+        #[serde(rename = "raw_charge_current_density_Apm2")]
+        raw_charge_current_density_apm2: f64,
+    },
+    LegacyCurrentSourceNorm {
+        current_source_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PrescribedSotCompatibilityOriginIR {
+    pub source_ir_version: String,
+    pub authored_kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

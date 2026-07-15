@@ -187,6 +187,22 @@ pub(crate) fn resolve_legacy_spin_torque(
                 )],
             });
         }
+        SpinTorqueModuleIR::PrescribedSot { formula, .. } => {
+            let formula_version = match formula {
+                fullmag_ir::PrescribedSotFormulaIR::FullmagV1 { .. } => {
+                    "prescribed_sot.fullmag.v1"
+                }
+                fullmag_ir::PrescribedSotFormulaIR::LegacyFullmagV0 { .. } => {
+                    "prescribed_sot.legacy_fullmag.v0"
+                }
+            };
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "spin_torque_modules[0]=prescribed_sot formula_version={formula_version} is semantic_only and not_yet_lowered by the planner; {}",
+                    support_matrix_note(lane)
+                )],
+            });
+        }
         SpinTorqueModuleIR::SpinOrbitTorque { .. } => match lane {
             SpinTorqueExecutableLane::Fdm => {
                 // SOT uses its own dedicated plan fields (sot_*), not legacy STT fields.
@@ -274,7 +290,60 @@ pub(crate) fn resolve_sot_fields(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fullmag_ir::ProblemIR;
+    use fullmag_ir::{
+        PrescribedSotCompatibilityOriginIR, PrescribedSotFormulaIR,
+        PrescribedSotLegacyDriveIR, PrescribedSotV1DriveIR, ProblemIR, RegionRefIR,
+    };
+
+    #[test]
+    fn canonical_prescribed_sot_formulas_fail_closed_until_planner_lowering_exists() {
+        let formulas = [
+            PrescribedSotFormulaIR::FullmagV1 {
+                drive: PrescribedSotV1DriveIR::SignedScalar {
+                    current_density_apm2: -1.0e10,
+                    sigma_hat: [0.0, 1.0, 0.0],
+                },
+                xi_dl: 0.1,
+                xi_fl: 0.0,
+                free_layer_thickness_m: 1.0e-9,
+            },
+            PrescribedSotFormulaIR::LegacyFullmagV0 {
+                drive: PrescribedSotLegacyDriveIR::LegacyScalarMagnitude {
+                    raw_charge_current_density_apm2: -1.0e10,
+                },
+                raw_spin_polarization: [0.0, 1.0, 0.0],
+                xi_dl: 0.1,
+                xi_fl: 0.0,
+                free_layer_thickness_m: 1.0e-9,
+                compatibility_origin: PrescribedSotCompatibilityOriginIR {
+                    source_ir_version: "0.2.0".to_string(),
+                    authored_kind: "spin_orbit_torque".to_string(),
+                },
+            },
+        ];
+
+        for formula in formulas {
+            let mut problem = ProblemIR::bootstrap_example();
+            problem.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
+                schema_version: "prescribed_sot.v1".to_string(),
+                id: "sot".to_string(),
+                target: Some(RegionRefIR {
+                    object_id: "strip".to_string(),
+                    region_id: None,
+                }),
+                formula,
+            }];
+            let error = resolve_legacy_spin_torque(
+                &problem,
+                SpinTorqueExecutableLane::Fdm,
+                &[],
+            )
+            .expect_err("canonical prescribed_sot must not enter the legacy executable path");
+            assert!(error.reasons.iter().any(|reason| {
+                reason.contains("prescribed_sot") && reason.contains("not_yet_lowered")
+            }));
+        }
+    }
 
     #[test]
     fn resolves_single_slonczewski_module_for_fdm() {

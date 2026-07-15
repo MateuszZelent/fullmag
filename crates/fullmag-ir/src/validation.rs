@@ -467,6 +467,9 @@ pub(crate) fn validate_legacy_spin_torque_fields(problem: &ProblemIR, errors: &m
 }
 
 pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let unit_vector_is_valid = |vector: &[f64; 3]| {
+        vector3_is_finite(vector) && (vector3_norm_sq(vector) - 1.0).abs() <= 1e-12
+    };
     let validate_vector_binding = |index: usize,
                                    label: &str,
                                    current_density: &Option<[f64; 3]>,
@@ -501,6 +504,7 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
             }
     };
 
+    let mut prescribed_sot_ids = BTreeSet::new();
     for (index, module) in problem.spin_torque_modules.iter().enumerate() {
         match module {
             SpinTorqueModuleIR::Slonczewski {
@@ -641,6 +645,9 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                 ferromagnet_thickness_m,
                 ..
             } => {
+                errors.push(format!(
+                    "spin_torque_modules[{index}] kind spin_orbit_torque is legal only in a 0.2.0 payload and must migrate to prescribed_sot"
+                ));
                 match (charge_current_density_a_per_m2, current_source.as_deref()) {
                     (Some(current_density), None) => {
                         if *current_density <= 0.0 {
@@ -677,6 +684,169 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                     errors.push(format!(
                         "spin_torque_modules[{index}] spin_orbit_torque ferromagnet_thickness_m must be > 0"
                     ));
+                }
+            }
+            SpinTorqueModuleIR::PrescribedSot {
+                schema_version,
+                id,
+                target,
+                formula,
+            } => {
+                if schema_version != "prescribed_sot.v1" {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] prescribed_sot schema_version must be prescribed_sot.v1"
+                    ));
+                }
+                if id.trim().is_empty() {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] prescribed_sot id must not be empty"
+                    ));
+                } else if !prescribed_sot_ids.insert(id.as_str()) {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] prescribed_sot has duplicate id '{id}'"
+                    ));
+                }
+                let validate_target = |target: &crate::RegionRefIR, errors: &mut Vec<String>| {
+                    if target.object_id.trim().is_empty()
+                        || target
+                            .region_id
+                            .as_deref()
+                            .is_some_and(|region| region.trim().is_empty())
+                    {
+                        errors.push(format!(
+                            "spin_torque_modules[{index}] prescribed_sot target references must not be empty"
+                        ));
+                    }
+                };
+
+                match formula {
+                    crate::PrescribedSotFormulaIR::FullmagV1 {
+                        drive,
+                        xi_dl,
+                        xi_fl,
+                        free_layer_thickness_m,
+                    } => {
+                        let Some(target) = target else {
+                            errors.push(format!(
+                                "spin_torque_modules[{index}] prescribed_sot.fullmag.v1 requires an explicit target"
+                            ));
+                            continue;
+                        };
+                        validate_target(target, errors);
+                        if !xi_dl.is_finite() || !xi_fl.is_finite() {
+                            errors.push(format!(
+                                "spin_torque_modules[{index}] prescribed_sot.fullmag.v1 xi_dl and xi_fl must be finite"
+                            ));
+                        }
+                        if !free_layer_thickness_m.is_finite() || *free_layer_thickness_m <= 0.0 {
+                            errors.push(format!(
+                                "spin_torque_modules[{index}] prescribed_sot.fullmag.v1 free_layer_thickness_m must be finite and > 0"
+                            ));
+                        }
+                        match drive {
+                            crate::PrescribedSotV1DriveIR::SignedScalar {
+                                current_density_apm2,
+                                sigma_hat,
+                            } => {
+                                if !current_density_apm2.is_finite() {
+                                    errors.push(format!(
+                                        "spin_torque_modules[{index}] prescribed_sot signed current_density_Apm2 must be finite"
+                                    ));
+                                }
+                                if !unit_vector_is_valid(sigma_hat) {
+                                    errors.push(format!(
+                                        "spin_torque_modules[{index}] prescribed_sot sigma_hat must be a finite unit vector"
+                                    ));
+                                }
+                            }
+                            crate::PrescribedSotV1DriveIR::VectorCurrentSource {
+                                current_source_id,
+                                drive_direction,
+                                interface_normal,
+                            } => {
+                                if current_source_id.trim().is_empty()
+                                    || !current_transport_exists(problem, current_source_id)
+                                {
+                                    errors.push(format!(
+                                        "spin_torque_modules[{index}] prescribed_sot current_source_id '{current_source_id}' must reference a current_transport module"
+                                    ));
+                                }
+                                if !unit_vector_is_valid(drive_direction) {
+                                    errors.push(format!(
+                                        "spin_torque_modules[{index}] prescribed_sot drive_direction must be a finite unit vector"
+                                    ));
+                                }
+                                if !unit_vector_is_valid(interface_normal) {
+                                    errors.push(format!(
+                                        "spin_torque_modules[{index}] prescribed_sot interface_normal must be a finite unit vector"
+                                    ));
+                                } else {
+                                    let cross = [
+                                        interface_normal[1] * drive_direction[2]
+                                            - interface_normal[2] * drive_direction[1],
+                                        interface_normal[2] * drive_direction[0]
+                                            - interface_normal[0] * drive_direction[2],
+                                        interface_normal[0] * drive_direction[1]
+                                            - interface_normal[1] * drive_direction[0],
+                                    ];
+                                    if vector3_norm_sq(&cross) <= 1e-24 {
+                                        errors.push(format!(
+                                            "spin_torque_modules[{index}] prescribed_sot interface_normal must not be parallel to drive_direction"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    crate::PrescribedSotFormulaIR::LegacyFullmagV0 {
+                        drive,
+                        raw_spin_polarization,
+                        xi_dl,
+                        xi_fl,
+                        free_layer_thickness_m,
+                        compatibility_origin,
+                    } => {
+                        if let Some(target) = target {
+                            validate_target(target, errors);
+                        }
+                        if compatibility_origin.source_ir_version != "0.2.0"
+                            || compatibility_origin.authored_kind != "spin_orbit_torque"
+                        {
+                            errors.push(format!(
+                                "spin_torque_modules[{index}] prescribed_sot legacy-v0 compatibility_origin must be exactly source_ir_version=0.2.0 and authored_kind=spin_orbit_torque"
+                            ));
+                        }
+                        if !vector3_is_finite(raw_spin_polarization) {
+                            errors.push(format!(
+                                "spin_torque_modules[{index}] prescribed_sot legacy-v0 raw_spin_polarization must be finite"
+                            ));
+                        }
+                        if !xi_dl.is_finite() || !xi_fl.is_finite() {
+                            errors.push(format!(
+                                "spin_torque_modules[{index}] prescribed_sot legacy-v0 xi_dl and xi_fl must be finite"
+                            ));
+                        }
+                        if !free_layer_thickness_m.is_finite() || *free_layer_thickness_m <= 0.0 {
+                            errors.push(format!(
+                                "spin_torque_modules[{index}] prescribed_sot legacy-v0 free_layer_thickness_m must be finite and > 0"
+                            ));
+                        }
+                        match drive {
+                            crate::PrescribedSotLegacyDriveIR::LegacyScalarMagnitude {
+                                raw_charge_current_density_apm2,
+                            } if !raw_charge_current_density_apm2.is_finite() => errors.push(
+                                format!(
+                                    "spin_torque_modules[{index}] prescribed_sot legacy-v0 raw current must be finite"
+                                ),
+                            ),
+                            crate::PrescribedSotLegacyDriveIR::LegacyCurrentSourceNorm {
+                                current_source_id,
+                            } if current_source_id.trim().is_empty() => errors.push(format!(
+                                "spin_torque_modules[{index}] prescribed_sot legacy-v0 current_source_id must not be empty"
+                            )),
+                            _ => {}
+                        }
+                    }
                 }
             }
         }

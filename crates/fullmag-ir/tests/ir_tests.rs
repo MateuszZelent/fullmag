@@ -53,6 +53,256 @@ fn previous_public_ir_version_is_supported_for_read_and_requires_migration() {
     assert!(requires_ir_migration(PREVIOUS_PUBLIC_IR_VERSION));
 }
 
+fn problem_ir_value_with_version(version: &str) -> serde_json::Value {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
+        .expect("bootstrap ProblemIR should serialize");
+    value["ir_version"] = serde_json::json!(version);
+    value["problem_meta"]["script_api_version"] = serde_json::json!(version);
+    value["problem_meta"]["serializer_version"] = serde_json::json!(version);
+    value
+}
+
+#[test]
+fn prescribed_sot_migrates_0_2_inline_scalar_without_losing_sign_or_zero_sigma() {
+    let mut value = problem_ir_value_with_version("0.2.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "spin_orbit_torque",
+        "charge_current_density_a_per_m2": -5.0e10,
+        "damping_like_efficiency": 0.12,
+        "field_like_efficiency": -0.03,
+        "spin_polarization": [0.0, 0.0, 0.0],
+        "ferromagnet_thickness_m": 1.5e-9
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value).expect("0.2 SOT should migrate");
+    let canonical = serde_json::to_value(decoded).expect("migrated SOT should serialize");
+    let sot = &canonical["spin_torque_modules"][0];
+    assert_eq!(canonical["ir_version"], "0.3.0");
+    assert_eq!(sot["kind"], "prescribed_sot");
+    assert_eq!(sot["schema_version"], "prescribed_sot.v1");
+    assert_eq!(sot["id"], "legacy_prescribed_sot_0");
+    assert!(sot.get("target").is_none() || sot["target"].is_null());
+    assert_eq!(sot["formula_version"], "prescribed_sot.legacy_fullmag.v0");
+    assert_eq!(sot["drive"]["kind"], "legacy_scalar_magnitude");
+    assert_eq!(sot["drive"]["raw_charge_current_density_Apm2"], -5.0e10);
+    assert_eq!(
+        sot["raw_spin_polarization"],
+        serde_json::json!([0.0, 0.0, 0.0])
+    );
+    assert_eq!(sot["compatibility_origin"]["source_ir_version"], "0.2.0");
+    assert_eq!(
+        sot["compatibility_origin"]["authored_kind"],
+        "spin_orbit_torque"
+    );
+}
+
+#[test]
+fn prescribed_sot_migrates_0_2_current_source_to_legacy_norm_drive() {
+    let mut value = problem_ir_value_with_version("0.2.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "spin_orbit_torque",
+        "current_source": "charge",
+        "damping_like_efficiency": 0.12,
+        "field_like_efficiency": 0.03,
+        "spin_polarization": [0.0, 2.0, 0.0],
+        "ferromagnet_thickness_m": 1.5e-9
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value).expect("0.2 source SOT should migrate");
+    let canonical = serde_json::to_value(decoded).expect("migrated SOT should serialize");
+    let sot = &canonical["spin_torque_modules"][0];
+    assert_eq!(sot["drive"]["kind"], "legacy_current_source_norm");
+    assert_eq!(sot["drive"]["current_source_id"], "charge");
+    assert_eq!(
+        sot["raw_spin_polarization"],
+        serde_json::json!([0.0, 2.0, 0.0])
+    );
+}
+
+#[test]
+fn explicit_0_1_migration_chain_preserves_cylinder_axis_and_reaches_0_3() {
+    let mut value = problem_ir_value_with_version("0.1.0");
+    value["geometry"]["entries"] = serde_json::json!([{
+        "kind": "cylinder", "name": "legacy", "radius": 1.0, "height": 2.0
+    }]);
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "spin_orbit_torque",
+        "charge_current_density_a_per_m2": 1.0,
+        "damping_like_efficiency": 0.1,
+        "field_like_efficiency": 0.0,
+        "spin_polarization": [0.0, 1.0, 0.0],
+        "ferromagnet_thickness_m": 1.0e-9
+    }]);
+
+    assert!(migrate_problem_ir_json_value(&mut value).expect("explicit chain should migrate"));
+    assert_eq!(value["ir_version"], "0.3.0");
+    assert_eq!(
+        value["geometry"]["entries"][0]["axis"],
+        serde_json::json!([0.0, 0.0, 1.0])
+    );
+    assert_eq!(value["spin_torque_modules"][0]["kind"], "prescribed_sot");
+}
+
+#[test]
+fn standard_reader_rejects_0_1_without_explicit_chain() {
+    let value = problem_ir_value_with_version("0.1.0");
+    let error = serde_json::from_value::<ProblemIR>(value)
+        .expect_err("standard reader must not silently chain 0.1.0");
+    assert!(error.to_string().contains("not supported for direct read"));
+}
+
+#[test]
+fn canonical_prescribed_sot_v1_round_trips_signed_scalar() {
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot",
+        "schema_version": "prescribed_sot.v1",
+        "id": "sot",
+        "target": {"object_id": "strip"},
+        "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "signed_scalar", "current_density_Apm2": -5.0e10,
+                  "sigma_hat": [0.0, 1.0, 0.0]},
+        "xi_dl": 0.12,
+        "xi_fl": -0.03,
+        "free_layer_thickness_m": 1.5e-9
+    }]);
+
+    let decoded: ProblemIR =
+        serde_json::from_value(value.clone()).expect("canonical v1 should decode");
+    assert!(decoded.validate().is_ok());
+    let encoded = serde_json::to_value(decoded).expect("canonical v1 should encode");
+    assert_eq!(encoded["spin_torque_modules"], value["spin_torque_modules"]);
+}
+
+#[test]
+fn canonical_prescribed_sot_v1_rejects_invalid_axes_and_nonfinite_signed_input() {
+    let mut zero_sigma = problem_ir_value_with_version("0.3.0");
+    zero_sigma["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+        "target": {"object_id": "strip"},
+        "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                  "sigma_hat": [0.0, 0.0, 0.0]},
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+    }]);
+    let decoded: ProblemIR = serde_json::from_value(zero_sigma).expect("shape should decode");
+    let errors = decoded
+        .validate()
+        .expect_err("zero v1 sigma must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("sigma_hat") && error.contains("unit")));
+
+    let mut parallel_axes = problem_ir_value_with_version("0.3.0");
+    parallel_axes["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+        "target": {"object_id": "strip"},
+        "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "vector_current_source", "current_source_id": "charge",
+                  "drive_direction": [1.0, 0.0, 0.0], "interface_normal": [1.0, 0.0, 0.0]},
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+    }]);
+    let decoded: ProblemIR = serde_json::from_value(parallel_axes).expect("shape should decode");
+    let errors = decoded
+        .validate()
+        .expect_err("parallel v1 axes must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("interface_normal") && error.contains("parallel")));
+
+    let mut nonfinite = ProblemIR::bootstrap_example();
+    nonfinite.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
+        schema_version: "prescribed_sot.v1".to_string(),
+        id: "sot".to_string(),
+        target: Some(RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula: PrescribedSotFormulaIR::FullmagV1 {
+            drive: PrescribedSotV1DriveIR::SignedScalar {
+                current_density_apm2: f64::NAN,
+                sigma_hat: [0.0, 1.0, 0.0],
+            },
+            xi_dl: 0.1,
+            xi_fl: 0.0,
+            free_layer_thickness_m: 1.0e-9,
+        },
+    }];
+    let errors = nonfinite
+        .validate()
+        .expect_err("nonfinite signed v1 current must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("current_density_Apm2") && error.contains("finite")));
+}
+
+#[test]
+fn prescribed_sot_legacy_v0_rejects_missing_or_forged_migration_origin() {
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "legacy",
+        "formula_version": "prescribed_sot.legacy_fullmag.v0",
+        "drive": {"kind": "legacy_scalar_magnitude", "raw_charge_current_density_Apm2": -1.0},
+        "raw_spin_polarization": [0.0, 0.0, 0.0],
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+    }]);
+    assert!(serde_json::from_value::<ProblemIR>(value.clone()).is_err());
+
+    value["spin_torque_modules"][0]["compatibility_origin"] = serde_json::json!({
+        "source_ir_version": "0.3.0", "authored_kind": "prescribed_sot"
+    });
+    let decoded: ProblemIR =
+        serde_json::from_value(value).expect("shape with origin should decode");
+    let errors = decoded
+        .validate()
+        .expect_err("forged legacy origin must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("compatibility_origin")));
+}
+
+#[test]
+fn prescribed_sot_rejects_duplicate_module_ids_and_unsupported_ir_version() {
+    let module = serde_json::json!({
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "duplicate",
+        "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                  "sigma_hat": [0.0, 1.0, 0.0]},
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
+    });
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([module.clone(), module]);
+    let decoded: ProblemIR = serde_json::from_value(value).expect("duplicate ids should decode");
+    let errors = decoded
+        .validate()
+        .expect_err("duplicate ids must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("duplicate") && error.contains("id")));
+
+    let unsupported = problem_ir_value_with_version("9.9.9");
+    let error = serde_json::from_value::<ProblemIR>(unsupported)
+        .expect_err("unsupported IR version must fail closed");
+    assert!(error.to_string().contains("not supported"));
+}
+
+#[test]
+fn prescribed_sot_rejects_unknown_formula_fields() {
+    let mut value = problem_ir_value_with_version("0.3.0");
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "prescribed_sot", "schema_version": "prescribed_sot.v1", "id": "sot",
+        "target": {"object_id": "strip"}, "formula_version": "prescribed_sot.fullmag.v1",
+        "drive": {"kind": "signed_scalar", "current_density_Apm2": 1.0,
+                  "sigma_hat": [0.0, 1.0, 0.0]},
+        "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9,
+        "backend_default": "must_not_be_ignored"
+    }]);
+
+    let error = serde_json::from_value::<ProblemIR>(value)
+        .expect_err("unknown prescribed-SOT formula fields must fail closed");
+    assert!(error.to_string().contains("unknown field"));
+}
+
 #[test]
 fn problem_ir_deserialize_migrates_previous_public_version() {
     let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
@@ -71,12 +321,12 @@ fn problem_ir_deserialize_migrates_previous_public_version() {
 }
 
 #[test]
-fn previous_public_cylinder_without_axis_migrates_explicitly() {
+fn historical_0_1_cylinder_without_axis_migrates_through_explicit_chain() {
     let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
         .expect("bootstrap ProblemIR should serialize");
-    value["ir_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
-    value["problem_meta"]["script_api_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
-    value["problem_meta"]["serializer_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["ir_version"] = serde_json::json!("0.1.0");
+    value["problem_meta"]["script_api_version"] = serde_json::json!("0.1.0");
+    value["problem_meta"]["serializer_version"] = serde_json::json!("0.1.0");
     value["geometry"]["entries"] = serde_json::json!([{
         "kind": "cylinder",
         "name": "legacy",
@@ -84,8 +334,9 @@ fn previous_public_cylinder_without_axis_migrates_explicitly() {
         "height": 2.0
     }]);
 
-    let decoded: ProblemIR = serde_json::from_value(value)
-        .expect("legacy cylinder should migrate its axis explicitly");
+    migrate_problem_ir_json_value(&mut value).expect("explicit chain should migrate 0.1.0");
+    let decoded: ProblemIR =
+        serde_json::from_value(value).expect("migrated cylinder should deserialize");
     match &decoded.geometry.entries[0] {
         GeometryEntryIR::Cylinder { axis, .. } => assert_eq!(*axis, [0.0, 0.0, 1.0]),
         other => panic!("expected migrated cylinder, got {other:?}"),
@@ -95,7 +346,7 @@ fn previous_public_cylinder_without_axis_migrates_explicitly() {
 #[test]
 fn legacy_migration_adds_axes_to_nested_geometry_and_region_csg() {
     let mut value = serde_json::json!({
-        "ir_version": PREVIOUS_PUBLIC_IR_VERSION,
+        "ir_version": "0.1.0",
         "geometry": {"entries": [{
             "kind": "translate", "name": "translated", "by": [0.0, 0.0, 0.0],
             "base": {"kind": "difference", "name": "difference",
@@ -115,8 +366,11 @@ fn legacy_migration_adds_axes_to_nested_geometry_and_region_csg() {
 #[test]
 fn previous_public_ir_golden_fixture_migrates_to_current() {
     let fixture = include_str!("../../../tests/golden/problem_ir/bootstrap_v0_1_read_compat.json");
-    let decoded: ProblemIR =
-        serde_json::from_str(fixture).expect("golden v0.1.0 fixture should migrate");
+    let mut value: serde_json::Value =
+        serde_json::from_str(fixture).expect("golden v0.1.0 fixture should parse");
+    migrate_problem_ir_json_value(&mut value).expect("golden fixture should explicitly migrate");
+    let decoded: ProblemIR = serde_json::from_value(value)
+        .expect("explicitly migrated golden v0.1.0 fixture should deserialize");
 
     assert_eq!(decoded.ir_version, CURRENT_IR_VERSION);
     assert_eq!(decoded.problem_meta.script_api_version, CURRENT_IR_VERSION);

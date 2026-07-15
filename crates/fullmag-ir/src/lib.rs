@@ -29,9 +29,9 @@ pub use spectral_validation::BlochWavevectorIR;
 pub use study::*;
 use validation::*;
 
-pub const IR_VERSION: &str = "0.2.0";
+pub const IR_VERSION: &str = "0.3.0";
 pub const CURRENT_IR_VERSION: &str = IR_VERSION;
-pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.1.0";
+pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.2.0";
 pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION, PREVIOUS_PUBLIC_IR_VERSION];
 const MU0_H_PER_M: f64 = 1.256_637_061_435_917_2e-6;
 
@@ -66,28 +66,21 @@ fn migrate_legacy_cylinder_axes(value: &mut Value) {
     }
 }
 
-pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> {
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| "ProblemIR payload must be a JSON object".to_string())?;
-    let version = object
+fn problem_ir_version(value: &Value) -> Result<&str, String> {
+    value
+        .as_object()
+        .ok_or_else(|| "ProblemIR payload must be a JSON object".to_string())?
         .get("ir_version")
         .and_then(Value::as_str)
         .map(str::trim)
-        .ok_or_else(|| "ProblemIR.ir_version must be a string".to_string())?;
+        .ok_or_else(|| "ProblemIR.ir_version must be a string".to_string())
+}
 
-    if version == CURRENT_IR_VERSION {
-        return Ok(false);
-    }
-    if version != PREVIOUS_PUBLIC_IR_VERSION {
-        return Err(format!("ir_version '{version}' is not supported for read"));
-    }
-
-    object.insert(
-        "ir_version".to_string(),
-        Value::String(CURRENT_IR_VERSION.to_string()),
-    );
-
+fn rewrite_problem_ir_version(value: &mut Value, from: &str, to: &str) {
+    let object = value
+        .as_object_mut()
+        .expect("version rewrite requires a ProblemIR object");
+    object.insert("ir_version".to_string(), Value::String(to.to_string()));
     if let Some(meta) = object
         .get_mut("problem_meta")
         .and_then(Value::as_object_mut)
@@ -96,22 +89,148 @@ pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> 
             if meta
                 .get(key)
                 .and_then(Value::as_str)
-                .is_some_and(|value| value.trim() == PREVIOUS_PUBLIC_IR_VERSION)
+                .is_some_and(|version| version.trim() == from)
             {
-                meta.insert(
-                    key.to_string(),
-                    Value::String(CURRENT_IR_VERSION.to_string()),
-                );
+                meta.insert(key.to_string(), Value::String(to.to_string()));
             }
         }
     }
+}
 
-    for value in object.values_mut() {
-        migrate_legacy_cylinder_axes(value);
+fn take_required(object: &mut serde_json::Map<String, Value>, key: &str) -> Result<Value, String> {
+    object
+        .remove(key)
+        .ok_or_else(|| format!("legacy spin_orbit_torque is missing required field '{key}'"))
+}
+
+fn migrate_v0_2_prescribed_sot(value: &mut Value) -> Result<(), String> {
+    let Some(modules) = value
+        .as_object_mut()
+        .and_then(|object| object.get_mut("spin_torque_modules"))
+        .and_then(Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+
+    for (index, module) in modules.iter_mut().enumerate() {
+        let Some(object) = module.as_object_mut() else {
+            return Err(format!("spin_torque_modules[{index}] must be an object"));
+        };
+        if object.get("kind").and_then(Value::as_str) != Some("spin_orbit_torque") {
+            continue;
+        }
+
+        const LEGACY_FIELDS: &[&str] = &[
+            "kind",
+            "charge_current_density_a_per_m2",
+            "current_source",
+            "damping_like_efficiency",
+            "field_like_efficiency",
+            "spin_polarization",
+            "ferromagnet_thickness_m",
+        ];
+        if let Some(unknown) = object
+            .keys()
+            .find(|key| !LEGACY_FIELDS.contains(&key.as_str()))
+        {
+            return Err(format!(
+                "spin_torque_modules[{index}] legacy spin_orbit_torque contains unknown field '{unknown}'"
+            ));
+        }
+
+        let scalar = object.remove("charge_current_density_a_per_m2");
+        let source = object.remove("current_source");
+        let drive = match (scalar, source) {
+            (Some(raw), None) => serde_json::json!({
+                "kind": "legacy_scalar_magnitude",
+                "raw_charge_current_density_Apm2": raw,
+            }),
+            (None, Some(source)) => serde_json::json!({
+                "kind": "legacy_current_source_norm",
+                "current_source_id": source,
+            }),
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "spin_torque_modules[{index}] legacy spin_orbit_torque has conflicting scalar and current_source drives"
+                ));
+            }
+            (None, None) => {
+                return Err(format!(
+                    "spin_torque_modules[{index}] legacy spin_orbit_torque has no drive"
+                ));
+            }
+        };
+        let xi_dl = take_required(object, "damping_like_efficiency")?;
+        let xi_fl = object
+            .remove("field_like_efficiency")
+            .unwrap_or_else(|| serde_json::json!(0.0));
+        let raw_spin_polarization = take_required(object, "spin_polarization")?;
+        let thickness = take_required(object, "ferromagnet_thickness_m")?;
+
+        *module = serde_json::json!({
+            "kind": "prescribed_sot",
+            "schema_version": "prescribed_sot.v1",
+            "id": format!("legacy_prescribed_sot_{index}"),
+            "formula_version": "prescribed_sot.legacy_fullmag.v0",
+            "drive": drive,
+            "raw_spin_polarization": raw_spin_polarization,
+            "xi_dl": xi_dl,
+            "xi_fl": xi_fl,
+            "free_layer_thickness_m": thickness,
+            "compatibility_origin": {
+                "source_ir_version": "0.2.0",
+                "authored_kind": "spin_orbit_torque"
+            }
+        });
     }
+    Ok(())
+}
 
+fn migrate_v0_2_to_v0_3(value: &mut Value) -> Result<(), String> {
+    migrate_v0_2_prescribed_sot(value)?;
+    rewrite_problem_ir_version(value, "0.2.0", "0.3.0");
+    Ok(())
+}
+
+fn migrate_problem_ir_json_value_for_direct_read(value: &mut Value) -> Result<bool, String> {
+    match problem_ir_version(value)? {
+        CURRENT_IR_VERSION => Ok(false),
+        PREVIOUS_PUBLIC_IR_VERSION => {
+            migrate_v0_2_to_v0_3(value)?;
+            Ok(true)
+        }
+        version => Err(format!(
+            "ir_version '{version}' is not supported for direct read"
+        )),
+    }
+}
+
+/// Explicit audited migration chain. Unlike ordinary deserialization, this
+/// function accepts the historical `0.1.0` payload and applies both public
+/// migrations in order.
+pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> {
+    let version = problem_ir_version(value)?.to_string();
+    if version == CURRENT_IR_VERSION {
+        return Ok(false);
+    }
+    if version == "0.1.0" {
+        for child in value
+            .as_object_mut()
+            .expect("version lookup already verified the root object")
+            .values_mut()
+        {
+            migrate_legacy_cylinder_axes(child);
+        }
+        rewrite_problem_ir_version(value, "0.1.0", "0.2.0");
+    } else if version != PREVIOUS_PUBLIC_IR_VERSION {
+        return Err(format!(
+            "ir_version '{version}' is not supported for migration"
+        ));
+    }
+    migrate_v0_2_to_v0_3(value)?;
     Ok(true)
 }
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ProblemIR {
     pub ir_version: String,
@@ -207,7 +326,7 @@ impl<'de> Deserialize<'de> for ProblemIR {
         D: Deserializer<'de>,
     {
         let mut value = Value::deserialize(deserializer)?;
-        migrate_problem_ir_json_value(&mut value).map_err(D::Error::custom)?;
+        migrate_problem_ir_json_value_for_direct_read(&mut value).map_err(D::Error::custom)?;
 
         #[derive(Deserialize)]
         struct ProblemIRWire {

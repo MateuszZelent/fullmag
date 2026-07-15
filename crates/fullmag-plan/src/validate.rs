@@ -487,6 +487,7 @@ fn validate_conservative_relaxation(problem: &ProblemIR, errors: &mut Vec<String
             fullmag_ir::SpinTorqueModuleIR::ZhangLi { .. } => "zhang_li",
             fullmag_ir::SpinTorqueModuleIR::Slonczewski { .. } => "slonczewski",
             fullmag_ir::SpinTorqueModuleIR::SpinOrbitTorque { .. } => "spin_orbit_torque",
+            fullmag_ir::SpinTorqueModuleIR::PrescribedSot { .. } => "prescribed_sot",
             fullmag_ir::SpinTorqueModuleIR::InterfaceCpp { .. } => "interface_cpp",
             fullmag_ir::SpinTorqueModuleIR::DriftDiffusion { .. } => "drift_diffusion",
         };
