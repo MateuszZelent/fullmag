@@ -281,6 +281,7 @@ impl NativeFdmBackend {
     /// Create a new backend from an FDM execution plan.
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
         validate_single_grid_budget(plan)?;
+        let sot_formula = super::ffi_prescribed_sot_formula(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
         let grid = ffi::fullmag_fdm_grid_desc {
             nx: plan.grid.cells[0],
@@ -469,7 +470,7 @@ impl NativeFdmBackend {
             } else {
                 0
             },
-            sot_formula: ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_V1,
+            sot_formula,
             sot_je: plan.sot_current_density.unwrap_or(0.0),
             sot_xi_dl: plan.sot_xi_dl.unwrap_or(0.0),
             sot_xi_fl: plan.sot_xi_fl.unwrap_or(0.0),

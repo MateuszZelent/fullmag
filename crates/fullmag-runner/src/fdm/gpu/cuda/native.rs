@@ -90,6 +90,23 @@ fn has_slonczewski_stt(plan: &fullmag_ir::FdmPlanIR) -> bool {
 }
 
 #[cfg(feature = "cuda")]
+fn ffi_prescribed_sot_formula(
+    plan: &fullmag_ir::FdmPlanIR,
+) -> Result<ffi::fullmag_fdm_prescribed_sot_formula, RunError> {
+    match plan.sot_formula_version.as_deref() {
+        None | Some("prescribed_sot.legacy_fullmag.v0") => Ok(
+            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0,
+        ),
+        Some("prescribed_sot.fullmag.v1") => Ok(
+            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_V1,
+        ),
+        Some(other) => Err(RunError {
+            message: format!("unsupported prescribed SOT formula_version '{other}'"),
+        }),
+    }
+}
+
+#[cfg(feature = "cuda")]
 fn ffi_transfer_kind(kind: &str) -> Result<ffi::fullmag_fdm_transfer_kind, RunError> {
     match kind {
         "identity" => Ok(ffi::fullmag_fdm_transfer_kind::FULLMAG_FDM_TRANSFER_IDENTITY),
@@ -439,6 +456,7 @@ impl NativeFdmBackend {
 
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
         validate_single_grid_budget(plan)?;
+        let sot_formula = ffi_prescribed_sot_formula(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
         if plan.material.ms_field.is_some()
             || plan.material.a_field.is_some()
@@ -647,7 +665,7 @@ impl NativeFdmBackend {
             } else {
                 0
             },
-            sot_formula: ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_V1,
+            sot_formula,
             sot_je: plan.sot_current_density.unwrap_or(0.0),
             sot_xi_dl: plan.sot_xi_dl.unwrap_or(0.0),
             sot_xi_fl: plan.sot_xi_fl.unwrap_or(0.0),
@@ -2005,6 +2023,30 @@ mod tests {
         CellSize, CubicAnisotropyConfig, EffectiveFieldTerms, ExchangeLlgProblem, LlgConfig,
         MaterialParameters, TimeIntegrator, UniaxialAnisotropyConfig,
     };
+
+    #[test]
+    fn prescribed_sot_formula_mapping_preserves_legacy_and_selects_v1_explicitly() {
+        let mut plan = fullmag_ir::FdmPlanIR::default();
+        assert_eq!(
+            ffi_prescribed_sot_formula(&plan).unwrap(),
+            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0
+        );
+
+        plan.sot_formula_version = Some("prescribed_sot.legacy_fullmag.v0".to_string());
+        assert_eq!(
+            ffi_prescribed_sot_formula(&plan).unwrap(),
+            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0
+        );
+
+        plan.sot_formula_version = Some("prescribed_sot.fullmag.v1".to_string());
+        assert_eq!(
+            ffi_prescribed_sot_formula(&plan).unwrap(),
+            ffi::fullmag_fdm_prescribed_sot_formula::FULLMAG_FDM_PRESCRIBED_SOT_V1
+        );
+
+        plan.sot_formula_version = Some("prescribed_sot.unknown".to_string());
+        assert!(ffi_prescribed_sot_formula(&plan).is_err());
+    }
     use fullmag_ir::{
         AxisBoundary, ExchangeBoundaryCondition, ExecutionPrecision, FdmDemagPeriodicityIR,
         FdmMaterialIR, FdmPeriodicityIR, FdmPlanIR, GridDimensions, IntegratorChoice,

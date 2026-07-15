@@ -109,6 +109,44 @@ void verify_legacy_v0_compatibility() {
           "legacy v0 must preserve historical absolute-current behavior");
 }
 
+void verify_invalid_v1_parameters_fail_closed() {
+    constexpr uint64_t cell_count = 1;
+    const double m0[3] = {1.0, 0.0, 0.0};
+    const uint8_t active_mask[cell_count] = {1};
+    const uint8_t target_mask[cell_count] = {1};
+
+    fullmag_fdm_plan_desc plan{};
+    plan.grid = {1, 1, 1, 2.0e-9, 2.0e-9, 2.0e-9};
+    plan.material = {8.0e5, 0.0, 0.3, 2.211e5};
+    plan.precision = FULLMAG_FDM_PRECISION_DOUBLE;
+    plan.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+    plan.initial_magnetization_xyz = m0;
+    plan.initial_magnetization_len = 3;
+    plan.active_mask = active_mask;
+    plan.active_mask_len = cell_count;
+    plan.has_sot = 1;
+    plan.sot_formula = FULLMAG_FDM_PRESCRIBED_SOT_V1;
+    plan.sot_je = 1.0e12;
+    plan.sot_xi_dl = 0.2;
+    plan.sot_sigma[2] = 1.0;
+    plan.sot_active_mask = target_mask;
+    plan.sot_active_mask_len = cell_count;
+
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan);
+    check(handle != nullptr, "invalid v1 create returned null");
+    const char *error = fullmag_fdm_backend_last_error(handle);
+    check(error != nullptr, "v1 with zero thickness must fail closed");
+    fullmag_fdm_backend_destroy(handle);
+
+    plan.sot_thickness = 1.0e-9;
+    plan.sot_sigma[2] = 0.0;
+    handle = fullmag_fdm_backend_create(&plan);
+    check(handle != nullptr, "zero-axis v1 create returned null");
+    error = fullmag_fdm_backend_last_error(handle);
+    check(error != nullptr, "v1 with zero sigma must fail closed");
+    fullmag_fdm_backend_destroy(handle);
+}
+
 void verify_precision(fullmag_fdm_precision precision, double relative_tolerance) {
     constexpr double current_density = 1.0e12;
     constexpr double dt = 1.0e-16;
@@ -155,6 +193,7 @@ int main() {
     verify_precision(FULLMAG_FDM_PRECISION_DOUBLE, fp64_rate_relative_budget);
     verify_precision(FULLMAG_FDM_PRECISION_SINGLE, fp32_displacement_smoke_relative_budget);
     verify_legacy_v0_compatibility();
+    verify_invalid_v1_parameters_fail_closed();
     std::printf("prescribed SOT CUDA fp64/fp32 runtime: PASS\n");
     return 0;
 }
