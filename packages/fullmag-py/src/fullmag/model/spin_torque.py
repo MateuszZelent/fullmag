@@ -44,13 +44,23 @@ def _normalized_axis(
     value: Sequence[float], field_name: str
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     authored = _finite_vector3(value, field_name)
-    norm = math.hypot(*authored)
-    if norm <= PRESCRIBED_SOT_V1_EPSILON_AXIS:
+    scale = max(abs(component) for component in authored)
+    if scale == 0.0:
         raise ValueError(
             f"{field_name} norm must be greater than epsilon_axis "
             f"({PRESCRIBED_SOT_V1_EPSILON_AXIS:g})"
         )
-    return authored, tuple(component / norm for component in authored)
+    scaled = tuple(component / scale for component in authored)
+    scaled_norm = math.hypot(*scaled)
+    if (
+        scale <= PRESCRIBED_SOT_V1_EPSILON_AXIS
+        and scaled_norm <= PRESCRIBED_SOT_V1_EPSILON_AXIS / scale
+    ):
+        raise ValueError(
+            f"{field_name} norm must be greater than epsilon_axis "
+            f"({PRESCRIBED_SOT_V1_EPSILON_AXIS:g})"
+        )
+    return authored, tuple(component / scaled_norm for component in scaled)
 
 
 @dataclass(frozen=True, slots=True)

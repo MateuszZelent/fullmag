@@ -185,6 +185,30 @@ class TestPrescribedSotDrives(unittest.TestCase):
         self.assertEqual(vector.to_ir()["drive_direction"], [-1.0, 0.0, 0.0])
         self.assertEqual(vector.to_ir()["interface_normal"], [0.0, 0.0, -1.0])
 
+    def test_scale_first_normalization_handles_unrepresentable_true_norm(self) -> None:
+        root_half = math.sqrt(0.5)
+        scalar = fm.SignedScalarDrive(
+            1.0,
+            sigma=(1.5e308, -1.5e308, 0.0),
+        )
+        vector = fm.VectorCurrentDrive(
+            "charge",
+            drive_direction=(-1.5e308, -1.5e308, 0.0),
+            interface_normal=(0.0, 0.0, -1.5e308),
+        )
+
+        sigma_hat = scalar.to_ir()["sigma_hat"]
+        drive_hat = vector.to_ir()["drive_direction"]
+        normal_hat = vector.to_ir()["interface_normal"]
+        self.assertTrue(all(math.isfinite(component) for component in sigma_hat))  # type: ignore[union-attr]
+        self.assertTrue(all(math.isfinite(component) for component in drive_hat))  # type: ignore[union-attr]
+        self.assertTrue(all(math.isfinite(component) for component in normal_hat))  # type: ignore[union-attr]
+        self.assertAlmostEqual(sigma_hat[0], root_half)  # type: ignore[index]
+        self.assertAlmostEqual(sigma_hat[1], -root_half)  # type: ignore[index]
+        self.assertAlmostEqual(drive_hat[0], -root_half)  # type: ignore[index]
+        self.assertAlmostEqual(drive_hat[1], -root_half)  # type: ignore[index]
+        self.assertEqual(normal_hat, [0.0, 0.0, -1.0])
+
     def test_nonfinite_near_zero_and_parallel_axes_fail_closed(self) -> None:
         invalid_factories = [
             lambda: fm.SignedScalarDrive(math.inf, sigma=(0.0, 1.0, 0.0)),
