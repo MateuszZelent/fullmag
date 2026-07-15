@@ -1,9 +1,8 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, EnergyTermIR,
     ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR, ExecutionPrecision,
-    FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
-    FdmGridCertificateIR, FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions,
-    InitialMagnetizationIR,
+    FdmGridCertificateIR, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
+    FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
     IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
     RelaxationAlgorithmIR, TimeDependenceIR, IR_VERSION,
 };
@@ -193,7 +192,9 @@ fn materialize_object_region_mask(
             match point_in_region_shape(point.position_object, &region.shape) {
                 Ok(true) => matches.push(index),
                 Ok(false) => {}
-                Err(message) => errors.push(format!("object_region '{}': {message}", region.region_id)),
+                Err(message) => {
+                    errors.push(format!("object_region '{}': {message}", region.region_id))
+                }
             }
         }
         if matches.is_empty() {
@@ -290,9 +291,7 @@ fn materialize_prescribed_sot_target_mask(
         .collect::<Vec<_>>();
     if !mask.iter().any(|selected| *selected) {
         return Err(PlanError {
-            reasons: vec![
-                "prescribed_sot target does not select any active FDM cells".to_string(),
-            ],
+            reasons: vec!["prescribed_sot target does not select any active FDM cells".to_string()],
         });
     }
     Ok(mask)
@@ -306,9 +305,7 @@ fn build_fdm_region_legend(
     let mut regions = problem
         .object_regions
         .iter()
-        .filter(|region| {
-            region.enabled && owner_names.contains(&region.owner_object.as_str())
-        })
+        .filter(|region| region.enabled && owner_names.contains(&region.owner_object.as_str()))
         .collect::<Vec<_>>();
     regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
     regions
@@ -570,9 +567,7 @@ pub(crate) fn plan_fdm(
             .as_ref()
             .and_then(|hints| hints.fdm.as_ref())
             .and_then(|fdm| fdm.boundary_correction.as_deref());
-        if pbc.has_any_periodic()
-            && boundary_correction.is_some_and(|value| value != "none")
-        {
+        if pbc.has_any_periodic() && boundary_correction.is_some_and(|value| value != "none") {
             errors.push(format!(
                 "FDM boundary_correction='{correction}' with periodic axes is capability-gated until seam-aware T0/T1 exchange parity is qualified; use boundary_correction='none'",
                 correction = boundary_correction.unwrap_or("?"),
@@ -666,7 +661,10 @@ pub(crate) fn plan_fdm(
         false,
         false,
         false,
-        problem.energy_terms.iter().any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
+        problem
+            .energy_terms
+            .iter()
+            .any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
         &mut errors,
     );
@@ -689,9 +687,8 @@ pub(crate) fn plan_fdm(
     let (bounding_size, active_mask, grid_cells, native_origin, used_precomputed_asset) =
         if let Some(asset) = provided_grid_asset {
             validate_grid_asset_cell_size(asset, cell_size, &mut errors);
-            let origin = std::array::from_fn(|axis| {
-                asset.origin[axis] + top_level_translation[axis]
-            });
+            let origin =
+                std::array::from_fn(|axis| asset.origin[axis] + top_level_translation[axis]);
             (
                 [
                     asset.cells[0] as f64 * asset.cell_size[0],
@@ -720,10 +717,9 @@ pub(crate) fn plan_fdm(
     }
 
     let resolved_periodic_images = match problem.pbc.as_ref() {
-        Some(pbc) => match pbc.resolve_periodic_images(
-            grid_cells,
-            problem.backend_policy.execution_precision,
-        ) {
+        Some(pbc) => match pbc
+            .resolve_periodic_images(grid_cells, problem.backend_policy.execution_precision)
+        {
             Ok(resolved) => resolved,
             Err(reason) => {
                 errors.push(reason);
@@ -804,14 +800,13 @@ pub(crate) fn plan_fdm(
                 texture_transform.scale[1],
                 texture_transform.scale[2],
             );
-            let points =
-                grid_sample_points(
-                    grid_cells,
-                    cell_size,
-                    native_origin,
-                    top_level_translation,
-                    active_mask.as_ref(),
-                );
+            let points = grid_sample_points(
+                grid_cells,
+                cell_size,
+                native_origin,
+                top_level_translation,
+                active_mask.as_ref(),
+            );
             match sample_preset_texture(
                 preset_kind,
                 &preset_params,
@@ -1089,6 +1084,10 @@ pub(crate) fn plan_fdm(
         grid_certificate: Some(grid_certificate),
         region_mask,
         active_mask: active_mask.clone(),
+        spin_transport_plans: crate::spin_transport::resolve_m1_spin_transport(
+            problem,
+            resolved_backend,
+        )?,
         initial_magnetization,
         material: FdmMaterialIR {
             name: material.name.clone(),
@@ -1469,7 +1468,11 @@ mod tests {
             &mut errors,
         );
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
-        assert_eq!(mask, vec![1], "translated owner must be sampled in object coordinates");
+        assert_eq!(
+            mask,
+            vec![1],
+            "translated owner must be sampled in object coordinates"
+        );
     }
 
     #[test]
@@ -1589,10 +1592,8 @@ fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) ->
         Ok(values) if values.len() == 3 => [values[0], values[1], values[2]],
         _ => return false,
     };
-    let Ok(global_cost) = checked_fdm_grid_cost(
-        global_grid_u32,
-        FDM_GRID_ESTIMATED_BYTES_PER_CELL,
-    ) else {
+    let Ok(global_cost) = checked_fdm_grid_cost(global_grid_u32, FDM_GRID_ESTIMATED_BYTES_PER_CELL)
+    else {
         return false;
     };
     let Ok(total_cells) = usize::try_from(global_cost.cells) else {
@@ -1958,14 +1959,13 @@ pub(crate) fn plan_fdm_multilayer(
                 mapping,
                 texture_transform,
             }) => {
-                let points =
-                    grid_sample_points(
-                        grid_cells,
-                        cell_size,
-                        native_origin,
-                        placed.translation,
-                        active_mask.as_ref(),
-                    );
+                let points = grid_sample_points(
+                    grid_cells,
+                    cell_size,
+                    native_origin,
+                    placed.translation,
+                    active_mask.as_ref(),
+                );
                 match sample_preset_texture(
                     preset_kind,
                     &preset_params,
@@ -2166,11 +2166,9 @@ pub(crate) fn plan_fdm_multilayer(
 
     let estimated_unique_kernels = unique_shifts.len() as u32;
     let estimated_pair_kernels = (lowered_bodies.len() * lowered_bodies.len()) as u32;
-    let padded_len = common_cells
-        .iter()
-        .try_fold(1u64, |acc, cells| {
-            acc.checked_mul((*cells as u64).checked_mul(2)?)
-        });
+    let padded_len = common_cells.iter().try_fold(1u64, |acc, cells| {
+        acc.checked_mul((*cells as u64).checked_mul(2)?)
+    });
     let estimated_kernel_bytes = padded_len
         .and_then(|cells| cells.checked_mul(6))
         .and_then(|bytes| bytes.checked_mul(16))
@@ -2188,10 +2186,9 @@ pub(crate) fn plan_fdm_multilayer(
     let common_grid_cost = checked_fdm_grid_cost(common_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
 
     let resolved_periodic_images = match problem.pbc.as_ref() {
-        Some(pbc) => match pbc.resolve_periodic_images(
-            common_cells,
-            problem.backend_policy.execution_precision,
-        ) {
+        Some(pbc) => match pbc
+            .resolve_periodic_images(common_cells, problem.backend_policy.execution_precision)
+        {
             Ok(resolved) => resolved,
             Err(reason) => {
                 errors.push(reason);
@@ -2252,8 +2249,7 @@ pub(crate) fn plan_fdm_multilayer(
             },
         })
         .collect::<Vec<_>>();
-    let multilayer_topology_tokens =
-        fullmag_ir::fdm_multilayer_topology_tokens(&layers);
+    let multilayer_topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&layers);
     let native_cuda_lane =
         runtime_requests_cuda(problem) && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
     let requested_auto_integrator = problem.study.optional_dynamics().is_some_and(|dynamics| {
@@ -2298,7 +2294,9 @@ pub(crate) fn plan_fdm_multilayer(
         &multilayer_topology_tokens,
     )
     .map_err(|message| PlanError {
-        reasons: vec![format!("invalid resolved multilayer FDM grid certificate: {message}")],
+        reasons: vec![format!(
+            "invalid resolved multilayer FDM grid certificate: {message}"
+        )],
     })?;
 
     let plan = FdmMultilayerPlanIR {

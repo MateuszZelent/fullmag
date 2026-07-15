@@ -2451,21 +2451,23 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
                     orientation: None,
                     pairing_policy: None,
                 }],
-                periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
-                    pair_id: "x_periodic".to_string(),
-                    node_a: 0,
-                    node_b: 3,
-                },
-                fullmag_ir::MeshPeriodicNodePairIR {
-                    pair_id: "x_periodic".to_string(),
-                    node_a: 1,
-                    node_b: 4,
-                },
-                fullmag_ir::MeshPeriodicNodePairIR {
-                    pair_id: "x_periodic".to_string(),
-                    node_a: 2,
-                    node_b: 5,
-                }],
+                periodic_node_pairs: vec![
+                    fullmag_ir::MeshPeriodicNodePairIR {
+                        pair_id: "x_periodic".to_string(),
+                        node_a: 0,
+                        node_b: 3,
+                    },
+                    fullmag_ir::MeshPeriodicNodePairIR {
+                        pair_id: "x_periodic".to_string(),
+                        node_a: 1,
+                        node_b: 4,
+                    },
+                    fullmag_ir::MeshPeriodicNodePairIR {
+                        pair_id: "x_periodic".to_string(),
+                        node_a: 2,
+                        node_b: 5,
+                    },
+                ],
                 per_domain_quality: std::collections::HashMap::new(),
             }),
             region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
@@ -2575,11 +2577,9 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         .demag = fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0;
     let demag_planned =
         plan(&demag_ir).expect("periodic FEM static demag with periodic-airbox PBC should plan");
-    assert!(demag_planned
-        .provenance
-        .notes
-        .iter()
-        .any(|note| note.contains("periodic mesh certificate: schema=periodic_mesh_certificate.v6")
+    assert!(
+        demag_planned.provenance.notes.iter().any(|note| note
+            .contains("periodic mesh certificate: schema=periodic_mesh_certificate.v6")
             && note.contains("topology=sha256:")
             && note.contains("magnetic_classes=3")
             && note.contains("scalar_classes=3")),
@@ -4744,8 +4744,7 @@ fn fem_demag_projected_gradient_bb_resolves_strict_armijo_policy() {
 
 #[test]
 fn fem_demag_direct_minimizer_rejects_explicit_solver_policy_too_loose_for_armijo() {
-    let mut ir =
-        fem_demag_relaxation_policy_ir(fullmag_ir::RelaxationAlgorithmIR::NonlinearCg);
+    let mut ir = fem_demag_relaxation_policy_ir(fullmag_ir::RelaxationAlgorithmIR::NonlinearCg);
     ir.backend_policy
         .discretization_hints
         .as_mut()
@@ -4994,7 +4993,9 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
         ),
         (
             fullmag_ir::SpinTorqueModuleIR::Slonczewski {
-                schema_version: None, id: None, target: None,
+                schema_version: None,
+                id: None,
+                target: None,
                 formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
                 current_density: Some([0.0, 0.0, 1e10]),
                 current_source: None,
@@ -5070,13 +5071,30 @@ fn fem_canonical_zhang_li_plan_preserves_identity_and_target_masks() {
     let BackendPlanIR::Fem(fem) = planned.backend_plan else {
         panic!("expected FEM plan");
     };
-    let contract = fem.spin_torque_contract.expect("versioned FEM STT contract");
+    let contract = fem
+        .spin_torque_contract
+        .expect("versioned FEM STT contract");
     assert_eq!(contract.formula_version, "zhang_li.fullmag.v1");
-    assert_eq!(contract.operator_version.as_deref(), Some("zl_central_reference_v1"));
+    assert_eq!(
+        contract.operator_version.as_deref(),
+        Some("zl_central_reference_v1")
+    );
     assert_eq!(contract.lande_g, Some(1.9));
-    assert_eq!(contract.target.as_ref().map(|target| target.object_id.as_str()), Some("strip"));
-    assert!(contract.active_node_mask.as_ref().is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected)));
-    assert!(contract.active_element_mask.as_ref().is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected)));
+    assert_eq!(
+        contract
+            .target
+            .as_ref()
+            .map(|target| target.object_id.as_str()),
+        Some("strip")
+    );
+    assert!(contract
+        .active_node_mask
+        .as_ref()
+        .is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected)));
+    assert!(contract
+        .active_element_mask
+        .as_ref()
+        .is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected)));
 }
 
 #[test]
@@ -7700,7 +7718,8 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
     let err = plan(&nonzero_k).expect_err("nonzero-k response should be gated");
     assert!(err.reasons.iter().any(|reason| {
         reason.contains("supported frequency-domain slices")
-            && reason.contains("nonzero-k Floquet/Bloch driven response requires spin_wave_bc=floquet")
+            && reason
+                .contains("nonzero-k Floquet/Bloch driven response requires spin_wave_bc=floquet")
     }));
 
     let mut periodic_without_pairs = fem_frequency_response_mesh_asset_problem();
@@ -9242,9 +9261,16 @@ fn fdm_translated_base_boundary_sdf_matches_active_mask_coordinates() {
     };
     assert_eq!(fdm.origin_m, [0.0, -20e-9, -2e-9]);
     let serialized = serde_json::to_value(&fdm).expect("FDM plan should serialize");
-    assert_eq!(serialized["origin_m"], serde_json::json!([0.0, -20e-9, -2e-9]));
-    let boundary = fdm.boundary_geometry.expect("translated base must retain SDF");
-    let active_mask = fdm.active_mask.expect("cylinder should have an active mask");
+    assert_eq!(
+        serialized["origin_m"],
+        serde_json::json!([0.0, -20e-9, -2e-9])
+    );
+    let boundary = fdm
+        .boundary_geometry
+        .expect("translated base must retain SDF");
+    let active_mask = fdm
+        .active_mask
+        .expect("cylinder should have an active mask");
     let active_index = active_mask
         .iter()
         .position(|active| *active)
@@ -9289,9 +9315,8 @@ fn fdm_translated_single_grid_asset_matches_multilayer_origin() {
         .expect("the same geometry must lower for multilayer");
     let expected_origin = std::array::from_fn(|axis| asset_origin[axis] + placed.translation[axis]);
     assert_eq!(single.origin_m, expected_origin);
-    let first_active_cell: [f64; 3] = std::array::from_fn(|axis| {
-        single.origin_m[axis] + 0.5 * single.cell_size[axis]
-    });
+    let first_active_cell: [f64; 3] =
+        std::array::from_fn(|axis| single.origin_m[axis] + 0.5 * single.cell_size[axis]);
     for (actual, expected) in first_active_cell.into_iter().zip([29e-9, -11e-9, 4e-9]) {
         assert!((actual - expected).abs() < 1e-21);
     }
@@ -9382,9 +9407,21 @@ fn fdm_boundary_params_none_when_not_set() {
 fn fdm_pbc_demag_resolution_matrix_is_lane_independent() {
     let axes = [
         [AxisBoundary::Open, AxisBoundary::Open, AxisBoundary::Open],
-        [AxisBoundary::Periodic, AxisBoundary::Open, AxisBoundary::Open],
-        [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open],
-        [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Periodic],
+        [
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+            AxisBoundary::Open,
+        ],
+        [
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+        ],
+        [
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
+        ],
     ];
     for device in [None, Some("cuda")] {
         for axis_set in axes {
@@ -9408,9 +9445,7 @@ fn fdm_pbc_demag_resolution_matrix_is_lane_independent() {
                     image_counts: Some([4, 4, 4]),
                 });
                 let result = plan(&ir);
-                let has_periodic_axis = axis_set
-                    .iter()
-                    .any(|axis| *axis == AxisBoundary::Periodic);
+                let has_periodic_axis = axis_set.iter().any(|axis| *axis == AxisBoundary::Periodic);
                 if demag == FdmDemagPeriodicityIR::Open && has_periodic_axis {
                     let error = result.expect_err("periodic + open demag must fail closed");
                     assert!(
@@ -9472,8 +9507,7 @@ fn fdm_multilayer_periodic_axes_fail_closed_until_kernel_parity() {
 
     let error = plan(&ir).expect_err("multilayer periodic kernels must fail closed");
     assert!(error.reasons.iter().any(|reason| {
-        reason.contains("multilayer periodic axes")
-            && reason.contains("self/shifted demag kernels")
+        reason.contains("multilayer periodic axes") && reason.contains("self/shifted demag kernels")
     }));
 }
 
@@ -9661,6 +9695,7 @@ fn fdm_cuda_general_oersted_field_plans() {
         current_density: Some([1.0e10, 0.0, 0.0]),
         solve_region: Some("strip".to_string()),
         conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
     });
     ir.energy_terms.push(EnergyTermIR::OerstedField {
         model: OerstedFieldModelIR::FromCurrentSolution,
@@ -9935,11 +9970,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
                 fem.external_field = Some([1.0, 0.0, 0.0]);
                 fem.enable_demag = true;
             },
-            expected: Some((
-                "Ms_element_field",
-                "GPU material-state upload",
-                "gpu",
-            )),
+            expected: Some(("Ms_element_field", "GPU material-state upload", "gpu")),
         },
         Case {
             name: "CPU A Zeeman",
@@ -9982,15 +10013,17 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_ms: true,
             include_a: false,
             gpu: false,
-            configure: |fem| fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
-                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
-                stop: fullmag_ir::RelaxStopIR {
-                    torque_tolerance_apm: Some(1e-3),
-                    energy_tolerance_j: None,
-                    max_steps: Some(1),
-                    max_relaxation_time_s: None,
-                },
-            }),
+            configure: |fem| {
+                fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                    algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                    stop: fullmag_ir::RelaxStopIR {
+                        torque_tolerance_apm: Some(1e-3),
+                        energy_tolerance_j: None,
+                        max_steps: Some(1),
+                        max_relaxation_time_s: None,
+                    },
+                })
+            },
             expected: Some((
                 "Ms_element_field",
                 "native FEM handle lifecycle fallback",
@@ -10180,9 +10213,8 @@ fn fem_cpu_exchange_preserves_nodal_ms_and_conformal_element_a_payloads() {
         }
     }
 
-    let planned = plan(&ir).expect(
-        "CPU exchange must accept distinct nodal Ms and conformal element A realizations",
-    );
+    let planned = plan(&ir)
+        .expect("CPU exchange must accept distinct nodal Ms and conformal element A realizations");
     let BackendPlanIR::Fem(fem_plan) = planned.backend_plan else {
         panic!("expected FEM plan");
     };
@@ -10575,7 +10607,6 @@ fn fem_sharp_conformal_ms_rejects_conflicting_nodal_and_element_realizations() {
         "unexpected planner errors: {:?}",
         err.reasons
     );
-
 }
 
 #[test]
@@ -11213,9 +11244,10 @@ fn fdm_grid_count_overflow_is_rejected() {
         .reasons
         .iter()
         .any(|reason| reason.contains("fdm_grid_count_overflow")));
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("4294967295") && reason.contains("requested_counts")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("4294967295") && reason.contains("requested_counts") }));
 }
 
 #[test]
@@ -11228,9 +11260,10 @@ fn fdm_grid_memory_budget_is_rejected() {
         .reasons
         .iter()
         .any(|reason| reason.contains("fdm_grid_memory_budget_exceeded")));
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("1000") && reason.contains("requested_counts")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("1000") && reason.contains("requested_counts") }));
 }
 
 #[test]
@@ -11259,7 +11292,9 @@ fn fdm_per_magnet_cells_resolve_without_hidden_fallback() {
     };
 
     assert_eq!(cell_for_magnet(&hints, "left").unwrap(), [1e-9, 2e-9, 3e-9]);
-    assert!(cell_for_magnet(&hints, "missing").unwrap_err().contains("missing"));
+    assert!(cell_for_magnet(&hints, "missing")
+        .unwrap_err()
+        .contains("missing"));
     assert!(fdm_default_cell(&hints).is_err());
 }
 
@@ -11348,9 +11383,14 @@ fn fdm_multilayer_plan_rejects_missing_or_conflicting_per_magnet_cells() {
     fdm.default_cell = None;
     fdm.per_magnet = Some(only_free);
     let error = plan(&missing).expect_err("missing layer override must fail closed");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("ref") && reason.contains("missing cell override")
-    }), "unexpected reasons: {:?}", error.reasons);
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| { reason.contains("ref") && reason.contains("missing cell override") }),
+        "unexpected reasons: {:?}",
+        error.reasons
+    );
 
     let mut conflicting = stacked_two_body_multilayer_problem();
     let mut per_magnet = BTreeMap::new();
@@ -11405,7 +11445,10 @@ fn fdm_difference_preserves_translated_operand_and_finite_height() {
     .expect("difference should lower");
     let mut errors = Vec::new();
     let (_size, mask, cells, origin) = voxelize_shape(&shape, [1.0; 3], &mut errors);
-    assert!(errors.is_empty(), "unexpected voxelization errors: {errors:?}");
+    assert!(
+        errors.is_empty(),
+        "unexpected voxelization errors: {errors:?}"
+    );
     assert_eq!(cells, [4, 4, 4]);
     assert_eq!(origin, [-2.0, -2.0, -2.0]);
     let mask = mask.expect("bounded CSG should produce a mask");
@@ -11436,7 +11479,10 @@ fn fdm_difference_preserves_translated_operand_and_finite_height() {
     .expect("box difference should lower");
     let mut box_errors = Vec::new();
     let (_, box_mask, _, _) = voxelize_shape(&box_shape, [1.0; 3], &mut box_errors);
-    assert!(box_errors.is_empty(), "unexpected box CSG errors: {box_errors:?}");
+    assert!(
+        box_errors.is_empty(),
+        "unexpected box CSG errors: {box_errors:?}"
+    );
     let box_removed: Vec<usize> = box_mask
         .expect("bounded CSG should produce a mask")
         .iter()

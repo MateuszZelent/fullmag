@@ -69,11 +69,7 @@ fn validate_time_dependence(label: &str, value: &TimeDependenceIR, errors: &mut 
     }
 }
 
-fn validate_time_envelope(
-    label: &str,
-    value: &crate::TimeEnvelopeIR,
-    errors: &mut Vec<String>,
-) {
+fn validate_time_envelope(label: &str, value: &crate::TimeEnvelopeIR, errors: &mut Vec<String>) {
     match value {
         crate::TimeEnvelopeIR::Constant { value } => {
             if !value.is_finite() {
@@ -558,8 +554,7 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
     let axis_is_valid = |vector: &[f64; 3]| {
         vector3_is_finite(vector)
             && vector3_norm_sq(vector)
-                > crate::PRESCRIBED_SOT_V1_EPSILON_AXIS
-                    * crate::PRESCRIBED_SOT_V1_EPSILON_AXIS
+                > crate::PRESCRIBED_SOT_V1_EPSILON_AXIS * crate::PRESCRIBED_SOT_V1_EPSILON_AXIS
     };
     let validate_vector_binding = |index: usize,
                                    label: &str,
@@ -642,9 +637,7 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                         "spin_torque_modules[{index}] slonczewski epsilon_prime must be finite"
                     ));
                 }
-                if free_layer_thickness_m
-                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
-                {
+                if free_layer_thickness_m.is_some_and(|value| !value.is_finite() || value <= 0.0) {
                     errors.push(format!(
                         "spin_torque_modules[{index}] slonczewski free_layer_thickness_m must be > 0 and finite"
                     ));
@@ -821,6 +814,33 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                     errors.push(format!(
                         "spin_torque_modules[{index}] drift_diffusion spin_diffusion_length_m must be > 0"
                     ));
+                }
+            }
+            SpinTorqueModuleIR::DriftDiffusionSpinTorque {
+                schema_version,
+                id,
+                solve_id,
+                target,
+                formula_version,
+            } => {
+                if schema_version != "drift_diffusion_spin_torque.v1" {
+                    errors.push(format!("spin_torque_modules[{index}] drift-diffusion schema_version must be drift_diffusion_spin_torque.v1"));
+                }
+                if id.trim().is_empty()
+                    || solve_id.trim().is_empty()
+                    || target.object_id.trim().is_empty()
+                {
+                    errors.push(format!("spin_torque_modules[{index}] drift-diffusion id, solve_id, and target.object_id must not be empty"));
+                }
+                if formula_version != "transport_torque_angular_momentum.fullmag.v1" {
+                    errors.push(format!("spin_torque_modules[{index}] drift-diffusion formula_version is unsupported"));
+                }
+                if !problem
+                    .spin_transport_modules
+                    .iter()
+                    .any(|solve| solve.id == *solve_id)
+                {
+                    errors.push(format!("spin_torque_modules[{index}] solve_id '{solve_id}' must reference a spin_transport module"));
                 }
             }
             SpinTorqueModuleIR::SpinOrbitTorque {
@@ -1072,6 +1092,98 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                 "legacy STT fields cannot represent more than one spin_torque_modules entry"
                     .to_string(),
             );
+        }
+    }
+}
+
+pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let mut ids = BTreeSet::new();
+    for (index, module) in problem.spin_transport_modules.iter().enumerate() {
+        let prefix = format!("spin_transport_modules[{index}]");
+        if module.schema_version != "spin_transport.v1" {
+            errors.push(format!("{prefix}.schema_version must be spin_transport.v1"));
+        }
+        if !ids.insert(module.id.as_str()) || module.id.trim().is_empty() {
+            errors.push(format!("{prefix}.id must be non-empty and unique"));
+        }
+        if module.mode != crate::SpinTransportModeIR::Steady {
+            errors.push(format!("{prefix}.mode must be steady for M1"));
+        }
+        if module.domain.is_empty() || module.materials.is_empty() {
+            errors.push(format!("{prefix} requires non-empty domain and materials"));
+        }
+        let source = problem
+            .current_modules
+            .iter()
+            .find_map(|current| match current {
+                CurrentModuleIR::CurrentTransport {
+                    name,
+                    conductivity_s_per_m,
+                    coupling,
+                    ..
+                } if name == &module.current_source_id => Some((*conductivity_s_per_m, *coupling)),
+                _ => None,
+            });
+        let Some((sigma_ref, coupling)) = source else {
+            errors.push(format!(
+                "{prefix}.current_source_id '{}' must reference a current_transport module",
+                module.current_source_id
+            ));
+            continue;
+        };
+        if coupling != crate::TransportCouplingIR::OneWay {
+            errors.push(format!(
+                "{prefix} M1 requires current source coupling=one_way"
+            ));
+        }
+        if module.constitutive_version != "transport_constitutive.one_way.fullmag.v1" {
+            errors.push(format!(
+                "{prefix}.constitutive_version is unsupported for M1"
+            ));
+        }
+        if module.requested_execution.precision != crate::ExecutionPrecision::Double {
+            errors.push(format!(
+                "{prefix} M1 initial lane supports precision=double only"
+            ));
+        }
+        for (material_index, assignment) in module.materials.iter().enumerate() {
+            let material = &assignment.material;
+            if !material.sigma_s_spm.is_finite() || material.sigma_s_spm <= 0.0 {
+                errors.push(format!(
+                    "{prefix}.materials[{material_index}].sigma_s_Spm must be finite and > 0"
+                ));
+            }
+            if !material.polarization_p.is_finite()
+                || !(-1.0..=1.0).contains(&material.polarization_p)
+            {
+                errors.push(format!("{prefix}.materials[{material_index}].polarization_p must be finite and in [-1,1]"));
+            }
+            if !material.theta_sh.is_finite()
+                || !material.lambda_sf_m.is_finite()
+                || material.lambda_sf_m <= 0.0
+            {
+                errors.push(format!("{prefix}.materials[{material_index}] theta_sh must be finite and lambda_sf_m > 0"));
+            }
+            if let Some(sigma) = sigma_ref {
+                if material.sigma_s_spm - material.polarization_p.powi(2) * sigma <= 0.0 {
+                    errors.push(format!("{prefix}.materials[{material_index}] requires sigma_s_Spm - polarization_p^2*sigma_ref > 0"));
+                }
+            }
+        }
+        if module.solver.operator_version != "fv_spin_upwind_v1"
+            || module.solver.physical_residual_version != "transport_balance_integrated_l2.v1"
+        {
+            errors.push(format!(
+                "{prefix}.solver carries unsupported operator/residual version"
+            ));
+        }
+        if module.solver.linear.relative_tolerance <= 0.0
+            || module.solver.linear.absolute_tolerance < 0.0
+            || module.solver.linear.max_iterations == 0
+        {
+            errors.push(format!(
+                "{prefix}.solver linear tolerances/iterations are invalid"
+            ));
         }
     }
 }

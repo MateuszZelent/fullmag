@@ -118,6 +118,8 @@ pub enum CurrentModuleIR {
         solve_region: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         conductivity_s_per_m: Option<f64>,
+        #[serde(default)]
+        coupling: crate::TransportCouplingIR,
     },
 }
 
@@ -204,6 +206,13 @@ pub enum SpinTorqueModuleIR {
         beta: f64,
         spin_diffusion_length_m: f64,
     },
+    DriftDiffusionSpinTorque {
+        schema_version: String,
+        id: String,
+        solve_id: String,
+        target: RegionRefIR,
+        formula_version: String,
+    },
     #[serde(skip)]
     SpinOrbitTorque {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,7 +254,9 @@ pub struct RegionRefIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SlonczewskiRealizationIR {
-    ThinLayerHomogenized { realization_version: String },
+    ThinLayerHomogenized {
+        realization_version: String,
+    },
     InterfaceFlux {
         interface_id: String,
         realization_version: String,

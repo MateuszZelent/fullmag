@@ -26,6 +26,7 @@ from fullmag.model.spin_torque import (
     SpinOrbitTorque,
     SpinTorqueModule,
 )
+from fullmag.model.spin_transport import DriftDiffusionSpinTorque, SpinDriftDiffusion
 from fullmag.model.mechanics import (
     ElasticBody,
     ElasticMaterial,
@@ -1098,6 +1099,7 @@ class Problem:
     spin_torque: LegacySpinTorque | None = None
     # Canonical torque family. Allows more than one module to be authored.
     spin_torques: Sequence[SpinTorqueModule] = ()
+    spin_transports: Sequence[SpinDriftDiffusion] = ()
     # Temperature for Brown thermal field [K] (optional, 0 = no noise)
     temperature: float | None = None
     # Magnetoelastic (optional)
@@ -1159,6 +1161,14 @@ class Problem:
             (coupling.coupling_id for coupling in self.couplings), "coupling ids"
         )
         current_modules_by_name = _current_module_name_map(self.current_modules)
+        ensure_unique_names((module.id for module in self.spin_transports), "spin transport ids")
+        spin_transports_by_id = {module.id: module for module in self.spin_transports}
+        for module in self.spin_transports:
+            source_module = current_modules_by_name.get(module.current_source_id)
+            if not isinstance(source_module, CurrentTransport):
+                raise ValueError(
+                    f"spin transport current_source_id={module.current_source_id!r} must reference a CurrentTransport"
+                )
         if self.excitation_analysis is not None:
             source_module = current_modules_by_name.get(self.excitation_analysis.source)
             if source_module is None:
@@ -1170,6 +1180,12 @@ class Problem:
                     "excitation_analysis.source must reference an AntennaFieldSource"
                 )
         for module in self.spin_torques:
+            if isinstance(module, DriftDiffusionSpinTorque):
+                if module.solve_id not in spin_transports_by_id:
+                    raise ValueError(
+                        f"drift-diffusion torque solve_id={module.solve_id!r} must reference Problem.spin_transports"
+                    )
+                continue
             current_source = getattr(module, "current_source", None)
             if current_source is None:
                 continue
@@ -1333,6 +1349,7 @@ class Problem:
             "magnets": magnets_ir,
             "energy_terms": [term.to_ir() for term in self.energy],
             "current_modules": [module.to_ir() for module in self.current_modules],
+            "spin_transport_modules": [module.to_ir() for module in self.spin_transports],
             "excitation_analysis": self.excitation_analysis.to_ir()
             if self.excitation_analysis is not None
             else None,

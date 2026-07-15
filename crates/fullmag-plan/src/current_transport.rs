@@ -97,6 +97,7 @@ mod tests {
                 current_density: Some([0.0, 0.0, 5e10]),
                 solve_region: None,
                 conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
             });
 
         let resolved =
@@ -118,6 +119,7 @@ mod tests {
                 current_density: Some([0.0, 0.0, 5e10]),
                 solve_region: None,
                 conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
             });
 
         let resolved =

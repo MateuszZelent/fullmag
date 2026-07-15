@@ -6,6 +6,7 @@ from typing import Sequence
 from fullmag._validation import as_vector3, require_non_empty, require_positive
 
 CURRENT_TRANSPORT_MODELS = {"prescribed_density", "ohmic_poisson"}
+CURRENT_TRANSPORT_COUPLINGS = {"one_way", "bidirectional"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,7 @@ class CurrentTransport:
     current_density: tuple[float, float, float] | None = None
     solve_region: str | None = None
     conductivity_s_per_m: float | None = None
+    coupling: str = "one_way"
 
     def __init__(
         self,
@@ -33,6 +35,7 @@ class CurrentTransport:
         current_density: Sequence[float] | None = None,
         solve_region: str | None = None,
         conductivity_s_per_m: float | None = None,
+        coupling: str = "one_way",
     ) -> None:
         normalized_model = require_non_empty(model, "model").lower()
         if normalized_model not in CURRENT_TRANSPORT_MODELS:
@@ -47,6 +50,12 @@ class CurrentTransport:
             "current_density",
             as_vector3(current_density, "current_density") if current_density is not None else None,
         )
+        normalized_coupling = require_non_empty(coupling, "coupling").lower()
+        if normalized_coupling not in CURRENT_TRANSPORT_COUPLINGS:
+            raise ValueError(f"coupling must be one of {sorted(CURRENT_TRANSPORT_COUPLINGS)}")
+        if normalized_coupling != "one_way":
+            raise ValueError("M1 CurrentTransport supports coupling='one_way' only")
+        object.__setattr__(self, "coupling", normalized_coupling)
         object.__setattr__(
             self,
             "solve_region",
@@ -82,7 +91,8 @@ class CurrentTransport:
             ir["solve_region"] = self.solve_region
         if self.conductivity_s_per_m is not None:
             ir["conductivity_s_per_m"] = self.conductivity_s_per_m
+        ir["coupling"] = self.coupling
         return ir
 
 
-__all__ = ["CURRENT_TRANSPORT_MODELS", "CurrentTransport"]
+__all__ = ["CURRENT_TRANSPORT_COUPLINGS", "CURRENT_TRANSPORT_MODELS", "CurrentTransport"]

@@ -8,9 +8,9 @@ use crate::{
     FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, IntegratorChoice,
     KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
-    ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy,
-    RegionRefIR, SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
-    ResolvedPeriodicImagesIR,
+    ModeTrackingIR, OerstedRealization, OutputIR, RegionRefIR, RelaxStopIR, RelaxationAlgorithmIR,
+    ResolvedPeriodicImagesIR, ResolvedSpinTransportPlanIR, SeedPolicy, SpinWaveBoundaryConditionIR,
+    ThermalSeedConfig, TimeDependenceIR,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -102,7 +102,15 @@ impl FdmGridCertificateIR {
         active_cells: u64,
         estimated_bytes: u64,
     ) -> Result<Self, String> {
-        Self::new_with_masks(origin_m, counts, cell_m, active_cells, estimated_bytes, None, &[])
+        Self::new_with_masks(
+            origin_m,
+            counts,
+            cell_m,
+            active_cells,
+            estimated_bytes,
+            None,
+            &[],
+        )
     }
 
     /// Build a certificate including the resolved active/region topology.
@@ -158,8 +166,7 @@ impl FdmGridCertificateIR {
         active_mask: Option<&[bool]>,
         payload: &[u32],
     ) -> Result<Self, String> {
-        let extent_m: [f64; 3] =
-            std::array::from_fn(|axis| counts[axis] as f64 * cell_m[axis]);
+        let extent_m: [f64; 3] = std::array::from_fn(|axis| counts[axis] as f64 * cell_m[axis]);
         let grid_fingerprint = Self::fingerprint_for(
             origin_m,
             counts,
@@ -294,10 +301,9 @@ impl FdmGridCertificateIR {
                     entry.numeric_id
                 ));
             }
-            if self.region_legend[..index]
-                .iter()
-                .any(|previous| previous.object_id == entry.object_id && previous.region_id == entry.region_id)
-            {
+            if self.region_legend[..index].iter().any(|previous| {
+                previous.object_id == entry.object_id && previous.region_id == entry.region_id
+            }) {
                 return Err(format!(
                     "FDM region legend contains duplicate authored region {}:{}",
                     entry.object_id, entry.region_id
@@ -371,8 +377,9 @@ impl FdmGridCertificateIR {
             "active_mask": active_mask,
             "region_mask": region_mask,
         });
-        let encoded = serde_json::to_vec(&payload)
-            .map_err(|error| format!("FDM grid certificate fingerprint serialization failed: {error}"))?;
+        let encoded = serde_json::to_vec(&payload).map_err(|error| {
+            format!("FDM grid certificate fingerprint serialization failed: {error}")
+        })?;
         Ok(Sha256::digest(encoded)
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -411,6 +418,8 @@ pub struct FdmPlanIR {
     pub region_mask: Vec<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_mask: Option<Vec<bool>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_transport_plans: Vec<ResolvedSpinTransportPlanIR>,
     pub initial_magnetization: Vec<[f64; 3]>,
     pub material: FdmMaterialIR,
     pub enable_exchange: bool,
@@ -1469,14 +1478,8 @@ mod tests {
 
     #[test]
     fn fdm_grid_certificate_rejects_active_count_and_fingerprint_tampering() {
-        let certificate = FdmGridCertificateIR::new(
-            [0.0; 3],
-            [2, 2, 1],
-            [1.0e-9; 3],
-            3,
-            1_024,
-        )
-        .expect("resolved grid certificate should validate");
+        let certificate = FdmGridCertificateIR::new([0.0; 3], [2, 2, 1], [1.0e-9; 3], 3, 1_024)
+            .expect("resolved grid certificate should validate");
         let mut active_invalid = certificate.clone();
         active_invalid.active_cells = 5;
         assert!(active_invalid
@@ -1523,33 +1526,27 @@ mod tests {
 
     #[test]
     fn fdm_grid_certificate_binds_deterministic_region_legend() {
-        let certificate = FdmGridCertificateIR::new(
-            [0.0; 3],
-            [2, 2, 1],
-            [1.0e-9; 3],
-            2,
-            1_024,
-        )
-        .expect("resolved grid certificate should validate")
-        .with_region_legend(vec![FdmRegionLegendEntryIR {
-            numeric_id: 1,
-            object_id: "magnet".to_string(),
-            region_id: "magnet:core".to_string(),
-            priority: 0,
-        }]);
+        let certificate = FdmGridCertificateIR::new([0.0; 3], [2, 2, 1], [1.0e-9; 3], 2, 1_024)
+            .expect("resolved grid certificate should validate")
+            .with_region_legend(vec![FdmRegionLegendEntryIR {
+                numeric_id: 1,
+                object_id: "magnet".to_string(),
+                region_id: "magnet:core".to_string(),
+                priority: 0,
+            }]);
         assert_eq!(certificate.region_legend.len(), 1);
         assert!(certificate
             .region_legend_fingerprint
             .as_deref()
             .is_some_and(|value| value.starts_with("sha256:")));
-        let changed = certificate.clone().with_region_legend(vec![
-            FdmRegionLegendEntryIR {
+        let changed = certificate
+            .clone()
+            .with_region_legend(vec![FdmRegionLegendEntryIR {
                 numeric_id: 1,
                 object_id: "magnet".to_string(),
                 region_id: "magnet:shell".to_string(),
                 priority: 0,
-            },
-        ]);
+            }]);
         assert_ne!(
             certificate.region_legend_fingerprint,
             changed.region_legend_fingerprint
@@ -1610,11 +1607,8 @@ mod tests {
 
     #[test]
     fn fdm_region_lut_rejects_out_of_range_exchange_pair() {
-        let error = validate_fdm_region_lut_indices(
-            &[1, 2],
-            &[(1, MAX_FDM_REGION_IDS + 1, 1.0)],
-        )
-        .expect_err("exchange pair ids must use the same LUT bound");
+        let error = validate_fdm_region_lut_indices(&[1, 2], &[(1, MAX_FDM_REGION_IDS + 1, 1.0)])
+            .expect_err("exchange pair ids must use the same LUT bound");
         assert!(error.contains("exchange_pair_index=0"));
         assert!(error.contains("supported_region_ids=255"));
     }

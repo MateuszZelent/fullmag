@@ -131,35 +131,31 @@ pub(crate) fn validate_region_owned_planning(
         ));
     }
     if resolved_backend == BackendTarget::Fdm && runtime_requests_cuda(problem) {
-        let has_cuda_region_fields = problem
-            .material_parameter_fields
-            .iter()
-            .any(|assignment| {
-                let active = assignment.region_id.as_deref().is_none_or(|region_id| {
-                    problem
-                        .object_regions
-                        .iter()
-                        .any(|region| region.enabled && region.region_id == region_id)
-                });
-                active
-                    && matches!(
-                        assignment.parameter,
+        let has_cuda_region_fields = problem.material_parameter_fields.iter().any(|assignment| {
+            let active = assignment.region_id.as_deref().is_none_or(|region_id| {
+                problem
+                    .object_regions
+                    .iter()
+                    .any(|region| region.enabled && region.region_id == region_id)
+            });
+            active
+                && matches!(
+                    assignment.parameter,
+                    fullmag_ir::MaterialParameterNameIR::Ms
+                        | fullmag_ir::MaterialParameterNameIR::Aex
+                        | fullmag_ir::MaterialParameterNameIR::Alpha
+                )
+        }) || problem.object_regions.iter().any(|region| {
+            region.enabled
+                && region.material_overrides.iter().any(|override_| {
+                    matches!(
+                        override_.parameter,
                         fullmag_ir::MaterialParameterNameIR::Ms
                             | fullmag_ir::MaterialParameterNameIR::Aex
                             | fullmag_ir::MaterialParameterNameIR::Alpha
                     )
-            })
-            || problem.object_regions.iter().any(|region| {
-                region.enabled
-                    && region.material_overrides.iter().any(|override_| {
-                        matches!(
-                            override_.parameter,
-                            fullmag_ir::MaterialParameterNameIR::Ms
-                                | fullmag_ir::MaterialParameterNameIR::Aex
-                                | fullmag_ir::MaterialParameterNameIR::Alpha
-                        )
-                    })
-            });
+                })
+        });
         if has_cuda_region_fields {
             errors.push(
                 "fdm_cuda_region_material_fields_unsupported: CUDA native does not yet support cellwise material fields (Ms/Aex/alpha); use FDM CPU reference or disable region material overrides"
@@ -490,6 +486,9 @@ fn validate_conservative_relaxation(problem: &ProblemIR, errors: &mut Vec<String
             fullmag_ir::SpinTorqueModuleIR::PrescribedSot { .. } => "prescribed_sot",
             fullmag_ir::SpinTorqueModuleIR::InterfaceCpp { .. } => "interface_cpp",
             fullmag_ir::SpinTorqueModuleIR::DriftDiffusion { .. } => "drift_diffusion",
+            fullmag_ir::SpinTorqueModuleIR::DriftDiffusionSpinTorque { .. } => {
+                "drift_diffusion_spin_torque"
+            }
         };
         errors.push(format!(
             "relaxation is a conservative equilibrium workflow and rejects nonconservative {name} torque"

@@ -31,6 +31,50 @@ fn bootstrap_example_round_trips_as_json() {
 }
 
 #[test]
+fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
+    let mut value = problem_ir_value_with_version(CURRENT_IR_VERSION);
+    value["current_modules"] = serde_json::json!([{
+        "kind": "current_transport", "name": "charge",
+        "model": "ohmic_poisson", "solve_region": "strip",
+        "conductivity_s_per_m": 4.0e6, "coupling": "one_way"
+    }]);
+    value["spin_transport_modules"] = serde_json::json!([{
+        "schema_version": "spin_transport.v1", "id": "spin_solve",
+        "current_source_id": "charge", "mode": "steady",
+        "domain": [{"object_id": "strip"}],
+        "materials": [{"region": {"object_id": "strip"}, "material": {
+            "sigma_s_Spm": 5.0e6, "polarization_p": 0.4, "theta_sh": 0.1,
+            "lambda_sf_m": 5.0e-9, "lambda_j_m": 1.0e-9,
+            "lambda_phi_m": "disabled"
+        }}],
+        "interfaces": [], "boundaries": [],
+        "solver": {"engine": "auto", "linear": {"relative_tolerance": 1.0e-8,
+            "absolute_tolerance": 0.0, "max_iterations": 500},
+            "physical_residual_version": "transport_balance_integrated_l2.v1",
+            "operator_version": "fv_spin_upwind_v1",
+            "default_external_boundary": "spin_insulating"},
+        "requested_execution": {"discretization": "fdm", "device": "cpu",
+            "precision": "double", "execution_mode": "strict"},
+        "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
+    }]);
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "drift_diffusion_spin_torque",
+        "schema_version": "drift_diffusion_spin_torque.v1", "id": "tr",
+        "solve_id": "spin_solve", "target": {"object_id": "strip"},
+        "formula_version": "transport_torque_angular_momentum.fullmag.v1"
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value).expect("typed M1 IR should decode");
+    decoded.validate().expect("typed M1 IR should validate");
+    assert_eq!(decoded.spin_transport_modules.len(), 1);
+    let encoded = serde_json::to_value(decoded).expect("typed M1 IR should encode");
+    assert_eq!(encoded["spin_transport_modules"][0]["mode"], "steady");
+    assert!(encoded["spin_transport_modules"][0]
+        .get("coupling")
+        .is_none());
+}
+
+#[test]
 fn current_ir_version_is_supported_for_read() {
     assert!(is_supported_ir_version_for_read(CURRENT_IR_VERSION));
     assert!(!requires_ir_migration(CURRENT_IR_VERSION));
@@ -232,18 +276,36 @@ fn prescribed_sot_tabulated_envelope_serializes_canonical_defaults() {
 #[test]
 fn prescribed_sot_time_envelope_rejects_invalid_boundaries() {
     let invalid = [
-        (serde_json::json!({"kind": "sinusoidal", "amplitude": 1.0,
-            "frequency_hz": -1.0, "phase_rad": 0.0, "offset": 0.0}), "frequency_hz"),
-        (serde_json::json!({"kind": "pulse", "amplitude": 1.0,
-            "t_on_s": 1.0, "t_off_s": 1.0}), "t_off_s"),
-        (serde_json::json!({"kind": "piecewise_linear", "points": [
-            {"time_s": 1.0, "value": 0.0}, {"time_s": 0.0, "value": 1.0}]}), "strictly increasing"),
-        (serde_json::json!({"kind": "sinc", "amplitude": 1.0,
-            "center_s": 0.0, "bandwidth_hz": 0.0, "offset": 0.0}), "bandwidth_hz"),
-        (serde_json::json!({"kind": "tabulated", "artifact_ref": "",
-            "interpolation": "linear", "extrapolation": "error"}), "artifact_ref"),
-        (serde_json::json!({"kind": "tabulated", "artifact_ref": "artifact://drive.csv",
-            "interpolation": "linear", "extrapolation": "error", "bandwidth_hz": 0.0}), "bandwidth_hz"),
+        (
+            serde_json::json!({"kind": "sinusoidal", "amplitude": 1.0,
+            "frequency_hz": -1.0, "phase_rad": 0.0, "offset": 0.0}),
+            "frequency_hz",
+        ),
+        (
+            serde_json::json!({"kind": "pulse", "amplitude": 1.0,
+            "t_on_s": 1.0, "t_off_s": 1.0}),
+            "t_off_s",
+        ),
+        (
+            serde_json::json!({"kind": "piecewise_linear", "points": [
+            {"time_s": 1.0, "value": 0.0}, {"time_s": 0.0, "value": 1.0}]}),
+            "strictly increasing",
+        ),
+        (
+            serde_json::json!({"kind": "sinc", "amplitude": 1.0,
+            "center_s": 0.0, "bandwidth_hz": 0.0, "offset": 0.0}),
+            "bandwidth_hz",
+        ),
+        (
+            serde_json::json!({"kind": "tabulated", "artifact_ref": "",
+            "interpolation": "linear", "extrapolation": "error"}),
+            "artifact_ref",
+        ),
+        (
+            serde_json::json!({"kind": "tabulated", "artifact_ref": "artifact://drive.csv",
+            "interpolation": "linear", "extrapolation": "error", "bandwidth_hz": 0.0}),
+            "bandwidth_hz",
+        ),
     ];
 
     for (envelope, expected) in invalid {
@@ -255,9 +317,15 @@ fn prescribed_sot_time_envelope_rejects_invalid_boundaries() {
                       "sigma_hat": [0.0, 2.0, 0.0], "envelope": envelope},
             "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
         }]);
-        let decoded: ProblemIR = serde_json::from_value(value).expect("invalid value shape should decode");
-        let errors = decoded.validate().expect_err("invalid envelope must fail validation");
-        assert!(errors.iter().any(|error| error.contains(expected)), "missing {expected}: {errors:?}");
+        let decoded: ProblemIR =
+            serde_json::from_value(value).expect("invalid value shape should decode");
+        let errors = decoded
+            .validate()
+            .expect_err("invalid envelope must fail validation");
+        assert!(
+            errors.iter().any(|error| error.contains(expected)),
+            "missing {expected}: {errors:?}"
+        );
     }
 
     for envelope in [
@@ -404,8 +472,12 @@ fn prescribed_sot_v1_rejects_invalid_signed_scalar_envelope() {
         "xi_dl": 0.1, "xi_fl": 0.0, "free_layer_thickness_m": 1.0e-9
     }]);
     let decoded: ProblemIR = serde_json::from_value(value).expect("envelope shape should decode");
-    let errors = decoded.validate().expect_err("non-monotone envelope must fail");
-    assert!(errors.iter().any(|error| error.contains("envelope") && error.contains("strictly increasing")));
+    let errors = decoded
+        .validate()
+        .expect_err("non-monotone envelope must fail");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("envelope") && error.contains("strictly increasing")));
 }
 
 #[test]
@@ -466,7 +538,10 @@ fn prescribed_sot_time_envelope_rejects_nonfinite_numbers_in_every_variant() {
         let errors = problem
             .validate()
             .expect_err("nonfinite envelope value must fail validation");
-        assert!(errors.iter().any(|error| error.contains("finite")), "{errors:?}");
+        assert!(
+            errors.iter().any(|error| error.contains("finite")),
+            "{errors:?}"
+        );
     }
 }
 
@@ -479,6 +554,7 @@ fn prescribed_sot_v1_accepts_nonunit_vector_source_axes_and_rejects_near_paralle
         current_density: Some([1.0, 0.0, 0.0]),
         solve_region: None,
         conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
     }];
     let module = |drive_direction, interface_normal| SpinTorqueModuleIR::PrescribedSot {
         schema_version: "prescribed_sot.v1".to_string(),
@@ -506,8 +582,9 @@ fn prescribed_sot_v1_accepts_nonunit_vector_source_axes_and_rejects_near_paralle
     let errors = problem
         .validate()
         .expect_err("near-parallel normalized axes must fail epsilon_axis validation");
-    assert!(errors.iter().any(|error| error.contains("parallel")
-        && error.contains("epsilon_axis")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("parallel") && error.contains("epsilon_axis")));
 }
 
 #[test]
@@ -544,9 +621,12 @@ fn migrated_legacy_current_source_must_resolve_to_current_transport() {
         "spin_polarization": [0.0, 1.0, 0.0], "ferromagnet_thickness_m": 1.0e-9
     }]);
     let decoded: ProblemIR = serde_json::from_value(value).expect("legacy source should migrate");
-    let errors = decoded.validate().expect_err("missing migrated source must fail validation");
-    assert!(errors.iter().any(|error| error.contains("current_source_id")
-        && error.contains("current_transport")));
+    let errors = decoded
+        .validate()
+        .expect_err("missing migrated source must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("current_source_id") && error.contains("current_transport")));
 }
 
 #[test]
@@ -646,9 +726,18 @@ fn legacy_migration_adds_axes_to_nested_geometry_and_region_csg() {
     });
 
     migrate_problem_ir_json_value(&mut value).expect("legacy payload should migrate");
-    assert_eq!(value["geometry"]["entries"][0]["base"]["base"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
-    assert_eq!(value["geometry"]["entries"][0]["base"]["tool"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
-    assert_eq!(value["object_regions"][0]["shape"]["expression"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
+    assert_eq!(
+        value["geometry"]["entries"][0]["base"]["base"]["axis"],
+        serde_json::json!([0.0, 0.0, 1.0])
+    );
+    assert_eq!(
+        value["geometry"]["entries"][0]["base"]["tool"]["axis"],
+        serde_json::json!([0.0, 0.0, 1.0])
+    );
+    assert_eq!(
+        value["object_regions"][0]["shape"]["expression"]["axis"],
+        serde_json::json!([0.0, 0.0, 1.0])
+    );
 }
 
 #[test]
@@ -2847,14 +2936,21 @@ fn cylinder_axis_is_serialized_and_validated() {
         axis: [1.0, 1.0, 1.0],
     };
     let value = serde_json::to_value(&ir).expect("cylinder should serialize");
-    assert_eq!(value["geometry"]["entries"][0]["axis"], serde_json::json!([1.0, 1.0, 1.0]));
+    assert_eq!(
+        value["geometry"]["entries"][0]["axis"],
+        serde_json::json!([1.0, 1.0, 1.0])
+    );
 
     let mut invalid = ir.clone();
     if let GeometryEntryIR::Cylinder { axis, .. } = &mut invalid.geometry.entries[0] {
         *axis = [0.0, 0.0, 0.0];
     }
-    let errors = invalid.validate().expect_err("zero cylinder axis must fail validation");
-    assert!(errors.iter().any(|error| error.contains("cylinder geometry 'tilted' axis must be non-zero")));
+    let errors = invalid
+        .validate()
+        .expect_err("zero cylinder axis must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("cylinder geometry 'tilted' axis must be non-zero")));
 }
 
 #[test]
@@ -4196,7 +4292,10 @@ fn canonical_slonczewski_requires_oriented_versioned_thin_layer_realization() {
     ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
         schema_version: Some("slonczewski_torque.v1".to_string()),
         id: Some("cpp".to_string()),
-        target: Some(fullmag_ir::RegionRefIR { object_id: "strip".to_string(), region_id: None }),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
         formula_version: "slonczewski.fullmag.v1".to_string(),
         current_density: Some([0.0, 0.0, -5e10]),
         current_source: None,
@@ -4211,7 +4310,8 @@ fn canonical_slonczewski_requires_oriented_versioned_thin_layer_realization() {
             realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
         }),
     }];
-    ir.validate().unwrap_or_else(|errors| panic!("canonical Slonczewski should validate: {errors:?}"));
+    ir.validate()
+        .unwrap_or_else(|errors| panic!("canonical Slonczewski should validate: {errors:?}"));
     let json = serde_json::to_string(&ir).unwrap();
     let restored: ProblemIR = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.spin_torque_modules, ir.spin_torque_modules);
@@ -4408,6 +4508,7 @@ fn excitation_analysis_source_must_reference_antenna_module() {
         current_density: Some([0.0, 0.0, 5e10]),
         solve_region: None,
         conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
     });
     ir.excitation_analysis = Some(ExcitationAnalysisIR {
         source: "drive".to_string(),
@@ -4506,6 +4607,7 @@ fn validation_rejects_multiple_oersted_terms() {
         current_density: Some([0.0, 0.0, 5e10]),
         solve_region: Some("box".to_string()),
         conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
     });
     ir.energy_terms = vec![
         EnergyTermIR::OerstedCylinder {

@@ -12,6 +12,7 @@ pub mod model;
 pub mod plan;
 pub mod quantities;
 pub mod spectral_validation;
+pub mod spin_transport;
 pub mod study;
 mod validation;
 pub use eigen_contract::*;
@@ -26,6 +27,7 @@ pub use quantities::{
     field_to_quantity_output, scalar_to_quantity_output, OutputSinkIR, QuantityOutputIR,
 };
 pub use spectral_validation::BlochWavevectorIR;
+pub use spin_transport::*;
 pub use study::*;
 use validation::*;
 
@@ -258,6 +260,8 @@ pub struct ProblemIR {
     pub excitation_analysis: Option<ExcitationAnalysisIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spin_torque_modules: Vec<SpinTorqueModuleIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_transport_modules: Vec<SpinTransportModuleIR>,
 
     /// Global current density for Zhang-Li STT [A/m^2]
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -356,6 +360,8 @@ impl<'de> Deserialize<'de> for ProblemIR {
             #[serde(default)]
             spin_torque_modules: Vec<SpinTorqueModuleIR>,
             #[serde(default)]
+            spin_transport_modules: Vec<SpinTransportModuleIR>,
+            #[serde(default)]
             current_density: Option<[f64; 3]>,
             #[serde(default)]
             stt_degree: Option<f64>,
@@ -410,6 +416,7 @@ impl<'de> Deserialize<'de> for ProblemIR {
             current_modules: wire.current_modules,
             excitation_analysis: wire.excitation_analysis,
             spin_torque_modules: wire.spin_torque_modules,
+            spin_transport_modules: wire.spin_transport_modules,
             current_density: wire.current_density,
             stt_degree: wire.stt_degree,
             stt_beta: wire.stt_beta,
@@ -551,6 +558,7 @@ impl ProblemIR {
             current_modules: Vec::new(),
             excitation_analysis: None,
             spin_torque_modules: Vec::new(),
+            spin_transport_modules: Vec::new(),
             current_density: None,
             stt_degree: None,
             stt_beta: None,
@@ -621,6 +629,7 @@ impl ProblemIR {
         validate_material_dmi_values(self, &mut errors);
         validate_legacy_spin_torque_fields(self, &mut errors);
         validate_spin_torque_modules(self, &mut errors);
+        validate_spin_transport_modules(self, &mut errors);
         validate_magnetoelastic(self, &mut errors);
         validate_region_owned_semantics(self, &mut errors);
         if self.regions.is_empty() {
@@ -1437,9 +1446,7 @@ impl ProblemIR {
                             name
                         ));
                     } else {
-                        let norm_sq = axis[0] * axis[0]
-                            + axis[1] * axis[1]
-                            + axis[2] * axis[2];
+                        let norm_sq = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
                         if norm_sq <= 1e-30 {
                             errors.push(format!(
                                 "cylinder geometry '{}' axis must be non-zero",
@@ -1627,15 +1634,17 @@ impl ProblemIR {
 
         if let Some(hints) = &self.backend_policy.discretization_hints {
             if let Some(fdm) = &hints.fdm {
-                let legacy_cell = (!fdm.cell.iter().all(|component| *component == 0.0))
-                    .then_some(fdm.cell);
+                let legacy_cell =
+                    (!fdm.cell.iter().all(|component| *component == 0.0)).then_some(fdm.cell);
                 let default_cell = fdm.default_cell.or(legacy_cell);
                 if let Some(cell) = default_cell {
                     if cell
                         .iter()
                         .any(|component| !component.is_finite() || *component <= 0.0)
                     {
-                        errors.push("fdm.default_cell components must be finite and positive".to_string());
+                        errors.push(
+                            "fdm.default_cell components must be finite and positive".to_string(),
+                        );
                     }
                 }
                 if let Some(per_magnet) = &fdm.per_magnet {

@@ -25,6 +25,7 @@ mod oersted;
 pub mod quantities;
 mod region_conflict;
 mod spin_torque;
+mod spin_transport;
 mod surface_selectors;
 mod util;
 mod validate;
@@ -33,8 +34,8 @@ pub mod boundary_geometry;
 
 pub use error::PlanError;
 pub use geometry::{
-    checked_fdm_grid_cost, FdmGridCost, FDM_GRID_ESTIMATED_BYTES_PER_CELL,
-    FDM_GRID_MAX_BYTES, FDM_GRID_MAX_CELLS,
+    checked_fdm_grid_cost, FdmGridCost, FDM_GRID_ESTIMATED_BYTES_PER_CELL, FDM_GRID_MAX_BYTES,
+    FDM_GRID_MAX_CELLS,
 };
 pub use magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 pub use quantities::{
