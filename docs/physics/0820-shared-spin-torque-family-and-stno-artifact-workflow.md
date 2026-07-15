@@ -41,7 +41,7 @@ The driven micromagnetic dynamics use the LLG equation with explicit torque-fami
 
 $$
 \frac{\partial \mathbf{m}}{\partial t}
-= -\gamma \mu_0 \mathbf{m} \times \mathbf{H}_\mathrm{eff}
+= -\gamma_0 \mathbf{m} \times \mathbf{H}_\mathrm{eff}
 + \alpha \mathbf{m} \times \frac{\partial \mathbf{m}}{\partial t}
 + \sum_k \boldsymbol{\tau}^{(k)}_\mathrm{spin}
 + \boldsymbol{\eta}_\mathrm{th}.
