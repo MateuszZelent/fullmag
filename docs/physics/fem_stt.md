@@ -1,7 +1,7 @@
 # FEM Spin-Transfer Torque
 
-- Status: native FEM CPU/GPU module contract
-- Last updated: 2026-07-10
+- Status: versioned native FEM CPU contract; canonical v1 GPU fail-closed
+- Last updated: 2026-07-15
 - Implementation: `backends/fem/cpu/mfem/interactions/stt.hpp/.cpp`,
   `backends/fem/cpu/mfem/interactions/stt_slonczewski.hpp/.cpp`,
   `backends/fem/cpu/mfem/interactions/stt_zhang_li.hpp/.cpp`
@@ -32,41 +32,45 @@ refresh. It does not define Slonczewski CPP torque, Zhang-Li CIP torque,
 CPP thickness/current physics, or CIP gradient projection; those semantics stay
 in `stt_slonczewski.hpp/.cpp` and `stt_zhang_li.hpp/.cpp`.
 
-Plan storage ownership: `SttRuntimeState` stores executable STT family
-enablement, shared current density, Zhang-Li `degree`/`beta`, Slonczewski spin
-polarization, asymmetry, field-like coefficient, free-layer thickness, and
-current sign. `Context` contains this owner as `ctx.stt` and does not own flat
-STT plan fields directly.
+Plan storage ownership: `SttRuntimeState` stores executable STT family and
+formula/operator/realization versions, signed current density, target masks,
+Zhang-Li `degree`/`beta`/Landé factor, and Slonczewski polarization,
+`n_stack`, asymmetry, independent field-like coefficient, and free-layer
+thickness. `Context` contains this owner as `ctx.stt` and does not own flat STT
+plan fields directly.
 
 ## Slonczewski CPP
 
-The Slonczewski path is local per node:
+For `slonczewski.fullmag.v1` with realization
+`slonczewski_thin_layer_homogenized.v1`, the local Gilbert source is
 
 ```text
-tau = beta_stt * [m x (m x p) + epsilon_prime * (m x p)]
-beta_stt = current_sign * |J| hbar gamma_mu0 / (2 e mu0 Ms d) * g(m.p)
-g(m.p) = P Lambda^2 / [(Lambda^2 + 1) + (Lambda^2 - 1) m.p]
+J_n = J dot n_stack
+epsilon(c) = P Lambda^2 / [(Lambda^2 + 1) + (Lambda^2 - 1)c]
+Omega_J = gamma_e hbar J_n / (2 e Ms t_F)
+T_G = Omega_J [epsilon(c) m x (m x p) + epsilon_prime m x p]
 ```
 
-With nonzero Gilbert damping, the explicit direct-RHS form used by Fullmag is
-the effective-field-equivalent form:
+where `e=1.602176634e-19 C` exactly, `c=m dot p`, and `J_n` is signed.
+Fullmag applies the Gilbert transform exactly once, giving
 
 ```text
-tau =
-  beta_stt / (1 + alpha^2)
-    * [(1 + alpha epsilon_prime) * m x (m x p)
-       + (epsilon_prime - alpha) * (m x p)]
+T_explicit = Omega_J/(1+alpha^2)
+  * [(epsilon + alpha epsilon_prime) m x (m x p)
+     + (epsilon_prime - alpha epsilon) m x p].
 ```
 
-For `alpha = 0`, this reduces to the simpler expression above. The
-`gamma_mu0` factor converts the field-scale Slonczewski coefficient into a
-`1/s` direct RHS contribution. This is equivalent to the Boris-style
-implementation that inserts a Slonczewski field into `H_eff`, provided the same
-angular efficiency and current-sign convention are used.
+Reversing either `J` or `n_stack` reverses the entire torque. The canonical
+target node mask is applied before accumulation. The independent
+`epsilon_prime` is not multiplied by `epsilon(c)`.
 
-The module uses explicit `stt_free_layer_thickness` when provided. Otherwise it
-derives a magnetic thickness from the mesh extent along the current-density
-axis.
+Canonical thin-layer execution requires explicit `t_F>0`; no mesh-extent
+fallback is permitted. `slonczewski_interface_flux.v1` is not bulk-lowered:
+until a separate oriented FEM surface functional exists, planner and native
+import reject it before execution. The unversioned/legacy
+`slonczewski.legacy_fullmag.v0` route preserves the historical current norm,
+`current_sign`, elementary-charge constant, thickness fallback, and coefficient
+algebra byte-for-byte in its separate branch.
 
 Source ownership: Slonczewski CPP is isolated in
 `stt_slonczewski.hpp/.cpp`. It owns the CPP current-density magnitude/sign,
@@ -76,20 +80,28 @@ gradients or add any effective-field contribution.
 
 ## Zhang-Li CIP
 
-The Zhang-Li path computes one P1 tetrahedral gradient of `m` per magnetic
-element, forms the drift vector:
+For `zhang_li.fullmag.v1` with `zl_central_reference_v1`, the FEM CPU path
+computes one P1 tetrahedral gradient per active target element and forms
 
 ```text
-u = stt_degree * mu_B * J / [e Ms (1 + beta^2)]
+u = g mu_B P J / (2 e Ms)
+v = (u dot grad)m
+T_G = -v + beta m x v
 ```
 
-and projects the element RHS back to nodes with lumped P1 weights:
+There is no extra `1/(1+beta^2)`. After tangential projection, exactly one
+Gilbert conversion gives
 
 ```text
-v = (u.grad) m
-v_perp = -m x (m x v)
-tau = [(1 + alpha beta) * v_perp - (beta - alpha) * (m x v)] / (1 + alpha^2)
+T_explicit = [-(1+alpha beta)v_perp
+              +(beta-alpha)m x v_perp]/(1+alpha^2).
 ```
+
+The exact elementary charge and explicit positive Landé factor are part of the
+versioned plan. Reversing `J` reverses the torque. Target element masks exclude
+all non-target elements before projection. The legacy
+`zhang_li.legacy_fullmag.v0` branch retains its historical prefactor, sign, and
+`1/(1+beta^2)` behavior.
 
 Source ownership: Zhang-Li CIP is isolated in `stt_zhang_li.hpp/.cpp`. It owns
 tetrahedral gradient reconstruction, Bohr-magneton drift scaling, nodal P1
@@ -119,10 +131,11 @@ report a standalone energy term.
 
 ## Warunki brzegowe
 
-Slonczewski CPP is local and has no FEM weak boundary term. Zhang-Li CIP uses
-tetrahedral gradients over magnetic elements and has the current executable
-P1-element/nodal-projection semantics; explicit source-bound current-transport
-boundary coupling remains outside this module.
+Homogenized Slonczewski CPP is local and has no FEM weak boundary term.
+Canonical interface-flux Slonczewski requires an oriented surface functional
+and is fail-closed rather than approximated by a volumetric `1/t_F` source.
+Zhang-Li CIP uses tetrahedral gradients over active target elements and the
+current P1-element/lumped-nodal-projection semantics.
 
 ## Dyskretyzacja FEM
 
@@ -151,6 +164,12 @@ this same map, SI units, and torque equation.
 
 - Only one executable STT family is accepted by native FEM plan validation at a
   time.
+- Canonical v1 FEM CPU execution is implemented but remains unvalidated pending
+  the named macrospin/current-scaling and domain-wall convergence gates.
+- Canonical v1 FEM GPU plans fail closed before device execution and before GPU
+  provenance is created. Existing GPU kernels retain legacy semantics only.
+- `slonczewski_interface_flux.v1` is semantic-only until a distinct oriented
+  surface functional is implemented; it is never bulk-lowered.
 - Multi-module spin-torque authoring remains semantic-only for FEM until the
   planner/API path is expanded.
 - Drift-diffusion spin accumulation and current-transport-coupled STT remain
@@ -164,8 +183,13 @@ this same map, SI units, and torque equation.
 
 Current gate:
 
-- `fem_stt_contract` checks Slonczewski damping-like and field-like terms,
-  current-sign handling, nonmagnetic-node masking, Slonczewski source-module
+- `fem_stt_contract` checks an independent canonical Slonczewski DL/FL oracle,
+  exact signed `J dot n_stack`, current reversal, target-node masking,
+  rejection of missing canonical thickness and interface-flux bulk lowering,
+  an independent canonical Zhang-Li `g/2` oracle without a beta denominator,
+  Zhang-Li current reversal and target-element masking, and canonical GPU
+  fail-closed behavior. It also retains the legacy Slonczewski and Zhang-Li
+  regression cases, nonmagnetic-node masking, Slonczewski source-module
   ownership, Zhang-Li source-module ownership, Zhang-Li tetrahedral
   gradient/nodal projection, additive Zhang-Li behavior for an existing RHS,
   aggregate-header non-ownership docstrings, `SttRuntimeState` plan-storage
