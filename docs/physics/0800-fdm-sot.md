@@ -33,7 +33,7 @@ This spin current exerts two torques on the adjacent ferromagnet magnetisation *
 The Landau–Lifshitz–Gilbert–Slonczewski (LLGS) equation for the normalised magnetisation
 **m** = **M** / M_s (|**m**|=1):
 
-$$\frac{d\mathbf{m}}{dt} = -\gamma_0(\mathbf{m}\times\mathbf{H}_\text{eff}) + \alpha\left(\mathbf{m}\times\frac{d\mathbf{m}}{dt}\right) + \tau_{DL}\left(\mathbf{m}\times(\hat{\sigma}\times\mathbf{m})\right) + \tau_{FL}\left(\mathbf{m}\times\hat{\sigma}\right)$$
+$$\frac{d\mathbf{m}}{dt} = -\gamma_0(\mathbf{m}\times\mathbf{H}_\text{eff}) + \alpha\left(\mathbf{m}\times\frac{d\mathbf{m}}{dt}\right) + \Omega_{DL}\left(\mathbf{m}\times(\hat{\sigma}\times\mathbf{m})\right) + \Omega_{FL}\left(\mathbf{m}\times\hat{\sigma}\right)$$
 
 Note: $\mathbf{m}\times(\hat{\sigma}\times\mathbf{m}) \equiv -\mathbf{m}\times(\mathbf{m}\times\hat{\sigma})$.
 
@@ -109,8 +109,8 @@ SOT is active when `sot_current_density.is_some() && sot_sigma.is_some() && sot_
 
 ## 6. Validation strategy
 
-- **Direction**: with **m** = **x̂**, σ̂ = **ŷ**, DL torque = **m×(σ̂×m)** = **x̂×ŷ** = **ẑ** ✓
-- **Direction**: the FL torque = **m×σ̂** = **x̂×ŷ** = **ẑ** ✓
+- **Direction**: with **m** = **x̂**, σ̂ = **ŷ**, DL basis = **m×(σ̂×m)** = **ŷ** ✓
+- **Direction**: with the same vectors, the FL basis = **m×σ̂** = **ẑ** ✓
 - **Zero field, DL only**: magnetisation should precess and/or switch depending on α.
 - **Signed-current involution**: `J_signed -> -J_signed` reverses both terms.
 - **Amplitude scaling**: verify torque ∝ `J_signed`, ∝ ξ_DL/ξ_FL, ∝ 1/(M_s t_F).

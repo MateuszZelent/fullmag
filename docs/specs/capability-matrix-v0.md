@@ -116,11 +116,14 @@ their historical executable-slice meaning. They must not be widened by name:
 | `spin_torque.prescribed_sot` | legacy FDM executable slice; canonical M0 reconciliation pending | must be named prescribed SOT, pass SI/Gilbert/signed-current gates, and never imply SHE solve |
 | `transport.charge.ohmic` | `semantic_only` until M1 implementation evidence | conservative charge solve, electrode balance, gauge and managed lane evidence |
 | `transport.charge.magnetoresistive` | `semantic_only` until M2 | full AMR/PHE/AHE and reciprocal nonlinear gates |
-| `transport.spin.steady_drift_diffusion` / `transport.spin.direct_she` | `semantic_only` until M1 | independent analytic, interface-balance, FDM/FEM convergence and runtime evidence |
+| `transport.spin.steady_drift_diffusion` | `semantic_only` until M1 | analytic spin profile, reaction, interface-balance, FDM/FEM convergence and runtime evidence |
+| `transport.spin.direct_she` | `semantic_only` until M1 | signed tensor-source oracle and charge-to-spin coupling evidence |
 | `transport.spin.inverse_she` | `semantic_only` until M2 | reciprocal constitutive/Onsager and nonlinear-coupling gates |
+| `transport.spin.mixing_conductance` | `semantic_only` until M1 | oriented two-trace interface law, backflow and absorbed-flux/torque balance |
 | `transport.spin.transient_drift_diffusion` | `semantic_only` until M3 | physical capacitance, IMEX order, rollback and restart gates |
 | `field.oersted.dynamic` | existing prescribed/cylinder/midpoint slices are not general validation | same signed `J_charge`, closed circuit, stage consistency, direct oracle and convergence |
-| `field.oersted.fdm_fft` / `field.oersted.fem_vector_potential` | `semantic_only` target capabilities at PR-00 | M1 cell-integrated FFT or H(curl)+gauge implementation and workload evidence |
+| `field.oersted.fdm_fft` | `semantic_only` target capability at PR-00 | M1 cell-integrated antisymmetric FFT kernel, direct oracle and open-boundary convergence |
+| `field.oersted.fem_vector_potential` | `semantic_only` target capability at PR-00 | M1 H(curl)+H1 gauge solve, direct oracle and airbox convergence |
 | `coupling.transport_llg.one_way` | `semantic_only` until M1 | stage-consistent torque/Oersted and accepted-state observables |
 | `coupling.transport_llg.bidirectional` | `semantic_only` until M2 | coupled residual/LTE and rejected-step behavior |
 

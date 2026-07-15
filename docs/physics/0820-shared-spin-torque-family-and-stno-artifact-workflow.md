@@ -47,12 +47,14 @@ $$
 + \boldsymbol{\eta}_\mathrm{th}.
 $$
 
-The formulas below describe the historical executable bridge. Canonical v1
-backends must instead lower each module to the Gilbert-source contract in 0960
-and preserve signed conventional current. In particular, no adapter may use
-`abs(J)` or infer current sign from `fixed_layer_position`.
+The formulas below are the **normative M0 target**, not a claim that every
+currently executable legacy slice already implements the correction. M0 must
+lower each module to the Gilbert-source contract in 0960 and preserve signed
+conventional current before those lanes can claim formula-v1 conformance. In
+particular, no adapter may use `abs(J)` or infer current sign from
+`fixed_layer_position`.
 
-For the currently executable public slice:
+Canonical target formulas:
 
 - Slonczewski CPP Gilbert-source torque
 
@@ -241,7 +243,7 @@ Current truthful status:
 
 ### 5.1 Runtime / session impact
 
-- the already executable FDM slice uses the same corrected STT contract as native FEM,
+- existing FDM and native FEM slices remain executable legacy realizations, but neither may claim the corrected formula-v1 contract until the M0 code changes and vector oracles land,
 - unsupported or semantic-only modules fail in planning instead of leaking to the runner,
 - supported single-module Slonczewski/Zhang-Li requests may execute on native FEM CPU/GPU,
 - requested intent and resolved executable lane remain distinct.

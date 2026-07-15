@@ -163,10 +163,14 @@ remains preferred.
 
 ### 3.1 FDM
 
-- FDM semantics remain unchanged.
+- FDM semantics remain unchanged by this historical FEM slice.
 - `SlonczewskiSTT` and `ZhangLiSTT` remain executable on CPU reference and GPU production lanes.
-- `OerstedField(model="from_current_solution")` remains executable only for the cylindrical exact reduction.
-- General prescribed-current Biot-Savart is still not lowered for FDM.
+- As subsequently documented by 0860, FDM also has a bounded, single-body,
+  source-count-capped midpoint Biot-Savart bootstrap for non-cylindrical
+  `prescribed_density`; it is distinct from the exact-cylinder reduction.
+- Neither historical FDM realization is the future M1 production
+  `field.oersted.fdm_fft` solver, which requires conservative face-to-cell
+  `J_charge` reconstruction and a cell-integrated open-boundary FFT kernel.
 
 ### 3.2 FEM
 
@@ -302,7 +306,7 @@ Provenance must preserve:
 2. `InterfaceCppSTT`, `DriftDiffusionSpinTorque`, and `SpinOrbitTorque` remain `semantic_only`.
 3. Multi-module torque superposition remains disallowed on the current public executable path.
 4. The generalized Oersted path is a midpoint Biot-Savart approximation, not a contact-aware transport solve.
-5. FDM still lacks a general `J(x) -> H_oe(x)` realization outside the cylindrical exact reduction.
+5. FDM has the bounded midpoint bootstrap from 0860, but still lacks the M1 production cell-integrated FFT realization for general conservative `J_charge(x,t)`.
 6. Rust FEM reference execution still rejects STT and therefore is not the STT reference lane.
 
 ## 9. References
