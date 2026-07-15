@@ -79,6 +79,7 @@ function startDevServer() {
     {
       cwd: repoRoot,
       detached: process.platform !== "win32",
+      shell: pnpm.shell,
       env: {
         ...process.env,
         FULLMAG_API_PROXY_TARGET: apiTarget,

@@ -10,7 +10,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 
 describe("resolvePnpmInvocation", () => {
   it("uses Corepack next to the current Linux Node even when PATH points at Windows pnpm", () => {
-    const execPath = "/home/user/.nvm/versions/node/v24.11.1/bin/node";
+    const execPath = "/home/user/.nvm/versions/node/v24.18.0/bin/node";
     const corepackPath = join(dirname(execPath), "corepack");
 
     expect(
@@ -20,12 +20,15 @@ describe("resolvePnpmInvocation", () => {
         env: {
           PATH: "/mnt/c/Users/User/AppData/Roaming/npm:/usr/bin",
           PNPM_HOME: "/mnt/c/Users/User/AppData/Roaming/npm",
+          WSL_DISTRO_NAME: "Ubuntu",
         },
         pathExists: (candidate) => candidate === corepackPath,
+        realPath: (candidate) => candidate,
       }),
     ).toEqual({
       command: execPath,
       argsPrefix: [corepackPath, "pnpm"],
+      shell: false,
       source: "corepack",
     });
   });
@@ -40,10 +43,12 @@ describe("resolvePnpmInvocation", () => {
         execPath: "/usr/bin/node",
         env: { PNPM_HOME: pnpmHome },
         pathExists: (candidate) => candidate === pnpmPath,
+        realPath: (candidate) => candidate,
       }),
     ).toEqual({
       command: pnpmPath,
       argsPrefix: [],
+      shell: false,
       source: "pnpm-home",
     });
   });
@@ -59,6 +64,55 @@ describe("resolvePnpmInvocation", () => {
     ).toThrow(/Linux pnpm installation/);
   });
 
+  it("never launches PNPM_HOME in WSL even from a nonstandard Windows mount", () => {
+    const pnpmHome = "/windir/c/Users/User/AppData/Roaming/npm";
+    const pnpmPath = join(pnpmHome, "pnpm");
+
+    expect(() =>
+      resolvePnpmInvocation({
+        platform: "linux",
+        execPath: "/usr/bin/node",
+        env: { PNPM_HOME: pnpmHome, WSL_DISTRO_NAME: "Ubuntu" },
+        pathExists: (candidate) => candidate === pnpmPath,
+        realPath: (candidate) => candidate,
+      }),
+    ).toThrow(/Corepack next to the active Linux Node/);
+  });
+
+  it("rejects a Node symlink that resolves to a Windows executable in WSL", () => {
+    const execPath = "/usr/local/bin/node";
+
+    expect(() =>
+      resolvePnpmInvocation({
+        platform: "linux",
+        execPath,
+        env: { WSL_INTEROP: "/run/WSL/123_interop" },
+        pathExists: () => true,
+        realPath: (candidate) =>
+          candidate === execPath
+            ? "/mnt/c/Program Files/nodejs/node.exe"
+            : candidate,
+      }),
+    ).toThrow(/active Linux Node/);
+  });
+
+  it("rejects a Windows Node executable under a custom WSL automount root", () => {
+    const execPath = "/usr/local/bin/node";
+
+    expect(() =>
+      resolvePnpmInvocation({
+        platform: "linux",
+        execPath,
+        env: { WSL_DISTRO_NAME: "Ubuntu" },
+        pathExists: () => true,
+        realPath: (candidate) =>
+          candidate === execPath
+            ? "/windir/c/Program Files/nodejs/node.exe"
+            : candidate,
+      }),
+    ).toThrow(/active Linux Node/);
+  });
+
   it("keeps native Windows pnpm resolution", () => {
     expect(
       resolvePnpmInvocation({
@@ -70,6 +124,7 @@ describe("resolvePnpmInvocation", () => {
     ).toEqual({
       command: "pnpm.cmd",
       argsPrefix: [],
+      shell: true,
       source: "windows-path",
     });
   });
@@ -101,6 +156,7 @@ describe("dev-server launcher contract", () => {
     expect(controlRoomLauncher).not.toContain(
       'process.platform === "win32" ? "pnpm.cmd" : "pnpm"',
     );
+    expect(controlRoomLauncher).toContain("shell: pnpm.shell");
     expect(webShim).toContain("process.execPath");
     expect(webShim).toContain("apps/control-room/dev-server.mjs");
     expect(webShim).not.toMatch(/\bpnpm(?:\.cmd)?\b/);

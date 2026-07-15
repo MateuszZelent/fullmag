@@ -1,9 +1,6 @@
 import { MAX_VISUALIZATION_DEBUG_SNAPSHOT_BYTES } from "@/kernel/visualization/VisualizationDebugController";
 
-import {
-  MAX_VISUALIZATION_DEBUG_COMPOSITE_ISSUES,
-  type VisualizationDebugPanelModel,
-} from "./VisualizationDebugPanelModel";
+import type { VisualizationDebugPanelModel } from "./VisualizationDebugPanelModel";
 
 export const VISUALIZATION_DEBUG_EXPORT_SCHEMA_VERSION =
   "fullmag.visualization-debug.v1" as const;
@@ -78,54 +75,115 @@ export function buildVisualizationDebugExport(
   model: VisualizationDebugPanelModel,
   exportedAtMs: number,
 ): VisualizationDebugExportResult {
-  const document: VisualizationDebugExportDocument = {
-    exportedAtMs,
-    issues: [],
-    model: jsonClone(model) as VisualizationDebugExportDocument["model"],
-    schemaVersion: VISUALIZATION_DEBUG_EXPORT_SCHEMA_VERSION,
-  };
-  const json = JSON.stringify(document, null, 2);
-  if (utf8ByteLength(json) <= MAX_VISUALIZATION_DEBUG_EXPORT_BYTES) {
-    return { document, json, mime: VISUALIZATION_DEBUG_EXPORT_MIME };
+  try {
+    const document: VisualizationDebugExportDocument = {
+      exportedAtMs: safeExportedAtMs(exportedAtMs),
+      issues: [],
+      model: jsonClone(model) as VisualizationDebugExportDocument["model"],
+      schemaVersion: VISUALIZATION_DEBUG_EXPORT_SCHEMA_VERSION,
+    };
+    const json = JSON.stringify(document, null, 2);
+    if (utf8ByteLength(json) <= MAX_VISUALIZATION_DEBUG_EXPORT_BYTES) {
+      return { document, json, mime: VISUALIZATION_DEBUG_EXPORT_MIME };
+    }
+    return buildSafeBoundedVisualizationDebugExport(model, exportedAtMs, "size");
+  } catch {
+    return buildSafeBoundedVisualizationDebugExport(
+      model,
+      exportedAtMs,
+      "serialization",
+    );
+  }
+}
+
+function buildSafeBoundedVisualizationDebugExport(
+  model: VisualizationDebugPanelModel,
+  exportedAtMs: number,
+  reason: "serialization" | "size",
+): VisualizationDebugExportResult {
+  try {
+    const result = buildBoundedVisualizationDebugExport(
+      model,
+      exportedAtMs,
+      reason,
+    );
+    if (utf8ByteLength(result.json) <= MAX_VISUALIZATION_DEBUG_EXPORT_BYTES) {
+      return result;
+    }
+  } catch {
+    // The minimal document below does not access backend-derived model values.
   }
 
-  const boundedDocument: VisualizationDebugExportDocument = {
-    exportedAtMs,
-    issues: [
-      {
-        code: "export-size-limit",
-        message:
-          "Full evidence exceeded the 64 KiB UTF-8 export budget; this identity summary replaces the oversized payload.",
-      },
-    ],
+  const document: VisualizationDebugExportDocument = {
+    exportedAtMs: safeExportedAtMs(exportedAtMs),
+    issues: [boundedExportIssue(reason)],
     model: {
-      disposition: model.disposition,
-      issues: model.issues
-        .slice(0, MAX_VISUALIZATION_DEBUG_COMPOSITE_ISSUES)
-        .map((entry) => ({
-          ...entry,
-          evidence: [...entry.evidence],
-        })),
-      state: model.state,
-      target: model.target ? { ...model.target } : null,
-      transportEntryCount: model.transport.length,
-      viewportSummaries: model.viewports.map((viewport) => ({
-        carrierIds: viewport.carriers.map((carrier) => carrier.carrierId),
-        snapshotCount: viewport.snapshots.length,
-        viewportId: viewport.viewportId,
-      })),
+      disposition: "unknown",
+      issues: [],
+      state: "missing-snapshot",
     },
     schemaVersion: VISUALIZATION_DEBUG_EXPORT_SCHEMA_VERSION,
   };
-  const boundedJson = JSON.stringify(boundedDocument, null, 2);
-  if (utf8ByteLength(boundedJson) > MAX_VISUALIZATION_DEBUG_EXPORT_BYTES) {
-    throw new TypeError("Visualization debug export summary exceeds its byte budget.");
-  }
   return {
-    document: boundedDocument,
-    json: boundedJson,
+    document,
+    json: JSON.stringify(document, null, 2),
     mime: VISUALIZATION_DEBUG_EXPORT_MIME,
   };
+}
+
+function buildBoundedVisualizationDebugExport(
+  model: VisualizationDebugPanelModel,
+  exportedAtMs: number,
+  reason: "serialization" | "size",
+): VisualizationDebugExportResult {
+  const document: VisualizationDebugExportDocument = {
+    exportedAtMs: safeExportedAtMs(exportedAtMs),
+    issues: [boundedExportIssue(reason)],
+    model: {
+      carrierCount: model.viewports.reduce(
+        (count, viewport) => count + viewport.carriers.length,
+        0,
+      ),
+      disposition: model.disposition,
+      issueCount: model.issues.length,
+      issues: [],
+      snapshotCount: model.viewports.reduce(
+        (count, viewport) => count + viewport.snapshots.length,
+        0,
+      ),
+      state: model.state,
+      target: model.target ? { kind: model.target.kind } : null,
+      transportEntryCount: model.transport.length,
+      viewportCount: model.viewports.length,
+    },
+    schemaVersion: VISUALIZATION_DEBUG_EXPORT_SCHEMA_VERSION,
+  };
+  const json = JSON.stringify(document, null, 2);
+  return {
+    document,
+    json,
+    mime: VISUALIZATION_DEBUG_EXPORT_MIME,
+  };
+}
+
+function boundedExportIssue(
+  reason: "serialization" | "size",
+): VisualizationDebugExportIssue {
+  return reason === "size"
+    ? {
+        code: "export-size-limit",
+        message:
+          "Full evidence exceeded the 64 KiB UTF-8 export budget; a bounded summary replaces the oversized payload.",
+      }
+    : {
+        code: "export-serialization-failed",
+        message:
+          "Full evidence could not be serialized; a bounded summary replaces the invalid payload.",
+      };
+}
+
+function safeExportedAtMs(value: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 export function createVisualizationDebugEvidenceActions(

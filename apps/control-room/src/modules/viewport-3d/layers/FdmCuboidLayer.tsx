@@ -39,7 +39,10 @@ import {
 
 import type { FdmGridRenderDomain } from "../viewport3dDomainAdapter";
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
-import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
+import {
+  resolveViewport3DScalarColorBufferKey,
+  type ScalarColorBuffer,
+} from "../viewport3dFieldMapping";
 import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
@@ -1160,9 +1163,7 @@ function fdmCuboidSurfaceAdoptionIdentity({
     fieldBufferId: scalarBuffer.sourceFieldBufferId ?? fieldBufferId,
     kind: "surface",
     resourceKey: scalarBuffer.sourceResourceKey ?? null,
-    scalarBufferKey:
-      scalarBuffer.buildKey ??
-      `scalar:${scalarBuffer.quantityId ?? "unknown"}:${scalarBuffer.colorMode ?? "unknown"}:${scalarBuffer.colors.byteLength}`,
+    scalarBufferKey: resolveViewport3DScalarColorBufferKey(scalarBuffer),
     vectorBuildKey: null,
   };
 }

@@ -334,7 +334,7 @@ async function verifyProjectionSwitchKeepsTopologyStable(browser) {
       null,
       { timeout: 10_000 },
     );
-    await clickCanvasUntilProjectionControlVisible(page);
+    await selectProjectionFixtureVisualizationNode(page);
     const projectionSelect = page
       .locator(".fm-inspector-panel")
       .getByLabel("Projection");
@@ -381,49 +381,27 @@ async function verifyProjectionSwitchKeepsTopologyStable(browser) {
   }
 }
 
-async function clickCanvasUntilProjectionControlVisible(page) {
-  const canvasBox = await readCanvasClipBox(page);
-  const center = {
-    x: canvasBox.x + canvasBox.width / 2,
-    y: canvasBox.y + canvasBox.height / 2,
-  };
-  const step = Math.max(16, Math.min(canvasBox.width, canvasBox.height) * 0.08);
-  const offsets = [
-    [0, 0],
-    [-step, 0],
-    [step, 0],
-    [0, -step],
-    [0, step],
-    [-step, -step],
-    [step, -step],
-    [-step, step],
-    [step, step],
-  ];
-  const projectionSelect = page
-    .locator(".fm-inspector-panel")
-    .getByLabel("Projection");
-
-  for (const [offsetX, offsetY] of offsets) {
-    await page.mouse.click(center.x + offsetX, center.y + offsetY);
-    await page.waitForTimeout(120);
-    if (await projectionSelect.isVisible()) return;
-  }
-
-  const selectedNodes = await page
-    .locator('[data-node-id][aria-selected="true"]')
-    .evaluateAll((nodes) =>
-      nodes
-        .map((node) => node.getAttribute("data-node-id"))
-        .filter(Boolean),
-    );
-  const inspectorText = await page
-    .locator(".fm-inspector-panel")
-    .evaluate((node) => node.textContent ?? "")
-    .catch(() => "missing");
-  throw new Error(
-    `Canvas clicks did not reveal the Projection control. Selected nodes: ${
-      selectedNodes.join(", ") || "none"
-    }. Inspector: ${inspectorText.slice(0, 240)}`,
+async function selectProjectionFixtureVisualizationNode(page) {
+  await ensureExplorerNodeExpanded(
+    page.locator('[data-node-id="model:objects"]'),
+  );
+  await ensureExplorerNodeExpanded(
+    page.locator('[data-node-id="model:object:projection-film"]'),
+  );
+  const visualizationNode = page.locator(
+    '[data-node-id="model:object:projection-film:visualization"]',
+  );
+  await visualizationNode.waitFor({ state: "visible", timeout: 15_000 });
+  await visualizationNode.click({ force: true });
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector(
+          '[data-node-id="model:object:projection-film:visualization"]',
+        )
+        ?.getAttribute("aria-selected") === "true",
+    null,
+    { timeout: 10_000 },
   );
 }
 
@@ -540,9 +518,15 @@ async function installTopBottomProjectionFixtureApi(
     const path = requestUrl.pathname;
     if (request.method() === "PATCH" && path === "/v2/sessions/current/visualization/state") {
       const patch = request.postDataJSON();
-      const override = Array.isArray(patch?.overrides)
+      const objectOverride = Array.isArray(patch?.overrides)
+        ? patch.overrides.find(
+            (entry) => entry?.scope_id === "projection-film",
+          )
+        : null;
+      const partOverride = Array.isArray(patch?.overrides)
         ? patch.overrides.find((entry) => entry?.scope_id === "part-film")
         : null;
+      const override = objectOverride ?? partOverride;
       const nextProjectionMode = override?.style?.surface_projection_mode;
       if (typeof nextProjectionMode === "string") {
         fixtureState.projectionMode = nextProjectionMode;

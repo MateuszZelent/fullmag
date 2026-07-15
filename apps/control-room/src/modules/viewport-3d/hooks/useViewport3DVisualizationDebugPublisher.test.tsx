@@ -13,7 +13,9 @@ import {
 
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { buildViewport3DTargetFieldBuffer } from "../model/viewport3DTargetFieldBuffer";
+import { recordFdmCuboidSurfaceAdoption } from "../layers/FdmCuboidLayer";
 import { recordMeshPartSurfaceAdoption } from "../layers/MeshPartLayer";
+import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
 import {
   createViewport3DVisualizationDebugPublisher,
   createViewport3DVisualizationDebugCandidateBuilder,
@@ -867,7 +869,81 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
       receipts,
     });
 
-    expect(receipts[0]?.scalarBufferKey).toBe("scalar:synthetic-airbox:x:8");
+    expect(receipts[0]?.scalarBufferKey).toBe(
+      resolveViewport3DScalarColorBufferKey(scalarColors),
+    );
+    expect(result.carriers[0]?.render.surface.bufferKey).toBe(
+      receipts[0]?.scalarBufferKey,
+    );
+    expect(result.issues.map((issue) => issue.code)).not.toContain(
+      "adopted-source-mismatch",
+    );
+  });
+
+  it("uses the same exact fallback scalar identity for FDM adoption and debug evidence", async () => {
+    const source = syntheticScanSource({ exactRange: true });
+    const pass = source.fieldModel!.targetPasses.get("part:__air__")!;
+    const scalarColors = pass.surface.scalarColors!;
+    delete scalarColors.buildKey;
+    const fdmSource: Viewport3DVisualizationDebugSource = {
+      ...source,
+      carrierRoles: new Map([["fdm-domain", "fdm-domain"]]),
+      fieldModel: {
+        ...source.fieldModel!,
+        targetPasses: new Map([
+          [
+            "full",
+            {
+              ...pass,
+              fieldBuffer: null,
+              fieldBufferState: "derived-global" as const,
+            },
+          ],
+        ]),
+      },
+      fullFieldBufferIdentity: {
+        bufferId: "field-fdm",
+        currentDomainGenerationId: null,
+        resourceKey: null,
+      },
+      fullFieldVector: {
+        dtype: "float64",
+        grid: [2, 1, 1],
+        nComp: 3,
+        pointCount: 2,
+        quantityId: "synthetic-airbox",
+        valueCount: 6,
+        values: new Float64Array([1, 2, 3, 4, 5, 6]),
+      },
+      targets: [
+        {
+          carrierIds: [],
+          target: { id: "object:sample", kind: "object", label: "Sample" },
+        },
+      ],
+    };
+    const candidate = await createViewport3DVisualizationDebugCandidateBuilder({
+      source: fdmSource,
+      viewportId: "viewport-main",
+    })({ signal: new AbortController().signal, targetId: "object:sample" });
+    await settleCandidate(candidate);
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([["fdm-domain", ["object:sample"]]]));
+    registry.retainDemand("object:sample");
+    recordFdmCuboidSurfaceAdoption({
+      fieldBufferId: "field-fdm",
+      registry,
+      scalarBuffer: scalarColors,
+    });
+    const receipts = registry.snapshot("object:sample");
+    const result = candidate.materialize({
+      frame: { commitId: "frame-fdm-scalar", committedAtMs: 1 },
+      receipts,
+    });
+
+    expect(receipts[0]?.scalarBufferKey).toBe(
+      resolveViewport3DScalarColorBufferKey(scalarColors),
+    );
     expect(result.carriers[0]?.render.surface.bufferKey).toBe(
       receipts[0]?.scalarBufferKey,
     );

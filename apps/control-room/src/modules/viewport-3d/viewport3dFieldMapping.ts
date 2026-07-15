@@ -64,6 +64,9 @@ export interface ScalarColorBuffer {
   vectorValues?: Float32Array;
 }
 
+const scalarColorBufferFallbackKeys = new WeakMap<ScalarColorBuffer, string>();
+let nextScalarColorBufferFallbackKey = 0;
+
 export function resolveViewport3DScalarColorBufferKey(
   scalarBuffer: ScalarColorBuffer,
 ): string;
@@ -77,10 +80,15 @@ export function resolveViewport3DScalarColorBufferKey(
   scalarBuffer: ScalarColorBuffer | null | undefined,
 ): string | null {
   if (!scalarBuffer) return null;
-  return (
-    scalarBuffer.buildKey ??
-    `scalar:${scalarBuffer.quantityId ?? "unknown"}:${scalarBuffer.colorMode ?? "unknown"}:${scalarBuffer.colors.byteLength}`
-  );
+  if (scalarBuffer.buildKey !== undefined) return scalarBuffer.buildKey;
+
+  const existingKey = scalarColorBufferFallbackKeys.get(scalarBuffer);
+  if (existingKey) return existingKey;
+
+  nextScalarColorBufferFallbackKey += 1;
+  const key = `scalar-buffer:runtime:${nextScalarColorBufferFallbackKey}`;
+  scalarColorBufferFallbackKeys.set(scalarBuffer, key);
+  return key;
 }
 
 export interface ChunkedFieldTransformOptions {

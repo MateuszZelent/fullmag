@@ -28,28 +28,80 @@ describe("visualization debug evidence export", () => {
 
   it("replaces oversized evidence with a bounded, explicit size-limit summary", () => {
     const model = exportModel(`/data/fields/m/${"x".repeat(80_000)}`);
+    model.target = {
+      id: `object:${"target".repeat(20_000)}`,
+      kind: "object",
+      selectionKind: "object.visualization.debug",
+    };
     model.disposition = "blocked";
     model.issues = Array.from({ length: 20 }, (_, index) => ({
       code: `issue-${index}`,
-      evidence: [`index=${index}`],
-      message: `Issue ${index}`,
+      evidence: [`index=${index}:${"evidence".repeat(20_000)}`],
+      message: `Issue ${index}:${"message".repeat(20_000)}`,
       severity: index === 0 ? "error" as const : "warning" as const,
       source: "render-derived" as const,
     }));
+    let result: ReturnType<typeof buildVisualizationDebugExport> | undefined;
+
+    expect(() => {
+      result = buildVisualizationDebugExport(model, 1_234);
+    }).not.toThrow();
+
+    expect(result?.document.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "export-size-limit" }),
+      ]),
+    );
+    expect(new TextEncoder().encode(result?.json ?? "").byteLength).toBeLessThanOrEqual(
+      MAX_VISUALIZATION_DEBUG_EXPORT_BYTES,
+    );
+    expect(result?.document.model).toMatchObject({
+      disposition: model.disposition,
+      state: model.state,
+      issueCount: model.issues.length,
+      target: { kind: "object" },
+    });
+    expect(result?.json).not.toContain("targettargettarget");
+    expect(result?.json).not.toContain("evidenceevidenceevidence");
+  });
+
+  it("falls back to a bounded document when JSON cloning fails", () => {
+    const model = exportModel("resource:key");
+    (model as unknown as { cycle: unknown }).cycle = model;
+
+    expect(() => buildVisualizationDebugExport(model, 1_234)).not.toThrow();
     const result = buildVisualizationDebugExport(model, 1_234);
 
     expect(result.document.issues).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "export-size-limit" }),
+        expect.objectContaining({ code: "export-serialization-failed" }),
       ]),
     );
     expect(new TextEncoder().encode(result.json).byteLength).toBeLessThanOrEqual(
       MAX_VISUALIZATION_DEBUG_EXPORT_BYTES,
     );
-    expect(result.document.model).toMatchObject({
-      disposition: model.disposition,
-      issues: model.issues,
+  });
+
+  it("returns minimal evidence when even the bounded model cannot be read", () => {
+    const model = exportModel("resource:key");
+    Object.defineProperty(model, "viewports", {
+      get() {
+        throw new Error("malformed model");
+      },
     });
+    let result: ReturnType<typeof buildVisualizationDebugExport> | undefined;
+
+    expect(() => {
+      result = buildVisualizationDebugExport(model, 1_234);
+    }).not.toThrow();
+    expect(result?.document.model).toMatchObject({
+      disposition: "unknown",
+      issues: [],
+      state: "missing-snapshot",
+    });
+    expect(new TextEncoder().encode(result?.json ?? "").byteLength).toBeLessThanOrEqual(
+      MAX_VISUALIZATION_DEBUG_EXPORT_BYTES,
+    );
   });
 
   it("copies snapshot and exact resource key with bounded success feedback", async () => {

@@ -105,7 +105,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("Viewport 3D phased compute metrics:");
     expect(smokeScript).toContain('"long-animation-frame"');
     expect(smokeScript).toContain('"startup-to-canvas"');
-    expect(smokeScript).toContain('"viewport-focus"');
+    expect(smokeScript).not.toContain('"viewport-focus"');
     expect(smokeScript).toContain('"camera-orbit-rotate"');
     expect(smokeScript).toContain('"camera-wheel-zoom"');
     expect(smokeScript).toContain('"camera-right-pan"');
@@ -130,6 +130,16 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain('scope === "phase"');
     expect(smokeScript).toContain("viewportDiagnostics?.frames ?? 0");
     expect(smokeScript).toContain("__FULLMAG_READ_VIEWPORT_3D_DIAGNOSTICS__");
+  });
+
+  it("does not confuse a selectable canvas click with a camera gesture", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).not.toContain('"viewport focus"');
+    expect(smokeScript).not.toContain("await page.mouse.click(x, y);");
+    expect(smokeScript.indexOf("const initialCameraSignature")).toBeLessThan(
+      smokeScript.indexOf('"orbit rotate"'),
+    );
   });
 
   it("excludes smoke harness canvas sampling from viewport long-task metrics", () => {
@@ -315,7 +325,17 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain('shapeSelect.selectOption("cylinder")');
     expect(smokeScript).toContain("region create button enabled");
     expect(smokeScript).toContain("createButton.evaluate");
-    expect(smokeScript).toContain('getByRole("button", { name: "Hide regions" })');
+    expect(smokeScript).toContain(
+      'getByRole("group", { name: "Region overlays" })',
+    );
+    expect(smokeScript).toContain(
+      'const authoredRegionOverlayMode = regionOverlayControl.getByRole("button",',
+    );
+    expect(smokeScript).toContain('name: "Authored"');
+    expect(smokeScript).toContain("authored region overlay mode active");
+    expect(smokeScript).not.toContain(
+      'getByRole("button", { name: "Hide regions" })',
+    );
     expect(smokeScript).toContain("assertViewportTopologyNotStale");
     expect(smokeScript).toContain("topology remains renderable");
     expect(smokeScript).toContain("edge-only safety view");
@@ -327,6 +347,24 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("waitForRegionAuthoringScriptSync");
     expect(smokeScript).toContain(JSON.stringify(MODEL_SYNCS_PATH));
     expect(smokeScript).toContain("script=region-authoring-synced");
+  });
+
+  it("uses the region transaction revision for geometry smoke cleanup", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain(
+      "const regionOverlayResult = await verifyRegionAuthoringOverlayFlow",
+    );
+    expect(smokeScript).toContain(
+      "cleanupRevision = regionOverlayResult.sceneRevision;",
+    );
+    expect(smokeScript).toContain("sceneRevision: committedSceneRevision");
+    expect(smokeScript).toContain(
+      "const externalBaseRevision = cleanupRevision;",
+    );
+    expect(smokeScript).not.toContain(
+      "sceneRevision(uiScene) ?? transaction.scene_revision ?? null",
+    );
   });
 
   it("does not order websocket refetch proof by probe timestamps", () => {
@@ -395,6 +433,34 @@ describe("viewport smoke projection round-trip", () => {
     expect(screenshotScript).toContain('scope_id: "part-film"');
     expect(screenshotScript).toContain('source: "mesh_part"');
     expect(screenshotScript).toContain('object_id: "projection-film"');
+  });
+
+  it("selects the semantic object Visualization node before changing projection", () => {
+    const screenshotScript = readFileSync(screenshotScriptUrl, "utf8");
+
+    expect(screenshotScript).toContain(
+      "selectProjectionFixtureVisualizationNode",
+    );
+    expect(screenshotScript).toContain(
+      'page.locator(\'[data-node-id="model:objects"]\')',
+    );
+    expect(screenshotScript).toContain(
+      'page.locator(\'[data-node-id="model:object:projection-film"]\')',
+    );
+    expect(screenshotScript).toContain(
+      '[data-node-id="model:object:projection-film:visualization"]',
+    );
+    expect(screenshotScript).toContain("const objectOverride =");
+    expect(screenshotScript).toContain(
+      'entry?.scope_id === "projection-film"',
+    );
+    expect(screenshotScript).toContain("const partOverride =");
+    expect(screenshotScript).toContain(
+      "const override = objectOverride ?? partOverride;",
+    );
+    expect(screenshotScript).not.toContain(
+      "clickCanvasUntilProjectionControlVisible",
+    );
   });
 
   it("rejects a projection screenshot gate with no pixel difference for any mode pair", () => {

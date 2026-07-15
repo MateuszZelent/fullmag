@@ -10,6 +10,7 @@ import {
   buildVertexScalarColorsChunked,
   fieldTransformNeedsChunking,
   resolveScalarRange,
+  resolveViewport3DScalarColorBufferKey,
 } from "./viewport3dFieldMapping";
 import {
   magnitudeColorRgb,
@@ -29,6 +30,34 @@ function vectorField(values: number[], nComp = 3): DecodedFieldVector {
 }
 
 describe("viewport3dFieldMapping", () => {
+  it("uses exact object identity when a scalar buffer has no explicit build key", () => {
+    const first = {
+      colors: new Float32Array(6),
+      colorMode: "magnitude",
+      quantityId: "m",
+      range: { max: 1, min: 0 },
+    };
+    const second = {
+      ...first,
+      colors: new Float32Array(6),
+    };
+
+    const firstKey = resolveViewport3DScalarColorBufferKey(first);
+
+    expect(resolveViewport3DScalarColorBufferKey(first)).toBe(firstKey);
+    expect(resolveViewport3DScalarColorBufferKey(second)).not.toBe(firstKey);
+  });
+
+  it("preserves an explicit scalar build key", () => {
+    expect(
+      resolveViewport3DScalarColorBufferKey({
+        buildKey: "scalar-build:exact",
+        colors: new Float32Array(3),
+        range: { max: 1, min: 0 },
+      }),
+    ).toBe("scalar-build:exact");
+  });
+
   it("maps vector magnitude to per-vertex scalar colors", () => {
     const result = buildVertexScalarColors(
       vectorField([

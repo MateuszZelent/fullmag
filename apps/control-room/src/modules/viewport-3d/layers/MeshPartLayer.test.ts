@@ -14,6 +14,7 @@ import {
   recordMeshPartSurfaceAdoption,
 } from "./MeshPartLayer";
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
+import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
 
 describe("MeshPartLayer", () => {
   it("uses the effective full node selection for the points pass", () => {
@@ -64,21 +65,22 @@ describe("MeshPartLayer", () => {
     const registry = createViewport3DRenderAdoptionRegistry();
     registry.setCarrierTargets(new Map([["part:a", ["object:a"]]]));
     registry.retainDemand("object:a");
+    const scalarBuffer = {
+      colors: new Float32Array(6),
+      colorMode: "x",
+      quantityId: "H_demag",
+      range: { max: 1, min: 0 },
+    };
 
     recordMeshPartSurfaceAdoption({
       carrierId: "part:a",
       fieldBufferId: "field-a",
       registry,
-      scalarBuffer: {
-        colors: new Float32Array(6),
-        colorMode: "x",
-        quantityId: "H_demag",
-        range: { max: 1, min: 0 },
-      },
+      scalarBuffer,
     });
 
     expect(registry.snapshot("object:a")[0]?.scalarBufferKey).toBe(
-      "scalar:H_demag:x:24",
+      resolveViewport3DScalarColorBufferKey(scalarBuffer),
     );
   });
   it("clears only its exact surface receipt when the adopted buffer is hidden or unmounted", () => {

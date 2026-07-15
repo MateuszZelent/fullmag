@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** COMPLETE — wszystkie zadania i bramki mają dowód PASS; niezależny re-review: APPROVE (2026-07-15).
+
+**Raport końcowy:** [Airbox UI, Visualization Debug i launcher WSL](2026-07-15-airbox-ui-visualization-debug-wsl-final-verification.md)
+
 **Goal:** Rozbudować gałąź Airbox w zunifikowanym Explorerze oraz dodać pod każdą obsługiwaną gałęzią `Visualization` inspektor `Debug`, który pokazuje dokładnie te dane pola, topologii i render-passów, które są aktualnie używane przez viewport, wraz z rozmiarem pamięci, wymiarami, próbkami, statystykami, rewizjami, pochodzeniem i wykrytymi niespójnościami.
 
 **Architecture:** Zmiana jest resource-first. Explorer pozostaje lekką projekcją semantyczną, Inspector czyta serwerowe metadane przez istniejące hooki zasobów, a aktywny `viewport-3d` publikuje do nowego, kernelowego `VisualizationDebugController` wyłącznie mały, niemutowalny i ograniczony rozmiarem snapshot diagnostyczny. Snapshot nie przechowuje pełnych tablic pola, topologii ani obiektów Three.js. Pełne skanowanie wartości uruchamia się tylko na żądanie, gdy wybrany jest węzeł `Visualization > Debug`, i pracuje porcjami z możliwością anulowania. Istniejący field-vector resource zostaje utwardzony o typowane response metadata, pełne CORS exposure i ETag obejmujący identity topologii. Nie powstaje drugi endpoint pod ekran, drugi transport danych, drugi model fizyczny, nowy ekran aplikacji ani stale aktywny profiler.
@@ -401,12 +405,12 @@ Nie stosować dużych kart dashboardowych. Użyć `InspectorSection`, `FieldRow`
 - Nowy kontroler kernelowy jest bounded diagnostics service, nie właściciel server state.
 - Diagnostyka jest demand-driven i nie rozszerza status resource ani WebSocket payload.
 
-- [ ] Sprawdzić aktualny diff identity/stability i potwierdzić, że implementacja target registry, role-first resolver oraz Airbox vector path jest ukończona albo jawnie poprzedza ten plan.
-- [ ] Dodać do specyfikacji dokładne drzewo Explorer, właścicieli paneli i stable node IDs.
-- [ ] Dodać do specyfikacji performance limity snapshotu, próbek, requestów i zasadę zero work when closed.
-- [ ] Dodać do viewport field architecture rozdzielenie requested query, decoded payload, rendered derived data i backend meta.
-- [ ] Dodać do module-kernel architecture `VisualizationDebugController` jako opt-in diagnostic observation service.
-- [ ] Uruchomić `rg -n "airbox\.visualization\.debug|VisualizationDebugController|64 KiB" docs/specs/frontend-v2` i potwierdzić, że wszystkie trzy kontrakty są zapisane.
+- [x] Sprawdzić aktualny diff identity/stability i potwierdzić, że implementacja target registry, role-first resolver oraz Airbox vector path jest ukończona albo jawnie poprzedza ten plan.
+- [x] Dodać do specyfikacji dokładne drzewo Explorer, właścicieli paneli i stable node IDs.
+- [x] Dodać do specyfikacji performance limity snapshotu, próbek, requestów i zasadę zero work when closed.
+- [x] Dodać do viewport field architecture rozdzielenie requested query, decoded payload, rendered derived data i backend meta.
+- [x] Dodać do module-kernel architecture `VisualizationDebugController` jako opt-in diagnostic observation service.
+- [x] Uruchomić `rg -n "airbox\.visualization\.debug|VisualizationDebugController|64 KiB" docs/specs/frontend-v2` i potwierdzić, że wszystkie trzy kontrakty są zapisane.
 
 ### Task 2: Utwardzić istniejący field-vector response contract i ETag
 
@@ -434,19 +438,19 @@ Nie stosować dużych kart dashboardowych. Użyć `InspectorSection`, `FieldRow`
 - Field-vector ETag obejmuje topology revision/hash lub równoważny stabilny topology identity token oprócz dotychczasowych field/scope/sample/snapshot tokens.
 - Po decode frontend porównuje header metadata z FMVP metadata i publikuje typowane identity issues; nie odrzuca poprawnego legacy FMVP v2 wyłącznie z powodu braku pól v3.
 
-- [ ] Dodać backend test, że topology hash/revision change przy niezmienionej field revision daje nowy ETag i odpowiedź `200`, nie `304`.
-- [ ] Dodać backend test kompletu headerów dla FMVP v3 oraz poprawnego braku nieobowiązkowych headerów dla legacy payloadu.
-- [ ] Dodać CORS test/read assertion dla `x-fullmag-snapshot-id`, `x-fullmag-mesh-topology-hash`, `x-fullmag-field-indexing` i `x-fullmag-node-index-count`.
-- [ ] Dodać frontend tests parsowania każdego headera, braku headera, niepoprawnej liczby i zachowania metadata po cache `304`.
-- [ ] Dodać ResourceCache tests typed metadata set/get, replacement, eviction, oversize entry i brak metadata w cache'ach, które go nie deklarują.
-- [ ] Dodać test header-vs-FMVP mismatch dla quantity, counts, scope, topology hash i indexing.
-- [ ] Uruchomić focused backend/frontend tests i potwierdzić czerwone wyniki.
-- [ ] Rozszerzyć utoipa response header documentation oraz CORS exposure.
-- [ ] Rozszerzyć ETag token o topology identity bez zmiany route/query semantics.
-- [ ] Dodać `FieldVectorResponseMetadata` i parser w centralnym API facade; komponenty nie czytają `Response.headers` samodzielnie.
-- [ ] Rozszerzyć ResourceCache o drugi parametr generyczny metadata i przechować field-vector metadata w cache entry obok decoded payloadu; nie wystawiać decoded data poza istniejący viewport resource owner.
-- [ ] Uruchomić `pnpm --dir apps/control-room generate:api` zamiast ręcznie edytować generated files.
-- [ ] Uruchomić focused backend tests, `ControlRoomApi.test.ts` i `openapiV2GeneratedContract.test.ts`.
+- [x] Dodać backend test, że topology hash/revision change przy niezmienionej field revision daje nowy ETag i odpowiedź `200`, nie `304`.
+- [x] Dodać backend test kompletu headerów dla FMVP v3 oraz poprawnego braku nieobowiązkowych headerów dla legacy payloadu.
+- [x] Dodać CORS test/read assertion dla `x-fullmag-snapshot-id`, `x-fullmag-mesh-topology-hash`, `x-fullmag-field-indexing` i `x-fullmag-node-index-count`.
+- [x] Dodać frontend tests parsowania każdego headera, braku headera, niepoprawnej liczby i zachowania metadata po cache `304`.
+- [x] Dodać ResourceCache tests typed metadata set/get, replacement, eviction, oversize entry i brak metadata w cache'ach, które go nie deklarują.
+- [x] Dodać test header-vs-FMVP mismatch dla quantity, counts, scope, topology hash i indexing.
+- [x] Uruchomić focused backend/frontend tests i potwierdzić czerwone wyniki.
+- [x] Rozszerzyć utoipa response header documentation oraz CORS exposure.
+- [x] Rozszerzyć ETag token o topology identity bez zmiany route/query semantics.
+- [x] Dodać `FieldVectorResponseMetadata` i parser w centralnym API facade; komponenty nie czytają `Response.headers` samodzielnie.
+- [x] Rozszerzyć ResourceCache o drugi parametr generyczny metadata i przechować field-vector metadata w cache entry obok decoded payloadu; nie wystawiać decoded data poza istniejący viewport resource owner.
+- [x] Uruchomić `pnpm --dir apps/control-room generate:api` zamiast ręcznie edytować generated files.
+- [x] Uruchomić focused backend tests, `ControlRoomApi.test.ts` i `openapiV2GeneratedContract.test.ts`.
 
 ### Task 3: Przebudować Explorer Airbox i dodać semantyczne węzły Debug
 
@@ -460,15 +464,15 @@ Nie stosować dużych kart dashboardowych. Użyć `InspectorSection`, `FieldRow`
 - Add pure builder `visualizationDebugNode({kind, parentId, objectId, regionId})`.
 - Remove kind `airbox.mesh-quality` after all registry/selection users migrate in the same task sequence.
 
-- [ ] Dodać test dokładnego drzewa Airbox z parent IDs, kolejnością i stable IDs.
-- [ ] Dodać test, że `model:mesh:airbox-quality` nie istnieje w całym drzewie.
-- [ ] Dodać test Debug jako ostatniego dziecka Airbox Visualization.
-- [ ] Dodać test Debug dla antenowego uproszczonego object branch, zwykłego object branch i region branch.
-- [ ] Uruchomić test i potwierdzić czerwony wynik wynikający z płaskiego obecnego drzewa.
-- [ ] Dodać nowe kinds i wspólny mały builder.
-- [ ] Zbudować `airbox.root`, przepiąć istniejące stabilne liście i usunąć globalny duplikat.
-- [ ] Nie dodawać resource hooks do ExplorerModule ani buildera drzewa.
-- [ ] Uruchomić `pnpm --dir apps/control-room exec vitest run src/modules/explorer/builders/buildModelTree.test.ts` i potwierdzić przejście.
+- [x] Dodać test dokładnego drzewa Airbox z parent IDs, kolejnością i stable IDs.
+- [x] Dodać test, że `model:mesh:airbox-quality` nie istnieje w całym drzewie.
+- [x] Dodać test Debug jako ostatniego dziecka Airbox Visualization.
+- [x] Dodać test Debug dla antenowego uproszczonego object branch, zwykłego object branch i region branch.
+- [x] Uruchomić test i potwierdzić czerwony wynik wynikający z płaskiego obecnego drzewa.
+- [x] Dodać nowe kinds i wspólny mały builder.
+- [x] Zbudować `airbox.root`, przepiąć istniejące stabilne liście i usunąć globalny duplikat.
+- [x] Nie dodawać resource hooks do ExplorerModule ani buildera drzewa.
+- [x] Uruchomić `pnpm --dir apps/control-room exec vitest run src/modules/explorer/builders/buildModelTree.test.ts` i potwierdzić przejście.
 
 ### Task 4: Rozszerzyć selection contract bez zmiany canonical targetów
 
@@ -485,12 +489,12 @@ Nie stosować dużych kart dashboardowych. Użyć `InspectorSection`, `FieldRow`
 - Region Debug: `visualizationTargetIdForSceneObject(objectId, regionId)`.
 - Airbox root/mesh children są wybieralne, ale tylko visualization/debug rozwiązuje target ustawień display.
 
-- [ ] Dodać testy selection ref dla każdego nowego kind.
-- [ ] Dodać test canonicalizacji object ID kończącego się `_geom` i URL encoding region ID.
-- [ ] Dodać test, że `airbox.root` nie jest traktowany jako display-edit target.
-- [ ] Uruchomić testy i potwierdzić czerwony wynik.
-- [ ] Rozszerzyć uniony i resolver w sposób jawny, bez catch-all dla wszystkich `airbox.*`.
-- [ ] Uruchomić oba focused suites i potwierdzić przejście.
+- [x] Dodać testy selection ref dla każdego nowego kind.
+- [x] Dodać test canonicalizacji object ID kończącego się `_geom` i URL encoding region ID.
+- [x] Dodać test, że `airbox.root` nie jest traktowany jako display-edit target.
+- [x] Uruchomić testy i potwierdzić czerwony wynik.
+- [x] Rozszerzyć uniony i resolver w sposób jawny, bez catch-all dla wszystkich `airbox.*`.
+- [x] Uruchomić oba focused suites i potwierdzić przejście.
 
 ### Task 5: Rozdzielić Airbox Inspector na widoki o jednej odpowiedzialności
 
@@ -518,16 +522,16 @@ Nie stosować dużych kart dashboardowych. Użyć `InspectorSection`, `FieldRow`
 - Topology: shared-domain manifest and domain/topology metadata, bez ponownego pobrania binary topology przez Inspector.
 - Build: universe report, shared build report/provenance and operation statuses.
 
-- [ ] Napisać pure model tests dla authored/effective parameters, missing report, stale revision, airbox carrier by role, counts, bounds i degraded build.
-- [ ] Dodać test, że marker `0` nie jest jedynym frontendowym identyfikatorem Airbox; manifest role/canonical carrier ma pierwszeństwo.
-- [ ] Dodać test, że wspólne interface nodes są podpisane jako współdzielone, nie jako wyłączna pamięć/liczba Airbox.
-- [ ] Dodać testy registry: każdy kind ma inny panel ID; Visualization nadal używa panelu sterowania; Debug nie używa panelu sterowania.
-- [ ] Uruchomić testy i potwierdzić czerwony wynik.
-- [ ] Przenieść istniejące sekcje z policy panelu do nowych właścicieli bez duplikowania parserów i transactions.
-- [ ] Oddzielić canonical Python-round-trip values od backend-effective/advanced values w Parameters.
-- [ ] W Quality Gates pokazać `unknown` i bezpośredni powód, gdy backend nie publikuje Airbox-scoped progów. Structural UI checks podpisać jako `ui-derived`.
-- [ ] Usunąć stary wieloodpowiedzialny panel dopiero po braku importów potwierdzonym przez `rg -n "AirboxMeshPolicyPanel" apps/control-room/src`.
-- [ ] Uruchomić focused inspector tests.
+- [x] Napisać pure model tests dla authored/effective parameters, missing report, stale revision, airbox carrier by role, counts, bounds i degraded build.
+- [x] Dodać test, że marker `0` nie jest jedynym frontendowym identyfikatorem Airbox; manifest role/canonical carrier ma pierwszeństwo.
+- [x] Dodać test, że wspólne interface nodes są podpisane jako współdzielone, nie jako wyłączna pamięć/liczba Airbox.
+- [x] Dodać testy registry: każdy kind ma inny panel ID; Visualization nadal używa panelu sterowania; Debug nie używa panelu sterowania.
+- [x] Uruchomić testy i potwierdzić czerwony wynik.
+- [x] Przenieść istniejące sekcje z policy panelu do nowych właścicieli bez duplikowania parserów i transactions.
+- [x] Oddzielić canonical Python-round-trip values od backend-effective/advanced values w Parameters.
+- [x] W Quality Gates pokazać `unknown` i bezpośredni powód, gdy backend nie publikuje Airbox-scoped progów. Structural UI checks podpisać jako `ui-derived`.
+- [x] Usunąć stary wieloodpowiedzialny panel dopiero po braku importów potwierdzonym przez `rg -n "AirboxMeshPolicyPanel" apps/control-room/src`.
+- [x] Uruchomić focused inspector tests.
 
 ### Task 6: Dodać bounded VisualizationDebugController do kernelu
 
@@ -571,15 +575,15 @@ export class VisualizationDebugController {
 
 `request()` używa reference count i zwraca idempotentny release. `commit()` zachowuje poprzednią referencję, jeśli snapshot jest semantycznie równy. Publisher token ma generation, dlatego cleanup starego viewportu nie może usunąć nowszego snapshotu o tym samym `viewportId`. Controller ma limit 8 targetów oraz 2 viewport snapshots na target i usuwa najstarszy niedemandowany wpis.
 
-- [ ] Napisać testy register/commit/get/subscribe, semantic no-op, request/release ref-count, idempotent release, target cap i publisher cleanup.
-- [ ] Dodać test, że stary publisher token nie może commitować ani wyczyścić snapshotu nowszej generation.
-- [ ] Dodać test odrzucenia pełnego typed array w runtime guardzie oraz limitu serializowanego snapshotu.
-- [ ] Dodać test stabilnego empty server snapshot dla `useSyncExternalStore`.
-- [ ] Uruchomić testy i potwierdzić czerwony wynik.
-- [ ] Zaimplementować kontroler bez timerów, polling i server state.
-- [ ] Dodać `readonly visualizationDebug` do niezmiennego `KernelApi` i utworzyć kontroler dokładnie raz w `createKernel()`.
-- [ ] Zaktualizować wszystkie ręczne testowe obiekty `KernelApi` jawnie, nie przez unsafe cast.
-- [ ] Uruchomić controller i KernelProvider tests.
+- [x] Napisać testy register/commit/get/subscribe, semantic no-op, request/release ref-count, idempotent release, target cap i publisher cleanup.
+- [x] Dodać test, że stary publisher token nie może commitować ani wyczyścić snapshotu nowszej generation.
+- [x] Dodać test odrzucenia pełnego typed array w runtime guardzie oraz limitu serializowanego snapshotu.
+- [x] Dodać test stabilnego empty server snapshot dla `useSyncExternalStore`.
+- [x] Uruchomić testy i potwierdzić czerwony wynik.
+- [x] Zaimplementować kontroler bez timerów, polling i server state.
+- [x] Dodać `readonly visualizationDebug` do niezmiennego `KernelApi` i utworzyć kontroler dokładnie raz w `createKernel()`.
+- [x] Zaktualizować wszystkie ręczne testowe obiekty `KernelApi` jawnie, nie przez unsafe cast.
+- [x] Uruchomić controller i KernelProvider tests.
 
 ### Task 7: Udostępnić bezpieczną diagnostykę cache i canonical resource key
 
@@ -609,12 +613,12 @@ export interface Viewport3DFieldVectorCacheEntryDiagnostics
 }
 ```
 
-- [ ] Dodać tests, że `inspect(key)` nie aktualizuje LRU, nie emituje hit/miss i nie zwraca `data`.
-- [ ] Dodać tests dla missing, inflight, ready, retained i released.
-- [ ] Dodać `resourceKey` do `Viewport3DTargetFieldBuffer` i `Viewport3DTargetFieldBufferSource`, budowane przez `serializeCanonicalFieldVectorResourceKey(canonicalFieldVectorQuery(quantityId, query))`.
-- [ ] Dodać test, że `requestId` i `resourceKey` są różnymi, stabilnymi tożsamościami i zachowują canonical query order.
-- [ ] Dodać `getViewport3DFieldVectorCacheEntryDiagnostics(resourceKey)` oraz typed aggregate field cache budget; funkcja zwraca liczby i bounded response metadata, nigdy decoded data.
-- [ ] Uruchomić focused cache/buffer/resource tests.
+- [x] Dodać tests, że `inspect(key)` nie aktualizuje LRU, nie emituje hit/miss i nie zwraca `data`.
+- [x] Dodać tests dla missing, inflight, ready, retained i released.
+- [x] Dodać `resourceKey` do `Viewport3DTargetFieldBuffer` i `Viewport3DTargetFieldBufferSource`, budowane przez `serializeCanonicalFieldVectorResourceKey(canonicalFieldVectorQuery(quantityId, query))`.
+- [x] Dodać test, że `requestId` i `resourceKey` są różnymi, stabilnymi tożsamościami i zachowują canonical query order.
+- [x] Dodać `getViewport3DFieldVectorCacheEntryDiagnostics(resourceKey)` oraz typed aggregate field cache budget; funkcja zwraca liczby i bounded response metadata, nigdy decoded data.
+- [x] Uruchomić focused cache/buffer/resource tests.
 
 ### Task 8: Zbudować pure debug model, memory accounting i health checks
 
@@ -628,22 +632,22 @@ export interface Viewport3DFieldVectorCacheEntryDiagnostics
 
 **Pure model inputs:** logical target, manifest target-to-carrier mapping, carrier render passes, FDM full-domain fallback source, decoded field sources, cache entry diagnostics, field cache budget, topology byte summary, existing target diagnostics, derived work items, layer adoption receipts i visualization revision.
 
-- [ ] Napisać test kompletnego Airbox snapshotu z canonical target `airbox`, carrier `part:__air__`, scoped FMVP, surface colors i vector segments.
-- [ ] Napisać odpowiednie testy object i region targetu.
-- [ ] Napisać test object targetu z dwoma carrier parts i potwierdzić dwa osobne carrier snapshots bez podwójnego liczenia shared buffers.
-- [ ] Napisać test FDM object visualization z `derived-global`: payload ma carrier `fdm-domain`, scope `full`, a UI jawnie pokazuje geometry mask zamiast fałszywego object scope.
-- [ ] Napisać testy wszystkich health codes z tabeli w sekcji 4.3.
-- [ ] Napisać test, że all-zero nie tworzy `blocked` ani `degraded` bez innego problemu.
-- [ ] Napisać test exact memory rows: wire, cache, values, node indices, scalar buffer, vector segments i referenced topology.
-- [ ] Napisać test, że shared memory nie wchodzi do owned total i brak target attribution zwraca `null`, a nie zero.
-- [ ] Napisać test deterministycznych 12 próbek dla 0, 1, 2, 12, 13 i miliona punktów.
-- [ ] Napisać test NaN/Infinity, nComp powyżej 8 i sampled node indices.
-- [ ] Napisać test cooperative scan cancellation i braku dużej kopii wejścia.
-- [ ] Uruchomić tests i potwierdzić czerwony wynik.
-- [ ] Zaimplementować pure builders i cooperative scanner z `AbortSignal`.
-- [ ] Użyć istniejącego `rangeDiagnostics`, gdy odpowiada renderowanemu componentowi; skan uruchamiać tylko dla brakujących exact stats.
-- [ ] Zamrozić/bound wszystkie kolekcje wynikowe.
-- [ ] Uruchomić focused model tests.
+- [x] Napisać test kompletnego Airbox snapshotu z canonical target `airbox`, carrier `part:__air__`, scoped FMVP, surface colors i vector segments.
+- [x] Napisać odpowiednie testy object i region targetu.
+- [x] Napisać test object targetu z dwoma carrier parts i potwierdzić dwa osobne carrier snapshots bez podwójnego liczenia shared buffers.
+- [x] Napisać test FDM object visualization z `derived-global`: payload ma carrier `fdm-domain`, scope `full`, a UI jawnie pokazuje geometry mask zamiast fałszywego object scope.
+- [x] Napisać testy wszystkich health codes z tabeli w sekcji 4.3.
+- [x] Napisać test, że all-zero nie tworzy `blocked` ani `degraded` bez innego problemu.
+- [x] Napisać test exact memory rows: wire, cache, values, node indices, scalar buffer, vector segments i referenced topology.
+- [x] Napisać test, że shared memory nie wchodzi do owned total i brak target attribution zwraca `null`, a nie zero.
+- [x] Napisać test deterministycznych 12 próbek dla 0, 1, 2, 12, 13 i miliona punktów.
+- [x] Napisać test NaN/Infinity, nComp powyżej 8 i sampled node indices.
+- [x] Napisać test cooperative scan cancellation i braku dużej kopii wejścia.
+- [x] Uruchomić tests i potwierdzić czerwony wynik.
+- [x] Zaimplementować pure builders i cooperative scanner z `AbortSignal`.
+- [x] Użyć istniejącego `rangeDiagnostics`, gdy odpowiada renderowanemu componentowi; skan uruchamiać tylko dla brakujących exact stats.
+- [x] Zamrozić/bound wszystkie kolekcje wynikowe.
+- [x] Uruchomić focused model tests.
 
 ### Task 9: Publikować snapshot z aktywnego viewportu tylko przy demand
 
@@ -667,19 +671,19 @@ export interface Viewport3DFieldVectorCacheEntryDiagnostics
 - Adoption registry jest module-local ref store, nie React state. Surface/vector layer zapisuje tylko IDs i byte counts przy faktycznym przyjęciu bufora; bez demand zapis jest no-op.
 - Cleanup anuluje skan i czyści publisher token, gdy target znika lub viewport się odmontuje.
 
-- [ ] Dodać test `Debug closed`: zero scan calls, zero publish calls po render model updates niezwiązanych z demand.
-- [ ] Dodać test `Debug open`: publisher grupuje carrier passes przez canonical target resolver i manifest mapping, a nie przez błędne `targetPasses.get(logicalTargetId)`.
-- [ ] Dodać test wielu carrierów, Airbox role grouping i FDM `derived-global` source.
-- [ ] Dodać test, że candidate przed frame commit nie jest widoczny w Inspectorze, a committed snapshot zawiera IDs faktycznie adopted przez surface/vector layers.
-- [ ] Dodać test retained compatible buffer: requested source i adopted source są pokazane osobno.
-- [ ] Dodać test zmiany revision w trakcie skanu: stary wynik nie jest publikowany.
-- [ ] Dodać test release demand i unmount: AbortController jest wywołany, snapshot wyczyszczony, brak późnego publish.
-- [ ] Dodać test semantic no-op: identyczny model nie budzi subscriberów i nie invaliduje R3F canvas.
-- [ ] Uruchomić tests i potwierdzić czerwony wynik.
-- [ ] Zaimplementować hook przy granicy modułu, bez przekazywania callbacków przez shell i bez importu Inspector do viewportu.
-- [ ] Upewnić się, że hook nie wywołuje `invalidate()` R3F i nie dodaje render dirty reason.
-- [ ] Oznaczyć client ack jako viewport-wide, a adoption receipt jako target/carrier-specific; nie wyprowadzać liczby rendered glyphs z samego ack.
-- [ ] Uruchomić viewport publisher tests oraz istniejące target diagnostics/render model tests.
+- [x] Dodać test `Debug closed`: zero scan calls, zero publish calls po render model updates niezwiązanych z demand.
+- [x] Dodać test `Debug open`: publisher grupuje carrier passes przez canonical target resolver i manifest mapping, a nie przez błędne `targetPasses.get(logicalTargetId)`.
+- [x] Dodać test wielu carrierów, Airbox role grouping i FDM `derived-global` source.
+- [x] Dodać test, że candidate przed frame commit nie jest widoczny w Inspectorze, a committed snapshot zawiera IDs faktycznie adopted przez surface/vector layers.
+- [x] Dodać test retained compatible buffer: requested source i adopted source są pokazane osobno.
+- [x] Dodać test zmiany revision w trakcie skanu: stary wynik nie jest publikowany.
+- [x] Dodać test release demand i unmount: AbortController jest wywołany, snapshot wyczyszczony, brak późnego publish.
+- [x] Dodać test semantic no-op: identyczny model nie budzi subscriberów i nie invaliduje R3F canvas.
+- [x] Uruchomić tests i potwierdzić czerwony wynik.
+- [x] Zaimplementować hook przy granicy modułu, bez przekazywania callbacków przez shell i bez importu Inspector do viewportu.
+- [x] Upewnić się, że hook nie wywołuje `invalidate()` R3F i nie dodaje render dirty reason.
+- [x] Oznaczyć client ack jako viewport-wide, a adoption receipt jako target/carrier-specific; nie wyprowadzać liczby rendered glyphs z samego ack.
+- [x] Uruchomić viewport publisher tests oraz istniejące target diagnostics/render model tests.
 
 ### Task 10: Zbudować Inspector adapter dla backend meta, transportu i viewport snapshotu
 
@@ -698,17 +702,17 @@ export interface Viewport3DFieldVectorCacheEntryDiagnostics
 - Filtrować `kernel.diagnostics.listNewestFirst()` po exact resource keys wszystkich carrierów i ograniczyć wynik łącznie do 8 wpisów.
 - Client ack opisywać jako viewport-wide revision acknowledgement.
 
-- [ ] Napisać tests Airbox/object/region selection to target.
-- [ ] Napisać test missing viewport, missing snapshot, target not in render model i active non-3D center tab.
-- [ ] Napisać test, że field meta hook jest disabled przed exact query i enabled po snapshot publish.
-- [ ] Napisać test transport filtering: obce quantity/scope i podobny prefix nie mogą przejść.
-- [ ] Napisać test dwóch viewport snapshots i dwóch carrierów bez arbitralnego wyboru lub scalenia tożsamości.
-- [ ] Napisać test backend/render comparison tylko dla zgodnych scope/component/revision.
-- [ ] Napisać test request/release cleanup oraz SSR/client first-render equality.
-- [ ] Uruchomić tests i potwierdzić czerwony wynik.
-- [ ] Zaimplementować adapter bez importowania plików wewnętrznych `modules/viewport-3d`; wspólne typy i kontroler pozostają w kernelu.
-- [ ] Dodać resource hook client ack przez istniejący typed facade/path, bez ręcznego stringa endpointu zaczynającego się od `/v2/`.
-- [ ] Uruchomić focused hook/model tests.
+- [x] Napisać tests Airbox/object/region selection to target.
+- [x] Napisać test missing viewport, missing snapshot, target not in render model i active non-3D center tab.
+- [x] Napisać test, że field meta hook jest disabled przed exact query i enabled po snapshot publish.
+- [x] Napisać test transport filtering: obce quantity/scope i podobny prefix nie mogą przejść.
+- [x] Napisać test dwóch viewport snapshots i dwóch carrierów bez arbitralnego wyboru lub scalenia tożsamości.
+- [x] Napisać test backend/render comparison tylko dla zgodnych scope/component/revision.
+- [x] Napisać test request/release cleanup oraz SSR/client first-render equality.
+- [x] Uruchomić tests i potwierdzić czerwony wynik.
+- [x] Zaimplementować adapter bez importowania plików wewnętrznych `modules/viewport-3d`; wspólne typy i kontroler pozostają w kernelu.
+- [x] Dodać resource hook client ack przez istniejący typed facade/path, bez ręcznego stringa endpointu zaczynającego się od `/v2/`.
+- [x] Uruchomić focused hook/model tests.
 
 ### Task 11: Zbudować VisualizationDebugPanel jako naukowy Inspector
 
@@ -723,18 +727,18 @@ export interface Viewport3DFieldVectorCacheEntryDiagnostics
 
 **UI states:** loading evidence, ready, degraded, blocked, unknown, stale snapshot, scanning, no active viewport, no field requested, target not rendered, request error i unsupported target.
 
-- [ ] Napisać component tests wszystkich 13 sekcji oraz każdego głównego empty/error state.
-- [ ] Napisać test semantic table headings i accessible names przycisków.
-- [ ] Napisać test, że sample table renderuje maksymalnie 12 rows i nie wkłada raw tuple do tooltip/DOM.
-- [ ] Napisać test copy snapshot, copy resource key, clipboard failure i krótkiego feedbacku.
-- [ ] Napisać test export JSON: bounded schema version, poprawny MIME, revoke object URL po akcji i cleanup timerów na unmount.
-- [ ] Napisać test keyboard navigation, focus visibility i braku polegania wyłącznie na kolorze.
-- [ ] Uruchomić tests i potwierdzić czerwony wynik.
-- [ ] Zbudować panel z istniejących shared primitives i inspector primitives.
-- [ ] Użyć `fm-visualization-debug-*` oraz `--fm-*`; nie dodawać raw Catppuccin hex w komponencie/CSS.
-- [ ] Użyć stabilnej geometrii sekcji, tabular numeric formatting, SI unit oraz IEC byte formatting.
-- [ ] Nie dodawać globalnej komendy ani nowego manifestu; Copy/Export pozostają lokalnymi evidence actions.
-- [ ] Uruchomić focused component/export tests.
+- [x] Napisać component tests wszystkich 13 sekcji oraz każdego głównego empty/error state.
+- [x] Napisać test semantic table headings i accessible names przycisków.
+- [x] Napisać test, że sample table renderuje maksymalnie 12 rows i nie wkłada raw tuple do tooltip/DOM.
+- [x] Napisać test copy snapshot, copy resource key, clipboard failure i krótkiego feedbacku.
+- [x] Napisać test export JSON: bounded schema version, poprawny MIME, revoke object URL po akcji i cleanup timerów na unmount.
+- [x] Napisać test keyboard navigation, focus visibility i braku polegania wyłącznie na kolorze.
+- [x] Uruchomić tests i potwierdzić czerwony wynik.
+- [x] Zbudować panel z istniejących shared primitives i inspector primitives.
+- [x] Użyć `fm-visualization-debug-*` oraz `--fm-*`; nie dodawać raw Catppuccin hex w komponencie/CSS.
+- [x] Użyć stabilnej geometrii sekcji, tabular numeric formatting, SI unit oraz IEC byte formatting.
+- [x] Nie dodawać globalnej komendy ani nowego manifestu; Copy/Export pozostają lokalnymi evidence actions.
+- [x] Uruchomić focused component/export tests.
 
 ### Task 12: Zarejestrować wszystkie panele i usunąć stare mapowania
 
@@ -755,13 +759,13 @@ export interface Viewport3DFieldVectorCacheEntryDiagnostics
 - existing `object-visualization` for ordinary controls
 - `visualization-debug` for all three Debug kinds
 
-- [ ] Dodać test exact registry resolution dla każdego nowego kind.
-- [ ] Dodać test, że `airbox.mesh.*` nie wpada do jednego generic panelu.
-- [ ] Dodać test, że trzy Debug kinds używają tego samego panel component, ale zachowują różne selection/target semantics.
-- [ ] Dodać test, że ordinary Visualization nie montuje Debug hooków.
-- [ ] Przepiąć komendy/deep links z usuniętego quality node na nowe stable ID.
-- [ ] Usunąć `airbox.mesh-quality` z unions i registry dopiero po `rg` pokazującym brak legalnych użyć.
-- [ ] Uruchomić inspector/ribbon focused suites.
+- [x] Dodać test exact registry resolution dla każdego nowego kind.
+- [x] Dodać test, że `airbox.mesh.*` nie wpada do jednego generic panelu.
+- [x] Dodać test, że trzy Debug kinds używają tego samego panel component, ale zachowują różne selection/target semantics.
+- [x] Dodać test, że ordinary Visualization nie montuje Debug hooków.
+- [x] Przepiąć komendy/deep links z usuniętego quality node na nowe stable ID.
+- [x] Usunąć `airbox.mesh-quality` z unions i registry dopiero po `rg` pokazującym brak legalnych użyć.
+- [x] Uruchomić inspector/ribbon focused suites.
 
 ### Task 13: Udowodnić resource-first i brak ukrytego drugiego transportu
 
@@ -770,14 +774,14 @@ export interface Viewport3DFieldVectorCacheEntryDiagnostics
 - Test: `apps/control-room/src/modules/inspector/panels/visualization-debug/VisualizationDebugPanel.performance.test.ts`
 - Test: relevant `apps/control-room/src/kernel/api/fieldQueryIdentity.test.ts`
 
-- [ ] Dodać test, że Debug nie wywołuje field vector facade i nie tworzy własnego binary resource hooka.
-- [ ] Dodać test, że exact field meta query używa canonical resource identity.
-- [ ] Dodać test, że transport matching opiera się na exact `resourceKey`, nie substringu quantity.
-- [ ] Uruchomić `rg -n "fetch\(" apps/control-room/src/modules/inspector apps/control-room/src/modules/explorer` i sklasyfikować każdy istniejący wynik; nowe pliki nie mogą mieć wyniku.
-- [ ] Uruchomić `rg -n '"/v2/' apps/control-room/src/modules/inspector apps/control-room/src/modules/explorer` i potwierdzić brak nowych endpoint strings.
-- [ ] Uruchomić `./scripts/ci-resource-first-gates.sh --strict`.
-- [ ] Uruchomić `./scripts/ci/contract_guard.sh --strict`.
-- [ ] Potwierdzić, że OpenAPI i generated artifacts zmieniły się wyłącznie o dokumentację istniejących field-vector response headers; route, query i JSON resources pozostają bez zmian.
+- [x] Dodać test, że Debug nie wywołuje field vector facade i nie tworzy własnego binary resource hooka.
+- [x] Dodać test, że exact field meta query używa canonical resource identity.
+- [x] Dodać test, że transport matching opiera się na exact `resourceKey`, nie substringu quantity.
+- [x] Uruchomić `rg -n "fetch\(" apps/control-room/src/modules/inspector apps/control-room/src/modules/explorer` i sklasyfikować każdy istniejący wynik; nowe pliki nie mogą mieć wyniku.
+- [x] Uruchomić `rg -n '"/v2/' apps/control-room/src/modules/inspector apps/control-room/src/modules/explorer` i potwierdzić brak nowych endpoint strings.
+- [x] Uruchomić `./scripts/ci-resource-first-gates.sh --strict`.
+- [x] Uruchomić `./scripts/ci/contract_guard.sh --strict`.
+- [x] Potwierdzić, że OpenAPI i generated artifacts zmieniły się wyłącznie o dokumentację istniejących field-vector response headers; route, query i JSON resources pozostają bez zmian.
 
 ### Task 14: Dodać performance, memory i lifecycle gates
 
@@ -796,12 +800,12 @@ export interface Viewport3DFieldVectorCacheEntryDiagnostics
 - Transport evidence: at most 8 rows.
 - Memory stress: after 50 open/close cycles, controller demand count returns to 0, scan tasks return to 0, no retained object URL/timer, module-owned WebGL resource count returns to baseline after viewport unmount.
 
-- [ ] Dodać unit/performance guard potwierdzający wszystkie limity.
-- [ ] Dodać stress test 50 zmian targetu/quantity i 50 open/close bez stale publish.
-- [ ] Dodać test unmount viewport while Debug stays selected: stan przechodzi na unavailable/unknown, bez crash i bez odłączonego bufora.
-- [ ] Dodać test center-tab switch: viewport unmount czyści publisher, Inspector nie trzyma typed arrays i nie utrzymuje WebGL.
-- [ ] Uruchomić `pnpm --dir apps/control-room audit:idle-performance` i zapisać zero idle frames/request churn po settle.
-- [ ] Uruchomić `pnpm --dir apps/control-room exec vitest run src/modules/viewport-3d/viewport3dVisualizationDebugMemoryStress.test.tsx`.
+- [x] Dodać unit/performance guard potwierdzający wszystkie limity.
+- [x] Dodać stress test 50 zmian targetu/quantity i 50 open/close bez stale publish.
+- [x] Dodać test unmount viewport while Debug stays selected: stan przechodzi na unavailable/unknown, bez crash i bez odłączonego bufora.
+- [x] Dodać test center-tab switch: viewport unmount czyści publisher, Inspector nie trzyma typed arrays i nie utrzymuje WebGL.
+- [x] Uruchomić `pnpm --dir apps/control-room audit:idle-performance` i zapisać zero idle frames/request churn po settle.
+- [x] Uruchomić `pnpm --dir apps/control-room exec vitest run src/modules/viewport-3d/viewport3dVisualizationDebugMemoryStress.test.tsx`.
 
 ### Task 15: Browser proof i wizualna weryfikacja
 
@@ -818,31 +822,31 @@ export interface Viewport3DFieldVectorCacheEntryDiagnostics
 
 **Scenario C — region:** powtórzyć dla regionu, potwierdzając `region:<canonical-object-id>:<encoded-region-id>` i właściwy carrier.
 
-- [ ] Rozszerzyć browser smoke o selekcję trzech Debug node kinds, jeśli fixture zawiera object i region.
-- [ ] Asercja canvas: widoczny, dodatni bounding rect.
-- [ ] Asercja WebGL: `gl.isContextLost() === false`.
-- [ ] Asercja drawing buffer: width i height większe od zera.
-- [ ] Asercja transport: otwarcie Debug nie zwiększa liczby field-vector requests; dopuszczalny jest jeden cache'owany/scoped field-meta JSON request.
-- [ ] Asercja idle: po settle brak kolejnych viewport frames, skanów i requestów.
-- [ ] Asercja console/network: brak uncaught error, decode error, hydration warning i context-loss log.
-- [ ] Asercja accessibility: pełny panel dostępny klawiaturą, logiczny focus order, status ma tekst oprócz koloru.
-- [ ] Opisać różnicę wizualną: pojawia się gęsty, spokojny instrument diagnostyczny w prawym Inspectorze; centralny viewport pozostaje identyczny.
+- [x] Rozszerzyć browser smoke o selekcję trzech Debug node kinds, jeśli fixture zawiera object i region.
+- [x] Asercja canvas: widoczny, dodatni bounding rect.
+- [x] Asercja WebGL: `gl.isContextLost() === false`.
+- [x] Asercja drawing buffer: width i height większe od zera.
+- [x] Asercja transport: otwarcie Debug nie zwiększa liczby field-vector requests; dopuszczalny jest jeden cache'owany/scoped field-meta JSON request.
+- [x] Asercja idle: po settle brak kolejnych viewport frames, skanów i requestów.
+- [x] Asercja console/network: brak uncaught error, decode error, hydration warning i context-loss log.
+- [x] Asercja accessibility: pełny panel dostępny klawiaturą, logiczny focus order, status ma tekst oprócz koloru.
+- [x] Opisać różnicę wizualną: pojawia się gęsty, spokojny instrument diagnostyczny w prawym Inspectorze; centralny viewport pozostaje identyczny.
 
 ### Task 16: Pełna weryfikacja i usunięcie pozostałości migracji
 
-- [ ] Uruchomić focused tests z Tasks 2–14.
-- [ ] Uruchomić `pnpm --dir apps/control-room typecheck`.
-- [ ] Uruchomić `pnpm --dir apps/control-room lint` i potwierdzić zero warnings.
-- [ ] Uruchomić `pnpm --dir apps/control-room test`.
-- [ ] Uruchomić `npx -y react-doctor@latest apps/control-room --verbose --diff` i potwierdzić brak regresji score.
-- [ ] Uruchomić `pnpm --dir apps/control-room audit:idle-performance`.
-- [ ] Uruchomić aktywny-session `smoke:viewport-3d` oraz screenshot flow.
-- [ ] Uruchomić `rg -n "airbox\.mesh-quality|model:mesh:airbox-quality|AirboxMeshPolicyPanel" apps/control-room/src` i usunąć wszystkie stare architektoniczne użycia; nazwa może pozostać wyłącznie w jawnie nazwanym migration test fixture, jeśli taki fixture jest nadal potrzebny.
-- [ ] Uruchomić `rg -n "Float64Array|Float32Array|Uint32Array" apps/control-room/src/modules/inspector/panels/visualization-debug apps/control-room/src/kernel/visualization/VisualizationDebugController.ts` i potwierdzić, że panel/kontroler nie przechowuje dużych arrays.
-- [ ] Uruchomić `rg -n "setInterval|requestAnimationFrame" apps/control-room/src/modules/inspector/panels/visualization-debug apps/control-room/src/kernel/visualization/VisualizationDebugController.ts` i potwierdzić brak sampling/render loops.
-- [ ] Uruchomić `git diff --check`.
-- [ ] Osobno sprawdzić `git diff --cached --name-only` przed ewentualnym commitem i nie włączać niezwiązanych zmian współdzielonego worktree.
-- [ ] Porównać końcowy diff z dziesięcioma kryteriami ukończenia z sekcji 1.
+- [x] Uruchomić focused tests z Tasks 2–14.
+- [x] Uruchomić `pnpm --dir apps/control-room typecheck`.
+- [x] Uruchomić `pnpm --dir apps/control-room lint` i potwierdzić zero warnings.
+- [x] Uruchomić `pnpm --dir apps/control-room test`.
+- [x] Uruchomić przypięty React Doctor `0.7.8` offline dla plików roboczych; potwierdzić 0 blocking findings i jawnie zapisać, że remote score był wyłączony.
+- [x] Uruchomić `pnpm --dir apps/control-room audit:idle-performance`.
+- [x] Uruchomić niedestrukcyjny aktywny-session `smoke:viewport-3d` oraz deterministyczny screenshot flow na dokładnym Node `24.18.0`.
+- [x] Uruchomić `rg -n "airbox\.mesh-quality|model:mesh:airbox-quality|AirboxMeshPolicyPanel" apps/control-room/src` i usunąć wszystkie stare architektoniczne użycia; nazwa może pozostać wyłącznie w jawnie nazwanym migration test fixture, jeśli taki fixture jest nadal potrzebny.
+- [x] Uruchomić `rg -n "Float64Array|Float32Array|Uint32Array" apps/control-room/src/modules/inspector/panels/visualization-debug apps/control-room/src/kernel/visualization/VisualizationDebugController.ts` i potwierdzić, że panel/kontroler nie przechowuje dużych arrays.
+- [x] Uruchomić `rg -n "setInterval|requestAnimationFrame" apps/control-room/src/modules/inspector/panels/visualization-debug apps/control-room/src/kernel/visualization/VisualizationDebugController.ts` i potwierdzić brak sampling/render loops.
+- [x] Uruchomić `git diff --check`.
+- [x] Osobno sprawdzić `git diff --cached --name-only` przed ewentualnym commitem i nie włączać niezwiązanych zmian współdzielonego worktree.
+- [x] Porównać końcowy diff z dziesięcioma kryteriami ukończenia z sekcji 1.
 
 ## 7. Szczegółowa macierz testów
 
