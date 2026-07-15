@@ -65,6 +65,39 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .patch(handlers::model::patch_authoring_scene),
         )
         .route(
+            "/v2/sessions/current/model/current-transports",
+            get(handlers::model::get_current_transports)
+                .post(handlers::model::create_current_transport),
+        )
+        .route(
+            "/v2/sessions/current/model/current-transports/:id",
+            get(handlers::model::get_current_transport)
+                .patch(handlers::model::patch_current_transport)
+                .delete(handlers::model::delete_current_transport),
+        )
+        .route(
+            "/v2/sessions/current/model/spin-torques",
+            get(handlers::model::get_spin_torques)
+                .post(handlers::model::create_spin_torque),
+        )
+        .route(
+            "/v2/sessions/current/model/spin-torques/:id",
+            get(handlers::model::get_spin_torque)
+                .patch(handlers::model::patch_spin_torque)
+                .delete(handlers::model::delete_spin_torque),
+        )
+        .route(
+            "/v2/sessions/current/model/oersted-fields",
+            get(handlers::model::get_oersted_fields)
+                .post(handlers::model::create_oersted_field),
+        )
+        .route(
+            "/v2/sessions/current/model/oersted-fields/:id",
+            get(handlers::model::get_oersted_field)
+                .patch(handlers::model::patch_oersted_field)
+                .delete(handlers::model::delete_oersted_field),
+        )
+        .route(
             "/v2/sessions/current/model/geometry/capabilities",
             get(handlers::model::get_authoring_geometry_capabilities),
         )

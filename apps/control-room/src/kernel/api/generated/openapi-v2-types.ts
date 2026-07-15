@@ -1876,6 +1876,38 @@ export interface paths {
         patch: operations["model_patch_sessions_current_model_couplings_coupling_id"];
         trace?: never;
     };
+    "/v2/sessions/current/model/current-transports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_current_transports"];
+        put?: never;
+        post: operations["model_post_sessions_current_model_current_transports"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/current-transports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_current_transports_id"];
+        put?: never;
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_current_transports_id"];
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_current_transports_id"];
+        trace?: never;
+    };
     "/v2/sessions/current/model/geometry/capabilities": {
         parameters: {
             query?: never;
@@ -2148,6 +2180,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/oersted-fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_oersted_fields"];
+        put?: never;
+        post: operations["model_post_sessions_current_model_oersted_fields"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/oersted-fields/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_oersted_fields_id"];
+        put?: never;
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_oersted_fields_id"];
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_oersted_fields_id"];
+        trace?: never;
+    };
     "/v2/sessions/current/model/realized-regions": {
         parameters: {
             query?: never;
@@ -2242,6 +2306,38 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/spin-torques": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_spin_torques"];
+        put?: never;
+        post: operations["model_post_sessions_current_model_spin_torques"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/spin-torques/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_spin_torques_id"];
+        put?: never;
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_spin_torques_id"];
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_spin_torques_id"];
         trace?: never;
     };
     "/v2/sessions/current/model/study": {
@@ -3430,6 +3526,24 @@ export interface components {
             total_stages?: number | null;
             /** Format: int64 */
             total_steps: number;
+        };
+        CurrentTransportCommitResource: {
+            committed_scene: components["schemas"]["SceneResource"];
+            resource: components["schemas"]["SceneCurrentTransport"];
+        };
+        /** @enum {string} */
+        CurrentTransportKind: "current_transport";
+        CurrentTransportListResource: {
+            items: components["schemas"]["SceneCurrentTransport"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        /** @enum {string} */
+        CurrentTransportModel: "prescribed_density" | "ohmic_poisson";
+        CurrentTransportMutationRequest: {
+            /** Format: int64 */
+            base_revision: number;
+            resource: components["schemas"]["SceneCurrentTransport"];
         };
         DisplayPatch: {
             active_quantity_id?: string | null;
@@ -5798,8 +5912,28 @@ export interface components {
             base_revision?: number | null;
             region_ids: string[];
         };
+        OerstedFieldCommitResource: {
+            committed_scene: components["schemas"]["SceneResource"];
+            resource: components["schemas"]["SceneOerstedField"];
+        };
+        OerstedFieldListResource: {
+            items: components["schemas"]["SceneOerstedField"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        /** @enum {string} */
+        OerstedFieldModel: "from_current_solution";
+        OerstedFieldMutationRequest: {
+            /** Format: int64 */
+            base_revision: number;
+            resource: components["schemas"]["SceneOerstedField"];
+        };
         /** @enum {string} */
         PeriodicValidationStatus: "valid" | "invalid" | "stale" | "unavailable";
+        /** @enum {string} */
+        PrescribedSotFormulaVersion: "prescribed_sot.fullmag.v1" | "prescribed_sot.legacy_fullmag.v0";
+        /** @enum {string} */
+        PrescribedSotSchemaVersion: "prescribed_sot.v1";
         PrimitiveGeometryCapability: {
             boolean: boolean;
             category: string;
@@ -6211,6 +6345,12 @@ export interface components {
             /** Format: int64 */
             total_rows: number;
         };
+        SceneCompatibilityOrigin: {
+            authored_kind: string;
+            source_ir_version: string;
+        } & {
+            [key: string]: string;
+        };
         SceneCoupling: {
             capability_policy?: components["schemas"]["SceneCouplingCapabilityPolicy"];
             coupling_id: string;
@@ -6268,6 +6408,19 @@ export interface components {
             source?: null | components["schemas"]["SceneCouplingEndpoint"];
             target?: null | components["schemas"]["SceneCouplingEndpoint"];
         };
+        SceneCurrentTransport: {
+            /** Format: double */
+            conductivity_s_per_m?: number | null;
+            current_density?: number[] | null;
+            kind: components["schemas"]["CurrentTransportKind"];
+            model: components["schemas"]["CurrentTransportModel"];
+            name: string;
+            solve_region?: string | null;
+        };
+        /** @enum {string} */
+        SceneEnvelopeExtrapolation: "zero" | "hold" | "error";
+        /** @enum {string} */
+        SceneEnvelopeInterpolation: "linear" | "previous";
         /** @enum {string} */
         SceneExchangeCouplingMode: "harmonic_mean" | "explicit" | "disabled";
         SceneInitialMagnetization: {
@@ -6438,8 +6591,82 @@ export interface components {
             } | null;
             visible?: boolean | null;
         };
+        SceneOerstedField: {
+            axis: number[];
+            center: number[];
+            /** Format: double */
+            current: number;
+            id?: string;
+            /** @enum {string} */
+            kind: "oersted_cylinder";
+            /** Format: double */
+            radius: number;
+            time_dependence?: null | components["schemas"]["SceneOerstedTimeDependence"];
+        } | {
+            id?: string;
+            /** @enum {string} */
+            kind: "oersted_field";
+            model: components["schemas"]["OerstedFieldModel"];
+            source: string;
+        };
+        SceneOerstedTimeDependence: {
+            /** @enum {string} */
+            kind: "constant";
+        } | {
+            /** Format: double */
+            frequency_hz: number;
+            /** @enum {string} */
+            kind: "sinusoidal";
+            /** Format: double */
+            offset: number;
+            /** Format: double */
+            phase_rad: number;
+        } | {
+            /** @enum {string} */
+            kind: "pulse";
+            /** Format: double */
+            t_off: number;
+            /** Format: double */
+            t_on: number;
+        } | {
+            /** @enum {string} */
+            kind: "piecewise_linear";
+            points: number[][];
+        } | {
+            /** Format: double */
+            amplitude: number;
+            /** Format: double */
+            cutoff_hz: number;
+            /** @enum {string} */
+            kind: "sinc_pulse";
+            /** Format: double */
+            t0: number;
+        };
         ScenePatchRequest: {
             merge_patch: Record<string, never>;
+        };
+        ScenePrescribedSotDrive: {
+            /** Format: double */
+            current_density_Apm2: number;
+            envelope?: null | components["schemas"]["SceneTimeEnvelope"];
+            /** @enum {string} */
+            kind: "signed_scalar";
+            sigma_hat: number[];
+        } | {
+            current_source_id: string;
+            drive_direction: number[];
+            interface_normal: number[];
+            /** @enum {string} */
+            kind: "vector_current_source";
+        } | {
+            /** @enum {string} */
+            kind: "legacy_scalar_magnitude";
+            /** Format: double */
+            raw_charge_current_density_Apm2: number;
+        } | {
+            current_source_id: string;
+            /** @enum {string} */
+            kind: "legacy_current_source_norm";
         };
         /** @enum {string} */
         SceneRegionConflictPolicy: "error" | "higher_priority_wins" | "min_mesh_size_wins";
@@ -6464,6 +6691,10 @@ export interface components {
         };
         /** @enum {string} */
         SceneRegionRealizationPolicy: "inherit" | "conformal" | "project";
+        SceneRegionRef: {
+            object_id: string;
+            region_id?: string | null;
+        };
         SceneRegionShape: {
             center: number[];
             /** @enum {string} */
@@ -6494,6 +6725,7 @@ export interface components {
             current_modules?: {
                 [key: string]: unknown;
             } | null;
+            current_transports?: components["schemas"]["SceneCurrentTransport"][];
             editor?: {
                 [key: string]: unknown;
             } | null;
@@ -6502,6 +6734,7 @@ export interface components {
             }[];
             materials?: components["schemas"]["SceneMaterialResource"][];
             objects?: components["schemas"]["SceneObjectResource"][];
+            oersted_fields?: components["schemas"]["SceneOerstedField"][];
             outputs?: {
                 [key: string]: unknown;
             } | null;
@@ -6510,6 +6743,7 @@ export interface components {
             scene?: null | components["schemas"]["SceneMetadataResource"];
             /** Format: int64 */
             scene_revision?: number | null;
+            spin_torques?: components["schemas"]["SceneSpinTorque"][];
             study?: {
                 [key: string]: unknown;
             } | null;
@@ -6517,6 +6751,54 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             version?: string | null;
+        };
+        SceneSpinTorque: {
+            current_density?: number[] | null;
+            current_source?: string | null;
+            /** Format: double */
+            degree: number;
+            /** Format: double */
+            epsilon_prime: number;
+            fixed_layer_position?: string | null;
+            formula_version: components["schemas"]["SlonczewskiFormulaVersion"];
+            /** Format: double */
+            free_layer_thickness_m?: number | null;
+            id?: string;
+            /** @enum {string} */
+            kind: "slonczewski";
+            /** Format: double */
+            lambda_asymmetry: number;
+            realization?: null | components["schemas"]["SlonczewskiRealization"];
+            schema_version?: string | null;
+            spin_polarization: number[];
+            stack_normal?: number[] | null;
+            target?: null | components["schemas"]["SceneRegionRef"];
+        } | {
+            /** Format: double */
+            beta: number;
+            current_density?: number[] | null;
+            current_source?: string | null;
+            /** Format: double */
+            degree: number;
+            id?: string;
+            /** @enum {string} */
+            kind: "zhang_li";
+        } | {
+            compatibility_origin?: null | components["schemas"]["SceneCompatibilityOrigin"];
+            drive: components["schemas"]["ScenePrescribedSotDrive"];
+            formula_version: components["schemas"]["PrescribedSotFormulaVersion"];
+            /** Format: double */
+            free_layer_thickness_m: number;
+            id?: string;
+            /** @enum {string} */
+            kind: "prescribed_sot";
+            raw_spin_polarization?: number[] | null;
+            schema_version: components["schemas"]["PrescribedSotSchemaVersion"];
+            target?: null | components["schemas"]["SceneRegionRef"];
+            /** Format: double */
+            xi_dl: number;
+            /** Format: double */
+            xi_fl: number;
         };
         SceneTextureMapping: {
             clamp_mode?: string;
@@ -6531,6 +6813,61 @@ export interface components {
             rotation_quat?: number[];
             scale?: number[];
             translation?: number[];
+        };
+        SceneTimeEnvelope: {
+            /** @enum {string} */
+            kind: "constant";
+            /** Format: double */
+            value: number;
+        } | {
+            /** Format: double */
+            amplitude: number;
+            /** Format: double */
+            frequency_hz: number;
+            /** @enum {string} */
+            kind: "sinusoidal";
+            /** Format: double */
+            offset: number;
+            /** Format: double */
+            phase_rad: number;
+        } | {
+            /** Format: double */
+            amplitude: number;
+            /** @enum {string} */
+            kind: "pulse";
+            /** Format: double */
+            t_off_s: number;
+            /** Format: double */
+            t_on_s: number;
+        } | {
+            /** @enum {string} */
+            kind: "piecewise_linear";
+            points: components["schemas"]["SceneTimeEnvelopePoint"][];
+        } | {
+            /** Format: double */
+            amplitude: number;
+            /** Format: double */
+            bandwidth_hz: number;
+            /** Format: double */
+            center_s: number;
+            /** @enum {string} */
+            kind: "sinc";
+            /** Format: double */
+            offset: number;
+        } | {
+            artifact_ref: string;
+            /** Format: double */
+            bandwidth_hz?: number | null;
+            extrapolation: components["schemas"]["SceneEnvelopeExtrapolation"];
+            interpolation: components["schemas"]["SceneEnvelopeInterpolation"];
+            /** @enum {string} */
+            kind: "tabulated";
+        };
+        SceneTimeEnvelopePoint: {
+            /** Format: double */
+            time_s: number;
+            /** Format: double */
+            value: number;
         };
         ScriptSourceResponse: {
             bytes: number;
@@ -6694,6 +7031,16 @@ export interface components {
             /** Format: double */
             thickness_percent?: number | null;
         };
+        /** @enum {string} */
+        SlonczewskiFormulaVersion: "slonczewski.fullmag.v1" | "slonczewski.legacy_fullmag.v0";
+        SlonczewskiRealization: {
+            kind: components["schemas"]["SlonczewskiRealizationKind"];
+            realization_version: components["schemas"]["SlonczewskiRealizationVersion"];
+        };
+        /** @enum {string} */
+        SlonczewskiRealizationKind: "thin_layer_homogenized";
+        /** @enum {string} */
+        SlonczewskiRealizationVersion: "slonczewski_thin_layer_homogenized.v1";
         SolverEnergyCurrentResource: {
             /** Format: double */
             anisotropy: number;
@@ -6952,6 +7299,24 @@ export interface components {
             relaxation_algorithm?: null | components["schemas"]["RelaxationAlgorithm"];
             /** @description idle | running | paused | finished | error */
             state: string;
+        };
+        SpinAuthoringDeleteRequest: {
+            /** Format: int64 */
+            base_revision: number;
+        };
+        SpinTorqueCommitResource: {
+            committed_scene: components["schemas"]["SceneResource"];
+            resource: components["schemas"]["SceneSpinTorque"];
+        };
+        SpinTorqueListResource: {
+            items: components["schemas"]["SceneSpinTorque"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        SpinTorqueMutationRequest: {
+            /** Format: int64 */
+            base_revision: number;
+            resource: components["schemas"]["SceneSpinTorque"];
         };
         StageExecutionRecordResource: {
             action?: string | null;
@@ -12385,6 +12750,143 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_current_transports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentTransportListResource"];
+                };
+            };
+        };
+    };
+    model_post_sessions_current_model_current_transports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CurrentTransportMutationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentTransportCommitResource"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_current_transports_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SceneCurrentTransport"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_current_transports_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpinAuthoringDeleteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentTransportCommitResource"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_current_transports_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CurrentTransportMutationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentTransportCommitResource"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_geometry_capabilities: {
         parameters: {
             query?: never;
@@ -13155,6 +13657,143 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_oersted_fields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OerstedFieldListResource"];
+                };
+            };
+        };
+    };
+    model_post_sessions_current_model_oersted_fields: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OerstedFieldMutationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OerstedFieldCommitResource"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_oersted_fields_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SceneOerstedField"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_oersted_fields_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpinAuthoringDeleteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OerstedFieldCommitResource"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_oersted_fields_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OerstedFieldMutationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OerstedFieldCommitResource"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     model_get_sessions_current_model_realized_regions: {
         parameters: {
             query?: never;
@@ -13393,6 +14032,143 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_spin_torques: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpinTorqueListResource"];
+                };
+            };
+        };
+    };
+    model_post_sessions_current_model_spin_torques: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpinTorqueMutationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpinTorqueCommitResource"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_spin_torques_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SceneSpinTorque"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_spin_torques_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpinAuthoringDeleteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpinTorqueCommitResource"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_spin_torques_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpinTorqueMutationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpinTorqueCommitResource"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

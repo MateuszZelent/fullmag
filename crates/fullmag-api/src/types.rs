@@ -1382,6 +1382,9 @@ mod tests {
             }],
             mesh_interfaces: Vec::new(),
             current_modules: Vec::new(),
+            current_transports: Vec::new(),
+            spin_torques: Vec::new(),
+            oersted_terms: Vec::new(),
             excitation_analysis: None,
         }
     }

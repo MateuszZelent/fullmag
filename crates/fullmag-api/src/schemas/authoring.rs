@@ -133,6 +133,12 @@ pub struct SceneResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub current_modules: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_transports: Vec<fullmag_authoring::SceneCurrentTransport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_torques: Vec<fullmag_authoring::SceneSpinTorque>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub oersted_fields: Vec<fullmag_authoring::SceneOerstedField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub study: Option<BTreeMap<String, Value>>,
@@ -142,6 +148,65 @@ pub struct SceneResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub editor: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CurrentTransportListResource {
+    pub scene_revision: u64,
+    pub items: Vec<fullmag_authoring::SceneCurrentTransport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SpinTorqueListResource {
+    pub scene_revision: u64,
+    pub items: Vec<fullmag_authoring::SceneSpinTorque>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct OerstedFieldListResource {
+    pub scene_revision: u64,
+    pub items: Vec<fullmag_authoring::SceneOerstedField>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CurrentTransportMutationRequest {
+    pub base_revision: u64,
+    pub resource: fullmag_authoring::SceneCurrentTransport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SpinTorqueMutationRequest {
+    pub base_revision: u64,
+    pub resource: fullmag_authoring::SceneSpinTorque,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct OerstedFieldMutationRequest {
+    pub base_revision: u64,
+    pub resource: fullmag_authoring::SceneOerstedField,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SpinAuthoringDeleteRequest {
+    pub base_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CurrentTransportCommitResource {
+    pub resource: fullmag_authoring::SceneCurrentTransport,
+    pub committed_scene: SceneResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SpinTorqueCommitResource {
+    pub resource: fullmag_authoring::SceneSpinTorque,
+    pub committed_scene: SceneResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct OerstedFieldCommitResource {
+    pub resource: fullmag_authoring::SceneOerstedField,
+    pub committed_scene: SceneResource,
 }
 
 impl SceneResource {

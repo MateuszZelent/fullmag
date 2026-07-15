@@ -21,7 +21,10 @@ use crate::schemas::authoring::{
     ObjectRegionReorderRequest, RegionDiagnosticResource, RegionDiagnosticsResource,
     RegionListResource, RegionPatchRequest, RegionResource, SceneCouplingPatch, ScenePatchRequest,
     SceneResource, StudyRuntimePatchRequest, StudyRuntimeResource, UniverseFitRequest,
-    UniversePatchRequest, UniverseResource,
+    UniversePatchRequest, UniverseResource, CurrentTransportCommitResource,
+    CurrentTransportListResource, CurrentTransportMutationRequest, OerstedFieldCommitResource,
+    OerstedFieldListResource, OerstedFieldMutationRequest, SpinAuthoringDeleteRequest,
+    SpinTorqueCommitResource, SpinTorqueListResource, SpinTorqueMutationRequest,
 };
 use crate::types::{
     AppState, LatestFields, ScriptSourceResponse, ScriptSyncRequest, ScriptSyncResponse,
@@ -31,9 +34,94 @@ use fullmag_authoring::{
     GeometryCapabilitiesResource, GeometryDiagnostic, GeometryDiagnosticsResource,
     GeometryRealizationSnapshot, GeometryRegionCandidate, GeometryValidationResource,
     MagnetizationAsset, SceneDocument, SceneGeometry, SceneMaterialAsset, SceneMaterialReference,
-    SceneObject, SceneRegionOverride, ScriptBuilderMagneticInteractionEntry,
+    SceneObject, SceneRegionOverride, SceneCurrentTransport, SceneOerstedField, SceneSpinTorque,
+    ScriptBuilderMagneticInteractionEntry,
     ScriptBuilderMagneticInteractionKind, ScriptBuilderUniverseState, Transform3D,
 };
+
+fn spin_commit_scene_resource(scene: SceneDocument) -> Result<SceneResource, ApiError> {
+    SceneResource::from_scene_document(scene)
+        .map_err(|error| ApiError::internal(format!("failed to serialize scene document: {error}")))
+}
+
+fn require_spin_base_revision(scene: &SceneDocument, base_revision: u64) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, Some(base_revision))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/current-transports", responses((status = 200, body = CurrentTransportListResource)), tag = "model")]
+pub async fn get_current_transports(State(state): State<Arc<AppState>>) -> Result<Json<CurrentTransportListResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    Ok(Json(CurrentTransportListResource { scene_revision: scene.revision, items: scene.current_transports }))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/current-transports/{id}", params(("id" = String, Path)), responses((status = 200, body = SceneCurrentTransport), (status = 404)), tag = "model")]
+pub async fn get_current_transport(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<SceneCurrentTransport>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    scene.current_transports.into_iter().find(|item| item.name == id).map(Json).ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))
+}
+
+#[utoipa::path(post, path = "/v2/sessions/current/model/current-transports", request_body = CurrentTransportMutationRequest, responses((status = 200, body = CurrentTransportCommitResource), (status = 409)), tag = "model")]
+pub async fn create_current_transport(State(state): State<Arc<AppState>>, Json(req): Json<CurrentTransportMutationRequest>) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    if scene.current_transports.iter().any(|item| item.name == req.resource.name) { return Err(ApiError::conflict(format!("duplicate current transport id '{}'", req.resource.name))); }
+    let resource = req.resource;
+    scene.current_transports.push(resource.clone());
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(CurrentTransportCommitResource { resource, committed_scene: spin_commit_scene_resource(committed)? }))
+}
+
+#[utoipa::path(patch, path = "/v2/sessions/current/model/current-transports/{id}", params(("id" = String, Path)), request_body = CurrentTransportMutationRequest, responses((status = 200, body = CurrentTransportCommitResource), (status = 409)), tag = "model")]
+pub async fn patch_current_transport(State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<CurrentTransportMutationRequest>) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    if req.resource.name != id { return Err(ApiError::bad_request("current transport resource name must match path id")); }
+    let slot = scene.current_transports.iter_mut().find(|item| item.name == id).ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))?;
+    let resource = req.resource;
+    *slot = resource.clone();
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(CurrentTransportCommitResource { resource, committed_scene: spin_commit_scene_resource(committed)? }))
+}
+
+#[utoipa::path(delete, path = "/v2/sessions/current/model/current-transports/{id}", params(("id" = String, Path)), request_body = SpinAuthoringDeleteRequest, responses((status = 200, body = CurrentTransportCommitResource), (status = 409)), tag = "model")]
+pub async fn delete_current_transport(State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<SpinAuthoringDeleteRequest>) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    require_spin_base_revision(&scene, req.base_revision)?;
+    let index = scene.current_transports.iter().position(|item| item.name == id).ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))?;
+    let resource = scene.current_transports.remove(index);
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    Ok(Json(CurrentTransportCommitResource { resource, committed_scene: spin_commit_scene_resource(committed)? }))
+}
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/spin-torques", responses((status = 200, body = SpinTorqueListResource)), tag = "model")]
+pub async fn get_spin_torques(State(state): State<Arc<AppState>>) -> Result<Json<SpinTorqueListResource>, ApiError> { let scene = crate::get_or_load_current_live_scene_document(&state).await?; Ok(Json(SpinTorqueListResource { scene_revision: scene.revision, items: scene.spin_torques })) }
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/spin-torques/{id}", params(("id" = String, Path)), responses((status = 200, body = SceneSpinTorque), (status = 404)), tag = "model")]
+pub async fn get_spin_torque(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<SceneSpinTorque>, ApiError> { let scene = crate::get_or_load_current_live_scene_document(&state).await?; scene.spin_torques.into_iter().find(|item| item.id() == id).map(Json).ok_or_else(|| ApiError::not_found(format!("spin torque not found: {id}"))) }
+
+#[utoipa::path(post, path = "/v2/sessions/current/model/spin-torques", request_body = SpinTorqueMutationRequest, responses((status = 200, body = SpinTorqueCommitResource), (status = 409)), tag = "model")]
+pub async fn create_spin_torque(State(state): State<Arc<AppState>>, Json(req): Json<SpinTorqueMutationRequest>) -> Result<Json<SpinTorqueCommitResource>, ApiError> { let mut scene = crate::get_or_load_current_live_scene_document(&state).await?; require_spin_base_revision(&scene, req.base_revision)?; if scene.spin_torques.iter().any(|item| item.id() == req.resource.id()) { return Err(ApiError::conflict(format!("duplicate spin torque id '{}'", req.resource.id()))); } let resource = req.resource; scene.spin_torques.push(resource.clone()); let committed = crate::commit_current_live_scene_document(&state, scene).await?; Ok(Json(SpinTorqueCommitResource { resource, committed_scene: spin_commit_scene_resource(committed)? })) }
+
+#[utoipa::path(patch, path = "/v2/sessions/current/model/spin-torques/{id}", params(("id" = String, Path)), request_body = SpinTorqueMutationRequest, responses((status = 200, body = SpinTorqueCommitResource), (status = 409)), tag = "model")]
+pub async fn patch_spin_torque(State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<SpinTorqueMutationRequest>) -> Result<Json<SpinTorqueCommitResource>, ApiError> { let mut scene = crate::get_or_load_current_live_scene_document(&state).await?; require_spin_base_revision(&scene, req.base_revision)?; if req.resource.id() != id { return Err(ApiError::bad_request("spin torque resource id must match path id")); } let slot = scene.spin_torques.iter_mut().find(|item| item.id() == id).ok_or_else(|| ApiError::not_found(format!("spin torque not found: {id}")))?; let resource = req.resource; *slot = resource.clone(); let committed = crate::commit_current_live_scene_document(&state, scene).await?; Ok(Json(SpinTorqueCommitResource { resource, committed_scene: spin_commit_scene_resource(committed)? })) }
+
+#[utoipa::path(delete, path = "/v2/sessions/current/model/spin-torques/{id}", params(("id" = String, Path)), request_body = SpinAuthoringDeleteRequest, responses((status = 200, body = SpinTorqueCommitResource), (status = 409)), tag = "model")]
+pub async fn delete_spin_torque(State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<SpinAuthoringDeleteRequest>) -> Result<Json<SpinTorqueCommitResource>, ApiError> { let mut scene = crate::get_or_load_current_live_scene_document(&state).await?; require_spin_base_revision(&scene, req.base_revision)?; let index = scene.spin_torques.iter().position(|item| item.id() == id).ok_or_else(|| ApiError::not_found(format!("spin torque not found: {id}")))?; let resource = scene.spin_torques.remove(index); let committed = crate::commit_current_live_scene_document(&state, scene).await?; Ok(Json(SpinTorqueCommitResource { resource, committed_scene: spin_commit_scene_resource(committed)? })) }
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/oersted-fields", responses((status = 200, body = OerstedFieldListResource)), tag = "model")]
+pub async fn get_oersted_fields(State(state): State<Arc<AppState>>) -> Result<Json<OerstedFieldListResource>, ApiError> { let scene = crate::get_or_load_current_live_scene_document(&state).await?; Ok(Json(OerstedFieldListResource { scene_revision: scene.revision, items: scene.oersted_fields })) }
+
+#[utoipa::path(get, path = "/v2/sessions/current/model/oersted-fields/{id}", params(("id" = String, Path)), responses((status = 200, body = SceneOerstedField), (status = 404)), tag = "model")]
+pub async fn get_oersted_field(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<SceneOerstedField>, ApiError> { let scene = crate::get_or_load_current_live_scene_document(&state).await?; scene.oersted_fields.into_iter().find(|item| item.id() == id).map(Json).ok_or_else(|| ApiError::not_found(format!("Oersted field not found: {id}"))) }
+
+#[utoipa::path(post, path = "/v2/sessions/current/model/oersted-fields", request_body = OerstedFieldMutationRequest, responses((status = 200, body = OerstedFieldCommitResource), (status = 409)), tag = "model")]
+pub async fn create_oersted_field(State(state): State<Arc<AppState>>, Json(req): Json<OerstedFieldMutationRequest>) -> Result<Json<OerstedFieldCommitResource>, ApiError> { let mut scene = crate::get_or_load_current_live_scene_document(&state).await?; require_spin_base_revision(&scene, req.base_revision)?; if scene.oersted_fields.iter().any(|item| item.id() == req.resource.id()) { return Err(ApiError::conflict(format!("duplicate Oersted field id '{}'", req.resource.id()))); } let resource = req.resource; scene.oersted_fields.push(resource.clone()); let committed = crate::commit_current_live_scene_document(&state, scene).await?; Ok(Json(OerstedFieldCommitResource { resource, committed_scene: spin_commit_scene_resource(committed)? })) }
+
+#[utoipa::path(patch, path = "/v2/sessions/current/model/oersted-fields/{id}", params(("id" = String, Path)), request_body = OerstedFieldMutationRequest, responses((status = 200, body = OerstedFieldCommitResource), (status = 409)), tag = "model")]
+pub async fn patch_oersted_field(State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<OerstedFieldMutationRequest>) -> Result<Json<OerstedFieldCommitResource>, ApiError> { let mut scene = crate::get_or_load_current_live_scene_document(&state).await?; require_spin_base_revision(&scene, req.base_revision)?; if req.resource.id() != id { return Err(ApiError::bad_request("Oersted field resource id must match path id")); } let slot = scene.oersted_fields.iter_mut().find(|item| item.id() == id).ok_or_else(|| ApiError::not_found(format!("Oersted field not found: {id}")))?; let resource = req.resource; *slot = resource.clone(); let committed = crate::commit_current_live_scene_document(&state, scene).await?; Ok(Json(OerstedFieldCommitResource { resource, committed_scene: spin_commit_scene_resource(committed)? })) }
+
+#[utoipa::path(delete, path = "/v2/sessions/current/model/oersted-fields/{id}", params(("id" = String, Path)), request_body = SpinAuthoringDeleteRequest, responses((status = 200, body = OerstedFieldCommitResource), (status = 409)), tag = "model")]
+pub async fn delete_oersted_field(State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<SpinAuthoringDeleteRequest>) -> Result<Json<OerstedFieldCommitResource>, ApiError> { let mut scene = crate::get_or_load_current_live_scene_document(&state).await?; require_spin_base_revision(&scene, req.base_revision)?; let index = scene.oersted_fields.iter().position(|item| item.id() == id).ok_or_else(|| ApiError::not_found(format!("Oersted field not found: {id}")))?; let resource = scene.oersted_fields.remove(index); let committed = crate::commit_current_live_scene_document(&state, scene).await?; Ok(Json(OerstedFieldCommitResource { resource, committed_scene: spin_commit_scene_resource(committed)? })) }
 
 #[utoipa::path(
     get,

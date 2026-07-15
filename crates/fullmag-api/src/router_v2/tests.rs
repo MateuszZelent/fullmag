@@ -145,6 +145,9 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         }],
         mesh_interfaces: Vec::new(),
         current_modules: Vec::new(),
+        current_transports: Vec::new(),
+        spin_torques: Vec::new(),
+        oersted_terms: Vec::new(),
         excitation_analysis: None,
     };
     fullmag_authoring::scene_document_from_script_builder(&builder)
@@ -25110,6 +25113,189 @@ fn openapi_v2_has_no_public_v1_paths() {
         public_v1_paths.is_empty(),
         "OpenAPI v2 must not expose public v1 paths: {public_v1_paths:?}"
     );
+}
+
+#[tokio::test]
+async fn spin_authoring_current_transport_crud_is_revision_safe() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let initial_revision = sample_scene_document().revision;
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/current-transports")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&serde_json::json!({
+                        "base_revision": initial_revision,
+                        "resource": {
+                            "kind": "current_transport",
+                            "name": "transport",
+                            "model": "prescribed_density",
+                            "current_density": [1.0e11, 0.0, 0.0],
+                            "solve_region": "body"
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let committed = body_json(response).await;
+    assert_eq!(committed["resource"]["name"], "transport");
+    let committed_revision = committed["committed_scene"]["revision"].as_u64().unwrap();
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/sessions/current/model/current-transports")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    assert_eq!(body_json(list).await["items"][0]["name"], "transport");
+
+    let stale = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri("/v2/sessions/current/model/current-transports/transport")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&serde_json::json!({
+                        "base_revision": initial_revision,
+                        "resource": {
+                            "kind": "current_transport",
+                            "name": "transport",
+                            "model": "prescribed_density",
+                            "current_density": [2.0e11, 0.0, 0.0],
+                            "solve_region": "body"
+                        }
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let stored = state.current_live_state.read().await;
+    let scene = stored.as_ref().unwrap().scene_document.as_ref().unwrap();
+    assert_eq!(scene.revision, committed_revision);
+    assert_eq!(scene.current_transports[0].current_density, Some([1.0e11, 0.0, 0.0]));
+}
+
+#[tokio::test]
+async fn spin_torque_and_oersted_resources_commit_through_the_same_scene_graph() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state);
+    let mut revision = sample_scene_document().revision;
+
+    for (uri, resource) in [
+        (
+            "/v2/sessions/current/model/current-transports",
+            serde_json::json!({
+                "kind": "current_transport",
+                "name": "transport",
+                "model": "prescribed_density",
+                "current_density": [1.0e11, 0.0, 0.0]
+            }),
+        ),
+        (
+            "/v2/sessions/current/model/spin-torques",
+            serde_json::json!({
+                "kind": "zhang_li",
+                "id": "zhang-li",
+                "current_source": "transport",
+                "degree": 0.5,
+                "beta": 0.02
+            }),
+        ),
+        (
+            "/v2/sessions/current/model/oersted-fields",
+            serde_json::json!({
+                "kind": "oersted_field",
+                "id": "oersted",
+                "model": "from_current_solution",
+                "source": "transport"
+            }),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(uri)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "base_revision": revision, "resource": resource })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "failed POST {uri}");
+        revision = body_json(response).await["committed_scene"]["revision"]
+            .as_u64()
+            .unwrap();
+    }
+
+    let scene = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/sessions/current/model/scene")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scene.status(), StatusCode::OK);
+    let scene = body_json(scene).await;
+    assert_eq!(scene["revision"], revision);
+    assert_eq!(scene["current_transports"][0]["name"], "transport");
+    assert_eq!(scene["spin_torques"][0]["id"], "zhang-li");
+    assert_eq!(scene["oersted_fields"][0]["id"], "oersted");
+}
+
+#[test]
+fn openapi_exposes_typed_spin_authoring_resources() {
+    let value = crate::openapi_v2::openapi_json();
+    let paths = value["paths"].as_object().unwrap();
+    let schemas = value["components"]["schemas"].as_object().unwrap();
+    for path in [
+        "/v2/sessions/current/model/current-transports",
+        "/v2/sessions/current/model/spin-torques",
+        "/v2/sessions/current/model/oersted-fields",
+    ] {
+        assert!(paths.contains_key(path), "missing OpenAPI path {path}");
+    }
+    for schema in [
+        "SceneCurrentTransport",
+        "SceneSpinTorque",
+        "SceneOerstedField",
+        "SpinAuthoringDeleteRequest",
+    ] {
+        assert!(schemas.contains_key(schema), "missing OpenAPI schema {schema}");
+    }
 }
 
 #[test]

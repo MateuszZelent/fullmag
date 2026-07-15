@@ -2356,6 +2356,71 @@
         ],
         "type": "object"
       },
+      "CurrentTransportCommitResource": {
+        "properties": {
+          "committed_scene": {
+            "$ref": "#/components/schemas/SceneResource"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/SceneCurrentTransport"
+          }
+        },
+        "required": [
+          "resource",
+          "committed_scene"
+        ],
+        "type": "object"
+      },
+      "CurrentTransportKind": {
+        "enum": [
+          "current_transport"
+        ],
+        "type": "string"
+      },
+      "CurrentTransportListResource": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SceneCurrentTransport"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "items"
+        ],
+        "type": "object"
+      },
+      "CurrentTransportModel": {
+        "enum": [
+          "prescribed_density",
+          "ohmic_poisson"
+        ],
+        "type": "string"
+      },
+      "CurrentTransportMutationRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/SceneCurrentTransport"
+          }
+        },
+        "required": [
+          "base_revision",
+          "resource"
+        ],
+        "type": "object"
+      },
       "DisplayPatch": {
         "properties": {
           "active_quantity_id": {
@@ -11480,12 +11545,83 @@
         ],
         "type": "object"
       },
+      "OerstedFieldCommitResource": {
+        "properties": {
+          "committed_scene": {
+            "$ref": "#/components/schemas/SceneResource"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/SceneOerstedField"
+          }
+        },
+        "required": [
+          "resource",
+          "committed_scene"
+        ],
+        "type": "object"
+      },
+      "OerstedFieldListResource": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SceneOerstedField"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "items"
+        ],
+        "type": "object"
+      },
+      "OerstedFieldModel": {
+        "enum": [
+          "from_current_solution"
+        ],
+        "type": "string"
+      },
+      "OerstedFieldMutationRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/SceneOerstedField"
+          }
+        },
+        "required": [
+          "base_revision",
+          "resource"
+        ],
+        "type": "object"
+      },
       "PeriodicValidationStatus": {
         "enum": [
           "valid",
           "invalid",
           "stale",
           "unavailable"
+        ],
+        "type": "string"
+      },
+      "PrescribedSotFormulaVersion": {
+        "enum": [
+          "prescribed_sot.fullmag.v1",
+          "prescribed_sot.legacy_fullmag.v0"
+        ],
+        "type": "string"
+      },
+      "PrescribedSotSchemaVersion": {
+        "enum": [
+          "prescribed_sot.v1"
         ],
         "type": "string"
       },
@@ -13135,6 +13271,24 @@
         ],
         "type": "object"
       },
+      "SceneCompatibilityOrigin": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "properties": {
+          "authored_kind": {
+            "type": "string"
+          },
+          "source_ir_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_ir_version",
+          "authored_kind"
+        ],
+        "type": "object"
+      },
       "SceneCoupling": {
         "properties": {
           "capability_policy": {
@@ -13390,6 +13544,63 @@
           }
         },
         "type": "object"
+      },
+      "SceneCurrentTransport": {
+        "properties": {
+          "conductivity_s_per_m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "current_density": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CurrentTransportKind"
+          },
+          "model": {
+            "$ref": "#/components/schemas/CurrentTransportModel"
+          },
+          "name": {
+            "type": "string"
+          },
+          "solve_region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "model"
+        ],
+        "type": "object"
+      },
+      "SceneEnvelopeExtrapolation": {
+        "enum": [
+          "zero",
+          "hold",
+          "error"
+        ],
+        "type": "string"
+      },
+      "SceneEnvelopeInterpolation": {
+        "enum": [
+          "linear",
+          "previous"
+        ],
+        "type": "string"
       },
       "SceneExchangeCouplingMode": {
         "enum": [
@@ -14130,6 +14341,213 @@
         ],
         "type": "object"
       },
+      "SceneOerstedField": {
+        "oneOf": [
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "current": {
+                "format": "double",
+                "type": "number"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "oersted_cylinder"
+                ],
+                "type": "string"
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              },
+              "time_dependence": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneOerstedTimeDependence"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "current",
+              "radius",
+              "center",
+              "axis",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "oersted_field"
+                ],
+                "type": "string"
+              },
+              "model": {
+                "$ref": "#/components/schemas/OerstedFieldModel"
+              },
+              "source": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "model",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneOerstedTimeDependence": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "constant"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "frequency_hz": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinusoidal"
+                ],
+                "type": "string"
+              },
+              "offset": {
+                "format": "double",
+                "type": "number"
+              },
+              "phase_rad": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "frequency_hz",
+              "phase_rad",
+              "offset",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "pulse"
+                ],
+                "type": "string"
+              },
+              "t_off": {
+                "format": "double",
+                "type": "number"
+              },
+              "t_on": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "t_on",
+              "t_off",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "piecewise_linear"
+                ],
+                "type": "string"
+              },
+              "points": {
+                "items": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "points",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "amplitude": {
+                "format": "double",
+                "type": "number"
+              },
+              "cutoff_hz": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinc_pulse"
+                ],
+                "type": "string"
+              },
+              "t0": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "cutoff_hz",
+              "t0",
+              "amplitude",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "ScenePatchRequest": {
         "properties": {
           "merge_patch": {
@@ -14140,6 +14558,118 @@
           "merge_patch"
         ],
         "type": "object"
+      },
+      "ScenePrescribedSotDrive": {
+        "oneOf": [
+          {
+            "properties": {
+              "current_density_Apm2": {
+                "format": "double",
+                "type": "number"
+              },
+              "envelope": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneTimeEnvelope"
+                  }
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "signed_scalar"
+                ],
+                "type": "string"
+              },
+              "sigma_hat": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "current_density_Apm2",
+              "sigma_hat",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "current_source_id": {
+                "type": "string"
+              },
+              "drive_direction": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "interface_normal": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "kind": {
+                "enum": [
+                  "vector_current_source"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "current_source_id",
+              "drive_direction",
+              "interface_normal",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "legacy_scalar_magnitude"
+                ],
+                "type": "string"
+              },
+              "raw_charge_current_density_Apm2": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "raw_charge_current_density_Apm2",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "current_source_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "legacy_current_source_norm"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "current_source_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "SceneRegionConflictPolicy": {
         "enum": [
@@ -14219,6 +14749,23 @@
           "project"
         ],
         "type": "string"
+      },
+      "SceneRegionRef": {
+        "properties": {
+          "object_id": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "object_id"
+        ],
+        "type": "object"
       },
       "SceneRegionShape": {
         "oneOf": [
@@ -14354,6 +14901,12 @@
               "null"
             ]
           },
+          "current_transports": {
+            "items": {
+              "$ref": "#/components/schemas/SceneCurrentTransport"
+            },
+            "type": "array"
+          },
           "editor": {
             "additionalProperties": true,
             "type": [
@@ -14380,6 +14933,12 @@
           "objects": {
             "items": {
               "$ref": "#/components/schemas/SceneObjectResource"
+            },
+            "type": "array"
+          },
+          "oersted_fields": {
+            "items": {
+              "$ref": "#/components/schemas/SceneOerstedField"
             },
             "type": "array"
           },
@@ -14416,6 +14975,12 @@
               "null"
             ]
           },
+          "spin_torques": {
+            "items": {
+              "$ref": "#/components/schemas/SceneSpinTorque"
+            },
+            "type": "array"
+          },
           "study": {
             "additionalProperties": true,
             "type": [
@@ -14438,6 +15003,236 @@
           }
         },
         "type": "object"
+      },
+      "SceneSpinTorque": {
+        "oneOf": [
+          {
+            "properties": {
+              "current_density": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "current_source": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "degree": {
+                "format": "double",
+                "type": "number"
+              },
+              "epsilon_prime": {
+                "format": "double",
+                "type": "number"
+              },
+              "fixed_layer_position": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "formula_version": {
+                "$ref": "#/components/schemas/SlonczewskiFormulaVersion"
+              },
+              "free_layer_thickness_m": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "slonczewski"
+                ],
+                "type": "string"
+              },
+              "lambda_asymmetry": {
+                "format": "double",
+                "type": "number"
+              },
+              "realization": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SlonczewskiRealization"
+                  }
+                ]
+              },
+              "schema_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "spin_polarization": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "stack_normal": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "target": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneRegionRef"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "formula_version",
+              "spin_polarization",
+              "degree",
+              "lambda_asymmetry",
+              "epsilon_prime",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "beta": {
+                "format": "double",
+                "type": "number"
+              },
+              "current_density": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "current_source": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "degree": {
+                "format": "double",
+                "type": "number"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "zhang_li"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "degree",
+              "beta",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "compatibility_origin": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneCompatibilityOrigin"
+                  }
+                ]
+              },
+              "drive": {
+                "$ref": "#/components/schemas/ScenePrescribedSotDrive"
+              },
+              "formula_version": {
+                "$ref": "#/components/schemas/PrescribedSotFormulaVersion"
+              },
+              "free_layer_thickness_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "prescribed_sot"
+                ],
+                "type": "string"
+              },
+              "raw_spin_polarization": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "schema_version": {
+                "$ref": "#/components/schemas/PrescribedSotSchemaVersion"
+              },
+              "target": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneRegionRef"
+                  }
+                ]
+              },
+              "xi_dl": {
+                "format": "double",
+                "type": "number"
+              },
+              "xi_fl": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "schema_version",
+              "formula_version",
+              "drive",
+              "xi_dl",
+              "xi_fl",
+              "free_layer_thickness_m",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "SceneTextureMapping": {
         "properties": {
@@ -14495,6 +15290,197 @@
             "type": "array"
           }
         },
+        "type": "object"
+      },
+      "SceneTimeEnvelope": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "constant"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "value",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "amplitude": {
+                "format": "double",
+                "type": "number"
+              },
+              "frequency_hz": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinusoidal"
+                ],
+                "type": "string"
+              },
+              "offset": {
+                "format": "double",
+                "type": "number"
+              },
+              "phase_rad": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "amplitude",
+              "frequency_hz",
+              "phase_rad",
+              "offset",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "amplitude": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "pulse"
+                ],
+                "type": "string"
+              },
+              "t_off_s": {
+                "format": "double",
+                "type": "number"
+              },
+              "t_on_s": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "amplitude",
+              "t_on_s",
+              "t_off_s",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "piecewise_linear"
+                ],
+                "type": "string"
+              },
+              "points": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneTimeEnvelopePoint"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "points",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "amplitude": {
+                "format": "double",
+                "type": "number"
+              },
+              "bandwidth_hz": {
+                "format": "double",
+                "type": "number"
+              },
+              "center_s": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinc"
+                ],
+                "type": "string"
+              },
+              "offset": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "amplitude",
+              "center_s",
+              "bandwidth_hz",
+              "offset",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "artifact_ref": {
+                "type": "string"
+              },
+              "bandwidth_hz": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "extrapolation": {
+                "$ref": "#/components/schemas/SceneEnvelopeExtrapolation"
+              },
+              "interpolation": {
+                "$ref": "#/components/schemas/SceneEnvelopeInterpolation"
+              },
+              "kind": {
+                "enum": [
+                  "tabulated"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "artifact_ref",
+              "interpolation",
+              "extrapolation",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneTimeEnvelopePoint": {
+        "properties": {
+          "time_s": {
+            "format": "double",
+            "type": "number"
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "time_s",
+          "value"
+        ],
         "type": "object"
       },
       "ScriptSourceResponse": {
@@ -15173,6 +16159,40 @@
           "mesh_shrink_factor"
         ],
         "type": "object"
+      },
+      "SlonczewskiFormulaVersion": {
+        "enum": [
+          "slonczewski.fullmag.v1",
+          "slonczewski.legacy_fullmag.v0"
+        ],
+        "type": "string"
+      },
+      "SlonczewskiRealization": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/SlonczewskiRealizationKind"
+          },
+          "realization_version": {
+            "$ref": "#/components/schemas/SlonczewskiRealizationVersion"
+          }
+        },
+        "required": [
+          "kind",
+          "realization_version"
+        ],
+        "type": "object"
+      },
+      "SlonczewskiRealizationKind": {
+        "enum": [
+          "thin_layer_homogenized"
+        ],
+        "type": "string"
+      },
+      "SlonczewskiRealizationVersion": {
+        "enum": [
+          "slonczewski_thin_layer_homogenized.v1"
+        ],
+        "type": "string"
       },
       "SolverEnergyCurrentResource": {
         "properties": {
@@ -16001,6 +17021,71 @@
         },
         "required": [
           "state"
+        ],
+        "type": "object"
+      },
+      "SpinAuthoringDeleteRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "base_revision"
+        ],
+        "type": "object"
+      },
+      "SpinTorqueCommitResource": {
+        "properties": {
+          "committed_scene": {
+            "$ref": "#/components/schemas/SceneResource"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/SceneSpinTorque"
+          }
+        },
+        "required": [
+          "resource",
+          "committed_scene"
+        ],
+        "type": "object"
+      },
+      "SpinTorqueListResource": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SceneSpinTorque"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "items"
+        ],
+        "type": "object"
+      },
+      "SpinTorqueMutationRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/SceneSpinTorque"
+          }
+        },
+        "required": [
+          "base_revision",
+          "resource"
         ],
         "type": "object"
       },
@@ -25815,6 +26900,172 @@
         ]
       }
     },
+    "/v2/sessions/current/model/current-transports": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_current_transports",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentTransportListResource"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "post": {
+        "operationId": "model_post_sessions_current_model_current_transports",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CurrentTransportMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentTransportCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/current-transports/{id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_current_transports_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpinAuthoringDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentTransportCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "get": {
+        "operationId": "model_get_sessions_current_model_current_transports_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneCurrentTransport"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_current_transports_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CurrentTransportMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentTransportCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/geometry/capabilities": {
       "get": {
         "operationId": "model_get_sessions_current_model_geometry_capabilities",
@@ -26656,6 +27907,172 @@
         ]
       }
     },
+    "/v2/sessions/current/model/oersted-fields": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_oersted_fields",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OerstedFieldListResource"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "post": {
+        "operationId": "model_post_sessions_current_model_oersted_fields",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OerstedFieldMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OerstedFieldCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/oersted-fields/{id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_oersted_fields_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpinAuthoringDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OerstedFieldCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "get": {
+        "operationId": "model_get_sessions_current_model_oersted_fields_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneOerstedField"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_oersted_fields_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OerstedFieldMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OerstedFieldCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/realized-regions": {
       "get": {
         "operationId": "model_get_sessions_current_model_realized_regions",
@@ -26872,6 +28289,172 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/spin-torques": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_spin_torques",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpinTorqueListResource"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "post": {
+        "operationId": "model_post_sessions_current_model_spin_torques",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpinTorqueMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpinTorqueCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/spin-torques/{id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_spin_torques_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpinAuthoringDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpinTorqueCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "get": {
+        "operationId": "model_get_sessions_current_model_spin_torques_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneSpinTorque"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_spin_torques_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpinTorqueMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpinTorqueCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
           }
         },
         "tags": [
