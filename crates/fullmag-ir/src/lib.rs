@@ -171,6 +171,7 @@ fn migrate_v0_2_prescribed_sot(value: &mut Value) -> Result<(), String> {
             "kind": "prescribed_sot",
             "schema_version": "prescribed_sot.v1",
             "id": format!("legacy_prescribed_sot_{index}"),
+            "target": null,
             "formula_version": "prescribed_sot.legacy_fullmag.v0",
             "drive": drive,
             "raw_spin_polarization": raw_spin_polarization,

@@ -203,21 +203,14 @@ pub(crate) fn resolve_legacy_spin_torque(
                 )],
             });
         }
-        SpinTorqueModuleIR::SpinOrbitTorque { .. } => match lane {
-            SpinTorqueExecutableLane::Fdm => {
-                // SOT uses its own dedicated plan fields (sot_*), not legacy STT fields.
-                // Return empty legacy fields; SOT resolution happens via resolve_sot_fields().
-                LegacySpinTorqueFields::default()
-            }
-            SpinTorqueExecutableLane::Fem => {
-                return Err(PlanError {
-                    reasons: vec![format!(
-                        "spin_torque_modules[0]=spin_orbit_torque is not executable on the FEM lane yet; {}",
-                        support_matrix_note(lane)
-                    )],
-                });
-            }
-        },
+        SpinTorqueModuleIR::SpinOrbitTorque { .. } => {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "spin_torque_modules[0]=spin_orbit_torque is a deprecated compatibility-only Rust variant and is fail_closed for planning; {}",
+                    support_matrix_note(lane)
+                )],
+            });
+        }
     };
 
     ensure_legacy_matches(&legacy, &resolved)?;
@@ -237,52 +230,33 @@ pub(crate) struct ResolvedSotFields {
 /// Extract SOT parameters from the first spin_torque_modules entry if it is SOT.
 pub(crate) fn resolve_sot_fields(
     problem: &ProblemIR,
-    current_transports: &[ResolvedCurrentTransport],
+    _current_transports: &[ResolvedCurrentTransport],
 ) -> Result<ResolvedSotFields, PlanError> {
     if problem.spin_torque_modules.is_empty() {
         return Ok(ResolvedSotFields::default());
     }
     match &problem.spin_torque_modules[0] {
-        SpinTorqueModuleIR::SpinOrbitTorque {
-            charge_current_density_a_per_m2,
-            current_source,
-            damping_like_efficiency,
-            field_like_efficiency,
-            spin_polarization,
-            ferromagnet_thickness_m,
-        } => {
-            let je = match (charge_current_density_a_per_m2, current_source.as_deref()) {
-                (Some(j), None) => *j,
-                (None, Some(source)) => {
-                    let transport = current_transports
-                        .iter()
-                        .find(|t| t.name == source)
-                        .ok_or_else(|| PlanError {
-                            reasons: vec![format!(
-                                "SOT current_source '{}' not found among resolved current transports",
-                                source
-                            )],
-                        })?;
-                    // For SOT, use the magnitude of the current density vector
-                    let j = transport.current_density;
-                    (j[0] * j[0] + j[1] * j[1] + j[2] * j[2]).sqrt()
+        SpinTorqueModuleIR::PrescribedSot { formula, .. } => {
+            let formula_version = match formula {
+                fullmag_ir::PrescribedSotFormulaIR::FullmagV1 { .. } => {
+                    "prescribed_sot.fullmag.v1"
                 }
-                _ => {
-                    return Err(PlanError {
-                        reasons: vec![
-                            "SOT requires exactly one of charge_current_density_a_per_m2 or current_source".to_string()
-                        ],
-                    });
+                fullmag_ir::PrescribedSotFormulaIR::LegacyFullmagV0 { .. } => {
+                    "prescribed_sot.legacy_fullmag.v0"
                 }
             };
-            Ok(ResolvedSotFields {
-                current_density: Some(je),
-                xi_dl: Some(*damping_like_efficiency),
-                xi_fl: Some(*field_like_efficiency),
-                sigma: Some(*spin_polarization),
-                thickness: Some(*ferromagnet_thickness_m),
+            Err(PlanError {
+                reasons: vec![format!(
+                    "prescribed_sot formula_version={formula_version} is semantic_only and not_yet_lowered for SOT field resolution"
+                )],
             })
         }
+        SpinTorqueModuleIR::SpinOrbitTorque { .. } => Err(PlanError {
+            reasons: vec![
+                "spin_orbit_torque is a deprecated compatibility-only Rust variant and is fail_closed for SOT field resolution"
+                    .to_string(),
+            ],
+        }),
         _ => Ok(ResolvedSotFields::default()),
     }
 }
@@ -302,6 +276,7 @@ mod tests {
                 drive: PrescribedSotV1DriveIR::SignedScalar {
                     current_density_apm2: -1.0e10,
                     sigma_hat: [0.0, 1.0, 0.0],
+                    envelope: None,
                 },
                 xi_dl: 0.1,
                 xi_fl: 0.0,
@@ -342,7 +317,44 @@ mod tests {
             assert!(error.reasons.iter().any(|reason| {
                 reason.contains("prescribed_sot") && reason.contains("not_yet_lowered")
             }));
+
+            let field_error = resolve_sot_fields(&problem, &[])
+                .expect_err("canonical prescribed_sot must fail closed before field lowering");
+            assert!(field_error.reasons.iter().any(|reason| {
+                reason.contains("prescribed_sot") && reason.contains("not_yet_lowered")
+            }));
         }
+    }
+
+    #[test]
+    fn deprecated_spin_orbit_torque_fails_closed_on_fdm_planner_paths() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::SpinOrbitTorque {
+            charge_current_density_a_per_m2: Some(1.0e10),
+            current_source: None,
+            damping_like_efficiency: 0.1,
+            field_like_efficiency: 0.0,
+            spin_polarization: [0.0, 1.0, 0.0],
+            ferromagnet_thickness_m: 1.0e-9,
+        }];
+
+        let legacy_error = resolve_legacy_spin_torque(
+            &problem,
+            SpinTorqueExecutableLane::Fdm,
+            &[],
+        )
+        .expect_err("deprecated wire variant must not enter the legacy FDM path");
+        assert!(legacy_error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("deprecated") && reason.contains("fail_closed")));
+
+        let sot_error = resolve_sot_fields(&problem, &[])
+            .expect_err("deprecated wire variant must not enter SOT field resolution");
+        assert!(sot_error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("deprecated") && reason.contains("fail_closed")));
     }
 
     #[test]
@@ -503,6 +515,6 @@ mod tests {
         assert!(err
             .reasons
             .iter()
-            .any(|reason| reason.contains("spin_orbit_torque is not executable on the FEM lane")));
+            .any(|reason| reason.contains("spin_orbit_torque") && reason.contains("fail_closed")));
     }
 }

@@ -180,6 +180,7 @@ pub enum SpinTorqueModuleIR {
         beta: f64,
         spin_diffusion_length_m: f64,
     },
+    #[serde(skip)]
     SpinOrbitTorque {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         charge_current_density_a_per_m2: Option<f64>,
@@ -194,7 +195,7 @@ pub enum SpinTorqueModuleIR {
     PrescribedSot {
         schema_version: String,
         id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         target: Option<RegionRefIR>,
         #[serde(flatten)]
         formula: PrescribedSotFormulaIR,
@@ -208,6 +209,9 @@ pub struct RegionRefIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_id: Option<String>,
 }
+
+/// Versioned lower-bound tolerance for prescribed-SOT authored axes.
+pub const PRESCRIBED_SOT_V1_EPSILON_AXIS: f64 = 1e-12;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "formula_version", deny_unknown_fields)]
@@ -237,6 +241,8 @@ pub enum PrescribedSotV1DriveIR {
         #[serde(rename = "current_density_Apm2")]
         current_density_apm2: f64,
         sigma_hat: [f64; 3],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        envelope: Option<TimeDependenceIR>,
     },
     VectorCurrentSource {
         current_source_id: String,

@@ -467,8 +467,11 @@ pub(crate) fn validate_legacy_spin_torque_fields(problem: &ProblemIR, errors: &m
 }
 
 pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec<String>) {
-    let unit_vector_is_valid = |vector: &[f64; 3]| {
-        vector3_is_finite(vector) && (vector3_norm_sq(vector) - 1.0).abs() <= 1e-12
+    let axis_is_valid = |vector: &[f64; 3]| {
+        vector3_is_finite(vector)
+            && vector3_norm_sq(vector)
+                > crate::PRESCRIBED_SOT_V1_EPSILON_AXIS
+                    * crate::PRESCRIBED_SOT_V1_EPSILON_AXIS
     };
     let validate_vector_binding = |index: usize,
                                    label: &str,
@@ -747,16 +750,26 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                             crate::PrescribedSotV1DriveIR::SignedScalar {
                                 current_density_apm2,
                                 sigma_hat,
+                                envelope,
                             } => {
                                 if !current_density_apm2.is_finite() {
                                     errors.push(format!(
                                         "spin_torque_modules[{index}] prescribed_sot signed current_density_Apm2 must be finite"
                                     ));
                                 }
-                                if !unit_vector_is_valid(sigma_hat) {
+                                if !axis_is_valid(sigma_hat) {
                                     errors.push(format!(
-                                        "spin_torque_modules[{index}] prescribed_sot sigma_hat must be a finite unit vector"
+                                        "spin_torque_modules[{index}] prescribed_sot sigma_hat must be finite with norm > epsilon_axis"
                                     ));
+                                }
+                                if let Some(envelope) = envelope {
+                                    validate_time_dependence(
+                                        &format!(
+                                            "spin_torque_modules[{index}] prescribed_sot signed_scalar envelope"
+                                        ),
+                                        envelope,
+                                        errors,
+                                    );
                                 }
                             }
                             crate::PrescribedSotV1DriveIR::VectorCurrentSource {
@@ -771,16 +784,19 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                                         "spin_torque_modules[{index}] prescribed_sot current_source_id '{current_source_id}' must reference a current_transport module"
                                     ));
                                 }
-                                if !unit_vector_is_valid(drive_direction) {
+                                let drive_valid = axis_is_valid(drive_direction);
+                                let normal_valid = axis_is_valid(interface_normal);
+                                if !drive_valid {
                                     errors.push(format!(
-                                        "spin_torque_modules[{index}] prescribed_sot drive_direction must be a finite unit vector"
+                                        "spin_torque_modules[{index}] prescribed_sot drive_direction must be finite with norm > epsilon_axis"
                                     ));
                                 }
-                                if !unit_vector_is_valid(interface_normal) {
+                                if !normal_valid {
                                     errors.push(format!(
-                                        "spin_torque_modules[{index}] prescribed_sot interface_normal must be a finite unit vector"
+                                        "spin_torque_modules[{index}] prescribed_sot interface_normal must be finite with norm > epsilon_axis"
                                     ));
-                                } else {
+                                }
+                                if drive_valid && normal_valid {
                                     let cross = [
                                         interface_normal[1] * drive_direction[2]
                                             - interface_normal[2] * drive_direction[1],
@@ -789,9 +805,15 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                                         interface_normal[0] * drive_direction[1]
                                             - interface_normal[1] * drive_direction[0],
                                     ];
-                                    if vector3_norm_sq(&cross) <= 1e-24 {
+                                    let normalized_cross_norm_sq = vector3_norm_sq(&cross)
+                                        / (vector3_norm_sq(drive_direction)
+                                            * vector3_norm_sq(interface_normal));
+                                    if normalized_cross_norm_sq
+                                        <= crate::PRESCRIBED_SOT_V1_EPSILON_AXIS
+                                            * crate::PRESCRIBED_SOT_V1_EPSILON_AXIS
+                                    {
                                         errors.push(format!(
-                                            "spin_torque_modules[{index}] prescribed_sot interface_normal must not be parallel to drive_direction"
+                                            "spin_torque_modules[{index}] prescribed_sot interface_normal and drive_direction are parallel within epsilon_axis"
                                         ));
                                     }
                                 }
@@ -841,9 +863,13 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                             ),
                             crate::PrescribedSotLegacyDriveIR::LegacyCurrentSourceNorm {
                                 current_source_id,
-                            } if current_source_id.trim().is_empty() => errors.push(format!(
-                                "spin_torque_modules[{index}] prescribed_sot legacy-v0 current_source_id must not be empty"
-                            )),
+                            } if current_source_id.trim().is_empty()
+                                || !current_transport_exists(problem, current_source_id) =>
+                            {
+                                errors.push(format!(
+                                    "spin_torque_modules[{index}] prescribed_sot legacy-v0 current_source_id '{current_source_id}' must reference a current_transport module"
+                                ))
+                            }
                             _ => {}
                         }
                     }
