@@ -5002,6 +5002,81 @@ export interface components {
             note?: string | null;
             triangle_count?: number | null;
         };
+        KnownSceneCurrentTransport: {
+            /** Format: double */
+            conductivity_s_per_m?: number | null;
+            current_density?: number[] | null;
+            kind: components["schemas"]["CurrentTransportKind"];
+            model: components["schemas"]["CurrentTransportModel"];
+            name: string;
+            solve_region?: string | null;
+        };
+        KnownSceneOerstedField: {
+            axis: number[];
+            center: number[];
+            /** Format: double */
+            current: number;
+            id?: string;
+            /** @enum {string} */
+            kind: "oersted_cylinder";
+            /** Format: double */
+            radius: number;
+            time_dependence?: null | components["schemas"]["SceneOerstedTimeDependence"];
+        } | {
+            id?: string;
+            /** @enum {string} */
+            kind: "oersted_field";
+            model: components["schemas"]["OerstedFieldModel"];
+            source: string;
+        };
+        KnownSceneSpinTorque: {
+            current_density?: number[] | null;
+            current_source?: string | null;
+            /** Format: double */
+            degree: number;
+            /** Format: double */
+            epsilon_prime: number;
+            fixed_layer_position?: string | null;
+            formula_version: components["schemas"]["SlonczewskiFormulaVersion"];
+            /** Format: double */
+            free_layer_thickness_m?: number | null;
+            id?: string;
+            /** @enum {string} */
+            kind: "slonczewski";
+            /** Format: double */
+            lambda_asymmetry: number;
+            realization?: null | components["schemas"]["SlonczewskiRealization"];
+            schema_version?: string | null;
+            spin_polarization: number[];
+            stack_normal?: number[] | null;
+            target?: null | components["schemas"]["SceneRegionRef"];
+        } | {
+            /** Format: double */
+            beta: number;
+            current_density?: number[] | null;
+            current_source?: string | null;
+            /** Format: double */
+            degree: number;
+            id?: string;
+            /** @enum {string} */
+            kind: "zhang_li";
+        } | {
+            compatibility_origin?: null | components["schemas"]["SceneCompatibilityOrigin"];
+            drive: components["schemas"]["ScenePrescribedSotDrive"];
+            formula_version: components["schemas"]["PrescribedSotFormulaVersion"];
+            /** Format: double */
+            free_layer_thickness_m: number;
+            id?: string;
+            /** @enum {string} */
+            kind: "prescribed_sot";
+            raw_spin_polarization?: number[] | null;
+            schema_version: components["schemas"]["PrescribedSotSchemaVersion"];
+            target?: null | components["schemas"]["SceneRegionRef"];
+            /** Format: double */
+            xi_dl: number;
+            /** Format: double */
+            xi_fl: number;
+        };
         LivePublisherDiagnosticsResource: {
             /** Format: int64 */
             coalesced_wake_count: number;
@@ -6408,15 +6483,7 @@ export interface components {
             source?: null | components["schemas"]["SceneCouplingEndpoint"];
             target?: null | components["schemas"]["SceneCouplingEndpoint"];
         };
-        SceneCurrentTransport: {
-            /** Format: double */
-            conductivity_s_per_m?: number | null;
-            current_density?: number[] | null;
-            kind: components["schemas"]["CurrentTransportKind"];
-            model: components["schemas"]["CurrentTransportModel"];
-            name: string;
-            solve_region?: string | null;
-        };
+        SceneCurrentTransport: components["schemas"]["KnownSceneCurrentTransport"] | components["schemas"]["UnsupportedAuthoringRecord"];
         /** @enum {string} */
         SceneEnvelopeExtrapolation: "zero" | "hold" | "error";
         /** @enum {string} */
@@ -6591,24 +6658,7 @@ export interface components {
             } | null;
             visible?: boolean | null;
         };
-        SceneOerstedField: {
-            axis: number[];
-            center: number[];
-            /** Format: double */
-            current: number;
-            id?: string;
-            /** @enum {string} */
-            kind: "oersted_cylinder";
-            /** Format: double */
-            radius: number;
-            time_dependence?: null | components["schemas"]["SceneOerstedTimeDependence"];
-        } | {
-            id?: string;
-            /** @enum {string} */
-            kind: "oersted_field";
-            model: components["schemas"]["OerstedFieldModel"];
-            source: string;
-        };
+        SceneOerstedField: components["schemas"]["KnownSceneOerstedField"] | components["schemas"]["UnsupportedAuthoringRecord"];
         SceneOerstedTimeDependence: {
             /** @enum {string} */
             kind: "constant";
@@ -6752,54 +6802,7 @@ export interface components {
             } | null;
             version?: string | null;
         };
-        SceneSpinTorque: {
-            current_density?: number[] | null;
-            current_source?: string | null;
-            /** Format: double */
-            degree: number;
-            /** Format: double */
-            epsilon_prime: number;
-            fixed_layer_position?: string | null;
-            formula_version: components["schemas"]["SlonczewskiFormulaVersion"];
-            /** Format: double */
-            free_layer_thickness_m?: number | null;
-            id?: string;
-            /** @enum {string} */
-            kind: "slonczewski";
-            /** Format: double */
-            lambda_asymmetry: number;
-            realization?: null | components["schemas"]["SlonczewskiRealization"];
-            schema_version?: string | null;
-            spin_polarization: number[];
-            stack_normal?: number[] | null;
-            target?: null | components["schemas"]["SceneRegionRef"];
-        } | {
-            /** Format: double */
-            beta: number;
-            current_density?: number[] | null;
-            current_source?: string | null;
-            /** Format: double */
-            degree: number;
-            id?: string;
-            /** @enum {string} */
-            kind: "zhang_li";
-        } | {
-            compatibility_origin?: null | components["schemas"]["SceneCompatibilityOrigin"];
-            drive: components["schemas"]["ScenePrescribedSotDrive"];
-            formula_version: components["schemas"]["PrescribedSotFormulaVersion"];
-            /** Format: double */
-            free_layer_thickness_m: number;
-            id?: string;
-            /** @enum {string} */
-            kind: "prescribed_sot";
-            raw_spin_polarization?: number[] | null;
-            schema_version: components["schemas"]["PrescribedSotSchemaVersion"];
-            target?: null | components["schemas"]["SceneRegionRef"];
-            /** Format: double */
-            xi_dl: number;
-            /** Format: double */
-            xi_fl: number;
-        };
+        SceneSpinTorque: components["schemas"]["KnownSceneSpinTorque"] | components["schemas"]["UnsupportedAuthoringRecord"];
         SceneTextureMapping: {
             clamp_mode?: string;
             projection?: string;
@@ -7785,6 +7788,9 @@ export interface components {
             scene_revision: number;
             study_universe_mesh: Record<string, never> | null;
             universe: Record<string, never> | null;
+        };
+        UnsupportedAuthoringRecord: {
+            [key: string]: unknown;
         };
         /** @enum {string} */
         VectorColorMode: "orientation" | "x" | "y" | "z" | "magnitude" | "monochrome";

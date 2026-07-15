@@ -25194,7 +25194,7 @@ async fn spin_authoring_current_transport_crud_is_revision_safe() {
     let stored = state.current_live_state.read().await;
     let scene = stored.as_ref().unwrap().scene_document.as_ref().unwrap();
     assert_eq!(scene.revision, committed_revision);
-    assert_eq!(scene.current_transports[0].current_density, Some([1.0e11, 0.0, 0.0]));
+    assert_eq!(scene.current_transports[0].known().unwrap().current_density, Some([1.0e11, 0.0, 0.0]));
 }
 
 #[tokio::test]
@@ -25274,6 +25274,39 @@ async fn spin_torque_and_oersted_resources_commit_through_the_same_scene_graph()
     assert_eq!(scene["current_transports"][0]["name"], "transport");
     assert_eq!(scene["spin_torques"][0]["id"], "zhang-li");
     assert_eq!(scene["oersted_fields"][0]["id"], "oersted");
+}
+
+#[tokio::test]
+async fn spin_authoring_api_returns_opaque_variants_losslessly_as_read_only() {
+    let state = test_app_state_with_live_session().await;
+    let opaque = serde_json::json!({
+        "id": "future-torque",
+        "kind": "vendor_future_torque",
+        "nested": { "coefficients": [1, true, null] }
+    });
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.spin_torques = serde_json::from_value(serde_json::json!([opaque.clone()])).unwrap();
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .clone()
+        .oneshot(Request::builder().method(Method::GET).uri("/v2/sessions/current/model/spin-torques").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["items"][0], opaque);
+
+    let before = state.current_live_state.read().await.as_ref().unwrap().scene_document.clone().unwrap();
+    let response = app
+        .oneshot(Request::builder().method(Method::PATCH).uri("/v2/sessions/current/model/spin-torques/future-torque").header(header::CONTENT_TYPE, "application/json").body(Body::from(serde_json::json!({"base_revision": before.revision, "resource": opaque}).to_string())).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let after = state.current_live_state.read().await.as_ref().unwrap().scene_document.clone().unwrap();
+    assert_eq!(serde_json::to_value(after).unwrap(), serde_json::to_value(before).unwrap());
 }
 
 #[test]

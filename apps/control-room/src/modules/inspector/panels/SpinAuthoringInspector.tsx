@@ -21,6 +21,7 @@ import { Button } from "@/shared/ui/Button";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorSection } from "../primitives/InspectorSection";
 import type { PhysicsInteractionId } from "./PhysicsInteractionPanelModel";
+import { isUnsupportedSpinAuthoringResource } from "./SpinAuthoringInspectorModel";
 
 type SpinResource = SceneCurrentTransport | SceneSpinTorque | SceneOerstedField;
 type Family = "current_transport" | "spin_torque" | "oersted_field";
@@ -50,9 +51,10 @@ const DEFAULTS: Record<Family, SpinResource> = {
 };
 
 function identity(family: Family, value: SpinResource): string {
-  return family === "current_transport"
-    ? (value as SceneCurrentTransport).name
-    : (value as SceneSpinTorque | SceneOerstedField).id ?? "";
+  const candidate = family === "current_transport"
+    ? (value as { name?: unknown }).name
+    : (value as { id?: unknown }).id;
+  return typeof candidate === "string" ? candidate : "";
 }
 
 export function SpinAuthoringInspector({ family }: { family: Extract<PhysicsInteractionId, Family> }) {
@@ -64,6 +66,7 @@ export function SpinAuthoringInspector({ family }: { family: Extract<PhysicsInte
   const items = useMemo(() => (active.data?.items ?? []) as SpinResource[], [active.data]);
   const [selectedId, setSelectedId] = useState("");
   const selected = items.find((item) => identity(family, item) === selectedId) ?? null;
+  const readOnly = selected ? isUnsupportedSpinAuthoringResource(family, selected) : false;
   const [draft, setDraft] = useState(JSON.stringify(DEFAULTS[family], null, 2));
   const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
   const [pending, setPending] = useState(false);
@@ -142,16 +145,17 @@ export function SpinAuthoringInspector({ family }: { family: Extract<PhysicsInte
             aria-label="Canonical typed payload"
             rows={18}
             spellCheck={false}
+            readOnly={readOnly}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
           />
         </label>
-        <p className="fm-help-text">All values use the canonical OpenAPI schema and SI units. Unsupported variants remain visible but cannot be committed.</p>
+        <p className="fm-help-text">{readOnly ? "This opaque compatibility record is unsupported and read-only. Its exact payload is preserved, but it cannot be edited or executed." : "All values use the canonical OpenAPI schema and SI units."}</p>
         {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
-        <Button disabled={pending || active.status !== "ready"} onClick={() => void save()}>
+        <Button disabled={readOnly || pending || active.status !== "ready"} onClick={() => void save()}>
           {pending ? "Committing…" : selected ? "Replace" : "Create"}
         </Button>
-        {selected ? (
+        {selected && !readOnly ? (
           <Button disabled={pending} variant="danger" onClick={() => void remove()}>
             Delete
           </Button>

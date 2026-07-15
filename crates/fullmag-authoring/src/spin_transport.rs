@@ -23,7 +23,7 @@ pub enum CurrentTransportModel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
-pub struct SceneCurrentTransport {
+pub struct KnownSceneCurrentTransport {
     pub kind: CurrentTransportKind,
     pub name: String,
     pub model: CurrentTransportModel,
@@ -33,6 +33,36 @@ pub struct SceneCurrentTransport {
     pub solve_region: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conductivity_s_per_m: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(untagged)]
+pub enum SceneCurrentTransport {
+    Known(KnownSceneCurrentTransport),
+    Unsupported(UnsupportedAuthoringRecord),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct UnsupportedAuthoringRecord {
+    #[serde(flatten)]
+    pub payload: BTreeMap<String, serde_json::Value>,
+}
+
+impl SceneCurrentTransport {
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Known(value) => Some(&value.name),
+            Self::Unsupported(value) => value.payload.get("name").and_then(|v| v.as_str()),
+        }
+    }
+
+    pub fn known(&self) -> Option<&KnownSceneCurrentTransport> {
+        match self { Self::Known(value) => Some(value), Self::Unsupported(_) => None }
+    }
+
+    pub fn known_mut(&mut self) -> Option<&mut KnownSceneCurrentTransport> {
+        match self { Self::Known(value) => Some(value), Self::Unsupported(_) => None }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
@@ -165,7 +195,7 @@ pub struct SceneCompatibilityOrigin {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SceneSpinTorque {
+pub enum KnownSceneSpinTorque {
     Slonczewski {
         #[serde(default)]
         id: String,
@@ -219,7 +249,7 @@ pub enum SceneSpinTorque {
     },
 }
 
-impl SceneSpinTorque {
+impl KnownSceneSpinTorque {
     pub fn id(&self) -> &str {
         match self {
             Self::Slonczewski { id, .. }
@@ -235,6 +265,26 @@ impl SceneSpinTorque {
             | Self::PrescribedSot { id, .. } if id.is_empty() => *id = fallback,
             _ => {}
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(untagged)]
+pub enum SceneSpinTorque {
+    Known(KnownSceneSpinTorque),
+    Unsupported(UnsupportedAuthoringRecord),
+}
+
+impl SceneSpinTorque {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Known(value) => value.id(),
+            Self::Unsupported(value) => value.payload.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+        }
+    }
+
+    pub fn ensure_authoring_id(&mut self, fallback: String) {
+        if let Self::Known(value) = self { value.ensure_authoring_id(fallback); }
     }
 }
 
@@ -269,7 +319,7 @@ pub enum OerstedFieldModel {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SceneOerstedField {
+pub enum KnownSceneOerstedField {
     OerstedCylinder {
         #[serde(default)]
         id: String,
@@ -288,7 +338,7 @@ pub enum SceneOerstedField {
     },
 }
 
-impl SceneOerstedField {
+impl KnownSceneOerstedField {
     pub fn id(&self) -> &str {
         match self {
             Self::OerstedCylinder { id, .. } | Self::OerstedField { id, .. } => id,
@@ -302,5 +352,25 @@ impl SceneOerstedField {
             }
             _ => {}
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(untagged)]
+pub enum SceneOerstedField {
+    Known(KnownSceneOerstedField),
+    Unsupported(UnsupportedAuthoringRecord),
+}
+
+impl SceneOerstedField {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Known(value) => value.id(),
+            Self::Unsupported(value) => value.payload.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+        }
+    }
+
+    pub fn ensure_authoring_id(&mut self, fallback: String) {
+        if let Self::Known(value) = self { value.ensure_authoring_id(fallback); }
     }
 }

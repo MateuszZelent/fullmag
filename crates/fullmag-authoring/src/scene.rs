@@ -1178,12 +1178,19 @@ mod spin_authoring_tests {
     }
 
     #[test]
-    fn typed_spin_authoring_rejects_unknown_variants() {
-        let error = serde_json::from_value::<SceneDocument>(serde_json::json!({
+    fn unsupported_spin_authoring_round_trips_exactly_and_remains_non_executable() {
+        let value = serde_json::json!({
             "version": "scene.v2",
-            "spin_torques": [{"id": "future", "kind": "future_torque"}]
-        }))
-        .expect_err("unknown torque must fail closed");
-        assert!(error.to_string().contains("unknown variant"), "{error}");
+            "current_transports": [{"kind": "future_transport", "name": "future-current", "nested": {"x": [1, true, null]}}],
+            "spin_torques": [{"id": "future-torque", "kind": "future_torque", "vendor": {"alpha": 0.125}}],
+            "oersted_fields": [{"id": "future-field", "kind": "future_oersted", "coefficients": [1, 2, 3]}]
+        });
+        let scene: SceneDocument = serde_json::from_value(value.clone()).expect("opaque records must load");
+        let serialized = serde_json::to_value(&scene).expect("opaque records must serialize");
+        assert_eq!(serialized["current_transports"], value["current_transports"]);
+        assert_eq!(serialized["spin_torques"], value["spin_torques"]);
+        assert_eq!(serialized["oersted_fields"], value["oersted_fields"]);
+        let error = crate::validate_scene_document(&scene).expect_err("opaque records must remain non-executable");
+        assert!(error.to_string().contains("unsupported read-only variant"), "{error}");
     }
 }

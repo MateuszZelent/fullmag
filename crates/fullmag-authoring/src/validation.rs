@@ -1,7 +1,8 @@
 use crate::{
-    CurrentTransportModel, PrescribedSotFormulaVersion, SceneCurrentTransport, SceneDocument,
-    SceneOerstedField, SceneOerstedTimeDependence, ScenePrescribedSotDrive, SceneSpinTorque,
-    SceneTimeEnvelope, SlonczewskiFormulaVersion, StudyPipelineDocument, StudyPipelineNode,
+    CurrentTransportModel, KnownSceneCurrentTransport, KnownSceneOerstedField,
+    KnownSceneSpinTorque, PrescribedSotFormulaVersion, SceneDocument, SceneOerstedField,
+    SceneOerstedTimeDependence, ScenePrescribedSotDrive, SceneSpinTorque, SceneTimeEnvelope,
+    SlonczewskiFormulaVersion, StudyPipelineDocument, StudyPipelineNode,
 };
 use fullmag_ir::{
     CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, ExchangeCouplingModeIR,
@@ -139,6 +140,9 @@ fn validate_spin_authoring(
 ) -> Result<(), SceneDocumentValidationError> {
     let mut transport_ids = BTreeSet::new();
     for (index, transport) in scene.current_transports.iter().enumerate() {
+        let transport = transport.known().ok_or_else(|| SceneDocumentValidationError::new(format!(
+            "current_transports[{index}] uses an unsupported read-only variant"
+        )))?;
         validate_current_transport(index, transport, object_ids)?;
         if !transport_ids.insert(transport.name.clone()) {
             return Err(SceneDocumentValidationError::new(format!(
@@ -165,8 +169,12 @@ fn validate_spin_authoring(
                 "oersted_fields[{index}] id must be non-empty and unique"
             )));
         }
+        let field = match field {
+            SceneOerstedField::Known(field) => field,
+            SceneOerstedField::Unsupported(_) => return Err(SceneDocumentValidationError::new(format!("oersted_fields[{index}] uses an unsupported read-only variant"))),
+        };
         match field {
-            SceneOerstedField::OerstedCylinder {
+            KnownSceneOerstedField::OerstedCylinder {
                 current,
                 radius,
                 center,
@@ -182,7 +190,7 @@ fn validate_spin_authoring(
                     validate_oersted_envelope(index, envelope)?;
                 }
             }
-            SceneOerstedField::OerstedField { source, .. } => {
+            KnownSceneOerstedField::OerstedField { source, .. } => {
                 require_reference(source, &transport_ids, &format!("oersted_fields[{index}].source"))?;
             }
         }
@@ -192,7 +200,7 @@ fn validate_spin_authoring(
 
 fn validate_current_transport(
     index: usize,
-    transport: &SceneCurrentTransport,
+    transport: &KnownSceneCurrentTransport,
     object_ids: &BTreeSet<String>,
 ) -> Result<(), SceneDocumentValidationError> {
     if transport.name.trim().is_empty() {
@@ -231,8 +239,12 @@ fn validate_spin_torque(
     object_ids: &BTreeSet<String>,
     transport_ids: &BTreeSet<String>,
 ) -> Result<(), SceneDocumentValidationError> {
+    let torque = match torque {
+        SceneSpinTorque::Known(torque) => torque,
+        SceneSpinTorque::Unsupported(_) => return Err(SceneDocumentValidationError::new(format!("spin_torques[{index}] uses an unsupported read-only variant"))),
+    };
     match torque {
-        SceneSpinTorque::ZhangLi {
+        KnownSceneSpinTorque::ZhangLi {
             current_density,
             current_source,
             degree,
@@ -243,7 +255,7 @@ fn validate_spin_torque(
             unit_interval_open(*degree, &format!("spin_torques[{index}].degree"))?;
             nonnegative(*beta, &format!("spin_torques[{index}].beta"))?;
         }
-        SceneSpinTorque::Slonczewski {
+        KnownSceneSpinTorque::Slonczewski {
             formula_version,
             schema_version,
             current_density,
@@ -291,7 +303,7 @@ fn validate_spin_torque(
                 }
             }
         }
-        SceneSpinTorque::PrescribedSot {
+        KnownSceneSpinTorque::PrescribedSot {
             formula_version,
             target,
             drive,

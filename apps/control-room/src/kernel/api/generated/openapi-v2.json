@@ -7943,6 +7943,360 @@
         ],
         "type": "object"
       },
+      "KnownSceneCurrentTransport": {
+        "properties": {
+          "conductivity_s_per_m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "current_density": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CurrentTransportKind"
+          },
+          "model": {
+            "$ref": "#/components/schemas/CurrentTransportModel"
+          },
+          "name": {
+            "type": "string"
+          },
+          "solve_region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "name",
+          "model"
+        ],
+        "type": "object"
+      },
+      "KnownSceneOerstedField": {
+        "oneOf": [
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "current": {
+                "format": "double",
+                "type": "number"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "oersted_cylinder"
+                ],
+                "type": "string"
+              },
+              "radius": {
+                "format": "double",
+                "type": "number"
+              },
+              "time_dependence": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneOerstedTimeDependence"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "current",
+              "radius",
+              "center",
+              "axis",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "oersted_field"
+                ],
+                "type": "string"
+              },
+              "model": {
+                "$ref": "#/components/schemas/OerstedFieldModel"
+              },
+              "source": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "model",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "KnownSceneSpinTorque": {
+        "oneOf": [
+          {
+            "properties": {
+              "current_density": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "current_source": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "degree": {
+                "format": "double",
+                "type": "number"
+              },
+              "epsilon_prime": {
+                "format": "double",
+                "type": "number"
+              },
+              "fixed_layer_position": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "formula_version": {
+                "$ref": "#/components/schemas/SlonczewskiFormulaVersion"
+              },
+              "free_layer_thickness_m": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "slonczewski"
+                ],
+                "type": "string"
+              },
+              "lambda_asymmetry": {
+                "format": "double",
+                "type": "number"
+              },
+              "realization": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SlonczewskiRealization"
+                  }
+                ]
+              },
+              "schema_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "spin_polarization": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "stack_normal": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "target": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneRegionRef"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "formula_version",
+              "spin_polarization",
+              "degree",
+              "lambda_asymmetry",
+              "epsilon_prime",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "beta": {
+                "format": "double",
+                "type": "number"
+              },
+              "current_density": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "current_source": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "degree": {
+                "format": "double",
+                "type": "number"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "zhang_li"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "degree",
+              "beta",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "compatibility_origin": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneCompatibilityOrigin"
+                  }
+                ]
+              },
+              "drive": {
+                "$ref": "#/components/schemas/ScenePrescribedSotDrive"
+              },
+              "formula_version": {
+                "$ref": "#/components/schemas/PrescribedSotFormulaVersion"
+              },
+              "free_layer_thickness_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "prescribed_sot"
+                ],
+                "type": "string"
+              },
+              "raw_spin_polarization": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "schema_version": {
+                "$ref": "#/components/schemas/PrescribedSotSchemaVersion"
+              },
+              "target": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SceneRegionRef"
+                  }
+                ]
+              },
+              "xi_dl": {
+                "format": "double",
+                "type": "number"
+              },
+              "xi_fl": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "schema_version",
+              "formula_version",
+              "drive",
+              "xi_dl",
+              "xi_fl",
+              "free_layer_thickness_m",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "LivePublisherDiagnosticsResource": {
         "properties": {
           "coalesced_wake_count": {
@@ -13546,46 +13900,14 @@
         "type": "object"
       },
       "SceneCurrentTransport": {
-        "properties": {
-          "conductivity_s_per_m": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/KnownSceneCurrentTransport"
           },
-          "current_density": {
-            "items": {
-              "format": "double",
-              "type": "number"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "kind": {
-            "$ref": "#/components/schemas/CurrentTransportKind"
-          },
-          "model": {
-            "$ref": "#/components/schemas/CurrentTransportModel"
-          },
-          "name": {
-            "type": "string"
-          },
-          "solve_region": {
-            "type": [
-              "string",
-              "null"
-            ]
+          {
+            "$ref": "#/components/schemas/UnsupportedAuthoringRecord"
           }
-        },
-        "required": [
-          "kind",
-          "name",
-          "model"
-        ],
-        "type": "object"
+        ]
       },
       "SceneEnvelopeExtrapolation": {
         "enum": [
@@ -14344,82 +14666,10 @@
       "SceneOerstedField": {
         "oneOf": [
           {
-            "properties": {
-              "axis": {
-                "items": {
-                  "format": "double",
-                  "type": "number"
-                },
-                "type": "array"
-              },
-              "center": {
-                "items": {
-                  "format": "double",
-                  "type": "number"
-                },
-                "type": "array"
-              },
-              "current": {
-                "format": "double",
-                "type": "number"
-              },
-              "id": {
-                "type": "string"
-              },
-              "kind": {
-                "enum": [
-                  "oersted_cylinder"
-                ],
-                "type": "string"
-              },
-              "radius": {
-                "format": "double",
-                "type": "number"
-              },
-              "time_dependence": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/SceneOerstedTimeDependence"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "current",
-              "radius",
-              "center",
-              "axis",
-              "kind"
-            ],
-            "type": "object"
+            "$ref": "#/components/schemas/KnownSceneOerstedField"
           },
           {
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "kind": {
-                "enum": [
-                  "oersted_field"
-                ],
-                "type": "string"
-              },
-              "model": {
-                "$ref": "#/components/schemas/OerstedFieldModel"
-              },
-              "source": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "source",
-              "model",
-              "kind"
-            ],
-            "type": "object"
+            "$ref": "#/components/schemas/UnsupportedAuthoringRecord"
           }
         ]
       },
@@ -15007,230 +15257,10 @@
       "SceneSpinTorque": {
         "oneOf": [
           {
-            "properties": {
-              "current_density": {
-                "items": {
-                  "format": "double",
-                  "type": "number"
-                },
-                "type": [
-                  "array",
-                  "null"
-                ]
-              },
-              "current_source": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "degree": {
-                "format": "double",
-                "type": "number"
-              },
-              "epsilon_prime": {
-                "format": "double",
-                "type": "number"
-              },
-              "fixed_layer_position": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "formula_version": {
-                "$ref": "#/components/schemas/SlonczewskiFormulaVersion"
-              },
-              "free_layer_thickness_m": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
-              },
-              "id": {
-                "type": "string"
-              },
-              "kind": {
-                "enum": [
-                  "slonczewski"
-                ],
-                "type": "string"
-              },
-              "lambda_asymmetry": {
-                "format": "double",
-                "type": "number"
-              },
-              "realization": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/SlonczewskiRealization"
-                  }
-                ]
-              },
-              "schema_version": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "spin_polarization": {
-                "items": {
-                  "format": "double",
-                  "type": "number"
-                },
-                "type": "array"
-              },
-              "stack_normal": {
-                "items": {
-                  "format": "double",
-                  "type": "number"
-                },
-                "type": [
-                  "array",
-                  "null"
-                ]
-              },
-              "target": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/SceneRegionRef"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "formula_version",
-              "spin_polarization",
-              "degree",
-              "lambda_asymmetry",
-              "epsilon_prime",
-              "kind"
-            ],
-            "type": "object"
+            "$ref": "#/components/schemas/KnownSceneSpinTorque"
           },
           {
-            "properties": {
-              "beta": {
-                "format": "double",
-                "type": "number"
-              },
-              "current_density": {
-                "items": {
-                  "format": "double",
-                  "type": "number"
-                },
-                "type": [
-                  "array",
-                  "null"
-                ]
-              },
-              "current_source": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "degree": {
-                "format": "double",
-                "type": "number"
-              },
-              "id": {
-                "type": "string"
-              },
-              "kind": {
-                "enum": [
-                  "zhang_li"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "degree",
-              "beta",
-              "kind"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "compatibility_origin": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/SceneCompatibilityOrigin"
-                  }
-                ]
-              },
-              "drive": {
-                "$ref": "#/components/schemas/ScenePrescribedSotDrive"
-              },
-              "formula_version": {
-                "$ref": "#/components/schemas/PrescribedSotFormulaVersion"
-              },
-              "free_layer_thickness_m": {
-                "format": "double",
-                "type": "number"
-              },
-              "id": {
-                "type": "string"
-              },
-              "kind": {
-                "enum": [
-                  "prescribed_sot"
-                ],
-                "type": "string"
-              },
-              "raw_spin_polarization": {
-                "items": {
-                  "format": "double",
-                  "type": "number"
-                },
-                "type": [
-                  "array",
-                  "null"
-                ]
-              },
-              "schema_version": {
-                "$ref": "#/components/schemas/PrescribedSotSchemaVersion"
-              },
-              "target": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/SceneRegionRef"
-                  }
-                ]
-              },
-              "xi_dl": {
-                "format": "double",
-                "type": "number"
-              },
-              "xi_fl": {
-                "format": "double",
-                "type": "number"
-              }
-            },
-            "required": [
-              "schema_version",
-              "formula_version",
-              "drive",
-              "xi_dl",
-              "xi_fl",
-              "free_layer_thickness_m",
-              "kind"
-            ],
-            "type": "object"
+            "$ref": "#/components/schemas/UnsupportedAuthoringRecord"
           }
         ]
       },
@@ -19087,6 +19117,10 @@
           "study_universe_mesh",
           "mesh_dirty"
         ],
+        "type": "object"
+      },
+      "UnsupportedAuthoringRecord": {
+        "additionalProperties": {},
         "type": "object"
       },
       "VectorColorMode": {

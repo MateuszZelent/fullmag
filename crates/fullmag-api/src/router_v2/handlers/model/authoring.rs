@@ -57,14 +57,15 @@ pub async fn get_current_transports(State(state): State<Arc<AppState>>) -> Resul
 #[utoipa::path(get, path = "/v2/sessions/current/model/current-transports/{id}", params(("id" = String, Path)), responses((status = 200, body = SceneCurrentTransport), (status = 404)), tag = "model")]
 pub async fn get_current_transport(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<SceneCurrentTransport>, ApiError> {
     let scene = crate::get_or_load_current_live_scene_document(&state).await?;
-    scene.current_transports.into_iter().find(|item| item.name == id).map(Json).ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))
+    scene.current_transports.into_iter().find(|item| item.name() == Some(id.as_str())).map(Json).ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))
 }
 
 #[utoipa::path(post, path = "/v2/sessions/current/model/current-transports", request_body = CurrentTransportMutationRequest, responses((status = 200, body = CurrentTransportCommitResource), (status = 409)), tag = "model")]
 pub async fn create_current_transport(State(state): State<Arc<AppState>>, Json(req): Json<CurrentTransportMutationRequest>) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
     let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
     require_spin_base_revision(&scene, req.base_revision)?;
-    if scene.current_transports.iter().any(|item| item.name == req.resource.name) { return Err(ApiError::conflict(format!("duplicate current transport id '{}'", req.resource.name))); }
+    let name = req.resource.name().ok_or_else(|| ApiError::bad_request("unsupported current transport variants are read-only"))?;
+    if scene.current_transports.iter().any(|item| item.name() == Some(name)) { return Err(ApiError::conflict(format!("duplicate current transport id '{name}'"))); }
     let resource = req.resource;
     scene.current_transports.push(resource.clone());
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
@@ -75,8 +76,10 @@ pub async fn create_current_transport(State(state): State<Arc<AppState>>, Json(r
 pub async fn patch_current_transport(State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<CurrentTransportMutationRequest>) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
     let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
     require_spin_base_revision(&scene, req.base_revision)?;
-    if req.resource.name != id { return Err(ApiError::bad_request("current transport resource name must match path id")); }
-    let slot = scene.current_transports.iter_mut().find(|item| item.name == id).ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))?;
+    if req.resource.known().is_none() { return Err(ApiError::bad_request("unsupported current transport variants are read-only")); }
+    if req.resource.name() != Some(id.as_str()) { return Err(ApiError::bad_request("current transport resource name must match path id")); }
+    let slot = scene.current_transports.iter_mut().find(|item| item.name() == Some(id.as_str())).ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))?;
+    if slot.known().is_none() { return Err(ApiError::bad_request("unsupported current transport variants are read-only")); }
     let resource = req.resource;
     *slot = resource.clone();
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
@@ -87,7 +90,8 @@ pub async fn patch_current_transport(State(state): State<Arc<AppState>>, Path(id
 pub async fn delete_current_transport(State(state): State<Arc<AppState>>, Path(id): Path<String>, Json(req): Json<SpinAuthoringDeleteRequest>) -> Result<Json<CurrentTransportCommitResource>, ApiError> {
     let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
     require_spin_base_revision(&scene, req.base_revision)?;
-    let index = scene.current_transports.iter().position(|item| item.name == id).ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))?;
+    let index = scene.current_transports.iter().position(|item| item.name() == Some(id.as_str())).ok_or_else(|| ApiError::not_found(format!("current transport not found: {id}")))?;
+    if scene.current_transports[index].known().is_none() { return Err(ApiError::bad_request("unsupported current transport variants are read-only")); }
     let resource = scene.current_transports.remove(index);
     let committed = crate::commit_current_live_scene_document(&state, scene).await?;
     Ok(Json(CurrentTransportCommitResource { resource, committed_scene: spin_commit_scene_resource(committed)? }))

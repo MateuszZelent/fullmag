@@ -406,13 +406,13 @@ pub fn scene_document_to_script_builder_overrides(
 
 fn spin_torque_override_value(torque: &crate::SceneSpinTorque) -> Value {
     let mut value = serde_json::to_value(torque).unwrap_or(Value::Null);
-    let strip_id = matches!(torque, crate::SceneSpinTorque::ZhangLi { .. })
+    let strip_id = matches!(torque, crate::SceneSpinTorque::Known(crate::KnownSceneSpinTorque::ZhangLi { .. }))
         || matches!(
             torque,
-            crate::SceneSpinTorque::Slonczewski {
+            crate::SceneSpinTorque::Known(crate::KnownSceneSpinTorque::Slonczewski {
                 formula_version: crate::SlonczewskiFormulaVersion::LegacyFullmagV0,
                 ..
-            }
+            })
         );
     if strip_id {
         if let Value::Object(entry) = &mut value {
@@ -2636,7 +2636,7 @@ mod tests {
             "id": "oe", "kind": "oersted_field", "source": "transport",
             "model": "from_current_solution"
         }])).unwrap();
-        scene.current_transports[0].solve_region = Some(scene.objects[0].id.clone());
+        scene.current_transports[0].known_mut().unwrap().solve_region = Some(scene.objects[0].id.clone());
 
         let builder = scene_document_to_script_builder(&scene).expect("typed projection");
         assert_eq!(builder.current_transports, scene.current_transports);
