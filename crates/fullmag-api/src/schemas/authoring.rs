@@ -130,6 +130,8 @@ pub struct SceneResource {
     pub magnetization_assets: Vec<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub couplings: Vec<fullmag_authoring::SceneCoupling>,
+    #[serde(default)]
+    pub field_drives: FieldDriveListStateResource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub current_modules: Option<BTreeMap<String, Value>>,
@@ -142,6 +144,173 @@ pub struct SceneResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(additional_properties, nullable)]
     pub editor: Option<BTreeMap<String, Value>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub struct FieldDriveListStateResource {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drives: Vec<RegionalFieldDriveResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldDriveKindResource {
+    Regional,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FieldTargetResource {
+    Global {},
+    Object { object_id: String },
+    Region { object_id: String, region_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FieldEnvelopeResource {
+    Uniform {},
+    Sinc {
+        axis: [f64; 3],
+        period_m: f64,
+        #[serde(default)]
+        center_m: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width_m: Option<f64>,
+        #[serde(default = "default_field_window_none")]
+        window: String,
+    },
+}
+
+fn default_field_window_none() -> String {
+    "none".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FieldSpatialProfileResource {
+    Uniform {},
+    Sinc {
+        axis: [f64; 3],
+        period_m: f64,
+        #[serde(default)]
+        center_m: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width_m: Option<f64>,
+        #[serde(default = "default_field_window_none")]
+        window: String,
+    },
+    GeometryMask {
+        object_id: String,
+        envelope: FieldEnvelopeResource,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TimeDependenceResource {
+    Constant,
+    Sinusoidal {
+        frequency_hz: f64,
+        #[serde(default)]
+        phase_rad: f64,
+        #[serde(default)]
+        offset: f64,
+    },
+    Pulse { t_on: f64, t_off: f64 },
+    PiecewiseLinear { points: Vec<[f64; 2]> },
+    SincPulse {
+        cutoff_hz: f64,
+        #[serde(default)]
+        t0: f64,
+        #[serde(default = "default_unit_amplitude")]
+        amplitude: f64,
+    },
+}
+
+fn default_unit_amplitude() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldTimeOriginResource {
+    StageLocal,
+    Absolute,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DriveActivationResource {
+    AllTimeEvolution {},
+    StageIds { stage_ids: Vec<String> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FieldDriveMigrationResource {
+    pub migrated_from: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RegionalFieldDriveResource {
+    pub id: String,
+    pub name: String,
+    pub kind: FieldDriveKindResource,
+    #[serde(default = "default_field_drive_enabled")]
+    pub enabled: bool,
+    pub target: FieldTargetResource,
+    #[serde(rename = "amplitude_B_T")]
+    pub amplitude_b_t: f64,
+    pub direction: [f64; 3],
+    pub spatial_profile: FieldSpatialProfileResource,
+    pub waveform: TimeDependenceResource,
+    pub time_origin: FieldTimeOriginResource,
+    pub activation: DriveActivationResource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration: Option<FieldDriveMigrationResource>,
+}
+
+fn default_field_drive_enabled() -> bool {
+    true
+}
+
+impl RegionalFieldDriveResource {
+    pub fn into_ir(self) -> Result<fullmag_ir::RegionalFieldDriveIR, serde_json::Error> {
+        serde_json::from_value(serde_json::to_value(self)?)
+    }
+
+    pub fn from_ir(value: fullmag_ir::RegionalFieldDriveIR) -> Result<Self, serde_json::Error> {
+        serde_json::from_value(serde_json::to_value(value)?)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FieldDriveListResource {
+    pub scene_revision: u64,
+    pub drives: Vec<RegionalFieldDriveResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FieldDriveCreateRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    pub drive: RegionalFieldDriveResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FieldDriveReplaceRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    pub drive: RegionalFieldDriveResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FieldDriveDeleteRequest {
+    #[serde(default)]
+    pub base_revision: Option<u64>,
 }
 
 impl SceneResource {

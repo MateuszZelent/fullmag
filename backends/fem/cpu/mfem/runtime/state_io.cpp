@@ -232,6 +232,10 @@ int context_copy_field_f64(
                 gpu_field = &ctx.gpu_state.device.fields.h_ext;
                 label = "H_ext";
                 break;
+            case FULLMAG_FEM_OBSERVABLE_H_DRIVE:
+                gpu_field = &ctx.gpu_state.device.fields.h_drive;
+                label = "H_drive";
+                break;
             case FULLMAG_FEM_OBSERVABLE_H_ANI:
                 gpu_field = &ctx.gpu_state.device.fields.h_ani;
                 label = "H_ani";
@@ -307,6 +311,10 @@ int context_copy_field_f64(
             break;
         case FULLMAG_FEM_OBSERVABLE_H_EXT:
             source = &ctx.zeeman.h_ext_xyz;
+            break;
+        case FULLMAG_FEM_OBSERVABLE_H_DRIVE:
+            materialize_regional_field_drive(const_cast<Context &>(ctx), ctx.state.current_time);
+            source = &ctx.zeeman.h_drive_xyz;
             break;
         case FULLMAG_FEM_OBSERVABLE_H_EFF:
             // Prefer full-domain visual version (includes airbox stray field)

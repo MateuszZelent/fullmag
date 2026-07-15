@@ -269,6 +269,9 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "modules": builder.get("current_modules") or [],
             "excitation_analysis": builder.get("excitation_analysis"),
         },
+        "field_drives": {
+            "drives": builder.get("field_drives") or [],
+        },
         "couplings": builder.get("couplings") or [],
         "study": {
             "backend": builder.get("backend"),
@@ -388,6 +391,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
 
     study = dict(scene.get("study") or {})
     current_modules = dict(scene.get("current_modules") or {})
+    field_drives = dict(scene.get("field_drives") or {})
     return {
         "revision": int(scene.get("revision", 0)),
         "backend": study.get("backend"),
@@ -407,6 +411,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "geometries": geometries,
         "couplings": scene.get("couplings") or [],
         "current_modules": current_modules.get("modules") or [],
+        "field_drives": field_drives.get("drives") or [],
         "excitation_analysis": current_modules.get("excitation_analysis"),
     }
 

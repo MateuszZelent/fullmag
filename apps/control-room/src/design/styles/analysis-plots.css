@@ -216,6 +216,20 @@
   overflow: hidden;
 }
 
+.fm-analysis-plots__heatmap {
+  display: grid;
+  align-content: stretch;
+  min-height: 280px;
+  overflow: auto;
+  background: var(--fm-bg-surface);
+}
+
+.fm-analysis-plots__heatmap-cell {
+  min-width: 2px;
+  min-height: 2px;
+  background: var(--fm-accent);
+}
+
 .fm-analysis-plots__empty,
 .fm-analysis-plots__chart-empty {
   display: flex;

@@ -159,6 +159,86 @@ verify-fem-time-domain-native-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_rk_explicit_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract fem_source_facade_gpu_rk_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract && native/build/backends/fem/fem_source_facade_gpu_rk_contract'
 
+verify-fem-regional-field-drive-contract:
+    docker compose --profile fem-gpu run --rm \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake -E rm -f native/build/backends/fem/fem_zeeman_contract native/build/backends/fem/fem_state_io_contract native/build/backends/fem/fem_step_metrics_contract && cmake --build native/build --target fem_zeeman_contract fem_state_io_contract fem_step_metrics_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_zeeman_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_step_metrics_contract'
+
+verify-fem-regional-field-drive-rk-time-convergence:
+    just ensure-python
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/fem-regional-field-drive-rk-time-convergence
+    mkdir -p .fullmag/reports/fem-regional-field-drive-rk-time-convergence
+    for integrator in heun rk4 rk23 rk45; do \
+      for dt in 4e-13 2e-13 1e-13 5e-14; do \
+        output=".fullmag/reports/fem-regional-field-drive-rk-time-convergence/${integrator}-${dt}"; \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FEM_EXECUTION=cpu FULLMAG_RK_INTEGRATOR="$integrator" FULLMAG_RK_DT_S="$dt" FULLMAG_DRIVE_FREQUENCY_HZ=100e9 \
+          '{{gpu_runtime_bin}}' examples/fem_regional_field_drive_manufactured.py --backend fem --headless --json --output-dir "$output"; \
+      done; \
+    done
+    FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FEM_EXECUTION=cpu FULLMAG_RK_INTEGRATOR=rk23 FULLMAG_RK_DT_S=3e-13 FULLMAG_DRIVE_WAVEFORM=pulse \
+      '{{gpu_runtime_bin}}' examples/fem_regional_field_drive_manufactured.py --backend fem --headless --json --output-dir .fullmag/reports/fem-regional-field-drive-rk-time-convergence/event
+    python3 scripts/collect_fem_regional_field_drive_rk_order.py \
+      --run heun:4e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/heun-4e-13 --run heun:2e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/heun-2e-13 --run heun:1e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/heun-1e-13 --run heun:5e-14:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/heun-5e-14 \
+      --run rk4:4e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk4-4e-13 --run rk4:2e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk4-2e-13 --run rk4:1e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk4-1e-13 --run rk4:5e-14:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk4-5e-14 \
+      --run rk23:4e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk23-4e-13 --run rk23:2e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk23-2e-13 --run rk23:1e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk23-1e-13 --run rk23:5e-14:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk23-5e-14 \
+      --run rk45:4e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk45-4e-13 --run rk45:2e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk45-2e-13 --run rk45:1e-13:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk45-1e-13 --run rk45:5e-14:.fullmag/reports/fem-regional-field-drive-rk-time-convergence/rk45-5e-14 \
+      --event-run .fullmag/reports/fem-regional-field-drive-rk-time-convergence/event --output .fullmag/reports/fem-regional-field-drive-rk-time-convergence/summary.json
+    python3 scripts/validate_fem_regional_field_drive_rk_order.py .fullmag/reports/fem-regional-field-drive-rk-time-convergence/summary.json
+
+verify-fem-regional-field-drive-cpu-gpu-parity-runtime:
+    just ensure-python
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/fem-regional-field-drive-cpu-gpu-parity
+    mkdir -p .fullmag/reports/fem-regional-field-drive-cpu-gpu-parity
+    FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FEM_EXECUTION=cpu FULLMAG_RK_INTEGRATOR=rk4 FULLMAG_RK_DT_S=1e-14 \
+      '{{gpu_runtime_bin}}' examples/fem_regional_field_drive_manufactured.py --backend fem --headless --json --output-dir .fullmag/reports/fem-regional-field-drive-cpu-gpu-parity/cpu
+    FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FEM_EXECUTION=gpu FULLMAG_FEM_MFEM_DEVICE=cuda FULLMAG_RK_INTEGRATOR=rk4 FULLMAG_RK_DT_S=1e-14 \
+      '{{gpu_runtime_bin}}' examples/fem_regional_field_drive_manufactured.py --backend fem --headless --json --output-dir .fullmag/reports/fem-regional-field-drive-cpu-gpu-parity/gpu
+    python3 scripts/validate_fem_regional_field_drive_cpu_gpu_parity.py --cpu .fullmag/reports/fem-regional-field-drive-cpu-gpu-parity/cpu --gpu .fullmag/reports/fem-regional-field-drive-cpu-gpu-parity/gpu
+
+verify-fem-periodic-antidot-gamma-pulse-runtime:
+    just ensure-python
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/fem-periodic-antidot-gamma-pulse
+    mkdir -p .fullmag/reports/fem-periodic-antidot-gamma-pulse
+    for variant in baseline half-dt refined double-amplitude gpu; do \
+      device=cpu; dt=1e-13; mesh_scale=2; amplitude=1e-3; \
+      case "$variant" in half-dt) dt=5e-14 ;; refined) mesh_scale=1.5 ;; double-amplitude) amplitude=2e-3 ;; gpu) device=gpu ;; esac; \
+      FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FEM_EXECUTION="$device" FULLMAG_FEM_MFEM_DEVICE="$([ "$device" = gpu ] && echo cuda || echo cpu)" \
+        FULLMAG_GAMMA_CELL_M=8e-8 FULLMAG_GAMMA_THICKNESS_M=8e-9 FULLMAG_GAMMA_HOLE_RADIUS_M=1e-8 \
+        FULLMAG_GAMMA_DT_S="$dt" FULLMAG_GAMMA_SAMPLE_DT_S=5e-13 FULLMAG_GAMMA_UNTIL_S=1e-10 FULLMAG_GAMMA_T0_S=1e-11 \
+        FULLMAG_GAMMA_AMPLITUDE_B_T="$amplitude" FULLMAG_GAMMA_RELAX_STEPS=4 FULLMAG_GAMMA_MESH_SCALE="$mesh_scale" \
+        '{{gpu_runtime_bin}}' examples/fem_periodic_antidot_time_domain_gamma.py --backend fem --headless --json --output-dir ".fullmag/reports/fem-periodic-antidot-gamma-pulse/$variant"; \
+    done
+    python3 scripts/validate_fem_periodic_antidot_gamma_spectrum.py \
+      .fullmag/reports/fem-periodic-antidot-gamma-pulse/baseline/analysis/spin_wave_response.gamma.v1.json \
+      --half-dt .fullmag/reports/fem-periodic-antidot-gamma-pulse/half-dt/analysis/spin_wave_response.gamma.v1.json \
+      --refined-mesh .fullmag/reports/fem-periodic-antidot-gamma-pulse/refined/analysis/spin_wave_response.gamma.v1.json \
+      --double-amplitude .fullmag/reports/fem-periodic-antidot-gamma-pulse/double-amplitude/analysis/spin_wave_response.gamma.v1.json \
+      --gpu .fullmag/reports/fem-periodic-antidot-gamma-pulse/gpu/analysis/spin_wave_response.gamma.v1.json
+
+verify-fem-antidot-waveguide-finite-k-runtime:
+    just ensure-python
+    just ensure-managed-fem-runtime
+    rm -rf .fullmag/reports/fem-antidot-waveguide-finite-k
+    mkdir -p .fullmag/reports/fem-antidot-waveguide-finite-k
+    for variant in baseline half-dt half-dx double-length gpu; do \
+      device=cpu; dt=2e-13; mesh_scale=2; length=4e-7; probes=16; \
+      case "$variant" in half-dt) dt=1e-13 ;; half-dx) mesh_scale=1 ;; double-length) length=8e-7; probes=32 ;; gpu) device=gpu ;; esac; \
+      FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FEM_EXECUTION="$device" FULLMAG_FEM_MFEM_DEVICE="$([ "$device" = gpu ] && echo cuda || echo cpu)" \
+        FULLMAG_FINITE_K_LENGTH_M="$length" FULLMAG_FINITE_K_WIDTH_M=8e-8 FULLMAG_FINITE_K_THICKNESS_M=8e-9 FULLMAG_FINITE_K_ABSORBER_M=6e-8 \
+        FULLMAG_FINITE_K_DT_S="$dt" FULLMAG_FINITE_K_SAMPLE_DT_S=1e-12 FULLMAG_FINITE_K_UNTIL_S=2e-11 FULLMAG_FINITE_K_T0_S=5e-12 \
+        FULLMAG_FINITE_K_PROBE_COUNT="$probes" FULLMAG_FINITE_K_RELAX_STEPS=4 FULLMAG_FINITE_K_MESH_SCALE="$mesh_scale" \
+        '{{gpu_runtime_bin}}' examples/fem_antidot_waveguide_time_domain_finite_k.py --backend fem --headless --json --output-dir ".fullmag/reports/fem-antidot-waveguide-finite-k/$variant"; \
+    done
+    python3 scripts/validate_fem_antidot_waveguide_dynamic_structure_factor.py \
+      .fullmag/reports/fem-antidot-waveguide-finite-k/baseline/analysis/dynamic_structure_factor.1d.v1.json \
+      --half-dt .fullmag/reports/fem-antidot-waveguide-finite-k/half-dt/analysis/dynamic_structure_factor.1d.v1.json \
+      --half-dx .fullmag/reports/fem-antidot-waveguide-finite-k/half-dx/analysis/dynamic_structure_factor.1d.v1.json \
+      --double-length .fullmag/reports/fem-antidot-waveguide-finite-k/double-length/analysis/dynamic_structure_factor.1d.v1.json \
+      --gpu .fullmag/reports/fem-antidot-waveguide-finite-k/gpu/analysis/dynamic_structure_factor.1d.v1.json
+
 # FEM-TD-OBS-003 focused Oersted observable contract.
 verify-fem-oersted-observable-contract:
     docker compose --profile fem-gpu run --rm \

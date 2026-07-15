@@ -665,6 +665,7 @@ fn observe_multilayer(
         demag_field,
         external_field,
         antenna_field: vec![[0.0, 0.0, 0.0]; effective_field.len()],
+        drive_field: vec![[0.0, 0.0, 0.0]; effective_field.len()],
         effective_field,
         anisotropy_field,
         dmi_field,
@@ -676,6 +677,7 @@ fn observe_multilayer(
         exchange_energy,
         demag_energy,
         external_energy,
+        drive_energy: 0.0,
         anisotropy_energy,
         dmi_energy,
         total_energy: exchange_energy

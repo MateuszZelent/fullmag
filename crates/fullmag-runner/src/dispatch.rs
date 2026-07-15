@@ -2092,7 +2092,7 @@ pub(crate) fn execute_fdm<'a>(
             });
         }
     }
-    match engine {
+    let mut executed = match engine {
         FdmEngine::CpuReference => cpu_reference::execute_reference_fdm(
             plan,
             until_seconds,
@@ -2101,7 +2101,17 @@ pub(crate) fn execute_fdm<'a>(
             artifact_writer,
         ),
         FdmEngine::CudaFdm => execute_cuda_fdm(plan, until_seconds, outputs, live, artifact_writer),
+    }?;
+    if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
+        &plan.field_drives,
+        &plan.time_stage,
+        until_seconds,
+        outputs,
+        &executed.provenance,
+    )? {
+        executed.auxiliary_artifacts.push(artifact);
     }
+    Ok(executed)
 }
 
 /// Execute a multilayer FDM plan using the selected engine.
@@ -2177,13 +2187,23 @@ pub(crate) fn execute_fem<'a>(
                         .unwrap_or("operator reduction required")
                 ),
             );
-            return fem_baseline::execute_reference_fem(
+            let mut executed = fem_baseline::execute_reference_fem(
                 &normalized_plan,
                 until_seconds,
                 outputs,
                 live,
                 artifact_writer,
-            );
+            )?;
+            if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
+                &normalized_plan.field_drives,
+                &normalized_plan.time_stage,
+                until_seconds,
+                outputs,
+                &executed.provenance,
+            )? {
+                executed.auxiliary_artifacts.push(artifact);
+            }
+            return Ok(executed);
         }
         FemStaticPbcLane::None
         | FemStaticPbcLane::NativeExchangeOnly
@@ -2192,7 +2212,7 @@ pub(crate) fn execute_fem<'a>(
             // Fall through to native execution below.
         }
     }
-    match engine {
+    let mut executed = match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
             execute_native_fem(
@@ -2216,14 +2236,24 @@ pub(crate) fn execute_fem<'a>(
                     min_nodes
                 );
                 let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
-                return execute_native_fem(
+                let mut executed = execute_native_fem(
                     FemEngine::CpuNative,
                     &cpu_plan,
                     until_seconds,
                     outputs,
                     live,
                     artifact_writer,
-                );
+                )?;
+                if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
+                    &normalized_plan.field_drives,
+                    &normalized_plan.time_stage,
+                    until_seconds,
+                    outputs,
+                    &executed.provenance,
+                )? {
+                    executed.auxiliary_artifacts.push(artifact);
+                }
+                return Ok(executed);
             }
             let gpu_plan = fem_plan_for_native_gpu(&normalized_plan);
             execute_native_fem(
@@ -2235,7 +2265,17 @@ pub(crate) fn execute_fem<'a>(
                 artifact_writer,
             )
         }
+    }?;
+    if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
+        &normalized_plan.field_drives,
+        &normalized_plan.time_stage,
+        until_seconds,
+        outputs,
+        &executed.provenance,
+    )? {
+        executed.auxiliary_artifacts.push(artifact);
     }
+    Ok(executed)
 }
 
 pub(crate) fn execute_fem_eigen(
@@ -4725,6 +4765,13 @@ fn execute_cuda_fdm(
             message: "until_seconds must be positive".to_string(),
         });
     }
+    let time_events = crate::time_events::build_resolved_stage_event_schedule(
+        &plan.field_drives,
+        plan.time_stage.start_time_s,
+        plan.time_stage.start_time_s + until_seconds,
+        outputs,
+        crate::schedules::OUTPUT_TIME_TOLERANCE,
+    );
 
     let mut backend = NativeFdmBackend::create(plan)?;
     let device_info = backend.device_info()?;
@@ -4839,7 +4886,13 @@ fn execute_cuda_fdm(
                 }
             }
 
-            let dt_step = dt.min(until_seconds - current_time);
+            let proposed_dt = dt.min(until_seconds - current_time);
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                current_time,
+                proposed_dt,
+                &time_events.times_s,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             let interrupt_requested = live
                 .as_ref()
                 .and_then(|consumer| consumer.interrupt_requested);
@@ -5319,6 +5372,13 @@ fn execute_native_fem(
             message: "until_seconds must be positive".to_string(),
         });
     }
+    let time_events = crate::time_events::build_resolved_stage_event_schedule(
+        &plan.field_drives,
+        0.0,
+        until_seconds,
+        outputs,
+        crate::schedules::OUTPUT_TIME_TOLERANCE,
+    );
 
     let native_relaxation_step =
         crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref());
@@ -5493,7 +5553,8 @@ fn execute_native_fem(
             &mut backend,
             engine,
             plan,
-            until_seconds,
+            plan.time_stage.start_time_s + until_seconds,
+            &time_events.times_s,
             node_count,
             dt,
             dt_is_fixed,
@@ -6029,6 +6090,9 @@ mod tests {
             enable_demag: false,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            field_drives: Vec::new(),
+            field_drive_geometry_masks: Vec::new(),
+            time_stage: Default::default(),
             current_modules: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: fullmag_ir::ExecutionPrecision::Double,

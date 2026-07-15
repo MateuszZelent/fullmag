@@ -570,6 +570,7 @@ pub(crate) fn validate_executable_outputs(
     enable_magnetoelastic: bool,
     enable_thermal: bool,
     enable_antenna_field: bool,
+    enable_regional_field_drive: bool,
     errors: &mut Vec<String>,
 ) {
     let allowed_fields = [
@@ -618,6 +619,7 @@ pub(crate) fn validate_executable_outputs(
                     && !mechanical_fields.contains(&name.as_str())
                     && !(enable_oersted && name == "H_oe")
                     && !(enable_antenna_field && name == "H_ant")
+                    && !(enable_regional_field_drive && name == "H_drive")
                     && !(allow_h_dmi_bulk && name == "H_dmi_bulk")
                 {
                     errors.push(format!(
@@ -650,6 +652,11 @@ pub(crate) fn validate_executable_outputs(
                         "field output 'H_ant' requires at least one antenna current module"
                             .to_string(),
                     );
+                } else if name == "H_drive" && !enable_regional_field_drive {
+                    errors.push(
+                        "field output 'H_drive' requires at least one RegionalFieldDrive"
+                            .to_string(),
+                    );
                 } else if mechanical_fields.contains(&name.as_str()) {
                     errors.push(format!(
                         "field output '{name}' requires the quasistatic/elastodynamic mechanics solver, which is not executable yet"
@@ -665,6 +672,7 @@ pub(crate) fn validate_executable_outputs(
             OutputIR::Scalar { name, .. } => {
                 if !allowed_scalars.contains(&name.as_str())
                     && !mechanical_scalars.contains(&name.as_str())
+                    && !(enable_regional_field_drive && name == "E_drive")
                 {
                     errors.push(format!(
                         "scalar output '{}' is not executable in the current executable path; allowed scalars are E_ex, E_demag, E_ext, E_ani, E_dmi, E_mel, E_total, time, step, solver_dt, mx, my, mz, max_dm_dt, and max_h_eff",
@@ -676,6 +684,11 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("scalar output 'E_demag' requires Demag()".to_string());
                 } else if name == "E_ext" && !enable_zeeman {
                     errors.push("scalar output 'E_ext' requires Zeeman(...)".to_string());
+                } else if name == "E_drive" && !enable_regional_field_drive {
+                    errors.push(
+                        "scalar output 'E_drive' requires at least one RegionalFieldDrive"
+                            .to_string(),
+                    );
                 } else if name == "E_mel" && !enable_magnetoelastic {
                     errors.push("scalar output 'E_mel' requires Magnetoelastic(...)".to_string());
                 } else if mechanical_scalars.contains(&name.as_str()) {

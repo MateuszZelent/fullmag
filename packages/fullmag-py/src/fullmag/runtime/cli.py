@@ -94,6 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     script_source=loaded.script_source,
                     source_root=loaded.source_path.parent,
                     study_pipeline=study_pipeline,
+                    stage_start_time_s=time_offset,
                 )
                 if final_magnetization is not None:
                     # Check for cross-backend FEM→FDM state transfer.
@@ -133,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for step in run_payload.get("steps", []):
                     adjusted = dict(step)
                     adjusted["step"] = int(step.get("step", 0)) + step_offset
-                    adjusted["time"] = float(step.get("time", 0.0)) + time_offset
+                    adjusted["time"] = float(step.get("time", 0.0))
                     offset_steps.append(adjusted)
                 aggregate_payload["steps"].extend(offset_steps)
                 final_magnetization = run_payload.get("final_magnetization")

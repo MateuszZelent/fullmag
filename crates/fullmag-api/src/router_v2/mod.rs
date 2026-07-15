@@ -187,6 +187,16 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .delete(handlers::model::delete_authoring_coupling),
         )
         .route(
+            "/v2/sessions/current/model/field-drives",
+            get(handlers::model::get_authoring_field_drives)
+                .post(handlers::model::create_authoring_field_drive),
+        )
+        .route(
+            "/v2/sessions/current/model/field-drives/:drive_id",
+            axum::routing::put(handlers::model::replace_authoring_field_drive)
+                .delete(handlers::model::delete_authoring_field_drive),
+        )
+        .route(
             "/v2/sessions/current/model/regions/:region_id",
             patch(handlers::model::patch_authoring_region),
         )
@@ -604,6 +614,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
         .route(
             "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
             get(handlers::analysis::get_magnetic_response_sweep_v1),
+        )
+        .route(
+            "/v2/sessions/current/analysis/spin-wave/gamma.v1",
+            get(handlers::analysis::get_spin_wave_gamma),
+        )
+        .route(
+            "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1",
+            get(handlers::analysis::get_dynamic_structure_factor),
         )
         .route(
             "/v2/sessions/current/analysis/extensions/objects/:object_id/topological-charge",

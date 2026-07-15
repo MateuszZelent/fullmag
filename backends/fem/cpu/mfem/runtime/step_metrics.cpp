@@ -20,8 +20,11 @@ namespace fullmag::fem {
 std::array<double, 3> average_magnetization_components(const Context &ctx)
 {
     std::array<double, 3> sum{};
-    uint64_t count = 0;
+    double weight_sum = 0.0;
     const size_t nodes = ctx.state.m_xyz.size() / 3u;
+    const auto &lumped_volume = !ctx.integration_weights.mfem_lumped_mass.empty()
+        ? ctx.integration_weights.mfem_lumped_mass
+        : ctx.mesh.node_volumes;
     for (size_t node = 0; node < nodes; ++node) {
         if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[node] == 0u) {
             continue;
@@ -33,15 +36,23 @@ std::array<double, 3> average_magnetization_components(const Context &ctx)
         if (std::abs(mx) <= 1e-18 && std::abs(my) <= 1e-18 && std::abs(mz) <= 1e-18) {
             continue;
         }
-        sum[0] += mx;
-        sum[1] += my;
-        sum[2] += mz;
-        count += 1;
+        const double volume = node < lumped_volume.size() ? lumped_volume[node] : 0.0;
+        const double ms = ctx.material_fields.Ms_field.empty()
+            ? ctx.material_fields.material.saturation_magnetisation
+            : ctx.material_fields.Ms_field[node];
+        const double weight = ms * volume;
+        if (!std::isfinite(weight) || weight <= 0.0) {
+            continue;
+        }
+        sum[0] += weight * mx;
+        sum[1] += weight * my;
+        sum[2] += weight * mz;
+        weight_sum += weight;
     }
-    if (count == 0) {
+    if (!(weight_sum > 0.0)) {
         return {0.0, 0.0, 0.0};
     }
-    const double inv = 1.0 / static_cast<double>(count);
+    const double inv = 1.0 / weight_sum;
     return {sum[0] * inv, sum[1] * inv, sum[2] * inv};
 }
 
@@ -104,13 +115,15 @@ void fill_common_step_metrics(
 #endif
 
     stats.external_energy_joules = zeeman_energy_from_field(ctx, ctx.state.m_xyz);
+    materialize_regional_field_drive(ctx, ctx.state.current_time);
+    stats.drive_energy_joules = regional_field_drive_energy(ctx, ctx.state.m_xyz);
     stats.anisotropy_energy_joules = ctx.anisotropy.energy_joules;
     stats.dmi_energy_joules = ctx.dmi.energy_joules;
     stats.magnetoelastic_energy_joules = ctx.magnetoelastic.energy_joules;
 
     stats.total_energy_joules =
         stats.exchange_energy_joules + stats.demag_energy_joules +
-        stats.external_energy_joules + stats.anisotropy_energy_joules +
+        stats.external_energy_joules + stats.drive_energy_joules + stats.anisotropy_energy_joules +
         stats.dmi_energy_joules + stats.magnetoelastic_energy_joules;
     stats.max_effective_field_amplitude = max_norm_aos(ctx.effective_field.h_xyz);
     stats.max_demag_field_amplitude = max_norm_aos(ctx.demag.h_xyz);

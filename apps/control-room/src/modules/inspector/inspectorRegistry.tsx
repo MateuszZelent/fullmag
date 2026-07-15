@@ -11,6 +11,7 @@ import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
 import { BoundaryFacesOverviewPanel } from "./panels/boundary-faces/BoundaryFacesOverviewPanel";
 import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
+import { RegionalFieldDrivePanel } from "./panels/RegionalFieldDrivePanel";
 import { CrossSectionInspectorPanel } from "./panels/CrossSectionInspectorPanel";
 import {
   EigenBranchInspectorPanel,
@@ -526,6 +527,12 @@ const PANELS: InspectorPanelContribution[] = [
     title: "Coupling",
     selectionKinds: ["physics.coupling"],
     component: CouplingInspectorPanel,
+  },
+  {
+    id: "physics-field-drive",
+    title: "Field Drive",
+    selectionKinds: ["physics.field-drive"],
+    component: RegionalFieldDrivePanel,
   },
   {
     id: "object-material",

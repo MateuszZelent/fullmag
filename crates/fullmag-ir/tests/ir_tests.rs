@@ -2,6 +2,20 @@ use fullmag_ir::*;
 use std::collections::{BTreeMap, HashMap};
 
 #[test]
+fn execution_plans_carry_regional_field_drives_without_legacy_aliasing() {
+    fn fdm_drives(plan: &FdmPlanIR) -> &[RegionalFieldDriveIR] {
+        &plan.field_drives
+    }
+    fn fem_drives(plan: &FemPlanIR) -> &[RegionalFieldDriveIR] {
+        &plan.field_drives
+    }
+
+    let fdm = FdmPlanIR::default();
+    assert!(fdm_drives(&fdm).is_empty());
+    let _fem_contract: fn(&FemPlanIR) -> &[RegionalFieldDriveIR] = fem_drives;
+}
+
+#[test]
 fn bootstrap_example_round_trips_as_json() {
     let ir = ProblemIR::bootstrap_example();
     let json = serde_json::to_string_pretty(&ir).expect("bootstrap example should serialize");
@@ -140,6 +154,129 @@ fn unsupported_ir_version_is_rejected() {
 fn bootstrap_example_validates() {
     let ir = ProblemIR::bootstrap_example();
     assert!(ir.validate().is_ok());
+}
+
+#[test]
+fn regional_field_drive_exact_wire_round_trips() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["field_drives"] = serde_json::json!([{
+        "id": "drive-pulse",
+        "name": "Gamma sinc pulse",
+        "kind": "regional",
+        "enabled": true,
+        "target": {"kind": "global"},
+        "amplitude_B_T": 0.001,
+        "direction": [0.0, 1.0, 0.0],
+        "spatial_profile": {"kind": "geometry_mask", "object_id": "strip", "envelope": {
+            "kind": "sinc", "axis": [1.0, 0.0, 0.0], "period_m": 2.0e-7,
+            "center_m": 0.0, "width_m": 4.0e-7, "window": "hann"
+        }},
+        "waveform": {"kind": "sinc_pulse", "cutoff_hz": 2.0e10, "t0": 1.0e-10, "amplitude": 1.0},
+        "time_origin": "stage_local",
+        "activation": {"kind": "stage_ids", "stage_ids": ["excite_gamma"]}
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(decoded.field_drives.len(), 1);
+    assert_eq!(decoded.field_drives[0].id, "drive-pulse");
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert_eq!(encoded["field_drives"], value["field_drives"]);
+}
+
+#[test]
+fn regional_field_drive_unknown_fields_are_rejected() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["field_drives"] = serde_json::json!([{
+        "id": "drive", "name": "Drive", "kind": "regional", "enabled": true,
+        "target": {"kind": "global", "unexpected": 1},
+        "amplitude_B_T": 0.001, "direction": [0.0, 1.0, 0.0],
+        "spatial_profile": {"kind": "uniform"},
+        "waveform": {"kind": "constant"}, "time_origin": "stage_local",
+        "activation": {"kind": "all_time_evolution"}
+    }]);
+    assert!(serde_json::from_value::<ProblemIR>(value).is_err());
+}
+
+#[test]
+fn regional_field_drive_validation_is_fail_closed() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "bad".into(),
+        name: "Bad".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Object { object_id: "missing".into() },
+        amplitude_b_t: -1.0,
+        direction: [0.0, 0.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 0.0, t0: -1.0, amplitude: 1.0 },
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::StageIds { stage_ids: vec!["missing-stage".into()] },
+        migration: None,
+    });
+    let errors = ir.validate().expect_err("invalid regional drive must fail");
+    for needle in ["amplitude_B_T", "direction", "target object", "cutoff_hz", "t0"] {
+        assert!(errors.iter().any(|error| error.contains(needle)), "missing {needle}: {errors:?}");
+    }
+}
+
+#[test]
+fn active_stage_id_controls_minimizer_drive_validation() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "study_pipeline".into(),
+        serde_json::json!({"version":"study_pipeline.v1","nodes":[
+            {"id":"relax","enabled":true}, {"id":"excite","enabled":true}
+        ]}),
+    );
+    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("relax"));
+    let sampling = ir.study.sampling().clone();
+    ir.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: None,
+            energy_tolerance_j: None,
+            max_steps: Some(2),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "excite-only".into(), name: "Excite only".into(), kind: FieldDriveKindIR::Regional,
+        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 20e9, t0: 50e-12, amplitude: 1.0 },
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::StageIds { stage_ids: vec!["excite".into()] }, migration: None,
+    });
+    ir.validate().expect("inactive dynamic drive must not invalidate relaxation stage");
+    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("missing"));
+    let errors = ir.validate().expect_err("unknown active stage must fail closed");
+    assert!(errors.iter().any(|error| error.contains("active_stage_id") && error.contains("missing")));
+}
+
+#[test]
+fn spin_wave_analysis_request_is_validated_against_source_locality() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "gamma".into(), name: "Gamma".into(), kind: FieldDriveKindIR::Regional,
+        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 20e9, t0: 50e-12, amplitude: 1.0 },
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::AllTimeEvolution {}, migration: None,
+    });
+    ir.problem_meta.runtime_metadata.insert("spin_wave_response".into(), serde_json::json!({
+        "schema_version":"spin_wave_response.request.v1", "analysis":"gamma", "response_component":"my"
+    }));
+    ir.validate().expect("global uniform source is valid for gamma analysis");
+    ir.problem_meta.runtime_metadata.insert("spin_wave_response".into(), serde_json::json!({
+        "schema_version":"spin_wave_response.request.v1", "analysis":"finite_k", "response_component":"my", "probe_count":2
+    }));
+    let errors = ir.validate().expect_err("finite-k must reject global source and too few probes");
+    assert!(errors.iter().any(|error| error.contains("probe_count")));
+    assert!(errors.iter().any(|error| error.contains("localized")));
 }
 
 #[test]

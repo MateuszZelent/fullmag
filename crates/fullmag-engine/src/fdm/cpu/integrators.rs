@@ -25,10 +25,11 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.m0[..n].copy_from_slice(&state.magnetization);
 
         // k1 = f(t, m0)
-        self.effective_field_into_ws(&bufs.m0[..n], ws, &mut bufs.h_eff[..n]);
+        self.effective_field_into_ws_at(&bufs.m0[..n], t_n, ws, &mut bufs.h_eff[..n]);
         self.llg_rhs_from_fields_with_direct_torques_into(
             &bufs.m0[..n],
             &bufs.h_eff[..n],
@@ -54,7 +55,7 @@ impl ExchangeLlgProblem {
         }
 
         // k2 = f(t+dt, predicted)
-        self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+        self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + dt, ws, &mut bufs.h_eff[..n]);
         self.llg_rhs_from_fields_with_direct_torques_into(
             &bufs.m_stage[..n],
             &bufs.h_eff[..n],
@@ -105,9 +106,10 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.soa.m0.scatter_from_aos(&state.magnetization);
 
-        self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m0, t_n, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
         for i in 0..n {
@@ -121,7 +123,7 @@ impl ExchangeLlgProblem {
             bufs.soa.m_stage.z[i] = predicted[2];
         }
 
-        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
         for i in 0..n {
@@ -156,10 +158,11 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.m0[..n].copy_from_slice(&state.magnetization);
 
         // k1 = f(t, m0)
-        self.effective_field_into_ws(&bufs.m0[..n], ws, &mut bufs.h_eff[..n]);
+        self.effective_field_into_ws_at(&bufs.m0[..n], t_n, ws, &mut bufs.h_eff[..n]);
         self.llg_rhs_from_fields_with_direct_torques_into(
             &bufs.m0[..n],
             &bufs.h_eff[..n],
@@ -183,7 +186,7 @@ impl ExchangeLlgProblem {
                 stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?;
             }
         }
-        self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+        self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + 0.5 * dt, ws, &mut bufs.h_eff[..n]);
         self.llg_rhs_from_fields_with_direct_torques_into(
             &bufs.m_stage[..n],
             &bufs.h_eff[..n],
@@ -207,7 +210,7 @@ impl ExchangeLlgProblem {
                 stage[i] = normalized(add(m0[i], scale(kj[i], 0.5 * dt)))?;
             }
         }
-        self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+        self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + 0.5 * dt, ws, &mut bufs.h_eff[..n]);
         self.llg_rhs_from_fields_with_direct_torques_into(
             &bufs.m_stage[..n],
             &bufs.h_eff[..n],
@@ -231,7 +234,7 @@ impl ExchangeLlgProblem {
                 stage[i] = normalized(add(m0[i], scale(kj[i], dt)))?;
             }
         }
-        self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+        self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + dt, ws, &mut bufs.h_eff[..n]);
         self.llg_rhs_from_fields_with_direct_torques_into(
             &bufs.m_stage[..n],
             &bufs.h_eff[..n],
@@ -294,9 +297,10 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.soa.m0.scatter_from_aos(&state.magnetization);
 
-        self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m0, t_n, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
         for i in 0..n {
@@ -309,7 +313,7 @@ impl ExchangeLlgProblem {
             bufs.soa.m_stage.y[i] = stage[1];
             bufs.soa.m_stage.z[i] = stage[2];
         }
-        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 0.5 * dt, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
         for i in 0..n {
@@ -322,7 +326,7 @@ impl ExchangeLlgProblem {
             bufs.soa.m_stage.y[i] = stage[1];
             bufs.soa.m_stage.z[i] = stage[2];
         }
-        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 0.5 * dt, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
 
         for i in 0..n {
@@ -335,7 +339,7 @@ impl ExchangeLlgProblem {
             bufs.soa.m_stage.y[i] = stage[1];
             bufs.soa.m_stage.z[i] = stage[2];
         }
-        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
 
         let dt6 = dt / 6.0;
@@ -404,11 +408,12 @@ impl ExchangeLlgProblem {
         let cfg = self.dynamics.adaptive;
         let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.m0[..n].copy_from_slice(&state.magnetization);
 
         loop {
             // k1 = f(t, m0)
-            self.effective_field_into_ws(&bufs.m0[..n], ws, &mut bufs.h_eff[..n]);
+            self.effective_field_into_ws_at(&bufs.m0[..n], t_n, ws, &mut bufs.h_eff[..n]);
             self.llg_rhs_from_fields_with_direct_torques_into(
                 &bufs.m0[..n],
                 &bufs.h_eff[..n],
@@ -433,7 +438,7 @@ impl ExchangeLlgProblem {
                     stage[i] = normalized(add(m0[i], scale(kj[i], f)))?;
                 }
             }
-            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + 0.5 * dt, ws, &mut bufs.h_eff[..n]);
             self.llg_rhs_from_fields_with_direct_torques_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
@@ -458,7 +463,7 @@ impl ExchangeLlgProblem {
                     stage[i] = normalized(add(m0[i], scale(kj[i], f)))?;
                 }
             }
-            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + 0.75 * dt, ws, &mut bufs.h_eff[..n]);
             self.llg_rhs_from_fields_with_direct_torques_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
@@ -501,7 +506,7 @@ impl ExchangeLlgProblem {
             }
 
             // k4 for error estimate
-            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + dt, ws, &mut bufs.h_eff[..n]);
             self.llg_rhs_from_fields_with_direct_torques_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
@@ -561,10 +566,11 @@ impl ExchangeLlgProblem {
         let cfg = self.dynamics.adaptive;
         let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.soa.m0.scatter_from_aos(&state.magnetization);
 
         loop {
-            self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m0, t_n, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
             for i in 0..n {
@@ -577,7 +583,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 0.5 * dt, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
             for i in 0..n {
@@ -590,7 +596,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 0.75 * dt, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
 
             for i in 0..n {
@@ -613,7 +619,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.z[i] = stage[2];
             }
 
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
 
             let error = self.max_error_norm_soa_buf(
@@ -673,6 +679,7 @@ impl ExchangeLlgProblem {
         let cfg = self.dynamics.adaptive;
         let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.m0[..n].copy_from_slice(&state.magnetization);
 
         // Dormand-Prince coefficients
@@ -708,7 +715,7 @@ impl ExchangeLlgProblem {
             if let Some(fsal) = state.k_fsal.take() {
                 bufs.k[0][..n].copy_from_slice(&fsal);
             } else {
-                self.effective_field_into_ws(&bufs.m0[..n], ws, &mut bufs.h_eff[..n]);
+                self.effective_field_into_ws_at(&bufs.m0[..n], t_n, ws, &mut bufs.h_eff[..n]);
                 self.llg_rhs_from_fields_with_direct_torques_into(
                     &bufs.m0[..n],
                     &bufs.h_eff[..n],
@@ -734,7 +741,7 @@ impl ExchangeLlgProblem {
                     stage[i] = normalized(add(m0[i], scale(k0[i], f)))?;
                 }
             }
-            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + dt / 5.0, ws, &mut bufs.h_eff[..n]);
             self.llg_rhs_from_fields_with_direct_torques_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
@@ -765,7 +772,7 @@ impl ExchangeLlgProblem {
                     ))?;
                 }
             }
-            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + 3.0 * dt / 10.0, ws, &mut bufs.h_eff[..n]);
             self.llg_rhs_from_fields_with_direct_torques_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
@@ -802,7 +809,7 @@ impl ExchangeLlgProblem {
                     ))?;
                 }
             }
-            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + 4.0 * dt / 5.0, ws, &mut bufs.h_eff[..n]);
             self.llg_rhs_from_fields_with_direct_torques_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
@@ -850,7 +857,7 @@ impl ExchangeLlgProblem {
                     ))?;
                 }
             }
-            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + 8.0 * dt / 9.0, ws, &mut bufs.h_eff[..n]);
             self.llg_rhs_from_fields_with_direct_torques_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
@@ -902,7 +909,7 @@ impl ExchangeLlgProblem {
                     ))?;
                 }
             }
-            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + dt, ws, &mut bufs.h_eff[..n]);
             self.llg_rhs_from_fields_with_direct_torques_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
@@ -953,7 +960,7 @@ impl ExchangeLlgProblem {
             }
 
             // k7 for error estimate (FSAL) → k[6]
-            self.effective_field_into_ws(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n]);
+            self.effective_field_into_ws_at(&bufs.m_stage[..n], t_n + dt, ws, &mut bufs.h_eff[..n]);
             self.llg_rhs_from_fields_with_direct_torques_into(
                 &bufs.m_stage[..n],
                 &bufs.h_eff[..n],
@@ -1009,6 +1016,7 @@ impl ExchangeLlgProblem {
         let cfg = self.dynamics.adaptive;
         let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.soa.m0.scatter_from_aos(&state.magnetization);
 
         const A21: f64 = 1.0 / 5.0;
@@ -1042,7 +1050,7 @@ impl ExchangeLlgProblem {
             if let Some(fsal) = state.k_fsal.take() {
                 bufs.soa.k[0].scatter_from_aos(&fsal);
             } else {
-                self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+                self.effective_field_into_soa_ws_at(&bufs.soa.m0, t_n, ws, &mut bufs.soa.h_eff);
                 self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
             }
 
@@ -1056,7 +1064,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt / 5.0, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
             for i in 0..n {
@@ -1069,7 +1077,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 3.0 * dt / 10.0, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
 
             for i in 0..n {
@@ -1091,7 +1099,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 4.0 * dt / 5.0, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
 
             for i in 0..n {
@@ -1116,7 +1124,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 8.0 * dt / 9.0, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[4]);
 
             for i in 0..n {
@@ -1144,7 +1152,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[5]);
 
             for i in 0..n {
@@ -1173,7 +1181,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.z[i] = stage[2];
             }
 
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[6]);
 
             let error = self.max_error_norm_soa_buf(
@@ -1475,9 +1483,10 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.soa.m0.copy_from(&state.magnetization);
 
-        self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m0, t_n, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
         for i in 0..n {
@@ -1491,7 +1500,7 @@ impl ExchangeLlgProblem {
             bufs.soa.m_stage.z[i] = predicted[2];
         }
 
-        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
         for i in 0..n {
@@ -1519,9 +1528,10 @@ impl ExchangeLlgProblem {
         evaluation: EvaluationRequest,
     ) -> Result<StepReport> {
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.soa.m0.copy_from(&state.magnetization);
 
-        self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m0, t_n, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
         for i in 0..n {
@@ -1534,7 +1544,7 @@ impl ExchangeLlgProblem {
             bufs.soa.m_stage.y[i] = stage[1];
             bufs.soa.m_stage.z[i] = stage[2];
         }
-        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 0.5 * dt, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
         for i in 0..n {
@@ -1547,7 +1557,7 @@ impl ExchangeLlgProblem {
             bufs.soa.m_stage.y[i] = stage[1];
             bufs.soa.m_stage.z[i] = stage[2];
         }
-        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 0.5 * dt, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
 
         for i in 0..n {
@@ -1560,7 +1570,7 @@ impl ExchangeLlgProblem {
             bufs.soa.m_stage.y[i] = stage[1];
             bufs.soa.m_stage.z[i] = stage[2];
         }
-        self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+        self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt, ws, &mut bufs.soa.h_eff);
         self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
 
         let dt6 = dt / 6.0;
@@ -1597,10 +1607,11 @@ impl ExchangeLlgProblem {
         let cfg = self.dynamics.adaptive;
         let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.soa.m0.copy_from(&state.magnetization);
 
         loop {
-            self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m0, t_n, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
 
             for i in 0..n {
@@ -1613,7 +1624,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 0.5 * dt, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
             for i in 0..n {
@@ -1626,7 +1637,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 0.75 * dt, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
 
             for i in 0..n {
@@ -1649,7 +1660,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.z[i] = stage[2];
             }
 
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
 
             let error = self.max_error_norm_soa_buf(
@@ -1698,6 +1709,7 @@ impl ExchangeLlgProblem {
         let cfg = self.dynamics.adaptive;
         let mut dt = dt.min(cfg.dt_max).max(cfg.dt_min);
         let n = state.magnetization.len();
+        let t_n = state.time_seconds;
         bufs.soa.m0.copy_from(&state.magnetization);
 
         const A21: f64 = 1.0 / 5.0;
@@ -1731,7 +1743,7 @@ impl ExchangeLlgProblem {
             if let Some(fsal) = state.k_fsal.take() {
                 bufs.soa.k[0].copy_from(&fsal);
             } else {
-                self.effective_field_into_soa_ws(&bufs.soa.m0, ws, &mut bufs.soa.h_eff);
+                self.effective_field_into_soa_ws_at(&bufs.soa.m0, t_n, ws, &mut bufs.soa.h_eff);
                 self.llg_rhs_soa_into(&bufs.soa.m0, &bufs.soa.h_eff, &mut bufs.soa.k[0]);
             }
 
@@ -1745,7 +1757,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt / 5.0, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[1]);
 
             for i in 0..n {
@@ -1758,7 +1770,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 3.0 * dt / 10.0, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[2]);
 
             for i in 0..n {
@@ -1780,7 +1792,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 4.0 * dt / 5.0, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[3]);
 
             for i in 0..n {
@@ -1805,7 +1817,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + 8.0 * dt / 9.0, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[4]);
 
             for i in 0..n {
@@ -1833,7 +1845,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.y[i] = stage[1];
                 bufs.soa.m_stage.z[i] = stage[2];
             }
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[5]);
 
             for i in 0..n {
@@ -1862,7 +1874,7 @@ impl ExchangeLlgProblem {
                 bufs.soa.m_stage.z[i] = stage[2];
             }
 
-            self.effective_field_into_soa_ws(&bufs.soa.m_stage, ws, &mut bufs.soa.h_eff);
+            self.effective_field_into_soa_ws_at(&bufs.soa.m_stage, t_n + dt, ws, &mut bufs.soa.h_eff);
             self.llg_rhs_soa_into(&bufs.soa.m_stage, &bufs.soa.h_eff, &mut bufs.soa.k[6]);
 
             let error = self.max_error_norm_soa_buf(

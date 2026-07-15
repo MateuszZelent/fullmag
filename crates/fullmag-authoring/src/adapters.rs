@@ -58,6 +58,9 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         couplings: Vec::new(),
         materials,
         magnetization_assets,
+        field_drives: crate::SceneFieldDrivesState {
+            drives: builder.field_drives.clone(),
+        },
         current_modules: SceneCurrentModulesState {
             modules: builder.current_modules.clone(),
             excitation_analysis: builder.excitation_analysis.clone(),
@@ -214,6 +217,7 @@ pub fn scene_document_to_script_builder(
             .iter()
             .map(builder_mesh_interface_from_scene)
             .collect(),
+        field_drives: normalized_scene.field_drives.drives.clone(),
         current_modules: normalized_scene.current_modules.modules.clone(),
         excitation_analysis: normalized_scene.current_modules.excitation_analysis.clone(),
     })
@@ -1786,6 +1790,32 @@ mod tests {
         StudyPipelineNodeSource, StudyPrimitiveStageKind,
     };
 
+    #[test]
+    fn scene_document_round_trips_typed_regional_field_drives() {
+        let value = serde_json::json!({
+            "version": "scene.v2",
+            "field_drives": {
+                "drives": [{
+                    "kind": "regional",
+                    "id": "pulse",
+                    "name": "Pulse",
+                    "target": { "kind": "global" },
+                    "spatial_profile": { "kind": "uniform" },
+                    "amplitude_B_T": 0.001,
+                    "direction": [0.0, 1.0, 0.0],
+                    "waveform": { "kind": "constant", "value": 1.0 },
+                    "time_origin": "stage_local",
+                    "activation": { "kind": "stage_ids", "stage_ids": ["run-1"] }
+                }]
+            }
+        });
+
+        let scene: SceneDocument = serde_json::from_value(value).expect("typed scene should parse");
+        assert_eq!(scene.field_drives.drives[0].id, "pulse");
+        let encoded = serde_json::to_value(scene).expect("typed scene should serialize");
+        assert_eq!(encoded["field_drives"]["drives"][0]["target"]["kind"], "global");
+    }
+
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
             revision: 7,
@@ -2108,6 +2138,7 @@ mod tests {
                     build_requested: false,
                 },
             }],
+            field_drives: Vec::new(),
             current_modules: vec![ScriptBuilderCurrentModuleState {
                 kind: "antenna_field_source".to_string(),
                 name: "cpw_1".to_string(),

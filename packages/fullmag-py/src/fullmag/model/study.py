@@ -235,6 +235,7 @@ SUPPORTED_TABLE_AUTOSAVE_QUANTITIES = frozenset(
         "e_ex",
         "e_demag",
         "e_ext",
+        "e_drive",
         "e_ani",
         "e_dmi",
         "e_total",
@@ -250,6 +251,7 @@ TABLE_AUTOSAVE_QUANTITY_ALIASES = {
     "time": "t",
     "solver_dt": "dt",
     "E_total": "e_total",
+    "E_drive": "e_drive",
     "max_torque_Apm": "max_torque",
 }
 

@@ -4,6 +4,9 @@ import {
   collectFieldVectorIdentityIssues,
   ControlRoomApi,
   parseFieldVectorResponseMetadata,
+  transformFieldMetaForDisplay,
+  transformFieldVectorForDisplay,
+  withDerivedDriveFluxDensity,
 } from "./ControlRoomApi";
 import type {
   AuthoringTransactionRequest,
@@ -15,6 +18,53 @@ import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 
 const contractHeaders = { "x-api-contract-version": "1.0.0" };
+
+describe("derived B_drive display quantity", () => {
+  it("adds B_drive to a catalog only when H_drive exists", () => {
+    const catalog = withDerivedDriveFluxDensity({
+      domain_generation_id: "domain-1",
+      revision: 7,
+      quantities: [{ available: true, components: 3, domain_generation_id: "domain-1", field_revision: 4, kind: "vector", label: "Drive field", location: "node", quantity_id: "H_drive", unit: "A/m" }],
+    });
+    expect(catalog.quantities.at(-1)).toMatchObject({
+      label: "Drive flux density",
+      quantity_id: "B_drive",
+      unit: "T",
+    });
+  });
+
+  it("converts H_drive metadata and values by mu0 without changing stored data", () => {
+    const meta = transformFieldMetaForDisplay("B_drive", {
+      components: 3,
+      domain_generation_id: "domain-1",
+      field_revision: 4,
+      kind: "vector",
+      label: "Drive field",
+      location: "node",
+      quantity_id: "H_drive",
+      stats: { min: -2, mean: 0, max: 3 },
+      unit: "A/m",
+    });
+    expect(meta.quantity_id).toBe("B_drive");
+    expect(meta.unit).toBe("T");
+    expect(meta.stats?.max).toBeCloseTo(3 * 4e-7 * Math.PI, 15);
+
+    const sourceValues = new Float64Array([1, -2, 3]);
+    const converted = transformFieldVectorForDisplay("B_drive", {
+      byteLength: sourceValues.byteLength,
+      data: { dtype: "float64", grid: [1, 1, 1], nComp: 3, pointCount: 1, quantityId: "H_drive", valueCount: 3, values: sourceValues },
+      etag: "drive-4",
+      responseMetadata: { component: "full", domainGenerationId: "domain-1", encoding: "FMVP;version=3", fieldIndexing: "full_domain", fieldRevision: "4", identityIssues: [], meshTopologyHash: "mesh", nComp: 3, nodeIndexCount: 0, pointCount: 1, quantityId: "H_drive", scopeId: null, scopeKind: "magnetic_only", snapshotId: null, valueCount: 3 },
+      status: "ready",
+    });
+    expect(converted.status).toBe("ready");
+    if (converted.status !== "ready") throw new Error("expected ready result");
+    expect(converted.data.quantityId).toBe("B_drive");
+    expect(converted.data.values[1]).toBeCloseTo(-2 * 4e-7 * Math.PI, 15);
+    expect(sourceValues[1]).toBe(-2);
+    expect(converted.responseMetadata.quantityId).toBe("B_drive");
+  });
+});
 
 describe("field vector response metadata", () => {
   it("requires response metadata for ready typed field-vector results", () => {

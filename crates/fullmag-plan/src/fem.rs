@@ -2054,6 +2054,7 @@ pub(crate) fn plan_fem(
         has_magnetoelastic,
         problem.energy_terms.iter().any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
         has_mqs_antenna_field_source(problem) || has_prescribed_zeeman_mask_source(problem),
+        !problem.field_drives.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
@@ -2471,6 +2472,15 @@ pub(crate) fn plan_fem(
     let dind_field = material.dind_field.clone();
     let dbulk_field = material.dbulk_field.clone();
     let antenna_zeeman_masks = resolve_prescribed_zeeman_masks(problem, &mesh.nodes, None)?;
+    let active_field_drives: Vec<_> = problem.field_drives.iter()
+        .filter(|drive| crate::util::field_drive_is_active(drive, crate::util::active_stage_id(problem)))
+        .cloned().collect();
+    let field_drive_geometry_masks = active_field_drives.iter().filter_map(|drive| {
+        let fullmag_ir::FieldSpatialProfileIR::GeometryMask { object_id, .. } = &drive.spatial_profile else {
+            return None;
+        };
+        problem.geometry.entries.iter().find(|entry| entry.name() == object_id).cloned()
+    }).collect();
 
     let mut fem_plan = FemPlanIR {
         mesh_name: mesh_name.clone(),
@@ -2493,6 +2503,9 @@ pub(crate) fn plan_fem(
         enable_demag,
         external_field,
         antenna_zeeman_masks,
+        field_drives: active_field_drives,
+        field_drive_geometry_masks,
+        time_stage: crate::util::time_stage_context(problem),
         current_modules: problem.current_modules.clone(),
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,

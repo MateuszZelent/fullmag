@@ -183,6 +183,12 @@ export type SelectionRef =
       type: "physics-coupling";
     }
   | {
+      fieldDriveId: string;
+      kind: "physics.field-drive";
+      nodeId: string;
+      type: "physics-field-drive";
+    }
+  | {
       chartId: string;
       kind: "analysis.chart";
       nodeId: string;
@@ -432,6 +438,13 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.couplingId === right.couplingId
+      );
+    case "physics-field-drive":
+      return (
+        right.type === "physics-field-drive" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.fieldDriveId === right.fieldDriveId
       );
     case "analysis-chart":
       return (

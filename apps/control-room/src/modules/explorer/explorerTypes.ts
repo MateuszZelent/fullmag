@@ -71,6 +71,8 @@ type ExplorerNodeKind =
   | "visualizations-2d.plot"
   | "physics.couplings"
   | "physics.coupling"
+  | "physics.field-drives"
+  | "physics.field-drive"
   | "study.root"
   | "study.execution"
   | "study.recovery"
@@ -271,6 +273,7 @@ export interface ExplorerNode {
   objectId?: string;
   observableId?: string;
   couplingId?: string;
+  fieldDriveId?: string;
   regionId?: string;
   resourceRef?: string;
   sampleIndex?: number;
@@ -366,8 +369,17 @@ export interface ModelTreeCouplingSnapshot {
   targetLabel: string;
 }
 
+export interface ModelTreeFieldDriveSnapshot {
+  enabled: boolean;
+  id: string;
+  label: string;
+  targetKind: string;
+  waveformKind: string;
+}
+
 export interface ModelTreeSnapshot {
   couplings?: readonly ModelTreeCouplingSnapshot[];
+  fieldDrives?: readonly ModelTreeFieldDriveSnapshot[];
   crossSections?: ModelTreeCrossSectionSnapshot | null;
   materials?: readonly ModelTreeMaterialSnapshot[];
   mesh?: ModelTreeMeshSnapshot | null;

@@ -145,6 +145,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         }],
         mesh_interfaces: Vec::new(),
         current_modules: Vec::new(),
+        field_drives: Vec::new(),
         excitation_analysis: None,
     };
     fullmag_authoring::scene_document_from_script_builder(&builder)
@@ -28761,6 +28762,62 @@ async fn frequency_domain_response_data_plane_uses_v2_linked_payload_path() {
             .and_then(|value| value.to_str().ok()),
         Some("3")
     );
+}
+
+#[tokio::test]
+async fn spin_wave_gamma_resource_reads_typed_session_artifact() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let analysis_dir = artifact_dir.join("analysis");
+    fs::create_dir_all(&analysis_dir).expect("analysis artifact directory should exist");
+    fs::write(
+        analysis_dir.join("spin_wave_response.gamma.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version":"spin_wave_response.gamma.v1","time_unit":"s","frequency_unit":"Hz","trace_unit":"1","source_unit":"A/m","susceptibility_unit":"m/A",
+            "weighting":"Ms_times_lumped_volume","detrend":"mean","window":"hann","normalization":"one_sided_psd",
+            "reference_m0":1.0,"reference_m0_secondary":0.0,"response_component":"my","transverse_components":["my","mz"],
+            "time_s":[0.0,1.0],"response_trace":[0.0,0.1],"secondary_response_trace":[0.0,0.0],"source_trace":[1.0,0.0],"frequency_hz":[0.0,0.5],
+            "response_psd":[0.0,0.01],"primary_response_psd":[0.0,0.01],"secondary_response_psd":[0.0,0.0],"source_psd":[1.0,0.0],
+            "response_spectrum_real":[0.0,0.1],"response_spectrum_imag":[0.0,0.0],"secondary_response_spectrum_real":[0.0,0.0],"secondary_response_spectrum_imag":[0.0,0.0],
+            "source_spectrum_real":[1.0,0.0],"source_spectrum_imag":[0.0,0.0],"window_values":[0.0,0.0],"window_power_sum":0.0,"nyquist_hz":0.5,
+            "susceptibility_abs":[null,0.1],"peaks":[{"index":1,"frequency_hz":0.5,"power":0.01}]
+        })).expect("gamma fixture should serialize"),
+    ).expect("gamma fixture should be written");
+
+    let response = app.oneshot(Request::builder().method("GET").uri("/v2/sessions/current/analysis/spin-wave/gamma.v1").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["weighting"], "Ms_times_lumped_volume");
+    assert_eq!(json["peaks"][0]["frequency_hz"], 0.5);
+}
+
+#[tokio::test]
+async fn dynamic_structure_factor_resource_bounds_json_and_keeps_full_artifact_ref() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+    let analysis_dir = artifact_dir.join("analysis");
+    fs::create_dir_all(&analysis_dir).expect("analysis artifact directory should exist");
+    let axis=(0..80).map(|index|index as f64).collect::<Vec<_>>();
+    let matrix=vec![1.0;80*80];
+    fs::write(
+        analysis_dir.join("dynamic_structure_factor.1d.v1.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version":"dynamic_structure_factor.1d.v1","artifact_ref":"analysis/dynamic_structure_factor.1d.v1.json","bounded":false,
+            "original_frequency_count":80,"original_wavevector_count":80,"wavevector_unit":"rad/m","frequency_unit":"Hz","x_m":axis,"time_s":axis,
+            "k_rad_per_m":axis,"frequency_hz":axis,"power":matrix,"spectrum_real":matrix,"spectrum_imag":matrix,
+            "source_power":matrix,"source_spectrum_real":matrix,"source_spectrum_imag":matrix,"source_observable":"H_drive_y","source_unit":"A/m",
+            "component":"my","propagation_axis":"x","phase_convention":"exp[-i(k*x-2*pi*f*t)]","normalization":"canonical",
+            "spatial_window":axis,"temporal_window":axis,"spatial_window_power_sum":80.0,"temporal_window_power_sum":80.0,
+            "mesh_probe_signature":"fixture","invalid_probe_mask":vec![false;80],"excluded_absorber_ranges_m":[],"frequency_count":80,"wavevector_count":80
+        })).expect("finite-k fixture should serialize"),
+    ).expect("finite-k fixture should be written");
+
+    let response = app.oneshot(Request::builder().method("GET").uri("/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json=body_json(response).await;
+    assert_eq!(json["artifact_ref"], "analysis/dynamic_structure_factor.1d.v1.json");
+    assert_eq!(json["bounded"], true);
+    assert!(json["power"].as_array().unwrap().len() <= 4096);
+    assert_eq!(json["original_frequency_count"], 80);
+    assert_eq!(json["original_wavevector_count"], 80);
 }
 
 fn frequency_domain_response_sweep_fixture(point_count: usize) -> FieldDrivenResponseSweepArtifact {

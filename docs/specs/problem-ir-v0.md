@@ -220,7 +220,7 @@ Relaxation completion is represented by `StageCompletionIR`: execution owns
 valid, budget exhaustion is completed but non-converged, and numerical
 stagnation is failed/non-converged. Artifact sampling never infers completion.
 
-### Planned staged antenna-field extension
+### Regional-field and staged antenna-field extension
 
 Physics note 0950 and ADR 0017 define the canonical extension for a
 variable-width three-dimensional microstrip/CPW. It adds these semantic types:
@@ -235,8 +235,9 @@ variable-width three-dimensional microstrip/CPW. It adds these semantic types:
   outputs;
 - `SolvedAntennaDriveIR`: reference to an earlier stage output, port mode, peak
   current, canonical waveform, time origin, and active stages;
-- `RegionalFieldDriveIR`: prescribed region, field amplitude/direction,
-  spatial profile, waveform, time origin, and active stages.
+- `RegionalFieldDriveIR`: stable id, nonnegative `amplitude_B_T`, normalized
+  direction, typed magnetic target, typed spatial profile, closed waveform,
+  `stage_local | absolute` time origin, and typed stage activation.
 
 These types replace the current design pressure to keep adding optional fields
 to `CurrentModuleIR::AntennaFieldSource`. Existing constant-width antenna and
@@ -259,9 +260,29 @@ reference to an earlier compatible field-solve output. Normalization may expand
 symmetric CPW shorthand and constant-width layouts; it may not invent a missing
 return path.
 
+Every primitive study node has a stable unique `stage_id`. Regional-drive
+activation is either `all_time_evolution` or an explicit nonempty set of
+existing stage ids. Dynamic drives are forbidden in minimizers. The regional
+target variants are `global`, `object(object_id)`, and
+`region(object_id,region_id)`; spatial variants are `uniform`, analytic sinc,
+and `geometry_mask(object_id,envelope)`. New variants deny unknown fields.
+Drive ids are unique and normalization sorts them by id.
+
+Canonical waveform variants are `constant`, `sinusoidal`, `pulse`,
+`piecewise_linear`, and normalized `sinc_pulse`. They carry SI seconds/hertz,
+finite values, and no executable callback. `prescribed_zeeman_mask` is an
+import-only compatibility payload which normalizes one-way to
+`RegionalFieldDriveIR` and records migration provenance.
+
 The shared IR does not carry MFEM finite-element spaces, CUDA buffers,
 Biot-Savart work arrays, artifact paths, or target node/cell ordering. Those
 belong to execution plans, native descriptors, and artifact provenance.
+
+The planner resolves target ownership markers, closed geometry/profile
+descriptors, activation, capability, events, and periodic topology. Production
+P1 lumped-L2 projection, adaptive tetrahedral quadrature, basis construction,
+and PBC basis certification belong to native `backends/fem`, not ProblemIR or
+the Rust planner.
 
 ## `DynamicsIR::Llg` parameter policy
 

@@ -1441,6 +1441,7 @@ mod tests {
             version: "scene.v1".to_string(),
             scene: SceneMetadata::default(),
             universe: None,
+            field_drives: crate::SceneFieldDrivesState::default(),
             current_modules: SceneCurrentModulesState::default(),
             study: SceneStudyState::default(),
             outputs: SceneOutputsState::default(),

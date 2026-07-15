@@ -13,6 +13,8 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
   ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH,
+  ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_METRICS_PATH,
@@ -87,6 +89,8 @@ import {
   MODEL_GEOMETRY_REALIZATIONS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_COUPLINGS_PATH,
+  MODEL_FIELD_DRIVE_PATH,
+  MODEL_FIELD_DRIVES_PATH,
   MODEL_MAGNETIZATION_ASSET_PATH,
   MODEL_MATERIAL_FIELDS_PATH,
   MODEL_MATERIAL_PATH,
@@ -142,7 +146,11 @@ import {
   canonicalFieldVectorQuery,
   canonicalFieldVectorQueryParams,
 } from "./fieldQueryIdentity";
-import { resolveCanonicalQuantityId } from "./quantityIds";
+import {
+  fieldDisplayScale,
+  resolveCanonicalQuantityId,
+  storedFieldQuantityId,
+} from "./quantityIds";
 import type {
   BinaryRequestOptions,
   BinaryResourceResult,
@@ -158,6 +166,12 @@ import type {
   CommandQueueStatusResource,
   CommandResponse,
   CouplingListResource,
+  DynamicStructureFactorResource,
+  FieldDriveCreateRequest,
+  FieldDriveDeleteRequest,
+  FieldDriveListResource,
+  FieldDriveReplaceRequest,
+  SpinWaveGammaResource,
   CpuTelemetryResource,
   CrossSectionImageQuery,
   CrossSectionQuery,
@@ -368,6 +382,73 @@ export function collectFieldVectorIdentityIssues(
   );
   return issues;
 }
+
+export function withDerivedDriveFluxDensity(
+  catalog: FieldCatalogResource,
+): FieldCatalogResource {
+  if (catalog.quantities.some((quantity) => quantity.quantity_id === "B_drive")) {
+    return catalog;
+  }
+  const source = catalog.quantities.find(
+    (quantity) => quantity.quantity_id === "H_drive",
+  );
+  if (!source) return catalog;
+  return {
+    ...catalog,
+    quantities: [
+      ...catalog.quantities,
+      {
+        ...source,
+        label: "Drive flux density",
+        quantity_id: "B_drive",
+        unit: "T",
+      },
+    ],
+  };
+}
+
+export function transformFieldMetaForDisplay(
+  requestedQuantityId: string,
+  meta: FieldMetaResource,
+): FieldMetaResource {
+  const scale = fieldDisplayScale(requestedQuantityId);
+  if (scale === 1) return meta;
+  return {
+    ...meta,
+    label: "Drive flux density",
+    quantity_id: requestedQuantityId,
+    stats: meta.stats
+      ? {
+          max: meta.stats.max * scale,
+          mean: meta.stats.mean * scale,
+          min: meta.stats.min * scale,
+        }
+      : meta.stats,
+    unit: "T",
+  };
+}
+
+export function transformFieldVectorForDisplay(
+  requestedQuantityId: string,
+  result: BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>,
+): BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata> {
+  const scale = fieldDisplayScale(requestedQuantityId);
+  if (scale === 1 || result.status !== "ready") return result;
+  const values = Float64Array.from(result.data.values, (value) => value * scale);
+  return {
+    ...result,
+    data: {
+      ...result.data,
+      quantityId: requestedQuantityId,
+      values,
+    },
+    responseMetadata: {
+      ...result.responseMetadata,
+      identityIssues: [],
+      quantityId: requestedQuantityId,
+    },
+  };
+}
 import {
   decodeCrossSection,
   decodeCrossSectionQuality,
@@ -553,6 +634,18 @@ export class ControlRoomApi {
   };
 
   readonly analysis = {
+    spinWave: {
+      gamma: (options?: RequestOptions) =>
+        this.requestJson<SpinWaveGammaResource>(
+          ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
+          options,
+        ),
+      dynamicStructureFactor: (options?: RequestOptions) =>
+        this.requestJson<DynamicStructureFactorResource>(
+          ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH,
+          options,
+        ),
+    },
     eigen: {
       eigenBranchesV2: (options?: RequestOptions) =>
         this.requestJson<FrequencyDomainJsonArtifactResource>(
@@ -807,33 +900,41 @@ export class ControlRoomApi {
     },
     fields: {
       catalog: (options?: RequestOptions) =>
-        this.requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options),
+        this.requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options).then(
+          withDerivedDriveFluxDensity,
+        ),
       meta: (
         quantityId: string,
         query: FieldMetaQuery = {},
         options?: RequestOptions,
-      ) =>
-        this.requestFieldMeta(
-          resolveCanonicalQuantityId(quantityId),
+      ) => {
+        const requestedQuantityId = resolveCanonicalQuantityId(quantityId);
+        const storedQuantityId = storedFieldQuantityId(requestedQuantityId);
+        return this.requestFieldMeta(
+          storedQuantityId,
           DATA_FIELD_META_PATH,
           {
-            path: { quantity_id: resolveCanonicalQuantityId(quantityId) },
+            path: { quantity_id: storedQuantityId },
             query: fieldMetaQueryParams(query),
           },
           options,
-        ),
+        ).then((meta) => transformFieldMetaForDisplay(requestedQuantityId, meta));
+      },
       vector: (
         quantityId: string,
         query: FieldVectorQuery = {},
         options?: BinaryRequestOptions,
-      ) =>
-        this.requestFieldVectorOnDemand(
-          resolveCanonicalQuantityId(quantityId),
+      ) => {
+        const requestedQuantityId = resolveCanonicalQuantityId(quantityId);
+        const storedQuantityId = storedFieldQuantityId(requestedQuantityId);
+        return this.requestFieldVectorOnDemand(
+          storedQuantityId,
           DATA_FIELD_VECTOR_PATH,
-          { quantity_id: resolveCanonicalQuantityId(quantityId) },
+          { quantity_id: storedQuantityId },
           fieldVectorQueryParams(query),
           options,
-        ),
+        ).then((result) => transformFieldVectorForDisplay(requestedQuantityId, result));
+      },
     },
     meshRegionMembership: (regionId: string, options?: RequestOptions) =>
       this.requestJson<MeshRegionMembershipResource>(
@@ -1408,6 +1509,39 @@ export class ControlRoomApi {
       ),
     couplings: (options?: RequestOptions) =>
       this.requestJson<CouplingListResource>(MODEL_COUPLINGS_PATH, options),
+    fieldDrives: (options?: RequestOptions) =>
+      this.requestJson<FieldDriveListResource>(MODEL_FIELD_DRIVES_PATH, options),
+    createFieldDrive: (
+      request: FieldDriveCreateRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<AuthoringTransactionResponse, FieldDriveCreateRequest>(
+        MODEL_FIELD_DRIVES_PATH,
+        request,
+        options,
+      ),
+    replaceFieldDrive: (
+      driveId: string,
+      request: FieldDriveReplaceRequest,
+      options?: RequestOptions,
+    ) =>
+      this.putJson<AuthoringTransactionResponse, FieldDriveReplaceRequest>(
+        MODEL_FIELD_DRIVE_PATH,
+        request,
+        options,
+        { path: { drive_id: driveId } },
+      ),
+    deleteFieldDrive: (
+      driveId: string,
+      request: FieldDriveDeleteRequest,
+      options?: RequestOptions,
+    ) =>
+      this.deleteJsonWithBody<AuthoringTransactionResponse, FieldDriveDeleteRequest>(
+        MODEL_FIELD_DRIVE_PATH,
+        request,
+        options,
+        { path: { drive_id: driveId } },
+      ),
     createObjectRegion: (
       objectId: string,
       region: components["schemas"]["SceneObjectRegion"],
@@ -1888,6 +2022,21 @@ export class ControlRoomApi {
     params?: Record<string, unknown>,
   ): Promise<TResponse> {
     const result = await this.transport.DELETE(path as never, {
+      cache: "no-store",
+      params,
+      signal: options.signal,
+    } as never);
+    return readOpenApiResult<TResponse>(result);
+  }
+
+  private async deleteJsonWithBody<TResponse, TBody>(
+    path: OpenApiV2Path,
+    body: TBody,
+    options: RequestOptions = {},
+    params?: Record<string, unknown>,
+  ): Promise<TResponse> {
+    const result = await this.transport.DELETE(path as never, {
+      body,
       cache: "no-store",
       params,
       signal: options.signal,

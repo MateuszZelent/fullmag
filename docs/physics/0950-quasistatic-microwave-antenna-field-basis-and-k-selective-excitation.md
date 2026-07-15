@@ -16,7 +16,7 @@
   - `docs/physics/0840-oersted-from-current-solution-and-fem-prescribed-current-transport.md`
   - `docs/physics/0850-native-fem-stt-and-generalized-oersted-from-prescribed-current.md`
   - `docs/physics/0860-fdm-generalized-oersted-from-prescribed-current.md`
-  - `docs/physics/0920-time-domain-microstrip-antenna-zeeman-mask.md`
+  - `docs/physics/0920-regional-time-domain-field-drive.md`
 
 ## 1. Problem statement
 

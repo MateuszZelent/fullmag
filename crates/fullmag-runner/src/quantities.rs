@@ -107,6 +107,7 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::HEx
                 | QuantityId::HDemag
                 | QuantityId::HExt
+                | QuantityId::HDrive
                 | QuantityId::HAnt
                 | QuantityId::Torque
                 | QuantityId::HAni
@@ -115,6 +116,7 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::EdenEx
                 | QuantityId::EdenDemag
                 | QuantityId::EdenExt
+                | QuantityId::EdenDrive
                 | QuantityId::EdenAni
                 | QuantityId::EdenDmi
                 | QuantityId::EdenTotal
@@ -143,6 +145,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::HEx => plan.enable_exchange,
         QuantityId::HDemag => plan.enable_demag,
         QuantityId::HExt => plan.external_field.is_some(),
+        QuantityId::HDrive => !plan.field_drives.is_empty(),
         QuantityId::HOe => plan.has_oersted_cylinder || plan.oersted_field_xyz.is_some(),
         QuantityId::HAni => fdm_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => fdm_has_cubic_anisotropy(&plan.material),
@@ -155,6 +158,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::EdenDemag => plan.enable_demag,
         QuantityId::EdenExt => plan.external_field.is_some(),
+        QuantityId::EdenDrive => !plan.field_drives.is_empty(),
         QuantityId::EdenAni => {
             fdm_has_uniaxial_anisotropy(&plan.material) || fdm_has_cubic_anisotropy(&plan.material)
         }
@@ -169,6 +173,7 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         | QuantityId::EEx
         | QuantityId::EDemag
         | QuantityId::EExt
+        | QuantityId::EDrive
         | QuantityId::EAni
         | QuantityId::EDmi
         | QuantityId::EEl
@@ -197,6 +202,7 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
                 | QuantityId::DemagPhi
                 | QuantityId::HExt
                 | QuantityId::HAnt
+                | QuantityId::HDrive
                 | QuantityId::Torque
                 | QuantityId::HEff
                 | QuantityId::HDmi
@@ -205,6 +211,7 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
                 | QuantityId::EdenEx
                 | QuantityId::EdenDemag
                 | QuantityId::EdenExt
+                | QuantityId::EdenDrive
                 | QuantityId::EdenAni
                 | QuantityId::EdenDmi
                 | QuantityId::EdenTotal
@@ -244,6 +251,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::DemagPhi => plan.enable_demag,
         QuantityId::HExt => plan.external_field.is_some(),
         QuantityId::HAnt => !plan.current_modules.is_empty(),
+        QuantityId::HDrive => !plan.field_drives.is_empty(),
         QuantityId::HAni => material_has_uniaxial_anisotropy(&plan.material),
         QuantityId::HAniCubic => material_has_cubic_anisotropy(&plan.material),
         QuantityId::HDmi => plan.interfacial_dmi.is_some() || has_values(&plan.dind_field),
@@ -260,6 +268,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         QuantityId::EdenEx => plan.enable_exchange,
         QuantityId::EdenDemag => plan.enable_demag,
         QuantityId::EdenExt => plan.external_field.is_some(),
+        QuantityId::EdenDrive => !plan.field_drives.is_empty(),
         QuantityId::EdenAni => {
             material_has_uniaxial_anisotropy(&plan.material)
                 || material_has_cubic_anisotropy(&plan.material)
@@ -277,6 +286,7 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         | QuantityId::Sigma
         | QuantityId::EDemag
         | QuantityId::EExt
+        | QuantityId::EDrive
         | QuantityId::EAni
         | QuantityId::EDmi
         | QuantityId::EEl
@@ -397,6 +407,9 @@ mod tests {
             region_materials: Vec::new(),
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            field_drives: Vec::new(),
+            field_drive_geometry_masks: Vec::new(),
+            time_stage: Default::default(),
             current_modules: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,

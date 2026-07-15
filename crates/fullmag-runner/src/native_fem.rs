@@ -79,6 +79,8 @@ use plan::{
 #[cfg(feature = "fem-gpu")]
 use std::collections::{BTreeSet, HashMap};
 #[cfg(feature = "fem-gpu")]
+use sha2::{Digest, Sha256};
+#[cfg(feature = "fem-gpu")]
 use std::ffi::c_void;
 #[cfg(feature = "fem-gpu")]
 use std::ffi::CStr;
@@ -106,6 +108,7 @@ fn validate_native_step_stats(stats: &ffi::fullmag_fem_step_stats) -> Result<f64
         ("exchange_energy_joules", stats.exchange_energy_joules),
         ("demag_energy_joules", stats.demag_energy_joules),
         ("external_energy_joules", stats.external_energy_joules),
+        ("drive_energy_joules", stats.drive_energy_joules),
         ("anisotropy_energy_joules", stats.anisotropy_energy_joules),
         ("dmi_energy_joules", stats.dmi_energy_joules),
         ("total_energy_joules", stats.total_energy_joules),
@@ -461,6 +464,7 @@ fn fem_preview_observable(quantity: &str) -> Result<ffi::fullmag_fem_observable,
         QuantityId::HDmiBulk => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_BULK,
         QuantityId::HOe => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_OE,
         QuantityId::HTherm => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_THERM,
+        QuantityId::HDrive => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DRIVE,
         QuantityId::M => ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_M,
         other => {
             return Err(RunError {
@@ -483,6 +487,248 @@ pub(crate) struct NativeFemBackend {
     object_node_indices: Vec<(String, Vec<u32>)>,
     demag_solver: Option<String>,
     demag_preconditioner: Option<String>,
+}
+
+#[cfg(feature = "fem-gpu")]
+fn resolved_drive_target_markers(
+    plan: &fullmag_ir::FemPlanIR,
+    target: &fullmag_ir::FieldTargetIR,
+) -> Result<Vec<u32>, RunError> {
+    use fullmag_ir::{FemMeshPartSelector, FieldTargetIR};
+    let (object_id, region_id) = match target {
+        FieldTargetIR::Global {} => return Ok(Vec::new()),
+        FieldTargetIR::Object { object_id } => (object_id.as_str(), None),
+        FieldTargetIR::Region { object_id, region_id } => {
+            (object_id.as_str(), Some(region_id.as_str()))
+        }
+    };
+    let mut markers = BTreeSet::new();
+    for part in &plan.mesh_parts {
+        if part.object_id.as_deref() != Some(object_id) ||
+            region_id.is_some_and(|region| {
+                part.id != region && part.geometry_id.as_deref() != Some(region)
+            }) {
+            continue;
+        }
+        match &part.element_selector {
+            FemMeshPartSelector::ElementMarkerSet { markers: values } => {
+                markers.extend(values.iter().copied());
+            }
+            FemMeshPartSelector::ElementRange { start, count } => {
+                let end = start.checked_add(*count).ok_or_else(|| RunError {
+                    message: "FEM regional field drive element range overflows".to_string(),
+                })? as usize;
+                let start = *start as usize;
+                if end > plan.mesh.element_markers.len() {
+                    return Err(RunError {
+                        message: "FEM regional field drive element range exceeds marker table"
+                            .to_string(),
+                    });
+                }
+                markers.extend(plan.mesh.element_markers[start..end].iter().copied());
+            }
+            _ => {}
+        }
+    }
+    if markers.is_empty() && region_id.is_none() {
+        for segment in &plan.object_segments {
+            if segment.object_id != object_id { continue; }
+            let start = segment.element_start as usize;
+            let end = start + segment.element_count as usize;
+            if end <= plan.mesh.element_markers.len() {
+                markers.extend(plan.mesh.element_markers[start..end].iter().copied());
+            }
+        }
+    }
+    if markers.is_empty() {
+        return Err(RunError {
+            message: format!(
+                "FEM regional field drive target could not be resolved to canonical element markers: object='{}'{}",
+                object_id,
+                region_id.map(|region| format!(", region='{region}'")).unwrap_or_default(),
+            ),
+        });
+    }
+    Ok(markers.into_iter().collect())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn flatten_native_geometry_mask(
+    geometry: &fullmag_ir::GeometryEntryIR,
+    nodes: &mut Vec<ffi::fullmag_fem_geometry_mask_node>,
+) -> Result<u32, RunError> {
+    use fullmag_ir::GeometryEntryIR;
+    let blank = |kind, child_a, child_b| ffi::fullmag_fem_geometry_mask_node {
+        kind, child_a, child_b, center_m: [0.0; 3], size_m: [0.0; 3],
+        axis: [0.0; 3], radius_m: 0.0, height_m: 0.0, translation_m: [0.0; 3],
+    };
+    let node = match geometry {
+        GeometryEntryIR::Box { size, .. } => {
+            let mut node = blank(1, 0, 0); node.size_m = *size; node
+        }
+        GeometryEntryIR::Cylinder { radius, height, axis, .. } => {
+            let mut node = blank(2, 0, 0); node.radius_m = *radius; node.height_m = *height; node.axis = *axis; node
+        }
+        GeometryEntryIR::Translate { base, by, .. } => {
+            let child = flatten_native_geometry_mask(base, nodes)?;
+            let mut node = blank(3, child, 0); node.translation_m = *by; node
+        }
+        GeometryEntryIR::Difference { base, tool, .. } => blank(
+            4,
+            flatten_native_geometry_mask(base, nodes)?,
+            flatten_native_geometry_mask(tool, nodes)?,
+        ),
+        GeometryEntryIR::Union { a, b, .. } => blank(
+            5,
+            flatten_native_geometry_mask(a, nodes)?,
+            flatten_native_geometry_mask(b, nodes)?,
+        ),
+        GeometryEntryIR::Intersection { a, b, .. } => blank(
+            6,
+            flatten_native_geometry_mask(a, nodes)?,
+            flatten_native_geometry_mask(b, nodes)?,
+        ),
+        other => return Err(RunError { message: format!(
+            "FEM regional field drive geometry mask '{}' uses unsupported primitive; supported: Box, Cylinder, Translate, Difference, Union, Intersection",
+            other.name()) }),
+    };
+    let index = nodes.len() as u32;
+    nodes.push(node);
+    Ok(index)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn pack_native_regional_field_drives(
+    plan: &fullmag_ir::FemPlanIR,
+) -> Result<(
+    Vec<ffi::fullmag_fem_regional_field_drive_desc>,
+    Vec<Vec<u32>>,
+    Vec<Vec<ffi::fullmag_fem_time_point>>,
+    Vec<Vec<ffi::fullmag_fem_geometry_mask_node>>,
+    Vec<Option<ffi::fullmag_fem_geometry_mask_desc>>,
+), RunError> {
+    use fullmag_ir::{FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, TimeDependenceIR};
+    let mut marker_storage = Vec::with_capacity(plan.field_drives.len());
+    let mut point_storage = Vec::with_capacity(plan.field_drives.len());
+    let mut geometry_node_storage = Vec::with_capacity(plan.field_drives.len());
+    for drive in plan.field_drives.iter().filter(|drive| drive.enabled) {
+        marker_storage.push(resolved_drive_target_markers(plan, &drive.target)?);
+        point_storage.push(match &drive.waveform {
+            TimeDependenceIR::PiecewiseLinear { points } => points.iter()
+                .map(|point| ffi::fullmag_fem_time_point { time_s: point[0], value: point[1] })
+                .collect(),
+            _ => Vec::new(),
+        });
+        let mut nodes = Vec::new();
+        if let FieldSpatialProfileIR::GeometryMask { object_id, .. } = &drive.spatial_profile {
+            let geometry = plan.field_drive_geometry_masks.iter()
+                .find(|entry| entry.name() == object_id)
+                .ok_or_else(|| RunError { message: format!(
+                    "FEM regional field drive '{}' geometry mask '{}' is absent from the resolved plan",
+                    drive.id, object_id) })?;
+            flatten_native_geometry_mask(geometry, &mut nodes)?;
+        }
+        geometry_node_storage.push(nodes);
+    }
+    let geometry_desc_storage: Vec<Option<ffi::fullmag_fem_geometry_mask_desc>> =
+        geometry_node_storage.iter().map(|nodes| (!nodes.is_empty()).then(|| {
+            ffi::fullmag_fem_geometry_mask_desc {
+                abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_geometry_mask_desc>() as u32,
+                nodes: nodes.as_ptr(), node_count: nodes.len() as u64,
+                root_index: (nodes.len() - 1) as u32,
+            }
+        })).collect();
+    let mut descriptors = Vec::with_capacity(marker_storage.len());
+    for (index, ((drive, markers), points)) in plan.field_drives.iter()
+        .filter(|drive| drive.enabled)
+        .zip(&marker_storage)
+        .zip(&point_storage).enumerate() {
+        let target_kind = match drive.target {
+            FieldTargetIR::Global {} => 0,
+            FieldTargetIR::Object { .. } | FieldTargetIR::Region { .. } => 1,
+        };
+        let spatial_profile = match &drive.spatial_profile {
+            FieldSpatialProfileIR::Uniform {} => ffi::fullmag_fem_spatial_profile_desc {
+                abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_spatial_profile_desc>() as u32,
+                kind: 0, sinc_axis: [0.0; 3], sinc_period_m: 0.0, sinc_center_m: 0.0,
+                sinc_width_m: 0.0, sinc_window: 0, geometry_mask: std::ptr::null(),
+            },
+            FieldSpatialProfileIR::Sinc { axis, period_m, center_m, width_m, window } => ffi::fullmag_fem_spatial_profile_desc {
+                abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_spatial_profile_desc>() as u32,
+                kind: 1, sinc_axis: *axis, sinc_period_m: *period_m, sinc_center_m: *center_m,
+                sinc_width_m: width_m.unwrap_or(0.0), sinc_window: if window == "hann" { 1 } else { 0 },
+                geometry_mask: std::ptr::null(),
+            },
+            FieldSpatialProfileIR::GeometryMask { envelope, .. } => {
+                let (axis, period, center, width, window) = match envelope {
+                    fullmag_ir::FieldEnvelopeIR::Uniform {} => ([0.0; 3], 0.0, 0.0, 0.0, 0),
+                    fullmag_ir::FieldEnvelopeIR::Sinc { axis, period_m, center_m, width_m, window } =>
+                        (*axis, *period_m, *center_m, width_m.unwrap_or(0.0), if window == "hann" { 1 } else { 0 }),
+                };
+                ffi::fullmag_fem_spatial_profile_desc {
+                    abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                    struct_size: std::mem::size_of::<ffi::fullmag_fem_spatial_profile_desc>() as u32,
+                    kind: 2, sinc_axis: axis, sinc_period_m: period, sinc_center_m: center,
+                    sinc_width_m: width, sinc_window: window,
+                    geometry_mask: geometry_desc_storage[index].as_ref()
+                        .map_or(std::ptr::null(), |descriptor| descriptor as *const _),
+                }
+            }
+        };
+        let mut parameters = ffi::fullmag_fem_time_dependence_parameters {
+            sinusoidal: ffi::fullmag_fem_sinusoidal_time_desc {
+                frequency_hz: 0.0, phase_rad: 0.0, offset: 0.0,
+            },
+        };
+        let waveform_kind = match &drive.waveform {
+            TimeDependenceIR::Constant => 0,
+            TimeDependenceIR::Sinusoidal { frequency_hz, phase_rad, offset } => {
+                parameters.sinusoidal = ffi::fullmag_fem_sinusoidal_time_desc {
+                    frequency_hz: *frequency_hz, phase_rad: *phase_rad, offset: *offset,
+                }; 1
+            }
+            TimeDependenceIR::Pulse { t_on, t_off } => {
+                parameters.pulse = ffi::fullmag_fem_pulse_time_desc { t_on_s: *t_on, t_off_s: *t_off }; 2
+            }
+            TimeDependenceIR::PiecewiseLinear { .. } => 3,
+            TimeDependenceIR::SincPulse { cutoff_hz, t0, amplitude } => {
+                parameters.sinc_pulse = ffi::fullmag_fem_sinc_pulse_time_desc {
+                    cutoff_hz: *cutoff_hz, t0_s: *t0, amplitude: *amplitude,
+                }; 4
+            }
+        };
+        let digest = Sha256::digest(drive.id.as_bytes());
+        let stable_id_hash = u64::from_le_bytes(digest[..8].try_into().expect("SHA-256 prefix"));
+        descriptors.push(ffi::fullmag_fem_regional_field_drive_desc {
+            abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::fullmag_fem_regional_field_drive_desc>() as u32,
+            stable_id_hash,
+            target: ffi::fullmag_fem_field_target_desc {
+                abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_field_target_desc>() as u32,
+                kind: target_kind,
+                element_markers: optional_slice_ptr(markers),
+                element_marker_count: markers.len() as u64,
+            },
+            spatial_profile,
+            amplitude_b_t: drive.amplitude_b_t,
+            direction: drive.direction,
+            waveform: ffi::fullmag_fem_time_dependence_desc {
+                abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                struct_size: std::mem::size_of::<ffi::fullmag_fem_time_dependence_desc>() as u32,
+                kind: waveform_kind, parameters,
+                points: optional_slice_ptr(points), point_count: points.len() as u64,
+            },
+            time_origin: match drive.time_origin {
+                FieldTimeOriginIR::StageLocal => 0,
+                FieldTimeOriginIR::Absolute => 1,
+            },
+        });
+    }
+    Ok((descriptors, marker_storage, point_storage, geometry_node_storage, geometry_desc_storage))
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -812,6 +1058,19 @@ fn configure_managed_openmpi_environment() {
 
 #[cfg(feature = "fem-gpu")]
 impl NativeFemBackend {
+    pub(crate) fn begin_stage(&mut self, stage_start_time_s: f64) -> Result<(), RunError> {
+        if !stage_start_time_s.is_finite() || stage_start_time_s < 0.0 {
+            return Err(RunError {
+                message: "native FEM stage start time must be finite and non-negative".to_string(),
+            });
+        }
+        let rc = unsafe { ffi::fullmag_fem_backend_begin_stage(self.handle, stage_start_time_s) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("beginning native FEM stage failed"));
+        }
+        Ok(())
+    }
+
     unsafe extern "C" fn poll_atomic_interrupt_flag(user_data: *mut c_void) -> i32 {
         let flag = user_data.cast::<AtomicBool>();
         if flag.is_null() {
@@ -902,6 +1161,9 @@ impl NativeFemBackend {
             .iter()
             .flat_map(|v| v.iter().copied())
             .collect();
+        let (regional_field_drive_descs, _regional_marker_storage, _regional_point_storage,
+            _regional_geometry_node_storage, _regional_geometry_desc_storage) =
+            pack_native_regional_field_drives(plan)?;
 
         let mesh = ffi::fullmag_fem_mesh_desc {
             nodes_xyz: nodes_flat.as_ptr(),
@@ -1370,6 +1632,9 @@ impl NativeFemBackend {
             } else {
                 0
             },
+            regional_field_drives: optional_slice_ptr(&regional_field_drive_descs),
+            regional_field_drive_count: regional_field_drive_descs.len() as u64,
+            stage_start_time_s: plan.time_stage.start_time_s,
         };
 
         // Build adaptive config if present
@@ -1658,6 +1923,7 @@ impl NativeFemBackend {
             exchange_energy_joules: 0.0,
             demag_energy_joules: 0.0,
             external_energy_joules: 0.0,
+            drive_energy_joules: 0.0,
             anisotropy_energy_joules: 0.0,
             dmi_energy_joules: 0.0,
             total_energy_joules: 0.0,
@@ -1727,6 +1993,7 @@ impl NativeFemBackend {
             e_ex: stats.exchange_energy_joules,
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
+            e_drive: stats.drive_energy_joules,
             e_ani: stats.anisotropy_energy_joules,
             e_dmi: stats.dmi_energy_joules,
             e_total: stats.total_energy_joules,
@@ -1795,6 +2062,14 @@ impl NativeFemBackend {
         Ok(Some(step_stats))
     }
 
+    pub fn invalidate_fsal(&mut self) -> Result<(), RunError> {
+        let rc = unsafe { ffi::fullmag_fem_backend_invalidate_fsal(self.handle) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM native FSAL invalidation failed"));
+        }
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub fn step(&mut self, dt: f64) -> Result<StepStats, RunError> {
         self.step_interruptible(dt, None)?
@@ -1833,6 +2108,7 @@ impl NativeFemBackend {
             exchange_energy_joules: 0.0,
             demag_energy_joules: 0.0,
             external_energy_joules: 0.0,
+            drive_energy_joules: 0.0,
             anisotropy_energy_joules: 0.0,
             dmi_energy_joules: 0.0,
             total_energy_joules: 0.0,
@@ -1903,6 +2179,7 @@ impl NativeFemBackend {
             e_ex: stats.exchange_energy_joules,
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
+            e_drive: stats.drive_energy_joules,
             e_ani: stats.anisotropy_energy_joules,
             e_dmi: stats.dmi_energy_joules,
             e_total: stats.total_energy_joules,
@@ -2114,6 +2391,7 @@ impl NativeFemBackend {
             exchange_energy_joules: 0.0,
             demag_energy_joules: 0.0,
             external_energy_joules: 0.0,
+            drive_energy_joules: 0.0,
             anisotropy_energy_joules: 0.0,
             dmi_energy_joules: 0.0,
             total_energy_joules: 0.0,
@@ -2174,6 +2452,7 @@ impl NativeFemBackend {
             e_ex: stats.exchange_energy_joules,
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
+            e_drive: stats.drive_energy_joules,
             e_ani: stats.anisotropy_energy_joules,
             e_dmi: stats.dmi_energy_joules,
             e_total: stats.total_energy_joules,
@@ -2786,8 +3065,10 @@ mod tests {
         let mut plan = make_test_plan();
         plan.mesh.elements = vec![[0, 1, 3, 2]];
 
-        let error = NativeFemBackend::create_with_initial_effective_field(&plan, false)
-            .expect_err("inverted mesh must fail before native ABI packaging");
+        let error = match NativeFemBackend::create_with_initial_effective_field(&plan, false) {
+            Ok(_) => panic!("inverted mesh must fail before native ABI packaging"),
+            Err(error) => error,
+        };
         assert!(error.message.contains("negative tetra orientation"));
         assert!(error.message.contains("before ABI packaging"));
     }
@@ -2914,6 +3195,9 @@ mod tests {
             enable_demag: false,
             external_field: Some([1.0, 2.0, 3.0]),
             antenna_zeeman_masks: Vec::new(),
+            field_drives: Vec::new(),
+            field_drive_geometry_masks: Vec::new(),
+            time_stage: Default::default(),
             current_modules: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -4252,6 +4536,9 @@ mod tests {
             enable_demag: false,
             external_field: Some([1.5e3, -2.0e3, 7.5e2]),
             antenna_zeeman_masks: Vec::new(),
+            field_drives: Vec::new(),
+            field_drive_geometry_masks: Vec::new(),
+            time_stage: Default::default(),
             current_modules: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,

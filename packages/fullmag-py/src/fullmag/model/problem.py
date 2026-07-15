@@ -13,13 +13,22 @@ from typing import Any, Sequence
 from fullmag._progress import emit_progress, emit_progress_event
 from fullmag._validation import ensure_unique_names, require_non_empty
 from fullmag.init.textures import PresetTexture
-from fullmag.model.antenna import AntennaFieldSource, SpinWaveExcitationAnalysis
+from fullmag.model.antenna import (
+    AntennaFieldSource,
+    DriveActivation,
+    FieldTarget,
+    GeometryMaskFieldProfile,
+    RegionalFieldDrive,
+    SincFieldProfile,
+    SpinWaveExcitationAnalysis,
+    UniformFieldProfile,
+)
 from fullmag.model.couplings import Coupling
 from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.discretization import DiscretizationHints, FEM
 from fullmag.model.dynamics import LLG
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds
-from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.spin_torque import LegacySpinTorque, SpinTorqueModule
 from fullmag.model.mechanics import (
     ElasticBody,
@@ -913,6 +922,58 @@ def _current_module_name_map(
     return {module.name: module for module in current_modules}
 
 
+def _legacy_spatial_envelope(profile: dict[str, object] | None):
+    payload = profile or {"kind": "uniform"}
+    kind = str(payload.get("kind") or "").strip().lower()
+    if kind == "uniform":
+        return UniformFieldProfile()
+    if kind == "sinc":
+        return SincFieldProfile(
+            axis=payload.get("axis", (1.0, 0.0, 0.0)),  # type: ignore[arg-type]
+            period_m=float(payload.get("period_m", payload.get("period", 0.0))),
+            center_m=float(payload.get("center_m", payload.get("center", 0.0))),
+            width_m=(
+                None
+                if payload.get("width_m", payload.get("width")) is None
+                else float(payload.get("width_m", payload.get("width")))
+            ),
+            window=str(payload.get("window") or "none"),
+        )
+    raise ValueError(f"unsupported legacy prescribed_zeeman_mask spatial profile {kind!r}")
+
+
+def _migrate_legacy_prescribed_field_sources(
+    current_modules: Sequence[CurrentModule],
+    field_drives: Sequence[RegionalFieldDrive],
+) -> tuple[tuple[CurrentModule, ...], tuple[RegionalFieldDrive, ...]]:
+    retained: list[CurrentModule] = []
+    migrated = list(field_drives)
+    for module in current_modules:
+        if not isinstance(module, AntennaFieldSource) or module.model != "prescribed_zeeman_mask":
+            retained.append(module)
+            continue
+        assert module.object is not None
+        assert module.B is not None
+        migrated.append(
+            RegionalFieldDrive(
+                id=module.name,
+                name=module.name,
+                target=FieldTarget.global_domain(),
+                amplitude_B_T=float(module.B),
+                direction=module.direction,
+                spatial_profile=GeometryMaskFieldProfile(
+                    object_id=module.object,
+                    envelope=_legacy_spatial_envelope(module.spatial_profile),
+                ),
+                waveform=module.waveform or Constant(),
+                time_origin="stage_local",
+                activation=DriveActivation.all_time_evolution(),
+                migration={"migrated_from": "prescribed_zeeman_mask"},
+            )
+        )
+    return tuple(retained), tuple(migrated)
+
+
 def _module_kind(module: CurrentModule) -> str:
     if isinstance(module, AntennaFieldSource):
         return "antenna_field_source"
@@ -947,6 +1008,8 @@ def _builder_editable_scopes(
         scopes.append("antennas")
     if any(isinstance(module, CurrentTransport) for module in problem.current_modules):
         scopes.append("current_transport")
+    if problem.field_drives:
+        scopes.append("field_drives")
     if mesh_workflow is not None or (
         problem.discretization is not None and problem.discretization.fem is not None
     ):
@@ -1017,6 +1080,7 @@ def build_problem_builder_manifest(
             "magnets": [magnet.to_ir() for magnet in problem.magnets],
             "energy_terms": [term.to_ir() for term in problem.energy],
             "current_modules": [module.to_ir() for module in problem.current_modules],
+            "field_drives": [drive.to_ir() for drive in problem.field_drives],
             "excitation_analysis": problem.excitation_analysis.to_ir()
             if problem.excitation_analysis is not None
             else None,
@@ -1082,6 +1146,7 @@ class Problem:
     runtime_metadata: dict[str, object] = field(default_factory=dict)
     auxiliary_geometries: Sequence[object] = ()
     current_modules: Sequence[CurrentModule] = ()
+    field_drives: Sequence[RegionalFieldDrive] = ()
     couplings: Sequence[Coupling] = ()
     excitation_analysis: SpinWaveExcitationAnalysis | None = None
     geometry_asset_cache: dict[str, dict[str, Any] | None] = field(
@@ -1111,6 +1176,15 @@ class Problem:
             raise ValueError("Problem requires at least one magnet")
         if not self.energy:
             raise ValueError("Problem requires at least one energy term")
+
+        normalized_current_modules, normalized_field_drives = (
+            _migrate_legacy_prescribed_field_sources(
+                self.current_modules,
+                self.field_drives,
+            )
+        )
+        object.__setattr__(self, "current_modules", normalized_current_modules)
+        object.__setattr__(self, "field_drives", normalized_field_drives)
 
         normalized_study = self._normalize_study()
         object.__setattr__(self, "study", normalized_study)
@@ -1142,6 +1216,32 @@ class Problem:
         ensure_unique_names(
             (module.name for module in self.current_modules), "current module names"
         )
+        ensure_unique_names((drive.id for drive in self.field_drives), "field drive ids")
+        ensure_unique_names((drive.name for drive in self.field_drives), "field drive names")
+        if any(not isinstance(drive, RegionalFieldDrive) for drive in self.field_drives):
+            raise TypeError("Problem.field_drives must contain RegionalFieldDrive objects")
+        magnetic_object_ids = {magnet.name for magnet in self.magnets}
+        region_ids = {
+            (region.owner_object, region.region_id) for region in self._collect_object_regions()
+        }
+        geometry_ids = {
+            getattr(geometry, "geometry_name", "") for geometry in self._collect_geometries()
+        }
+        for drive in self.field_drives:
+            target = drive.target
+            if target.kind in {"object", "region"} and target.object_id not in magnetic_object_ids:
+                raise ValueError(
+                    f"field drive {drive.id!r} target object {target.object_id!r} is not magnetic"
+                )
+            if target.kind == "region" and (target.object_id, target.region_id) not in region_ids:
+                raise ValueError(
+                    f"field drive {drive.id!r} target region {target.region_id!r} does not exist"
+                )
+            if isinstance(drive.spatial_profile, GeometryMaskFieldProfile):
+                if drive.spatial_profile.object_id not in geometry_ids:
+                    raise ValueError(
+                        f"field drive {drive.id!r} geometry mask {drive.spatial_profile.object_id!r} does not exist"
+                    )
         ensure_unique_names(
             (coupling.coupling_id for coupling in self.couplings), "coupling ids"
         )
@@ -1320,6 +1420,7 @@ class Problem:
             "magnets": magnets_ir,
             "energy_terms": [term.to_ir() for term in self.energy],
             "current_modules": [module.to_ir() for module in self.current_modules],
+            "field_drives": [drive.to_ir() for drive in self.field_drives],
             "excitation_analysis": self.excitation_analysis.to_ir()
             if self.excitation_analysis is not None
             else None,

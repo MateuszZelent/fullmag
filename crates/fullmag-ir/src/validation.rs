@@ -1,6 +1,7 @@
 use crate::{
     AntennaFieldSourceModelIR, AntennaSpatialProfileIR, CurrentModuleIR, CurrentTransportModelIR,
-    DynamicsIR, EnergyTermIR, MechanicalLoadIR, MechanicsIR, ProblemIR, SpinTorqueModuleIR,
+    DriveActivationIR, DynamicsIR, EnergyTermIR, FieldEnvelopeIR, FieldSpatialProfileIR,
+    FieldTargetIR, MechanicalLoadIR, MechanicsIR, ProblemIR, SpinTorqueModuleIR, StudyIR,
     TimeDependenceIR,
 };
 use std::collections::BTreeSet;
@@ -60,11 +61,214 @@ fn validate_time_dependence(label: &str, value: &TimeDependenceIR, errors: &mut 
             if *cutoff_hz <= 0.0 {
                 errors.push(format!("{label} sinc_pulse cutoff_hz must be > 0"));
             }
-            if !t0.is_finite() || !amplitude.is_finite() {
+            if !t0.is_finite() || *t0 < 0.0 || !amplitude.is_finite() {
                 errors.push(format!(
-                    "{label} sinc_pulse t0 and amplitude must be finite"
+                    "{label} sinc_pulse t0 must be finite and >= 0; amplitude must be finite"
                 ));
             }
+        }
+    }
+}
+
+fn validate_field_sinc(
+    label: &str,
+    axis: &[f64; 3],
+    period_m: f64,
+    center_m: f64,
+    width_m: Option<f64>,
+    window: &str,
+    errors: &mut Vec<String>,
+) {
+    if !vector3_is_finite(axis) || vector3_norm_sq(axis) <= 1e-30 {
+        errors.push(format!("{label} axis must be finite and non-zero"));
+    }
+    if !period_m.is_finite() || period_m <= 0.0 {
+        errors.push(format!("{label} period_m must be finite and > 0"));
+    }
+    if !center_m.is_finite() {
+        errors.push(format!("{label} center_m must be finite"));
+    }
+    if width_m.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+        errors.push(format!("{label} width_m must be finite and > 0"));
+    }
+    if !matches!(window, "none" | "hann") {
+        errors.push(format!("{label} window must be 'none' or 'hann'"));
+    }
+}
+
+fn validate_field_spatial_profile(
+    index: usize,
+    profile: &FieldSpatialProfileIR,
+    geometry_names: &BTreeSet<&str>,
+    errors: &mut Vec<String>,
+) {
+    let label = format!("field_drives[{index}] spatial_profile");
+    match profile {
+        FieldSpatialProfileIR::Uniform {} => {}
+        FieldSpatialProfileIR::Sinc { axis, period_m, center_m, width_m, window } => {
+            validate_field_sinc(&label, axis, *period_m, *center_m, *width_m, window, errors);
+        }
+        FieldSpatialProfileIR::GeometryMask { object_id, envelope } => {
+            if !geometry_names.contains(object_id.as_str()) {
+                errors.push(format!("{label} geometry mask object '{object_id}' does not exist"));
+            }
+            if let FieldEnvelopeIR::Sinc { axis, period_m, center_m, width_m, window } = envelope {
+                validate_field_sinc(
+                    format!("{label} envelope").as_str(),
+                    axis,
+                    *period_m,
+                    *center_m,
+                    *width_m,
+                    window,
+                    errors,
+                );
+            }
+        }
+    }
+}
+
+pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let magnet_names: BTreeSet<&str> = problem.magnets.iter().map(|magnet| magnet.name.as_str()).collect();
+    let geometry_names: BTreeSet<&str> = problem.geometry.entries.iter().map(|geometry| geometry.name()).collect();
+    let region_ids: BTreeSet<(&str, &str)> = problem
+        .object_regions
+        .iter()
+        .map(|region| (region.owner_object.as_str(), region.region_id.as_str()))
+        .collect();
+    let pipeline_stage_ids: BTreeSet<&str> = problem
+        .problem_meta
+        .runtime_metadata
+        .get("study_pipeline")
+        .and_then(|value| value.get("nodes"))
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|node| node.get("id").and_then(|value| value.as_str()))
+        .collect();
+    let active_stage_id = problem
+        .problem_meta
+        .runtime_metadata
+        .get("active_stage_id")
+        .and_then(|value| value.as_str());
+    if let Some(value) = problem.problem_meta.runtime_metadata.get("stage_start_time_s") {
+        if value.as_f64().is_none_or(|time| !time.is_finite() || time < 0.0) {
+            errors.push("runtime_metadata.stage_start_time_s must be finite and non-negative".to_string());
+        }
+    }
+    if let Some(stage_id) = active_stage_id {
+        if stage_id.trim().is_empty() || !pipeline_stage_ids.contains(stage_id) {
+            errors.push(format!(
+                "runtime_metadata.active_stage_id '{stage_id}' does not identify an enabled study pipeline stage"
+            ));
+        }
+    }
+    let mut ids = BTreeSet::new();
+    let mut names = BTreeSet::new();
+
+    for (index, drive) in problem.field_drives.iter().enumerate() {
+        if drive.id.trim().is_empty() || !ids.insert(drive.id.as_str()) {
+            errors.push(format!("field_drives[{index}] id must be non-empty and unique"));
+        }
+        if drive.name.trim().is_empty() || !names.insert(drive.name.as_str()) {
+            errors.push(format!("field_drives[{index}] name must be non-empty and unique"));
+        }
+        if !drive.amplitude_b_t.is_finite() || drive.amplitude_b_t < 0.0 {
+            errors.push(format!("field_drives[{index}] amplitude_B_T must be finite and >= 0"));
+        }
+        if !vector3_is_finite(&drive.direction) || vector3_norm_sq(&drive.direction) <= 1e-30 {
+            errors.push(format!("field_drives[{index}] direction must be finite and non-zero"));
+        } else if (vector3_norm_sq(&drive.direction).sqrt() - 1.0).abs() > 1e-12 {
+            errors.push(format!("field_drives[{index}] direction must be normalized"));
+        }
+        match &drive.target {
+            FieldTargetIR::Global {} => {}
+            FieldTargetIR::Object { object_id } => {
+                if !magnet_names.contains(object_id.as_str()) {
+                    errors.push(format!("field_drives[{index}] target object '{object_id}' does not exist"));
+                }
+            }
+            FieldTargetIR::Region { object_id, region_id } => {
+                if !region_ids.contains(&(object_id.as_str(), region_id.as_str())) {
+                    errors.push(format!("field_drives[{index}] target region '{object_id}/{region_id}' does not exist"));
+                }
+            }
+        }
+        validate_field_spatial_profile(index, &drive.spatial_profile, &geometry_names, errors);
+        validate_time_dependence(format!("field_drives[{index}] waveform").as_str(), &drive.waveform, errors);
+        let active_in_current_stage = match (&drive.activation, active_stage_id) {
+            (DriveActivationIR::AllTimeEvolution {}, _) => true,
+            (DriveActivationIR::StageIds { stage_ids }, Some(active)) => {
+                stage_ids.iter().any(|stage_id| stage_id == active)
+            }
+            (DriveActivationIR::StageIds { .. }, None) => false,
+        };
+        if active_in_current_stage
+            && matches!(problem.study, StudyIR::Relaxation { .. })
+            && !matches!(drive.waveform, TimeDependenceIR::Constant)
+        {
+            errors.push(format!("field_drives[{index}] dynamic waveform is invalid in a minimizer/relaxation stage"));
+        }
+        if let DriveActivationIR::StageIds { stage_ids } = &drive.activation {
+            if stage_ids.is_empty() {
+                errors.push(format!("field_drives[{index}] activation.stage_ids must not be empty"));
+            }
+            let mut local_ids = BTreeSet::new();
+            for stage_id in stage_ids {
+                if stage_id.trim().is_empty() || !local_ids.insert(stage_id.as_str()) {
+                    errors.push(format!("field_drives[{index}] activation stage ids must be non-empty and unique"));
+                }
+                if !pipeline_stage_ids.contains(stage_id.as_str()) {
+                    errors.push(format!("field_drives[{index}] activation stage id '{stage_id}' does not exist"));
+                }
+            }
+        }
+        if drive.migration.as_ref().is_some_and(|migration| migration.migrated_from != "prescribed_zeeman_mask") {
+            errors.push(format!("field_drives[{index}] migration.migrated_from is unsupported"));
+        }
+    }
+
+    let legacy_names: BTreeSet<&str> = problem.current_modules.iter().filter_map(|module| match module {
+        CurrentModuleIR::AntennaFieldSource { name, model: AntennaFieldSourceModelIR::PrescribedZeemanMask, .. } => Some(name.as_str()),
+        _ => None,
+    }).collect();
+    for name in ids.intersection(&legacy_names) {
+        errors.push(format!("field drive '{name}' collides with legacy prescribed_zeeman_mask"));
+    }
+}
+
+pub(crate) fn validate_spin_wave_response_request(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let Some(request) = problem.problem_meta.runtime_metadata.get("spin_wave_response") else { return };
+    let Some(request) = request.as_object() else {
+        errors.push("runtime_metadata.spin_wave_response must be an object".into()); return;
+    };
+    if request.get("schema_version").and_then(|value| value.as_str()) != Some("spin_wave_response.request.v1") {
+        errors.push("runtime_metadata.spin_wave_response.schema_version must be 'spin_wave_response.request.v1'".into());
+    }
+    let analysis = request.get("analysis").and_then(|value| value.as_str());
+    if !matches!(analysis, Some("gamma" | "finite_k")) {
+        errors.push("runtime_metadata.spin_wave_response.analysis must be 'gamma' or 'finite_k'".into());
+    }
+    let response_component = request.get("response_component").and_then(|value| value.as_str()).unwrap_or("my");
+    if analysis == Some("gamma") && !matches!(response_component, "my" | "mz") {
+        errors.push("runtime_metadata.spin_wave_response.response_component must be my or mz for transverse S_Gamma".into());
+    } else if analysis == Some("finite_k") && !matches!(response_component, "mx" | "my" | "mz") {
+        errors.push("runtime_metadata.spin_wave_response.response_component must be mx, my, or mz".into());
+    }
+    if !matches!(request.get("detrend").and_then(|value| value.as_str()).unwrap_or("none"), "none" | "mean" | "linear") {
+        errors.push("runtime_metadata.spin_wave_response.detrend must be none, mean, or linear".into());
+    }
+    if request.get("susceptibility_floor_fraction").and_then(|value| value.as_f64()).is_some_and(|value| !value.is_finite() || !(0.0..1.0).contains(&value)) {
+        errors.push("runtime_metadata.spin_wave_response.susceptibility_floor_fraction must be finite in [0,1)".into());
+    }
+    if analysis == Some("gamma") && !problem.field_drives.iter().any(|drive| drive.enabled && matches!(drive.target, FieldTargetIR::Global {}) && matches!(drive.spatial_profile, FieldSpatialProfileIR::Uniform {})) {
+        errors.push("gamma spin-wave analysis requires an enabled global uniform field drive".into());
+    }
+    if analysis == Some("finite_k") {
+        if request.get("probe_count").and_then(|value| value.as_u64()).is_some_and(|value| !(4..=2048).contains(&value)) {
+            errors.push("finite_k spin-wave analysis probe_count must be in 4..=2048".into());
+        }
+        if !problem.field_drives.iter().any(|drive| drive.enabled && (!matches!(drive.target, FieldTargetIR::Global {}) || matches!(drive.spatial_profile, FieldSpatialProfileIR::GeometryMask { .. }))) {
+            errors.push("finite_k spin-wave analysis requires an enabled localized field drive target or geometry mask".into());
         }
     }
 }

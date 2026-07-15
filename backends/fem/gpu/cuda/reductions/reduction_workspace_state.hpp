@@ -12,7 +12,7 @@
 
 namespace fullmag::fem {
 
-static constexpr uint32_t FEM_GPU_SCALAR_RESULT_SLOTS = 20;
+static constexpr uint32_t FEM_GPU_SCALAR_RESULT_SLOTS = 24;
 
 struct FemGpuReductionWorkspaceDeviceState {
     double *scalar_workspace = nullptr;

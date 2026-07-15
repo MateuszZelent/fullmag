@@ -9,7 +9,7 @@ use fullmag_engine::{
     EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
     MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, SlonczewskiSttConfig,
-    ResolvedFdmPeriodicWorkspace, SotConfig, StepReport, TimeIntegrator,
+    RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, SotConfig, StepReport, TimeIntegrator,
     UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
 };
 use fullmag_ir::{
@@ -289,6 +289,24 @@ fn resolved_antenna_zeeman_field(plan: &FdmPlanIR, time_seconds: f64) -> Vec<Vec
     )
 }
 
+pub(crate) fn resolved_regional_field_drives(
+    plan: &FdmPlanIR,
+    stage_start_time_s: f64,
+) -> Vec<RegionalFieldDriveTerm> {
+    plan.regional_field_drive_bases
+        .iter()
+        .map(|resolved| RegionalFieldDriveTerm {
+            basis_field: resolved.field_xyz.clone(),
+            waveform: resolved.drive.waveform.clone(),
+            time_offset_s: match resolved.drive.time_origin {
+                fullmag_ir::FieldTimeOriginIR::StageLocal => stage_start_time_s,
+                fullmag_ir::FieldTimeOriginIR::Absolute => 0.0,
+            },
+            enabled: resolved.drive.enabled,
+        })
+        .collect()
+}
+
 pub(crate) fn snapshot_preview(
     plan: &FdmPlanIR,
     request: &LivePreviewRequest,
@@ -542,6 +560,8 @@ pub(crate) fn build_snapshot_problem_and_state(
     .map_err(|e| RunError {
         message: format!("Problem construction: {}", e),
     })?;
+    problem.regional_field_drives =
+        resolved_regional_field_drives(plan, plan.time_stage.start_time_s);
     // Wire periodic boundary policy from plan
     if let Some(ref pbc) = plan.periodicity {
         let map_axis = |a: &fullmag_ir::AxisBoundary| match a {
@@ -582,11 +602,12 @@ pub(crate) fn build_snapshot_problem_and_state(
         .map_err(|e| RunError {
             message: format!("Spatial fields: {}", e),
         })?;
-    let state = problem
+    let mut state = problem
         .new_state(plan.initial_magnetization.clone())
         .map_err(|e| RunError {
             message: format!("State: {}", e),
         })?;
+    state.time_seconds = plan.time_stage.start_time_s;
     Ok((problem, state))
 }
 
@@ -717,6 +738,8 @@ pub(crate) fn execute_reference_fdm(
     .map_err(|e| RunError {
         message: format!("Problem construction: {}", e),
     })?;
+    problem.regional_field_drives =
+        resolved_regional_field_drives(plan, plan.time_stage.start_time_s);
     // Wire periodic boundary policy
     if let Some(ref pbc) = plan.periodicity {
         let map_axis = |a: &fullmag_ir::AxisBoundary| match a {
@@ -739,6 +762,8 @@ pub(crate) fn execute_reference_fdm(
         .map_err(|e| RunError {
             message: format!("State: {}", e),
         })?;
+    state.time_seconds = plan.time_stage.start_time_s;
+    let stage_end_time_s = plan.time_stage.start_time_s + until_seconds;
     let initial_magnetization = state.magnetization().to_vec();
 
     let mut dt =
@@ -782,10 +807,19 @@ pub(crate) fn execute_reference_fdm(
 
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;
+    let time_events = crate::time_events::build_resolved_stage_event_schedule(
+        &plan.field_drives,
+        plan.time_stage.start_time_s,
+        stage_end_time_s,
+        outputs,
+        crate::schedules::OUTPUT_TIME_TOLERANCE,
+    );
     let default_scalar_trace = scalar_schedules.is_empty();
 
     if default_scalar_trace {
-        record_scalar_snapshot(&problem, &state, 0, 0.0, 0, &mut steps, &mut artifacts)?;
+        record_scalar_snapshot(
+            &problem, &state, 0, state.time_seconds, 0, &mut steps, &mut artifacts,
+        )?;
     } else {
         record_due_outputs(
             &problem,
@@ -910,7 +944,7 @@ pub(crate) fn execute_reference_fdm(
             .as_ref()
             .map(|observables| make_step_stats(step_count, state.time_seconds, 0.0, 0, observables))
             .unwrap_or_default();
-        while state.time_seconds < until_seconds {
+        while state.time_seconds < stage_end_time_s {
             if step_count == 0
                 && live
                     .as_ref()
@@ -1001,7 +1035,13 @@ pub(crate) fn execute_reference_fdm(
                 }
             }
 
-            let dt_step = dt.min(until_seconds - state.time_seconds);
+            let proposed_dt = dt.min(stage_end_time_s - state.time_seconds);
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                state.time_seconds,
+                proposed_dt,
+                &time_events.times_s,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             if crate::antenna_fields::has_time_varying_antenna_zeeman_masks(
                 &plan.antenna_zeeman_masks,
             ) {
@@ -1132,6 +1172,7 @@ pub(crate) fn execute_reference_fdm(
                     &report,
                     wall_elapsed,
                     state.magnetization(),
+                    &problem,
                 );
                 if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
                     apply_average_m_to_step_stats(&mut update_stats, state.magnetization());
@@ -1342,7 +1383,7 @@ fn record_due_outputs(
     {
         if let Some(report) = step_report.filter(|_| scalar_due) {
             let stats =
-                make_step_stats_from_report(step, report, wall_time_ns, state.magnetization());
+                make_step_stats_from_report(step, report, wall_time_ns, state.magnetization(), problem);
             artifacts.record_scalar(&stats)?;
             steps.push(stats);
             advance_due_schedules(scalar_schedules, state.time_seconds);
@@ -1493,7 +1534,7 @@ fn record_final_outputs(
             .all(|name| direct_field_values_available(name))
     {
         let report = final_step_report.expect("checked final step report");
-        let stats = make_step_stats_from_report(step, report, 0, state.magnetization());
+        let stats = make_step_stats_from_report(step, report, 0, state.magnetization(), problem);
         artifacts.record_scalar(&stats)?;
         steps.push(stats);
 
@@ -1576,17 +1617,37 @@ fn observe_state_with_antenna_field(
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
     let antenna_field = antenna_field_override
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
+    let drive_field = problem.regional_drive_field_at_time(state.time_seconds);
+    let drive_energy = -crate::MU0
+        * problem.material.saturation_magnetisation
+        * problem.cell_size.volume()
+        * state
+            .magnetization()
+            .iter()
+            .zip(&drive_field)
+            .enumerate()
+            .filter(|(index, _)| {
+                !problem.active_mask.as_ref().is_some_and(|mask| !mask[*index])
+            })
+            .map(|(_, (m, h))| m[0] * h[0] + m[1] * h[1] + m[2] * h[2])
+            .sum::<f64>();
+    let mut effective_field = observables.effective_field;
+    for (total, drive) in effective_field.iter_mut().zip(&drive_field) {
+        total[0] += drive[0];
+        total[1] += drive[1];
+        total[2] += drive[2];
+    }
     let anisotropy_field = problem.anisotropy_field(state.magnetization());
 
     let torque_field = compute_torque_field(
         &observables.magnetization,
-        &observables.effective_field,
+        &effective_field,
         problem.material.damping,
         problem.dynamics.precession_enabled,
     );
     let max_torque_apm = max_torque_residual_apm_from_field(
         &observables.magnetization,
-        &observables.effective_field,
+        &effective_field,
     );
 
     Ok(StateObservables {
@@ -1596,7 +1657,8 @@ fn observe_state_with_antenna_field(
         demag_field: observables.demag_field,
         external_field: uniform_external,
         antenna_field,
-        effective_field: observables.effective_field,
+        drive_field,
+        effective_field,
         anisotropy_field,
         dmi_field: observables.dmi_field,
         magnetoelastic_field: Vec::new(),
@@ -1607,9 +1669,10 @@ fn observe_state_with_antenna_field(
         exchange_energy: observables.exchange_energy_joules,
         demag_energy: observables.demag_energy_joules,
         external_energy: observables.external_energy_joules,
+        drive_energy,
         anisotropy_energy: observables.anisotropy_energy_joules,
         dmi_energy: observables.dmi_energy_joules,
-        total_energy: observables.total_energy_joules,
+        total_energy: observables.total_energy_joules + drive_energy,
         max_dm_dt: observables.max_rhs_amplitude,
         max_h_eff: observables.max_effective_field_amplitude,
         max_h_demag: observables.max_demag_field_amplitude,
@@ -1623,7 +1686,21 @@ fn make_step_stats_from_report(
     report: &StepReport,
     wall_time_ns: u64,
     magnetization: &[Vector3],
+    problem: &ExchangeLlgProblem,
 ) -> StepStats {
+    let drive_field = problem.regional_drive_field_at_time(report.time_seconds);
+    let drive_energy = -crate::MU0
+        * problem.material.saturation_magnetisation
+        * problem.cell_size.volume()
+        * magnetization
+            .iter()
+            .zip(&drive_field)
+            .enumerate()
+            .filter(|(index, _)| {
+                !problem.active_mask.as_ref().is_some_and(|mask| !mask[*index])
+            })
+            .map(|(_, (m, h))| m[0] * h[0] + m[1] * h[1] + m[2] * h[2])
+            .sum::<f64>();
     let mut stats = StepStats {
         step,
         time: report.time_seconds,
@@ -1631,9 +1708,10 @@ fn make_step_stats_from_report(
         e_ex: report.exchange_energy_joules,
         e_demag: report.demag_energy_joules,
         e_ext: report.external_energy_joules,
+        e_drive: drive_energy,
         e_ani: report.anisotropy_energy_joules,
         e_dmi: report.dmi_energy_joules,
-        e_total: report.total_energy_joules,
+        e_total: report.total_energy_joules + drive_energy,
         max_dm_dt: report.max_rhs_amplitude,
         max_rhs_norm_per_s: report.max_rhs_amplitude,
         max_h_eff: report.max_effective_field_amplitude,
@@ -1662,6 +1740,7 @@ fn make_step_stats(
         e_ex: observables.exchange_energy,
         e_demag: observables.demag_energy,
         e_ext: observables.external_energy,
+        e_drive: observables.drive_energy,
         e_ani: observables.anisotropy_energy,
         e_dmi: observables.dmi_energy,
         e_total: observables.total_energy,
@@ -1973,8 +2052,10 @@ fn project_component(
 mod tests {
     use super::*;
     use fullmag_ir::{
-        ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, GridDimensions,
+        DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR,
+        FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, GridDimensions,
         IntegratorChoice, RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR, StageStopReason,
+        RegionalFieldDriveIR, ResolvedRegionalFieldDriveBasisIR, TimeDependenceIR,
     };
 
     fn make_test_plan() -> FdmPlanIR {
@@ -2028,6 +2109,72 @@ mod tests {
             bulk_dmi: None,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn regional_drive_produces_distinct_field_and_energy_outputs() {
+        let drive = RegionalFieldDriveIR {
+            id: "drive".into(), name: "Drive".into(), kind: FieldDriveKindIR::Regional,
+            enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
+            direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
+            waveform: TimeDependenceIR::Constant,
+            time_origin: FieldTimeOriginIR::StageLocal,
+            activation: DriveActivationIR::AllTimeEvolution {}, migration: None,
+        };
+        let h = 1e-3 / crate::MU0;
+        let plan = FdmPlanIR {
+            enable_exchange: false,
+            regional_field_drive_bases: vec![ResolvedRegionalFieldDriveBasisIR {
+                drive: drive.clone(), field_xyz: vec![[0.0, h, 0.0]; 16],
+                projection_signature: "test".into(),
+            }],
+            time_stage: Default::default(),
+            field_drives: vec![drive],
+            ..make_test_plan()
+        };
+        let outputs = [
+            OutputIR::Field { name: "H_drive".into(), every_seconds: 1e-14 },
+            OutputIR::Scalar { name: "E_drive".into(), every_seconds: 1e-14 },
+        ];
+
+        let executed = execute_reference_fdm(&plan, 1e-14, &outputs, None, None)
+            .expect("regional drive reference run should succeed");
+        let field = executed.field_snapshots.iter().find(|snapshot| snapshot.name == "H_drive")
+            .expect("H_drive snapshot");
+        assert!(field.values.iter().all(|value| *value == [0.0, h, 0.0]));
+        assert!(executed.result.steps.iter().any(|step| step.e_drive != 0.0));
+        assert!(executed.result.steps.iter().all(|step| step.e_ext == 0.0));
+    }
+
+    #[test]
+    fn regional_drive_stage_local_restart_and_absolute_clock_are_distinct() {
+        let mut plan = make_test_plan();
+        plan.time_stage.start_time_s = 10.0;
+        let make_basis = |time_origin, waveform| ResolvedRegionalFieldDriveBasisIR {
+            drive: RegionalFieldDriveIR {
+                id: "clock".into(), name: "Clock".into(), kind: FieldDriveKindIR::Regional,
+                enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
+                direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
+                waveform, time_origin, activation: DriveActivationIR::AllTimeEvolution {},
+                migration: None,
+            },
+            field_xyz: vec![[0.0, 1.0, 0.0]; 16], projection_signature: "clock".into(),
+        };
+        plan.regional_field_drive_bases = vec![make_basis(
+            FieldTimeOriginIR::StageLocal,
+            TimeDependenceIR::Pulse { t_on: 1.0, t_off: 2.0 },
+        )];
+        let local = resolved_regional_field_drives(&plan, plan.time_stage.start_time_s);
+        assert_eq!(local[0].multiplier_at(11.5), 1.0);
+        assert_eq!(local[0].multiplier_at(10.5), 0.0);
+
+        plan.regional_field_drive_bases = vec![make_basis(
+            FieldTimeOriginIR::Absolute,
+            TimeDependenceIR::Pulse { t_on: 11.0, t_off: 12.0 },
+        )];
+        let absolute = resolved_regional_field_drives(&plan, plan.time_stage.start_time_s);
+        assert_eq!(absolute[0].multiplier_at(11.5), 1.0);
+        assert_eq!(absolute[0].multiplier_at(1.5), 0.0);
     }
 
     fn cpu_fft_env_lock() -> std::sync::MutexGuard<'static, ()> {

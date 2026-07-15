@@ -482,3 +482,56 @@ fn guardrail_soa_round_trip() {
         assert_eq!(*a, *b, "SoA round-trip mismatch at {i}");
     }
 }
+
+#[test]
+fn guardrail_regional_drive_is_evaluated_at_requested_rhs_time() {
+    let mut problem = permalloy_problem(
+        2,
+        1,
+        1,
+        5.0,
+        TimeIntegrator::Heun,
+        EffectiveFieldTerms { exchange: false, demag: false, ..Default::default() },
+    );
+    problem.regional_field_drives.push(RegionalFieldDriveTerm {
+        basis_field: vec![[0.0, 2.0, 0.0], [0.0, -1.0, 0.0]],
+        waveform: fullmag_ir::TimeDependenceIR::Sinusoidal {
+            frequency_hz: 0.25,
+            phase_rad: 0.0,
+            offset: 0.0,
+        },
+        time_offset_s: 0.0,
+        enabled: true,
+    });
+
+    assert_eq!(problem.regional_drive_field_at_time(0.0), vec![[0.0; 3]; 2]);
+    assert_eq!(
+        problem.regional_drive_field_at_time(1.0),
+        vec![[0.0, 2.0, 0.0], [0.0, -1.0, 0.0]]
+    );
+}
+
+#[test]
+fn guardrail_heun_uses_end_stage_time_for_regional_drive() {
+    let grid = GridShape::new(1, 1, 1).unwrap();
+    let mut problem = ExchangeLlgProblem::with_terms(
+        grid,
+        CellSize::new(1.0, 1.0, 1.0).unwrap(),
+        MaterialParameters::new(1.0, 1.0, 0.0).unwrap(),
+        LlgConfig::new(1.0, TimeIntegrator::Heun).unwrap(),
+        EffectiveFieldTerms { exchange: false, demag: false, ..Default::default() },
+    );
+    problem.regional_field_drives.push(RegionalFieldDriveTerm {
+        basis_field: vec![[0.0, 1.0, 0.0]],
+        waveform: fullmag_ir::TimeDependenceIR::Pulse { t_on: 0.5, t_off: 1.5 },
+        time_offset_s: 0.0,
+        enabled: true,
+    });
+    let mut state = problem.uniform_state([1.0, 0.0, 0.0]).unwrap();
+    let mut ws = problem.create_workspace();
+    let mut buffers = problem.create_integrator_buffers();
+
+    problem.step_with_buffers(&mut state, 1.0, &mut ws, &mut buffers).unwrap();
+
+    assert!(state.magnetization()[0][2] < -0.1, "end-stage pulse was frozen at t_n");
+}

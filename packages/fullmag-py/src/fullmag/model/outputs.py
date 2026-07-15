@@ -21,6 +21,7 @@ _KNOWN_SCALARS = {
     "E_ex",
     "E_demag",
     "E_ext",
+    "E_drive",
     "E_ani",
     "E_dmi",
     "E_total",
@@ -75,13 +76,13 @@ class SaveScalar:
 
 _KNOWN_FIELDS = {
     "m",
-    "H_ex", "H_demag", "H_ext", "H_ant", "H_eff",
+    "H_ex", "H_demag", "H_ext", "H_drive", "B_drive", "H_ant", "H_eff",
     "H_ani", "H_dmi", "H_mel", "H_ani_cubic", "H_dmi_bulk",
     "H_oe", "H_therm",
     "demag_phi",
     # Second wave (QB-17)
     "dm_dt", "torque_stt", "torque_sot",
-    "eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi", "eden_total",
+    "eden_ex", "eden_demag", "eden_ext", "eden_drive", "eden_ani", "eden_dmi", "eden_total",
 }
 _COMPONENTS = {"x", "y", "z"}
 

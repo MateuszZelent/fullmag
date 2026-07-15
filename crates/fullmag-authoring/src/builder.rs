@@ -714,6 +714,8 @@ pub struct ScriptBuilderState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_interfaces: Vec<ScriptBuilderMeshInterfaceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_drives: Vec<fullmag_ir::RegionalFieldDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_modules: Vec<ScriptBuilderCurrentModuleState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excitation_analysis: Option<ScriptBuilderExcitationAnalysisState>,

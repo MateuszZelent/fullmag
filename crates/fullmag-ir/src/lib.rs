@@ -134,6 +134,8 @@ pub struct ProblemIR {
     pub validation_profile: ValidationProfileIR,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_modules: Vec<CurrentModuleIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_drives: Vec<RegionalFieldDriveIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excitation_analysis: Option<ExcitationAnalysisIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -232,6 +234,8 @@ impl<'de> Deserialize<'de> for ProblemIR {
             #[serde(default)]
             current_modules: Vec<CurrentModuleIR>,
             #[serde(default)]
+            field_drives: Vec<RegionalFieldDriveIR>,
+            #[serde(default)]
             excitation_analysis: Option<ExcitationAnalysisIR>,
             #[serde(default)]
             spin_torque_modules: Vec<SpinTorqueModuleIR>,
@@ -288,6 +292,7 @@ impl<'de> Deserialize<'de> for ProblemIR {
             backend_policy: wire.backend_policy,
             validation_profile: wire.validation_profile,
             current_modules: wire.current_modules,
+            field_drives: wire.field_drives,
             excitation_analysis: wire.excitation_analysis,
             spin_torque_modules: wire.spin_torque_modules,
             current_density: wire.current_density,
@@ -429,6 +434,7 @@ impl ProblemIR {
                 execution_mode: ExecutionMode::Strict,
             },
             current_modules: Vec::new(),
+            field_drives: Vec::new(),
             excitation_analysis: None,
             spin_torque_modules: Vec::new(),
             current_density: None,
@@ -495,6 +501,8 @@ impl ProblemIR {
             }
         }
         validate_current_modules(self, &mut errors);
+        validate_field_drives(self, &mut errors);
+        validate_spin_wave_response_request(self, &mut errors);
         validate_oersted_energy_terms(self, &mut errors);
         validate_dmi_energy_terms(self, &mut errors);
         validate_material_scalar_values(self, &mut errors);

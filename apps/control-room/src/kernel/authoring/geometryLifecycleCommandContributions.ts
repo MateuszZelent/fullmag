@@ -469,12 +469,10 @@ function sceneObjects(scene: unknown): JsonObject[] {
     : [];
 }
 
-function sceneCurrentModules(scene: unknown): JsonObject[] {
-  const modules = asRecord(asRecord(scene)?.current_modules)?.modules;
-  return Array.isArray(modules)
-    ? modules.filter((module): module is JsonObject =>
-        Boolean(module && typeof module === "object" && !Array.isArray(module)),
-      )
+function sceneFieldDrives(scene: unknown): JsonObject[] {
+  const drives = asRecord(asRecord(scene)?.field_drives)?.drives;
+  return Array.isArray(drives)
+    ? drives.filter((drive): drive is JsonObject => Boolean(drive && typeof drive === "object" && !Array.isArray(drive)))
     : [];
 }
 
@@ -529,17 +527,19 @@ function defaultMicrostripAntennaObject(objectId: string): JsonObject {
   };
 }
 
-function defaultMicrostripAntennaModule(objectId: string): JsonObject {
+function defaultMicrostripFieldDrive(objectId: string): JsonObject {
   return {
-    B: 0.001,
+    activation: { kind: "all_time_evolution" },
+    amplitude_B_T: 0.001,
     direction: [0, 1, 0],
+    enabled: true,
     id: `${objectId}:H_ant`,
-    kind: "antenna_field_source",
-    model: "prescribed_zeeman_mask",
+    kind: "regional",
     name: "Microstrip antenna field",
-    object: objectId,
-    spatial_profile: { kind: "uniform" },
-    waveform: { cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
+    spatial_profile: { kind: "geometry_mask", object_id: objectId, envelope: { kind: "uniform" } },
+    target: { kind: "global" },
+    time_origin: "stage_local",
+    waveform: { amplitude: 1, cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
   };
 }
 
@@ -663,10 +663,10 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       const response = await context.api.model.commitTransaction({
         kind: "merge_patch",
         merge_patch: {
-          current_modules: {
-            modules: [
-              ...sceneCurrentModules(scene),
-              defaultMicrostripAntennaModule(objectId),
+          field_drives: {
+            drives: [
+              ...sceneFieldDrives(scene),
+              defaultMicrostripFieldDrive(objectId),
             ],
           },
           objects: [

@@ -148,7 +148,7 @@ S_\mathrm{sinc}(\mathbf r)=\operatorname{sinc}_\pi(\xi/\mathrm{period\_m})W(\xi)
 jest zerowy dla `|xi|>width_m/2`. `window="none"` daje `W=1` wewnątrz nośnika, natomiast
 
 \[
-W_\mathrm{Hann}(\xi)=\sin^2\!\left[\pi\left(\frac{\xi}{\mathrm{width\_m}}+rac12\right)\right]
+W_\mathrm{Hann}(\xi)=\sin^2\!\left[\pi\left(\frac{\xi}{\mathrm{width\_m}}+\frac12\right)\right]
 \]
 
 dla `|xi|<=width_m/2`. Dla geometry mask całkowity profil to `chi_G(r) S_envelope(r)`.
@@ -386,6 +386,13 @@ AOS-3 ABI. Planner odrzuca regional drive dla wyższego rzędu z komunikatem wym
 high-order DOF projection contract. Nie wolno broadcastować wartości węzłowych na dodatkowe DOF.
 
 ### 5.3 Cache i rewizje
+
+`H0_q` jest budowane przez produkcyjny moduł projekcji w `backends/fem`, a nie przez planner lub
+runner w Rust. Rust rozwiązuje i waliduje semantyczny target, profil, activation oraz wersjonowany
+descriptor geometrii/markerów. Natywny backend wykonuje kwadraturę, dzielenie przez lumped mass,
+certyfikat PBC i zapisuje diagnostykę materializacji. Referencyjny projektor poza
+`backends/fem` może istnieć wyłącznie jako niezależny oracle testowy i nie może zasilać
+produkcyjnego runtime.
 
 `H0_q` jest przebudowywane wyłącznie po zmianie:
 
@@ -823,8 +830,10 @@ typedef struct fullmag_fem_regional_field_drive_desc {
   uint32_t abi_version;
   uint32_t struct_size;
   uint64_t stable_id_hash;
-  const double* h_basis_xyz_a_per_m;
-  uint64_t h_basis_value_count;
+  fullmag_fem_field_target_desc target;
+  fullmag_fem_spatial_profile_desc spatial_profile;
+  double amplitude_b_t;
+  double direction[3];
   fullmag_fem_time_dependence_desc waveform;
   uint32_t time_origin;
 } fullmag_fem_regional_field_drive_desc;
@@ -835,12 +844,14 @@ typedef struct fullmag_fem_regional_field_drive_desc {
 kopiuje descriptor i potrzebne tablice. `abi_version`, `struct_size`, null/count oraz value count są
 walidowane przed alokacją.
 
-`h_basis_xyz_a_per_m` ma dokładnie `3 * mesh.n_nodes` wartości w istniejącym layout AOS-3:
-`value[3*i+c]` oznacza komponent `c={x,y,z}` węzła `i` w kolejności `mesh.nodes_xyz`. Jest to pole
-na pełnym zbiorze węzłów siatki wejściowej, przed natywną redukcją klas periodycznych. Planner
-certyfikuje zgodność wartości w każdej klasie PBC, a native sprawdza certificate signature i dopiero
-potem może mapować pełny bufor na reprezentantów. CPU utrzymuje AOS-3 jak istniejące `h_ext_xyz`;
-GPU wykonuje jednorazową konwersję do istniejącego SoA przy uploadzie bazy.
+Descriptor targetu zawiera rozwiązane markery elementów canonical mesh ownership. Descriptor
+profilu jest zamkniętym, wersjonowanym drzewem obsługiwanych prymitywów i transformacji albo
+analitycznym profilem sinc; nie przenosi callbacku ani gotowej bazy węzłowej. Native kopiuje
+descriptor, buduje `H0_q` na pełnym zbiorze węzłów siatki wejściowej metodą z rozdz. 5, sprawdza
+zgodność każdej klasy PBC, a dopiero potem mapuje pole na reprezentantów. Powstała baza ma layout
+AOS-3 (`value[3*i+c]`, `c={x,y,z}`) na CPU; GPU wykonuje jednorazową konwersję do SoA przy uploadzie.
+ABI eksportuje basis signature, normy i certyfikat PBC jako diagnostykę, ale nie przyjmuje
+niezweryfikowanego `h_basis_xyz` z planera.
 
 ABI dodaje `FULLMAG_FEM_OBSERVABLE_H_DRIVE` oraz osobne `drive_energy_joules` w step stats.
 `external_energy_joules` nadal oznacza energię statycznego `H_ext`; suma całkowita zawiera oba
@@ -904,9 +915,9 @@ fazowego, energii i widma; nie dziedziczy statusu z double.
 Planner:
 
 1. normalizuje drive i stage activation;
-2. rozwiązuje target/profile na mesh;
-3. buduje lumped-L2 `H0_q`;
-4. sprawdza PBC certificate;
+2. rozwiązuje target/profile do wersjonowanego descriptoru markerów i geometrii;
+3. sprawdza semantyczną legalność PBC i przekazuje klasy periodyczne;
+4. zleca produkcyjną materializację lumped-L2 oraz certyfikat PBC natywnemu `backends/fem`;
 5. tworzy event schedule;
 6. sprawdza backend capability;
 7. wpisuje plan signature i diagnostics.
@@ -1110,7 +1121,7 @@ nie należy stage'ować cudzych zmian ze wspólnego worktree.
 - [ ] Test legacy adapter i wykrycie konfliktu podwójnego źródła.
 - [ ] Uruchomić `cargo test -p fullmag-authoring`.
 
-### Task 5 — Planner: target, lumped-L2, PBC i capability
+### Task 5 — Planner: target descriptor, PBC legality i capability
 
 **Pliki:**
 
@@ -1122,13 +1133,13 @@ nie należy stage'ować cudzych zmian ze wspólnego worktree.
 - Replace/deprecate: `crates/fullmag-plan/src/antenna_zeeman.rs`
 - Test: `crates/fullmag-plan/src/tests.rs`
 
-- [ ] Failing tests global/object/region/mask projection, overlap superposition i deterministic order.
-- [ ] Manufactured tetra tests dla lumped-L2 z analitycznym wynikiem.
-- [ ] Refinement tests geometry mask i exact global uniform `w=1`.
-- [ ] PBC pair test: zgodna baza pass, niespójna fail z id pary/osi/max mismatch.
+- [ ] Failing tests global/object/region/mask descriptor, overlap superposition i deterministic order.
+- [ ] Testy rozwiązania canonical mesh ownership do markerów i zamkniętego drzewa geometrii.
+- [ ] Testy odrzucenia geometrii bez stabilnego predicate oraz `fe_order != 1`.
+- [ ] PBC legality test: brak klas lub nieperiodyczny profil na osi PBC fail przed run.
 - [ ] Dodać plan signature, basis diagnostics i event schedule.
 - [ ] Planner wymuszonego niewspieranego backendu musi fail przed run.
-- [ ] Test `cargo test -p fullmag-plan`; testy projekcji mogą korzystać z małych repo fixtures.
+- [ ] Test `cargo test -p fullmag-plan`; testy nie mogą implementować produkcyjnej kwadratury FEM.
 
 ### Task 6 — Wspólny evaluator czasu i scheduler zdarzeń
 
@@ -1205,6 +1216,8 @@ nie należy stage'ować cudzych zmian ze wspólnego worktree.
 **Pliki:**
 
 - Modify: `backends/fem/cpu/mfem/interactions/zeeman.hpp`
+- Add: `backends/fem/cpu/mfem/interactions/zeeman_regional_field_projection.hpp`
+- Add: `backends/fem/cpu/mfem/interactions/zeeman_regional_field_projection.cpp`
 - Add: `backends/fem/cpu/mfem/interactions/zeeman_time_dependence.hpp`
 - Add: `backends/fem/cpu/mfem/interactions/zeeman_time_dependence.cpp`
 - Add: `backends/fem/cpu/mfem/interactions/zeeman_regional_field.hpp`
@@ -1224,6 +1237,9 @@ nie należy stage'ować cudzych zmian ze wspólnego worktree.
 - Modify: `backends/fem/tests/source_facade_contract.cpp`
 
 - [ ] Native unit oracle dla waveformów z golden table Task 6.
+- [ ] Manufactured tetra tests dla lumped-L2 z analitycznym wynikiem.
+- [ ] Refinement tests geometry mask, Box/Cylinder volume i exact global uniform `w=1`.
+- [ ] PBC pair test: zgodna baza pass, niespójna fail z id pary/osi/max mismatch; bez uśredniania.
 - [ ] Global constant manufactured test: dokładne H, E i zero dodatkowych alokacji per RHS.
 - [ ] Regional basis test: H_eff difference równe H_drive dokładnie raz.
 - [ ] Multi-drive superposition/cancellation test.

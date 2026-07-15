@@ -606,6 +606,7 @@ pub(crate) fn plan_fdm(
         false,
         problem.energy_terms.iter().any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
+        !problem.field_drives.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double
@@ -784,6 +785,22 @@ pub(crate) fn plan_fdm(
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
     let integrator = controls.integrator;
+    if !problem.field_drives.is_empty() && integrator == Some(IntegratorChoice::Abm3) {
+        errors.push(
+            "RegionalFieldDrive is not executable with ABM3 because the multistep history has no qualified discontinuity/event restart contract; use heun, rk4, rk23, or rk45"
+                .to_string(),
+        );
+    }
+    if runtime_requests_cuda(problem)
+        && problem.field_drives.iter().any(|drive| {
+            crate::util::field_drive_is_active(drive, crate::util::active_stage_id(problem))
+        })
+    {
+        errors.push(
+            "fdm_cuda_regional_field_drive_unsupported: regional time-domain field drives are implemented only by the FDM CPU reference lane; request device='cpu' or use FEM CUDA double"
+                .to_string(),
+        );
+    }
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
     let relaxation = controls.relaxation;
@@ -991,6 +1008,18 @@ pub(crate) fn plan_fdm(
         reasons: vec![format!("invalid resolved FDM grid certificate: {message}")],
     })?
     .with_region_legend(grid_legend);
+    let active_field_drives: Vec<_> = problem.field_drives.iter()
+        .filter(|drive| crate::util::field_drive_is_active(drive, crate::util::active_stage_id(problem)))
+        .cloned().collect();
+    let regional_field_drive_bases = crate::regional_field_drive::resolve_fdm_regional_field_drives(
+        &active_field_drives,
+        &point_coords,
+        active_mask.as_deref(),
+        &region_mask,
+        Some(&grid_certificate),
+        cell_size,
+        &problem.geometry.entries,
+    )?;
 
     let mut fdm_plan = FdmPlanIR {
         origin_m: native_origin,
@@ -1021,6 +1050,9 @@ pub(crate) fn plan_fdm(
         enable_demag,
         external_field,
         antenna_zeeman_masks,
+        field_drives: active_field_drives,
+        regional_field_drive_bases,
+        time_stage: crate::util::time_stage_context(problem),
         inter_region_exchange,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
@@ -1674,6 +1706,7 @@ pub(crate) fn plan_fdm_multilayer(
         false,
         false,
         false,
+        !problem.field_drives.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double

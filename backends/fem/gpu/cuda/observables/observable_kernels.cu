@@ -57,22 +57,24 @@ __global__ void magnetization_sum_blocks_kernel(
     const double *__restrict__ my,
     const double *__restrict__ mz,
     const uint8_t *__restrict__ magnetic_node_mask,
+    const double *__restrict__ node_volumes,
+    const double *__restrict__ ms,
     double *__restrict__ block_sum_x,
     double *__restrict__ block_sum_y,
     double *__restrict__ block_sum_z,
-    double *__restrict__ block_count,
+    double *__restrict__ block_weight,
     int N)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     double local_x = 0.0;
     double local_y = 0.0;
     double local_z = 0.0;
-    double local_count = 0.0;
+    double local_weight = 0.0;
     if (i < N && (magnetic_node_mask == nullptr || magnetic_node_mask[i] != 0u)) {
-        local_x = mx[i];
-        local_y = my[i];
-        local_z = mz[i];
-        local_count = 1.0;
+        local_weight = node_volumes[i] * ms[i];
+        local_x = local_weight * mx[i];
+        local_y = local_weight * my[i];
+        local_z = local_weight * mz[i];
     }
 
     typedef cub::BlockReduce<double, 256> BlockReduce;
@@ -83,12 +85,12 @@ __global__ void magnetization_sum_blocks_kernel(
     const double x_sum = BlockReduce(x_temp_storage).Sum(local_x);
     const double y_sum = BlockReduce(y_temp_storage).Sum(local_y);
     const double z_sum = BlockReduce(z_temp_storage).Sum(local_z);
-    const double count_sum = BlockReduce(count_temp_storage).Sum(local_count);
+    const double count_sum = BlockReduce(count_temp_storage).Sum(local_weight);
     if (threadIdx.x == 0) {
         block_sum_x[blockIdx.x] = x_sum;
         block_sum_y[blockIdx.x] = y_sum;
         block_sum_z[blockIdx.x] = z_sum;
-        block_count[blockIdx.x] = count_sum;
+        block_weight[blockIdx.x] = count_sum;
     }
 }
 
@@ -118,10 +120,12 @@ void fullmag_cuda_field_metric_blocks(
 void fullmag_cuda_magnetization_sum_blocks(
     const double *mx, const double *my, const double *mz,
     const uint8_t *magnetic_node_mask,
+    const double *node_volumes,
+    const double *ms,
     double *block_sum_x,
     double *block_sum_y,
     double *block_sum_z,
-    double *block_count,
+    double *block_weight,
     int N,
     cudaStream_t stream)
 {
@@ -131,10 +135,12 @@ void fullmag_cuda_magnetization_sum_blocks(
         my,
         mz,
         magnetic_node_mask,
+        node_volumes,
+        ms,
         block_sum_x,
         block_sum_y,
         block_sum_z,
-        block_count,
+        block_weight,
         N);
 }
 

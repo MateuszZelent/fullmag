@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import copy
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence, cast
 
@@ -42,6 +42,7 @@ from fullmag._validation import as_vector3, require_non_empty, require_non_negat
 from fullmag.model.antenna import (
     AntennaFieldSource,
     Antenna,
+    RegionalFieldDrive,
     RfDrive,
     SpinWaveExcitationAnalysis,
 )
@@ -1845,6 +1846,7 @@ class _WorldState:
     _outputs: list = field(default_factory=list)
     _table_autosave: TableAutosave | None = None
     _current_modules: list[AntennaFieldSource | CurrentTransport] = field(default_factory=list)
+    _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
     _last_result: Any | None = None
     _last_step: Any | None = None
@@ -1885,6 +1887,8 @@ class CapturedStage:
     entrypoint_kind: str
     default_until_seconds: float | None = None
     action: dict[str, object] | None = None
+    stage_id: str | None = None
+    output_every_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2946,8 +2950,36 @@ def capture_declared_stages() -> list[CapturedStage]:
 class StudyStagesBuilder:
     """Declarative stage authoring facade for the flat study builder."""
 
-    def add_stage(self, stage_spec: object) -> "StudyStagesBuilder":
+    def _allocate_stage_id(self, kind: str, requested: str | None) -> str:
+        existing = {stage.stage_id for stage in _state._declared_stages if stage.stage_id}
+        if requested is not None:
+            stage_id = require_non_empty(requested, "stage_id")
+            if stage_id in existing:
+                raise ValueError(f"duplicate stage_id {stage_id!r}")
+            return stage_id
+        index = 1
+        while f"{kind}-{index}" in existing:
+            index += 1
+        return f"{kind}-{index}"
+
+    def add_stage(
+        self,
+        stage_spec: object,
+        *,
+        stage_id: str | None = None,
+        output_every: float | None = None,
+        id_kind: str | None = None,
+    ) -> "StudyStagesBuilder":
         captured_stage = _capture_stage(stage_spec)
+        kind = id_kind or captured_stage.entrypoint_kind.removeprefix("flat_")
+        resolved_id = self._allocate_stage_id(kind, stage_id)
+        if output_every is not None:
+            require_positive(output_every, "output_every")
+        captured_stage = replace(
+            captured_stage,
+            stage_id=resolved_id,
+            output_every_seconds=output_every,
+        )
         _state._declared_stages.append(captured_stage)
         if _state._interactive:
             _state._wait_for_solve = True
@@ -2956,6 +2988,7 @@ class StudyStagesBuilder:
     def add_relax(
         self,
         *,
+        stage_id: str | None = None,
         tol: object = _RELAX_UNSET,
         max_steps: object = _RELAX_UNSET,
         algorithm: str = "llg_overdamped",
@@ -2989,26 +3022,46 @@ class StudyStagesBuilder:
                 dt_max=dt_max,
                 field_refresh=field_refresh,
                 stop=stop,
-            )
+            ),
+            stage_id=stage_id,
+            id_kind="relax",
         )
 
-    def add_run(self, until: float) -> "StudyStagesBuilder":
-        return self.add_stage(run_stage(until))
+    def add_run(
+        self,
+        until: float | None = None,
+        *,
+        stage_id: str | None = None,
+        output_every: float | None = None,
+    ) -> "StudyStagesBuilder":
+        if until is None:
+            raise TypeError("add_run() requires until")
+        return self.add_stage(
+            run_stage(until),
+            stage_id=stage_id,
+            output_every=output_every,
+            id_kind="run",
+        )
 
     def add_minimize(
         self,
         *,
+        stage_id: str | None = None,
         method: str = "bb",
         tol: float = _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM,
         max_steps: int = 50_000,
         energy_tolerance: float | None = None,
     ) -> "StudyStagesBuilder":
-        return self.add_relax(
-            tol=tol,
-            max_steps=max_steps,
-            algorithm=_resolve_minimize_algorithm(method),
-            energy_tolerance=energy_tolerance,
-            relax_alpha=None,
+        return self.add_stage(
+            relax_stage(
+                tol=tol,
+                max_steps=max_steps,
+                algorithm=_resolve_minimize_algorithm(method),
+                energy_tolerance=energy_tolerance,
+                relax_alpha=None,
+            ),
+            stage_id=stage_id,
+            id_kind="minimize",
         )
 
     def add_eigenmodes(
@@ -3600,12 +3653,30 @@ class StudyCouplingsHandle:
         return self._owner
 
 
+class StudyFieldDriveRegistry:
+    """Typed authoring registry for prescribed regional magnetic-field drives."""
+
+    def add(self, drive: RegionalFieldDrive) -> RegionalFieldDrive:
+        if not isinstance(drive, RegionalFieldDrive):
+            raise TypeError("study.field_drives.add() requires RegionalFieldDrive")
+        if any(existing.id == drive.id for existing in _state._field_drives):
+            raise ValueError(f"duplicate field drive id {drive.id!r}")
+        if any(existing.name == drive.name for existing in _state._field_drives):
+            raise ValueError(f"duplicate field drive name {drive.name!r}")
+        _state._field_drives.append(drive)
+        return drive
+
+    def items(self) -> tuple[RegionalFieldDrive, ...]:
+        return tuple(_state._field_drives)
+
+
 class StudyBuilder:
     """Study-root facade over the current script-local world state."""
 
     def __init__(self, problem_name: str | None = None) -> None:
         _state._api_surface = "study"
         self.stages = StudyStagesBuilder()
+        self.field_drives = StudyFieldDriveRegistry()
         self.universe = StudyUniverseHandle(self)
         self.airbox = StudyAirboxHandle(self)
         self.objects = StudyObjectsHandle(self)
@@ -5817,6 +5888,11 @@ def antenna_field_source(
     return source
 
 
+def field_drive(drive: RegionalFieldDrive) -> RegionalFieldDrive:
+    """Register a canonical regional magnetic-field drive in flat scripts."""
+    return StudyFieldDriveRegistry().add(drive)
+
+
 def current_transport(
     *,
     name: str,
@@ -6372,6 +6448,7 @@ def _build_problem(
         runtime_metadata=runtime_metadata,
         auxiliary_geometries=tuple(s._auxiliary_geometries),
         current_modules=tuple(s._current_modules),
+        field_drives=tuple(s._field_drives),
         couplings=s._couplings.items(),
         excitation_analysis=s._excitation_analysis,
         geometry_asset_cache=s._geometry_asset_cache,

@@ -168,6 +168,13 @@ fn execute_native_fem(
             message: "until_seconds must be positive".to_string(),
         });
     }
+    let time_events = crate::time_events::build_resolved_stage_event_schedule(
+        &plan.field_drives,
+        plan.time_stage.start_time_s,
+        plan.time_stage.start_time_s + until_seconds,
+        outputs,
+        crate::schedules::OUTPUT_TIME_TOLERANCE,
+    );
 
     let direct_minimization_relax = direct_minimizer_control(plan.relaxation.as_ref());
     let needs_initial_snapshot = native_fem_requires_initial_snapshot(
@@ -319,7 +326,8 @@ fn execute_native_fem(
         let outcome = crate::fem::relax::llg_overdamped::execute_llg_overdamped(
             &mut backend,
             plan,
-            until_seconds,
+            plan.time_stage.start_time_s + until_seconds,
+            &time_events.times_s,
             node_count,
             dt,
             dt_is_fixed,

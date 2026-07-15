@@ -23,6 +23,7 @@ enum class GpuFinalScalarSlot : int {
     DemagEnergy,
     DemagRobinBoundaryEnergy,
     ExternalEnergy,
+    DriveEnergy,
     DmiEnergy,
     BulkDmiEnergy,
     AnisotropyEnergy,
@@ -34,7 +35,7 @@ enum class GpuFinalScalarSlot : int {
     MxSum,
     MySum,
     MzSum,
-    MagneticCount,
+    MomentWeight,
     Count,
 };
 

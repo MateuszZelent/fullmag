@@ -1,5 +1,10 @@
 # Microwave Antenna Numerical Backend Implementation Plan
 
+> Supersession note (2026-07-15): regional prescribed-field projection,
+> `H_drive`, and its time-domain runtime are governed by ADR 0019, physics note
+> 0920, and the 2026-07-15 regional-field implementation plan. This document
+> remains canonical for solved antenna field-basis production and consumption.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the Tier 1 full-3D quasistatic antenna workflow: mesh a variable-width microstrip/CPW, solve its balanced conduction current, compute and cache a per-ampere magnetic field basis, project it to FDM/FEM targets, apply arbitrary canonical waveforms during LLG, and publish validated field and spectrum artifacts.

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { EMPTY_SELECTION } from "@/kernel/selection/selectionTypes";
 
 import {
-  buildAntennaCurrentModulesPatch,
+  buildAntennaLegacyMigrationPatch,
   resolveAntennaObjectPanelModel,
 } from "./AntennaObjectPanelModel";
 
@@ -42,7 +42,7 @@ describe("AntennaObjectPanelModel", () => {
     expect(model).toMatchObject({
       amplitude: "1.000e-3 T",
       direction: "(0.000e+0, 1.000e+0, 0.000e+0)",
-      mode: "present",
+      mode: "legacy",
       objectId: "center_microstrip",
       source: "center_drive",
       spatialProfile: "uniform",
@@ -84,49 +84,16 @@ describe("AntennaObjectPanelModel", () => {
     expect(model.waveform).toBe("sin, 750 MHz");
   });
 
-  it("builds a current_modules merge patch for edited antenna waveform", () => {
-    const selection = {
-      ...EMPTY_SELECTION,
-      objectId: "center_microstrip",
-      ref: {
-        kind: "object.antenna" as const,
-        nodeId: "model:object:center_microstrip:antenna",
-        objectId: "center_microstrip",
-        type: "scene-object" as const,
-        visualizationTargetId: "object:center_microstrip" as const,
-      },
-    };
-    const patch = buildAntennaCurrentModulesPatch(
-      selection,
-      {
-        current_modules: {
-          modules: [
-            {
-              B: 0.001,
-              direction: [0, 1, 0],
-              kind: "antenna_field_source",
-              model: "prescribed_zeeman_mask",
-              name: "center_drive",
-              object: "center_microstrip",
-            },
-          ],
-        },
-      } as never,
-      {
-        amplitudeB: "0.002",
-        direction: "1, 0, 0",
-        sincCutoffHz: "30000000000",
-        sincT0: "6e-11",
-        sinusoidalFrequencyHz: "10000000000",
-        waveformKind: "sinc_pulse",
-      },
-    );
-
-    expect(patch.error).toBeNull();
-    expect(patch.modules?.[0]).toMatchObject({
-      B: 0.002,
-      direction: [1, 0, 0],
-      waveform: { cutoff_hz: 30e9, kind: "sinc_pulse", t0: 6e-11 },
+  it("migrates a legacy source to one canonical geometry-mask drive", () => {
+    const selection = { ...EMPTY_SELECTION, objectId: "antenna" };
+    const patch = buildAntennaLegacyMigrationPatch(selection, {
+      field_drives: { drives: [] },
+      current_modules: { modules: [{ id:"old",name:"Old",kind:"antenna_field_source",model:"prescribed_zeeman_mask",object:"antenna",B:0.001,direction:[0,1,0],spatial_profile:{kind:"uniform"} }] },
+    } as never, {
+      amplitudeB:"0.001",direction:"0, 1, 0",waveformKind:"constant",sincCutoffHz:"2e10",sincT0:"5e-11",sinusoidalFrequencyHz:"1e10",
     });
+    expect(patch.error).toBeNull();
+    expect(patch.modules).toEqual([]);
+    expect(patch.drives?.[0]).toMatchObject({ id:"old",kind:"regional",migration:{migrated_from:"prescribed_zeeman_mask"},spatial_profile:{kind:"geometry_mask",object_id:"antenna"} });
   });
 });

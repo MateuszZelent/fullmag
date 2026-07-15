@@ -36,6 +36,8 @@ void gpu_rk_publish_final_step_stats(
             : 0.0;
     const double external_energy =
         ctx.zeeman.has_external_field ? scalar(GpuFinalScalarSlot::ExternalEnergy) : 0.0;
+    const double drive_energy = !ctx.zeeman.regional_drives.empty()
+        ? scalar(GpuFinalScalarSlot::DriveEnergy) : 0.0;
     const double anisotropy_energy =
         ctx.anisotropy.uniaxial_enabled ? scalar(GpuFinalScalarSlot::AnisotropyEnergy) : 0.0;
     const double cubic_anisotropy_energy =
@@ -53,25 +55,26 @@ void gpu_rk_publish_final_step_stats(
     const double mx_sum = scalar(GpuFinalScalarSlot::MxSum);
     const double my_sum = scalar(GpuFinalScalarSlot::MySum);
     const double mz_sum = scalar(GpuFinalScalarSlot::MzSum);
-    const double magnetic_count = scalar(GpuFinalScalarSlot::MagneticCount);
+    const double moment_weight = scalar(GpuFinalScalarSlot::MomentWeight);
 
     stats.max_rhs_amplitude = max_rhs;
     stats.exchange_energy_joules = exchange_energy;
     stats.demag_energy_joules = demag_energy;
     stats.external_energy_joules = external_energy;
+    stats.drive_energy_joules = drive_energy;
     stats.anisotropy_energy_joules = anisotropy_energy + cubic_anisotropy_energy;
     stats.dmi_energy_joules = dmi_energy + bulk_dmi_energy;
     stats.magnetoelastic_energy_joules = magnetoelastic_energy;
     stats.total_energy_joules =
-        exchange_energy + demag_energy + external_energy + anisotropy_energy + cubic_anisotropy_energy +
+        exchange_energy + demag_energy + external_energy + drive_energy + anisotropy_energy + cubic_anisotropy_energy +
         dmi_energy + bulk_dmi_energy + magnetoelastic_energy;
     stats.max_effective_field_amplitude = max_h_eff;
     stats.max_demag_field_amplitude = max_h_demag;
     stats.max_torque_Apm = max_torque;
-    if (magnetic_count > 0.0) {
-        stats.mx = mx_sum / magnetic_count;
-        stats.my = my_sum / magnetic_count;
-        stats.mz = mz_sum / magnetic_count;
+    if (moment_weight > 0.0) {
+        stats.mx = mx_sum / moment_weight;
+        stats.my = my_sum / moment_weight;
+        stats.mz = mz_sum / moment_weight;
     } else {
         stats.mx = 0.0;
         stats.my = 0.0;

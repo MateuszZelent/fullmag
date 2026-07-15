@@ -2739,7 +2739,7 @@ class ProblemApiTests(unittest.TestCase):
                 rewritten,
             )
             self.assertIn('study.geometry(fm.Box(1e-08, 1e-08, 5e-09), name="track")', rewritten)
-            self.assertIn('study.stages.add_run(1e-12)', rewritten)
+            self.assertIn('study.stages.add_run(until=1e-12)', rewritten)
 
             overridden = rewrite_loaded_problem_script(
                 loaded,
@@ -4692,7 +4692,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("algorithm=\"llg_overdamped\"", rewritten)
         self.assertIn("tol=1e-05", rewritten)
         self.assertIn("max_steps=25", rewritten)
-        self.assertIn("study.stages.add_run(4e-12)", rewritten)
+        self.assertIn('study.stages.add_run(stage_id="run-1", until=4e-12)', rewritten)
 
     def test_study_stage_builder_change_device_roundtrips_as_pipeline_action(self) -> None:
         script = """

@@ -157,6 +157,7 @@ pub(crate) fn execute_llg_overdamped(
     engine: FemEngine,
     plan: &FemPlanIR,
     until_seconds: f64,
+    time_event_schedule_s: &[f64],
     node_count: usize,
     mut dt: f64,
     dt_is_fixed: bool,
@@ -168,7 +169,7 @@ pub(crate) fn execute_llg_overdamped(
     mut last_preview_revision: Option<u64>,
 ) -> Result<LlgOverdampedExecution, RunError> {
     let mut latest_stats: Option<StepStats> = None;
-    let mut current_time = 0.0;
+    let mut current_time = plan.time_stage.start_time_s;
     let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut cancelled = false;
     let mut paused = false;
@@ -177,6 +178,12 @@ pub(crate) fn execute_llg_overdamped(
     let mut live_preview_handoff = FemLivePreviewHandoff::default();
     let mut cached_preview_handoff = FemCachedPreviewHandoff::default();
     let mut live_magnetization_handoff = FemLiveMagnetizationHandoff::default();
+    let drive_discontinuities = crate::time_events::resolved_stage_drive_discontinuities(
+        &plan.field_drives,
+        plan.time_stage.start_time_s,
+        until_seconds,
+        crate::schedules::OUTPUT_TIME_TOLERANCE,
+    );
 
     let until_label = if until_seconds.is_finite() {
         format!("{until_seconds:.4e}")
@@ -307,7 +314,18 @@ pub(crate) fn execute_llg_overdamped(
         if paused {
             break;
         }
-        let dt_step = dt.min(until_seconds - current_time);
+        if drive_discontinuities.iter().any(|event|
+            (*event - current_time).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE
+        ) {
+            backend.invalidate_fsal()?;
+        }
+        let proposed_dt = dt.min(until_seconds - current_time);
+        let dt_step = crate::time_events::cap_timestep_to_next_event(
+            current_time,
+            proposed_dt,
+            time_event_schedule_s,
+            crate::schedules::OUTPUT_TIME_TOLERANCE,
+        );
         let interrupt_requested = live
             .as_ref()
             .and_then(|consumer| consumer.interrupt_requested);

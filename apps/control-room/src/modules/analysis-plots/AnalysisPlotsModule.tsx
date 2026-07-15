@@ -32,6 +32,9 @@ export default function AnalysisPlotsModule({ kernel }: ModuleProps) {
       visibleTable={controller.visibleTable}
       xAxisId={controller.xAxisId}
       yAxisIds={controller.yAxisIds}
+      spinWaveGamma={controller.spinWaveGamma}
+      spinWaveGammaStatus={controller.spinWaveGammaStatus}
+      dynamicStructureFactor={controller.dynamicStructureFactor}
     />
   );
 }

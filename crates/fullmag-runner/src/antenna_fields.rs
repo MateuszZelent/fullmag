@@ -55,56 +55,7 @@ pub(crate) fn combined_antenna_zeeman_mask_field_at_time(
 }
 
 fn time_dependence_multiplier(waveform: Option<&TimeDependenceIR>, t: f64) -> f64 {
-    match waveform {
-        None | Some(TimeDependenceIR::Constant) => 1.0,
-        Some(TimeDependenceIR::Sinusoidal {
-            frequency_hz,
-            phase_rad,
-            offset,
-        }) => (2.0 * PI * frequency_hz * t + phase_rad).sin() + offset,
-        Some(TimeDependenceIR::Pulse { t_on, t_off }) => {
-            if t >= *t_on && t < *t_off {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        Some(TimeDependenceIR::PiecewiseLinear { points }) => piecewise_linear(points, t),
-        Some(TimeDependenceIR::SincPulse {
-            cutoff_hz,
-            t0,
-            amplitude,
-        }) => amplitude * sinc(2.0 * cutoff_hz * (t - t0)),
-    }
-}
-
-fn sinc(value: f64) -> f64 {
-    if value.abs() <= 1e-12 {
-        1.0
-    } else {
-        (PI * value).sin() / (PI * value)
-    }
-}
-
-fn piecewise_linear(points: &[[f64; 2]], t: f64) -> f64 {
-    if points.is_empty() {
-        return 0.0;
-    }
-    if t <= points[0][0] {
-        return points[0][1];
-    }
-    if t >= points[points.len() - 1][0] {
-        return points[points.len() - 1][1];
-    }
-    for window in points.windows(2) {
-        let [t0, v0] = window[0];
-        let [t1, v1] = window[1];
-        if t >= t0 && t <= t1 {
-            let frac = (t - t0) / (t1 - t0);
-            return v0 + frac * (v1 - v0);
-        }
-    }
-    0.0
+    crate::time_dependence::evaluate_optional_time_dependence(waveform, t)
 }
 
 /// Precompute per-unit-current Biot-Savart fields for each antenna module.

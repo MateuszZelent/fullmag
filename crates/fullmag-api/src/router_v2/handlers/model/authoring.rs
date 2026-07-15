@@ -11,7 +11,8 @@ use crate::router_v2::handlers::data::field_resolution::flatten_json_field_value
 use crate::schemas::authoring::{
     AuthoringTransactionRequest, AuthoringTransactionResponse, CouplingCreateRequest,
     CouplingDeleteRequest, CouplingEndpointResolutionResource, CouplingListResource,
-    CouplingPatchRequest, CouplingResource, GeometryRealizationRequest,
+    CouplingPatchRequest, CouplingResource, FieldDriveCreateRequest, FieldDriveDeleteRequest,
+    FieldDriveListResource, FieldDriveReplaceRequest, GeometryRealizationRequest,
     MagnetizationAssetPatchRequest, MagnetizationAssetResource, MaterialParameterFieldListResource,
     MaterialParameterFieldResource, MaterialPatchRequest, MaterialPropertiesResource,
     MaterialReferenceResource, MaterialResource, NullableF64PatchValue, NullableStringPatchValue,
@@ -19,8 +20,9 @@ use crate::schemas::authoring::{
     ObjectInteractionPatchRequest, ObjectInteractionResource, ObjectPatchRequest,
     ObjectRegionCreateRequest, ObjectRegionDuplicateRequest, ObjectRegionPatchRequest,
     ObjectRegionReorderRequest, RegionDiagnosticResource, RegionDiagnosticsResource,
-    RegionListResource, RegionPatchRequest, RegionResource, SceneCouplingPatch, ScenePatchRequest,
-    SceneResource, StudyRuntimePatchRequest, StudyRuntimeResource, UniverseFitRequest,
+    RegionListResource, RegionPatchRequest, RegionResource, RegionalFieldDriveResource,
+    SceneCouplingPatch, ScenePatchRequest, SceneResource, StudyRuntimePatchRequest,
+    StudyRuntimeResource, UniverseFitRequest,
     UniversePatchRequest, UniverseResource,
 };
 use crate::types::{
@@ -596,6 +598,109 @@ pub async fn get_authoring_couplings(
         scene_revision: scene.revision,
         couplings: authored_coupling_resources(&scene, execution_plan.as_ref(), fem_mesh.as_ref()),
     }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/model/field-drives",
+    responses(
+        (status = 200, description = "Canonical regional field drives", body = FieldDriveListResource),
+        (status = 404, description = "No active workspace or scene document"),
+    ),
+    tag = "model"
+)]
+pub async fn get_authoring_field_drives(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<FieldDriveListResource>, ApiError> {
+    let scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    let drives = scene
+        .field_drives
+        .drives
+        .into_iter()
+        .map(RegionalFieldDriveResource::from_ir)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| ApiError::internal(format!("failed to serialize field drive: {error}")))?;
+    Ok(Json(FieldDriveListResource {
+        scene_revision: scene.revision,
+        drives,
+    }))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v2/sessions/current/model/field-drives",
+    request_body = FieldDriveCreateRequest,
+    responses(
+        (status = 200, description = "Created a regional field drive", body = AuthoringTransactionResponse),
+        (status = 400, description = "Invalid field drive"),
+        (status = 409, description = "Revision conflict or duplicate field drive"),
+    ),
+    tag = "model"
+)]
+pub async fn create_authoring_field_drive(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FieldDriveCreateRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    apply_create_field_drive_transaction(&mut scene, req.base_revision, req.drive.into_ir().map_err(
+        |error| ApiError::bad_request(format!("invalid field drive: {error}")),
+    )?)?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    authoring_transaction_response("create_field_drive", committed)
+}
+
+#[utoipa::path(
+    put,
+    path = "/v2/sessions/current/model/field-drives/{drive_id}",
+    params(("drive_id" = String, Path, description = "Stable field drive id")),
+    request_body = FieldDriveReplaceRequest,
+    responses(
+        (status = 200, description = "Replaced a regional field drive", body = AuthoringTransactionResponse),
+        (status = 400, description = "Invalid field drive"),
+        (status = 404, description = "Field drive not found"),
+        (status = 409, description = "Revision conflict"),
+    ),
+    tag = "model"
+)]
+pub async fn replace_authoring_field_drive(
+    State(state): State<Arc<AppState>>,
+    Path(drive_id): Path<String>,
+    Json(req): Json<FieldDriveReplaceRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    apply_replace_field_drive_transaction(
+        &mut scene,
+        req.base_revision,
+        &drive_id,
+        req.drive.into_ir().map_err(|error| {
+            ApiError::bad_request(format!("invalid field drive: {error}"))
+        })?,
+    )?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    authoring_transaction_response("replace_field_drive", committed)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/v2/sessions/current/model/field-drives/{drive_id}",
+    params(("drive_id" = String, Path, description = "Stable field drive id")),
+    request_body = FieldDriveDeleteRequest,
+    responses(
+        (status = 200, description = "Deleted a regional field drive", body = AuthoringTransactionResponse),
+        (status = 404, description = "Field drive not found"),
+        (status = 409, description = "Revision conflict"),
+    ),
+    tag = "model"
+)]
+pub async fn delete_authoring_field_drive(
+    State(state): State<Arc<AppState>>,
+    Path(drive_id): Path<String>,
+    Json(req): Json<FieldDriveDeleteRequest>,
+) -> Result<Json<AuthoringTransactionResponse>, ApiError> {
+    let mut scene = crate::get_or_load_current_live_scene_document(&state).await?;
+    apply_delete_field_drive_transaction(&mut scene, req.base_revision, &drive_id)?;
+    let committed = crate::commit_current_live_scene_document(&state, scene).await?;
+    authoring_transaction_response("delete_field_drive", committed)
 }
 
 #[utoipa::path(
@@ -3090,6 +3195,90 @@ fn apply_create_coupling_transaction(
     Ok(())
 }
 
+fn validate_field_drive_scene(scene: &SceneDocument) -> Result<(), ApiError> {
+    fullmag_authoring::validate_scene_document(scene)
+        .map_err(|error| ApiError::bad_request(format!("invalid field drive scene: {error}")))
+}
+
+fn apply_create_field_drive_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    drive: fullmag_ir::RegionalFieldDriveIR,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    if scene
+        .field_drives
+        .drives
+        .iter()
+        .any(|entry| entry.id == drive.id || entry.name == drive.name)
+    {
+        return Err(ApiError::conflict(format!(
+            "field drive id or name already exists: {}/{}",
+            drive.id, drive.name
+        )));
+    }
+    scene.field_drives.drives.push(drive);
+    if let Err(error) = validate_field_drive_scene(scene) {
+        scene.field_drives.drives.pop();
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn apply_replace_field_drive_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    drive_id: &str,
+    drive: fullmag_ir::RegionalFieldDriveIR,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    if drive.id != drive_id {
+        return Err(ApiError::bad_request(
+            "field drive replacement cannot modify the stable id",
+        ));
+    }
+    let index = scene
+        .field_drives
+        .drives
+        .iter()
+        .position(|entry| entry.id == drive_id)
+        .ok_or_else(|| ApiError::not_found(format!("field drive not found: {drive_id}")))?;
+    if scene
+        .field_drives
+        .drives
+        .iter()
+        .enumerate()
+        .any(|(other, entry)| other != index && entry.name == drive.name)
+    {
+        return Err(ApiError::conflict(format!(
+            "field drive name already exists: {}",
+            drive.name
+        )));
+    }
+    let previous = std::mem::replace(&mut scene.field_drives.drives[index], drive);
+    if let Err(error) = validate_field_drive_scene(scene) {
+        scene.field_drives.drives[index] = previous;
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn apply_delete_field_drive_transaction(
+    scene: &mut SceneDocument,
+    base_revision: Option<u64>,
+    drive_id: &str,
+) -> Result<(), ApiError> {
+    check_base_scene_revision(scene, base_revision)?;
+    let before = scene.field_drives.drives.len();
+    scene.field_drives.drives.retain(|entry| entry.id != drive_id);
+    if scene.field_drives.drives.len() == before {
+        return Err(ApiError::not_found(format!(
+            "field drive not found: {drive_id}"
+        )));
+    }
+    validate_field_drive_scene(scene)
+}
+
 fn apply_patch_coupling_transaction(
     scene: &mut SceneDocument,
     base_revision: Option<u64>,
@@ -3883,5 +4072,75 @@ fn expect_object_params(
             "invalid params payload for interaction: {}",
             interaction_kind_str(kind)
         ))),
+    }
+}
+
+#[cfg(test)]
+mod regional_field_drive_tests {
+    use super::*;
+    use fullmag_ir::{
+        DriveActivationIR, FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR,
+        FieldTimeOriginIR, RegionalFieldDriveIR, TimeDependenceIR,
+    };
+
+    fn scene() -> SceneDocument {
+        serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "revision": 4
+        }))
+        .expect("minimal scene")
+    }
+
+    fn drive(id: &str) -> RegionalFieldDriveIR {
+        RegionalFieldDriveIR {
+            id: id.into(),
+            name: format!("Drive {id}"),
+            kind: FieldDriveKindIR::Regional,
+            enabled: true,
+            target: FieldTargetIR::Global {},
+            amplitude_b_t: 1e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: FieldSpatialProfileIR::Uniform {},
+            waveform: TimeDependenceIR::SincPulse {
+                cutoff_hz: 20e9,
+                t0: 50e-12,
+                amplitude: 1.0,
+            },
+            time_origin: FieldTimeOriginIR::StageLocal,
+            activation: DriveActivationIR::AllTimeEvolution {},
+            migration: None,
+        }
+    }
+
+    #[test]
+    fn field_drive_crud_preserves_typed_scene_state() {
+        let mut scene = scene();
+        apply_create_field_drive_transaction(&mut scene, Some(4), drive("pulse"))
+            .expect("create");
+        assert_eq!(scene.field_drives.drives[0].id, "pulse");
+
+        let mut replacement = drive("pulse");
+        replacement.amplitude_b_t = 2e-3;
+        apply_replace_field_drive_transaction(&mut scene, Some(4), "pulse", replacement)
+            .expect("replace");
+        assert_eq!(scene.field_drives.drives[0].amplitude_b_t, 2e-3);
+
+        apply_delete_field_drive_transaction(&mut scene, Some(4), "pulse").expect("delete");
+        assert!(scene.field_drives.drives.is_empty());
+    }
+
+    #[test]
+    fn field_drive_crud_rejects_revision_conflict_and_invalid_direction() {
+        let mut scene = scene();
+        let conflict = apply_create_field_drive_transaction(&mut scene, Some(3), drive("pulse"))
+            .expect_err("stale revision must fail");
+        assert_eq!(conflict.status, axum::http::StatusCode::CONFLICT);
+
+        let mut invalid = drive("invalid");
+        invalid.direction = [0.0, 2.0, 0.0];
+        let error = apply_create_field_drive_transaction(&mut scene, Some(4), invalid)
+            .expect_err("invalid direction must fail");
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+        assert!(scene.field_drives.drives.is_empty());
     }
 }

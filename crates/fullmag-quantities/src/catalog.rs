@@ -4,7 +4,7 @@ use crate::descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, Qua
 use crate::id::{normalize_quantity_id, QuantityId};
 use crate::{QuantityComponent, QuantityShape};
 
-const CATALOG: [QuantitySpec; 45] = [
+const CATALOG: [QuantitySpec; 48] = [
     QuantitySpec {
         id: QuantityId::M,
         label: "Magnetization",
@@ -124,6 +124,27 @@ const CATALOG: [QuantitySpec; 45] = [
         n_comp: 3,
         location: QuantityLocation::Node,
         domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Vector3,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::HDrive,
+        label: "Regional Drive Field",
+        description: "Applied regional time-domain magnetic drive used by LLG",
+        shape: QuantityShape::VectorField,
+        unit: "A/m",
+        interactive_preview: true,
+        cached_preview: true,
+        quick_access_label: Some("H_drive"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::MagneticOnly,
         normalization_hint: NormalizationHint::MaxAbs,
         default_component: QuantityComponent::Vector3,
         supports_preview_2d: true,
@@ -447,6 +468,27 @@ const CATALOG: [QuantitySpec; 45] = [
         supports_export: true,
     },
     QuantitySpec {
+        id: QuantityId::EDrive,
+        label: "Regional Drive Energy",
+        description: "Zeeman energy due to the regional time-domain drive",
+        shape: QuantityShape::GlobalScalar,
+        unit: "J",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: None,
+        scalar_metric_key: Some("e_drive"),
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Global,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::None,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: true,
+        supports_export: true,
+    },
+    QuantitySpec {
         id: QuantityId::EAni,
         label: "Anisotropy Energy",
         description: "Magnetocrystalline anisotropy energy",
@@ -708,6 +750,27 @@ const CATALOG: [QuantitySpec; 45] = [
         interactive_preview: true,
         cached_preview: false,
         quick_access_label: Some("ε_ext"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Cell,
+        domain: QuantityDomain::MagneticOnly,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::EdenDrive,
+        label: "Regional Drive Energy Density",
+        description: "Spatial Zeeman energy density due to the regional time-domain drive",
+        shape: QuantityShape::SpatialScalar,
+        unit: "J/m³",
+        interactive_preview: true,
+        cached_preview: false,
+        quick_access_label: Some("ε_drive"),
         scalar_metric_key: None,
         ui_exposed: true,
         n_comp: 1,
@@ -1019,6 +1082,25 @@ pub fn quantity_unit(id: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regional_field_drive_quantities_have_distinct_canonical_identity() {
+        let expected = [
+            ("H_drive", QuantityShape::VectorField, "A/m"),
+            ("E_drive", QuantityShape::GlobalScalar, "J"),
+            ("eden_drive", QuantityShape::SpatialScalar, "J/m³"),
+        ];
+
+        for (id, shape, unit) in expected {
+            let spec = quantity_spec(id).expect("regional drive quantity should be catalogued");
+            assert_eq!(normalize_quantity_id(id).expect("known quantity").as_str(), id);
+            assert_eq!(spec.shape, shape);
+            assert_eq!(spec.unit, unit);
+            assert_eq!(spec.domain, QuantityDomain::MagneticOnly);
+            assert!(spec.ui_exposed);
+            assert!(spec.supports_export);
+        }
+    }
 
     #[test]
     fn mechanical_magnetoelastic_quantities_are_canonical_but_not_previewed_yet() {

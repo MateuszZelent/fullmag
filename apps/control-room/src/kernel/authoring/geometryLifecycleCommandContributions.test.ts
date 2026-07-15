@@ -533,7 +533,7 @@ describe("geometry lifecycle command contributions", () => {
     now.mockRestore();
   });
 
-  it("adds microstrip antennas as auxiliary scene objects with field modules", async () => {
+  it("adds microstrip antennas as auxiliary scene objects with canonical field drives", async () => {
     const registry = registryWithLifecycleCommands();
     const bus = new EventBus<KernelEventMap>();
     const selection = new SelectionController(bus);
@@ -543,6 +543,7 @@ describe("geometry lifecycle command contributions", () => {
       current_modules: {
         modules: [{ id: "existing-source", kind: "antenna_field_source" }],
       },
+      field_drives: { drives: [{ id: "existing-drive", kind: "regional" }] },
       objects: [{ id: "waveguide", name: "Waveguide", role: "magnet" }],
       revision: 20,
     }));
@@ -568,19 +569,21 @@ describe("geometry lifecycle command contributions", () => {
     expect(commitTransaction).toHaveBeenCalledWith({
       kind: "merge_patch",
       merge_patch: {
-        current_modules: {
-          modules: [
-            { id: "existing-source", kind: "antenna_field_source" },
+        field_drives: {
+          drives: [
+            { id: "existing-drive", kind: "regional" },
             {
-              B: 0.001,
+              activation: { kind: "all_time_evolution" },
+              amplitude_B_T: 0.001,
               direction: [0, 1, 0],
+              enabled: true,
               id: "antenna-9ix:H_ant",
-              kind: "antenna_field_source",
-              model: "prescribed_zeeman_mask",
+              kind: "regional",
               name: "Microstrip antenna field",
-              object: "antenna-9ix",
-              spatial_profile: { kind: "uniform" },
-              waveform: { cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
+              spatial_profile: { kind: "geometry_mask", object_id: "antenna-9ix", envelope: { kind: "uniform" } },
+              target: { kind: "global" },
+              time_origin: "stage_local",
+              waveform: { amplitude: 1, cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
             },
           ],
         },

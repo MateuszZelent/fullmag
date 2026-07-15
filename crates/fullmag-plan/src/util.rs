@@ -1,6 +1,40 @@
 use fullmag_ir::{DeclaredUniverseIR, DomainFrameIR, ProblemIR};
 use serde_json::Value;
 
+pub(crate) fn active_stage_id(problem: &ProblemIR) -> Option<&str> {
+    problem
+        .problem_meta
+        .runtime_metadata
+        .get("active_stage_id")
+        .and_then(Value::as_str)
+}
+
+pub(crate) fn time_stage_context(problem: &ProblemIR) -> fullmag_ir::TimeStageContextIR {
+    fullmag_ir::TimeStageContextIR {
+        active_stage_id: active_stage_id(problem).map(str::to_owned),
+        start_time_s: problem
+            .problem_meta
+            .runtime_metadata
+            .get("stage_start_time_s")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+    }
+}
+
+pub(crate) fn field_drive_is_active(
+    drive: &fullmag_ir::RegionalFieldDriveIR,
+    active_stage: Option<&str>,
+) -> bool {
+    if !drive.enabled {
+        return false;
+    }
+    match &drive.activation {
+        fullmag_ir::DriveActivationIR::AllTimeEvolution {} => true,
+        fullmag_ir::DriveActivationIR::StageIds { stage_ids } => active_stage
+            .is_some_and(|active| stage_ids.iter().any(|stage_id| stage_id == active)),
+    }
+}
+
 pub(crate) const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
 pub(crate) const PLACEMENT_TOLERANCE: f64 = 1e-12;
 pub(crate) const GRID_TOLERANCE: f64 = 1e-6;

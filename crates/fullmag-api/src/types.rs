@@ -1382,6 +1382,7 @@ mod tests {
             }],
             mesh_interfaces: Vec::new(),
             current_modules: Vec::new(),
+            field_drives: Vec::new(),
             excitation_analysis: None,
         }
     }

@@ -16,6 +16,10 @@ import {
   useTableColumnsResource,
   useTableRowsBinaryResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import {
+  useDynamicStructureFactorResource,
+  useSpinWaveGammaResource,
+} from "@/kernel/resources/spinWaveResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelection";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
@@ -105,6 +109,8 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       ),
     [solverEnergyHistory.data, solverEnergyHistory.status],
   );
+  const spinWaveGamma = useSpinWaveGammaResource();
+  const dynamicStructureFactor = useDynamicStructureFactorResource();
   const frequencyDomainManifest = useFrequencyDomainManifestResource();
   const frequencyDomainManifestRoute = routeFrequencyDomainCalculationMode(
     frequencyDomainManifest.data?.result_manifest?.payload,
@@ -407,6 +413,9 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     xAxisId,
     yAxisIds,
     selectedStageId,
+    spinWaveGamma: spinWaveGamma.data ?? null,
+    spinWaveGammaStatus: spinWaveGamma.status,
+    dynamicStructureFactor: dynamicStructureFactor.data ?? null,
   };
 }
 

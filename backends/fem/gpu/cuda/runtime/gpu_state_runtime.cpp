@@ -11,6 +11,7 @@
 #include "cpu/mfem/runtime/mfem_context.hpp"
 #include "gpu/cuda/demag_poisson/poisson.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
 
 #include <cstdint>
 
@@ -158,6 +159,11 @@ bool initialize_context_gpu_state(Context &ctx, std::string &error) {
             error)) {
         return gpu_bootstrap_failed(ctx);
     }
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (!gpu_regional_field_drive_upload(ctx, error)) {
+        return gpu_bootstrap_failed(ctx);
+    }
+#endif
     return true;
 }
 

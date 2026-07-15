@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { MODEL_SCENE_PATH } from "@/kernel/api/apiPaths";
-import type { JsonObject } from "@/kernel/api/apiTypes";
+import type { JsonObject, RegionalFieldDriveResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { Button } from "@/shared/ui/Button";
@@ -12,7 +12,8 @@ import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
-  buildAntennaCurrentModulesPatch,
+  buildAntennaCanonicalFieldDrive,
+  buildAntennaLegacyMigrationPatch,
   resolveAntennaObjectDraft,
   resolveAntennaObjectPanelModel,
   type AntennaObjectDraft,
@@ -78,23 +79,11 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
   }
 
   async function commitDraft(): Promise<void> {
-    const patch = buildAntennaCurrentModulesPatch(selection, scene.data, draft);
-    if (patch.error || !patch.modules) {
-      setFeedback({ kind: "error", message: patch.error ?? "Invalid antenna draft." });
-      return;
-    }
     setPending(true);
     try {
-      const response = await api.model.commitTransaction({
-        kind: "merge_patch",
-        merge_patch: {
-          current_modules: {
-            modules: patch.modules as unknown as JsonObject[],
-          },
-        },
-      });
+      const response = model.mode === "canonical" ? await saveCanonicalDrive() : await migrateLegacyDrive();
       invalidateSceneResource(resources, response.scene_revision);
-      setFeedback({ kind: "success", message: "Antenna source committed." });
+      setFeedback({ kind: "success", message: model.mode === "legacy" ? "Legacy source migrated to a regional field drive." : "Antenna field drive committed." });
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
     } finally {
@@ -102,12 +91,26 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
     }
   }
 
+  async function saveCanonicalDrive() {
+    const patch = buildAntennaCanonicalFieldDrive(selection, scene.data, draft);
+    if (patch.error || !patch.drive) throw new Error(patch.error ?? "Invalid antenna drive draft.");
+    const drive = patch.drive as unknown as RegionalFieldDriveResource;
+    return api.model.replaceFieldDrive(drive.id, { base_revision: scene.data?.revision ?? null, drive });
+  }
+
+  async function migrateLegacyDrive() {
+    const patch = buildAntennaLegacyMigrationPatch(selection, scene.data, draft);
+    if (patch.error || !patch.drives || !patch.modules) throw new Error(patch.error ?? "Invalid legacy antenna migration.");
+    return api.model.commitTransaction({ kind: "merge_patch", merge_patch: { field_drives: { drives: patch.drives as JsonObject[] }, current_modules: { modules: patch.modules as JsonObject[] } } });
+  }
+
   return (
     <div className="fm-inspector-panel">
       <InspectorSection
         title="Antenna"
-        badge={model.mode === "present" ? "Zeeman mask" : "unassigned"}
+        badge={model.mode === "canonical" ? "Regional drive" : model.mode === "legacy" ? "Migration required" : "unassigned"}
       >
+        {model.mode === "legacy" ? <FeedbackBanner kind="warning" message="Deprecated prescribed_zeeman_mask source. Saving migrates it atomically to RegionalFieldDrive." /> : null}
         <FieldRow label="Object" value={model.objectId} />
         <FieldRow label="Source" value={model.source} />
         <FieldRow label="Amplitude" value={model.amplitude} />
@@ -172,13 +175,13 @@ export function AntennaObjectPanel({ selection }: InspectorPanelProps) {
         ) : null}
         <div className="fm-inspector-toolbar">
           <Button
-            disabled={pending || model.mode !== "present"}
+            disabled={pending || model.mode === "missing"}
             size="sm"
             type="button"
             variant="primary"
             onClick={commitDraft}
           >
-            {pending ? "Saving" : "Save antenna"}
+            {pending ? "Saving" : model.mode === "legacy" ? "Migrate and save" : "Save field drive"}
           </Button>
         </div>
       </InspectorSection>

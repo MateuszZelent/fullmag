@@ -5,6 +5,7 @@ import type {
   ModelTreeObjectSnapshot,
   ModelTreePhysicsInteractionSnapshot,
   ModelTreeCouplingSnapshot,
+  ModelTreeFieldDriveSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
 
@@ -986,6 +987,31 @@ function couplingNodes(couplings: readonly ModelTreeCouplingSnapshot[]): Explore
   };
 }
 
+function fieldDriveNodes(drives: readonly ModelTreeFieldDriveSnapshot[]): ExplorerNode | null {
+  if (drives.length === 0) return null;
+  return {
+    id: "model:physics:field-drives",
+    kind: "physics.field-drives",
+    label: "Field drives",
+    parentId: "model:session",
+    badge: `${drives.length}`,
+    icon: "wave",
+    status: "ready",
+    contextCommands: ["workspace.focus-selection"],
+    children: drives.map((drive) => ({
+      id: `model:physics:field-drives:${drive.id}`,
+      kind: "physics.field-drive" as const,
+      label: drive.label,
+      parentId: "model:physics:field-drives",
+      badge: `${drive.targetKind} · ${drive.waveformKind}`,
+      icon: "wave" as const,
+      fieldDriveId: drive.id,
+      status: drive.enabled ? "ready" as const : "degraded" as const,
+      contextCommands: ["workspace.focus-selection"],
+    })),
+  };
+}
+
 function couplingStatus(coupling: ModelTreeCouplingSnapshot): ExplorerNodeStatus {
   if (!coupling.enabled) return "degraded";
   if (coupling.realizationStatus?.includes("requires")) return "unsupported";
@@ -1148,6 +1174,10 @@ export function buildModelTree(
   const couplingBranch = couplingNodes(snapshot?.couplings ?? []);
   if (couplingBranch) {
     sessionChildren.push(couplingBranch);
+  }
+  const fieldDriveBranch = fieldDriveNodes(snapshot?.fieldDrives ?? []);
+  if (fieldDriveBranch) {
+    sessionChildren.push(fieldDriveBranch);
   }
 
   sessionChildren.push(

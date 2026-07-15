@@ -9706,6 +9706,141 @@ fn fdm_prescribed_zeeman_mask_antenna_plans_with_extra_geometry() {
     }
 }
 
+#[test]
+fn fdm_regional_field_drive_is_carried_as_canonical_plan_input() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "pulse".to_string(),
+        name: "Pulse".to_string(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1.0e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse {
+            cutoff_hz: 20.0e9,
+            t0: 50.0e-12,
+            amplitude: 1.0,
+        },
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
+    });
+    match &mut ir.study {
+        StudyIR::TimeEvolution { sampling, .. }
+        | StudyIR::Relaxation { sampling, .. }
+        | StudyIR::Eigenmodes { sampling, .. }
+        | StudyIR::FrequencyResponse { sampling, .. }
+        | StudyIR::Hysteresis { sampling, .. } => {
+            sampling.outputs.push(OutputIR::Field {
+                name: "H_drive".into(),
+                every_seconds: 1e-12,
+            });
+            sampling.outputs.push(OutputIR::Scalar {
+                name: "E_drive".into(),
+                every_seconds: 1e-12,
+            });
+        }
+    }
+
+    let execution = plan(&ir).expect("canonical regional drive should plan on FDM");
+    match execution.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            assert_eq!(fdm.field_drives, ir.field_drives);
+            assert!(fdm.antenna_zeeman_masks.is_empty());
+            assert_eq!(fdm.regional_field_drive_bases.len(), 1);
+            let expected_h = 1.0e-3 / crate::util::MU0;
+            for value in &fdm.regional_field_drive_bases[0].field_xyz {
+                assert_eq!(*value, [0.0, expected_h, 0.0]);
+            }
+        }
+        other => panic!("expected FDM plan, got {other:?}"),
+    }
+}
+
+#[test]
+fn fdm_regional_field_drive_activation_is_resolved_for_active_stage() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "study_pipeline".into(),
+        serde_json::json!({"version":"study_pipeline.v1","nodes":[
+            {"id":"relax","enabled":true}, {"id":"excite","enabled":true}
+        ]}),
+    );
+    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("relax"));
+    ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), serde_json::json!(2e-12));
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "excite-only".into(), name: "Excite only".into(), kind: FieldDriveKindIR::Regional,
+        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Constant, time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::StageIds { stage_ids: vec!["excite".into()] }, migration: None,
+    });
+    let relaxed = plan(&ir).expect("inactive drive should plan");
+    let BackendPlanIR::Fdm(relaxed) = relaxed.backend_plan else { panic!("expected FDM") };
+    assert!(relaxed.field_drives.is_empty());
+    assert!(relaxed.regional_field_drive_bases.is_empty());
+    assert_eq!(relaxed.time_stage.active_stage_id.as_deref(), Some("relax"));
+    assert_eq!(relaxed.time_stage.start_time_s, 2e-12);
+
+    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("excite"));
+    let excited = plan(&ir).expect("active drive should plan");
+    let BackendPlanIR::Fdm(excited) = excited.backend_plan else { panic!("expected FDM") };
+    assert_eq!(excited.field_drives.len(), 1);
+    assert_eq!(excited.regional_field_drive_bases.len(), 1);
+}
+
+#[test]
+fn fdm_regional_field_drive_rejects_abm3_without_exact_stage_time_contract() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "pulse".into(), name: "Pulse".into(), kind: FieldDriveKindIR::Regional,
+        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 20e9, t0: 50e-12, amplitude: 1.0 },
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::AllTimeEvolution {}, migration: None,
+    });
+    if let StudyIR::TimeEvolution {
+        dynamics: DynamicsIR::Llg { integrator, .. },
+        ..
+    } = &mut ir.study
+    {
+        *integrator = "abm3".to_string();
+    }
+
+    let error = plan(&ir).expect_err("ABM3 drive must fail before runtime");
+    assert!(error.reasons.iter().any(|reason| reason.contains("ABM3") && reason.contains("RegionalFieldDrive")));
+}
+
+#[test]
+fn fdm_cuda_regional_field_drive_fails_closed() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "drive".into(),
+        name: "Drive".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Constant,
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
+    });
+    let error = plan(&ir).expect_err("CUDA FDM must not silently ignore field drives");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("fdm_cuda_regional_field_drive_unsupported")
+    }));
+}
+
 fn fem_minimal_test_ir() -> ProblemIR {
     let mut ir = ProblemIR::bootstrap_example();
     ir.backend_policy.requested_backend = BackendTarget::Fem;

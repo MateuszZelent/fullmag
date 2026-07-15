@@ -4,7 +4,7 @@ use crate::{
     CellSize, EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
     ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace, GridShape,
     IntegratorBuffers, LlgConfig, MaterialParameters, ResolvedFdmPeriodicWorkspace, Result,
-    StepReport, TimeIntegrator, Vector3,
+    RegionalFieldDriveTerm, StepReport, TimeIntegrator, Vector3,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -43,6 +43,8 @@ pub struct ExchangeLlgProblem {
     pub ms_field: Option<Vec<f64>>,
     pub a_field: Option<Vec<f64>>,
     pub alpha_field: Option<Vec<f64>>,
+    /// Canonical regional field drives, separate from legacy per-node fields.
+    pub regional_field_drives: Vec<RegionalFieldDriveTerm>,
 }
 
 impl ExchangeLlgProblem {
@@ -107,7 +109,21 @@ impl ExchangeLlgProblem {
             ms_field: None,
             a_field: None,
             alpha_field: None,
+            regional_field_drives: Vec::new(),
         })
+    }
+
+    pub fn regional_drive_field_at_time(&self, evaluation_time_s: f64) -> Vec<Vector3> {
+        let mut field = vec![[0.0; 3]; self.grid.cell_count()];
+        for drive in self.regional_field_drives.iter().filter(|drive| drive.enabled) {
+            let multiplier = drive.multiplier_at(evaluation_time_s);
+            for (total, basis) in field.iter_mut().zip(&drive.basis_field) {
+                total[0] += multiplier * basis[0];
+                total[1] += multiplier * basis[1];
+                total[2] += multiplier * basis[2];
+            }
+        }
+        field
     }
 
     pub fn new_state(&self, magnetization: Vec<Vector3>) -> Result<ExchangeLlgState> {
@@ -564,6 +580,7 @@ impl Clone for ExchangeLlgProblem {
             ms_field: self.ms_field.clone(),
             a_field: self.a_field.clone(),
             alpha_field: self.alpha_field.clone(),
+            regional_field_drives: self.regional_field_drives.clone(),
         }
     }
 }
@@ -584,5 +601,6 @@ impl PartialEq for ExchangeLlgProblem {
             && self.ms_field == other.ms_field
             && self.a_field == other.a_field
             && self.alpha_field == other.alpha_field
+            && self.regional_field_drives == other.regional_field_drives
     }
 }

@@ -42,7 +42,7 @@ pub use fdm::{
     ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy,
     FdmDemagBoundary, FftWorkspace, ResolvedFdmPeriodicWorkspace,
     GridShape, IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
-    OerstedCylinderConfig, ReferenceDemoReport, Result, RhsEvaluation, SlonczewskiSttConfig,
+    OerstedCylinderConfig, ReferenceDemoReport, RegionalFieldDriveTerm, Result, RhsEvaluation, SlonczewskiSttConfig,
     SolverSession, SotConfig, StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA,
     ZhangLiSttConfig,
 };

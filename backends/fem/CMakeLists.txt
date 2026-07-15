@@ -102,6 +102,8 @@ set(FEM_SOURCES
     cpu/mfem/interactions/thermal_brown_sampler.cpp
     cpu/mfem/interactions/thermal_brown_sigma.cpp
     cpu/mfem/interactions/zeeman.cpp
+    cpu/mfem/interactions/zeeman_time_dependence.cpp
+    cpu/mfem/interactions/zeeman_regional_field.cpp
     cpu/mfem/interactions/zeeman_energy.cpp
     cpu/mfem/interactions/zeeman_field.cpp
     cpu/mfem/interactions/zeeman_uniform_field.cpp
@@ -262,6 +264,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/stt/stt_kernels.cu
             gpu/cuda/interactions/thermal/thermal_kernels.cu
             gpu/cuda/interactions/zeeman/zeeman_kernels.cu
+            gpu/cuda/interactions/zeeman/regional_field_kernels.cu
             gpu/cuda/demag_poisson/demag_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
             gpu/cuda/relaxation/pgbb_kernels.cu

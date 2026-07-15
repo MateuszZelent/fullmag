@@ -1,5 +1,10 @@
 # Microwave Antenna Contracts and API Implementation Plan
 
+> Supersession note (2026-07-15): regional prescribed-field clauses are
+> superseded by ADR 0019, physics note 0920, and the 2026-07-15 regional-field
+> implementation plan. This document remains canonical for solved antenna
+> layouts, field-solve artifacts, and `SolvedAntennaDrive`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Introduce the canonical variable-width antenna, staged field-solve, solved-drive, regional-drive, artifact, capability, and OpenAPI contracts without implementing the native numerical solve.

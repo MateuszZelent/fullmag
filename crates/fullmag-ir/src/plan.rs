@@ -6,10 +6,10 @@ use crate::{
     FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FemDomainMeshAssetIR,
     FemLinearSolverPolicy, FemSharedDomainBuildReportIR, FieldRefreshPolicyIR,
     FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, IntegratorChoice,
-    KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
+    GeometryEntryIR, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
     ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy,
-    SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
+    RegionalFieldDriveIR, SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
     ResolvedPeriodicImagesIR,
 };
 use serde::{Deserialize, Serialize};
@@ -395,6 +395,23 @@ pub struct ResolvedAntennaZeemanMaskIR {
     pub field_xyz: Vec<[f64; 3]>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedRegionalFieldDriveBasisIR {
+    pub drive: RegionalFieldDriveIR,
+    /// Immutable cell-wise field basis in A/m. The waveform is evaluated by
+    /// the integrator at every RK stage and never folded into this vector.
+    pub field_xyz: Vec<[f64; 3]>,
+    pub projection_signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TimeStageContextIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_stage_id: Option<String>,
+    #[serde(default)]
+    pub start_time_s: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct FdmPlanIR {
     /// Physical world-space origin of the resolved FDM grid (lower corner), in metres.
@@ -419,6 +436,14 @@ pub struct FdmPlanIR {
     pub external_field: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub antenna_zeeman_masks: Vec<ResolvedAntennaZeemanMaskIR>,
+    /// Canonical regional time-domain magnetic drives. Legacy antenna masks
+    /// remain migration-only and must not be populated for the same source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_drives: Vec<RegionalFieldDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regional_field_drive_bases: Vec<ResolvedRegionalFieldDriveBasisIR>,
+    #[serde(default)]
+    pub time_stage: TimeStageContextIR,
     /// Explicit inter-region exchange coupling overrides.
     /// Each entry `(region_i, region_j, A_ij)` sets the exchange stiffness [J/m]
     /// between regions i and j (symmetric: A_ij = A_ji). When a region mask is
@@ -884,6 +909,16 @@ pub struct FemPlanIR {
     pub external_field: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub antenna_zeeman_masks: Vec<ResolvedAntennaZeemanMaskIR>,
+    /// Canonical regional time-domain magnetic drives. Native FEM resolves
+    /// their spatial basis against the realized mesh.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_drives: Vec<RegionalFieldDriveIR>,
+    /// Closed geometry trees referenced by regional-drive geometry masks.
+    /// Native FEM consumes these descriptors and owns spatial projection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_drive_geometry_masks: Vec<GeometryEntryIR>,
+    #[serde(default)]
+    pub time_stage: TimeStageContextIR,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_modules: Vec<CurrentModuleIR>,
     pub gyromagnetic_ratio: f64,

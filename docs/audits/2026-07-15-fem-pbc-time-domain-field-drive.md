@@ -390,7 +390,7 @@ Nie uruchomiono testu `PBC + FEM + sinc + run`, ponieważ taki zarządzany test 
 - `docs/physics/0410-fem-exchange-demag-zeeman-mfem-gpu.md`
 - `docs/physics/0490-fem-higher-order-and-adaptive-time-integrators-mfem-gpu.md`
 - `docs/physics/0600-periodic-boundary-conditions.md`
-- `docs/physics/0920-time-domain-microstrip-antenna-zeeman-mask.md`
+- `docs/physics/0920-regional-time-domain-field-drive.md`
 - `docs/specs/capability-matrix-v0.json`
 - `docs/specs/problem-ir-v0.md`
 - `docs/specs/resource-first-control-room-api-v2.md`

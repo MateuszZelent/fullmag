@@ -72,6 +72,33 @@ pub(crate) fn cached_preview_quantities_for(
         .collect()
 }
 
+fn interactive_time_event_schedule(
+    drives: &[fullmag_ir::RegionalFieldDriveIR],
+    stage_start_s: f64,
+    duration_s: f64,
+    output_periods_s: impl IntoIterator<Item = f64>,
+) -> Vec<f64> {
+    let stage_end_s = stage_start_s + duration_s;
+    let mut times = crate::time_events::build_resolved_stage_event_schedule(
+        drives,
+        stage_start_s,
+        stage_end_s,
+        &[],
+        crate::schedules::OUTPUT_TIME_TOLERANCE,
+    ).times_s;
+    for period_s in output_periods_s {
+        if period_s.is_finite() && period_s > 0.0 {
+            let count = (duration_s / period_s).floor() as u64;
+            times.extend((0..=count).map(|index| stage_start_s + index as f64 * period_s));
+        }
+    }
+    times.sort_by(f64::total_cmp);
+    times.dedup_by(|right, left| {
+        (*right - *left).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE
+    });
+    times
+}
+
 fn build_cached_grid_preview_fields(
     display_state: &DisplaySelectionState,
     observables: &StateObservables,
@@ -759,7 +786,7 @@ impl InteractiveFemPreviewRuntime {
                 plan_signature: normalize_fem_plan_signature(&effective_plan),
                 provenance,
                 total_steps: 0,
-                total_time: 0.0,
+                total_time: effective_plan.time_stage.start_time_s,
                 antenna_field,
             });
             Ok(Self { inner })
@@ -1082,6 +1109,11 @@ impl CpuInteractiveFdmPreviewRuntime {
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
+        self.problem.regional_field_drives =
+            cpu_reference::resolved_regional_field_drives(plan, base_time);
+        let time_events = interactive_time_event_schedule(
+            &plan.field_drives, base_time, until_seconds, std::iter::empty(),
+        );
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
@@ -1174,7 +1206,11 @@ impl CpuInteractiveFdmPreviewRuntime {
                 _ => {}
             }
 
-            let dt_step = dt.min(until_seconds - (self.state.time_seconds - base_time));
+            let proposed_dt = dt.min(until_seconds - (self.state.time_seconds - base_time));
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                self.state.time_seconds, proposed_dt, &time_events,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             let wall_start = std::time::Instant::now();
             let report = self.step(dt_step)?;
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
@@ -1429,6 +1465,13 @@ impl CpuInteractiveFdmPreviewRuntime {
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
+        self.problem.regional_field_drives =
+            cpu_reference::resolved_regional_field_drives(plan, base_time);
+        let output_periods = scalar_schedules.iter().chain(field_schedules.iter())
+            .map(|schedule| schedule.every_seconds);
+        let time_events = interactive_time_event_schedule(
+            &plan.field_drives, base_time, until_seconds, output_periods,
+        );
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
@@ -1500,7 +1543,11 @@ impl CpuInteractiveFdmPreviewRuntime {
                 _ => {}
             }
 
-            let dt_step = dt.min(until_seconds - (self.state.time_seconds - base_time));
+            let proposed_dt = dt.min(until_seconds - (self.state.time_seconds - base_time));
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                self.state.time_seconds, proposed_dt, &time_events,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             let wall_start = std::time::Instant::now();
             let report = self.step(dt_step)?;
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
@@ -1806,6 +1853,9 @@ impl CudaInteractiveFdmPreviewRuntime {
         }
         let base_step = self.total_steps;
         let base_time = self.total_time;
+        let time_events = interactive_time_event_schedule(
+            &plan.field_drives, base_time, until_seconds, std::iter::empty(),
+        );
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
@@ -1903,7 +1953,11 @@ impl CudaInteractiveFdmPreviewRuntime {
                 _ => {}
             }
 
-            let dt_step = dt.min(until_seconds - (self.total_time - base_time));
+            let proposed_dt = dt.min(until_seconds - (self.total_time - base_time));
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                self.total_time, proposed_dt, &time_events,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             let Some(total_stats) = self
                 .backend
                 .step_interruptible(dt_step, interrupt_requested)?
@@ -2102,6 +2156,11 @@ impl CudaInteractiveFdmPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
+        let output_periods = scalar_schedules.iter().chain(field_schedules.iter())
+            .map(|schedule| schedule.every_seconds);
+        let time_events = interactive_time_event_schedule(
+            &plan.field_drives, base_time, until_seconds, output_periods,
+        );
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
@@ -2196,7 +2255,11 @@ impl CudaInteractiveFdmPreviewRuntime {
                 _ => {}
             }
 
-            let dt_step = dt.min(until_seconds - (self.total_time - base_time));
+            let proposed_dt = dt.min(until_seconds - (self.total_time - base_time));
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                self.total_time, proposed_dt, &time_events,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             let Some(total_stats) = self
                 .backend
                 .step_interruptible(dt_step, interrupt_requested)?
@@ -2470,6 +2533,9 @@ impl CpuInteractiveFemPreviewRuntime {
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
+        let time_events = interactive_time_event_schedule(
+            &plan.field_drives, base_time, until_seconds, std::iter::empty(),
+        );
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
@@ -2561,7 +2627,11 @@ impl CpuInteractiveFemPreviewRuntime {
                 _ => {}
             }
 
-            let dt_step = dt.min(until_seconds - (self.state.time_seconds - base_time));
+            let proposed_dt = dt.min(until_seconds - (self.state.time_seconds - base_time));
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                self.state.time_seconds, proposed_dt, &time_events,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             let wall_start = std::time::Instant::now();
             let report = self
                 .problem
@@ -2787,6 +2857,11 @@ impl CpuInteractiveFemPreviewRuntime {
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
+        let output_periods = scalar_schedules.iter().chain(field_schedules.iter())
+            .map(|schedule| schedule.every_seconds);
+        let time_events = interactive_time_event_schedule(
+            &plan.field_drives, base_time, until_seconds, output_periods,
+        );
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
@@ -2858,7 +2933,11 @@ impl CpuInteractiveFemPreviewRuntime {
                 _ => {}
             }
 
-            let dt_step = dt.min(until_seconds - (self.state.time_seconds - base_time));
+            let proposed_dt = dt.min(until_seconds - (self.state.time_seconds - base_time));
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                self.state.time_seconds, proposed_dt, &time_events,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             let wall_start = std::time::Instant::now();
             let report = self
                 .problem
@@ -3165,6 +3244,10 @@ impl GpuInteractiveFemPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
+        self.backend.begin_stage(base_time)?;
+        let time_events = interactive_time_event_schedule(
+            &plan.field_drives, base_time, until_seconds, std::iter::empty(),
+        );
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
@@ -3246,7 +3329,11 @@ impl GpuInteractiveFemPreviewRuntime {
                 _ => {}
             }
 
-            let dt_step = dt.min(until_seconds - (self.total_time - base_time));
+            let proposed_dt = dt.min(until_seconds - (self.total_time - base_time));
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                self.total_time, proposed_dt, &time_events,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             let Some(total_stats) = self
                 .backend
                 .step_interruptible(dt_step, interrupt_requested)?
@@ -3420,6 +3507,12 @@ impl GpuInteractiveFemPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
+        self.backend.begin_stage(base_time)?;
+        let output_periods = scalar_schedules.iter().chain(field_schedules.iter())
+            .map(|schedule| schedule.every_seconds);
+        let time_events = interactive_time_event_schedule(
+            &plan.field_drives, base_time, until_seconds, output_periods,
+        );
         let mut dt =
             crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
                 .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
@@ -3481,7 +3574,11 @@ impl GpuInteractiveFemPreviewRuntime {
                 _ => {}
             }
 
-            let dt_step = dt.min(until_seconds - (self.total_time - base_time));
+            let proposed_dt = dt.min(until_seconds - (self.total_time - base_time));
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                self.total_time, proposed_dt, &time_events,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             let Some(total_stats) = self
                 .backend
                 .step_interruptible(dt_step, interrupt_requested)?

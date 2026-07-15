@@ -2,7 +2,11 @@
 
 import { useMemo } from "react";
 
-import type { TableRowsResource } from "@/kernel/api/apiTypes";
+import type {
+  DynamicStructureFactorResource,
+  SpinWaveGammaResource,
+  TableRowsResource,
+} from "@/kernel/api/apiTypes";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
@@ -18,6 +22,8 @@ import {
 } from "./chartTableModel";
 import { EChartsSurface } from "./components/EChartsSurface";
 import { frequencyDomainXAxisLabel } from "./frequencyDomainSeriesAdapter";
+import { SpinWaveGammaView } from "./SpinWaveGammaView";
+import { DynamicStructureFactorView } from "./DynamicStructureFactorView";
 
 const EMPTY_CHART_SERIES: readonly ChartSeries[] = [];
 
@@ -46,6 +52,9 @@ function useAnalysisPlotsView({
   visibleTable,
   xAxisId,
   yAxisIds,
+  spinWaveGamma = null,
+  spinWaveGammaStatus = "idle",
+  dynamicStructureFactor = null,
 }: {
   kernel: KernelApi;
   frequencyDomainSeries?: readonly ChartSeries[];
@@ -65,6 +74,9 @@ function useAnalysisPlotsView({
   visibleTable: TableRowsResource | null;
   xAxisId: string;
   yAxisIds: string[];
+  spinWaveGamma?: SpinWaveGammaResource | null;
+  spinWaveGammaStatus?: string;
+  dynamicStructureFactor?: DynamicStructureFactorResource | null;
 }) {
   const table = useMemo<TableRowsLike | null>(
     () =>
@@ -397,6 +409,12 @@ function useAnalysisPlotsView({
           </div>
         ) : null}
       </section>
+      {spinWaveGamma ? (
+        <SpinWaveGammaView resource={spinWaveGamma} status={spinWaveGammaStatus} />
+      ) : null}
+      {dynamicStructureFactor ? (
+        <DynamicStructureFactorView resource={dynamicStructureFactor} />
+      ) : null}
     </div>
   );
 }

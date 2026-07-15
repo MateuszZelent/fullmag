@@ -53,6 +53,8 @@ bool gpu_rk_reduce_final_magnetization_terms(
         gpu.magnetization.m.y,
         gpu.magnetization.m.z,
         gpu.mesh_regions.magnetic_node_mask,
+        gpu.mesh_metrics.node_volumes,
+        gpu.materials.ms,
         gpu.reductions.scalar_workspace,
         gpu.rk.error.x,
         gpu.rk.error.y,
@@ -100,11 +102,11 @@ bool gpu_rk_reduce_final_magnetization_terms(
     fullmag_cuda_device_sum(
         gpu.rk.error.z,
         blocks,
-        gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MagneticCount),
+        gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::MomentWeight),
         gpu.reductions.temp_storage,
         reduce_bytes,
         stream);
-    return cuda_launch_ok("launch GPU RK magnetic count reduction", reason);
+    return cuda_launch_ok("launch GPU RK magnetic moment weight reduction", reason);
 }
 
 } // namespace fullmag::fem

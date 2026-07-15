@@ -51,6 +51,14 @@ export const ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/frequency-response/magnetic-sweep.v1",
 );
 
+export const ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/spin-wave/gamma.v1",
+);
+
+export const ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH = openApiV2Path(
+  "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1",
+);
+
 export const ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH = openApiV2Path(
   "/v2/sessions/current/analysis/extensions/objects/{object_id}/topological-charge",
 );
@@ -561,6 +569,14 @@ export const MODEL_COUPLINGS_PATH = openApiV2Path(
 
 export const MODEL_COUPLING_PATH = openApiV2Path(
   "/v2/sessions/current/model/couplings/{coupling_id}",
+);
+
+export const MODEL_FIELD_DRIVES_PATH = openApiV2Path(
+  "/v2/sessions/current/model/field-drives",
+);
+
+export const MODEL_FIELD_DRIVE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/field-drives/{drive_id}",
 );
 
 export const MODEL_REGION_PATH = openApiV2Path(

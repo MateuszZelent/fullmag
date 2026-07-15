@@ -9,6 +9,7 @@ interface AnalysisChartPoint {
 export interface AnalysisChartResourceRef {
   kind:
     | "analysis.frequency_domain"
+    | "analysis.spin_wave"
     | "data.table.rows"
     | "simulation.solver.energies.history";
   resourceKey: string;

@@ -318,6 +318,15 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
+  if (node.kind === "physics.field-drive" && node.fieldDriveId) {
+    return {
+      fieldDriveId: node.fieldDriveId,
+      kind: "physics.field-drive",
+      nodeId: node.id,
+      type: "physics-field-drive",
+    };
+  }
+
   return null;
 }
 

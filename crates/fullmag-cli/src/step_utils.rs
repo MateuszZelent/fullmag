@@ -3383,7 +3383,6 @@ mod tests {
                 periodic_node_pairs: Vec::new(),
                 per_domain_quality: std::collections::HashMap::new(),
             },
-            mesh_build_report: None,
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
             domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,

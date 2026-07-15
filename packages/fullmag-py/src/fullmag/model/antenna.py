@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Sequence
 
 from fullmag._validation import (
@@ -17,6 +18,261 @@ from fullmag.model.energy import Sinusoidal, TimeDependence
 ANTENNA_SOLVERS = {"mqs_2p5d_az"}
 ANTENNA_FIELD_SOURCE_MODELS = {"mqs_2p5d_az", "prescribed_zeeman_mask"}
 CURRENT_DISTRIBUTIONS = {"uniform"}
+FIELD_TIME_ORIGINS = frozenset({"stage_local", "absolute"})
+SPATIAL_WINDOWS = frozenset({"none", "hann"})
+
+
+def _normalized_vector3(value: Sequence[float], name: str) -> tuple[float, float, float]:
+    vector = as_vector3(value, name)
+    norm = math.sqrt(sum(component * component for component in vector))
+    if not math.isfinite(norm) or norm <= 1e-15:
+        raise ValueError(f"{name} must be non-zero")
+    return tuple(component / norm for component in vector)
+
+
+@dataclass(frozen=True, slots=True)
+class FieldTarget:
+    kind: str
+    object_id: str | None = None
+    region_id: str | None = None
+
+    def __post_init__(self) -> None:
+        kind = require_non_empty(self.kind, "target.kind").lower()
+        object.__setattr__(self, "kind", kind)
+        if kind == "global":
+            if self.object_id is not None or self.region_id is not None:
+                raise ValueError("global target must not define object_id or region_id")
+            return
+        if kind not in {"object", "region"}:
+            raise ValueError("target.kind must be 'global', 'object', or 'region'")
+        object_id = require_non_empty(self.object_id or "", "target.object_id")
+        object.__setattr__(self, "object_id", object_id)
+        if kind == "object":
+            if self.region_id is not None:
+                raise ValueError("object target must not define region_id")
+            return
+        object.__setattr__(
+            self,
+            "region_id",
+            require_non_empty(self.region_id or "", "target.region_id"),
+        )
+
+    @classmethod
+    def global_domain(cls) -> "FieldTarget":
+        return cls(kind="global")
+
+    @classmethod
+    def object(cls, object_id: str) -> "FieldTarget":
+        return cls(kind="object", object_id=object_id)
+
+    @classmethod
+    def region(cls, object_id: str, region_id: str) -> "FieldTarget":
+        return cls(kind="region", object_id=object_id, region_id=region_id)
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {"kind": self.kind}
+        if self.object_id is not None:
+            payload["object_id"] = self.object_id
+        if self.region_id is not None:
+            payload["region_id"] = self.region_id
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class UniformFieldProfile:
+    def to_ir(self) -> dict[str, object]:
+        return {"kind": "uniform"}
+
+
+@dataclass(frozen=True, slots=True)
+class SincFieldProfile:
+    axis: tuple[float, float, float]
+    period_m: float
+    center_m: float = 0.0
+    width_m: float | None = None
+    window: str = "none"
+
+    def __init__(
+        self,
+        axis: Sequence[float],
+        period_m: float,
+        center_m: float = 0.0,
+        width_m: float | None = None,
+        window: str = "none",
+    ) -> None:
+        object.__setattr__(self, "axis", _normalized_vector3(axis, "spatial_profile.axis"))
+        require_positive(period_m, "spatial_profile.period_m")
+        require_finite(center_m, "spatial_profile.center_m")
+        if width_m is not None:
+            require_positive(width_m, "spatial_profile.width_m")
+        normalized_window = require_non_empty(window, "spatial_profile.window").lower()
+        if normalized_window not in SPATIAL_WINDOWS:
+            raise ValueError(
+                f"spatial_profile.window must be one of {sorted(SPATIAL_WINDOWS)}"
+            )
+        object.__setattr__(self, "period_m", float(period_m))
+        object.__setattr__(self, "center_m", float(center_m))
+        object.__setattr__(self, "width_m", None if width_m is None else float(width_m))
+        object.__setattr__(self, "window", normalized_window)
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "kind": "sinc",
+            "axis": list(self.axis),
+            "period_m": self.period_m,
+            "center_m": self.center_m,
+            "window": self.window,
+        }
+        if self.width_m is not None:
+            payload["width_m"] = self.width_m
+        return payload
+
+
+FieldEnvelope = UniformFieldProfile | SincFieldProfile
+
+
+@dataclass(frozen=True, slots=True)
+class GeometryMaskFieldProfile:
+    object_id: str
+    envelope: FieldEnvelope = UniformFieldProfile()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "object_id",
+            require_non_empty(self.object_id, "spatial_profile.object_id"),
+        )
+        if not isinstance(self.envelope, (UniformFieldProfile, SincFieldProfile)):
+            raise TypeError("geometry-mask envelope must be UniformFieldProfile or SincFieldProfile")
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "geometry_mask",
+            "object_id": self.object_id,
+            "envelope": self.envelope.to_ir(),
+        }
+
+
+FieldSpatialProfile = UniformFieldProfile | SincFieldProfile | GeometryMaskFieldProfile
+
+
+@dataclass(frozen=True, slots=True)
+class DriveActivation:
+    kind: str
+    stage_ids_value: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        kind = require_non_empty(self.kind, "activation.kind").lower()
+        object.__setattr__(self, "kind", kind)
+        if kind == "all_time_evolution":
+            if self.stage_ids_value:
+                raise ValueError("all_time_evolution activation must not define stage ids")
+            return
+        if kind != "stage_ids":
+            raise ValueError("activation.kind must be 'all_time_evolution' or 'stage_ids'")
+        if not self.stage_ids_value:
+            raise ValueError("stage_ids activation requires at least one stage id")
+        normalized = tuple(
+            require_non_empty(stage_id, "activation.stage_id")
+            for stage_id in self.stage_ids_value
+        )
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("activation stage ids must be unique")
+        object.__setattr__(self, "stage_ids_value", normalized)
+
+    @classmethod
+    def all_time_evolution(cls) -> "DriveActivation":
+        return cls(kind="all_time_evolution")
+
+    @classmethod
+    def stage_ids(cls, stage_ids: Sequence[str]) -> "DriveActivation":
+        return cls(kind="stage_ids", stage_ids_value=tuple(stage_ids))
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {"kind": self.kind}
+        if self.kind == "stage_ids":
+            payload["stage_ids"] = list(self.stage_ids_value)
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class RegionalFieldDrive:
+    id: str
+    name: str
+    target: FieldTarget
+    amplitude_B_T: float
+    direction: tuple[float, float, float]
+    spatial_profile: FieldSpatialProfile
+    waveform: TimeDependence
+    time_origin: str = "stage_local"
+    activation: DriveActivation = DriveActivation(kind="all_time_evolution")
+    enabled: bool = True
+    migration: dict[str, str] | None = None
+
+    def __init__(
+        self,
+        *,
+        id: str,
+        name: str,
+        target: FieldTarget,
+        amplitude_B_T: float,
+        direction: Sequence[float],
+        spatial_profile: FieldSpatialProfile,
+        waveform: TimeDependence,
+        time_origin: str = "stage_local",
+        activation: DriveActivation | None = None,
+        enabled: bool = True,
+        migration: dict[str, str] | None = None,
+    ) -> None:
+        object.__setattr__(self, "id", require_non_empty(id, "field_drive.id"))
+        object.__setattr__(self, "name", require_non_empty(name, "field_drive.name"))
+        if not isinstance(target, FieldTarget):
+            raise TypeError("target must be a FieldTarget")
+        require_non_negative(amplitude_B_T, "amplitude_B_T")
+        object.__setattr__(self, "target", target)
+        object.__setattr__(self, "amplitude_B_T", float(amplitude_B_T))
+        object.__setattr__(self, "direction", _normalized_vector3(direction, "direction"))
+        if not isinstance(
+            spatial_profile,
+            (UniformFieldProfile, SincFieldProfile, GeometryMaskFieldProfile),
+        ):
+            raise TypeError("spatial_profile must be a typed Fullmag field profile")
+        if not hasattr(waveform, "to_ir"):
+            raise TypeError("waveform must be a Fullmag time-dependence object")
+        normalized_origin = require_non_empty(time_origin, "time_origin").lower()
+        if normalized_origin not in FIELD_TIME_ORIGINS:
+            raise ValueError(f"time_origin must be one of {sorted(FIELD_TIME_ORIGINS)}")
+        resolved_activation = activation or DriveActivation.all_time_evolution()
+        if not isinstance(resolved_activation, DriveActivation):
+            raise TypeError("activation must be a DriveActivation")
+        object.__setattr__(self, "spatial_profile", spatial_profile)
+        object.__setattr__(self, "waveform", waveform)
+        object.__setattr__(self, "time_origin", normalized_origin)
+        object.__setattr__(self, "activation", resolved_activation)
+        object.__setattr__(self, "enabled", bool(enabled))
+        if migration is not None:
+            if migration != {"migrated_from": "prescribed_zeeman_mask"}:
+                raise ValueError("unsupported RegionalFieldDrive migration provenance")
+            migration = dict(migration)
+        object.__setattr__(self, "migration", migration)
+
+    def to_ir(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "id": self.id,
+            "name": self.name,
+            "kind": "regional",
+            "enabled": self.enabled,
+            "target": self.target.to_ir(),
+            "amplitude_B_T": self.amplitude_B_T,
+            "direction": list(self.direction),
+            "spatial_profile": self.spatial_profile.to_ir(),
+            "waveform": self.waveform.to_ir(),
+            "time_origin": self.time_origin,
+            "activation": self.activation.to_ir(),
+        }
+        if self.migration is not None:
+            payload["migration"] = dict(self.migration)
+        return payload
 
 
 def _drive_waveform_ir(

@@ -230,6 +230,20 @@ export type MeshSharedDomainManifestResource =
   components["schemas"]["MeshSharedDomainManifestResource"];
 export type CouplingListResource =
   components["schemas"]["CouplingListResource"];
+export type SpinWaveGammaResource =
+  components["schemas"]["SpinWaveGammaResource"];
+export type DynamicStructureFactorResource =
+  components["schemas"]["DynamicStructureFactorResource"];
+export type FieldDriveListResource =
+  components["schemas"]["FieldDriveListResource"];
+export type RegionalFieldDriveResource =
+  components["schemas"]["RegionalFieldDriveResource"];
+export type FieldDriveCreateRequest =
+  components["schemas"]["FieldDriveCreateRequest"];
+export type FieldDriveReplaceRequest =
+  components["schemas"]["FieldDriveReplaceRequest"];
+export type FieldDriveDeleteRequest =
+  components["schemas"]["FieldDriveDeleteRequest"];
 export type RegionListResource = components["schemas"]["RegionListResource"];
 export type RegionDiagnosticsResource =
   components["schemas"]["RegionDiagnosticsResource"];

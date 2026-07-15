@@ -73,6 +73,7 @@ Each quantity belongs to one of these kinds:
 - `H_ex`
 - `H_demag`
 - `H_ext`
+- `H_drive`
 - `H_eff`
 - `H_ant`
 - later:
@@ -87,6 +88,7 @@ Each quantity belongs to one of these kinds:
 
 #### Energy densities
 
+- `eden_drive`
 - later `e_ex_density`
 - later `e_demag_density`
 - later `e_dmi_density`
@@ -311,6 +313,23 @@ fields to magnetic topology or infer compatibility from equal point counts.
 The UI may display `mu0 * H_ant` or `mu0 * H_ant_basis` in T/mT or T/A as a
 declared unit transform. This is not a new `B_ext` quantity and does not change
 the stored canonical field.
+
+### When regional time-domain field drives become executable
+
+Publish together from one runtime field revision:
+
+- `H_drive`: instantaneous summed regional field in `A/m` on the magnetic
+  execution domain;
+- `B_drive`: declared display transform `mu0 H_drive` in `T`, not an
+  independently stored solver state;
+- `E_drive`: global imposed-Zeeman energy in `J`;
+- `eden_drive`: imposed-Zeeman energy density in `J/m^3`.
+
+`H_drive` must be the exact buffer used by the accepted RHS evaluation or
+snapshot refresh at the published time. Preview-only analytic evaluation may
+use a distinct preview revision and must never be presented as runtime proof.
+`H_drive` does not alias `H_ant` or `H_ext`; availability, source kind,
+stage id, evaluation time, basis signature, and field revision are explicit.
 
 ## 9. API contract
 

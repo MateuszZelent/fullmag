@@ -30,6 +30,7 @@ pub(crate) fn collect_scalar_schedules(
                 "E_ex"
                     | "E_demag"
                     | "E_ext"
+                    | "E_drive"
                     | "E_total"
                     | "time"
                     | "step"

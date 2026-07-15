@@ -618,7 +618,7 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             stats_publication_source.find("stats.total_energy_joules =") !=
                 std::string::npos &&
-            stats_publication_source.find("stats.mx = mx_sum / magnetic_count") !=
+            stats_publication_source.find("stats.mx = mx_sum / moment_weight") !=
                 std::string::npos &&
             stats_publication_source.find("fill_demag_solver_stats(ctx, stats)") !=
                 std::string::npos &&
@@ -627,7 +627,7 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
         "GPU CUDA RK final stats publication source must own scalar-to-stats publication");
     check(
         stats_source.find("stats.total_energy_joules =") == std::string::npos &&
-            stats_source.find("stats.mx = mx_sum / magnetic_count") ==
+            stats_source.find("stats.mx = mx_sum / moment_weight") ==
                 std::string::npos &&
             stats_source.find("fill_demag_solver_stats(ctx, stats)") ==
                 std::string::npos &&
@@ -1000,22 +1000,22 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             magnetization_source.find("GpuFinalScalarSlot::MzSum") !=
                 std::string::npos &&
-            magnetization_source.find("GpuFinalScalarSlot::MagneticCount") !=
+            magnetization_source.find("GpuFinalScalarSlot::MomentWeight") !=
                 std::string::npos &&
-            magnetization_source.find("launch GPU RK magnetic count reduction") !=
+            magnetization_source.find("launch GPU RK magnetic moment weight reduction") !=
                 std::string::npos,
-        "GPU CUDA RK magnetization reductions source must own average magnetization reductions");
+        "GPU CUDA RK magnetization reductions source must own moment-weighted average magnetization reductions");
     check(
         observable_source.find("fullmag_cuda_field_metric_blocks(") == std::string::npos &&
             observable_source.find("fullmag_cuda_magnetization_sum_blocks(") ==
                 std::string::npos &&
             observable_source.find("GpuFinalScalarSlot::MaxTorque") ==
                 std::string::npos &&
-            observable_source.find("GpuFinalScalarSlot::MagneticCount") ==
+            observable_source.find("GpuFinalScalarSlot::MomentWeight") ==
                 std::string::npos &&
             observable_source.find("launch GPU RK max H_eff reduction") ==
                 std::string::npos &&
-            observable_source.find("launch GPU RK magnetic count reduction") ==
+            observable_source.find("launch GPU RK magnetic moment weight reduction") ==
                 std::string::npos,
         "GPU CUDA RK final observable reductions source must delegate observable reduction internals");
     check(

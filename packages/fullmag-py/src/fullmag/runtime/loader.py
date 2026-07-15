@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -15,6 +16,8 @@ class LoadedStage:
     entrypoint_kind: str
     default_until_seconds: float | None = None
     action: dict[str, object] | None = None
+    stage_id: str | None = None
+    output_every_seconds: float | None = None
 
     def to_ir(
         self,
@@ -28,6 +31,7 @@ class LoadedStage:
         include_geometry_assets: bool = True,
         study_pipeline: dict[str, object] | None = None,
         runtime_device_override: str | None = None,
+        stage_start_time_s: float = 0.0,
     ) -> dict[str, object]:
         ir = self.problem.to_ir(
             requested_backend=requested_backend,
@@ -40,6 +44,18 @@ class LoadedStage:
             include_geometry_assets=include_geometry_assets,
             study_pipeline=study_pipeline,
         )
+        if self.stage_id is not None:
+            runtime_metadata = ir.get("problem_meta", {}).get("runtime_metadata")
+            if not isinstance(runtime_metadata, dict):
+                raise ValueError("ProblemIR problem_meta.runtime_metadata must be an object")
+            runtime_metadata["active_stage_id"] = self.stage_id
+            if (
+                not isinstance(stage_start_time_s, (int, float))
+                or not math.isfinite(float(stage_start_time_s))
+                or float(stage_start_time_s) < 0.0
+            ):
+                raise ValueError("stage_start_time_s must be finite and non-negative")
+            runtime_metadata["stage_start_time_s"] = float(stage_start_time_s)
         if runtime_device_override is not None:
             apply_ir_runtime_device_override(ir, runtime_device_override)
         return ir
@@ -176,6 +192,8 @@ def load_problem_from_script(
                     entrypoint_kind=stage.entrypoint_kind,
                     default_until_seconds=stage.default_until_seconds,
                     action=stage.action,
+                    stage_id=stage.stage_id,
+                    output_every_seconds=stage.output_every_seconds,
                 )
                 for stage in captured_stages
             )
@@ -198,6 +216,8 @@ def load_problem_from_script(
                     entrypoint_kind=stage.entrypoint_kind,
                     default_until_seconds=stage.default_until_seconds,
                     action=stage.action,
+                    stage_id=stage.stage_id,
+                    output_every_seconds=stage.output_every_seconds,
                 )
                 for stage in declared_stages
             )

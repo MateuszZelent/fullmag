@@ -14,6 +14,7 @@ import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifec
 import type {
   ExplorerNodeStatus,
   ModelTreeCouplingSnapshot,
+  ModelTreeFieldDriveSnapshot,
   ModelTreeMaterialSnapshot,
   ModelTreeHysteresisSettleStepSnapshot,
   ModelTreeMaterialFieldSnapshot,
@@ -26,6 +27,7 @@ import type {
 interface SceneLike {
   [key: string]: unknown;
   current_modules?: unknown;
+  field_drives?: unknown;
   magnetization_assets?: unknown;
   materials?: unknown;
   objects?: SceneResource["objects"] | unknown;
@@ -71,6 +73,7 @@ export function modelTreeSnapshotFromScene(
   );
   return {
     couplings: couplingSnapshots(resources.couplings, scene),
+    fieldDrives: fieldDriveSnapshots(scene?.field_drives),
     materials,
     objects: Array.isArray(scene?.objects)
       ? scene.objects.reduce<ModelTreeObjectSnapshot[]>((objects, object) => {
@@ -92,6 +95,23 @@ export function modelTreeSnapshotFromScene(
     study: sceneStudySnapshot(scene?.study),
     universe: sceneUniverseSnapshot(scene?.universe),
   };
+}
+
+function fieldDriveSnapshots(value: unknown): ModelTreeFieldDriveSnapshot[] {
+  const state = recordValue(value);
+  const drives = Array.isArray(state?.drives) ? state.drives : [];
+  return drives.flatMap((candidate) => {
+    const drive = recordValue(candidate);
+    const id = stringValue(drive?.id);
+    if (!drive || !id) return [];
+    return [{
+      enabled: drive.enabled !== false,
+      id,
+      label: stringValue(drive.name) ?? id,
+      targetKind: stringValue(recordValue(drive.target)?.kind) ?? "unresolved",
+      waveformKind: stringValue(recordValue(drive.waveform)?.kind) ?? "unresolved",
+    }];
+  });
 }
 
 function isSyntheticAirboxSceneObject(value: unknown): boolean {
