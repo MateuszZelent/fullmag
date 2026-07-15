@@ -6,6 +6,15 @@
 - Related ADRs: `docs/adr/0003-stno-v1-fdm-only.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`, `docs/specs/problem-ir-v0.md`
 
+> **Normative reconciliation (2026-07-15).** This note records the exact
+> infinite-cylinder lowering available in the historical implementation.
+> General M0–M3 current/Oersted semantics are governed by 0980: `H_oe` is in
+> A/m (no `mu0` in Biot–Savart), consumes the same signed `J_charge` used by
+> transport/torque, is evaluated at RK stage time, and requires a globally
+> closed circuit or an explicit lead/return-path model. The typed M0–M3 model
+> resources described in the API spec are planned contracts, not implemented
+> by this note.
+
 ## 1. Problem statement
 
 Fullmag already exposes:
@@ -97,6 +106,7 @@ No arbitrary-volume Biot-Savart integral is introduced here.
 4. The field realization is the existing infinite-cylinder Oersted model already used by FDM/FEM.
 5. Non-cylindrical conductors, current crowding, contact solves, and finite-length corrections remain deferred.
 6. FEM `CurrentTransport(prescribed_density)` is provenance-executable and Oersted-bindable, but not yet torque-executable.
+7. The infinite-cylinder formula is a special analytic complete-circuit model; a finite transport domain with inlet/outlet electrodes is not by itself a globally closed Biot–Savart source.
 
 ## 3. Numerical interpretation
 
