@@ -1,4 +1,5 @@
 use crate::fdm::shared::types::{CellSize, EngineError, GridShape, Result};
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PotentialGauge {
@@ -85,6 +86,20 @@ impl StructuredChargeProblem {
             return Err(EngineError::new(format!(
                 "active_cells must contain {count} cell values"
             )));
+        }
+        if !active_cells.iter().any(|active| *active) {
+            return Err(EngineError::new(
+                "charge transport requires at least one active cell",
+            ));
+        }
+        if active_cells
+            .iter()
+            .zip(&conductivity_s_per_m)
+            .any(|(&active, &conductivity)| active && conductivity <= 0.0)
+        {
+            return Err(EngineError::new(
+                "every active charge-transport cell must have positive conductivity",
+            ));
         }
         for value in [
             boundary.x_min,
@@ -264,6 +279,9 @@ impl StructuredChargeProblem {
                 "a pure-Neumann charge problem requires an explicit potential gauge",
             ));
         }
+        if has_dirichlet {
+            self.validate_dirichlet_anchors()?;
+        }
 
         let count = self.grid.cell_count();
         let zero = vec![0.0; count];
@@ -358,6 +376,65 @@ impl StructuredChargeProblem {
             ));
         }
         Ok(())
+    }
+
+    fn validate_dirichlet_anchors(&self) -> Result<()> {
+        let count = self.grid.cell_count();
+        let mut visited = vec![false; count];
+        for seed in 0..count {
+            if visited[seed] || !self.active_cells[seed] {
+                continue;
+            }
+            let mut queue = VecDeque::from([seed]);
+            visited[seed] = true;
+            let mut anchored = false;
+            while let Some(cell) = queue.pop_front() {
+                let x = cell % self.grid.nx;
+                let yz = cell / self.grid.nx;
+                let y = yz % self.grid.ny;
+                let z = yz / self.grid.ny;
+                anchored |= (x == 0 && self.boundary.x_min.is_some())
+                    || (x + 1 == self.grid.nx && self.boundary.x_max.is_some())
+                    || (y == 0 && self.boundary.y_min.is_some())
+                    || (y + 1 == self.grid.ny && self.boundary.y_max.is_some())
+                    || (z == 0 && self.boundary.z_min.is_some())
+                    || (z + 1 == self.grid.nz && self.boundary.z_max.is_some());
+
+                for neighbor in self.active_neighbors(x, y, z) {
+                    if !visited[neighbor] {
+                        visited[neighbor] = true;
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+            if !anchored {
+                return Err(EngineError::new(
+                    "every disconnected active conductor component requires a Dirichlet anchor",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn active_neighbors(&self, x: usize, y: usize, z: usize) -> Vec<usize> {
+        let mut neighbors = Vec::with_capacity(6);
+        for (nx, ny, nz) in [
+            x.checked_sub(1).map(|value| (value, y, z)),
+            (x + 1 < self.grid.nx).then_some((x + 1, y, z)),
+            y.checked_sub(1).map(|value| (x, value, z)),
+            (y + 1 < self.grid.ny).then_some((x, y + 1, z)),
+            z.checked_sub(1).map(|value| (x, y, value)),
+            (z + 1 < self.grid.nz).then_some((x, y, z + 1)),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let neighbor = self.grid.index(nx, ny, nz);
+            if self.active_cells[neighbor] {
+                neighbors.push(neighbor);
+            }
+        }
+        neighbors
     }
 
     fn internal_flux(&self, left: usize, right: usize, potential: &[f64], distance: f64) -> f64 {
@@ -557,5 +634,37 @@ mod tests {
         .unwrap();
         let error = problem.solve(ChargeSolverConfig::default()).unwrap_err();
         assert!(error.to_string().contains("gauge"));
+    }
+
+    #[test]
+    fn active_cells_must_have_positive_conductivity() {
+        let grid = GridShape::new(1, 1, 1).unwrap();
+        let error = StructuredChargeProblem::new(
+            grid,
+            CellSize::new(1.0, 1.0, 1.0).unwrap(),
+            vec![0.0],
+            None,
+            ChargeBoundaryConditions::default(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("positive conductivity"));
+    }
+
+    #[test]
+    fn every_disconnected_conductor_component_needs_a_dirichlet_anchor() {
+        let grid = GridShape::new(3, 1, 1).unwrap();
+        let problem = StructuredChargeProblem::new(
+            grid,
+            CellSize::new(1.0, 1.0, 1.0).unwrap(),
+            vec![1.0; 3],
+            Some(vec![true, false, true]),
+            ChargeBoundaryConditions {
+                x_min: Some(0.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let error = problem.solve(ChargeSolverConfig::default()).unwrap_err();
+        assert!(error.to_string().contains("Dirichlet anchor"));
     }
 }
