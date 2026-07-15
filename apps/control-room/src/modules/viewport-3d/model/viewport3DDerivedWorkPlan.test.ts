@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { DecodedComplexFieldVector } from "@/kernel/api/codecs";
+import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 
 import type { Viewport3DTargetRenderPassModel } from "../viewport3dRenderModel";
 
@@ -20,6 +21,11 @@ function targetPass(
       pointCount: 4,
       quantityId: "m",
       requestId: "quantity=m&component=full&scope_kind=part&scope_id=part-a",
+      resourceKey: fieldVectorResourceKey("m", {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      }),
       sampled: false,
       scopeId: "part-a",
       scopeKind: "part",
@@ -302,6 +308,13 @@ describe("viewport3DDerivedWorkPlan", () => {
               pointCount: 4,
               quantityId: "m",
               requestId: "quantity=m&component=full&max_samples=4",
+              resourceKey:
+                fieldVectorResourceKey("m", {
+                  component: "full",
+                  max_samples: 4,
+                  scope_id: "part-a",
+                  scope_kind: "part",
+                }),
               sampled: true,
               scopeId: "part-a",
               scopeKind: "part",

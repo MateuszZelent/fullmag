@@ -32,19 +32,20 @@ Dokładne zgłoszenie użytkownika — points i wireframe widoczne tylko dla
 airboxa, bez tekstur/surface/vectorów dla ferromagnetyków — jest zgodne z
 zachowanymi profilami i analizą ścieżki danych. Nie zostało jednak w całości
 ponownie odtworzone na świeżym runtime po bieżących niezacommitowanych zmianach,
-ponieważ materializacja mesha CoFeB zatrzymuje sesję przed topology/field ready.
-Raport rozdziela więc potwierdzony frontendowy błąd derived pipeline od tej
-niezależnej blokady backend/mesh.
+Aktualizacja 2026-07-15 usunęła blokadę dowodową: aktualny przykład CoFeB
+materializuje mesh, publikuje topology/fields i przechodzi izolowany smoke
+produkcyjnego viewportu na portach web/API 3193/8195.
 
 Z 28 historycznych findings:
 
 | Stan | Liczba | Findings |
 |---|---:|---|
 | Naprawione w pierwotnym zakresie | 26 | F3D-001–002, F3D-004–012 oraz F3D-014–028 |
-| Częściowo naprawione | 2 | F3D-003, F3D-013 |
+| Częściowo naprawione | 0 | — |
 
-Dodano cztery nowe problemy: F3D-029–F3D-032. Łącznie pozostaje sześć
-niezamkniętych punktów frontendowych: cztery P0 i dwa P1.
+Dodane w reaudytcie problemy F3D-029–F3D-032 zostały zamknięte 2026-07-15.
+Kod, testy kontraktowe, browser click/reveal oraz realny CoFeB FEM smoke są
+zielone; szczegóły napraw i bieżące dowody zapisano w pliku `11`.
 
 ## Najmocniejsze dowody runtime
 
@@ -118,21 +119,28 @@ Payloady miały zgodny topology hash i dokładny generation ID. Zawęża to brak
 surface/vector do frontendowego decoded-buffer/render-model path, a nie do
 braku quantity po stronie backendu.
 
-### R6 — bieżąca poprawka Airbox identity jest lokalnie zielona, ale niepełna
+### R6 — twardy katalog semantycznych targetów jest zaimplementowany
 
 Na niezacommitowanych zmianach przeszły:
 
-- pięć frontendowych suite resolver/selection/Explorer/viewport: 144 testy;
+- wspólny katalog `targetId -> explorerNodeId -> carrierIds`, test złożonego
+  kontraktu renderer/Explorer i przypadek zdegradowanego `object_segment`;
+- focused suite selection/Explorer/viewport oraz typecheck;
 - trzy testy API: jeden kanoniczny Airbox i tylko orphan part fallbacki,
   canonical-over-legacy precedence oraz migracja `object:__air__`.
+- świeży production audit build;
+- browser click/reveal na świeżym bundle'u: kliknięcie regionu w canvasie
+  wybrało dokładnie
+  `model:object:fixture-region-owner:regions:fixture-region-owner:core`.
 
-Te testy potwierdzają filtr target registry i normalizację override'ów. Nie
-potwierdzają kontraktu użytkownika. Picking nadal buduje selection
-`mesh-part:part:__air__`, podczas gdy Explorer aktywuje wiersz przez dokładne
-`nodeId=model:airbox`. Test adaptera nazywa wynik canonical, ale nadal oczekuje
-ID carriera; nie istnieje test sprawdzający, że każdy pickowalny render target
-ma węzeł w aktualnym drzewie i że kliknięcie go ujawnia. Dlatego F3D-032
-pozostaje otwarte mimo zielonych suite.
+Implementacja usuwa syntetyczny `__air__` z renderera i Explorera, mapuje role
+`air|airbox` wyłącznie do `model:airbox`, mapuje prawidłowego ownera do
+`model:object:*`, a stale/orphan carrier do jawnego
+`model:mesh:unassigned:*`. Picking zachowuje ID carriera wyłącznie jako
+metadane transportowe, natomiast selection `nodeId` zawsze wskazuje istniejący
+węzeł. Explorer przełącza kartę, rozwija ścieżkę, zachowuje zaznaczenie mimo
+filtra i przewija wiersz. F3D-032 nie jest jeszcze oznaczone jako całkowicie
+zamknięte, bo browser gate nie policzył jeszcze pojedynczych passów Airboxa.
 
 ## Macierz 28 historycznych findings
 
@@ -140,7 +148,7 @@ pozostaje otwarte mimo zielonych suite.
 |---|---|---|
 | F3D-001 | Naprawione | Jawne scene/manifest provenance i testy freshness pozostają w kodzie. |
 | F3D-002 | Naprawione | Stale topology nadal blokuje field-bearing passy. |
-| F3D-003 | Częściowo naprawione | FMVP v3 zachowuje `u64`, ale JSON status/catalog i wygenerowane typy używają `number`; profil pokazuje zaokrąglony status `4228960224618299400` wobec dokładnego `4228960224618299214` w topology/FMVP. |
+| F3D-003 | Naprawione | Publiczne generation IDs są dokładnymi stringami dziesiętnymi w JSON, OpenAPI, AsyncAPI i typach TS; fixture powyżej `2^53` nie traci precyzji. |
 | F3D-004 | Naprawione | Late FDM build jest odrzucany według aktualnego build key. |
 | F3D-005 | Naprawione | Canonical part target routing pozostaje zaimplementowany i testowany. |
 | F3D-006 | Naprawione | Effective target registry jest konsumowane; zgłoszona awaria występuje niżej. |
@@ -150,7 +158,7 @@ pozostaje otwarte mimo zielonych suite.
 | F3D-010 | Naprawione | Airbox style/reset pozostają serializowane. |
 | F3D-011 | Naprawione | Object segment aliases i degraded carriers są jawne. |
 | F3D-012 | Naprawione | Inspector mutuje wybrany canonical target. |
-| F3D-013 | Częściowo naprawione | Pending patch jest ograniczony revision/ACK, ale synchronizacja nadal może bezterminowo ponawiać trwałe 4xx i nie publikuje pełnego terminalnego rejection. |
+| F3D-013 | Naprawione | Trwałe 4xx jest terminalne, transient retry jest ograniczony, optimistic overlay jest wycofywany, a Inspector publikuje target/error/requestId i dokładny retry. |
 | F3D-014 | Naprawione | Hidden target blokuje pass controls. |
 | F3D-015 | Naprawione | Inherited/reset usuwa backend override. |
 | F3D-016 | Naprawione | Local renderer preferences mają osobnego ownera. |
@@ -171,10 +179,10 @@ pozostaje otwarte mimo zielonych suite.
 
 | Finding | Priorytet | Stan |
 |---|---|---|
-| F3D-029 — derived pipeline FEM nie publikuje surface/vector w budżecie | P0 | otwarte |
-| F3D-030 — `Maximum update depth exceeded` nie ma deterministycznego gate'a ani pełnego śladu | P0 | otwarte |
-| F3D-031 — gate CoFeB i recorder są rozjechane z aktualnym przykładem | P1 | otwarte |
-| F3D-032 — renderowany/pickowalny cel nie ma jednego kanonicznego węzła Explorera | P0 | otwarte; poprawki Airbox są w toku i bez browser proof |
+| F3D-029 — derived pipeline FEM nie publikuje surface/vector w budżecie | P0 | zamknięte; realny CoFeB smoke zielony, switch <200 ms |
+| F3D-030 — `Maximum update depth exceeded` nie ma deterministycznego gate'a ani pełnego śladu | P0 | zamknięte; produkcyjny Chromium negative-control, pre-canvas boundary, remount latch i pełny failure artifact |
+| F3D-031 — gate CoFeB i recorder są rozjechane z aktualnym przykładem | P1 | zamknięte; aktualny target/stage contract i izolowane porty |
+| F3D-032 — renderowany/pickowalny cel nie ma jednego kanonicznego węzła Explorera | P0 | zamknięte; invariant click/reveal oraz realne build evidence magnet/airbox |
 
 Plany naprawy i kryteria akceptacji są w plikach `11` i `12`.
 
@@ -194,13 +202,21 @@ pnpm --dir apps/control-room lint
   PASS — zero warnings
 
 env TMPDIR=/tmp pnpm --dir apps/control-room test
-  PASS — 325 plików, 3015 testów
+  PARTIAL — 328 plików / 3069 testów pass; 2 niezależne failure:
+  sandbox EPERM przy spawnSync oraz oczekiwanie zmienione równolegle w viewport3dResources
 
 focused frontend selection/Explorer/viewport
   PASS — 5 plików, 144 testy
 
 focused fullmag-api Airbox identity/override tests
   PASS — 3 testy
+
+pnpm --dir apps/control-room build:audit:webpack
+  PASS — świeży Next.js 16.2.6 production audit bundle
+
+CONTROL_ROOM_SCREENSHOT_ALLOW_MISSING_SESSION=1 CONTROL_ROOM_SCREENSHOT_SCENES=fdm
+  PARTIAL — canvas/WebGL i dokładny click -> Explorer node PASS;
+  późniejsza niezależna kontrolka projection nie została ujawniona
 
 just run-cofeb-rings-relax-diagnostics gpu auto 3192 viewport-3d
   FAIL — timeout 120 s na .fm-viewport-3d canvas; brak pełnego artefaktu
@@ -218,6 +234,6 @@ just run-cofeb-rings-relax-interactive gpu auto
 - Nie uznaje małego fixture za dowód produkcyjnego FEM.
 - Nie uznaje niezacommitowanych zmian innych agentów za naprawę bez ponownego
   runtime/browser proof.
-- Nie uznaje mapowania carriera `part:__air__` na display target `airbox` za
-  pełną naprawę, dopóki picking nie ujawnia i nie podświetla dokładnie jednego
-  węzła Explorera oraz nie istnieje fail-closed guard dla wszystkich targetów.
+- Nie uznaje samego click/reveal za pełny dowód braku podwójnych passów Airboxa;
+  ten osobny browser gate pozostaje wymagany do ostatecznego zamknięcia
+  F3D-032.

@@ -107,7 +107,16 @@ Expected: only the regression fixture/assertion and classifier guard are new; pr
 
 ### Task 2: Prove the restored field and WebGL path
 
+Before running this task, repair the field-query identity exposed by the first managed smoke:
+
+- Add a RED assertion in `apps/control-room/src/kernel/api/fieldQueryIdentity.test.ts` that `canonicalFieldVectorQuery` retains `part:film_mesh` for `scope_kind: "part"`, and that serialization emits `scope_id=part%3Afilm_mesh`.
+- Keep the existing assertion that `object:film` becomes `film` for `scope_kind: "object"`.
+- In `apps/control-room/src/kernel/api/fieldQueryIdentity.ts`, change `canonicalScopeId` so it strips only the `object:` visualization prefix and preserves exact part IDs.
+- Run `pnpm --dir apps/control-room exec vitest run src/kernel/api/fieldQueryIdentity.test.ts` before and after implementation to prove RED and GREEN.
+
 **Files:**
+- Modify: `apps/control-room/src/kernel/api/fieldQueryIdentity.test.ts`
+- Modify: `apps/control-room/src/kernel/api/fieldQueryIdentity.ts`
 - Inspect only: `apps/control-room/scripts/smoke-viewport-3d-mixed-targets.mjs`
 - Inspect only: `.fullmag/reports/viewport-3d-mixed-target-smoke/*`
 - Modify only if a distinct reproduced lifecycle defect requires it: `apps/control-room/src/modules/viewport-3d/Viewport3DCanvas.tsx`

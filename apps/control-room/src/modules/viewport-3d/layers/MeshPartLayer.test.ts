@@ -10,9 +10,55 @@ import {
   resolveMeshPartScalarColors,
   resolveMeshPartVectorLayerInput,
   resolveMeshPartWireframeEdgeIndices,
+  resolveMeshPartPointNodeSelection,
+  recordMeshPartSurfaceAdoption,
 } from "./MeshPartLayer";
+import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
 describe("MeshPartLayer", () => {
+  it("uses the effective full node selection for the points pass", () => {
+    const fullNodeSelection = { nodeIndices: [4, 5, 6] };
+    expect(
+      resolveMeshPartPointNodeSelection("full", {
+        fullNodeSelection,
+        part: { node_indices: [0, 1, 2, 3, 4, 5, 6] },
+        surfaceNodeSelection: { nodeIndices: [4, 5] },
+      } as never),
+    ).toBe(fullNodeSelection);
+  });
+  it("records the actually visible retained scalar buffer, not merely the requested candidate", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([["part:a", ["object:a"]]]));
+    registry.retainDemand("object:a");
+
+    recordMeshPartSurfaceAdoption({
+      carrierId: "part:a",
+      fieldBufferId: "field-requested-new",
+      registry,
+      scalarBuffer: {
+        buildKey: "scalar-retained",
+        colors: new Float32Array(9),
+        range: { max: 1, min: 0 },
+        sourceFieldBufferId: "field-retained-old",
+        sourceResourceKey: "resource-retained-old",
+      },
+    });
+
+    expect(registry.snapshot("object:a")[0]).toMatchObject({
+      fieldBufferId: "field-retained-old",
+      resourceKey: "resource-retained-old",
+      scalarBufferKey: "scalar-retained",
+    });
+  });
+  it("clears only its exact surface receipt when the adopted buffer is hidden or unmounted", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("adoptionRegistry.clearAdoption(adoption)");
+    expect(source).toContain("unregister();");
+  });
   it("uses the scalar shader material when large scalar buffers skip CPU RGB colors", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),

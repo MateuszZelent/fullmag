@@ -15,7 +15,9 @@ import {
   hasAnyEffectiveFdmPass,
   resolveFdmCuboidPassPlan,
   resolveFdmVectorGlyphScale,
+  recordFdmCuboidSurfaceAdoption,
 } from "./FdmCuboidLayer";
+import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
 function domainFixture(
   overrides: Partial<FdmGridRenderDomain> = {},
@@ -68,6 +70,35 @@ const viewport3DSceneModelPath = join(
 );
 
 describe("FdmCuboidLayer model", () => {
+  it("clears the exact FDM surface receipt when colors disappear or the pass unmounts", () => {
+    const source = readFileSync(fdmCuboidLayerPath, "utf8");
+
+    expect(source).toContain("adoptionRegistry.clearAdoption(");
+    expect(source).toContain("if (usesInstanceColors || !adoptionRegistry) return;");
+    expect(source).toContain("unregister();");
+  });
+  it("records FDM surface colors as an adopted derived-global carrier", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([["fdm-domain", ["object:sample"]]]));
+    registry.retainDemand("object:sample");
+
+    recordFdmCuboidSurfaceAdoption({
+      fieldBufferId: "field-global",
+      registry,
+      scalarBuffer: {
+        buildKey: "scalar-global",
+        colors: new Float32Array(12),
+        range: { max: 1, min: -1 },
+      },
+    });
+
+    expect(registry.snapshot("object:sample")[0]).toMatchObject({
+      carrierId: "fdm-domain",
+      fieldBufferId: "field-global",
+      kind: "surface",
+      scalarBufferKey: "scalar-global",
+    });
+  });
   it("keeps every independently enabled FDM pass renderable", () => {
     expect(
       hasAnyEffectiveFdmPass({

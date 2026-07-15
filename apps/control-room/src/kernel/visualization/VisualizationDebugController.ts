@@ -33,22 +33,6 @@ export const EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS: readonly VisualizationDebugSna
   Object.freeze([]);
 
 const textEncoder = new TextEncoder();
-const emptyDemandSnapshots = new Map<string, VisualizationDebugDemand>();
-
-export function getEmptyVisualizationDebugDemandSnapshot(
-  targetId: string,
-): VisualizationDebugDemand {
-  const cached = emptyDemandSnapshots.get(targetId);
-  if (cached) return cached;
-
-  if (emptyDemandSnapshots.size >= MAX_VISUALIZATION_DEBUG_TARGETS) {
-    const oldestTargetId = emptyDemandSnapshots.keys().next().value;
-    if (oldestTargetId !== undefined) emptyDemandSnapshots.delete(oldestTargetId);
-  }
-  const snapshot = Object.freeze({ expanded: false, targetId });
-  emptyDemandSnapshots.set(targetId, snapshot);
-  return snapshot;
-}
 
 export class VisualizationDebugController {
   private readonly activePublisherGenerations = new Map<string, number>();
@@ -119,7 +103,7 @@ export class VisualizationDebugController {
     const cached = this.demandSnapshots.get(targetId);
     if (cached) return cached;
 
-    const snapshot = getEmptyVisualizationDebugDemandSnapshot(targetId);
+    const snapshot = frozenDemand(targetId, false);
     this.demandSnapshots.set(targetId, snapshot);
     return snapshot;
   }
@@ -155,10 +139,7 @@ export class VisualizationDebugController {
       }
 
       this.demandCounts.delete(targetId);
-      this.demandSnapshots.set(
-        targetId,
-        getEmptyVisualizationDebugDemandSnapshot(targetId),
-      );
+      this.demandSnapshots.set(targetId, frozenDemand(targetId, false));
       this.notify(this.demandListeners.get(targetId));
       this.clearTargetSnapshots(targetId);
       this.pruneDemandSnapshot(targetId);
@@ -453,9 +434,7 @@ function frozenDemand(
   targetId: string,
   expanded: boolean,
 ): VisualizationDebugDemand {
-  return expanded
-    ? Object.freeze({ expanded: true, targetId })
-    : getEmptyVisualizationDebugDemandSnapshot(targetId);
+  return Object.freeze({ expanded, targetId });
 }
 
 function getOrCreateListeners(

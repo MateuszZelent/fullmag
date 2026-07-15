@@ -7,6 +7,7 @@ import type {
   SceneResource,
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
 import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
 
@@ -96,9 +97,10 @@ export function modelTreeSnapshotFromScene(
 function isSyntheticAirboxSceneObject(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const object = value as Record<string, unknown>;
-  const id = stringValue(object.id);
-  const role = stringValue(object.role);
-  return id === "__air__" || role === "air" || role === "airbox";
+  return isVisualizationAirboxIdentity({
+    id: stringValue(object.id),
+    role: stringValue(object.role),
+  });
 }
 
 export function modelTreeSnapshotWithStageExecution(

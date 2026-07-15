@@ -106,6 +106,7 @@ import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
+import { VisualizationDebugPanel } from "./panels/visualization-debug/VisualizationDebugPanel";
 import {
   EigenmodesBoundaryStageInspectorPanel,
   EigenmodesCalculationModeStageInspectorPanel,
@@ -487,10 +488,14 @@ const PANELS: InspectorPanelContribution[] = [
     component: ObjectVisualizationPanel,
   },
   {
-    id: "airbox-visualization-debug",
-    title: "Airbox Visualization Debug",
-    selectionKinds: ["airbox.visualization.debug"],
-    component: PlaceholderPanel,
+    id: "visualization-debug",
+    title: "Visualization Debug",
+    selectionKinds: [
+      "airbox.visualization.debug",
+      "object.visualization.debug",
+      "object.region.visualization.debug",
+    ],
+    component: VisualizationDebugPanel,
   },
   {
     id: "object-mode-visualization",

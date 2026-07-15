@@ -30,6 +30,11 @@ describe("viewport3dPrimitiveModel", () => {
             geometry: { geometry_kind: "box", size: [10, 10, 10] },
           },
           {
+            id: "__airbox__",
+            name: "Legacy synthetic airbox",
+            geometry: { geometry_kind: "box", size: [10, 10, 10] },
+          },
+          {
             id: "compat-air",
             name: "Legacy Airbox",
             role: "airbox",

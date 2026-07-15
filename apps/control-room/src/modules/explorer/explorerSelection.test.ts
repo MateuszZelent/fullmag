@@ -79,6 +79,7 @@ describe("selectExplorerNode", () => {
       kind: "mesh.unassigned.part",
       label: "Recovered volume",
       meshPartId: "part:orphan",
+      visualizationTargetId: "part:part:orphan",
       parentId: "model:mesh:unassigned",
     };
 
@@ -93,7 +94,7 @@ describe("selectExplorerNode", () => {
         nodeId: node.id,
         objectId: null,
         type: "mesh-part",
-        visualizationTargetId: "part:orphan",
+        visualizationTargetId: "part:part:orphan",
       },
     });
   });

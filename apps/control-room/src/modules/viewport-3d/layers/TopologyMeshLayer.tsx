@@ -24,8 +24,10 @@ import { FallbackTopologyMeshLayer } from "./FallbackTopologyMeshLayer";
 import { MeshPartLayer } from "./MeshPartLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
 export function TopologyMeshLayer({
+  adoptionRegistry,
   colors,
   vectorColorMode,
   fallbackSettings,
@@ -43,6 +45,7 @@ export function TopologyMeshLayer({
   topologyFreshness,
   vectorStyle,
 }: {
+  adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
   vectorColorMode: string;
   fallbackSettings: VisualizationTargetSettings;
@@ -72,6 +75,7 @@ export function TopologyMeshLayer({
           const settings = getPartSettings(partModel.part);
           return (
             <MeshPartLayer
+              adoptionRegistry={adoptionRegistry}
               colors={colors}
               fieldModel={resolvedFieldModel}
               key={partModel.part.id}

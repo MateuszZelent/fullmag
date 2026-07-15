@@ -46,6 +46,12 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).not.toContain("useObjectVisualizationRegistry()");
   });
 
+  it("keeps ordinary visualization controls independent from opt-in Debug demand", () => {
+    expect(panelSource).not.toContain("useVisualizationDebugSnapshots");
+    expect(panelSource).not.toContain("kernel.visualizationDebug.request");
+    expect(panelSource).not.toContain("VisualizationDebugSnapshot");
+  });
+
   it("uses a revision-bounded local target patch while remote visualization state is pending", () => {
     expect(panelSource).toContain("visualization.patchTargetPending(");
     expect(panelSource).toContain("visualizationState.rawData?.revision");

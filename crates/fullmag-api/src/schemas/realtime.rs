@@ -17,6 +17,7 @@ pub struct RealtimeResourceRevisionMap {
     pub command_completion_revision: u64,
     pub fields_revision: u64,
     pub scalars_revision: u64,
+    #[serde(with = "crate::schemas::decimal_u64")]
     pub domain_generation_id: u64,
     pub artifacts_revision: u64,
     pub engine_log_revision: u64,
@@ -64,6 +65,7 @@ pub struct RealtimeResourceChange {
     #[serde(default, skip_serializing_if = "is_false")]
     pub broad: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::schemas::decimal_u64::optional")]
     pub domain_generation_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recommended_fetch: Option<String>,

@@ -37,7 +37,8 @@ function finiteNumber(value: number | null | undefined): number | undefined {
 
 function canonicalScopeId(scopeKind: string, scopeId: string | undefined): string | undefined {
   if (!scopeId) return undefined;
-  const prefix = `${scopeKind}:`;
+  if (scopeKind !== "object") return scopeId;
+  const prefix = "object:";
   return scopeId.startsWith(prefix) ? scopeId.slice(prefix.length) : scopeId;
 }
 
@@ -109,6 +110,15 @@ export function serializeCanonicalFieldVectorResourceKey(
   }
   const serialized = search.toString();
   return serialized ? `${path}?${serialized}` : path;
+}
+
+export function fieldVectorResourceKey(
+  quantityId: string,
+  query: FieldVectorQuery = {},
+): string {
+  return serializeCanonicalFieldVectorResourceKey(
+    canonicalFieldVectorQuery(quantityId, query),
+  );
 }
 
 export function parseCanonicalFieldVectorResourceKey(

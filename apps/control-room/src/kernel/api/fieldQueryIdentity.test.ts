@@ -2,12 +2,24 @@ import { describe, expect, it } from "vitest";
 
 import {
   canonicalFieldVectorQuery,
+  fieldVectorResourceKey,
   parseCanonicalFieldVectorResourceKey,
   serializeCanonicalFieldVectorResourceKey,
 } from "./fieldQueryIdentity";
 
 describe("fieldQueryIdentity", () => {
-  it("normalizes prefixed object and part scopes into one transport identity", () => {
+  it("builds a vector resource key through the canonical API path", () => {
+    expect(
+      fieldVectorResourceKey("m", {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      }),
+    ).toBe(
+      "/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_id=part-a&scope_kind=part",
+    );
+  });
+  it("normalizes object target ids while preserving exact mesh part ids", () => {
     expect(
       canonicalFieldVectorQuery("m", {
         component: "x",
@@ -21,7 +33,16 @@ describe("fieldQueryIdentity", () => {
         scope_id: "part:film_mesh",
         scope_kind: "part",
       }),
-    ).toMatchObject({ quantityId: "m", scopeId: "film_mesh", scopeKind: "part" });
+    ).toMatchObject({ quantityId: "m", scopeId: "part:film_mesh", scopeKind: "part" });
+    expect(
+      serializeCanonicalFieldVectorResourceKey(
+        canonicalFieldVectorQuery("m", {
+          component: "x",
+          scope_id: "part:film_mesh",
+          scope_kind: "part",
+        }),
+      ),
+    ).toContain("scope_id=part%3Afilm_mesh&scope_kind=part");
   });
 
   it("serializes every field-vector identity dimension in a stable order", () => {

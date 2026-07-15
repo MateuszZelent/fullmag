@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
+
 import type { Viewport3DTargetRenderPassModel } from "../viewport3dRenderModel";
 
 import type { Viewport3DDerivedWorkItem } from "./viewport3DDerivedWorkPlan";
-import { summarizeViewport3DTargetDiagnostics } from "./viewport3DTargetDiagnostics";
+import {
+  resolveViewport3DTargetDiagnosticResourceKeys,
+  summarizeViewport3DTargetDiagnostics,
+} from "./viewport3DTargetDiagnostics";
 
 function targetPass(
   overrides: Partial<Viewport3DTargetRenderPassModel> = {},
@@ -19,6 +24,11 @@ function targetPass(
       pointCount: 4,
       quantityId: "m",
       requestId: "quantity=m&component=full&scope_kind=part&scope_id=part-a",
+      resourceKey: fieldVectorResourceKey("m", {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      }),
       sampled: false,
       scopeId: "part-a",
       scopeKind: "part",
@@ -123,6 +133,13 @@ describe("viewport3DTargetDiagnostics", () => {
         targetId: "part-a",
       },
     ]);
+    expect(resolveViewport3DTargetDiagnosticResourceKeys(targetPass())).toEqual([
+      fieldVectorResourceKey("m", {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      }),
+    ]);
   });
 
   it("explains blocked target work and pass degradation reasons", () => {
@@ -169,6 +186,13 @@ describe("viewport3DTargetDiagnostics", () => {
               pointCount: 4,
               quantityId: "m",
               requestId: "quantity=m&component=full&max_samples=4",
+              resourceKey:
+                fieldVectorResourceKey("m", {
+                  component: "full",
+                  max_samples: 4,
+                  scope_id: "part-a",
+                  scope_kind: "part",
+                }),
               sampled: true,
               scopeId: "part-a",
               scopeKind: "part",
@@ -469,6 +493,12 @@ describe("viewport3DTargetDiagnostics", () => {
               quantityId: "m",
               requestId:
                 "quantity=m&component=full&scope_kind=part&scope_id=part-a",
+              resourceKey:
+                fieldVectorResourceKey("m", {
+                  component: "full",
+                  scope_id: "part-a",
+                  scope_kind: "part",
+                }),
               sampled: false,
               scopeId: "part-a",
               scopeKind: "part",

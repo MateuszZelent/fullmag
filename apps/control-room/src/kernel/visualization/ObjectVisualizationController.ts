@@ -9,6 +9,7 @@ import {
 } from "../api/quantityIds";
 import {
   canonicalVisualizationSceneObjectId,
+  visualizationPartScopeIdFromTargetId,
   visualizationTargetIdForSceneObject,
   type Selection,
 } from "../selection/selectionTypes";
@@ -901,6 +902,9 @@ function visualizationStateScopeIdForTarget(target: VisualizationTargetRef): str
       target.id.slice("object:".length),
     );
   }
+  if (target.kind === "part") {
+    return visualizationPartScopeIdFromTargetId(target.id);
+  }
   return target.id;
 }
 
@@ -1063,7 +1067,12 @@ export function visualizationStateOverrideMatchesTarget(
   target: VisualizationTargetRef,
 ): boolean {
   if (entry.scope !== target.kind) return false;
-  if (entry.scope_id === target.id) return true;
+  if (
+    entry.scope_id === target.id ||
+    entry.scope_id === visualizationStateScopeIdForTarget(target)
+  ) {
+    return true;
+  }
   return (
     target.kind === "object" &&
     target.id.startsWith("object:") &&
@@ -1383,6 +1392,7 @@ function visualizationSettingsFromResolvedTarget(
       defaultSettings.scalarColorPalette,
     surfaceColorSource: settings.surface_color_source,
     surfaceProjectionMode: settings.surface_projection_mode ?? "raw_nodal",
+    viewportColorbarVisible: settings.viewport_colorbar_visible,
     vectorAlphaPercent: layerOpacityToPercent(settings.vector_alpha),
     vectorBudget: Math.max(
       0,

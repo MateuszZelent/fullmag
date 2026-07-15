@@ -10,7 +10,7 @@ const resources: LiveStatusResource["resources"] = {
   command_completion_revision: 0,
   commands_revision: 0,
   display_revision: 0,
-  domain_generation_id: 0,
+  domain_generation_id: "0",
   engine_log_revision: 0,
   field_catalog_revision: 0,
   field_revision: 0,

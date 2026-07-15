@@ -50,13 +50,16 @@ function makeSnapshot({
         render: {
           adoption: {
             adoptedFieldBufferId: "field-buffer-1",
+            adoptedResourceKey: "field:m?component=full&scope_kind=object",
             adoptedScalarBufferKey: null,
             adoptedVectorBuildKey: "vectors-1",
             frameCommitId: "frame-1",
           },
           fieldBufferState: "ready",
+          requestedFieldBufferId: "field-buffer-1",
           requestedPasses: ["vectors"],
           surface: {
+            bufferKey: null,
             colorMode: null,
             degradation: null,
             projectionMode: null,

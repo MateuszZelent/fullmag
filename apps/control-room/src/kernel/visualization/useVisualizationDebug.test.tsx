@@ -108,4 +108,40 @@ describe("visualization debug external-store hooks", () => {
     });
     expect(observations[2]!.demand).not.toBe(observations[0]!.demand);
   });
+
+  it("isolates empty demand snapshots per controller across more than eight SSR targets", () => {
+    const firstKernel = makeKernel();
+    const secondKernel = makeKernel();
+    const firstObservations: HookObservation[] = [];
+    const secondObservations: HookObservation[] = [];
+    const sharedTargetId = "object:ssr-controller-isolation";
+
+    renderToStaticMarkup(
+      <KernelContext.Provider value={firstKernel}>
+        <Probe observations={firstObservations} targetId={sharedTargetId} />
+      </KernelContext.Provider>,
+    );
+    renderToStaticMarkup(
+      <KernelContext.Provider value={secondKernel}>
+        <Probe observations={secondObservations} targetId={sharedTargetId} />
+        {Array.from({ length: 9 }, (_, index) => (
+          <Probe
+            key={index}
+            observations={secondObservations}
+            targetId={`object:second-kernel-${index}`}
+          />
+        ))}
+      </KernelContext.Provider>,
+    );
+
+    const firstServerSnapshot = firstObservations[0]!.demand;
+    const secondServerSnapshot = secondObservations[0]!.demand;
+    expect(firstKernel.visualizationDebug.getDemandSnapshot(sharedTargetId)).toBe(
+      firstServerSnapshot,
+    );
+    expect(secondKernel.visualizationDebug.getDemandSnapshot(sharedTargetId)).toBe(
+      secondServerSnapshot,
+    );
+    expect(firstServerSnapshot).not.toBe(secondServerSnapshot);
+  });
 });

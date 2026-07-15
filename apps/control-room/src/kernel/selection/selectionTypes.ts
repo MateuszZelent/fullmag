@@ -45,6 +45,20 @@ export interface VisualizationMeshPartLike {
   role?: string | null;
 }
 
+const LEGACY_AIRBOX_IDS = new Set(["__air__", "__airbox__"]);
+
+export function isVisualizationAirboxIdentity(value: {
+  id?: string | null;
+  role?: string | null;
+}): boolean {
+  const role = value.role?.trim().toLowerCase();
+  return (
+    role === "air" ||
+    role === "airbox" ||
+    LEGACY_AIRBOX_IDS.has(value.id?.trim() ?? "")
+  );
+}
+
 export function visualizationTargetIdForSceneObject(
   objectId: string,
   regionId?: string | null,
@@ -58,12 +72,22 @@ export function canonicalVisualizationSceneObjectId(objectId: string): string {
   return objectId.endsWith("_geom") ? objectId.slice(0, -5) : objectId;
 }
 
+export function canonicalVisualizationPartTargetId(partId: string): string {
+  return `part:${partId}`;
+}
+
+export function visualizationPartScopeIdFromTargetId(targetId: string): string {
+  return targetId.startsWith("part:")
+    ? targetId.slice("part:".length)
+    : targetId;
+}
+
 export function visualizationObjectIdForMeshPartLike(part: {
   geometry_id?: string | null;
   object_id?: string | null;
   role?: string | null;
 }): string | null {
-  if (part.role === "air" || part.role === "airbox") return null;
+  if (isVisualizationAirboxIdentity(part)) return null;
   const objectId = part.object_id ?? part.geometry_id;
   return objectId ? canonicalVisualizationSceneObjectId(objectId) : null;
 }

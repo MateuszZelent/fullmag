@@ -5,6 +5,7 @@ import {
   canonicalVisualizationSceneObjectId,
   type VisualizationMeshPartLike,
   visualizationObjectIdForMeshPartLike,
+  visualizationPartScopeIdFromTargetId,
 } from "./selectionTypes";
 
 export function resolveVisualizationTargetForMeshPart({
@@ -72,7 +73,7 @@ function objectTarget(
 
 function partTarget(part: VisualizationMeshPartLike): VisualizationTargetRef {
   return {
-    id: part.id,
+    id: visualizationPartScopeIdFromTargetId(part.id),
     kind: "part",
     label: part.label,
   };

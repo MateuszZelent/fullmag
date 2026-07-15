@@ -572,6 +572,9 @@ export function AppMenuBar() {
         syncSnapshot={visualizationSyncSnapshot}
         visualizationState={visualizationState.data}
         onOpenChange={setRegistryOpen}
+        onRetryMutation={() => {
+          void kernel.visualizationSync.retryRejectedMutation();
+        }}
       />
 
       <DiagnosticRecorderDialog

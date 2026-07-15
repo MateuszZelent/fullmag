@@ -5,6 +5,7 @@ import type {
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
 import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
+import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 import {
   DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
@@ -18,7 +19,6 @@ import {
   queuePartVectorVisibilityPatch,
   queueTargetVectorVisibilityPatch,
   buildAirboxVisibilityDiagnostic,
-  buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
   displayPassTogglePatch,
@@ -41,6 +41,8 @@ import {
   resolveRegionVisualizationCarrier,
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
+  resolveVisualizationVectorAccounting,
+  resolveVisualizationDebugTargetId,
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowSurfaceFieldColorbar,
@@ -63,6 +65,151 @@ import {
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
+  it("maps the semantic Airbox target to its renderer mesh-part debug target", () => {
+    expect(
+      resolveVisualizationDebugTargetId({
+        airboxPartIds: ["part:__air__"],
+        target: { id: "airbox", kind: "airbox", label: "Airbox" },
+      }),
+    ).toBe("part:__air__");
+  });
+
+  it("reports decoded and adopted vector counts only for matching identities", () => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: { pointCount: 10_586 },
+        request: { resourceKey: "field-key" },
+        revisions: { meshTopologyHash: "topology-a" },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build" },
+          adoption: {
+            adoptedFieldBufferId: "field-buffer",
+            adoptedResourceKey: "field-key",
+            adoptedVectorBuildKey: "vector-build",
+            adoptedVectorItemCount: 10_586,
+          },
+        },
+      }],
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-a",
+      snapshots: [snapshot],
+    })).toEqual({
+      adoptedGlyphCount: 10_586,
+      availableNodeCount: 10_586,
+      decodedSampleCount: 10_586,
+    });
+  });
+
+  it("rejects oversized decoded payloads from vector accounting", () => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: { pointCount: 16_940 },
+        request: { resourceKey: "field-key" },
+        revisions: { meshTopologyHash: "topology-a" },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build" },
+          adoption: {
+            adoptedFieldBufferId: "field-buffer",
+            adoptedResourceKey: "field-key",
+            adoptedVectorBuildKey: "vector-build",
+            adoptedVectorItemCount: 16_940,
+          },
+        },
+      }],
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-a",
+      snapshots: [snapshot],
+    })).toEqual({
+      adoptedGlyphCount: null,
+      availableNodeCount: 10_586,
+      decodedSampleCount: null,
+    });
+  });
+
+  it("reports waiting until a current debug snapshot exists", () => {
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-a",
+      snapshots: [],
+    })).toEqual({
+      adoptedGlyphCount: null,
+      availableNodeCount: 10_586,
+      decodedSampleCount: null,
+    });
+  });
+
+  it("clears decoded and adopted counts from a stale topology", () => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: { pointCount: 10_586 },
+        request: { resourceKey: "field-key" },
+        revisions: { meshTopologyHash: "topology-old" },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build" },
+          adoption: {
+            adoptedFieldBufferId: "field-buffer",
+            adoptedResourceKey: "field-key",
+            adoptedVectorBuildKey: "vector-build",
+            adoptedVectorItemCount: 10_586,
+          },
+        },
+      }],
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-current",
+      snapshots: [snapshot],
+    })).toEqual({
+      adoptedGlyphCount: null,
+      availableNodeCount: 10_586,
+      decodedSampleCount: null,
+    });
+  });
+
+  it("keeps decoded samples but clears adoption on a stale build identity", () => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: { pointCount: 10_586 },
+        request: { resourceKey: "field-key" },
+        revisions: { meshTopologyHash: "topology-a" },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build-current" },
+          adoption: {
+            adoptedFieldBufferId: "field-buffer",
+            adoptedResourceKey: "field-key",
+            adoptedVectorBuildKey: "vector-build-old",
+            adoptedVectorItemCount: 10_586,
+          },
+        },
+      }],
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-a",
+      snapshots: [snapshot],
+    })).toEqual({
+      adoptedGlyphCount: null,
+      availableNodeCount: 10_586,
+      decodedSampleCount: 10_586,
+    });
+  });
+
   it("counts backend-only child region overrides after reload", () => {
     const childTargets = [
       { id: "region:object-a:core", kind: "region" as const },
@@ -1126,19 +1273,21 @@ describe("ObjectVisualizationPanelModel", () => {
     ]));
   });
 
-  it("scales the airbox arrow budget to the airbox node count", () => {
+  it("scales the airbox arrow budget to the air-only node count", () => {
     const meshParts: MeshPart[] = [
       meshPart({
         id: "part:__air__",
         label: "Airbox",
-        node_count: 34668,
+        node_count: 16_940,
+        node_indices: Array.from({ length: 16_940 }, (_, index) => index),
         role: "air",
       }),
       meshPart({
         id: "arch_waveguide",
         label: "Arch",
-        node_count: 34229,
-        role: "object",
+        node_count: 6_354,
+        node_indices: Array.from({ length: 6_354 }, (_, index) => index),
+        role: "magnetic",
       }),
     ];
 
@@ -1148,9 +1297,9 @@ describe("ObjectVisualizationPanelModel", () => {
         target: { id: "airbox", kind: "airbox" },
       }),
     ).toEqual({
-      availableNodeCount: 34668,
+      availableNodeCount: 10_586,
       exact: true,
-      max: 34668,
+      max: 10_586,
       min: 0,
       step: 1,
     });
@@ -1544,26 +1693,6 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
-  it("reports displayed arrow samples against available target nodes", () => {
-    expect(
-      buildVisualizationVectorBudgetDiagnostic({
-        requestedBudget: 12,
-        vectorBudgetRange: {
-          availableNodeCount: 5,
-          exact: true,
-          max: 5,
-          min: 0,
-          step: 1,
-        },
-      }),
-    ).toEqual({
-      availableNodeCount: 5,
-      displayedGlyphCount: 5,
-      exact: true,
-      requestedBudget: 12,
-    });
-  });
-
   it("explains an airbox Visible request that is still off in backend state", () => {
     const diagnostic = buildAirboxVisibilityDiagnostic({
       displaySettings: {
@@ -1615,12 +1744,12 @@ describe("ObjectVisualizationPanelModel", () => {
 
   it("confirms airbox H_eff vectors when gates and catalog are available", () => {
     const fieldCatalog: FieldCatalogResource = {
-      domain_generation_id: 1,
+      domain_generation_id: "1",
       quantities: [
         {
           available: true,
           components: 3,
-          domain_generation_id: 1,
+          domain_generation_id: "1",
           field_revision: 3,
           kind: "vector",
           label: "Effective field",

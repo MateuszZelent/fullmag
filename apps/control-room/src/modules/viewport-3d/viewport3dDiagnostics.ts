@@ -153,6 +153,13 @@ export class Viewport3DResourceTracker {
     timers: number;
     workers: number;
   }): void {
+    if (
+      this.counts.workerRuntimeJobs === counts.jobs &&
+      this.counts.workerRuntimeTimers === counts.timers &&
+      this.counts.workerRuntimeWorkers === counts.workers
+    ) {
+      return;
+    }
     this.counts = {
       ...this.counts,
       workerRuntimeJobs: counts.jobs,

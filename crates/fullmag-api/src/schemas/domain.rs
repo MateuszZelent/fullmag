@@ -12,6 +12,8 @@ pub struct DomainMeta {
     pub domain_id: String,
     #[schema(example = "fem")]
     pub discretization: String,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub generation_id: u64,
     pub dimension: u8,
     pub coordinate_system: String,
@@ -132,6 +134,8 @@ pub struct DomainSliceMeshOverlay {
     pub segment_count: usize,
     pub point_count: usize,
     pub topology_revision: u64,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub domain_generation_id: u64,
     pub etag: String,
 }

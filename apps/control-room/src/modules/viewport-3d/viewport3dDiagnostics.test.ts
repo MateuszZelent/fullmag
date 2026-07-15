@@ -64,6 +64,23 @@ describe("viewport3dDiagnostics", () => {
     expect(tracker.consumeDirtyReasonCounts()).toEqual({});
   });
 
+  it("publishes only one worker-runtime snapshot for 1000 identical notifications", () => {
+    const tracker = new Viewport3DResourceTracker();
+    const listener = vi.fn();
+    tracker.subscribe(listener);
+
+    for (let index = 0; index < 1_000; index += 1) {
+      tracker.setWorkerRuntimeCounts({ jobs: 1, timers: 2, workers: 3 });
+    }
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(tracker.getSnapshot()).toMatchObject({
+      workerRuntimeJobs: 1,
+      workerRuntimeTimers: 2,
+      workerRuntimeWorkers: 3,
+    });
+  });
+
   it("records context loss and restoration diagnostics", () => {
     const tracker = new Viewport3DResourceTracker();
 

@@ -316,6 +316,7 @@ describe("buildModelTree", () => {
       objects: [
         { id: "film", name: "Film", role: "magnet" },
         { id: "__air__", name: "Synthetic air", role: "air" },
+        { id: "__airbox__", name: "Legacy synthetic airbox" },
         { id: "compat-air", name: "Legacy Airbox", role: "airbox" },
       ],
     } as SceneResource);
@@ -501,7 +502,11 @@ describe("buildModelTree", () => {
       mesh: {
         partCount: 1,
         visualizationPartFallbacks: [
-          { id: "part:orphan", label: "Recovered volume" },
+          {
+            id: "part:orphan",
+            label: "Recovered volume",
+            visualizationTargetId: "part:part:orphan",
+          },
         ],
       },
     });
@@ -528,7 +533,11 @@ describe("buildModelTree", () => {
     const nodes = buildModelTree({
       mesh: {
         visualizationPartFallbacks: [
-          { id: "part:orphan", label: "Recovered volume" },
+          {
+            id: "part:orphan",
+            label: "Recovered volume",
+            visualizationTargetId: "part:part:orphan",
+          },
         ],
       },
     });

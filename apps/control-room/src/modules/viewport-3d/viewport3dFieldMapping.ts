@@ -38,6 +38,8 @@ export interface ScalarColorBuffer {
   phasorConvention?: string;
   quantityId?: string;
   range: ScalarRange;
+  sourceFieldBufferId?: string | null;
+  sourceResourceKey?: string | null;
   rangeDiagnostics?: ScalarRangeDiagnostics;
   degradedFaceCount?: number;
   faceCount?: number;

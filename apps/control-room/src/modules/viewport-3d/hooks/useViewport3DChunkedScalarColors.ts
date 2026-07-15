@@ -206,11 +206,19 @@ export function createViewport3DFieldColorBuildReference({
 export function attachViewport3DFieldColorBuildReference(
   colors: ScalarColorBuffer | null,
   reference: Viewport3DFieldColorBuildReference | null,
+  sourceIdentity?: {
+    fieldBufferId: string | null;
+    resourceKey: string | null;
+  },
 ): ScalarColorBuffer | null {
   if (!colors || !reference) return colors;
   return {
     ...colors,
     buildKey: reference.buildKey,
+    sourceFieldBufferId:
+      colors.sourceFieldBufferId ?? sourceIdentity?.fieldBufferId ?? null,
+    sourceResourceKey:
+      colors.sourceResourceKey ?? sourceIdentity?.resourceKey ?? null,
     targetRevision: reference.targetRevision,
     topologyRevision: reference.topologyRevision,
   };
@@ -531,11 +539,13 @@ export function useViewport3DChunkedScalarColors({
   const partBuildSpecs = useMemo(() => {
     if (!topology || !partScalarColorModes) return [];
     const specs: Array<{
+      fieldBufferId: string | null;
       fieldVector: DecodedFieldVector;
       mode: string;
       partId: string;
       palette: string;
       scalarRange: ScalarRange | null | undefined;
+      resourceKey: string | null;
       target: Viewport3DFieldColorBuildTarget;
       targetProjectionMode: Viewport3DChunkedProjectionMode;
     }> = [];
@@ -609,11 +619,15 @@ export function useViewport3DChunkedScalarColors({
             );
       if (!target) continue;
       specs.push({
+        fieldBufferId:
+          explicitPartFieldBuffer?.bufferId ??
+          `decoded:${partFieldVector.quantityId}:${partFieldVector.pointCount}:${partFieldVector.values.byteLength}`,
         fieldVector: partFieldVector,
         mode,
         partId,
         palette,
         scalarRange,
+        resourceKey: explicitPartFieldBuffer?.resourceKey ?? null,
         target,
         targetProjectionMode,
       });
@@ -860,6 +874,12 @@ export function useViewport3DChunkedScalarColors({
                   topologyRevision:
                     topologyRevision ?? topology.meshRevision ?? null,
                 });
+              if (
+                fieldColorBuildReference &&
+                entries.get(mode)?.buildKey === fieldColorBuildReference.buildKey
+              ) {
+                return;
+              }
               const colors = await buildVertexScalarColorsOffMainThread(
                 fieldVector,
                 {
@@ -881,6 +901,10 @@ export function useViewport3DChunkedScalarColors({
                 attachViewport3DFieldColorBuildReference(
                   colors,
                   fieldColorBuildReference,
+                  {
+                    fieldBufferId: `decoded:${fieldVector.quantityId}:${fieldVector.pointCount}:${fieldVector.values.byteLength}`,
+                    resourceKey: null,
+                  },
                 ),
               ] as const;
               if (entry[1] !== null) {
@@ -892,11 +916,13 @@ export function useViewport3DChunkedScalarColors({
           : [];
       const partJobs = partBuildSpecs.map(
         async ({
+          fieldBufferId,
           fieldVector,
           mode,
           palette,
           partId,
           scalarRange,
+          resourceKey,
           target,
         }) => {
           const fieldColorBuildReference =
@@ -923,6 +949,13 @@ export function useViewport3DChunkedScalarColors({
               topologyRevision:
                 topologyRevision ?? topology.meshRevision ?? null,
             });
+          if (
+            fieldColorBuildReference &&
+            partEntries.get(partId)?.get(mode)?.buildKey ===
+              fieldColorBuildReference.buildKey
+          ) {
+            return;
+          }
           const colors = await buildVertexScalarColorsOffMainThread(
             fieldVector,
             {
@@ -942,6 +975,7 @@ export function useViewport3DChunkedScalarColors({
           const entry = attachViewport3DFieldColorBuildReference(
             colors,
             fieldColorBuildReference,
+            { fieldBufferId, resourceKey },
           );
           if (entry !== null) {
             builtAnyEntry = true;

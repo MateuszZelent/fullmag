@@ -35,7 +35,10 @@ import type {
 import { useKernel } from "@/kernel/KernelContext";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import { fieldVectorMinRefetchIntervalMs } from "@/kernel/realtime/communicationPolicy";
-import { ResourceCache } from "@/kernel/resources/ResourceCache";
+import {
+  ResourceCache,
+  type ResourceCacheEntryDiagnostics,
+} from "@/kernel/resources/ResourceCache";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { useResource } from "@/kernel/resources/useResource";
 
@@ -58,7 +61,7 @@ const qualityDataCache = new ResourceCache<DecodedMeshQualityData>({
   maxBytes: 48 * 1024 * 1024,
 });
 const binaryResourceInflight = new WeakMap<
-  ResourceCache<unknown, unknown>,
+  object,
   Map<string, InflightBinaryResource<unknown>>
 >();
 
@@ -175,7 +178,7 @@ export function invalidateViewport3DFieldMetaResources(
   );
 }
 
-function resolveDomainMetaRevision(meta: { generation_id: number }) {
+function resolveDomainMetaRevision(meta: { generation_id: string }) {
   return meta.generation_id;
 }
 
@@ -216,6 +219,101 @@ export function getViewport3DCacheStats() {
       topologyStats.entryCount +
       fieldVectorStats.entryCount +
       qualityDataStats.entryCount,
+  };
+}
+
+export interface Viewport3DFieldVectorCacheEntryDiagnostics
+  extends ResourceCacheEntryDiagnostics {
+  responseMetadata: FieldVectorResponseMetadata | null;
+}
+
+export interface Viewport3DFieldVectorCacheBudgetDiagnostics {
+  byteLength: number;
+  entryCount: number;
+  maxBytes: number;
+}
+
+export function getViewport3DFieldVectorCacheEntryDiagnostics(
+  resourceKey: string,
+): Viewport3DFieldVectorCacheEntryDiagnostics {
+  return inspectViewport3DFieldVectorCacheEntryDiagnostics(
+    fieldVectorCache,
+    resourceKey,
+    binaryResourceInflight,
+  );
+}
+
+export function inspectViewport3DFieldVectorCacheEntryDiagnostics<TInflight>(
+  cache: ResourceCache<DecodedFieldVector, FieldVectorResponseMetadata>,
+  resourceKey: string,
+  inflightRegistry: WeakMap<object, ReadonlyMap<string, TInflight>>,
+): Viewport3DFieldVectorCacheEntryDiagnostics {
+  const diagnostics = cache.inspect(resourceKey);
+  const binaryInflight =
+    inflightRegistry.get(cache)?.has(resourceKey) ?? false;
+  const entryState =
+    binaryInflight ? "inflight" : diagnostics.entryState;
+  const metadata = cache.peek(resourceKey)?.metadata;
+  return {
+    ...diagnostics,
+    entryState,
+    responseMetadata: metadata
+      ? boundFieldVectorResponseMetadata(metadata)
+      : null,
+  };
+}
+
+export function getViewport3DFieldVectorCacheBudgetDiagnostics(): Viewport3DFieldVectorCacheBudgetDiagnostics {
+  const stats = fieldVectorCache.stats();
+  return {
+    byteLength: stats.byteLength,
+    entryCount: stats.entryCount,
+    maxBytes: fieldVectorCache.maxBytes(),
+  };
+}
+
+const MAX_FIELD_VECTOR_DIAGNOSTIC_STRING_LENGTH = 4_096;
+const MAX_FIELD_VECTOR_IDENTITY_ISSUES = 20;
+
+function boundFieldVectorDiagnosticString(value: string | null): string | null {
+  return value?.slice(0, MAX_FIELD_VECTOR_DIAGNOSTIC_STRING_LENGTH) ?? null;
+}
+
+function boundFieldVectorResponseMetadata(
+  metadata: FieldVectorResponseMetadata,
+): FieldVectorResponseMetadata {
+  return {
+    component: boundFieldVectorDiagnosticString(metadata.component),
+    domainGenerationId: boundFieldVectorDiagnosticString(
+      metadata.domainGenerationId,
+    ),
+    encoding: boundFieldVectorDiagnosticString(metadata.encoding),
+    fieldIndexing: boundFieldVectorDiagnosticString(metadata.fieldIndexing),
+    fieldRevision: boundFieldVectorDiagnosticString(metadata.fieldRevision),
+    identityIssues: metadata.identityIssues
+      .slice(0, MAX_FIELD_VECTOR_IDENTITY_ISSUES)
+      .map((issue) => ({
+        field: boundFieldVectorDiagnosticString(issue.field) ?? "",
+        headerValue:
+          typeof issue.headerValue === "string"
+            ? boundFieldVectorDiagnosticString(issue.headerValue)
+            : issue.headerValue,
+        payloadValue:
+          typeof issue.payloadValue === "string"
+            ? boundFieldVectorDiagnosticString(issue.payloadValue)
+            : issue.payloadValue,
+      })),
+    meshTopologyHash: boundFieldVectorDiagnosticString(
+      metadata.meshTopologyHash,
+    ),
+    nComp: metadata.nComp,
+    nodeIndexCount: metadata.nodeIndexCount,
+    pointCount: metadata.pointCount,
+    quantityId: boundFieldVectorDiagnosticString(metadata.quantityId),
+    scopeId: boundFieldVectorDiagnosticString(metadata.scopeId),
+    scopeKind: boundFieldVectorDiagnosticString(metadata.scopeKind),
+    snapshotId: boundFieldVectorDiagnosticString(metadata.snapshotId),
+    valueCount: metadata.valueCount,
   };
 }
 

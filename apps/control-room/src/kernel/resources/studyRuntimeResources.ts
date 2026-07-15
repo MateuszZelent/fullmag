@@ -527,8 +527,13 @@ export function frequencyDomainTextArtifactRevision(
   ].join("|");
 }
 
-function hasPositiveRevision(revision: number | null | undefined): boolean {
-  return typeof revision === "number" && revision > 0;
+function hasPositiveRevision(
+  revision: number | string | null | undefined,
+): boolean {
+  return (
+    (typeof revision === "number" && revision > 0) ||
+    (typeof revision === "string" && /^[1-9]\d*$/.test(revision))
+  );
 }
 
 export function useCommandQueueResource({

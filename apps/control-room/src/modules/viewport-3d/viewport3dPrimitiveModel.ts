@@ -2,7 +2,10 @@ import type {
   MeshSharedDomainManifestResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
-import type { Selection } from "@/kernel/selection/selectionTypes";
+import {
+  isVisualizationAirboxIdentity,
+  type Selection,
+} from "@/kernel/selection/selectionTypes";
 
 import { magnetizationHslRgb } from "./orientation/magnetizationColor";
 import type { Viewport3DBounds } from "./viewport3dRenderModel";
@@ -467,9 +470,7 @@ export function buildViewport3DPrimitiveRenderModel(
     if (
       !object ||
       !objectId ||
-      objectId === "__air__" ||
-      objectRole === "air" ||
-      objectRole === "airbox" ||
+      isVisualizationAirboxIdentity({ id: objectId, role: objectRole }) ||
       !geometry
     ) {
       return [];

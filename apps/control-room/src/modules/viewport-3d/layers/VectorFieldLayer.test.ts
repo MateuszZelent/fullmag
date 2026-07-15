@@ -16,11 +16,14 @@ import {
   createVectorGlyphMatrixUploadRollback,
   createVectorGlyphUploadKeys,
   ensureWhiteVertexColorAttribute,
+  identifyVectorGlyphBuildResult,
+  recordVectorFieldAdoption,
   resolveVectorFieldLayerStyle,
   syncVectorGlyphMaterialStyle,
   syncVectorGlyphColorState,
 } from "./VectorFieldLayer";
 import { createViewport3DGpuUploadManager } from "../build-engine/gpu/viewport3dGpuUploadManager";
+import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
 const vectorFieldLayerSource = readFileSync(
   join(process.cwd(), "src/modules/viewport-3d/layers/VectorFieldLayer.tsx"),
@@ -36,6 +39,62 @@ import {
 } from "./viewport3DLayerSettings";
 
 describe("VectorFieldLayer performance contracts", () => {
+  it("clears the exact vector receipt when no build remains or the layer unmounts", () => {
+    expect(vectorFieldLayerSource).toContain("adoptionRegistry.clearAdoption(");
+    expect(vectorFieldLayerSource).toContain("if (glyphBuild || !adoptionRegistry || !carrierId) return;");
+    expect(vectorFieldLayerSource).toContain("unregister();");
+  });
+  it("preserves the retained vector build source when a newer source is requested", () => {
+    const retained = identifyVectorGlyphBuildResult(
+      {
+        colors: null,
+        transforms: {
+          count: 0,
+          directions: new Float32Array(),
+          headCenters: new Float32Array(),
+          headScales: new Float32Array(),
+          shaftCenters: new Float32Array(),
+          shaftScales: new Float32Array(),
+        },
+      },
+      {
+        buildKey: "vector-old",
+        fieldBufferId: "field-old",
+        fieldRevision: "old",
+        groupKey: "group",
+        resourceKey: "resource-old",
+        revisionSummary: "old",
+        targetRevision: "field=old",
+        topologyRevision: "mesh-1",
+      },
+    );
+
+    expect(retained).toMatchObject({
+      sourceFieldBufferId: "field-old",
+      sourceResourceKey: "resource-old",
+    });
+  });
+  it("records target-specific vector evidence only after visible adoption", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([["part:a", ["object:a"]]]));
+    registry.retainDemand("object:a");
+
+    recordVectorFieldAdoption({
+      buildKey: "vector-adopted",
+      byteLength: 144,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      glyphCount: 7,
+      registry,
+    });
+
+    expect(registry.snapshot("object:a")[0]).toMatchObject({
+      byteLength: 144,
+      fieldBufferId: "field-a",
+      itemCount: 7,
+      vectorBuildKey: "vector-adopted",
+    });
+  });
   it("restores a partially uploaded glyph color lane after a later chunk fails", () => {
     const scheduled: Array<() => void> = [];
     const geometry = new BoxGeometry(1, 1, 1);
@@ -285,6 +344,8 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(buildHookSource).toContain("AbortController");
     expect(buildHookSource).toContain("useVectorGlyphDerivedBufferCache");
     expect(buildHookSource).toContain("resolveVisible");
+    expect(buildHookSource).toContain('cached.state === "ready-current"');
+    expect(buildHookSource).toContain("result: cached.entry.buffer");
     expect(buildHookSource).toContain("retainedBuildRef");
     expect(buildHookSource).toContain("cache.tryRetain(visibleCacheKey)");
     expect(buildHookSource).toContain(

@@ -95,3 +95,4 @@ apps/control-room/target-host/*
 target_agent/*
 target_tmp/debug/*
 target_host/*
+apps/control-room/.next-audit/*

@@ -13,6 +13,7 @@ import {
   type Selection,
 } from "@/kernel/selection/selectionTypes";
 import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
+import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 import {
   isAnalysisFieldQuantityId,
   isMagneticOnlyQuantityId,
@@ -26,6 +27,10 @@ import {
   formatValueWithUnit,
   hasDisplayUnitOptions,
 } from "@/shared/domain/physics/displayUnits";
+import {
+  buildAirOnlyVisualizationNodeSelection,
+  countVisualizationNodeSelection,
+} from "@/shared/domain/mesh/visualizationNodeSelection";
 import {
   mergeVisualizationStateTargetOverride,
   visualizationTargetKey,
@@ -555,11 +560,83 @@ export interface VisualizationVectorBudgetRange {
   step: 1;
 }
 
-export interface VisualizationVectorBudgetDiagnostic {
-  availableNodeCount: number;
-  displayedGlyphCount: number;
-  exact: boolean;
-  requestedBudget: number;
+export interface VisualizationVectorAccounting {
+  adoptedGlyphCount: number | null;
+  availableNodeCount: number | null;
+  decodedSampleCount: number | null;
+}
+
+export function resolveVisualizationDebugTargetId({
+  airboxPartIds,
+  target,
+}: {
+  airboxPartIds: readonly string[];
+  target: VisualizationTargetRef;
+}): string {
+  if (target.kind !== "airbox") return target.id;
+  return airboxPartIds.length === 1 ? airboxPartIds[0]! : target.id;
+}
+
+export function resolveVisualizationVectorAccounting({
+  availableNodeCount,
+  currentTopologyHash,
+  snapshots,
+}: {
+  availableNodeCount: number | null;
+  currentTopologyHash?: string | null;
+  snapshots: readonly VisualizationDebugSnapshot[];
+}): VisualizationVectorAccounting {
+  const available =
+    availableNodeCount === null
+      ? null
+      : Math.max(0, Math.floor(availableNodeCount));
+  const snapshot = [...snapshots].sort(
+    (left, right) => right.capturedAtMs - left.capturedAtMs,
+  )[0];
+  if (!snapshot || available === null) {
+    return {
+      adoptedGlyphCount: null,
+      availableNodeCount: available,
+      decodedSampleCount: null,
+    };
+  }
+
+  let adoptedGlyphCount = 0;
+  let decodedSampleCount = 0;
+  let adoptedComplete = snapshot.carriers.length > 0;
+  let decodedComplete = snapshot.carriers.length > 0;
+  for (const carrier of snapshot.carriers) {
+    const topologyMatches =
+      !currentTopologyHash ||
+      carrier.revisions.meshTopologyHash === currentTopologyHash;
+    const payload = topologyMatches ? carrier.payload : null;
+    if (!payload) decodedComplete = false;
+    else decodedSampleCount += payload.pointCount;
+
+    const adoption = carrier.render.adoption;
+    const adoptionMatches = Boolean(
+      topologyMatches &&
+        adoption.adoptedVectorItemCount != null &&
+        carrier.render.requestedFieldBufferId &&
+        carrier.request.resourceKey &&
+        carrier.render.vectors.buildKey &&
+        adoption.adoptedFieldBufferId === carrier.render.requestedFieldBufferId &&
+        adoption.adoptedResourceKey === carrier.request.resourceKey &&
+        adoption.adoptedVectorBuildKey === carrier.render.vectors.buildKey,
+    );
+    if (!adoptionMatches) adoptedComplete = false;
+    else adoptedGlyphCount += adoption.adoptedVectorItemCount ?? 0;
+  }
+
+  if (decodedComplete && decodedSampleCount > available) {
+    decodedComplete = false;
+    adoptedComplete = false;
+  }
+  return {
+    adoptedGlyphCount: adoptedComplete ? adoptedGlyphCount : null,
+    availableNodeCount: available,
+    decodedSampleCount: decodedComplete ? decodedSampleCount : null,
+  };
 }
 
 export function resolveVisualizationVectorBudgetRange({
@@ -616,8 +693,38 @@ export function resolveVisualizationVectorBudgetRange({
       ? carrierPartIds.has(part.id)
       : meshPartMatchesVisualizationTarget(part, target),
   );
+  const topologyNodeCount = inferManifestTopologyNodeCount(meshParts);
+  const canonicalMagneticParts = meshParts.filter(
+    (part) => part.role === "magnetic_object",
+  );
+  const magneticParts =
+    canonicalMagneticParts.length > 0
+      ? canonicalMagneticParts
+      : meshParts.filter(
+          (part) =>
+            part.role !== "air" &&
+            part.role !== "airbox" &&
+            part.role !== "interface" &&
+            Boolean(
+              part.object_id ||
+                part.role === "magnetic" ||
+                part.role === "object",
+            ),
+        );
   let exact = true;
   const max = matchingParts.reduce((total, part) => {
+    if (target.kind === "airbox") {
+      const selection = buildAirOnlyVisualizationNodeSelection({
+        airSelection: part,
+        magneticSelections: magneticParts,
+        nodeCount: topologyNodeCount,
+        surfaceFaces:
+          geometryScope === "surface" ? part.surface_faces : undefined,
+      });
+      return (
+        total + countVisualizationNodeSelection(selection, topologyNodeCount)
+      );
+    }
     const count = meshPartVectorNodeCount(part, geometryScope);
     if (!count.exact) exact = false;
     return total + count.nodeCount;
@@ -634,6 +741,19 @@ export function resolveVisualizationVectorBudgetRange({
     min: 0,
     step: 1,
   };
+}
+
+function inferManifestTopologyNodeCount(meshParts: readonly MeshPart[]): number {
+  let nodeCount = 0;
+  for (const part of meshParts) {
+    for (const nodeIndex of part.node_indices ?? []) {
+      if (Number.isInteger(nodeIndex) && nodeIndex >= 0) {
+        nodeCount = Math.max(nodeCount, nodeIndex + 1);
+      }
+    }
+    nodeCount = Math.max(nodeCount, part.node_start + part.node_count);
+  }
+  return nodeCount;
 }
 
 export function resolveRegionVisualizationCarrier({
@@ -706,23 +826,6 @@ export function resolveRegionVisualizationCarrier({
   return {
     kind: "unavailable",
     reason: "Region is not present in the mesh manifest or region memberships.",
-  };
-}
-
-export function buildVisualizationVectorBudgetDiagnostic({
-  requestedBudget,
-  vectorBudgetRange,
-}: {
-  requestedBudget: number;
-  vectorBudgetRange: VisualizationVectorBudgetRange;
-}): VisualizationVectorBudgetDiagnostic {
-  const safeBudget = Math.max(0, Math.floor(requestedBudget));
-  const availableNodeCount = Math.max(0, vectorBudgetRange.availableNodeCount);
-  return {
-    availableNodeCount,
-    displayedGlyphCount: Math.min(safeBudget, availableNodeCount),
-    exact: vectorBudgetRange.exact,
-    requestedBudget: safeBudget,
   };
 }
 

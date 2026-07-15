@@ -9,11 +9,16 @@ import {
 } from "@/kernel/api/apiPaths";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import type { FieldVectorResponseMetadata } from "@/kernel/api/apiTypes";
+import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { ResourceCache } from "@/kernel/resources/ResourceCache";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 
 import {
   cachedBinaryResourceMatchesRevision,
+  getViewport3DFieldVectorCacheBudgetDiagnostics,
+  getViewport3DFieldVectorCacheEntryDiagnostics,
+  inspectViewport3DFieldVectorCacheEntryDiagnostics,
   invalidateViewport3DFieldMetaResources,
   loadCachedBinaryResource,
   resolveViewport3DAirboxFieldVectorQuery,
@@ -32,6 +37,150 @@ const viewport3dResourcesSourceUrl = new URL(
 );
 
 describe("viewport3dResources", () => {
+  it("exposes bounded aggregate and exact-entry field cache diagnostics without decoded data", () => {
+    const resourceKey = resolveViewport3DFieldVectorResourceKey("missing", {
+      component: "full",
+      scope_kind: "full",
+    });
+
+    const budget = getViewport3DFieldVectorCacheBudgetDiagnostics();
+    expect(budget).toEqual({
+      byteLength: expect.any(Number),
+      entryCount: expect.any(Number),
+      maxBytes: expect.any(Number),
+    });
+    expect(Number.isSafeInteger(budget.byteLength)).toBe(true);
+    expect(Number.isSafeInteger(budget.entryCount)).toBe(true);
+    expect(Number.isSafeInteger(budget.maxBytes)).toBe(true);
+    expect(budget.byteLength).toBeGreaterThanOrEqual(0);
+    expect(budget.entryCount).toBeGreaterThanOrEqual(0);
+    expect(budget.maxBytes).toBeGreaterThan(0);
+    const diagnostics = getViewport3DFieldVectorCacheEntryDiagnostics(resourceKey);
+    expect(diagnostics).toEqual({
+      byteLength: null,
+      entryState: "missing",
+      etag: null,
+      key: resourceKey,
+      responseMetadata: null,
+      retainCount: 0,
+    });
+    expect(diagnostics).not.toHaveProperty("data");
+  });
+
+  it("integrates ready, inflight, retain, release, and bounded metadata without exposing field data", () => {
+    const cache = new ResourceCache<
+      DecodedFieldVector,
+      FieldVectorResponseMetadata
+    >({ maxBytes: 64 });
+    const resourceKey = resolveViewport3DFieldVectorResourceKey("H_eff", {
+      component: "full",
+      scope_kind: "full",
+    });
+    const inflightRegistry = new WeakMap<
+      object,
+      ReadonlyMap<string, { requestId: string }>
+    >();
+    const longValue = "x".repeat(5_000);
+    const responseMetadata: FieldVectorResponseMetadata = {
+      component: longValue,
+      domainGenerationId: null,
+      encoding: "fmvp-v3",
+      fieldIndexing: "full_domain",
+      fieldRevision: "field-1",
+      identityIssues: Array.from({ length: 25 }, (_, index) => ({
+        field: `${longValue}-${index}`,
+        headerValue: longValue,
+        payloadValue: index,
+      })),
+      meshTopologyHash: "topology-1",
+      nComp: 3,
+      nodeIndexCount: 0,
+      pointCount: 1,
+      quantityId: "H_eff",
+      scopeId: null,
+      scopeKind: "full",
+      snapshotId: null,
+      valueCount: 3,
+    };
+    const fieldVector: DecodedFieldVector = {
+      dtype: "float64",
+      grid: [1, 1, 1],
+      nComp: 3,
+      pointCount: 1,
+      quantityId: "m",
+      valueCount: 3,
+      values: new Float64Array([1, 2, 3]),
+    };
+
+    expect(
+      inspectViewport3DFieldVectorCacheEntryDiagnostics(
+        cache,
+        resourceKey,
+        inflightRegistry,
+      ).entryState,
+    ).toBe("missing");
+    inflightRegistry.set(
+      cache,
+      new Map([[resourceKey, { requestId: "request-1" }]]),
+    );
+    expect(
+      inspectViewport3DFieldVectorCacheEntryDiagnostics(
+        cache,
+        resourceKey,
+        inflightRegistry,
+      ).entryState,
+    ).toBe("inflight");
+
+    cache.set(resourceKey, {
+      byteLength: 24,
+      data: fieldVector,
+      etag: '"field-1"',
+      metadata: responseMetadata,
+    });
+    inflightRegistry.delete(cache);
+    const release = cache.retain(resourceKey);
+    const ready = inspectViewport3DFieldVectorCacheEntryDiagnostics(
+      cache,
+      resourceKey,
+      inflightRegistry,
+    );
+    expect(ready).toMatchObject({
+      byteLength: 24,
+      entryState: "ready",
+      etag: '"field-1"',
+      key: resourceKey,
+      retainCount: 1,
+    });
+    expect(ready).not.toHaveProperty("data");
+    expect(ready.responseMetadata?.identityIssues).toHaveLength(20);
+    expect(ready.responseMetadata?.component).toHaveLength(4_096);
+    expect(ready.responseMetadata?.identityIssues[0]?.field).toHaveLength(4_096);
+    expect(ready.responseMetadata?.identityIssues[0]?.headerValue).toHaveLength(
+      4_096,
+    );
+
+    inflightRegistry.set(
+      cache,
+      new Map([[resourceKey, { requestId: "request-2" }]]),
+    );
+    expect(
+      inspectViewport3DFieldVectorCacheEntryDiagnostics(
+        cache,
+        resourceKey,
+        inflightRegistry,
+      ),
+    ).toMatchObject({ entryState: "inflight", retainCount: 1 });
+    inflightRegistry.delete(cache);
+    release();
+    expect(
+      inspectViewport3DFieldVectorCacheEntryDiagnostics(
+        cache,
+        resourceKey,
+        inflightRegistry,
+      ).retainCount,
+    ).toBe(0);
+  });
+
   it("threads pauseLoad through field-vector resource hooks", () => {
     const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
 
@@ -527,7 +676,7 @@ describe("viewport3dResources", () => {
           "component=x&quantity=H_eff&scope_id=part:a&scope_kind=part",
           {
             consumers: ["part:a:surface"],
-            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x&scope_id=a&scope_kind=part`,
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x&scope_id=part%3Aa&scope_kind=part`,
             quantityId: "H_eff",
             query: {
               component: "x",
@@ -542,7 +691,7 @@ describe("viewport3dResources", () => {
           "component=x&quantity=H_eff&scope_id=part:b&scope_kind=part",
           {
             consumers: ["part:b:surface"],
-            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x&scope_id=b&scope_kind=part`,
+            key: `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x&scope_id=part%3Ab&scope_kind=part`,
             quantityId: "H_eff",
             query: {
               component: "x",

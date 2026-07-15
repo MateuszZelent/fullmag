@@ -483,6 +483,7 @@ interface ControlRoomApiOptions {
   diagnostics?: RequestDiagnosticsController;
   fetchImpl?: FetchLike;
   maxGetRetries?: number;
+  retryDelayMs?: number;
   requestIdFactory?: () => string;
 }
 
@@ -490,6 +491,7 @@ export class ControlRoomApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly requestId: string | null = null,
   ) {
     super(message);
     this.name = "ControlRoomApiError";
@@ -502,6 +504,7 @@ export class ControlRoomApi {
   private readonly requestDiagnostics: RequestDiagnosticsController | null;
   private readonly fetchImpl: FetchLike;
   private readonly maxGetRetries: number;
+  private readonly retryDelayMs: number;
   private readonly requestIdFactory: () => string;
   private readonly transport: OpenApiV2Transport;
   private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
@@ -1765,7 +1768,8 @@ export class ControlRoomApi {
     binaryDecodeScheduler = createBinaryDecodeScheduler(),
     diagnostics,
     fetchImpl,
-    maxGetRetries = 1,
+    maxGetRetries = 2,
+    retryDelayMs = 100,
     requestIdFactory = () => crypto.randomUUID(),
   }: ControlRoomApiOptions = {}) {
     this.baseUrl = resolveBaseUrl(baseUrl);
@@ -1773,6 +1777,7 @@ export class ControlRoomApi {
     this.requestDiagnostics = diagnostics ?? null;
     this.fetchImpl = fetchImpl ?? resolveDefaultFetch();
     this.maxGetRetries = maxGetRetries;
+    this.retryDelayMs = retryDelayMs;
     this.requestIdFactory = requestIdFactory;
     this.transport = createOpenApiV2Transport({
       baseUrl: this.baseUrl,
@@ -2511,7 +2516,8 @@ export class ControlRoomApi {
           status: response.status,
         });
 
-        if (attempt < maxAttempts && response.status >= 500) {
+        if (attempt < maxAttempts && retryableGetStatus(method, response.status)) {
+          await delayRetry(this.retryDelayMs, init.signal);
           continue;
         }
 
@@ -2530,6 +2536,7 @@ export class ControlRoomApi {
           attempt < maxAttempts &&
           !(error instanceof DOMException && error.name === "AbortError")
         ) {
+          await delayRetry(this.retryDelayMs, init.signal);
           continue;
         }
       }
@@ -2556,6 +2563,35 @@ export class ControlRoomApi {
 
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
+}
+
+function retryableGetStatus(method: string, status: number): boolean {
+  return (
+    method === "GET" &&
+    (status === 408 ||
+      status === 429 ||
+      status === 502 ||
+      status === 503 ||
+      status === 504)
+  );
+}
+
+async function delayRetry(
+  delayMs: number,
+  signal: AbortSignal | null | undefined,
+): Promise<void> {
+  if (delayMs <= 0) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = globalThis.setTimeout(resolve, delayMs);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        globalThis.clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true },
+    );
+  });
 }
 
 function resolveBaseUrl(baseUrl: string | undefined): string {
@@ -2860,6 +2896,7 @@ function readOpenApiResult<T>(result: {
     throw new ControlRoomApiError(
       formatOpenApiError(result.error),
       response.status,
+      response.headers.get("x-request-id"),
     );
   }
 

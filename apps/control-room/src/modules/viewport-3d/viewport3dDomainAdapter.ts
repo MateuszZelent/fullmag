@@ -157,11 +157,11 @@ export function adaptFemSharedDomainManifest(
     partsById.set(part.id, part);
     if (part.role === "air" || part.role === "airbox") {
       airboxParts.push(part);
+    } else if (isInterfaceSurfacePart(part)) {
+      interfaceParts.push(part);
     } else if (isMagneticRenderablePart(part)) {
       magneticParts.push(part);
       addMagneticPartAliases(magneticPartIdsByAlias, part);
-    } else if (isInterfaceSurfacePart(part)) {
-      interfaceParts.push(part);
     }
 
     addObjectPartAlias(objectPartIds, part.object_id, part.id);

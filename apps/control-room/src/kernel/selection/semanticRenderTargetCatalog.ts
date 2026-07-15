@@ -2,7 +2,9 @@ import type { MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
 import { manifestCarrierOwnershipAliases } from "@/kernel/visualization/visualizationDisplayResolution";
 
 import {
+  canonicalVisualizationPartTargetId,
   canonicalVisualizationSceneObjectId,
+  isVisualizationAirboxIdentity,
   type VisualizationMeshPartLike,
 } from "./selectionTypes";
 
@@ -31,7 +33,13 @@ type SemanticManifest = Pick<
 export function semanticRenderTargetCarriersFromManifest(
   manifest: SemanticManifest | null | undefined,
 ): VisualizationMeshPartLike[] {
-  const meshParts = manifest?.mesh_parts ?? [];
+  const seenMeshPartIds = new Set<string>();
+  const meshParts = (manifest?.mesh_parts ?? []).filter((part) => {
+    const id = part.id.trim();
+    if (!id || seenMeshPartIds.has(id)) return false;
+    seenMeshPartIds.add(id);
+    return true;
+  });
   const meshOwnership = new Set<string>();
   for (const part of meshParts) {
     for (const alias of manifestCarrierOwnershipAliases(part)) {
@@ -66,7 +74,7 @@ export function buildSemanticRenderTargetCatalog({
   const canonicalSceneObjectIds = new Set(
     [...sceneObjectIds]
       .map(canonicalVisualizationSceneObjectId)
-      .filter((objectId) => !isSyntheticAirboxObjectId(objectId)),
+      .filter((objectId) => !isVisualizationAirboxIdentity({ id: objectId })),
   );
   const mutableEntries = new Map<
     string,
@@ -138,7 +146,7 @@ function semanticTargetIdForMeshPart(
   part: VisualizationMeshPartLike,
   sceneObjectIds: ReadonlySet<string>,
 ): string {
-  if (part.role === "air" || part.role === "airbox") return "airbox";
+  if (isVisualizationAirboxIdentity(part)) return "airbox";
 
   for (const candidate of [part.object_id, part.geometry_id]) {
     if (!candidate) continue;
@@ -146,9 +154,9 @@ function semanticTargetIdForMeshPart(
     if (sceneObjectIds.has(objectId)) return `object:${objectId}`;
   }
 
-  return part.id;
+  return canonicalPartTargetId(part.id);
 }
 
-function isSyntheticAirboxObjectId(objectId: string): boolean {
-  return objectId === "__air__";
+function canonicalPartTargetId(carrierId: string): string {
+  return canonicalVisualizationPartTargetId(carrierId);
 }

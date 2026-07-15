@@ -220,8 +220,22 @@ import {
   type Viewport3DBounds,
   viewport3DFieldRenderOptionsNeedFieldData,
 } from "../viewport3dRenderModel";
+
+export function resolveViewport3DAirboxVectorSampleBudget(
+  requestedBudget: number,
+  availableAirOnlyNodeCount: number,
+): number {
+  return Math.max(
+    0,
+    Math.min(
+      Math.floor(requestedBudget),
+      Math.floor(availableAirOnlyNodeCount),
+    ),
+  );
+}
 import {
   getViewport3DCacheStats as getCacheStats,
+  resolveViewport3DFieldVectorResourceKey,
   resolveViewport3DFieldVectorRequestResourceKey,
   useViewport3DAirboxFieldVectors,
   useViewport3DDomainMeta,
@@ -419,6 +433,7 @@ export function mergeViewport3DPrimaryTargetFieldBuffers({
   getPartSettings,
   primaryFieldQuantityId,
   primaryFieldRequest,
+  primaryFieldResourceKey,
   topology,
   topologyRevision = null,
 }: {
@@ -428,6 +443,7 @@ export function mergeViewport3DPrimaryTargetFieldBuffers({
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
   primaryFieldQuantityId: string;
   primaryFieldRequest: Viewport3DFieldResourceRequest;
+  primaryFieldResourceKey: string;
   topology:
     | Pick<
         Viewport3DTopologyRenderModel<Viewport3DMeshPart>,
@@ -485,6 +501,7 @@ export function mergeViewport3DPrimaryTargetFieldBuffers({
           pointCount: topology.nodeCount,
         },
         query: primaryFieldRequest.query,
+        resourceKey: primaryFieldResourceKey,
         targetIds: [partId],
         topologyRevision,
       }),
@@ -536,6 +553,7 @@ type Viewport3DResolvedFieldResourceRequest =
   Pick<Viewport3DFieldResourceRequest, "query"> & {
     consumers?: readonly string[];
     quantityId?: string;
+    resourceKey?: string;
   };
 
 export function resolveViewport3DResolvedPartFieldBuffers({
@@ -629,6 +647,14 @@ export function resolveViewport3DResolvedPartFieldBuffers({
             }
           : undefined,
         query: request.query,
+        resourceKey:
+          request.resourceKey ??
+          (request.quantityId
+            ? resolveViewport3DFieldVectorResourceKey(
+                request.quantityId,
+                request.query,
+              )
+            : null),
         targetIds: [partId],
         topologyRevision: resolvedTopologyRevision,
       }),
@@ -723,6 +749,7 @@ export function resolveViewport3DResolvedPartFieldBuffers({
             scope_id: partId,
             scope_kind: "airbox",
           },
+          resourceKey: null,
           synthetic: true,
           targetIds: [partId],
           topologyRevision: resolvedTopologyRevision,
@@ -2906,21 +2933,35 @@ export function useViewport3DSceneModel({
       EMPTY_AIRBOX_FIELD_VECTOR_PARTS,
     [fieldCompatibleTopologyRenderModel],
   );
+  const airboxAvailableNodeCount = useMemo(() => {
+    if (!fieldCompatibleTopologyRenderModel) return 0;
+    return fieldCompatibleTopologyRenderModel.airboxParts.reduce(
+      (total, partModel) =>
+        total +
+        resolveNodeSelectionCount(
+          airboxSettings.geometryScope === "surface"
+            ? partModel.surfaceNodeSelection ?? partModel.fullNodeSelection
+            : partModel.fullNodeSelection,
+          fieldCompatibleTopologyRenderModel,
+        ),
+      0,
+    );
+  }, [airboxSettings.geometryScope, fieldCompatibleTopologyRenderModel]);
   const airboxFieldQuery = useMemo(
     () =>
       resolveViewport3DScopedVectorFieldQuery({
-        maxSamples: clampViewport3DInteractiveVectorBudget(
+        maxSamples: resolveViewport3DAirboxVectorSampleBudget(
           airboxSettings.vectorBudget,
-          maxInteractiveVectorGlyphs,
+          airboxAvailableNodeCount,
         ),
         surfaceColorMode: airboxSurfaceColorMode,
         vectorsVisible: airboxVectorsVisible,
       }),
     [
       airboxSettings.vectorBudget,
+      airboxAvailableNodeCount,
       airboxSurfaceColorMode,
       airboxVectorsVisible,
-      maxInteractiveVectorGlyphs,
     ],
   );
   const airboxFieldDemandPlan = useMemo(
@@ -2932,9 +2973,9 @@ export function useViewport3DSceneModel({
         replayQuery: selectedSnapshotQuery,
         shaderVisible: Boolean(airboxSurfaceColorMode),
         surfaceColorSource: airboxSettings.surfaceColorSource,
-        vectorBudget: clampViewport3DInteractiveVectorBudget(
+        vectorBudget: resolveViewport3DAirboxVectorSampleBudget(
           airboxSettings.vectorBudget,
-          maxInteractiveVectorGlyphs,
+          airboxAvailableNodeCount,
         ),
         vectorsVisible: airboxVectorsVisible,
       }),
@@ -2942,11 +2983,11 @@ export function useViewport3DSceneModel({
       airboxFieldQuery,
       airboxFieldVectorParts,
       airboxSettings.activeQuantityId,
+      airboxAvailableNodeCount,
       airboxSettings.surfaceColorSource,
       airboxSettings.vectorBudget,
       airboxSurfaceColorMode,
       airboxVectorsVisible,
-      maxInteractiveVectorGlyphs,
       selectedSnapshotQuery,
     ],
   );
@@ -3517,6 +3558,7 @@ export function useViewport3DSceneModel({
         getPartSettings,
         primaryFieldQuantityId,
         primaryFieldRequest,
+        primaryFieldResourceKey: fieldVectorResourceKey,
         topology: fieldCompatibleTopologyRenderModel,
         topologyRevision:
           topology.revision == null ? null : String(topology.revision),
@@ -3527,6 +3569,7 @@ export function useViewport3DSceneModel({
       getPartSettings,
       primaryFieldQuantityId,
       primaryFieldRequest,
+      fieldVectorResourceKey,
       primaryFieldRevision,
       resolvedFieldRenderOptions,
       topology.revision,
@@ -3639,15 +3682,30 @@ export function useViewport3DSceneModel({
   const fdmVectorSegments = fdmBuildResult?.vectorSegments ?? null;
   const fdmSurfaceColors = useMemo(() => {
     if (!fdmSurfaceColorMode) return null;
-    return buildSampledScalarColors(
+    const colors = buildSampledScalarColors(
       fdmFieldVector,
       fdmInstanceModel?.cellIndices,
       fdmSurfaceColorMode,
       scalarColorPalette,
     );
+    if (!colors || !fdmFieldVector) return colors;
+    return {
+      ...colors,
+      sourceFieldBufferId: `decoded:${fdmFieldVector.quantityId}:${fdmFieldVector.pointCount}:${fdmFieldVector.values.byteLength}`,
+      sourceResourceKey:
+        sameViewport3DQuantityId(
+          fdmSettings.activeQuantityId,
+          primaryFieldQuantityId,
+        )
+          ? fieldVectorResourceKey
+          : null,
+    };
   }, [
     fdmFieldVector,
     fdmSurfaceColorMode,
+    fdmSettings.activeQuantityId,
+    fieldVectorResourceKey,
+    primaryFieldQuantityId,
     fdmInstanceModel,
     scalarColorPalette,
   ]);
@@ -3740,6 +3798,33 @@ export function useViewport3DSceneModel({
     analysisOverlay?.phasorConvention,
     analysisOverlay?.wavevectorKf,
   ]);
+  const visualizationDebugTargets = useMemo(
+    () =>
+      viewportVisualizationTargets.map((target) => {
+        const carrierIds = new Set(
+          semanticTargetCatalog.byTargetId.get(target.id)?.carrierIds ?? [],
+        );
+        for (const [carrierId, regionTarget] of regionTargetByPartId) {
+          if (regionTarget.id === target.id) carrierIds.add(carrierId);
+        }
+        return {
+          carrierIds: Object.freeze([...carrierIds]),
+          target,
+        };
+      }),
+    [regionTargetByPartId, semanticTargetCatalog.byTargetId, viewportVisualizationTargets],
+  );
+  const visualizationDebugTopologyByteLength = useMemo(() => {
+    const decoded = topology.data;
+    if (!decoded) return null;
+    return (
+      decoded.boundaryFaces.byteLength +
+      decoded.boundaryMarkers.byteLength +
+      decoded.elementMarkers.byteLength +
+      decoded.indices.byteLength +
+      decoded.positions.byteLength
+    );
+  }, [topology.data]);
   const selectedLabel = selection.label ?? "No selection";
   const status =
     topology.error?.message ??
@@ -3929,6 +4014,40 @@ export function useViewport3DSceneModel({
       status: visualizationState.status,
     },
   ]);
+  const visualizationDebugSource = useMemo(
+    () => ({
+      fieldModel: fieldRenderModel,
+      fullFieldBufferIdentity: fdmFieldVector
+        ? {
+            bufferId: `decoded:${fdmFieldVector.quantityId}:${fdmFieldVector.pointCount}:${fdmFieldVector.values.byteLength}`,
+            resourceKey:
+              sameViewport3DQuantityId(
+                fdmSettings.activeQuantityId,
+                primaryFieldQuantityId,
+              )
+                ? fieldVectorResourceKey
+                : null,
+          }
+        : null,
+      fullFieldVector: fdmDomain ? fdmFieldVector ?? null : null,
+      targets: visualizationDebugTargets,
+      topologyByteLength: visualizationDebugTopologyByteLength,
+      visualizationRevision:
+        renderingState?.revision == null ? null : String(renderingState.revision),
+      webglSharedByteLength: null,
+    }),
+    [
+      fdmDomain,
+      fdmFieldVector,
+      fdmSettings.activeQuantityId,
+      fieldRenderModel,
+      fieldVectorResourceKey,
+      primaryFieldQuantityId,
+      renderingState?.revision,
+      visualizationDebugTargets,
+      visualizationDebugTopologyByteLength,
+    ],
+  );
 
   return {
     airboxSettings,
@@ -3992,6 +4111,7 @@ export function useViewport3DSceneModel({
     renderedMeshRevision: topologyRenderModelForGeometry?.meshRevision ?? null,
     topology: topology.data,
     topologyRevision: topology.revision,
+    visualizationDebugSource,
     topologyFreshness,
     topologyModel: topologyRenderModelForGeometry,
     vectorColorMode,

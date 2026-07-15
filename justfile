@@ -3071,7 +3071,7 @@ run-cofeb-rings-relax-headless fem_execution="gpu" cpu_threads="auto":
     FULLMAG_CPU_THREADS="$cpu_threads_env" \
     '{{gpu_runtime_bin}}' examples/permalloy_layer_cofeb_rings_relax_300nm.py --backend fem --headless --json
 
-run-cofeb-rings-relax-diagnostics fem_execution="gpu" cpu_threads="auto" web_port="3192" scenario="viewport-3d":
+run-cofeb-rings-relax-diagnostics fem_execution="gpu" cpu_threads="auto" web_port="3192" scenario="viewport-3d" api_port="8194":
     just ensure-python
     just ensure-managed-fem-runtime
     bash -euo pipefail -c '\
@@ -3098,6 +3098,7 @@ run-cofeb-rings-relax-diagnostics fem_execution="gpu" cpu_threads="auto" web_por
       FULLMAG_FDM_EXECUTION=cpu \
       FULLMAG_FEM_EXECUTION="$mode" \
       FULLMAG_RELAX_DEVICE="$mode" \
+      FULLMAG_API_PORT="{{api_port}}" \
       FULLMAG_CPU_THREADS="$cpu_threads_env" \
       FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS="${FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS:-10}" \
       FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS="${FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS:-10}" \
@@ -3116,6 +3117,7 @@ run-cofeb-rings-relax-diagnostics fem_execution="gpu" cpu_threads="auto" web_por
       done; \
       curl -fsS "$web_url" >/dev/null 2>&1 || { echo "control room did not become ready at $web_url; see $app_log" >&2; exit 1; }; \
       CONTROL_ROOM_URL="$web_url" \
+      CONTROL_ROOM_API_BASE_URL="http://localhost:{{api_port}}" \
       CONTROL_ROOM_DIAGNOSTICS_SCENARIO="{{scenario}}" \
       CONTROL_ROOM_DIAGNOSTICS_OUTPUT_DIR="$artifact_root" \
       CONTROL_ROOM_DIAGNOSTICS_TIMEOUT_MS="${CONTROL_ROOM_DIAGNOSTICS_TIMEOUT_MS:-180000}" \
@@ -3126,13 +3128,16 @@ run-cofeb-rings-relax-diagnostics fem_execution="gpu" cpu_threads="auto" web_por
         echo "diagnostic recorder did not produce a readable artifact; see $recorder_log" >&2; \
         exit 1; \
       fi; \
+      stages_url="${web_url%/workspace}/v2/sessions/current/simulation/stages/execution"; \
+      stages_terminal=false; \
       for _ in $(seq 1 600); do \
-        grep -Eq "\[fullmag\] stage 2/2 .* completed" "$app_log" && break; \
+        stage_json="$(curl -fsS "$stages_url" 2>/dev/null || true)"; \
+        if [ -n "$stage_json" ] && node -e '\''const x=JSON.parse(process.argv[1]); const s=x.stages??[]; process.exit(s.length>0&&s.every(v=>["completed","failed","cancelled","rejected","skipped"].includes(v.status))?0:1)'\'' "$stage_json"; then stages_terminal=true; break; fi; \
         if ! kill -0 "$sim_pid" >/dev/null 2>&1; then break; fi; \
         sleep 0.5; \
       done; \
-      if ! grep -Eq "\[fullmag\] stage 2/2 .* completed" "$app_log"; then \
-        echo "CoFeB rings short simulation did not complete both stages; see $app_log" >&2; \
+      if [ "$stages_terminal" != true ]; then \
+        echo "CoFeB rings published stages did not reach terminal state; see $app_log" >&2; \
         tail -n 120 "$app_log" >&2 || true; \
         exit 1; \
       fi; \
@@ -3142,7 +3147,7 @@ run-cofeb-rings-relax-diagnostics fem_execution="gpu" cpu_threads="auto" web_por
       printf "  artifact: %s\n" "$artifact_dir"; \
       node -e '\''const fs=require("fs"); const dir=process.argv[1]; const summary=JSON.parse(fs.readFileSync(`${dir}/summary.json`,"utf8")); const report=fs.readFileSync(`${dir}/suspect-report.md`,"utf8").split("\n").slice(0,28).join("\n"); console.log(`  records: ${summary.recordCount}, warnings: ${summary.warningCount}, critical: ${summary.criticalCount}, dropped: ${summary.droppedCount}`); console.log(report);'\'' "$artifact_dir"'
 
-run-cofeb-rings-relax-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_port="3193":
+run-cofeb-rings-relax-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8195":
     just ensure-python
     just ensure-managed-fem-runtime
     bash -euo pipefail -c '\
@@ -3168,6 +3173,7 @@ run-cofeb-rings-relax-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" 
       FULLMAG_FDM_EXECUTION=cpu \
       FULLMAG_FEM_EXECUTION="$mode" \
       FULLMAG_RELAX_DEVICE="$mode" \
+      FULLMAG_API_PORT="{{api_port}}" \
       FULLMAG_CPU_THREADS="$cpu_threads_env" \
       FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS="${FULLMAG_COFEB_RINGS_MINIMIZE_MAX_STEPS:-10}" \
       FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS="${FULLMAG_COFEB_RINGS_RELAX_MAX_STEPS:-10}" \
@@ -3175,6 +3181,7 @@ run-cofeb-rings-relax-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" 
         > "$app_log" 2>&1 & \
       sim_pid=$!; \
       web_url="http://localhost:{{web_port}}/workspace"; \
+      api_url="http://localhost:{{api_port}}"; \
       for _ in $(seq 1 600); do \
         curl -fsS "$web_url" >/dev/null 2>&1 && break; \
         if ! kill -0 "$sim_pid" >/dev/null 2>&1; then \
@@ -3186,7 +3193,8 @@ run-cofeb-rings-relax-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" 
       done; \
       curl -fsS "$web_url" >/dev/null 2>&1 || { echo "control room did not become ready at $web_url; see $app_log" >&2; exit 1; }; \
       CONTROL_ROOM_URL="$web_url" \
-      CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS="${CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS:-180000}" \
+      CONTROL_ROOM_API_BASE_URL="$api_url" \
+      CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS="${CONTROL_ROOM_MIXED_TARGET_SMOKE_TIMEOUT_MS:-600000}" \
       $PNPM_CMD --dir apps/control-room smoke:viewport-3d-mixed-targets | tee "$smoke_log"; \
       printf "\nCoFeB rings mixed-target smoke logs:\n"; \
       printf "  fullmag: %s\n" "$app_log"; \

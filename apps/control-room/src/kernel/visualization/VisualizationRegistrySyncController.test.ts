@@ -8,6 +8,7 @@ import type {
   VisualizationStateResource,
 } from "../api/apiTypes";
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 
 import { VisualizationRegistrySyncController } from "./VisualizationRegistrySyncController";
 
@@ -524,5 +525,78 @@ describe("VisualizationRegistrySyncController", () => {
       }),
     );
     await flush;
+  });
+
+  it("rejects a permanent 400 once and rolls back the optimistic overlay", async () => {
+    const patchSpy = vi.fn(async () => {
+      throw new ControlRoomApiError("invalid opacity", 400, "req-invalid");
+    });
+    const controller = new VisualizationRegistrySyncController({
+      api: { patch: patchSpy },
+      retryBaseDelayMs: 0,
+    });
+    const remote = visualizationState(7);
+    controller.observeRemoteState(remote);
+    controller.queuePatch({ layers: { surface: { visible: false } } });
+
+    await controller.flushNow();
+
+    expect(patchSpy).toHaveBeenCalledTimes(1);
+    expect(controller.applyOptimisticState(remote)).toBe(remote);
+    expect(controller.getSnapshot()).toMatchObject({
+      inflightPatch: null,
+      mutation: {
+        attempts: 1,
+        requestId: "req-invalid",
+        status: "rejected",
+        targetId: "visualization",
+      },
+      pendingPatch: null,
+    });
+  });
+
+  it("bounds transient 503 retries and ends in rejected state", async () => {
+    const patchSpy = vi.fn(async () => {
+      throw new ControlRoomApiError("temporarily unavailable", 503, "req-503");
+    });
+    const controller = new VisualizationRegistrySyncController({
+      api: { patch: patchSpy },
+      maxTransientAttempts: 3,
+      retryBaseDelayMs: 0,
+    });
+    controller.queuePatch({ layers: { wireframe: { visible: false } } });
+
+    await controller.flushNow();
+
+    expect(patchSpy).toHaveBeenCalledTimes(3);
+    expect(controller.getSnapshot()).toMatchObject({
+      mutation: {
+        attempts: 3,
+        requestId: "req-503",
+        status: "rejected",
+      },
+      pendingPatch: null,
+    });
+  });
+
+  it("retries the exact rejected mutation on explicit user request", async () => {
+    const patchSpy = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ControlRoomApiError("invalid opacity", 400, "req-invalid"),
+      )
+      .mockResolvedValueOnce(visualizationState(8));
+    const controller = new VisualizationRegistrySyncController({
+      api: { patch: patchSpy },
+      retryBaseDelayMs: 0,
+    });
+    const patch = { layers: { surface: { visible: false } } } as const;
+    controller.queuePatch(patch);
+    await controller.flushNow();
+
+    await controller.retryRejectedMutation();
+
+    expect(patchSpy).toHaveBeenNthCalledWith(2, patch);
+    expect(controller.getSnapshot().mutation?.status).toBe("succeeded");
   });
 });

@@ -34,7 +34,13 @@ describe("semantic render target to Explorer contract", () => {
     });
     const fallbackParts = catalog.entries
       .filter((entry) => entry.targetKind === "part")
-      .map((entry) => ({ id: entry.targetId, label: entry.label }));
+      .flatMap((entry) =>
+        entry.carrierIds.slice(0, 1).map((carrierId) => ({
+          id: carrierId,
+          label: entry.label,
+          visualizationTargetId: entry.targetId,
+        })),
+      );
     const tree = buildModelTree({
       mesh: { partCount: parts.length, visualizationPartFallbacks: fallbackParts },
       objects: [

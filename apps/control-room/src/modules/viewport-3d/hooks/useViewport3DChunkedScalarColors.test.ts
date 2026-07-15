@@ -4,8 +4,14 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import {
+  canonicalFieldVectorQuery,
+  serializeCanonicalFieldVectorResourceKey,
+} from "@/kernel/api/fieldQueryIdentity";
 
-import { buildViewport3DTargetFieldBuffer } from "../model/viewport3DTargetFieldBuffer";
+import {
+  buildViewport3DTargetFieldBuffer as buildViewport3DTargetFieldBufferWithResourceKey,
+} from "../model/viewport3DTargetFieldBuffer";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import type { Viewport3DFieldRenderModel } from "../viewport3dRenderModel";
 import {
@@ -22,6 +28,21 @@ import {
   shouldBuildViewport3DPartChunkedScalarColor,
   shouldStartChunkedScalarColorBuild,
 } from "./useViewport3DChunkedScalarColors";
+
+type TargetFieldBufferOptions = Parameters<
+  typeof buildViewport3DTargetFieldBufferWithResourceKey
+>[0];
+
+function buildViewport3DTargetFieldBuffer(
+  options: Omit<TargetFieldBufferOptions, "resourceKey">,
+) {
+  return buildViewport3DTargetFieldBufferWithResourceKey({
+    ...options,
+    resourceKey: serializeCanonicalFieldVectorResourceKey(
+      canonicalFieldVectorQuery(options.fieldVector.quantityId, options.query),
+    ),
+  });
+}
 
 const sourceUrl = new URL("./useViewport3DChunkedScalarColors.ts", import.meta.url);
 const fallbackLayerSource = readFileSync(
@@ -810,6 +831,12 @@ describe("useViewport3DChunkedScalarColors", () => {
 
     expect(source).toContain("const fieldColorBuildReference =");
     expect(source).toContain("createViewport3DFieldColorBuildReference({");
+    expect(source).toContain(
+      "entries.get(mode)?.buildKey === fieldColorBuildReference.buildKey",
+    );
+    expect(source).toContain(
+      "partEntries.get(partId)?.get(mode)?.buildKey ===",
+    );
     expect(source).toContain(
       "buildKey: fieldColorBuildReference?.buildKey",
     );

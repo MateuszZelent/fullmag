@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
+import {
+  canonicalFieldVectorQuery,
+  serializeCanonicalFieldVectorResourceKey,
+} from "@/kernel/api/fieldQueryIdentity";
 
 import {
   buildViewport3DTargetRenderPlan,
@@ -29,8 +33,25 @@ import {
   resolveViewport3DVectorSegmentScale,
   viewport3DFieldRenderOptionsNeedFieldData,
 } from "./viewport3dRenderModel";
-import { buildViewport3DTargetFieldBuffer } from "./model/viewport3DTargetFieldBuffer";
+import {
+  buildViewport3DTargetFieldBuffer as buildViewport3DTargetFieldBufferWithResourceKey,
+} from "./model/viewport3DTargetFieldBuffer";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
+
+type TargetFieldBufferOptions = Parameters<
+  typeof buildViewport3DTargetFieldBufferWithResourceKey
+>[0];
+
+function buildViewport3DTargetFieldBuffer(
+  options: Omit<TargetFieldBufferOptions, "resourceKey">,
+) {
+  return buildViewport3DTargetFieldBufferWithResourceKey({
+    ...options,
+    resourceKey: serializeCanonicalFieldVectorResourceKey(
+      canonicalFieldVectorQuery(options.fieldVector.quantityId, options.query),
+    ),
+  });
+}
 
 const viewport3dRenderModelSource = readFileSync(
   join(process.cwd(), "src/modules/viewport-3d/viewport3dRenderModel.ts"),
@@ -460,6 +481,25 @@ describe("viewport3dRenderModel", () => {
       -0.25, 0, 0, 0.25, 0, 0, 1,
       0, 1, -0.25, 0, 1, 0.25, 1,
     ]);
+  });
+
+  it("compacts zero-magnitude samples out of the logical glyph buffer", () => {
+    const field = fieldVectorFixture();
+    field.values = new Float64Array([
+      1, 0, 0,
+      0, 0, 0,
+      0, 0, 1,
+      0, 0, 0,
+    ]);
+    const segments = buildVectorLineSegmentsForNodeSelection(
+      topologyFixture(),
+      field,
+      { nodeIndices: [0, 1, 2, 3] },
+      0.5,
+      4,
+    );
+
+    expect(segments?.length).toBe(14);
   });
 
   it("can anchor vector line segments by their tail for comparison with centered arrows", () => {
@@ -1823,15 +1863,23 @@ describe("viewport3dRenderModel", () => {
     );
 
     const targetPass = model?.targetPasses.get("part-a");
+    expect(targetPass?.fieldBuffer).toMatchObject({
+      requestId: targetBuffer.requestId,
+      resourceKey: targetBuffer.resourceKey,
+    });
     expect(targetPass?.surface.scalarColorMode).toBe("x");
     expect(targetPass?.surface.projectionMode).toBe("surface_faces");
     expect(targetPass?.surface.scalarColors).toMatchObject({
       colors: expect.objectContaining({ length: 9 }),
       geometryRole: "face_expanded_surface",
       projectionMode: "surface_faces",
+      sourceFieldBufferId: targetBuffer.bufferId,
+      sourceResourceKey: targetBuffer.resourceKey,
     });
     expect(targetPass?.vectors.segments?.length).toBeGreaterThan(0);
     expect(targetPass?.vectors.buildReference).toMatchObject({
+      fieldBufferId: targetBuffer.bufferId,
+      resourceKey: targetBuffer.resourceKey,
       revisionSummary: expect.stringContaining("scope=full:part-a"),
     });
     expect(model?.targetDiagnostics).toContainEqual(
@@ -2906,6 +2954,10 @@ describe("viewport3dRenderModel", () => {
       ],
     );
 
+    expect(
+      topologyModel?.airboxParts[0]?.fullNodeSelection.nodeIndices,
+    ).toEqual([4]);
+
     const fieldModel = buildViewport3DFieldRenderModel(
       topologyModel,
       null,
@@ -2936,12 +2988,58 @@ describe("viewport3dRenderModel", () => {
       },
     );
 
-    const segments = fieldModel?.partVectorSegments.get("airbox");
-    expect(segments?.length).toBe(7);
-    expect(segments?.[0]).toBeCloseTo(-0.25);
-    expect(segments?.[2]).toBeCloseTo(-1);
-    expect(segments?.[3]).toBeCloseTo(0.25);
-    expect(segments?.[5]).toBeCloseTo(-1);
+    expect(fieldModel?.partVectorSegments.get("airbox")).toBeNull();
+  });
+
+  it("rejects a scoped payload larger than the active air-only surface carrier", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "magnetic-part",
+          node_indices: [0],
+        },
+      ],
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "airbox",
+          node_indices: [0, 1, 2, 3],
+          role: "air",
+        },
+      ],
+    );
+    const field = {
+      ...fieldVectorFixture(),
+      grid: [3, 1, 1] as [number, number, number],
+      nodeIndices: new Uint32Array([1, 2, 3]),
+      pointCount: 3,
+      valueCount: 9,
+      values: new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]),
+    };
+
+    const fieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      {
+        partFieldVectors: new Map([["airbox", field]]),
+        partVectorBudgets: new Map([["airbox", 3]]),
+        partVectorScopes: new Map([["airbox", "surface"]]),
+        scalarColorsVisible: false,
+      },
+    );
+
+    expect(topologyModel?.airboxParts[0]?.fullNodeSelection.nodeIndices).toEqual([
+      1, 2, 3,
+    ]);
+    expect(
+      topologyModel?.airboxParts[0]?.surfaceNodeSelection?.nodeIndices,
+    ).toEqual([1, 2]);
+    expect(fieldModel?.partVectorSegments.get("airbox")).toBeNull();
   });
 
   it("builds airbox vector glyphs from scoped field data at global topology positions", () => {

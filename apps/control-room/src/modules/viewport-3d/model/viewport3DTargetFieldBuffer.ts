@@ -36,6 +36,7 @@ export interface Viewport3DTargetFieldBuffer {
   pointCount: number;
   quantityId: string;
   requestId: string | null;
+  resourceKey: string | null;
   sampled: boolean;
   scopeId: string | null;
   scopeKind: Viewport3DFieldScopeKind;
@@ -64,6 +65,7 @@ export function buildViewport3DTargetFieldBuffer({
   fieldRevision = null,
   fieldVector,
   query,
+  resourceKey,
   synthetic = false,
   targetIds,
   topologyRevision = null,
@@ -73,6 +75,7 @@ export function buildViewport3DTargetFieldBuffer({
   fieldRevision?: string | null;
   fieldVector: DecodedFieldVector;
   query: FieldVectorQuery;
+  resourceKey: string | null;
   synthetic?: boolean;
   targetIds: readonly string[];
   topologyRevision?: string | null;
@@ -127,6 +130,7 @@ export function buildViewport3DTargetFieldBuffer({
     requestId: synthetic
       ? null
       : buildViewport3DFieldResourceRequestId(fieldVector.quantityId, query),
+    resourceKey,
     sampled,
     scopeId: query.scope_id ?? null,
     scopeKind: resolveTargetFieldBufferScopeKind(query.scope_kind),

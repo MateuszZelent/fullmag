@@ -6,6 +6,8 @@ import path from "node:path";
 const FEM_PART_COUNTS = [1, 10, 100];
 const FEM_NODE_COUNT = 4096;
 const FEM_MANIFEST_PATH = "/v2/sessions/current/meshing/meshes/shared-domain/manifest";
+const PICK_SCAN_COLUMNS = 32;
+const PICK_SCAN_ROWS = 24;
 const PASS_CONFIGS = [
   { id: "surface", points: false, surface: true, wireframe: false },
   { id: "wireframe", points: false, surface: false, wireframe: true },
@@ -13,6 +15,8 @@ const PASS_CONFIGS = [
   { id: "surface-wireframe-points", points: true, surface: true, wireframe: true },
 ];
 const configuredUrl = process.env.CONTROL_ROOM_URL ?? null;
+const semanticOnly = process.env.CONTROL_ROOM_AUDIT_SEMANTIC_ONLY === "1";
+const preCanvasOnly = process.env.CONTROL_ROOM_AUDIT_PRE_CANVAS_ONLY === "1";
 const requestedAuditPort = Number(process.env.CONTROL_ROOM_AUDIT_PORT ?? 0);
 const apiBase =
   process.env.CONTROL_ROOM_API_BASE_URL ??
@@ -38,7 +42,7 @@ const measurements = [];
 
 try {
   await mkdir(auditArtifactsDirectory, { recursive: true });
-  for (const passConfig of PASS_CONFIGS) {
+  for (const passConfig of semanticOnly || preCanvasOnly ? [] : PASS_CONFIGS) {
     for (const partCount of FEM_PART_COUNTS) {
       const measurement = await measureFemTopologyUploads({
         browser,
@@ -57,15 +61,190 @@ try {
     }
   }
 
-  assertPositionUploadPlateau(measurements);
+  if (!semanticOnly && !preCanvasOnly) assertPositionUploadPlateau(measurements);
+  const semanticTargetExplorerProof = preCanvasOnly
+    ? null
+    : await verifySemanticTargetExplorerInvariant({ browser, url });
+  const preCanvasErrorBoundaryProof = await verifyViewport3DPreCanvasErrorBoundary({
+    browser,
+    url,
+  });
   await writeFile(
     path.join(auditArtifactsDirectory, "fem-topology-upload-metrics.json"),
-    `${JSON.stringify({ measurements }, null, 2)}\n`,
+    `${JSON.stringify({ measurements, preCanvasErrorBoundaryProof, semanticTargetExplorerProof }, null, 2)}\n`,
   );
   console.log("FEM topology upload audit passed:", `measurements=${measurements.length}`);
 } finally {
   await browser.close();
   await managedRuntime?.stop();
+}
+
+async function verifyViewport3DPreCanvasErrorBoundary({ browser, url }) {
+  const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
+  const fixture = createSemanticTargetExplorerFixture();
+  await installFemFixtureApi(page, fixture);
+  await page.addInitScript(({ baseUrl }) => {
+    window.__FULLMAG_CONFIG__ = {
+      ...(window.__FULLMAG_CONFIG__ ?? {}),
+      allowMissingSessionSmoke: true,
+      controlRoomApiBase: baseUrl,
+      diagnosticRecorderScenario: "viewport-3d-pre-canvas-negative-control",
+      disableRealtime: true,
+      enableAuditHooks: true,
+      enableDiagnosticRecorder: true,
+      injectViewport3DRenderError: true,
+    };
+  }, { baseUrl: apiBase });
+
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    const alert = page.locator(".fm-viewport-3d__error-boundary");
+    await alert.waitFor({ state: "visible", timeout: 20_000 });
+    const text = await alert.innerText();
+    if (!text.includes("Maximum update depth exceeded")) {
+      throw new Error(`Pre-canvas boundary did not expose the injected failure: ${text}`);
+    }
+    if (await page.locator(".fm-viewport-3d canvas").count()) {
+      throw new Error("Pre-canvas negative control unexpectedly mounted a canvas.");
+    }
+    const records = await page.evaluate(
+      () =>
+        window.__FULLMAG_DIAGNOSTIC_RECORDER_EXPORT__?.().streams?.console ?? [],
+    );
+    const record = records.find(
+      (entry) =>
+        entry.name === "viewport-3d.render-error" &&
+        String(entry.message).includes("Maximum update depth exceeded"),
+    );
+    if (!record?.detail?.componentStack || !record?.detail?.errorStack) {
+      throw new Error(
+        `Pre-canvas failure did not publish bounded component/error stacks: ${JSON.stringify(record ?? null)}`,
+      );
+    }
+    await page.screenshot({
+      path: path.join(auditArtifactsDirectory, "viewport-3d-pre-canvas-error-boundary.png"),
+    });
+    return {
+      canvasCount: 0,
+      componentStackBytes: String(record.detail.componentStack).length,
+      errorStackBytes: String(record.detail.errorStack).length,
+      message: record.message,
+      retryVisible: await alert.getByRole("button", { name: "Retry viewport" }).isVisible(),
+    };
+  } finally {
+    await page.close();
+  }
+}
+
+async function verifySemanticTargetExplorerInvariant({ browser, url }) {
+  const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
+  const fixture = createSemanticTargetExplorerFixture();
+  const expectedNodeIds = new Set([
+    "model:airbox",
+    "model:object:semantic-magnet",
+    "model:mesh:unassigned:semantic-orphan",
+  ]);
+  const selectedNodeIds = new Set();
+  const errors = [];
+  await installFemFixtureApi(page, fixture);
+  await page.addInitScript(({ baseUrl }) => {
+    window.__FULLMAG_CONFIG__ = {
+      ...(window.__FULLMAG_CONFIG__ ?? {}),
+      allowMissingSessionSmoke: true,
+      controlRoomApiBase: baseUrl,
+      disableRealtime: true,
+      disableViewport3DFieldColorLayers: true,
+      disableViewport3DPrimitiveObjectLayer: true,
+      disableViewport3DVectorLayers: true,
+    };
+  }, { baseUrl: apiBase });
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      const location = message.location();
+      errors.push(`${message.text()} @ ${location.url || "unknown"}:${location.lineNumber ?? "?"}`);
+    }
+  });
+  page.on("pageerror", (error) => errors.push(error.message));
+
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    const canvas = page.locator(".fm-viewport-3d canvas");
+    await canvas.waitFor({ state: "visible", timeout: 20_000 });
+    await waitForViewportDiagnostics(page);
+    const webgl = await canvas.evaluate((element) => {
+      const gl =
+        element.getContext("webgl2") ??
+        element.getContext("webgl") ??
+        element.getContext("experimental-webgl");
+      return {
+        drawingBufferHeight: gl?.drawingBufferHeight ?? 0,
+        drawingBufferWidth: gl?.drawingBufferWidth ?? 0,
+        isContextLost: gl ? gl.isContextLost() : true,
+      };
+    });
+    if (
+      webgl.isContextLost ||
+      webgl.drawingBufferWidth <= 0 ||
+      webgl.drawingBufferHeight <= 0
+    ) {
+      throw new Error(`Semantic target fixture WebGL is not renderable: ${JSON.stringify(webgl)}`);
+    }
+
+    const canvasBox = await canvas.boundingBox();
+    if (!canvasBox) throw new Error("Semantic target fixture canvas has no bounds.");
+    for (let row = 5; row < 20 && selectedNodeIds.size < expectedNodeIds.size; row += 1) {
+      for (let column = 4; column < 26 && selectedNodeIds.size < expectedNodeIds.size; column += 1) {
+        const offsetX = (canvasBox.width * column) / PICK_SCAN_COLUMNS;
+        const offsetY = (canvasBox.height * row) / PICK_SCAN_ROWS;
+        if (offsetX >= canvasBox.width - 240 && offsetY <= 240) continue;
+        await page.mouse.click(
+          canvasBox.x + offsetX,
+          canvasBox.y + offsetY,
+        );
+        const selected = await page
+          .locator('[data-node-id][aria-selected="true"]')
+          .evaluateAll((nodes) =>
+            nodes.map((node) => node.getAttribute("data-node-id")).filter(Boolean),
+          );
+        for (const nodeId of selected) {
+          if (expectedNodeIds.has(nodeId)) selectedNodeIds.add(nodeId);
+        }
+      }
+    }
+
+    for (const nodeId of expectedNodeIds) {
+      if (!selectedNodeIds.has(nodeId)) {
+        await page.screenshot({
+          path: path.join(auditArtifactsDirectory, "semantic-target-selection-failure.png"),
+        });
+        const diagnostics = await readViewportDiagnostics(page);
+        const selectedRows = await page
+          .locator('[data-node-id][aria-selected="true"]')
+          .evaluateAll((nodes) =>
+            nodes.map((node) => node.getAttribute("data-node-id")).filter(Boolean),
+          );
+        throw new Error(
+          `Canvas picking did not reveal ${nodeId}; selected=${[...selectedNodeIds].join(",") || "none"}; active=${selectedRows.join(",") || "none"}; diagnostics=${diagnostics.raw}.`,
+        );
+      }
+      const row = page.locator(`[data-node-id="${nodeId}"]`);
+      await row.waitFor({ state: "visible", timeout: 5_000 });
+    }
+    const diagnostics = await readViewportDiagnostics(page);
+    if (diagnostics.raw.includes("unaddressable-render-target:")) {
+      throw new Error(`Addressable fixture emitted rejection: ${diagnostics.raw}`);
+    }
+    if (errors.length > 0) {
+      throw new Error(`Semantic target fixture emitted errors:\n${errors.join("\n")}`);
+    }
+    console.log(
+      "Semantic target Explorer invariant passed:",
+      [...selectedNodeIds].sort().join(","),
+    );
+    return { selectedNodeIds: [...selectedNodeIds].sort(), webgl };
+  } finally {
+    await page.close();
+  }
 }
 
 async function measureFemTopologyUploads({ browser, partCount, passConfig, url }) {
@@ -287,6 +466,189 @@ function createFemTopologyFixture({ partCount, passConfig }) {
   };
 }
 
+function createSemanticTargetExplorerFixture() {
+  const passConfig = { points: false, surface: true, wireframe: true };
+  const targetSettings = femTopologyTargetSettings(passConfig);
+  const meshParts = [
+    semanticFixturePart({
+      faceIndex: 0,
+      id: "semantic-air",
+      label: "Semantic Airbox",
+      nodeStart: 0,
+      role: "air",
+    }),
+    semanticFixturePart({
+      faceIndex: 1,
+      id: "semantic-magnetic-part",
+      label: "Semantic magnet",
+      nodeStart: 4,
+      objectId: "semantic-magnet",
+      role: "magnetic",
+    }),
+    semanticFixturePart({
+      faceIndex: 2,
+      id: "semantic-orphan",
+      label: "Semantic orphan",
+      nodeStart: 8,
+      objectId: "deleted-semantic-object",
+      role: "magnetic",
+    }),
+  ];
+  return {
+    domainMeta: {
+      ...femDomainMetaFixture(),
+      bounds: { max: [4, 2, 1], min: [-4, -2, -1] },
+      counts: { cells: 0, nodes: 12 },
+      generation_id: "semantic-target-fixture-v1",
+    },
+    expectedPositionBytes: 12 * 3 * Float32Array.BYTES_PER_ELEMENT,
+    manifest: {
+      domain_mesh_mode: "shared_domain",
+      generation_id: "semantic-target-fixture-v1",
+      mesh_id: "semantic-target-fixture",
+      mesh_name: "Semantic target Explorer fixture",
+      mesh_parts: meshParts,
+      object_segments: [],
+      regions: [],
+      revision: 1,
+      source_scene_revision: 1,
+      topology_fingerprint: "semantic-target-fixture-v1",
+    },
+    requests: [],
+    scene: {
+      objects: [
+        { id: "semantic-magnet", name: "Semantic magnet", visible: true },
+        { id: "__air__", name: "Synthetic air", role: "air", visible: true },
+      ],
+      revision: 1,
+      schema_version: 1,
+    },
+    topology: makeSemanticTargetTopologyBuffer(),
+    visualizationState: {
+      ...createFemTopologyFixture({ partCount: 1, passConfig }).visualizationState,
+      camera: {
+        position: [0, 0, 10],
+        projection: "perspective",
+        target: [0, 0, 0],
+        up: [0, 1, 0],
+      },
+      layers: {
+        ...createFemTopologyFixture({ partCount: 1, passConfig }).visualizationState.layers,
+        airbox: {
+          points: { visible: false },
+          surface: { opacity: 0.35, visible: true },
+          vectors: { density: 0, domain: "airbox_only", visible: false },
+          visible: true,
+          wireframe: { visible: true },
+        },
+      },
+      targets: {
+        airbox: {
+          label: "Airbox",
+          scope: "airbox",
+          scope_id: "airbox",
+          settings: targetSettings,
+          source: "airbox",
+        },
+        objects: [
+          {
+            label: "Semantic magnet",
+            scope: "object",
+            scope_id: "semantic-magnet",
+            settings: targetSettings,
+            source: "scene_object",
+          },
+        ],
+        parts: [
+          {
+            label: "Semantic orphan",
+            scope: "part",
+            scope_id: "semantic-orphan",
+            settings: targetSettings,
+            source: "mesh_part",
+          },
+        ],
+      },
+    },
+  };
+}
+
+function semanticFixturePart({ faceIndex, id, label, nodeStart, objectId = null, role }) {
+  const surfaceFaces = tetraSurfaceFaces(nodeStart);
+  const boundaryFaceStart = faceIndex * surfaceFaces.length;
+  return {
+    boundary_face_count: surfaceFaces.length,
+    boundary_face_indices: surfaceFaces.map((_, index) => boundaryFaceStart + index),
+    boundary_face_start: boundaryFaceStart,
+    bounds_max: [4, 1, 0.5],
+    bounds_min: [-4, -1, -0.5],
+    element_count: 0,
+    element_start: 0,
+    geometry_id: objectId,
+    id,
+    label,
+    material_id: role === "air" ? null : "semantic-material",
+    node_count: 4,
+    node_indices: [nodeStart, nodeStart + 1, nodeStart + 2, nodeStart + 3],
+    node_start: nodeStart,
+    object_id: objectId,
+    role,
+    surface_faces: surfaceFaces,
+  };
+}
+
+function tetraSurfaceFaces(nodeStart) {
+  return [
+    [nodeStart, nodeStart + 2, nodeStart + 1],
+    [nodeStart, nodeStart + 1, nodeStart + 3],
+    [nodeStart + 1, nodeStart + 2, nodeStart + 3],
+    [nodeStart + 2, nodeStart, nodeStart + 3],
+  ];
+}
+
+function makeSemanticTargetTopologyBuffer() {
+  const positions = [
+    -2.7, -2.7, -1.6, -1.3, -2.7, -1.6, -2, -1.3, -1.6, -2, -2, -0.2,
+    1.3, -2.7, -1.6, 2.7, -2.7, -1.6, 2, -1.3, -1.6, 2, -2, -0.2,
+    -0.7, 1.3, 0.4, 0.7, 1.3, 0.4, 0, 2.7, 0.4, 0, 2, 1.8,
+  ];
+  const surfaceFaces = [
+    ...tetraSurfaceFaces(0),
+    ...tetraSurfaceFaces(4),
+    ...tetraSurfaceFaces(8),
+  ];
+  const nodeCount = 12;
+  const elementCount = 0;
+  const boundaryFaceCount = surfaceFaces.length;
+  const markerCount = boundaryFaceCount;
+  const byteLength =
+    32 +
+    nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT +
+    boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT +
+    markerCount * Uint32Array.BYTES_PER_ELEMENT * 2;
+  const buffer = new ArrayBuffer(byteLength);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMMT"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setUint32(8, nodeCount, true);
+  view.setUint32(12, elementCount, true);
+  view.setUint32(16, boundaryFaceCount, true);
+  view.setUint32(20, markerCount, true);
+  view.setUint32(24, markerCount, true);
+  let offset = 32;
+  new Float64Array(buffer, offset, positions.length).set(positions);
+  offset += positions.length * Float64Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, boundaryFaceCount * 3).set(surfaceFaces.flat());
+  offset += boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, markerCount).fill(1);
+  offset += markerCount * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, markerCount).fill(1);
+  return buffer;
+}
+
 function femTopologyTargetSettings({ points, surface, wireframe }) {
   return {
     active_quantity_id: "m",
@@ -371,14 +733,15 @@ async function installFemFixtureApi(page, fixture) {
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
     if (requestPath === "/v2/sessions/current/status") return fulfillJson(route, femStatusFixture());
     if (requestPath === "/v2/sessions/current/visualization/state") return fulfillJson(route, fixture.visualizationState);
-    if (requestPath === "/v2/sessions/current/data/domain/meta") return fulfillJson(route, femDomainMetaFixture());
+    if (requestPath === "/v2/sessions/current/data/domain/meta") return fulfillJson(route, fixture.domainMeta ?? femDomainMetaFixture());
     if (requestPath === "/v2/sessions/current/data/domain/topology") return fulfillBinary(route, fixture.topology);
     if (requestPath === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") return fulfillJson(route, fixture.manifest);
     if (requestPath === "/v2/sessions/current/model/scene") {
       return fulfillJson(route, fixture.scene);
     }
     if (requestPath === "/v2/sessions/current/model/universe") {
-      return fulfillJson(route, { mesh_dirty: false, object_bounds_max: [1, 1, 1], object_bounds_min: [-1, -1, -1], scene_revision: 1, study_universe_mesh: null, universe: null });
+      const bounds = fixture.domainMeta?.bounds ?? femDomainMetaFixture().bounds;
+      return fulfillJson(route, { mesh_dirty: false, object_bounds_max: bounds.max, object_bounds_min: bounds.min, scene_revision: 1, study_universe_mesh: null, universe: null });
     }
     return fulfillEmpty(route, 204);
   });

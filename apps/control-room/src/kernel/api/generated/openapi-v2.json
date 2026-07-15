@@ -2617,9 +2617,7 @@
             ]
           },
           "generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "grid": {
             "oneOf": [
@@ -2670,9 +2668,7 @@
             "type": "number"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "etag": {
             "type": "string"
@@ -2769,9 +2765,7 @@
             "type": "string"
           },
           "generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           }
         },
         "required": [
@@ -3450,9 +3444,7 @@
       "FieldCatalog": {
         "properties": {
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "quantities": {
             "items": {
@@ -3493,9 +3485,7 @@
             "type": "integer"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "field_revision": {
             "format": "int64",
@@ -3692,9 +3682,7 @@
             "type": "integer"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "field_revision": {
             "format": "int64",
@@ -3784,9 +3772,7 @@
             "type": "string"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "empty_count": {
             "format": "int32",
@@ -3905,9 +3891,7 @@
             "type": "string"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "field_revision": {
             "format": "int64",
@@ -4157,9 +4141,7 @@
             ]
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "etag": {
             "description": "Stable fingerprint covering all resolved parameters (ETag for the meta resource).",
@@ -12543,9 +12525,7 @@
             "type": "integer"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "engine_log_revision": {
             "format": "int64",

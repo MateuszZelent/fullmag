@@ -56,19 +56,19 @@ pub(crate) fn resolve_api_port() -> Result<u16> {
         if port == 0 {
             return Ok(0);
         }
-        if api_is_ready(port) || port_is_bindable(port) {
+        if api_bridge_is_ready(port) || port_is_bindable(port) {
             return Ok(port);
         }
-        bail!("requested FULLMAG_API_PORT={port} is not bindable and does not serve a healthy fullmag-api");
+        bail!("requested FULLMAG_API_PORT={port} is not bindable and does not serve a compatible fullmag-api");
     }
 
-    if api_is_ready(8081) || port_is_bindable(8081) {
+    if api_bridge_is_ready(8081) || port_is_bindable(8081) {
         return Ok(8081);
     }
 
     const CANDIDATE_API_PORTS: &[u16] = &[8080, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089];
     for &port in CANDIDATE_API_PORTS {
-        if api_is_ready(port) {
+        if api_bridge_is_ready(port) {
             return Ok(port);
         }
         if port_is_bindable(port) {
@@ -152,13 +152,22 @@ impl Drop for ControlRoomGuard {
 
 #[cfg(test)]
 mod control_room_guard_tests {
-    use super::ControlRoomGuard;
+    use super::{api_openapi_response_is_compatible, ControlRoomGuard};
 
     #[test]
     fn reused_frontend_is_not_stopped_on_drop() {
         let guard = ControlRoomGuard::active(3100, None, None);
 
         assert!(!guard.stop_frontend_on_drop);
+    }
+
+    #[test]
+    fn api_reuse_rejects_health_only_or_stale_openapi_responses() {
+        let stale = "HTTP/1.1 200 OK\r\nx-api-contract-version: 1.0.0\r\n\r\n{\"paths\":{}}";
+        assert!(!api_openapi_response_is_compatible(stale));
+
+        let current = "HTTP/1.1 200 OK\r\nx-api-contract-version: 1.0.0\r\n\r\n{\"paths\":{\"/v2/sessions/current/model/scene\":{},\"/v2/sessions/current/data/mesh-region-memberships\":{},\"/v2/sessions/current/simulation/objects/{object_id}/metrics\":{}}}";
+        assert!(api_openapi_response_is_compatible(current));
     }
 }
 
@@ -682,6 +691,9 @@ fn api_bridge_is_ready(port: u16) -> bool {
     if !api_is_ready(port) {
         return false;
     }
+    if !api_openapi_is_compatible(port) {
+        return false;
+    }
 
     let addr = std::net::SocketAddr::from((LOOPBACK_V4_OCTETS, port));
     let mut stream = match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
@@ -712,6 +724,37 @@ fn api_bridge_is_ready(port: u16) -> bool {
         || response.starts_with("HTTP/1.0 400")
         || response.starts_with("HTTP/1.1 422")
         || response.starts_with("HTTP/1.0 422")
+}
+
+fn api_openapi_is_compatible(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from((LOOPBACK_V4_OCTETS, port));
+    let mut stream = match std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500)) {
+        Ok(stream) => stream,
+        Err(_) => return false,
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(750)));
+    if stream
+        .write_all(b"GET /v2/platform/openapi.json HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut response = String::new();
+    stream.read_to_string(&mut response).is_ok() && api_openapi_response_is_compatible(&response)
+}
+
+fn api_openapi_response_is_compatible(response: &str) -> bool {
+    let headers = response
+        .split("\r\n\r\n")
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"))
+        && headers.contains("x-api-contract-version: 1.0.0")
+        && response.contains("/v2/sessions/current/model/scene")
+        && response.contains("/v2/sessions/current/data/mesh-region-memberships")
+        && response.contains("/v2/sessions/current/simulation/objects/{object_id}/metrics")
 }
 
 pub(crate) fn current_live_api_client() -> &'static reqwest::blocking::Client {

@@ -175,7 +175,7 @@ const resourceRevisions: LiveStatusResource["resources"] = {
   command_completion_revision: 0,
   commands_revision: 0,
   display_revision: 0,
-  domain_generation_id: 0,
+  domain_generation_id: "0",
   engine_log_revision: 0,
   field_catalog_revision: 0,
   field_revision: 0,
@@ -233,7 +233,7 @@ function liveStatusFixture(
     domain: {
       cell_count: 1,
       discretization: "fdm",
-      generation_id: 0,
+      generation_id: "0",
     },
     energies: {},
     metrics: {
@@ -2196,6 +2196,38 @@ describe("ControlRoomApi", () => {
         status: 200,
       },
     ]);
+  });
+
+  it("uses three total attempts for retryable GET failures", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("temporary", { headers: contractHeaders, status: 503 }))
+      .mockResolvedValueOnce(new Response("temporary", { headers: contractHeaders, status: 503 }))
+      .mockResolvedValueOnce(jsonResponse(liveStatusFixture({ fields_revision: 11 })));
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      retryDelayMs: 0,
+    });
+
+    await expect(api.sessions.current.status()).resolves.toMatchObject({
+      resources: { fields_revision: 11 },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("never retries a GET 404", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ error: "missing" }, { status: 404 }),
+    );
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      retryDelayMs: 0,
+    });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({ status: 404 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry mutating commands and records rejected command diagnostics", async () => {

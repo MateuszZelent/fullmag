@@ -431,6 +431,17 @@ describe("viewport smoke projection round-trip", () => {
     expect(memoryChurnScript).toContain("Live WebGL buffers did not return");
   });
 
+  it("browser-proves the pre-canvas React error boundary and forensic stacks", () => {
+    const femTopologyAuditScript = readFileSync(femTopologyUploadAuditScriptUrl, "utf8");
+
+    expect(femTopologyAuditScript).toContain("verifyViewport3DPreCanvasErrorBoundary");
+    expect(femTopologyAuditScript).toContain("CONTROL_ROOM_AUDIT_PRE_CANVAS_ONLY");
+    expect(femTopologyAuditScript).toContain("injectViewport3DRenderError: true");
+    expect(femTopologyAuditScript).toContain('entry.name === "viewport-3d.render-error"');
+    expect(femTopologyAuditScript).toContain("record?.detail?.componentStack");
+    expect(femTopologyAuditScript).toContain("Retry viewport");
+  });
+
   it("measures shared FEM topology position uploads in a real WebGL viewport", () => {
     const femTopologyAuditScript = readFileSync(femTopologyUploadAuditScriptUrl, "utf8");
 
@@ -443,6 +454,29 @@ describe("viewport smoke projection round-trip", () => {
     expect(femTopologyAuditScript).toContain("drawCalls <= 0");
     expect(femTopologyAuditScript).toContain("Position upload grew with FEM part count");
     expect(femTopologyAuditScript).toContain("fem-topology-upload-metrics.json");
+  });
+
+  it("browser-proves Airbox, magnetic, and orphan picks reveal their exact Explorer rows", () => {
+    const femTopologyAuditScript = readFileSync(femTopologyUploadAuditScriptUrl, "utf8");
+
+    expect(femTopologyAuditScript).toContain("verifySemanticTargetExplorerInvariant");
+    expect(femTopologyAuditScript).toContain('"model:airbox"');
+    expect(femTopologyAuditScript).toContain('"model:object:semantic-magnet"');
+    expect(femTopologyAuditScript).toContain(
+      '"model:mesh:unassigned:semantic-orphan"',
+    );
+    expect(femTopologyAuditScript).toContain("drawingBufferWidth");
+    expect(femTopologyAuditScript).toContain("isContextLost()");
+    expect(femTopologyAuditScript).toContain("aria-selected");
+    expect(femTopologyAuditScript).toContain("unaddressable-render-target:");
+    expect(femTopologyAuditScript).toContain("boundary_face_count: surfaceFaces.length");
+    expect(femTopologyAuditScript).toContain("tetraSurfaceFaces(nodeStart)");
+    expect(femTopologyAuditScript).toContain("PICK_SCAN_COLUMNS = 32");
+    expect(femTopologyAuditScript).toContain("PICK_SCAN_ROWS = 24");
+    expect(femTopologyAuditScript).toContain(
+      "fixture.domainMeta ?? femDomainMetaFixture()",
+    );
+    expect(femTopologyAuditScript).toContain("bounds: { max: [4, 2, 1], min: [-4, -2, -1] }");
   });
 
   it("finds viewport diagnostics by content instead of a fixed HUD index", () => {

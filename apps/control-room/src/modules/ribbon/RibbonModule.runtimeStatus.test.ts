@@ -10,7 +10,7 @@ const baseResources: LiveStatusResource["resources"] = {
   command_completion_revision: 0,
   commands_revision: 4,
   display_revision: 0,
-  domain_generation_id: 1,
+  domain_generation_id: "1",
   engine_log_revision: 0,
   field_catalog_revision: 0,
   field_revision: 0,
@@ -55,7 +55,7 @@ function statusWith({
     domain: {
       cell_count: 1,
       discretization: "fdm",
-      generation_id: 1,
+      generation_id: "1",
     },
     resources: baseResources,
     run: runId

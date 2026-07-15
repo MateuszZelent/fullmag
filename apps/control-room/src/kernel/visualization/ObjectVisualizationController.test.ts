@@ -1047,7 +1047,7 @@ describe("ObjectVisualizationController", () => {
 
   it("uses the effective mesh-part registry settings instead of object defaults", () => {
     const controller = new ObjectVisualizationController();
-    const target = { id: "part-film", kind: "part" as const };
+    const target = { id: "part:part-film", kind: "part" as const };
 
     expect(
       resolveTargetVisualization({
@@ -1100,6 +1100,46 @@ describe("ObjectVisualizationController", () => {
       wireframeVisible: true,
     });
 
+  });
+
+  it("preserves viewport colorbar visibility from the effective target registry", () => {
+    const controller = new ObjectVisualizationController();
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target: { id: "object:film", kind: "object" },
+        visualizationState: {
+          revision: 4,
+          targets: {
+            airbox: {} as never,
+            objects: [
+              {
+                scope: "object",
+                scope_id: "film",
+                settings: {
+                  viewport_colorbar_visible: true,
+                } as never,
+              },
+            ],
+            parts: [],
+          },
+        } as never,
+      }).effectiveSettings.viewportColorbarVisible,
+    ).toBe(true);
+  });
+
+  it("serializes a canonical part target back to the exact mesh carrier scope id", () => {
+    expect(
+      visualizationStateOverrideFromTargetPatch(
+        { id: "part:part-film", kind: "part" },
+        { visible: true },
+      ),
+    ).toMatchObject({
+      scope: "part",
+      scope_id: "part-film",
+      visible: true,
+    });
   });
 
   it("lets a pending target patch win only until a newer registry revision acknowledges it", () => {

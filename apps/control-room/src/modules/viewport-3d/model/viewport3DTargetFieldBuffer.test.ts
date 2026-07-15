@@ -1,13 +1,37 @@
 import { describe, expect, it } from "vitest";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import {
+  canonicalFieldVectorQuery,
+  fieldVectorResourceKey,
+  serializeCanonicalFieldVectorResourceKey,
+} from "@/kernel/api/fieldQueryIdentity";
 
 import {
-  buildViewport3DTargetFieldBuffer,
+  buildViewport3DTargetFieldBuffer as buildViewport3DTargetFieldBufferWithResourceKey,
   resolveViewport3DTargetFieldInput,
   viewport3DTargetFieldBufferCanServeSurface,
   viewport3DTargetFieldBufferCanServeVectors,
 } from "./viewport3DTargetFieldBuffer";
+
+type TargetFieldBufferOptions = Parameters<
+  typeof buildViewport3DTargetFieldBufferWithResourceKey
+>[0];
+
+function buildViewport3DTargetFieldBuffer(
+  options: Omit<TargetFieldBufferOptions, "resourceKey"> & {
+    resourceKey?: string | null;
+  },
+) {
+  return buildViewport3DTargetFieldBufferWithResourceKey({
+    ...options,
+    resourceKey:
+      options.resourceKey ??
+      serializeCanonicalFieldVectorResourceKey(
+        canonicalFieldVectorQuery(options.fieldVector.quantityId, options.query),
+      ),
+  });
+}
 
 function vectorFixture(overrides: Partial<DecodedFieldVector> = {}): DecodedFieldVector {
   const nComp = overrides.nComp ?? 3;
@@ -46,12 +70,71 @@ describe("viewport3DTargetFieldBuffer", () => {
     expect(buffer.requestId).toContain("quantity=m");
     expect(buffer.requestId).toContain("scope_id=part-a");
     expect(buffer.requestId).toContain("scope_kind=part");
+    expect(buffer.resourceKey).toBe(
+      fieldVectorResourceKey("m", {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      }),
+    );
+    expect(buffer.resourceKey).not.toBe(buffer.requestId);
     expect(buffer.sampled).toBe(false);
     expect(buffer.values).toBe(fieldVector.values);
     expect(buffer.vectorComponentCount).toBe(buffer.componentCount);
     expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "orientation"))
       .toBe(true);
     expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(true);
+  });
+
+  it("keeps canonical resource identity stable independently from planner query ordering", () => {
+    const fieldVector = vectorFixture({ quantityId: "h_eff" });
+    const first = buildViewport3DTargetFieldBuffer({
+      fieldVector,
+      query: {
+        scope_kind: "object",
+        max_samples: 32,
+        component: "x",
+        scope_id: "object:sample",
+      },
+      targetIds: ["object:sample"],
+    });
+    const second = buildViewport3DTargetFieldBuffer({
+      fieldVector,
+      query: {
+        component: "x",
+        max_samples: 32,
+        scope_id: "sample",
+        scope_kind: "object",
+      },
+      targetIds: ["object:sample"],
+    });
+
+    expect(first.resourceKey).toBe(
+      fieldVectorResourceKey("H_eff", {
+        component: "x",
+        max_samples: 32,
+        scope_id: "sample",
+        scope_kind: "object",
+      }),
+    );
+    expect(second.resourceKey).toBe(first.resourceKey);
+    expect(first.requestId).not.toBe(first.resourceKey);
+  });
+
+  it("keeps the requested cache identity when decoded payload identity disagrees", () => {
+    const requestedResourceKey = fieldVectorResourceKey("H_eff", {
+      component: "full",
+      scope_kind: "full",
+    });
+    const buffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: vectorFixture({ quantityId: "m" }),
+      query: { component: "full", scope_kind: "full" },
+      resourceKey: requestedResourceKey,
+      targetIds: ["full"],
+    });
+
+    expect(buffer.resourceKey).toBe(requestedResourceKey);
+    expect(buffer.quantityId).toBe("m");
   });
 
   it("allows sampled full vectors for glyphs but not surface shaders", () => {

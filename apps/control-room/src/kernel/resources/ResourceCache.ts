@@ -16,6 +16,14 @@ export interface ResourceCacheStats {
   entryCount: number;
 }
 
+export interface ResourceCacheEntryDiagnostics {
+  byteLength: number | null;
+  entryState: "missing" | "inflight" | "ready";
+  etag: string | null;
+  key: string;
+  retainCount: number;
+}
+
 export type ResourceCacheEventAction = "evict" | "hit" | "miss" | "set";
 
 interface ResourceCacheEvent {
@@ -76,6 +84,21 @@ export class ResourceCache<TData, TMetadata = unknown> {
 
   peek(key: string): ResourceCacheEntry<TData, TMetadata> | null {
     return this.entries.get(key) ?? null;
+  }
+
+  inspect(key: string): ResourceCacheEntryDiagnostics {
+    const entry = this.entries.get(key);
+    return {
+      byteLength: entry?.byteLength ?? null,
+      entryState: entry
+        ? "ready"
+        : this.inflight.has(key)
+          ? "inflight"
+          : "missing",
+      etag: entry?.etag ?? null,
+      key,
+      retainCount: this.retained.get(key) ?? 0,
+    };
   }
 
   getOrLoad(

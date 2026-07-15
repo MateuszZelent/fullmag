@@ -24,7 +24,7 @@ function fdmMeta(cells: number): DomainMetaResource {
     dimension: 3,
     discretization: "fdm",
     domain_id: "domain",
-    generation_id: 4,
+    generation_id: "4",
     grid: {
       origin: [0, 0, 0],
       shape: [100, 100, 1],
@@ -222,7 +222,9 @@ describe("viewport3dDomainAdapter", () => {
   });
 
   it("assigns air-magnetic interface surfaces to the owning magnetic part", () => {
-    const domain = adaptFemSharedDomainManifest(manifestFixture());
+    const manifest = manifestFixture();
+    manifest.mesh_parts![3]!.object_id = "object-1";
+    const domain = adaptFemSharedDomainManifest(manifest);
 
     expect(domain.partsById.get("part-interface")?.role).toBe("interface");
     expect(domain.magneticParts.map((part) => part.id)).toEqual(["part-magnet"]);

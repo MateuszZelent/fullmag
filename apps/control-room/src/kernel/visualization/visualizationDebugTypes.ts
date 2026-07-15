@@ -22,7 +22,7 @@ export interface VisualizationDebugIssue {
 }
 
 export interface VisualizationDebugSample {
-  componentValues: readonly number[];
+  componentValues: readonly (number | null)[];
   magnitude: number | null;
   nodeIndex: number | null;
   pointIndex: number;
@@ -60,6 +60,7 @@ export interface VisualizationDebugCarrierSnapshot {
   };
   carrierId: string;
   carrierRole: string;
+  geometryMaskDescription?: string | null;
   memory: readonly VisualizationDebugMemoryRow[];
   payload: {
     component: string;
@@ -78,13 +79,17 @@ export interface VisualizationDebugCarrierSnapshot {
   render: {
     adoption: {
       adoptedFieldBufferId: string | null;
+      adoptedResourceKey: string | null;
       adoptedScalarBufferKey: string | null;
       adoptedVectorBuildKey: string | null;
+      adoptedVectorItemCount?: number | null;
       frameCommitId: string | null;
     };
     fieldBufferState: string;
+    requestedFieldBufferId: string | null;
     requestedPasses: readonly string[];
     surface: {
+      bufferKey: string | null;
       colorMode: string | null;
       degradation: string | null;
       projectionMode: string | null;
@@ -118,6 +123,12 @@ export interface VisualizationDebugSnapshot {
   carriers: readonly VisualizationDebugCarrierSnapshot[];
   disposition: VisualizationDebugDisposition;
   issues: readonly VisualizationDebugIssue[];
+  memoryTotals?: {
+    owned: number;
+    referenced: number | null;
+    shared: number | null;
+  };
+  ownedByteLength?: number;
   sharedMemory: readonly VisualizationDebugMemoryRow[];
   target: {
     carrierIds: readonly string[];

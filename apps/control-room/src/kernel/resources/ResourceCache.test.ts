@@ -3,6 +3,78 @@ import { describe, expect, it, vi } from "vitest";
 import { ResourceCache } from "./ResourceCache";
 
 describe("ResourceCache", () => {
+  it("inspects missing, inflight, ready, retained, and released entries without exposing data", async () => {
+    const cache = new ResourceCache<string>({ maxBytes: 10 });
+
+    expect(cache.inspect("field:m")).toEqual({
+      byteLength: null,
+      entryState: "missing",
+      etag: null,
+      key: "field:m",
+      retainCount: 0,
+    });
+
+    let resolveLoad!: (entry: {
+      byteLength: number;
+      data: string;
+      etag: string;
+    }) => void;
+    const pending = cache.getOrLoad(
+      "field:m",
+      () =>
+        new Promise((resolve) => {
+          resolveLoad = resolve;
+        }),
+    );
+
+    expect(cache.inspect("field:m")).toEqual({
+      byteLength: null,
+      entryState: "inflight",
+      etag: null,
+      key: "field:m",
+      retainCount: 0,
+    });
+
+    resolveLoad({ byteLength: 6, data: "secret", etag: '"field-1"' });
+    await pending;
+    const ready = cache.inspect("field:m");
+    expect(ready).toEqual({
+      byteLength: 6,
+      entryState: "ready",
+      etag: '"field-1"',
+      key: "field:m",
+      retainCount: 0,
+    });
+    expect(ready).not.toHaveProperty("data");
+    expect(ready).not.toHaveProperty("metadata");
+
+    const releaseFirst = cache.retain("field:m");
+    const releaseSecond = cache.retain("field:m");
+    expect(cache.inspect("field:m").retainCount).toBe(2);
+    releaseFirst();
+    expect(cache.inspect("field:m").retainCount).toBe(1);
+    releaseSecond();
+    expect(cache.inspect("field:m").retainCount).toBe(0);
+  });
+
+  it("inspects an entry without refreshing LRU position or emitting cache events", () => {
+    const events: unknown[] = [];
+    const cache = new ResourceCache<string>({
+      maxBytes: 2,
+      onEvent: (event) => events.push(event),
+    });
+    cache.set("oldest", { byteLength: 1, data: "old" });
+    cache.set("newest", { byteLength: 1, data: "new" });
+    events.length = 0;
+
+    expect(cache.inspect("oldest").entryState).toBe("ready");
+    expect(events).toEqual([]);
+
+    cache.set("replacement", { byteLength: 1, data: "replacement" });
+    expect(cache.peek("oldest")).toBeNull();
+    expect(cache.peek("newest")?.data).toBe("new");
+  });
+
   it("stores, replaces, evicts, and preserves typed metadata", () => {
     const cache = new ResourceCache<string, { revision: number }>({ maxBytes: 2 });
     cache.set("a", { byteLength: 1, data: "a", metadata: { revision: 1 } });

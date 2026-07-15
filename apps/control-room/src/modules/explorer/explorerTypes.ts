@@ -264,6 +264,7 @@ export interface ExplorerNode {
   measurementAxis?: string;
   meshIdentity?: string;
   meshPartId?: string;
+  visualizationTargetId?: string;
   modeIndex?: number;
   objectId?: string;
   observableId?: string;
@@ -480,5 +481,9 @@ export interface ModelTreeMeshSnapshot {
   realizedSizeFieldCount?: number | null;
   regionCount?: number | null;
   sourceSceneRevision?: number | string | null;
-  visualizationPartFallbacks?: readonly { id: string; label: string }[];
+  visualizationPartFallbacks?: readonly {
+    id: string;
+    label: string;
+    visualizationTargetId: string;
+  }[];
 }

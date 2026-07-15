@@ -5,7 +5,6 @@ import { useCallback, useSyncExternalStore } from "react";
 import { useKernel } from "../KernelContext";
 import {
   EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS,
-  getEmptyVisualizationDebugDemandSnapshot,
   type VisualizationDebugDemand,
   type VisualizationDebugController,
 } from "./VisualizationDebugController";
@@ -35,7 +34,6 @@ export function useVisualizationDebugDemand(
   targetId: string,
 ): VisualizationDebugDemand {
   const controller = useVisualizationDebugController();
-  const serverSnapshot = getEmptyVisualizationDebugDemandSnapshot(targetId);
   const subscribe = useCallback(
     (listener: () => void) => controller.subscribeDemand(targetId, listener),
     [controller, targetId],
@@ -44,12 +42,8 @@ export function useVisualizationDebugDemand(
     () => controller.getDemandSnapshot(targetId),
     [controller, targetId],
   );
-  const getServerSnapshot = useCallback(
-    () => serverSnapshot,
-    [serverSnapshot],
-  );
 
-  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 export function useVisualizationDebugController(): VisualizationDebugController {

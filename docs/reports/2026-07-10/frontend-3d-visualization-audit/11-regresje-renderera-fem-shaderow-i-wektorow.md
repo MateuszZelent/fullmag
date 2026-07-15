@@ -1,5 +1,28 @@
 # 11. Regresje renderera FEM, shaderów i wektorów
 
+## Stan naprawy — 2026-07-15
+
+| Problem | Stan | Dowód |
+|---|---|---|
+| F3D-003 | naprawione | Wszystkie publiczne identyfikatory generacji `u64` są serializowane jako dokładne stringi dziesiętne; OpenAPI, AsyncAPI i generowane typy TS są zgodne, a fixture powyżej `2^53` przechodzi przez status, catalog i realtime bez utraty bitów. |
+| F3D-013 | naprawione | Trwałe 4xx kończy się po jednej próbie, transient 5xx ma ograniczony backoff, optimistic state jest wycofywany, a Inspector pokazuje target, błąd, `requestId` i akcję ponowienia dokładnego patcha. |
+| F3D-029 | naprawione | Produkcyjny smoke przykładu CoFeB FEM przeszedł na izolowanych portach 3193/8195: surface shader, magnetic vectors i airbox vectors mają rzeczywiste buildy worker/GPU, colorbar pozostaje zamontowany, a przełączenie pola nie generuje tasku main-thread >200 ms. |
+| F3D-030 | naprawione | Produkcyjny Chromium negative-control wymusza `Maximum update depth exceeded` przed canvasem i dowodzi widocznego retry oraz pełnych, ograniczonych stacków (component 6021 B, error 978 B). Latch błędu przetrzymuje remount modułu bez ponownego wejścia w wadliwe drzewo. Recorder zapisuje pełny artifact i `failure.json` także przy awarii pre-canvas. |
+| F3D-031 | naprawione | Gate nie zakłada nieistniejącego dolnego pierścienia, używa aktualnego terminalnego stanu etapów, izoluje API/web i pozostawia pełny artifact przy błędzie pre-canvas. Realny smoke `permalloy_layer_cofeb_rings_relax_300nm.py` przeszedł. |
+| F3D-032 | naprawione | Jeden katalog semantycznych targetów jest wspólny dla renderera, pickingu i Explorera; brakujące owners dostają jawny orphan node, blank/duplicate carriers fail-close, a browser fixture dowodzi click/reveal dla Airbox, magnesu i orphan. Realny smoke wymaga osobnych buildów shader/vector dla magnetycznych części i airboxu. |
+
+Końcowe dowody:
+
+- `just run-cofeb-rings-relax-mixed-target-smoke gpu auto 3100 8195` — pass,
+  41 rekordów build-engine, 10/10 odpowiedzi field, jeden colorbar oraz jawne
+  build evidence dla magnetic shader, magnetic vectors i airbox vectors;
+- `CONTROL_ROOM_AUDIT_PRE_CANVAS_ONLY=1 ... audit:viewport-3d-fem-topology-uploads`
+  — pass; artifact
+  `apps/control-room/.artifacts/viewport-3d-browser-audit/fem-topology-upload-metrics.json`;
+- `pnpm --dir apps/control-room test` — 345 plików, 3240/3240 testów;
+- `typecheck`, `lint --max-warnings=0`, `check:api-hygiene` i
+  `git diff --check` — pass.
+
 ## F3D-003 — utrata precyzji `domain_generation_id` w JSON/OpenAPI
 
 **Priorytet:** P0 — krytyczny  
@@ -175,7 +198,8 @@ updates wykonywanych w effect/render callbacks.
 ## F3D-032 — renderer i Explorer nie dzielą twardej listy obiektów
 
 **Priorytet:** P0 — krytyczny  
-**Stan:** otwarte; Airbox identity repair jest w toku, ale bez dowodu browser
+**Stan:** częściowo zamknięte w dirty worktree; invariant i browser
+click/reveal są udowodnione, pełny airbox-pass browser gate pozostaje
 
 ### Symptom
 
@@ -216,11 +240,12 @@ sprawdzenia, czy taki obiekt istnieje w aktualnej scenie, podczas gdy backend
 usuwa każdy part z `object_id` z fallback registry. Stary lub błędny owner id
 tworzy więc target bez możliwego węzła Explorera.
 
-Skupione testy bieżącego patcha są zielone: 144 testy frontendu w pięciu suite
-oraz trzy testy API canonicalizacji Airboxa. Nie podważają findingu, ponieważ
-żaden nie sprawdza dwukierunkowego invariant render target → Explorer node ani
-browserowego click/reveal. Jeden z testów adaptera wprost nadal oczekuje
-`nodeId` carriera.
+Bieżący patch wprowadza wspólny katalog semantycznych targetów, złożony test
+każdego pickowalnego carriera przeciwko rzeczywistemu drzewu Explorera oraz
+test zdegradowanego `object_segment`. Świeży production audit bundle przeszedł
+browserową asercję click/reveal dla regionu. Osobno nadal brakuje browserowej
+asercji liczącej pojedyncze passy Airboxa; dlatego finding pozostaje częściowo,
+a nie całkowicie zamknięty.
 
 ### Twardy kontrakt i plan naprawy
 

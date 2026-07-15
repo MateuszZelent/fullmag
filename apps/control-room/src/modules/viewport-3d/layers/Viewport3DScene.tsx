@@ -134,8 +134,10 @@ import {
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { clampNumber } from "../viewport3dMath";
 import { createViewport3DCameraGestureRef } from "./viewport3DCameraGesture";
+import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
 interface Viewport3DSceneProps {
+  adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   bounds: Viewport3DBounds | null;
   cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
@@ -750,6 +752,7 @@ function Viewport3DOverlayLayerStack({
 }
 
 function Viewport3DModelLayerStack({
+  adoptionRegistry,
   airboxSettings,
   bounds,
   colors,
@@ -796,6 +799,7 @@ function Viewport3DModelLayerStack({
   visualizationRevision,
 }: Pick<
   Viewport3DSceneProps,
+  | "adoptionRegistry"
   | "airboxSettings"
   | "bounds"
   | "colors"
@@ -931,6 +935,7 @@ function Viewport3DModelLayerStack({
       {stageVisibility.baseGeometry &&
       viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
         <FdmCuboidLayer
+          adoptionRegistry={adoptionRegistry}
           colors={colors}
           fieldVector={stagedFieldVector}
           instanceModel={fdmInstanceModel}
@@ -955,6 +960,7 @@ function Viewport3DModelLayerStack({
       {stageVisibility.baseGeometry &&
       viewport3DAirboxLayerEnabledFromBrowserConfig() ? (
         <AirboxLayer
+          adoptionRegistry={adoptionRegistry}
           colors={colors}
           fieldModel={stagedFieldModel}
           materialProfile={materialProfile}
@@ -981,6 +987,7 @@ function Viewport3DModelLayerStack({
       {stageVisibility.baseGeometry &&
       viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
         <TopologyMeshLayer
+          adoptionRegistry={adoptionRegistry}
           colors={colors}
           fallbackSettings={fallbackSettings}
           femDomain={femDomain}
@@ -1187,6 +1194,7 @@ function Viewport3DInteractionAndHudStack({
 }
 
 export function Viewport3DScene({
+  adoptionRegistry,
   bounds,
   cameraOrthographicScale,
   cameraProjection,
@@ -1362,6 +1370,7 @@ export function Viewport3DScene({
         tracker={tracker}
       />
       <Viewport3DModelLayerStack
+        adoptionRegistry={adoptionRegistry}
         airboxSettings={airboxSettings}
         bounds={bounds}
         colors={colors}

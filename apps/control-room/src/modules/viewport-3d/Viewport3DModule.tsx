@@ -25,7 +25,10 @@ import {
   quantityUnitForColorbar,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
-import { viewport3DOrbitDebugEnabledFromBrowserConfig } from "@/kernel/browserFullmagConfig";
+import {
+  viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig,
+  viewport3DOrbitDebugEnabledFromBrowserConfig,
+} from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
@@ -71,6 +74,12 @@ import {
   type Viewport3DFieldDataIssue,
 } from "./hooks/useViewport3DSceneModel";
 import {
+  createViewport3DVisualizationDebugCandidateBuilder,
+  useViewport3DVisualizationDebugPublisher,
+  type Viewport3DVisualizationDebugSource,
+} from "./hooks/useViewport3DVisualizationDebugPublisher";
+import { createViewport3DRenderAdoptionRegistry } from "./model/viewport3DRenderAdoptionRegistry";
+import {
   resolveViewport3DCameraFit,
   normalizeViewport3DOrbitDebugAngles,
   shouldApplyViewport3DOrbitDebugAngles,
@@ -86,9 +95,8 @@ import type { RegionOverlayMode } from "./regionOverlayMode";
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
 import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog";
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
-import {
-  type Viewport3DPartSelection,
-} from "./viewport3dDomainAdapter";
+import { Viewport3DErrorBoundary } from "./Viewport3DErrorBoundary";
+import { type Viewport3DPartSelection } from "./viewport3dDomainAdapter";
 import type {
   HysteresisReplayGlyphModel,
   HysteresisStepViewportTarget,
@@ -1045,6 +1053,7 @@ interface Viewport3DFrameProps
   topologyRevision: number | string | null;
   visualizationEffectiveRenderMode: string;
   visualizationError: string | null;
+  visualizationDebugSource: Viewport3DVisualizationDebugSource;
 }
 
 export default function Viewport3DModule({
@@ -1150,8 +1159,12 @@ export default function Viewport3DModule({
   }, [kernel.cameraRegistry]);
 
   return (
-    <WorkspaceRenderProfiler id="Viewport3DModule">
-      <Viewport3DFrame
+    <Viewport3DErrorBoundary diagnosticRecorder={kernel.diagnosticRecorder}>
+      {viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig() ? (
+        <Viewport3DAuditRenderErrorInjection />
+      ) : (
+        <WorkspaceRenderProfiler id="Viewport3DModule">
+        <Viewport3DFrame
       {...sceneModel}
       clientReady={clientReady}
       colors={colors}
@@ -1184,9 +1197,15 @@ export default function Viewport3DModule({
       slotId={slotId}
       tracker={tracker}
       viewCubeVisible={commandState.widgets.viewCubeVisible}
-      />
-    </WorkspaceRenderProfiler>
+        />
+        </WorkspaceRenderProfiler>
+      )}
+    </Viewport3DErrorBoundary>
   );
+}
+
+function Viewport3DAuditRenderErrorInjection(): never {
+  throw new Error("Maximum update depth exceeded (viewport audit injection)");
 }
 
 function useViewport3DSelectionHandlers({
@@ -1260,6 +1279,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   status,
   visualizationEffectiveRenderMode,
   visualizationError,
+  visualizationDebugSource,
   ...sceneProps
 }: Viewport3DFrameProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1318,6 +1338,53 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     useState<Viewport3DInspectHover | null>(null);
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
+  const visualizationDebugAdoptionRegistry = useMemo(
+    () => createViewport3DRenderAdoptionRegistry(),
+    [],
+  );
+  const visualizationDebugCandidateBuilder = useMemo(
+    () =>
+      createViewport3DVisualizationDebugCandidateBuilder({
+        source: visualizationDebugSource,
+        viewportId: slotId,
+      }),
+    [slotId, visualizationDebugSource],
+  );
+  const visualizationDebugTargetIds = useMemo(
+    () => visualizationDebugSource.targets.map(({ target }) => target.id),
+    [visualizationDebugSource.targets],
+  );
+  const visualizationDebugCarrierTargets = useMemo(() => {
+    const mapping = new Map<string, string[]>();
+    const appendTarget = (carrierId: string, targetId: string) => {
+      const targetIds = mapping.get(carrierId) ?? [];
+      if (!targetIds.includes(targetId)) targetIds.push(targetId);
+      mapping.set(carrierId, targetIds);
+    };
+    for (const { carrierIds, target } of visualizationDebugSource.targets) {
+      for (const carrierId of carrierIds) appendTarget(carrierId, target.id);
+    }
+    if (visualizationDebugSource.fullFieldVector) {
+      for (const { carrierIds, target } of visualizationDebugSource.targets) {
+        if (carrierIds.length === 0 && target.kind !== "airbox") {
+          appendTarget("fdm-domain", target.id);
+        }
+      }
+    }
+    return mapping;
+  }, [visualizationDebugSource]);
+  const visualizationDebugPublisher = useViewport3DVisualizationDebugPublisher({
+    adoptionRegistry: visualizationDebugAdoptionRegistry,
+    buildCandidate: visualizationDebugCandidateBuilder,
+    carrierTargets: visualizationDebugCarrierTargets,
+    controller: kernel.visualizationDebug,
+    revision: [
+      visualizationDebugSource.visualizationRevision ?? "none",
+      sceneProps.resourceFrameKey,
+    ].join("|"),
+    targetIds: visualizationDebugTargetIds,
+    viewportId: slotId,
+  });
   const initialCameraFit = resolveViewport3DCameraFit(null);
   const canvasCamera = useMemo(
     () => ({
@@ -1462,6 +1529,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     [],
   );
   const onVisualizationFrameCommitted = useCallback((revision: number) => {
+    const canvas = canvasRef.current;
+    const gl = canvas?.getContext("webgl2") ?? canvas?.getContext("webgl");
+    visualizationDebugPublisher.onFrameCommitted({
+      commitId: `${slotId}:${revision}`,
+      committedAtMs: revision,
+      contextLost: gl?.isContextLost() ?? null,
+      drawingBuffer: gl
+        ? [gl.drawingBufferWidth, gl.drawingBufferHeight]
+        : null,
+    });
     sendVisualizationAck({
       effectiveRenderMode: visualizationEffectiveRenderMode,
       enabled: clientReady && !visualizationError,
@@ -1487,6 +1564,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     sceneProps.renderedMeshRevision,
     sendVisualizationAck,
     slotId,
+    visualizationDebugPublisher,
     visualizationEffectiveRenderMode,
     visualizationError,
   ]);
@@ -1674,6 +1752,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           <Viewport3DRendererProfile visualProfile={visualProfile} />
           <Viewport3DScene
             {...sceneProps}
+            adoptionRegistry={visualizationDebugAdoptionRegistry}
             colors={colors}
             hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
             orbitDebugAngles={orbitDebugAngles}

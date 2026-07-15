@@ -50,7 +50,7 @@ const status: LiveStatusResource = {
   domain: {
     cell_count: 1024,
     discretization: "fem",
-    generation_id: 7,
+    generation_id: "7",
   },
   energies: {
     anisotropy: 0.4,
@@ -71,7 +71,7 @@ const status: LiveStatusResource = {
     command_completion_revision: 0,
     commands_revision: 0,
     display_revision: 1,
-    domain_generation_id: 7,
+    domain_generation_id: "7",
     engine_log_revision: 0,
     field_catalog_revision: 0,
     field_revision: 0,

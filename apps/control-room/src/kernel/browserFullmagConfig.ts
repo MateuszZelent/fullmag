@@ -32,6 +32,7 @@ export interface BrowserFullmagConfig {
   readonly enableDiagnosticRecorder?: unknown;
   readonly enablePerformanceDiagnostics?: unknown;
   readonly enableViewport3DOrbitDebug?: unknown;
+  readonly injectViewport3DRenderError?: unknown;
   readonly runtimeHttpBase?: unknown;
 }
 
@@ -50,6 +51,15 @@ export function viewport3DEnabledFromBrowserConfig(
   config: BrowserFullmagConfig | undefined = readBrowserFullmagConfig(),
 ): boolean {
   return config?.disableViewport3D !== true;
+}
+
+export function viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig(
+  config: BrowserFullmagConfig | undefined = readBrowserFullmagConfig(),
+): boolean {
+  return (
+    config?.enableAuditHooks === true &&
+    config?.injectViewport3DRenderError === true
+  );
 }
 
 export function performanceDiagnosticsEnabledFromBrowserConfig(

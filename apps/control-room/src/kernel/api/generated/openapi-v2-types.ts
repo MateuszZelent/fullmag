@@ -3504,8 +3504,7 @@ export interface components {
             discretization: string;
             domain_id: string;
             element_type?: string | null;
-            /** Format: int64 */
-            generation_id: number;
+            generation_id: string;
             grid?: null | components["schemas"]["StructuredGridDescriptor"];
             units: {
                 [key: string]: string;
@@ -3518,8 +3517,7 @@ export interface components {
             cut_norm: number;
             /** Format: double */
             cut_world: number;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             etag: string;
             normal_axis: string;
             plane: components["schemas"]["SlicePlane"];
@@ -3541,8 +3539,7 @@ export interface components {
             /** Format: int64 */
             cell_count: number;
             discretization: string;
-            /** Format: int64 */
-            generation_id: number;
+            generation_id: string;
         };
         DomainVisualizationPatch: {
             active_scope?: null | components["schemas"]["VisualizationScopeKind"];
@@ -3716,8 +3713,7 @@ export interface components {
         /** @enum {string} */
         FerromagnetVisibilityMode: "hide" | "ghost";
         FieldCatalog: {
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             quantities: components["schemas"]["FieldDescriptor"][];
             /** Format: int64 */
             revision: number;
@@ -3728,8 +3724,7 @@ export interface components {
             available: boolean;
             /** Format: int32 */
             components: number;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** Format: int64 */
             field_revision: number;
             kind: string;
@@ -3772,8 +3767,7 @@ export interface components {
         FieldMeta: {
             /** Format: int32 */
             components: number;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** Format: int64 */
             field_revision: number;
             kind: string;
@@ -3793,8 +3787,7 @@ export interface components {
         FieldProjectionMeta: {
             bounds?: null | components["schemas"]["FieldSliceBounds"];
             component: string;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** Format: int32 */
             empty_count: number;
             empty_mask: components["schemas"]["FieldProjectionMaskDescriptor"];
@@ -3826,8 +3819,7 @@ export interface components {
         FieldProjectionProfile: {
             bounds?: null | components["schemas"]["FieldSliceBounds"];
             component: string;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** Format: int64 */
             field_revision: number;
             /** Format: int32 */
@@ -3910,8 +3902,7 @@ export interface components {
              * @description Resolved cut in world coordinates (m), if domain bounds are known.
              */
             cut_world?: number | null;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** @description Stable fingerprint covering all resolved parameters (ETag for the meta resource). */
             etag: string;
             /** Format: int64 */
@@ -6057,8 +6048,7 @@ export interface components {
             commands_revision: number;
             /** Format: int64 */
             display_revision: number;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** Format: int64 */
             engine_log_revision: number;
             /** Format: int64 */

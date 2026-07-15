@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -37,6 +38,10 @@ import {
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
 import { useVectorGlyphDerivedBufferCache } from "./vectorGlyphDerivedBufferRuntime";
+import type {
+  Viewport3DRenderAdoptionReceipt,
+  Viewport3DRenderAdoptionRegistry,
+} from "../model/viewport3DRenderAdoptionRegistry";
 
 const UNIT_Y = new Vector3(0, 1, 0);
 // V1-matched proportions for better visual quality.
@@ -590,7 +595,10 @@ function useVectorGlyphBuild({
   segments: Float32Array | null;
   shaftRadiusRatio: number;
   tracker: Viewport3DResourceTracker;
-}): VectorGlyphBuildResult | null {
+}): {
+  buildKey: string | null;
+  result: VectorGlyphBuildResult;
+} | null {
   const store = useMemo(() => createVectorGlyphBuildStore(), []);
   const cache = useVectorGlyphDerivedBufferCache();
   const retainedBuildRef =
@@ -619,6 +627,25 @@ function useVectorGlyphBuild({
   useEffect(() => {
     if (!request) return;
 
+    if (buildReference && buildKey) {
+      const cached = cache.resolveVisible({
+        fieldRevision: buildReference.fieldRevision,
+        groupKey: buildReference.groupKey,
+        key: buildKey,
+        lane: "vector-glyph",
+        targetRevision: buildReference.targetRevision,
+        topologyRevision: buildReference.topologyRevision,
+      });
+      if (cached.state === "ready-current" && cached.entry) {
+        store.publish({
+          buildKey,
+          request,
+          result: cached.entry.buffer,
+        });
+        return;
+      }
+    }
+
     const abortController = new AbortController();
     const startMark = markVectorGlyphWork(VECTOR_GLYPH_BUILD_MEASURE);
     let measured = false;
@@ -632,10 +659,14 @@ function useVectorGlyphBuild({
     })
       .then((result) => {
         if (abortController.signal.aborted) return;
+        const identifiedResult = identifyVectorGlyphBuildResult(
+          result,
+          buildReference ?? null,
+        );
         if (buildReference && buildKey) {
           cache.putReady({
-            buffer: result,
-            estimatedBytes: estimateVectorGlyphBuildResultBytes(result),
+            buffer: identifiedResult,
+            estimatedBytes: estimateVectorGlyphBuildResultBytes(identifiedResult),
             fieldRevision: buildReference.fieldRevision,
             groupKey: buildReference.groupKey,
             key: buildKey,
@@ -644,7 +675,7 @@ function useVectorGlyphBuild({
             topologyRevision: buildReference.topologyRevision,
           });
         }
-        store.publish({ buildKey: buildKey ?? null, request, result });
+        store.publish({ buildKey: buildKey ?? null, request, result: identifiedResult });
         measureVectorGlyphWork(VECTOR_GLYPH_BUILD_MEASURE, startMark);
         measured = true;
         tracker.recordDirtyFrame("vector-glyph-build");
@@ -729,7 +760,20 @@ function useVectorGlyphBuild({
     };
   }, [buildReference, cache, visibleCacheKey]);
 
-  return visibleResult;
+  return visibleResult
+    ? { buildKey: visibleCacheKey ?? buildKey ?? null, result: visibleResult }
+    : null;
+}
+
+export function identifyVectorGlyphBuildResult(
+  result: VectorGlyphBuildResult,
+  buildReference: Viewport3DVectorBuildReference | null,
+): VectorGlyphBuildResult {
+  return {
+    ...result,
+    sourceFieldBufferId: buildReference?.fieldBufferId ?? null,
+    sourceResourceKey: buildReference?.resourceKey ?? null,
+  };
 }
 
 function isAbortError(error: unknown): boolean {
@@ -750,6 +794,7 @@ function useVectorGlyphUpload({
   invalidate,
   material,
   materialColor,
+  onAdopted,
   shaftRef,
   targetRevision,
   tracker,
@@ -764,6 +809,7 @@ function useVectorGlyphUpload({
   invalidate: () => void;
   material: MeshBasicMaterial;
   materialColor: string;
+  onAdopted?: (buildKey: string, byteLength: number) => void;
   shaftRef: RefObject<InstancedMesh | null>;
   targetRevision?: string | null;
   tracker: Viewport3DResourceTracker;
@@ -1002,6 +1048,12 @@ function useVectorGlyphUpload({
         measureVectorGlyphWork(VECTOR_GLYPH_MATRIX_UPLOAD_MEASURE, startMark);
         measured = true;
         tracker.recordDirtyFrame("vector-glyphs");
+        if (buildKey) {
+          onAdopted?.(
+            buildKey,
+            transformByteLength + (glyphColors?.byteLength ?? 0),
+          );
+        }
         invalidate();
       },
       signal: abortController.signal,
@@ -1020,6 +1072,7 @@ function useVectorGlyphUpload({
     glyphTransforms,
     headRef,
     invalidate,
+    onAdopted,
     shaftRef,
     targetRevision,
     tracker,
@@ -1029,21 +1082,27 @@ function useVectorGlyphUpload({
 }
 
 export function VectorFieldLayer({
+  adoptionRegistry,
   buildReference,
+  carrierId,
   colors,
   colorMode = "orientation",
   opacity = 1,
   segments,
+  fieldBufferId,
   style,
   materialProfile,
   tracker,
 }: {
+  adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   buildReference?: Viewport3DVectorBuildReference | null;
+  carrierId?: string;
   colors: Viewport3DColors;
   colorMode?: string;
   materialProfile?: Viewport3DMaterialProfile["glyphs"];
   opacity?: number;
   segments: Float32Array | null;
+  fieldBufferId?: string | null;
   style?: VectorFieldLayerVectorStyle;
   tracker: Viewport3DResourceTracker;
 }) {
@@ -1071,7 +1130,7 @@ export function VectorFieldLayer({
       resolvedStyle.shaftRadiusRatio,
     ],
   );
-  const glyphBuild = useVectorGlyphBuild({
+  const visibleGlyphBuild = useVectorGlyphBuild({
     buildKey: vectorGlyphBuildKey,
     buildReference,
     colorMode,
@@ -1081,6 +1140,7 @@ export function VectorFieldLayer({
     shaftRadiusRatio: resolvedStyle.shaftRadiusRatio,
     tracker,
   });
+  const glyphBuild = visibleGlyphBuild?.result ?? null;
   const glyphTransforms = glyphBuild?.transforms ?? null;
   const glyphColors = glyphBuild?.colors ?? null;
   const useInstanceColors = Boolean(glyphColors);
@@ -1096,6 +1156,67 @@ export function VectorFieldLayer({
   const { glyphPolicy, headGeometry, material, shaftGeometry } =
     useTrackedVectorGlyphResources({ tracker });
   const instanceColorAttrRef = useVectorGlyphInstanceColorAttribute(capacity);
+  const lastAdoptionRef = useRef<{
+    buildKey: string;
+    byteLength: number;
+    fieldBufferId: string | null;
+    glyphCount: number;
+    resourceKey: string | null;
+  } | null>(null);
+  const recordAdoption = useCallback(
+    (buildKey: string, byteLength: number) => {
+      if (!adoptionRegistry || !carrierId) return;
+      lastAdoptionRef.current = {
+        buildKey,
+        byteLength,
+        fieldBufferId:
+          glyphBuild?.sourceFieldBufferId ?? fieldBufferId ?? null,
+        glyphCount,
+        resourceKey: glyphBuild?.sourceResourceKey ?? null,
+      };
+      recordVectorFieldAdoption({
+        buildKey,
+        byteLength,
+        carrierId,
+        fieldBufferId:
+          glyphBuild?.sourceFieldBufferId ?? fieldBufferId ?? null,
+        glyphCount,
+        resourceKey: glyphBuild?.sourceResourceKey ?? null,
+        registry: adoptionRegistry,
+      });
+    },
+    [adoptionRegistry, carrierId, fieldBufferId, glyphBuild, glyphCount],
+  );
+  useEffect(() => {
+    if (!adoptionRegistry || !carrierId) return;
+    const unregister = adoptionRegistry.registerCarrierAdoptionReplay(carrierId, () => {
+      const adoption = lastAdoptionRef.current;
+      if (!adoption) return;
+      recordVectorFieldAdoption({
+        ...adoption,
+        carrierId,
+        registry: adoptionRegistry,
+      });
+    });
+    return () => {
+      unregister();
+      const adoption = lastAdoptionRef.current;
+      if (!adoption) return;
+      adoptionRegistry.clearAdoption(
+        vectorFieldAdoptionIdentity({ ...adoption, carrierId }),
+      );
+      lastAdoptionRef.current = null;
+    };
+  }, [adoptionRegistry, carrierId]);
+  useEffect(() => {
+    if (glyphBuild || !adoptionRegistry || !carrierId) return;
+    const adoption = lastAdoptionRef.current;
+    if (!adoption) return;
+    adoptionRegistry.clearAdoption(
+      vectorFieldAdoptionIdentity({ ...adoption, carrierId }),
+    );
+    lastAdoptionRef.current = null;
+  }, [adoptionRegistry, carrierId, glyphBuild]);
 
   useVectorGlyphMaterialSync({
     glyphPolicy,
@@ -1108,7 +1229,7 @@ export function VectorFieldLayer({
     useInstanceColors,
   });
   useVectorGlyphUpload({
-    buildKey: vectorGlyphBuildKey,
+    buildKey: visibleGlyphBuild?.buildKey ?? null,
     glyphColors,
     glyphCount,
     glyphTransforms,
@@ -1117,6 +1238,7 @@ export function VectorFieldLayer({
     invalidate,
     material,
     materialColor: resolvedStyle.materialColor,
+    onAdopted: recordAdoption,
     shaftRef,
     targetRevision: buildReference?.targetRevision ?? null,
     tracker,
@@ -1143,6 +1265,64 @@ export function VectorFieldLayer({
       />
     </>
   );
+}
+
+export function recordVectorFieldAdoption({
+  buildKey,
+  byteLength,
+  carrierId,
+  fieldBufferId,
+  glyphCount,
+  resourceKey = null,
+  registry,
+}: {
+  buildKey: string;
+  byteLength: number;
+  carrierId: string;
+  fieldBufferId: string | null;
+  glyphCount: number;
+  resourceKey?: string | null;
+  registry: Viewport3DRenderAdoptionRegistry;
+}): Omit<
+  Viewport3DRenderAdoptionReceipt,
+  "byteLength" | "itemCount" | "targetId"
+> {
+  const adoption = vectorFieldAdoptionIdentity({
+    buildKey,
+    carrierId,
+    fieldBufferId,
+    resourceKey,
+  });
+  registry.recordVectorAdoption({
+    byteLength,
+    carrierId: adoption.carrierId,
+    fieldBufferId: adoption.fieldBufferId,
+    itemCount: glyphCount,
+    resourceKey: adoption.resourceKey,
+    vectorBuildKey: adoption.vectorBuildKey ?? buildKey,
+  });
+  return adoption;
+}
+
+function vectorFieldAdoptionIdentity({
+  buildKey,
+  carrierId,
+  fieldBufferId,
+  resourceKey,
+}: {
+  buildKey: string;
+  carrierId: string;
+  fieldBufferId: string | null;
+  resourceKey: string | null;
+}): Omit<Viewport3DRenderAdoptionReceipt, "byteLength" | "targetId"> {
+  return {
+    carrierId,
+    fieldBufferId,
+    kind: "vector",
+    resourceKey,
+    scalarBufferKey: null,
+    vectorBuildKey: buildKey,
+  };
 }
 
 function clampOpacity(value: number): number {

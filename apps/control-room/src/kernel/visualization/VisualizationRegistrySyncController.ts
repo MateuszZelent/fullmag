@@ -4,6 +4,7 @@ import type {
   VisualizationStateResource,
 } from "../api/apiTypes";
 import type { ResourceRevision } from "../api/apiTypes";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { sharedResourceRuntimeStore } from "../resources/ResourceRuntimeStore";
@@ -22,9 +23,18 @@ export interface VisualizationRegistrySyncSnapshot {
   inflightPatch: VisualizationStatePatch | null;
   lastLocalChangedAt: number | null;
   lastRemoteRevision: ResourceRevision | null;
+  mutation: VisualizationRegistryMutationState | null;
   pendingFingerprint: string | null;
   pendingPatch: VisualizationStatePatch | null;
   version: number;
+}
+
+export interface VisualizationRegistryMutationState {
+  attempts: number;
+  error: string | null;
+  requestId: string | null;
+  status: "inflight" | "rejected" | "retrying" | "succeeded";
+  targetId: string;
 }
 
 interface VisualizationRegistrySyncControllerOptions {
@@ -32,17 +42,22 @@ interface VisualizationRegistrySyncControllerOptions {
   maxLatencyMs?: number;
   now?: () => number;
   quietMs?: number;
+  maxTransientAttempts?: number;
+  retryBaseDelayMs?: number;
   resources?: Pick<ResourceInvalidationController, "invalidate">;
 }
 
 const DEFAULT_MAX_LATENCY_MS = 2_500;
 const DEFAULT_QUIET_MS = 600;
+const DEFAULT_MAX_TRANSIENT_ATTEMPTS = 3;
+const DEFAULT_RETRY_BASE_DELAY_MS = 250;
 
 const INITIAL_SNAPSHOT: VisualizationRegistrySyncSnapshot = {
   error: null,
   inflightPatch: null,
   lastLocalChangedAt: null,
   lastRemoteRevision: null,
+  mutation: null,
   pendingFingerprint: null,
   pendingPatch: null,
   version: 0,
@@ -54,10 +69,13 @@ export class VisualizationRegistrySyncController {
   private readonly maxLatencyMs: number;
   private readonly now: () => number;
   private readonly quietMs: number;
+  private readonly maxTransientAttempts: number;
+  private readonly retryBaseDelayMs: number;
   private readonly resources: Pick<ResourceInvalidationController, "invalidate"> | null;
   private firstPendingAt: number | null = null;
   private flushPromise: Promise<void> | null = null;
   private inflightCameraInvalidationSuppressed = false;
+  private rejectedPatch: VisualizationStatePatch | null = null;
   private started = false;
   private readonly suppressedCameraInvalidationRevisions = new Set<string>();
   private snapshot: VisualizationRegistrySyncSnapshot = INITIAL_SNAPSHOT;
@@ -68,12 +86,16 @@ export class VisualizationRegistrySyncController {
     maxLatencyMs = DEFAULT_MAX_LATENCY_MS,
     now = Date.now,
     quietMs = DEFAULT_QUIET_MS,
+    maxTransientAttempts = DEFAULT_MAX_TRANSIENT_ATTEMPTS,
+    retryBaseDelayMs = DEFAULT_RETRY_BASE_DELAY_MS,
     resources,
   }: VisualizationRegistrySyncControllerOptions) {
     this.api = api;
     this.maxLatencyMs = maxLatencyMs;
     this.now = now;
     this.quietMs = quietMs;
+    this.maxTransientAttempts = Math.max(1, Math.trunc(maxTransientAttempts));
+    this.retryBaseDelayMs = Math.max(0, retryBaseDelayMs);
     this.resources = resources ?? null;
   }
 
@@ -135,6 +157,13 @@ export class VisualizationRegistrySyncController {
       ),
       pendingFingerprint: null,
       pendingPatch: null,
+      mutation: {
+        attempts: 0,
+        error: null,
+        requestId: null,
+        status: "inflight",
+        targetId: visualizationPatchTargetId(patch),
+      },
       version: this.snapshot.version + 1,
     };
     this.firstPendingAt = null;
@@ -142,9 +171,9 @@ export class VisualizationRegistrySyncController {
       this.notify();
     }
 
-    this.flushPromise = this.api
-      .patch(patch)
+    this.flushPromise = this.patchWithBoundedRetry(patch)
       .then((state) => {
+        this.rejectedPatch = null;
         this.observeRemoteState(state);
         // Optimize: populate the local resource cache pessimistically with the fresh patched state
         // to avoid triggering a redundant GET /v2/sessions/current/visualization/state fetch.
@@ -164,24 +193,35 @@ export class VisualizationRegistrySyncController {
             resourceRevisionKey(state.revision),
           );
         }
-      })
-      .catch((error: unknown) => {
-        const restoredPatch = mergeVisualizationStatePatch(
-          this.snapshot.inflightPatch,
-          this.snapshot.pendingPatch,
-        );
-        const now = this.now();
         this.snapshot = {
           ...this.snapshot,
-          error: error instanceof Error ? error : new Error(String(error)),
-          inflightPatch: null,
-          lastLocalChangedAt: now,
-          pendingFingerprint: null,
-          pendingPatch: restoredPatch,
+          mutation: this.snapshot.mutation
+            ? { ...this.snapshot.mutation, status: "succeeded" }
+            : null,
           version: this.snapshot.version + 1,
         };
-        this.firstPendingAt = this.firstPendingAt ?? now;
-        if (!isCameraOnlyPatch(restoredPatch)) {
+      })
+      .catch((error: unknown) => {
+        this.rejectedPatch = patch;
+        const normalizedError = error instanceof Error ? error : new Error(String(error));
+        this.snapshot = {
+          ...this.snapshot,
+          error: normalizedError,
+          inflightPatch: null,
+          pendingFingerprint: null,
+          pendingPatch: null,
+          mutation: this.snapshot.mutation
+            ? {
+                ...this.snapshot.mutation,
+                error: normalizedError.message,
+                requestId: requestIdFromError(error),
+                status: "rejected",
+              }
+            : null,
+          version: this.snapshot.version + 1,
+        };
+        this.firstPendingAt = null;
+        if (renderAffectingPatch) {
           this.notify();
         }
       })
@@ -194,6 +234,33 @@ export class VisualizationRegistrySyncController {
       });
 
     return this.flushPromise;
+  }
+
+  private async patchWithBoundedRetry(
+    patch: VisualizationStatePatch,
+  ): Promise<VisualizationStateResource> {
+    for (let attempt = 1; attempt <= this.maxTransientAttempts; attempt += 1) {
+      this.snapshot = {
+        ...this.snapshot,
+        mutation: this.snapshot.mutation
+          ? {
+              ...this.snapshot.mutation,
+              attempts: attempt,
+              status: attempt === 1 ? "inflight" : "retrying",
+            }
+          : null,
+        version: this.snapshot.version + 1,
+      };
+      try {
+        return await this.api.patch(patch);
+      } catch (error) {
+        if (!isTransientVisualizationPatchError(error) || attempt >= this.maxTransientAttempts) {
+          throw error;
+        }
+        await delay(this.retryBaseDelayMs * 2 ** (attempt - 1));
+      }
+    }
+    throw new Error("Visualization patch retry limit exhausted");
   }
 
   getSnapshot(): VisualizationRegistrySyncSnapshot {
@@ -279,6 +346,13 @@ export class VisualizationRegistrySyncController {
     this.scheduleFlush();
   }
 
+  retryRejectedMutation(): Promise<void> {
+    const patch = this.rejectedPatch;
+    if (!patch || this.flushPromise) return Promise.resolve();
+    this.queuePatch(patch);
+    return this.flushNow();
+  }
+
   start(): void {
     if (this.started) return;
     this.started = true;
@@ -360,6 +434,28 @@ export class VisualizationRegistrySyncController {
 
 function resourceRevisionKey(revision: ResourceRevision): string {
   return `${typeof revision}:${String(revision)}`;
+}
+
+function isTransientVisualizationPatchError(error: unknown): boolean {
+  if (error instanceof ControlRoomApiError) {
+    return error.status === 0 || error.status >= 500;
+  }
+  return !(error instanceof DOMException && error.name === "AbortError");
+}
+
+function requestIdFromError(error: unknown): string | null {
+  return error instanceof ControlRoomApiError ? error.requestId : null;
+}
+
+function visualizationPatchTargetId(patch: VisualizationStatePatch): string {
+  const target = patch.overrides?.[0];
+  if (target?.scope_id) return `${target.scope}:${target.scope_id}`;
+  return "visualization";
+}
+
+function delay(milliseconds: number): Promise<void> {
+  if (milliseconds <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function snapshotChangeAffectsRender(

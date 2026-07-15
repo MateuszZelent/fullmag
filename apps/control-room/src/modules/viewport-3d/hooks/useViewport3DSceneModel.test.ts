@@ -9,6 +9,11 @@ import {
   ObjectVisualizationController,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import {
+  canonicalFieldVectorQuery,
+  fieldVectorResourceKey,
+  serializeCanonicalFieldVectorResourceKey,
+} from "@/kernel/api/fieldQueryIdentity";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   buildHysteresisChartPointSelection,
@@ -46,6 +51,7 @@ import {
   resolveViewport3DResourceFrameState,
   resolveViewport3DSceneCameraView,
   resolveViewport3DAirboxFieldVectorDemandPlan,
+  resolveViewport3DAirboxVectorSampleBudget,
   resolveViewport3DScopedPartVectorFieldDemandPlan,
   resolveViewport3DScopedPartVectorFieldRequests,
   resolveViewport3DScopedVectorFieldQuery,
@@ -66,7 +72,9 @@ import {
 import { summarizeViewport3DFieldDemandDiagnostics } from "../model/viewport3DFieldDataPlan";
 import { resolveViewport3DFieldVectorResourceKey } from "../viewport3dResources";
 import { viewport3DFieldRenderOptionsNeedFieldData } from "../viewport3dRenderModel";
-import { buildViewport3DTargetFieldBuffer } from "../model/viewport3DTargetFieldBuffer";
+import {
+  buildViewport3DTargetFieldBuffer as buildViewport3DTargetFieldBufferWithResourceKey,
+} from "../model/viewport3DTargetFieldBuffer";
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   type Viewport3DCommandState,
@@ -77,6 +85,46 @@ const visualizationStateResourceSourceUrl = new URL(
   "../../../kernel/visualization/useVisualizationStateResource.ts",
   import.meta.url,
 );
+
+type TargetFieldBufferOptions = Parameters<
+  typeof buildViewport3DTargetFieldBufferWithResourceKey
+>[0];
+
+describe("airbox vector sample budget", () => {
+  it("clamps to the effective air-only carrier, not legacy or session limits", () => {
+    expect(resolveViewport3DAirboxVectorSampleBudget(16_940, 10_586)).toBe(
+      10_586,
+    );
+    expect(resolveViewport3DAirboxVectorSampleBudget(10_586, 10_586)).toBe(
+      10_586,
+    );
+    expect(resolveViewport3DAirboxVectorSampleBudget(384, 10_586)).toBe(384);
+
+    const query = resolveViewport3DScopedVectorFieldQuery({
+      maxSamples: resolveViewport3DAirboxVectorSampleBudget(16_940, 10_586),
+      surfaceColorMode: null,
+      vectorsVisible: true,
+    });
+    expect(
+      resolveViewport3DFieldVectorResourceKey("H_demag", {
+        ...query,
+        scope_id: "part:__air__",
+        scope_kind: "airbox",
+      }),
+    ).toContain("max_samples=10586");
+  });
+});
+
+function buildViewport3DTargetFieldBuffer(
+  options: Omit<TargetFieldBufferOptions, "resourceKey">,
+) {
+  return buildViewport3DTargetFieldBufferWithResourceKey({
+    ...options,
+    resourceKey: serializeCanonicalFieldVectorResourceKey(
+      canonicalFieldVectorQuery(options.fieldVector.quantityId, options.query),
+    ),
+  });
+}
 
 function fieldVectorResourceRef(
   quantityId: string,
@@ -226,6 +274,10 @@ describe("useViewport3DSceneModel", () => {
         },
         requestId: "quantity=m&component=full&scope_kind=full",
       },
+      primaryFieldResourceKey: fieldVectorResourceKey("m", {
+        component: "full",
+        scope_kind: "full",
+      }),
       topology: {
         magneticParts: [
           { part: { id: "part-a", label: "A" } },
@@ -284,6 +336,14 @@ describe("useViewport3DSceneModel", () => {
         },
         requestId: "quantity=analysis:eigen:sample-0000:mode-0002&component=full",
       },
+      primaryFieldResourceKey: fieldVectorResourceKey(
+        "analysis:eigen:sample-0000:mode-0002",
+        {
+          component: "full",
+          scope_kind: "full",
+          view: "phase_rotated_real",
+        },
+      ),
       topology: {
         magneticParts: [{ part: { id: "part-a", label: "A" } }],
       } as never,
@@ -355,6 +415,48 @@ describe("useViewport3DSceneModel", () => {
     });
     expect(resolved.partFieldVectors.get("part-b")).toBeUndefined();
     expect(resolved.partTargetFieldBuffers.has("part-b")).toBe(false);
+  });
+
+  it("keeps requested resource identity when a decoded scoped payload reports another quantity", () => {
+    const resolved = resolveViewport3DResolvedPartFieldBuffers({
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        shaderVisible: true,
+        visible: true,
+      }),
+      magneticPartFieldQueries: new Map([
+        [
+          "part-a",
+          {
+            consumers: ["part-a:surface"],
+            quantityId: "H_eff",
+            query: {
+              component: "full",
+              scope_id: "part-a",
+              scope_kind: "part",
+            },
+          },
+        ],
+      ]),
+      magneticPartFieldVectors: new Map([
+        ["part-a", fieldVectorFixture({ quantityId: "m" })],
+      ]),
+      topology: {
+        airboxParts: [],
+        magneticParts: [{ part: { id: "part-a", label: "A" } }],
+        nodeCount: 4,
+      } as never,
+    });
+
+    expect(resolved.partTargetFieldBuffers.get("part-a")).toMatchObject({
+      quantityId: "m",
+      resourceKey: fieldVectorResourceKey("H_eff", {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      }),
+    });
   });
 
   it("keeps synthetic airbox vectors as target buffers instead of legacy fields", () => {
@@ -2258,22 +2360,61 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
-  it("uses the canonical part target when geometry is not a current scene object", () => {
+  it("keeps prefixed transport scope while normalizing the semantic part target once", () => {
     const visualization = new ObjectVisualizationController();
+    const carrierPartId = "part:part-film";
     const renderingState = {
       targets: {
         airbox: {},
         objects: [],
-        parts: [{ scope: "part", scope_id: "part-film" }],
+        parts: [{ scope: "part", scope_id: carrierPartId }],
       },
     } as never;
+    const resolved = resolveViewport3DResolvedPartFieldBuffers({
+      getPartSettings: () => ({
+        ...DEFAULT_OBJECT_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        shaderVisible: true,
+        visible: true,
+      }),
+      magneticPartFieldQueries: new Map([
+        [
+          carrierPartId,
+          {
+            quantityId: "H_eff",
+            query: {
+              component: "full",
+              scope_id: carrierPartId,
+              scope_kind: "part",
+            },
+          },
+        ],
+      ]),
+      magneticPartFieldVectors: new Map([
+        [carrierPartId, fieldVectorFixture({ quantityId: "H_eff" })],
+      ]),
+      topology: {
+        airboxParts: [],
+        magneticParts: [{ part: { id: carrierPartId, label: "Film" } }],
+        nodeCount: 4,
+      } as never,
+    });
+
+    expect(resolved.partTargetFieldBuffers.get(carrierPartId)).toMatchObject({
+      resourceKey: fieldVectorResourceKey("H_eff", {
+        component: "full",
+        scope_id: carrierPartId,
+        scope_kind: "part",
+      }),
+      scopeId: carrierPartId,
+    });
 
     expect(
       resolveViewport3DPartVisualizationSettings({
         objectVisualizationSnapshot: visualization.getSnapshot(),
         part: {
           geometry_id: "projection-film",
-          id: "part-film",
+          id: carrierPartId,
           object_id: null,
         } as never,
         renderingState,

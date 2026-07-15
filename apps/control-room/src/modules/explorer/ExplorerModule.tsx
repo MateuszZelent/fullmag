@@ -37,6 +37,7 @@ import {
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import {
   buildSemanticRenderTargetCatalog,
   semanticRenderTargetCarriersFromManifest,
@@ -216,7 +217,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     [modelRegions.data?.regions],
   );
   const regionMemberships = useMeshRegionMembershipsResource(regionIds, {
-    enabled: modelTabActive,
+    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatusData),
   });
   const modelMaterialFields = useModelMaterialFieldsResource({
     enabled: modelTabActive,
@@ -336,10 +337,16 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       sourceSceneRevision: revisionValue(modelResourceRecord?.revision),
       visualizationPartFallbacks: semanticTargetCatalog.entries
         .filter((entry) => entry.targetKind === "part")
-        .map((entry) => ({ id: entry.targetId, label: entry.label })),
+        .flatMap((entry) =>
+          entry.carrierIds.slice(0, 1).map((carrierId) => ({
+            id: carrierId,
+            label: entry.label,
+            visualizationTargetId: entry.targetId,
+          })),
+        ),
     };
     const objects = modelSnapshot.objects
-      ?.filter((object) => object.id !== "__air__")
+      ?.filter((object) => !isVisualizationAirboxIdentity(object))
       .map((object) => ({
         ...object,
         extensions: resolveActiveObjectExtensionExplorerItems(

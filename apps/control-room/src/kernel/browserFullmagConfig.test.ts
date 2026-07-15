@@ -23,9 +23,23 @@ import {
   viewport3DSceneLayersEnabledFromBrowserConfig,
   viewport3DTopologyMeshLayerEnabledFromBrowserConfig,
   viewport3DVectorLayersEnabledFromBrowserConfig,
+  viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig,
 } from "./browserFullmagConfig";
 
 describe("browser fullmag config", () => {
+  it("allows render-error injection only behind explicit audit hooks", () => {
+    expect(
+      viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig({
+        injectViewport3DRenderError: true,
+      }),
+    ).toBe(false);
+    expect(
+      viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig({
+        enableAuditHooks: true,
+        injectViewport3DRenderError: true,
+      }),
+    ).toBe(true);
+  });
   it("keeps viewport 3D enabled unless it is explicitly disabled", () => {
     expect(viewport3DEnabledFromBrowserConfig()).toBe(true);
     expect(viewport3DEnabledFromBrowserConfig({ disableViewport3D: false })).toBe(

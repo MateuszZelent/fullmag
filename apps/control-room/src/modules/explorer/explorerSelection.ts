@@ -91,7 +91,8 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       nodeId: node.id,
       objectId: null,
       type: "mesh-part",
-      visualizationTargetId: node.meshPartId,
+      visualizationTargetId:
+        node.visualizationTargetId ?? node.meshPartId,
     };
   }
 

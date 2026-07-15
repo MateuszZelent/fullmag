@@ -20,6 +20,7 @@ import {
 import { buildStudyNodes } from "./study/studyExplorerNodes";
 
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
 import {
   buildEigenSpectrumChartModel,
@@ -943,6 +944,7 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
                 kind: "mesh.unassigned.part" as const,
                 label: part.label,
                 meshPartId: part.id,
+                visualizationTargetId: part.visualizationTargetId,
                 parentId: "model:mesh:unassigned",
                 badge: "orphan",
                 icon: "mesh" as const,
@@ -1010,7 +1012,7 @@ export function buildModelTree(
     size: [2e-6, 1e-6, 5e-8] as const,
   };
   const objects = (snapshot?.objects ?? []).filter(
-    (object) => object.id !== "__air__",
+    (object) => !isVisualizationAirboxIdentity({ id: object.id, role: object.objectRole }),
   );
   const sessionChildren: ExplorerNode[] = [
     {
