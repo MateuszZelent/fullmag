@@ -110,6 +110,20 @@ T_SL,G = Omega_J [epsilon(c) m x (m x p)
                   + epsilon_prime m x p].
 ```
 
+Writing `D=m x (m x p)` and `C=m x p`, the single canonical Gilbert
+conversion gives the explicit contribution
+
+```text
+T_SL,explicit = Omega_J [(epsilon(c)+alpha epsilon_prime) D
+                         +(epsilon_prime-alpha epsilon(c)) C]
+                         /(1+alpha^2).
+```
+
+`epsilon_prime` is independent of `epsilon(c)`: an implementation must not
+factor `epsilon(c)` across the field-like term. Canonical v1 uses the exact SI
+elementary charge `e=1.602176634e-19 C`; a rounded historical literal may only
+remain inside an explicitly versioned legacy evaluator.
+
 `fixed_layer_position` is only a migration input used to derive `n_stack`; it
 must not multiply the current sign a second time. The efficiency denominator is
 strictly positive over the admitted domain.
@@ -269,6 +283,13 @@ signs in adjacent balances; it is not inserted twice as two cell sources.
 CPU double is the algebraic oracle. CUDA uses the same immutable descriptor,
 mask, signed current, formula version, and stage time with persistent device
 buffers. FP64 parity precedes a separately bounded FP32 qualification.
+
+Until a CUDA descriptor carries that complete canonical data, a requested
+`slonczewski.fullmag.v1` CUDA execution fails before native construction. It
+must not reuse the legacy current norm, fixed-layer sign, or global-only mask.
+Likewise, an FDM request for `slonczewski_interface_flux.v1` fails in planning;
+FDM may not replace the oriented interface functional with the homogenized
+bulk `1/t_F` source.
 
 ### 3.2 FEM
 
