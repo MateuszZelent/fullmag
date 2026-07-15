@@ -2119,7 +2119,9 @@ impl ExchangeLlgProblem {
         cfg: &ZhangLiSttConfig,
     ) -> Vec<Vector3> {
         const MU_B: f64 = 9.274009994e-24;
-        const E_CHARGE: f64 = 1.602176634e-19;
+        // Zhang-Li remains an unversioned legacy evaluator. Preserve its
+        // historical literal until a canonical formula version is introduced.
+        const E_CHARGE: f64 = 1.60217662e-19;
 
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let beta = cfg.non_adiabaticity;
