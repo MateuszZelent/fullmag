@@ -107,6 +107,17 @@ impl ExchangeLlgProblem {
                 ));
             }
         }
+        if let Some(slonczewski) = terms.slonczewski_stt.as_ref() {
+            if let Some(mask) = slonczewski.active_mask.as_ref() {
+                if mask.len() != grid.cell_count() {
+                    return Err(EngineError::new(format!(
+                        "Slonczewski active_mask length {} does not match grid cell count {}",
+                        mask.len(),
+                        grid.cell_count()
+                    )));
+                }
+            }
+        }
         Ok(Self {
             grid,
             cell_size,

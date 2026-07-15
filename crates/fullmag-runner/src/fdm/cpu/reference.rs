@@ -8,8 +8,9 @@ use fullmag_engine::{
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
     EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
-    MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, SlonczewskiSttConfig,
-    ResolvedFdmPeriodicWorkspace, SotConfig, SotFormula, StepReport, TimeIntegrator,
+    MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig,
+    ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, SotFormula,
+    StepReport, TimeIntegrator,
     UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
 };
 use fullmag_ir::{
@@ -220,19 +221,44 @@ fn build_slon_stt(plan: &FdmPlanIR, cell_dz: f64) -> Option<SlonczewskiSttConfig
     }
     // Use explicit thickness if provided, otherwise fall back to cell_dz (like amumax)
     let thickness = plan.stt_thickness.unwrap_or(cell_dz);
-    // Fixed layer position controls current sign: "top" → +1, "bottom" → -1
-    let current_sign = match plan.stt_fixed_layer_position.as_deref().unwrap_or("top") {
-        "bottom" => -1.0,
-        _ => 1.0, // "top" or unset
+    let (current_density_magnitude, current_sign, active_mask) = match plan
+        .slonczewski_formula_version
+        .as_deref()
+        .unwrap_or("slonczewski.legacy_fullmag.v0")
+    {
+        "slonczewski.fullmag.v1" => {
+            let n = plan.slonczewski_stack_normal?;
+            let active_mask = plan.slonczewski_active_mask.clone()?;
+            let n_norm = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let signed_normal_current = (j[0] * n[0] + j[1] * n[1] + j[2] * n[2]) / n_norm;
+            if !signed_normal_current.is_finite() || signed_normal_current == 0.0 {
+                return None;
+            }
+            (
+                signed_normal_current.abs(),
+                signed_normal_current.signum(),
+                Some(active_mask),
+            )
+        }
+        "slonczewski.legacy_fullmag.v0" => (
+            j_mag,
+            match plan.stt_fixed_layer_position.as_deref().unwrap_or("top") {
+                "bottom" => -1.0,
+                _ => 1.0,
+            },
+            None,
+        ),
+        _ => return None,
     };
     Some(SlonczewskiSttConfig {
-        current_density_magnitude: j_mag,
+        current_density_magnitude,
         spin_polarization_axis: p_axis,
         lambda: lam,
         epsilon_prime: plan.stt_epsilon_prime.unwrap_or(0.0),
         degree: plan.stt_degree.unwrap_or(1.0),
         thickness,
         current_sign,
+        active_mask,
     })
 }
 
@@ -4219,6 +4245,32 @@ mod tests {
 
         assert_eq!(top.current_sign, 1.0);
         assert_eq!(bottom.current_sign, -1.0);
+    }
+
+    #[test]
+    fn canonical_slonczewski_uses_signed_stack_normal_projection_and_target_mask() {
+        let mut plan = make_test_plan();
+        plan.current_density = Some([3.0e10, 4.0e10, 0.0]);
+        plan.stt_degree = Some(0.55);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.4);
+        plan.stt_epsilon_prime = Some(0.0);
+        plan.slonczewski_formula_version = Some("slonczewski.fullmag.v1".to_string());
+        plan.slonczewski_stack_normal = Some([0.0, 2.0, 0.0]);
+        plan.slonczewski_active_mask = Some(vec![true; plan.initial_magnetization.len()]);
+
+        let forward = build_slon_stt(&plan, plan.cell_size[2])
+            .expect("canonical Slonczewski config should build");
+        let mut reversed_plan = plan.clone();
+        reversed_plan.current_density = Some([-3.0e10, -4.0e10, 0.0]);
+        let reversed = build_slon_stt(&reversed_plan, reversed_plan.cell_size[2])
+            .expect("reversed canonical Slonczewski config should build");
+
+        assert_eq!(forward.current_density_magnitude, 4.0e10);
+        assert_eq!(reversed.current_density_magnitude, 4.0e10);
+        assert_eq!(forward.current_sign, 1.0);
+        assert_eq!(reversed.current_sign, -1.0);
+        assert_eq!(forward.active_mask, plan.slonczewski_active_mask);
     }
 
     #[test]

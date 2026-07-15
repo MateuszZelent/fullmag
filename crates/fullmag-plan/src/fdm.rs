@@ -887,6 +887,20 @@ pub(crate) fn plan_fdm(
             )
         })
         .transpose()?;
+    let slonczewski_active_mask = spin_torque
+        .slonczewski_target
+        .as_ref()
+        .map(|target| {
+            materialize_prescribed_sot_target_mask(
+                problem,
+                target,
+                &owner_names,
+                &region_mask,
+                &region_index_by_id,
+                active_mask.as_deref(),
+            )
+        })
+        .transpose()?;
     apply_region_texture_overrides(
         problem,
         &region_index_by_id,
@@ -1135,6 +1149,10 @@ pub(crate) fn plan_fdm(
         stt_epsilon_prime: spin_torque.stt_epsilon_prime,
         stt_thickness: spin_torque.stt_thickness,
         stt_fixed_layer_position: spin_torque.stt_fixed_layer_position.clone(),
+        slonczewski_formula_version: spin_torque.slonczewski_formula_version.clone(),
+        slonczewski_stack_normal: spin_torque.slonczewski_stack_normal,
+        slonczewski_target: spin_torque.slonczewski_target.clone(),
+        slonczewski_active_mask,
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,

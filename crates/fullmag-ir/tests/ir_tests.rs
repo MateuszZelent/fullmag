@@ -4185,18 +4185,51 @@ fn spin_torque_current_source_must_reference_current_transport() {
 }
 
 #[test]
+fn canonical_slonczewski_requires_oriented_versioned_thin_layer_realization() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+        schema_version: Some("slonczewski_torque.v1".to_string()),
+        id: Some("cpp".to_string()),
+        target: Some(fullmag_ir::RegionRefIR { object_id: "strip".to_string(), region_id: None }),
+        formula_version: "slonczewski.fullmag.v1".to_string(),
+        current_density: Some([0.0, 0.0, -5e10]),
+        current_source: None,
+        degree: 0.4,
+        spin_polarization: [0.0, 1.0, 0.0],
+        stack_normal: Some([0.0, 0.0, 1.0]),
+        lambda_asymmetry: 1.2,
+        epsilon_prime: 0.0,
+        free_layer_thickness_m: Some(1.5e-9),
+        fixed_layer_position: None,
+        realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
+            realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
+        }),
+    }];
+    ir.validate().unwrap_or_else(|errors| panic!("canonical Slonczewski should validate: {errors:?}"));
+    let json = serde_json::to_string(&ir).unwrap();
+    let restored: ProblemIR = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.spin_torque_modules, ir.spin_torque_modules);
+}
+
+#[test]
 fn slonczewski_fixed_layer_position_accepts_top_and_bottom() {
     for position in ["top", "bottom"] {
         let mut ir = ProblemIR::bootstrap_example();
         ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: None,
+            id: None,
+            target: None,
+            formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
             current_density: Some([0.0, 0.0, 5e10]),
             current_source: None,
             degree: 0.4,
             spin_polarization: [0.0, 0.0, 1.0],
+            stack_normal: None,
             lambda_asymmetry: 1.2,
             epsilon_prime: 0.0,
             free_layer_thickness_m: Some(1.5e-9),
             fixed_layer_position: Some(position.to_string()),
+            realization: None,
         }];
 
         ir.validate()
@@ -4208,14 +4241,20 @@ fn slonczewski_fixed_layer_position_accepts_top_and_bottom() {
 fn slonczewski_rejects_invalid_fixed_layer_position() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+        schema_version: None,
+        id: None,
+        target: None,
+        formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
         current_density: Some([0.0, 0.0, 5e10]),
         current_source: None,
         degree: 0.4,
         spin_polarization: [0.0, 0.0, 1.0],
+        stack_normal: None,
         lambda_asymmetry: 1.2,
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(1.5e-9),
         fixed_layer_position: Some("side".to_string()),
+        realization: None,
     }];
 
     let errors = ir
@@ -4230,14 +4269,20 @@ fn slonczewski_rejects_invalid_fixed_layer_position() {
 fn slonczewski_rejects_non_positive_free_layer_thickness() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+        schema_version: None,
+        id: None,
+        target: None,
+        formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
         current_density: Some([0.0, 0.0, 5e10]),
         current_source: None,
         degree: 0.4,
         spin_polarization: [0.0, 0.0, 1.0],
+        stack_normal: None,
         lambda_asymmetry: 1.2,
         epsilon_prime: 0.0,
         free_layer_thickness_m: Some(0.0),
         fixed_layer_position: Some("top".to_string()),
+        realization: None,
     }];
 
     let errors = ir

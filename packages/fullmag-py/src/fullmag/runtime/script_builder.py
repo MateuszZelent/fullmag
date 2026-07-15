@@ -1796,6 +1796,16 @@ def _render_spin_torques(
             continue
         if isinstance(module, SlonczewskiSTT):
             kwargs = []
+            if module.formula_version == "slonczewski.fullmag.v1":
+                assert module.id is not None and module.target is not None
+                assert module.stack_normal is not None
+                kwargs.append(f"id={_py_repr(module.id)}")
+                kwargs.append(
+                    "target=fm.RegionRef("
+                    f"object_id={_py_repr(module.target.object_id)}, "
+                    f"region_id={'None' if module.target.region_id is None else _py_repr(module.target.region_id)})"
+                )
+                kwargs.append(f"stack_normal={_py_tuple3(module.stack_normal)}")
             if module.current_density is not None:
                 kwargs.append(f"current_density={_py_tuple3(module.current_density)}")
             if module.current_source is not None:
@@ -1809,7 +1819,7 @@ def _render_spin_torques(
                 kwargs.append(f"epsilon_prime={_py_number(module.epsilon_prime)}")
             if module.free_layer_thickness_m is not None:
                 kwargs.append(f"free_layer_thickness_m={_py_number(module.free_layer_thickness_m)}")
-            if module.fixed_layer_position is not None:
+            if module.formula_version == "slonczewski.legacy_fullmag.v0" and module.fixed_layer_position is not None:
                 kwargs.append(f"fixed_layer_position={_py_repr(module.fixed_layer_position)}")
             lines.append(f"fm.SlonczewskiSTT({', '.join(kwargs)})")
             continue
@@ -2162,7 +2172,8 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
         "slonczewski": {
             "kind", "current_density", "current_source", "spin_polarization", "degree",
             "lambda_asymmetry", "epsilon_prime", "free_layer_thickness_m",
-            "fixed_layer_position",
+            "fixed_layer_position", "formula_version", "schema_version", "id", "target",
+            "stack_normal", "realization",
         },
         "zhang_li": {"kind", "current_density", "current_source", "degree", "beta"},
         "interface_cpp": {
@@ -2208,12 +2219,39 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
                 f"{field}={_required_roundtrip_number(entry, field, context=str(kind))}"
             )
     if kind == "slonczewski":
+        formula_version = entry.get("formula_version", "slonczewski.legacy_fullmag.v0")
+        if formula_version == "slonczewski.fullmag.v1":
+            if _required_entry(entry, "schema_version", context=str(kind)) != "slonczewski_torque.v1":
+                raise ValueError("canonical slonczewski schema_version must be slonczewski_torque.v1")
+            kwargs.append(f"id={_py_repr(_required_nonempty_string(entry, 'id', context=str(kind)))}")
+            target = _required_entry(entry, "target", context=str(kind))
+            if not isinstance(target, Mapping):
+                raise ValueError("slonczewski target must be an object")
+            object_id = _required_nonempty_string(target, "object_id", context="slonczewski.target")
+            region_id = target.get("region_id")
+            if region_id is not None and not isinstance(region_id, str):
+                raise ValueError("slonczewski target region_id must be a string")
+            kwargs.append(
+                "target=fm.RegionRef("
+                f"object_id={_py_repr(object_id)}, region_id={'None' if region_id is None else _py_repr(region_id)})"
+            )
+            kwargs.append(
+                "stack_normal="
+                f"{_roundtrip_literal(list(_required_vec3(entry, 'stack_normal', context=str(kind))), context='slonczewski.stack_normal')}"
+            )
+            realization = _required_entry(entry, "realization", context=str(kind))
+            if not isinstance(realization, Mapping) or realization.get("kind") != "thin_layer_homogenized" or realization.get("realization_version") != "slonczewski_thin_layer_homogenized.v1":
+                raise ValueError("canonical slonczewski requires thin-layer realization v1")
+            if "fixed_layer_position" in entry:
+                raise ValueError("canonical slonczewski must not contain fixed_layer_position")
+        elif formula_version != "slonczewski.legacy_fullmag.v0":
+            raise ValueError(f"unsupported slonczewski formula_version {formula_version!r}")
         if "free_layer_thickness_m" in entry:
             kwargs.append(
                 "free_layer_thickness_m="
                 f"{_required_roundtrip_number(entry, 'free_layer_thickness_m', context=str(kind))}"
             )
-        if "fixed_layer_position" in entry:
+        if formula_version == "slonczewski.legacy_fullmag.v0" and "fixed_layer_position" in entry:
             kwargs.append(
                 f"fixed_layer_position={_py_repr(_required_nonempty_string(entry, 'fixed_layer_position', context=str(kind)))}"
             )

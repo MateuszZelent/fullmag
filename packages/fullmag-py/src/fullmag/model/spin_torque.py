@@ -427,7 +427,12 @@ class SlonczewskiSTT:
     lambda_asymmetry: float = 1.0
     epsilon_prime: float = 0.0
     free_layer_thickness_m: float | None = None
-    fixed_layer_position: str = "top"
+    fixed_layer_position: str | None = "top"
+    id: str | None = None
+    target: RegionRef | None = None
+    stack_normal: tuple[float, float, float] | None = None
+    formula_version: str = "slonczewski.legacy_fullmag.v0"
+    realization_version: str | None = None
 
     def __init__(
         self,
@@ -437,9 +442,12 @@ class SlonczewskiSTT:
         lambda_asymmetry: float = 1.0,
         epsilon_prime: float = 0.0,
         free_layer_thickness_m: float | None = None,
-        fixed_layer_position: str = "top",
+        fixed_layer_position: str | None = None,
         *,
         current_source: str | None = None,
+        id: str | None = None,
+        target: RegionRef | None = None,
+        stack_normal: Sequence[float] | None = None,
     ) -> None:
         resolved_density, resolved_source = _resolve_current_binding(
             current_density=current_density,
@@ -447,11 +455,33 @@ class SlonczewskiSTT:
         )
         object.__setattr__(self, "current_density", resolved_density)
         object.__setattr__(self, "current_source", resolved_source)
-        object.__setattr__(
-            self,
-            "spin_polarization",
-            as_vector3(spin_polarization, "spin_polarization"),
-        )
+        canonical = id is not None or target is not None or stack_normal is not None
+        if canonical:
+            if id is None or target is None or stack_normal is None:
+                raise ValueError("canonical SlonczewskiSTT requires id, target, and stack_normal")
+            if not isinstance(target, RegionRef):
+                raise TypeError("target must be a RegionRef")
+            if free_layer_thickness_m is None:
+                raise ValueError("canonical thin-layer SlonczewskiSTT requires free_layer_thickness_m")
+            if fixed_layer_position is not None:
+                raise ValueError("fixed_layer_position is legacy-only; canonical SlonczewskiSTT uses stack_normal")
+            _, polarization_hat = _normalized_axis(spin_polarization, "spin_polarization")
+            _, stack_hat = _normalized_axis(stack_normal, "stack_normal")
+            object.__setattr__(self, "spin_polarization", polarization_hat)
+            object.__setattr__(self, "id", require_non_empty(id, "id"))
+            object.__setattr__(self, "target", target)
+            object.__setattr__(self, "stack_normal", stack_hat)
+            object.__setattr__(self, "fixed_layer_position", None)
+            object.__setattr__(self, "formula_version", "slonczewski.fullmag.v1")
+            object.__setattr__(self, "realization_version", "slonczewski_thin_layer_homogenized.v1")
+        else:
+            object.__setattr__(self, "spin_polarization", as_vector3(spin_polarization, "spin_polarization"))
+            object.__setattr__(self, "id", None)
+            object.__setattr__(self, "target", None)
+            object.__setattr__(self, "stack_normal", None)
+            object.__setattr__(self, "fixed_layer_position", _validated_fixed_layer_position(fixed_layer_position or "top"))
+            object.__setattr__(self, "formula_version", "slonczewski.legacy_fullmag.v0")
+            object.__setattr__(self, "realization_version", None)
         object.__setattr__(self, "degree", _validated_degree(degree))
         object.__setattr__(self, "lambda_asymmetry", _validated_lambda(lambda_asymmetry))
         object.__setattr__(self, "epsilon_prime", float(epsilon_prime))
@@ -460,21 +490,31 @@ class SlonczewskiSTT:
             object.__setattr__(self, "free_layer_thickness_m", float(free_layer_thickness_m))
         else:
             object.__setattr__(self, "free_layer_thickness_m", None)
-        object.__setattr__(
-            self,
-            "fixed_layer_position",
-            _validated_fixed_layer_position(fixed_layer_position),
-        )
 
     def to_ir_module(self) -> dict[str, object]:
         ir: dict[str, object] = {
             "kind": "slonczewski",
+            "formula_version": self.formula_version,
             "spin_polarization": list(self.spin_polarization),
             "degree": self.degree,
             "lambda_asymmetry": self.lambda_asymmetry,
             "epsilon_prime": self.epsilon_prime,
-            "fixed_layer_position": self.fixed_layer_position,
         }
+        if self.formula_version == "slonczewski.fullmag.v1":
+            assert self.id is not None and self.target is not None
+            assert self.stack_normal is not None and self.realization_version is not None
+            ir.update({
+                "schema_version": "slonczewski_torque.v1",
+                "id": self.id,
+                "target": self.target.to_ir(),
+                "stack_normal": list(self.stack_normal),
+                "realization": {
+                    "kind": "thin_layer_homogenized",
+                    "realization_version": self.realization_version,
+                },
+            })
+        else:
+            ir["fixed_layer_position"] = self.fixed_layer_position
         if self.free_layer_thickness_m is not None:
             ir["free_layer_thickness_m"] = self.free_layer_thickness_m
         if self.current_density is not None:
@@ -485,7 +525,7 @@ class SlonczewskiSTT:
 
     def to_ir_fields(self) -> dict[str, object]:
         """Return the legacy executable STT fields used by the current runner."""
-        if self.current_density is None:
+        if self.current_density is None or self.formula_version != "slonczewski.legacy_fullmag.v0":
             return {}
         fields: dict[str, object] = {
             "current_density": list(self.current_density),

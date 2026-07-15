@@ -2244,7 +2244,11 @@ impl ExchangeLlgProblem {
 
         (0..n)
             .map(|flat| {
-                if !self.is_active(flat) {
+                if !self.is_active(flat)
+                    || cfg.active_mask.as_ref().is_some_and(|mask| {
+                        !mask.get(flat).copied().unwrap_or(false)
+                    })
+                {
                     return [0.0, 0.0, 0.0];
                 }
                 let [m0, m1, m2] = magnetization[flat];
@@ -2555,7 +2559,11 @@ impl ExchangeLlgProblem {
         let n = self.grid.cell_count();
 
         let compute = |flat: usize, o: &mut Vector3| {
-            if !self.is_active(flat) {
+            if !self.is_active(flat)
+                || cfg.active_mask.as_ref().is_some_and(|mask| {
+                    !mask.get(flat).copied().unwrap_or(false)
+                })
+            {
                 return;
             }
             let [m0, m1, m2] = magnetization[flat];
@@ -2616,7 +2624,11 @@ impl ExchangeLlgProblem {
         let [px, py, pz] = cfg.spin_polarization_axis;
 
         for flat in 0..self.grid.cell_count() {
-            if !self.is_active(flat) {
+            if !self.is_active(flat)
+                || cfg.active_mask.as_ref().is_some_and(|mask| {
+                    !mask.get(flat).copied().unwrap_or(false)
+                })
+            {
                 continue;
             }
             let m0 = magnetization.x[flat];
@@ -3609,6 +3621,7 @@ mod stt_tests {
             degree: 1.0,
             thickness: 1.0e-9,
             current_sign: 1.0,
+            active_mask: None,
         };
         let m = [1.0, 0.0, 0.0];
         let torque = problem.slonczewski_stt_torque(&[m], &cfg);
@@ -3651,6 +3664,7 @@ mod stt_tests {
             degree: 1.0,
             thickness: 1.0e-9,
             current_sign: 1.0,
+            active_mask: None,
         });
         let magnetization = [[1.0, 0.0, 0.0]];
         let mut workspace = problem.create_workspace();

@@ -133,11 +133,21 @@ pub enum CurrentTransportModelIR {
 pub enum SpinTorqueModuleIR {
     Slonczewski {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema_version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<RegionRefIR>,
+        #[serde(default = "default_legacy_slonczewski_formula_version")]
+        formula_version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         current_density: Option<[f64; 3]>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         current_source: Option<String>,
         degree: f64,
         spin_polarization: [f64; 3],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stack_normal: Option<[f64; 3]>,
         lambda_asymmetry: f64,
         #[serde(default)]
         epsilon_prime: f64,
@@ -147,6 +157,8 @@ pub enum SpinTorqueModuleIR {
         /// Fixed-layer position: "top" or "bottom". Controls current sign.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fixed_layer_position: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        realization: Option<SlonczewskiRealizationIR>,
     },
     ZhangLi {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -202,12 +214,26 @@ pub enum SpinTorqueModuleIR {
     },
 }
 
+fn default_legacy_slonczewski_formula_version() -> String {
+    "slonczewski.legacy_fullmag.v0".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RegionRefIR {
     pub object_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SlonczewskiRealizationIR {
+    ThinLayerHomogenized { realization_version: String },
+    InterfaceFlux {
+        interface_id: String,
+        realization_version: String,
+    },
 }
 
 /// Versioned lower-bound tolerance for prescribed-SOT authored axes.

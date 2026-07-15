@@ -9,7 +9,7 @@ use crate::{
     KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
     ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy,
-    SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
+    RegionRefIR, SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
     ResolvedPeriodicImagesIR,
 };
 use serde::{Deserialize, Serialize};
@@ -488,6 +488,18 @@ pub struct FdmPlanIR {
     /// Slonczewski fixed-layer position: "top" or "bottom". Controls current sign.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stt_fixed_layer_position: Option<String>,
+    /// Versioned Slonczewski evaluator identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slonczewski_formula_version: Option<String>,
+    /// Independent signed-current stack normal for canonical Slonczewski v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slonczewski_stack_normal: Option<[f64; 3]>,
+    /// Canonical authored target retained in the execution plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slonczewski_target: Option<RegionRefIR>,
+    /// Resolved FDM cells selected by the canonical target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slonczewski_active_mask: Option<Vec<bool>>,
 
     // ── Spin-Orbit Torque (SOT) ────────────────────────
     /// Prescribed-SOT source current density [A/m²]: signed for v1, raw legacy scalar for v0.

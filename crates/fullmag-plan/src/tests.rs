@@ -4988,14 +4988,18 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
         ),
         (
             fullmag_ir::SpinTorqueModuleIR::Slonczewski {
+                schema_version: None, id: None, target: None,
+                formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
                 current_density: Some([0.0, 0.0, 1e10]),
                 current_source: None,
                 degree: 0.5,
                 spin_polarization: [0.0, 0.0, 1.0],
+                stack_normal: None,
                 lambda_asymmetry: 1.0,
                 epsilon_prime: 0.0,
                 free_layer_thickness_m: Some(1e-9),
                 fixed_layer_position: Some("top".to_string()),
+                realization: None,
             },
             "slonczewski",
         ),

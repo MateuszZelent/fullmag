@@ -14,6 +14,9 @@ pub(crate) enum SpinTorqueExecutableLane {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LegacySpinTorqueFields {
+    pub slonczewski_formula_version: Option<String>,
+    pub slonczewski_target: Option<RegionRefIR>,
+    pub slonczewski_stack_normal: Option<[f64; 3]>,
     pub current_density: Option<[f64; 3]>,
     pub stt_degree: Option<f64>,
     pub stt_beta: Option<f64>,
@@ -27,6 +30,9 @@ pub(crate) struct LegacySpinTorqueFields {
 impl LegacySpinTorqueFields {
     pub(crate) fn from_problem(problem: &ProblemIR) -> Self {
         Self {
+            slonczewski_formula_version: None,
+            slonczewski_target: None,
+            slonczewski_stack_normal: None,
             current_density: problem.current_density,
             stt_degree: problem.stt_degree,
             stt_beta: problem.stt_beta,
@@ -133,15 +139,22 @@ pub(crate) fn resolve_legacy_spin_torque(
 
     let resolved = match &problem.spin_torque_modules[0] {
         SpinTorqueModuleIR::Slonczewski {
+            target,
+            formula_version,
             current_density,
             current_source,
             degree,
             spin_polarization,
+            stack_normal,
             lambda_asymmetry,
             epsilon_prime,
             free_layer_thickness_m,
             fixed_layer_position,
+            ..
         } => LegacySpinTorqueFields {
+            slonczewski_formula_version: Some(formula_version.clone()),
+            slonczewski_target: target.clone(),
+            slonczewski_stack_normal: *stack_normal,
             current_density: Some(match (current_density, current_source.as_deref()) {
                 (Some(current_density), None) => *current_density,
                 (None, Some(source)) => resolve_current_density_source(current_transports, source)?,
@@ -161,6 +174,9 @@ pub(crate) fn resolve_legacy_spin_torque(
             degree,
             beta,
         } => LegacySpinTorqueFields {
+            slonczewski_formula_version: None,
+            slonczewski_target: None,
+            slonczewski_stack_normal: None,
             current_density: Some(match (current_density, current_source.as_deref()) {
                 (Some(current_density), None) => *current_density,
                 (None, Some(source)) => resolve_current_density_source(current_transports, source)?,
@@ -580,20 +596,54 @@ mod tests {
     fn resolves_single_slonczewski_module_for_fdm() {
         let mut problem = ProblemIR::bootstrap_example();
         problem.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: None, id: None, target: None,
+            formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
             current_density: Some([0.0, 0.0, 5e10]),
             current_source: None,
             degree: 0.4,
             spin_polarization: [0.0, 0.0, 1.0],
+            stack_normal: None,
             lambda_asymmetry: 1.0,
             epsilon_prime: 0.0,
             free_layer_thickness_m: None,
             fixed_layer_position: None,
+            realization: None,
         }];
         let resolved =
             resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fdm, &[]).unwrap();
         assert_eq!(resolved.current_density, Some([0.0, 0.0, 5e10]));
         assert_eq!(resolved.stt_spin_polarization, Some([0.0, 0.0, 1.0]));
         assert_eq!(resolved.stt_lambda, Some(1.0));
+    }
+
+    #[test]
+    fn canonical_slonczewski_preserves_stack_normal_target_and_signed_current() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let target = RegionRefIR { object_id: "strip".to_string(), region_id: None };
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: Some("slonczewski_torque.v1".to_string()),
+            id: Some("cpp".to_string()),
+            target: Some(target.clone()),
+            formula_version: "slonczewski.fullmag.v1".to_string(),
+            current_density: Some([3.0e10, -4.0e10, 0.0]),
+            current_source: None,
+            degree: 0.4,
+            spin_polarization: [0.0, 0.0, 1.0],
+            stack_normal: Some([0.0, 1.0, 0.0]),
+            lambda_asymmetry: 1.0,
+            epsilon_prime: 0.0,
+            free_layer_thickness_m: Some(1.0e-9),
+            fixed_layer_position: None,
+            realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
+                realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
+            }),
+        }];
+        let resolved = resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fdm, &[])
+            .expect("canonical Slonczewski should resolve");
+        assert_eq!(resolved.slonczewski_formula_version.as_deref(), Some("slonczewski.fullmag.v1"));
+        assert_eq!(resolved.slonczewski_target, Some(target));
+        assert_eq!(resolved.slonczewski_stack_normal, Some([0.0, 1.0, 0.0]));
+        assert_eq!(resolved.current_density, Some([3.0e10, -4.0e10, 0.0]));
     }
 
     #[test]
@@ -607,14 +657,18 @@ mod tests {
                 beta: 0.02,
             },
             SpinTorqueModuleIR::Slonczewski {
+                schema_version: None, id: None, target: None,
+                formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
                 current_density: Some([0.0, 0.0, 5e10]),
                 current_source: None,
                 degree: 0.4,
                 spin_polarization: [0.0, 0.0, 1.0],
+                stack_normal: None,
                 lambda_asymmetry: 1.0,
                 epsilon_prime: 0.0,
                 free_layer_thickness_m: None,
                 fixed_layer_position: None,
+                realization: None,
             },
         ];
         let err =
@@ -666,14 +720,18 @@ mod tests {
     fn resolves_named_current_source_for_fem() {
         let mut problem = ProblemIR::bootstrap_example();
         problem.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: None, id: None, target: None,
+            formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
             current_density: None,
             current_source: Some("drive".to_string()),
             degree: 0.4,
             spin_polarization: [0.0, 0.0, 1.0],
+            stack_normal: None,
             lambda_asymmetry: 1.0,
             epsilon_prime: 0.0,
             free_layer_thickness_m: None,
             fixed_layer_position: None,
+            realization: None,
         }];
         let resolved = resolve_legacy_spin_torque(
             &problem,
@@ -699,14 +757,18 @@ mod tests {
         problem.stt_thickness = Some(1.5e-9);
         problem.stt_fixed_layer_position = Some("bottom".to_string());
         problem.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: None, id: None, target: None,
+            formula_version: "slonczewski.legacy_fullmag.v0".to_string(),
             current_density: Some([0.0, 0.0, 5e10]),
             current_source: None,
             degree: 0.4,
             spin_polarization: [0.0, 0.0, 1.0],
+            stack_normal: None,
             lambda_asymmetry: 1.0,
             epsilon_prime: 0.0,
             free_layer_thickness_m: Some(2.0e-9),
             fixed_layer_position: Some("top".to_string()),
+            realization: None,
         }];
 
         let err =

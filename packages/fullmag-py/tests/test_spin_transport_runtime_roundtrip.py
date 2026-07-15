@@ -50,6 +50,41 @@ def _eval_rendered(lines: list[str]) -> object:
 
 
 class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
+    def test_legacy_slonczewski_round_trip_preserves_fixed_layer_semantics(self) -> None:
+        module = fm.SlonczewskiSTT(
+            current_density=(0.0, 0.0, -2e11),
+            spin_polarization=(0.0, 0.0, 2.0),
+            fixed_layer_position="bottom",
+        )
+        entry = module.to_ir_module()
+        self.assertEqual(entry["formula_version"], "slonczewski.legacy_fullmag.v0")
+        self.assertEqual(entry["spin_polarization"], [0.0, 0.0, 2.0])
+        self.assertEqual(entry["fixed_layer_position"], "bottom")
+        rendered = _render_spin_torques(_problem(spin_torques=[module]), surface="flat")
+        rebuilt = _eval_rendered(rendered)
+        self.assertEqual(rebuilt.to_ir_module(), entry)
+
+    def test_canonical_slonczewski_normalized_round_trip_preserves_orientation(self) -> None:
+        module = fm.SlonczewskiSTT(
+            id="cpp",
+            target=fm.RegionRef("layer"),
+            current_density=(0.0, 0.0, -2e11),
+            spin_polarization=(0.0, 1.0, 0.0),
+            stack_normal=(0.0, 0.0, 4.0),
+            degree=0.55,
+            lambda_asymmetry=1.4,
+            epsilon_prime=0.03,
+            free_layer_thickness_m=1.5e-9,
+        )
+        entry = module.to_ir_module()
+        self.assertEqual(entry["formula_version"], "slonczewski.fullmag.v1")
+        self.assertEqual(entry["realization"]["realization_version"], "slonczewski_thin_layer_homogenized.v1")  # type: ignore[index]
+        self.assertEqual(entry["stack_normal"], [0.0, 0.0, 1.0])
+
+        rendered = _render_spin_torques(_problem(spin_torques=[module]), surface="flat")
+        rebuilt = _eval_rendered(rendered)
+        self.assertEqual(rebuilt.to_ir_module(), entry)
+
     def test_flat_registration_is_typed_returns_object_and_preserves_order(self) -> None:
         first = fm.ZhangLiSTT(current_density=(1e11, 0.0, 0.0))
         second = fm.SlonczewskiSTT(

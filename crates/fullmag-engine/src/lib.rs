@@ -2012,6 +2012,7 @@ mod tests {
                     degree: 1.0,
                     thickness: 1.0,
                     current_sign: 1.0,
+                    active_mask: None,
                 }),
                 ..Default::default()
             },
@@ -2049,6 +2050,7 @@ mod tests {
                     degree: 1.0,
                     thickness: 1.0,
                     current_sign: 1.0,
+                    active_mask: None,
                 }),
                 ..Default::default()
             },
@@ -2208,6 +2210,7 @@ mod tests {
                     degree: 1.0,
                     thickness: 1.0,
                     current_sign: 1.0,
+                    active_mask: None,
                 }),
                 sot: Some(SotConfig {
                     formula: SotFormula::FullmagV1,

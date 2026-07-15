@@ -599,13 +599,19 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
     for (index, module) in problem.spin_torque_modules.iter().enumerate() {
         match module {
             SpinTorqueModuleIR::Slonczewski {
+                schema_version,
+                id,
+                target,
+                formula_version,
                 current_density,
                 current_source,
                 degree,
                 spin_polarization,
+                stack_normal,
                 lambda_asymmetry,
                 free_layer_thickness_m,
                 fixed_layer_position,
+                realization,
                 ..
             } => {
                 validate_vector_binding(
@@ -641,6 +647,51 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                             "spin_torque_modules[{index}] slonczewski fixed_layer_position must be 'top' or 'bottom'"
                         ));
                     }
+                }
+                match formula_version.as_str() {
+                    "slonczewski.fullmag.v1" => {
+                        if schema_version.as_deref() != Some("slonczewski_torque.v1") {
+                            errors.push(format!("spin_torque_modules[{index}] canonical slonczewski schema_version must be slonczewski_torque.v1"));
+                        }
+                        if id.as_deref().is_none_or(|value| value.trim().is_empty()) {
+                            errors.push(format!("spin_torque_modules[{index}] canonical slonczewski id must not be empty"));
+                        }
+                        let Some(target) = target else {
+                            errors.push(format!("spin_torque_modules[{index}] canonical slonczewski requires target"));
+                            continue;
+                        };
+                        if target.object_id.trim().is_empty() || target.region_id.as_deref().is_some_and(|value| value.trim().is_empty()) {
+                            errors.push(format!("spin_torque_modules[{index}] canonical slonczewski target references must not be empty"));
+                        }
+                        if stack_normal.as_ref().is_none_or(|axis| !axis_is_valid(axis)) {
+                            errors.push(format!("spin_torque_modules[{index}] canonical slonczewski stack_normal must be finite with norm > epsilon_axis"));
+                        }
+                        if !axis_is_valid(spin_polarization) {
+                            errors.push(format!("spin_torque_modules[{index}] canonical slonczewski spin_polarization must be a finite nonzero axis"));
+                        }
+                        if fixed_layer_position.is_some() {
+                            errors.push(format!("spin_torque_modules[{index}] canonical slonczewski must not contain legacy fixed_layer_position"));
+                        }
+                        if free_layer_thickness_m.is_none() {
+                            errors.push(format!("spin_torque_modules[{index}] canonical thin-layer slonczewski requires free_layer_thickness_m"));
+                        }
+                        match realization {
+                            Some(crate::SlonczewskiRealizationIR::ThinLayerHomogenized { realization_version })
+                                if realization_version == "slonczewski_thin_layer_homogenized.v1" => {}
+                            Some(crate::SlonczewskiRealizationIR::InterfaceFlux { interface_id, realization_version }) => {
+                                if interface_id.trim().is_empty() || realization_version != "slonczewski_interface_flux.v1" {
+                                    errors.push(format!("spin_torque_modules[{index}] canonical interface-flux slonczewski has invalid identity"));
+                                }
+                            }
+                            _ => errors.push(format!("spin_torque_modules[{index}] canonical slonczewski requires a registered realization identity")),
+                        }
+                    }
+                    "slonczewski.legacy_fullmag.v0" => {
+                        if schema_version.is_some() || id.is_some() || target.is_some() || stack_normal.is_some() || realization.is_some() {
+                            errors.push(format!("spin_torque_modules[{index}] legacy slonczewski must not contain canonical identity, target, stack_normal, or realization"));
+                        }
+                    }
+                    other => errors.push(format!("spin_torque_modules[{index}] unsupported slonczewski formula_version '{other}'")),
                 }
             }
             SpinTorqueModuleIR::ZhangLi {

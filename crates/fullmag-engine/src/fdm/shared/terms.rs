@@ -84,6 +84,8 @@ pub struct SlonczewskiSttConfig {
     /// Current sign from fixed-layer position: +1.0 for top, -1.0 for bottom.
     /// Equivalent to amumax `currentSignFromFixedLayerPosition`.
     pub current_sign: f64,
+    /// Optional resolved target mask; canonical v1 requires it.
+    pub active_mask: Option<Vec<bool>>,
 }
 
 /// Spin-Orbit Torque (SOT) configuration.
