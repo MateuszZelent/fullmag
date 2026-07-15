@@ -282,7 +282,7 @@ typedef struct {
 
     /* Spin-Orbit Torque (SOT) — Manchon-Zhang damping-like + field-like model */
     int                        has_sot;                /* 1 = enabled */
-    double                     sot_je;                 /* |Je| charge current density [A/m²] */
+    double                     sot_je;                 /* signed conventional charge-current density [A/m²] */
     double                     sot_xi_dl;              /* damping-like SOT efficiency (≈ θ_SH) */
     double                     sot_xi_fl;              /* field-like SOT efficiency (Rashba term) */
     double                     sot_sigma[3];           /* σ̂ spin polarisation unit vector */

@@ -151,6 +151,10 @@ verify-fdm-pbc-production:
     cargo test -p fullmag-runner --lib stale_resolved_periodic_workspace --no-fail-fast
     python3 scripts/verify_pbc_production_matrix.py --manifest scripts/pbc_production_matrix.v1.json
 
+verify-fdm-prescribed-sot-native-contract:
+    docker compose --profile fem-gpu run --rm \
+      fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-prescribed-sot-build && cmake -S native -B "$build_dir" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && cmake --build "$build_dir" --target prescribed_sot_contract prescribed_sot_cuda_runtime && "$build_dir/backends/fdm/prescribed_sot_contract" && LD_LIBRARY_PATH="$build_dir/backends/fdm:${LD_LIBRARY_PATH:-}" "$build_dir/backends/fdm/prescribed_sot_cuda_runtime"'
+
 verify-fem-relaxation-source-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_relaxation_source_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_relaxation_source_contract'

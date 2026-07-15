@@ -194,21 +194,15 @@ __global__ void llg_rhs_fp64_kernel(
         rhs_z += damping_like_scale * double_m_cross_pz + field_like_scale * m_cross_pz;
     }
 
-    // --- Spin-Orbit Torque (SOT) --- Manchon-Zhang DL + FL model
-    // dm/dt|_SOT = amp * [ -xi_DL * m×(m×σ̂) + xi_FL * (m×σ̂) ]
-    if (sot.has_sot) {
-        double m_dot_s = m0*sot.sx + m1*sot.sy + m2*sot.sz;
-        // FL term: m × σ̂
-        double fl_x = m1*sot.sz - m2*sot.sy;
-        double fl_y = m2*sot.sx - m0*sot.sz;
-        double fl_z = m0*sot.sy - m1*sot.sx;
-        // DL term: m × (m × σ̂) = (m·σ̂)m - σ̂
-        double dl_x = m_dot_s*m0 - sot.sx;
-        double dl_y = m_dot_s*m1 - sot.sy;
-        double dl_z = m_dot_s*m2 - sot.sz;
-        rhs_x += sot.amp * (-sot.xi_dl*dl_x + sot.xi_fl*fl_x);
-        rhs_y += sot.amp * (-sot.xi_dl*dl_y + sot.xi_fl*fl_y);
-        rhs_z += sot.amp * (-sot.xi_dl*dl_z + sot.xi_fl*fl_z);
+    // --- Prescribed SOT: canonical Gilbert source converted exactly once. ---
+    if (sot.has_sot && (!sot.has_active_mask || sot.active_mask[idx] != 0)) {
+        const auto sot_rhs = prescribed_sot_explicit_rhs(
+            PrescribedSotVector<double>{m0, m1, m2},
+            PrescribedSotVector<double>{sot.sx, sot.sy, sot.sz},
+            sot.amp, sot.xi_dl, sot.xi_fl, alpha);
+        rhs_x += sot_rhs.x;
+        rhs_y += sot_rhs.y;
+        rhs_z += sot_rhs.z;
     }
 
     out_x[idx] = rhs_x;

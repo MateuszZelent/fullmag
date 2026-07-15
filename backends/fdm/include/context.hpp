@@ -9,6 +9,7 @@
 #define FULLMAG_FDM_CONTEXT_HPP
 
 #include "fullmag_fdm.h"
+#include "spin_torque.hpp"
 
 #include <cstdint>
 #include <cstddef>
@@ -198,7 +199,7 @@ struct Context {
 
     // Spin-Orbit Torque (SOT) — Manchon-Zhang DL + FL model
     bool   has_sot        = false;
-    double sot_je         = 0.0;          // |Je| charge current density [A/m²]
+    double sot_je         = 0.0;          // signed conventional current density [A/m²]
     double sot_xi_dl      = 0.0;          // ξ_DL damping-like efficiency
     double sot_xi_fl      = 0.0;          // ξ_FL field-like efficiency
     double sot_sigma[3]   = {0.0, 0.0, 1.0}; // σ̂ spin polarisation vector (normalised on use)
@@ -535,16 +536,15 @@ struct SotParams {
     double sx      = 0.0;  // σ̂_x (normalised)
     double sy      = 0.0;  // σ̂_y
     double sz      = 1.0;  // σ̂_z
-    double amp     = 0.0;  // ℏ|Je|/(2e μ₀ Ms t_F)  [rad/s]
+    double amp     = 0.0;  // gamma_e ℏ J_signed/(2e Ms t_F) [1/s]
+    const uint8_t *active_mask = nullptr;
+    int has_active_mask = 0;
 };
 
 /// Build a SotParams from a Context.
 inline SotParams sot_params_from_ctx(const Context &ctx) {
     SotParams p;
     if (!ctx.has_sot || ctx.Ms <= 0.0 || ctx.sot_thickness <= 0.0) return p;
-    constexpr double HBAR = 1.054571817e-34;
-    constexpr double E_CH = 1.60217662e-19;
-    constexpr double MU0  = 1.2566370614359173e-6;
     p.has_sot = 1;
     p.xi_dl   = ctx.sot_xi_dl;
     p.xi_fl   = ctx.sot_xi_fl;
@@ -555,7 +555,10 @@ inline SotParams sot_params_from_ctx(const Context &ctx) {
     p.sx = ctx.sot_sigma[0] * inv;
     p.sy = ctx.sot_sigma[1] * inv;
     p.sz = ctx.sot_sigma[2] * inv;
-    p.amp = (fabs(ctx.sot_je) * HBAR) / (2.0 * E_CH * MU0 * ctx.Ms * ctx.sot_thickness);
+    p.amp = prescribed_sot_rate_prefactor(
+        ctx.gamma, ctx.sot_je, ctx.Ms, ctx.sot_thickness);
+    p.active_mask = ctx.active_mask;
+    p.has_active_mask = ctx.has_active_mask ? 1 : 0;
     return p;
 }
 
