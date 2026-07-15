@@ -50,7 +50,7 @@ export interface Viewport3DRenderAdoptionRegistry {
     targetIdsByCarrierId: ReadonlyMap<string, readonly string[]>,
   ): void;
   snapshot(targetId: string): readonly Viewport3DRenderAdoptionReceipt[];
-  subscribe(listener: () => void): () => void;
+  subscribe(listener: (targetId: string) => void): () => void;
 }
 
 const EMPTY_RECEIPTS: readonly Viewport3DRenderAdoptionReceipt[] = Object.freeze([]);
@@ -61,11 +61,11 @@ export function createViewport3DRenderAdoptionRegistry(): Viewport3DRenderAdopti
   const demandCounts = new Map<string, number>();
   let carrierTargets: ReadonlyMap<string, readonly string[]> = new Map();
   const receipts = new Map<string, readonly Viewport3DRenderAdoptionReceipt[]>();
-  const listeners = new Set<() => void>();
+  const listeners = new Set<(targetId: string) => void>();
   const replaysByCarrier = new Map<string, Set<() => void>>();
 
-  const notify = () => {
-    for (const listener of [...listeners]) listener();
+  const notify = (targetId: string) => {
+    for (const listener of [...listeners]) listener(targetId);
   };
   const record = (receipt: Viewport3DRenderAdoptionReceipt) => {
     if ((demandCounts.get(receipt.targetId) ?? 0) === 0) return;
@@ -80,7 +80,7 @@ export function createViewport3DRenderAdoptionRegistry(): Viewport3DRenderAdopti
       receipt.targetId,
       Object.freeze(next.slice(-MAX_RECEIPTS_PER_TARGET)),
     );
-    notify();
+    notify(receipt.targetId);
   };
   const replayCarrier = (carrierId: string) => {
     for (const replay of [...(replaysByCarrier.get(carrierId) ?? [])]) replay();
@@ -99,12 +99,12 @@ export function createViewport3DRenderAdoptionRegistry(): Viewport3DRenderAdopti
         if (next.length === current.length) continue;
         if (next.length === 0) receipts.delete(targetId);
         else receipts.set(targetId, Object.freeze(next));
-        notify();
+        notify(targetId);
       }
     },
     clearTarget(targetId) {
       if (!receipts.delete(targetId)) return;
-      notify();
+      notify(targetId);
     },
     registerCarrierAdoptionReplay(carrierId, replay) {
       const replays = replaysByCarrier.get(carrierId) ?? new Set();
@@ -163,7 +163,7 @@ export function createViewport3DRenderAdoptionRegistry(): Viewport3DRenderAdopti
           return;
         }
         demandCounts.delete(targetId);
-        if (receipts.delete(targetId)) notify();
+        if (receipts.delete(targetId)) notify(targetId);
       };
     },
     snapshot(targetId) {

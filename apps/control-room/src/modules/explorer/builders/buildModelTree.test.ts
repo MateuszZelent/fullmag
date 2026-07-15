@@ -497,6 +497,81 @@ describe("buildModelTree", () => {
     });
   });
 
+  it("places Boundary Faces beside Airbox under Universe", () => {
+    const [session] = buildModelTree();
+    const universe = session?.children?.find((node) => node.id === "model:universe");
+
+    expect(universe?.children?.map(({ id }) => id)).toEqual([
+      "model:airbox",
+      "model:boundary-faces",
+    ]);
+    expect(
+      universe?.children?.find((node) => node.id === "model:boundary-faces"),
+    ).toMatchObject({
+      kind: "boundary-faces.root",
+      label: "Boundary Faces",
+      parentId: "model:universe",
+      status: "unavailable",
+    });
+  });
+
+  it("marks Boundary Faces ready when the shared mesh is realized", () => {
+    const [session] = buildModelTree({
+      mesh: {
+        manifestSourceSceneRevision: 1,
+        meshName: "semantic-target-fixture",
+        meshRevision: 1,
+        outerBoundaryPartCount: 1,
+        sourceSceneRevision: 1,
+      },
+    });
+    const boundaryFaces = session?.children
+      ?.find((node) => node.id === "model:universe")
+      ?.children?.find((node) => node.id === "model:boundary-faces");
+
+    expect(boundaryFaces).toMatchObject({
+      badge: "realized",
+      status: "mesh-ready",
+    });
+  });
+
+  it("marks Boundary Faces stale when its realized carrier belongs to an older scene", () => {
+    const [session] = buildModelTree({
+      mesh: {
+        manifestSourceSceneRevision: 1,
+        meshName: "stale-boundary-fixture",
+        meshRevision: 1,
+        outerBoundaryPartCount: 1,
+        sourceSceneRevision: 2,
+      },
+    });
+    const boundaryFaces = session?.children
+      ?.find((node) => node.id === "model:universe")
+      ?.children?.find((node) => node.id === "model:boundary-faces");
+
+    expect(boundaryFaces).toMatchObject({
+      badge: "mesh stale",
+      status: "mesh-stale",
+    });
+  });
+
+  it("keeps Boundary Faces unavailable when a mesh has no outer-boundary carrier", () => {
+    const [session] = buildModelTree({
+      mesh: {
+        meshName: "mesh-without-boundary-carrier",
+        outerBoundaryPartCount: 0,
+      },
+    });
+    const boundaryFaces = session?.children
+      ?.find((node) => node.id === "model:universe")
+      ?.children?.find((node) => node.id === "model:boundary-faces");
+
+    expect(boundaryFaces).toMatchObject({
+      badge: "mesh required",
+      status: "unavailable",
+    });
+  });
+
   it("exposes every orphan render target as an explicit unassigned mesh-part node", () => {
     const nodes = buildModelTree({
       mesh: {

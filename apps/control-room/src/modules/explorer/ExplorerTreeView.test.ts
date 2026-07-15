@@ -421,6 +421,7 @@ describe("flattenVisibleExplorerRows", () => {
     expect(explorerStatusClassName("running")).toBe("fm-explorer-node--active");
     expect(explorerStatusClassName("queued")).toBe("fm-explorer-node--muted");
     expect(explorerStatusClassName("skipped")).toBe("fm-explorer-node--muted");
+    expect(explorerStatusClassName("unavailable")).toBe("fm-explorer-node--muted");
     expect(explorerStatusClassName("warning")).toBe("fm-explorer-node--warning");
     expect(explorerStatusClassName("failed")).toBe("fm-explorer-node--failed");
 
@@ -431,5 +432,6 @@ describe("flattenVisibleExplorerRows", () => {
     expect(css).toContain(".fm-explorer-node--muted");
     expect(css).toContain(".fm-explorer-node--warning");
     expect(css).toContain(".fm-explorer-node--failed");
+    expect(css).toContain('.fm-explorer-tree-row[data-status="unavailable"]');
   });
 });

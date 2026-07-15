@@ -48,6 +48,7 @@ export interface Viewport3DVisualizationDebugCarrierInput {
   plannerRequestId?: string | null;
   rangeDiagnostics?: ScalarRangeDiagnostics | null;
   rangeDiagnosticsComponent?: string | null;
+  renderedComponent: string | null;
   requestedComponent: string;
   requestedPasses: readonly ("surface" | "vector-glyph")[];
   requestedQuantityId: string;
@@ -211,7 +212,7 @@ function buildCarrier(
       geometryMaskDescription: boundNullableText(carrier.geometryMaskDescription),
       memory,
       payload: decoded ? Object.freeze({
-        component: boundText(carrier.requestedComponent),
+        component: null,
         dtype: "float64",
         formatVersion: decoded.formatVersion === 2 || decoded.formatVersion === 3 ? decoded.formatVersion : null,
         grid: Object.freeze(decoded.grid.map(safeCount)) as unknown as readonly [number, number, number],
@@ -239,7 +240,7 @@ function buildCarrier(
         fieldBufferState: boundText(carrier.fieldBufferState),
         requestedFieldBufferId: boundNullableText(carrier.fieldBufferId),
         requestedPasses,
-        surface: Object.freeze({ bufferKey: boundNullableText(carrier.scalarBufferKey), colorMode: requestedPasses.includes("surface") ? boundText(carrier.requestedComponent) : null, degradation: null, projectionMode: null, scalarByteLength: safeNullableByteLength(carrier.scalarBufferByteLength) }),
+        surface: Object.freeze({ bufferKey: boundNullableText(carrier.scalarBufferKey), colorMode: requestedPasses.includes("surface") ? boundNullableText(carrier.renderedComponent) : null, degradation: null, projectionMode: null, scalarByteLength: safeNullableByteLength(carrier.scalarBufferByteLength) }),
         vectors: Object.freeze({ buildKey: boundNullableText(carrier.vectorBuildKey), degradation: null, segmentByteLength: safeNullableByteLength(carrier.vectorSegmentByteLength), segmentCount: carrier.vectorSegmentCount == null ? null : safeCount(carrier.vectorSegmentCount) }),
       }),
       request: Object.freeze({ plannerRequestId: boundNullableText(carrier.plannerRequestId), resourceKey: boundNullableText(carrier.resourceKey) }),
@@ -289,7 +290,7 @@ function buildHealthEvidence(
       decoded.meshTopologyRevision != null &&
       (decoded.scopeKind === "full" || decoded.scopeId != null),
     ),
-    fieldBufferPresent: !fieldRequired(carrier) || decoded !== null,
+    fieldBufferPresent: !fieldRequired(carrier) || carrier.fieldBufferId != null,
     fieldRequestOk: !carrier.fieldRequestError,
     fieldRevisionCurrent: compareWhenKnown(carrier.fieldRevision, carrier.expectedFieldRevision),
     frameCommitted: Boolean(input.frame.commitId),
@@ -349,7 +350,14 @@ function buildStatistics(carrier: Viewport3DVisualizationDebugCarrierInput): rea
     min: safeNullableNumber(rangeDiagnostics.min), nonFiniteCount: safeCount(rangeDiagnostics.nonFiniteCount),
     p01: safeNullableNumber(rangeDiagnostics.p01), p99: safeNullableNumber(rangeDiagnostics.p99), source: "render-derived", zeroCount: safeCount(rangeDiagnostics.zeroCount),
   }));
-  else if (carrier.scannedStats) stats.push(sanitizeStats(carrier.scannedStats));
+  else if (carrier.scannedStats) {
+    const scannedStats = sanitizeStats(carrier.scannedStats);
+    stats.push(
+      carrier.decoded
+        ? scannedStats
+        : Object.freeze({ ...scannedStats, source: "render-derived" }),
+    );
+  }
   return Object.freeze(stats);
 }
 
@@ -357,7 +365,7 @@ function matchingRangeDiagnostics(
   carrier: Viewport3DVisualizationDebugCarrierInput,
 ): ScalarRangeDiagnostics | null {
   if (!carrier.rangeDiagnostics) return null;
-  return carrier.rangeDiagnosticsComponent === carrier.requestedComponent
+  return carrier.rangeDiagnosticsComponent === carrier.renderedComponent
     ? carrier.rangeDiagnostics
     : null;
 }

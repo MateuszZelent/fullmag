@@ -93,6 +93,31 @@ describe("viewport3DRenderAdoptionRegistry", () => {
     unsubscribe();
   });
 
+  it("identifies the exact target affected by each semantic receipt change", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    const listener = vi.fn();
+    registry.subscribe(listener);
+    registry.retainDemand("object:a");
+    registry.retainDemand("object:b");
+
+    registry.recordSurfaceAdoption({
+      byteLength: 24,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      scalarBufferKey: "scalar-a",
+      targetId: "object:a",
+    });
+    registry.recordVectorAdoption({
+      byteLength: 48,
+      carrierId: "part:b",
+      fieldBufferId: "field-b",
+      targetId: "object:b",
+      vectorBuildKey: "vector-b",
+    });
+
+    expect(listener.mock.calls).toEqual([["object:a"], ["object:b"]]);
+  });
+
   it("attributes one derived-global FDM carrier to every demanded logical target", () => {
     const registry = createViewport3DRenderAdoptionRegistry();
     registry.setCarrierTargets(

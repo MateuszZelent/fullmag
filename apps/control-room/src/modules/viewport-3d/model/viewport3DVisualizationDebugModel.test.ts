@@ -45,6 +45,7 @@ function carrier(overrides: Partial<Viewport3DVisualizationDebugCarrierInput> = 
     fieldBufferState: "target-buffer",
     fieldRevision: "field-1",
     plannerRequestId: "request-1",
+    renderedComponent: "full",
     requestedComponent: "full",
     requestedPasses: ["surface", "vector-glyph"],
     requestedQuantityId: "H_demag",
@@ -175,6 +176,35 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     );
   });
 
+  it("treats a synthetic render field buffer as present without calling it decoded FMVP", () => {
+    const result = snapshot([
+      carrier({
+        adoptedFieldBufferId: "synthetic:airbox:vectors",
+        decoded: null,
+        fieldBufferId: "synthetic:airbox:vectors",
+        fieldBufferState: "synthetic",
+        requestedPasses: ["vector-glyph"],
+        scalarBufferByteLength: null,
+        scalarBufferKey: null,
+      }),
+    ]);
+
+    expect(result.carriers[0]?.payload).toBeNull();
+    expect(result.issues).not.toContainEqual(
+      expect.objectContaining({ code: "field-buffer-missing" }),
+    );
+    expect(result.disposition).toBe("unknown");
+  });
+
+  it("keeps decoded component absent while reporting the actual rendered component", () => {
+    const result = snapshot([
+      carrier({ renderedComponent: "x", requestedComponent: "full" }),
+    ]);
+
+    expect(result.carriers[0]?.payload?.component).toBeNull();
+    expect(result.carriers[0]?.render.surface.colorMode).toBe("x");
+  });
+
   it("does not count shared bytes as owned and preserves unknown attribution as null", () => {
     const result = snapshot([carrier({ cache: null, topologyByteLength: null, webglSharedByteLength: null, wireByteLength: null })]);
     expect(result.carriers[0]?.memory).toContainEqual(expect.objectContaining({ id: "wire", byteLength: null }));
@@ -237,7 +267,8 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
   it("caps issues at 20 and bounds requested pass collections", () => {
     const broken = carrier({
       adoptedFieldBufferId: "wrong",
-      decoded: null,
+      decoded: field("part", "other"),
+      fieldBufferId: null,
       fieldRequestError: true,
       requestedPasses: Array.from({ length: 100 }, (_, index) => index % 2 ? "surface" : "vector-glyph"),
     });

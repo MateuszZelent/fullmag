@@ -118,12 +118,15 @@ export function createViewport3DVisualizationDebugPublisher({
     controller.registerPublisher(viewportId);
   const active = new Map<string, ActiveTarget>();
   const demandUnsubscribers = new Map<string, () => void>();
+  const pendingAdoptionTargetIds = new Set<string>();
   const targetIds = new Set<string>();
+  let adoptionFlushQueued = false;
 
   const stopTarget = (targetId: string) => {
     const current = active.get(targetId);
     if (!current) return;
     active.delete(targetId);
+    pendingAdoptionTargetIds.delete(targetId);
     current.abortController.abort();
     current.releaseAdoptionDemand();
     adoptionRegistry.clearTarget(targetId);
@@ -191,12 +194,27 @@ export function createViewport3DVisualizationDebugPublisher({
     );
     state.lastCommittedFrameId = frame.commitId;
   };
-  const unsubscribeAdoption = adoptionRegistry.subscribe(() => {
-    if (disposed || !lastFrame) return;
-    for (const [targetId, state] of active) {
-      state.lastCommittedFrameId = null;
-      commitTarget(targetId, state, lastFrame);
-    }
+  const unsubscribeAdoption = adoptionRegistry.subscribe((targetId) => {
+    if (disposed || !lastFrame || !active.has(targetId)) return;
+    pendingAdoptionTargetIds.add(targetId);
+    if (adoptionFlushQueued) return;
+    adoptionFlushQueued = true;
+    queueMicrotask(() => {
+      adoptionFlushQueued = false;
+      if (disposed || !lastFrame) {
+        pendingAdoptionTargetIds.clear();
+        return;
+      }
+      const frame = lastFrame;
+      const affectedTargetIds = [...pendingAdoptionTargetIds];
+      pendingAdoptionTargetIds.clear();
+      for (const affectedTargetId of affectedTargetIds) {
+        const state = active.get(affectedTargetId);
+        if (!state) continue;
+        state.lastCommittedFrameId = null;
+        commitTarget(affectedTargetId, state, frame);
+      }
+    });
   });
 
   return {
@@ -204,6 +222,9 @@ export function createViewport3DVisualizationDebugPublisher({
       if (disposed) return;
       lastFrame = frame;
       for (const [targetId, state] of active) {
+        if (pendingAdoptionTargetIds.delete(targetId)) {
+          state.lastCommittedFrameId = null;
+        }
         commitTarget(targetId, state, frame);
       }
     },
@@ -211,6 +232,7 @@ export function createViewport3DVisualizationDebugPublisher({
       if (disposed) return;
       disposed = true;
       unsubscribeAdoption();
+      pendingAdoptionTargetIds.clear();
       for (const unsubscribe of demandUnsubscribers.values()) unsubscribe();
       demandUnsubscribers.clear();
       for (const targetId of [...active.keys()]) stopTarget(targetId);
@@ -528,6 +550,7 @@ function buildCarrierInput({
     plannerRequestId: fieldBuffer?.requestId ?? null,
     rangeDiagnostics: scalarColors?.rangeDiagnostics ?? null,
     rangeDiagnosticsComponent: scalarColors?.colorMode ?? null,
+    renderedComponent: pass.surface.scalarColorMode,
     requestedComponent: fieldBuffer?.component ?? scalarColors?.colorMode ?? "full",
     requestedPasses: [
       ...(pass.surface.scalarColorMode ? (["surface"] as const) : []),

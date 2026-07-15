@@ -335,6 +335,7 @@ describe("viewport visualization debug publisher", () => {
       resourceKey: "resource-22",
       vectorBuildKey: "vector-22",
     });
+    await Promise.resolve();
 
     expect(controller.getSnapshots("airbox")[0]).toMatchObject({
       ownedByteLength: 10_604,
@@ -342,6 +343,169 @@ describe("viewport visualization debug publisher", () => {
     });
     release();
     publisher.dispose();
+  });
+
+  it("coalesces late adoption changes for one target without republishing another target", async () => {
+    const controller = new VisualizationDebugController();
+    const registry = createViewport3DRenderAdoptionRegistry();
+    const materializeByTarget = new Map<string, ReturnType<typeof vi.fn>>();
+    const publisher = createViewport3DVisualizationDebugPublisher({
+      adoptionRegistry: registry,
+      buildCandidate: async ({ targetId }) => {
+        const materialize = vi.fn(({ frame, receipts }) => ({
+          ...snapshot(targetId, frame.commitId),
+          ownedByteLength: receipts.length,
+        }));
+        materializeByTarget.set(targetId, materialize);
+        return { materialize };
+      },
+      controller,
+      viewportId: "viewport-main",
+    });
+    const releaseA = controller.request("object:a");
+    const releaseB = controller.request("object:b");
+    publisher.update({
+      carrierTargets: new Map([
+        ["part:a", ["object:a"]],
+        ["part:b", ["object:b"]],
+      ]),
+      revision: "field-1",
+      targetIds: ["object:a", "object:b"],
+    });
+    await Promise.resolve();
+    publisher.commitFrame({ commitId: "frame-retained" });
+    materializeByTarget.get("object:a")?.mockClear();
+    materializeByTarget.get("object:b")?.mockClear();
+
+    registry.recordSurfaceAdoption({
+      byteLength: 24,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      scalarBufferKey: "scalar-a",
+    });
+    registry.recordVectorAdoption({
+      byteLength: 48,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      vectorBuildKey: "vector-a",
+    });
+    await Promise.resolve();
+
+    expect(materializeByTarget.get("object:a")).toHaveBeenCalledTimes(1);
+    expect(materializeByTarget.get("object:b")).not.toHaveBeenCalled();
+    expect(controller.getSnapshots("object:a")[0]).toMatchObject({
+      ownedByteLength: 2,
+      viewport: { frameCommitId: "frame-retained" },
+    });
+
+    registry.recordSurfaceAdoption({
+      byteLength: 24,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      scalarBufferKey: "scalar-a",
+    });
+    registry.recordVectorAdoption({
+      byteLength: 48,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      vectorBuildKey: "vector-a",
+    });
+    await Promise.resolve();
+    expect(materializeByTarget.get("object:a")).toHaveBeenCalledTimes(1);
+
+    releaseA();
+    releaseB();
+    publisher.dispose();
+  });
+
+  it("does not lose a pending adoption when the retained frame commits again with the same id", async () => {
+    const controller = new VisualizationDebugController();
+    const registry = createViewport3DRenderAdoptionRegistry();
+    const materializeByTarget = new Map<string, ReturnType<typeof vi.fn>>();
+    const publisher = createViewport3DVisualizationDebugPublisher({
+      adoptionRegistry: registry,
+      buildCandidate: async ({ targetId }) => {
+        const materialize = vi.fn(({ frame, receipts }) => ({
+          ...snapshot(targetId, frame.commitId),
+          ownedByteLength: receipts.length,
+        }));
+        materializeByTarget.set(targetId, materialize);
+        return { materialize };
+      },
+      controller,
+      viewportId: "viewport-main",
+    });
+    const releaseA = controller.request("object:a");
+    const releaseB = controller.request("object:b");
+    publisher.update({
+      carrierTargets: new Map([
+        ["part:a", ["object:a"]],
+        ["part:b", ["object:b"]],
+      ]),
+      revision: "field-1",
+      targetIds: ["object:a", "object:b"],
+    });
+    await Promise.resolve();
+    publisher.commitFrame({ commitId: "frame-retained" });
+    materializeByTarget.get("object:a")?.mockClear();
+    materializeByTarget.get("object:b")?.mockClear();
+
+    registry.recordSurfaceAdoption({
+      byteLength: 24,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      scalarBufferKey: "scalar-a",
+    });
+    publisher.commitFrame({ commitId: "frame-retained" });
+    await Promise.resolve();
+
+    expect(materializeByTarget.get("object:a")).toHaveBeenCalledTimes(1);
+    expect(materializeByTarget.get("object:b")).not.toHaveBeenCalled();
+    expect(controller.getSnapshots("object:a")[0]).toMatchObject({
+      ownedByteLength: 1,
+      viewport: { frameCommitId: "frame-retained" },
+    });
+
+    releaseA();
+    releaseB();
+    publisher.dispose();
+  });
+
+  it("invalidates a pending coalesced adoption publication on dispose", async () => {
+    const controller = new VisualizationDebugController();
+    const registry = createViewport3DRenderAdoptionRegistry();
+    const materialize = vi.fn(({ frame, receipts }) => ({
+      ...snapshot("object:a", frame.commitId),
+      ownedByteLength: receipts.length,
+    }));
+    const publisher = createViewport3DVisualizationDebugPublisher({
+      adoptionRegistry: registry,
+      buildCandidate: async () => ({ materialize }),
+      controller,
+      viewportId: "viewport-main",
+    });
+    const release = controller.request("object:a");
+    publisher.update({
+      carrierTargets: new Map([["part:a", ["object:a"]]]),
+      revision: "field-1",
+      targetIds: ["object:a"],
+    });
+    await Promise.resolve();
+    publisher.commitFrame({ commitId: "frame-retained" });
+    materialize.mockClear();
+
+    registry.recordSurfaceAdoption({
+      byteLength: 24,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      scalarBufferKey: "scalar-a",
+    });
+    publisher.dispose();
+    await Promise.resolve();
+
+    expect(materialize).not.toHaveBeenCalled();
+    expect(controller.getSnapshots("object:a")).toEqual([]);
+    release();
   });
 });
 
@@ -372,6 +536,105 @@ describe("groupViewport3DVisualizationDebugCarriers", () => {
 });
 
 describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
+  it("labels scanned synthetic render values as render-derived without decoded payload evidence", async () => {
+    const values = new Float64Array([1, 2, 3, 4, 5, 6]);
+    const fieldBuffer = {
+      bufferId: "synthetic:airbox:vectors",
+      capability: "synthetic-full-vector" as const,
+      component: "full" as const,
+      componentCount: 3,
+      consumers: [],
+      decodedFieldVector: null,
+      domainGenerationId: null,
+      fieldRevision: null,
+      indexing: "legacy_count_only" as const,
+      meshTopologyHash: null,
+      nodeIndexCount: null,
+      nodeIndices: null,
+      pointCount: 2,
+      quantityId: "synthetic-airbox",
+      requestId: null,
+      resourceKey: null,
+      sampled: false,
+      scopeId: "part:__air__",
+      scopeKind: "airbox" as const,
+      topologyRevision: null,
+      values,
+      vectorComponentCount: 3,
+    };
+    const builder = createViewport3DVisualizationDebugCandidateBuilder({
+      source: {
+        fieldModel: {
+          complexFieldVector: null,
+          derivedWorkItems: [],
+          fullVectorBuild: null,
+          fullVectorSegments: null,
+          partVectorBuilds: new Map(),
+          partVectorSegments: new Map(),
+          scalarColors: null,
+          scalarColorsByMode: new Map(),
+          scalarColorsByPartAndMode: new Map(),
+          targetDiagnostics: [],
+          targetPasses: new Map([
+            [
+              "part:__air__",
+              {
+                fieldBuffer,
+                fieldBufferState: "target-buffer" as const,
+                surface: {
+                  degradation: null,
+                  passId: "part:__air__:surface",
+                  scalarColorMode: null,
+                  scalarColors: null,
+                },
+                vectors: {
+                  buildReference: null,
+                  degradation: null,
+                  passId: "part:__air__:vector-glyph",
+                  segments: new Float32Array([0, 0, 0, 1, 0, 0, 0]),
+                },
+              },
+            ],
+          ]),
+          visualizationPhaseRad: null,
+        },
+        fullFieldVector: null,
+        targets: [
+          {
+            carrierIds: ["part:__air__"],
+            target: { id: "airbox", kind: "airbox", label: "Airbox" },
+          },
+        ],
+        topologyByteLength: null,
+        visualizationRevision: "viz-1",
+        webglSharedByteLength: null,
+      },
+      viewportId: "viewport-main",
+    });
+
+    const candidate = await builder({
+      signal: new AbortController().signal,
+      targetId: "airbox",
+    });
+    const result = candidate.materialize({
+      frame: { commitId: "frame-synthetic", committedAtMs: 7 },
+      receipts: [],
+    });
+
+    expect(result.carriers[0]?.payload).toBeNull();
+    expect(result.carriers[0]?.samples).toEqual([]);
+    expect(result.carriers[0]?.statistics).toEqual([
+      expect.objectContaining({
+        max: 6,
+        min: 1,
+        source: "render-derived",
+      }),
+    ]);
+    expect(result.carriers[0]?.statistics).not.toContainEqual(
+      expect.objectContaining({ source: "decoded-payload" }),
+    );
+  });
+
   it("materializes separate multi-carrier snapshots with actual adoption identities", async () => {
     const field = (id: string) => {
       const values = new Float64Array([1, 0, 0]);
@@ -427,7 +690,19 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
         scalarColors: {
           buildKey: `scalar-${id}`,
           colors: new Float32Array([1, 0, 0]),
+          colorMode: "x",
           range: { max: 1, min: 1 },
+          rangeDiagnostics: {
+            finiteCount: 1,
+            max: 1,
+            mean: 1,
+            min: 1,
+            nonFiniteCount: 0,
+            outlierDominated: false,
+            p01: 1,
+            p99: 1,
+            zeroCount: 0,
+          },
         },
       },
       vectors: {
@@ -500,7 +775,10 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
       meshTopologyHash: "topology-hash-1",
       topologyRevision: "mesh-1",
     });
-    expect(result.carriers[0]?.render.surface.colorMode).toBe("full");
+    expect(result.carriers[0]?.render.surface.colorMode).toBe("x");
+    expect(result.carriers[0]?.statistics).toContainEqual(
+      expect.objectContaining({ max: 1, min: 1, source: "render-derived" }),
+    );
     expect(result.issues.map((issue) => issue.code)).toContain("adopted-source-mismatch");
     expect(result.carriers[1]?.render.adoption.adoptedScalarBufferKey).toBeNull();
   });
@@ -603,7 +881,7 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
     });
 
     expect(result.carriers[0]?.payload).toEqual({
-      component: "full",
+      component: null,
       dtype: "float64",
       formatVersion: 3,
       grid: [1, 1, 1],

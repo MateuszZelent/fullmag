@@ -449,6 +449,7 @@ function buildSnapshot({
     fieldBufferId: `buffer:${revision}`,
     fieldBufferState: "target-buffer",
     fieldRevision: revision,
+    renderedComponent: "full",
     requestedComponent: "full",
     requestedPasses: ["surface", "vector-glyph"],
     requestedQuantityId: quantityId,

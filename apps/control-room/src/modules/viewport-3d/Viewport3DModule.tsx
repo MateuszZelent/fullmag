@@ -77,6 +77,7 @@ import {
 import {
   createViewport3DVisualizationDebugCandidateBuilder,
   useViewport3DVisualizationDebugPublisher,
+  type Viewport3DVisualizationDebugFrameCommit,
   type Viewport3DVisualizationDebugSource,
 } from "./hooks/useViewport3DVisualizationDebugPublisher";
 import { createViewport3DRenderAdoptionRegistry } from "./model/viewport3DRenderAdoptionRegistry";
@@ -167,6 +168,27 @@ type Viewport3DSceneProps = ComponentProps<typeof Viewport3DScene>;
 type Viewport3DCanvasCreatedState = Parameters<
   NonNullable<ComponentProps<typeof Viewport3DCanvas>["onCreated"]>
 >[0];
+
+export function buildViewport3DVisualizationDebugFrameCommit({
+  contextLost,
+  drawingBuffer,
+  nowMs = Date.now,
+  revision,
+  slotId,
+}: {
+  contextLost: boolean | null;
+  drawingBuffer: readonly [number, number] | null;
+  nowMs?: () => number;
+  revision: number;
+  slotId: string;
+}): Viewport3DVisualizationDebugFrameCommit {
+  return {
+    commitId: `${slotId}:${revision}`,
+    committedAtMs: nowMs(),
+    contextLost,
+    drawingBuffer,
+  };
+}
 
 const VIEWPORT_3D_CANVAS_GL_NO_ANTIALIAS = {
   alpha: false,
@@ -1532,14 +1554,16 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const onVisualizationFrameCommitted = useCallback((revision: number) => {
     const canvas = canvasRef.current;
     const gl = canvas?.getContext("webgl2") ?? canvas?.getContext("webgl");
-    visualizationDebugPublisher.onFrameCommitted({
-      commitId: `${slotId}:${revision}`,
-      committedAtMs: revision,
-      contextLost: gl?.isContextLost() ?? null,
-      drawingBuffer: gl
-        ? [gl.drawingBufferWidth, gl.drawingBufferHeight]
-        : null,
-    });
+    visualizationDebugPublisher.onFrameCommitted(
+      buildViewport3DVisualizationDebugFrameCommit({
+        revision,
+        slotId,
+        contextLost: gl?.isContextLost() ?? null,
+        drawingBuffer: gl
+          ? [gl.drawingBufferWidth, gl.drawingBufferHeight]
+          : null,
+      }),
+    );
     sendVisualizationAck({
       effectiveRenderMode: visualizationEffectiveRenderMode,
       enabled: clientReady && !visualizationError,

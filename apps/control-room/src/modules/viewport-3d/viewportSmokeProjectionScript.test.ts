@@ -456,7 +456,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(femTopologyAuditScript).toContain("fem-topology-upload-metrics.json");
   });
 
-  it("browser-proves Airbox, magnetic, and orphan picks reveal their exact Explorer rows", () => {
+  it("browser-proves semantic picks and keeps outer boundary under Universe", () => {
     const femTopologyAuditScript = readFileSync(femTopologyUploadAuditScriptUrl, "utf8");
 
     expect(femTopologyAuditScript).toContain("verifySemanticTargetExplorerInvariant");
@@ -464,6 +464,19 @@ describe("viewport smoke projection round-trip", () => {
     expect(femTopologyAuditScript).toContain('"model:object:semantic-magnet"');
     expect(femTopologyAuditScript).toContain(
       '"model:mesh:unassigned:semantic-orphan"',
+    );
+    expect(femTopologyAuditScript).toContain('"model:boundary-faces"');
+    expect(femTopologyAuditScript).toContain(
+      '"model:mesh:unassigned:semantic-outer-boundary"',
+    );
+    expect(femTopologyAuditScript).toContain("Boundary Faces Overview");
+    expect(femTopologyAuditScript).toContain("Outer boundary leaked into Unassigned mesh");
+    expect(femTopologyAuditScript).toContain('"Realized carriers": "1"');
+    expect(femTopologyAuditScript).toContain('"Boundary faces": "4"');
+    expect(femTopologyAuditScript).toContain('"Manifest state": "ready"');
+    expect(femTopologyAuditScript).toContain("postInteractionWebgl");
+    expect(femTopologyAuditScript).toContain(
+      "semantic-target-boundary-faces-success.png",
     );
     expect(femTopologyAuditScript).toContain("drawingBufferWidth");
     expect(femTopologyAuditScript).toContain("isContextLost()");

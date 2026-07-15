@@ -217,6 +217,8 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS");
     expect(auditScript).toContain("MAX_VISUALIZATION_DEBUG_TRANSPORT_ENTRIES");
     expect(auditScript).toContain("getLifecycleStats");
+    expect(auditScript).toContain("demandSubscriptionCount");
+    expect(auditScript).toContain("snapshotSubscriptionCount");
     expect(auditScript).toContain("checkRibbonSliderCommandDebounce");
     expect(auditScript).toContain("useDraftSliderCommand");
     expect(auditScript).toContain("stageSliderCommand(next)");

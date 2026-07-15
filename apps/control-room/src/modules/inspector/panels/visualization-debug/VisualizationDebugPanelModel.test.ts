@@ -85,7 +85,7 @@ function carrier({
     carrierRole: "magnetic",
     memory: [],
     payload: {
-      component,
+      component: null,
       dtype: "float64",
       formatVersion: 3,
       grid: [2, 2, 1],
@@ -452,7 +452,7 @@ describe("VisualizationDebugPanelModel", () => {
     ).toBe(first?.metaResourceKey);
   });
 
-  it("rejects a resource query whose exact identity disagrees with decoded payload", () => {
+  it("keeps the canonical resource query while decoded evidence reports a mismatch", () => {
     const model = buildVisualizationDebugPanelModel({
       activeViewportMainModuleId: "viewport-3d",
       clientAcks: null,
@@ -470,8 +470,15 @@ describe("VisualizationDebugPanelModel", () => {
       ],
     });
 
-    expect(model.fieldQueries).toEqual([]);
-    expect(model.viewports[0]?.carriers[0]?.observations[0]?.query).toBeNull();
+    expect(model.fieldQueries).toEqual([
+      expect.objectContaining({
+        component: "x",
+        quantityId: "m",
+        scopeId: "other",
+        scopeKind: "object",
+      }),
+    ]);
+    expect(model.viewports[0]?.carriers[0]?.observations[0]?.query).not.toBeNull();
   });
 
   it("filters transport by exact carrier resource keys only and caps the total at eight", () => {
@@ -496,7 +503,7 @@ describe("VisualizationDebugPanelModel", () => {
     expect(model.transport.every((item) => item.resourceKey === exact)).toBe(true);
   });
 
-  it("compares backend and render ranges only for compatible quantity, scope, component and revision", () => {
+  it("compares backend and render ranges only with exact component and adopted surface evidence", () => {
     const base = buildVisualizationDebugPanelModel({
       activeViewportMainModuleId: "viewport-3d",
       clientAcks: null,
@@ -534,8 +541,82 @@ describe("VisualizationDebugPanelModel", () => {
     });
 
     const query = base.fieldQueries[0]!;
+    expect(
+      compareBackendAndRender({
+        backendMeta: backendMeta(12),
+        carrier: carrier(),
+        query: { ...query, component: "x" },
+      }),
+    ).toEqual({ compatible: false, rangesMatch: null });
+
+    const exactCarrier = carrier();
+    const missingComponentEvidence = {
+      ...exactCarrier,
+      render: {
+        ...exactCarrier.render,
+        surface: { ...exactCarrier.render.surface, colorMode: null },
+      },
+    };
+    const missingAdoptionEvidence = {
+      ...exactCarrier,
+      render: {
+        ...exactCarrier.render,
+        adoption: {
+          ...exactCarrier.render.adoption,
+          adoptedFieldBufferId: null,
+          adoptedScalarBufferKey: null,
+        },
+        requestedFieldBufferId: null,
+        surface: { ...exactCarrier.render.surface, bufferKey: null },
+      },
+    };
+    for (const incomplete of [
+      missingComponentEvidence,
+      missingAdoptionEvidence,
+    ]) {
+      expect(
+        compareBackendAndRender({
+          backendMeta: backendMeta(12),
+          carrier: incomplete,
+          query,
+        }),
+      ).toBeNull();
+    }
+
+    const wrongAdoptedResource = {
+      ...exactCarrier,
+      render: {
+        ...exactCarrier.render,
+        adoption: {
+          ...exactCarrier.render.adoption,
+          adoptedResourceKey: `${query.vectorResourceKey}:other`,
+        },
+      },
+    };
+    expect(
+      compareBackendAndRender({
+        backendMeta: backendMeta(12),
+        carrier: wrongAdoptedResource,
+        query,
+      }),
+    ).toEqual({ compatible: false, rangesMatch: null });
+
+    const decodedOnlyStatistics = {
+      ...exactCarrier,
+      statistics: exactCarrier.statistics.map((entry) => ({
+        ...entry,
+        source: "decoded-payload" as const,
+      })),
+    };
+    expect(
+      compareBackendAndRender({
+        backendMeta: backendMeta(12),
+        carrier: decodedOnlyStatistics,
+        query,
+      }),
+    ).toEqual({ compatible: true, rangesMatch: null });
+
     for (const incompatibleQuery of [
-      { ...query, component: "x" },
       { ...query, scopeId: "other" },
       { ...query, scopeKind: "part" },
     ]) {
@@ -554,6 +635,84 @@ describe("VisualizationDebugPanelModel", () => {
         query,
       }),
     ).toEqual({ compatible: false, rangesMatch: null });
+  });
+
+  it("keeps backend/render compatibility unknown when legacy FMVP omits scope and domain evidence", () => {
+    const legacyCarrier = carrier();
+    legacyCarrier.payload = legacyCarrier.payload
+      ? {
+          ...legacyCarrier.payload,
+          component: null,
+          formatVersion: 2,
+          scopeId: null,
+          scopeKind: null,
+        }
+      : null;
+    legacyCarrier.revisions = {
+      ...legacyCarrier.revisions,
+      domainGenerationId: null,
+      meshTopologyHash: null,
+      topologyRevision: null,
+    };
+    const query = resolveVisualizationDebugCarrierQuery(legacyCarrier);
+
+    expect(query).not.toBeNull();
+    expect(
+      compareBackendAndRender({
+        backendMeta: backendMeta(12),
+        carrier: legacyCarrier,
+        query,
+      }),
+    ).toBeNull();
+
+    const knownMismatches = [
+      {
+        backendMeta: backendMeta(12),
+        carrier: {
+          ...legacyCarrier,
+          render: {
+            ...legacyCarrier.render,
+            surface: { ...legacyCarrier.render.surface, colorMode: "x" },
+          },
+        },
+      },
+      {
+        backendMeta: backendMeta(12),
+        carrier: {
+          ...legacyCarrier,
+          render: {
+            ...legacyCarrier.render,
+            adoption: {
+              ...legacyCarrier.render.adoption,
+              adoptedFieldBufferId: "other-buffer",
+            },
+          },
+        },
+      },
+      {
+        backendMeta: { ...backendMeta(12), quantity_id: "H_demag" },
+        carrier: legacyCarrier,
+      },
+      {
+        backendMeta: backendMeta(12),
+        carrier: {
+          ...legacyCarrier,
+          payload: null,
+          render: {
+            ...legacyCarrier.render,
+            surface: { ...legacyCarrier.render.surface, colorMode: "x" },
+          },
+        },
+      },
+    ];
+    for (const mismatch of knownMismatches) {
+      expect(
+        compareBackendAndRender({
+          ...mismatch,
+          query,
+        }),
+      ).toEqual({ compatible: false, rangesMatch: null });
+    }
   });
 
   it("labels client acknowledgements as viewport-wide and does not attach them to carriers", () => {

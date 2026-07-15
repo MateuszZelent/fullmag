@@ -107,6 +107,38 @@ function visualizationSettings(
 }
 
 describe("resolveViewport3DMeshQualityLegend", () => {
+  it("keeps the render revision in the commit id and uses the supplied wall clock", async () => {
+    const moduleExports = (await import("./Viewport3DModule")) as unknown as {
+      buildViewport3DVisualizationDebugFrameCommit?: (input: {
+        contextLost: boolean | null;
+        drawingBuffer: readonly [number, number] | null;
+        nowMs: () => number;
+        revision: number;
+        slotId: string;
+      }) => {
+        commitId: string;
+        committedAtMs: number;
+        contextLost: boolean | null;
+        drawingBuffer: readonly [number, number] | null;
+      };
+    };
+    const result = moduleExports.buildViewport3DVisualizationDebugFrameCommit?.({
+      contextLost: false,
+      drawingBuffer: [1280, 720],
+      nowMs: () => 1_720_000_000_123,
+      revision: 42,
+      slotId: "viewport-main",
+    });
+
+    expect(result).toEqual({
+      commitId: "viewport-main:42",
+      committedAtMs: 1_720_000_000_123,
+      contextLost: false,
+      drawingBuffer: [1280, 720],
+    });
+    expect(result?.committedAtMs).not.toBe(42);
+  });
+
   it("preserves mesh-part boundary face identity in viewport selection refs", () => {
     const source = readFileSync(
       "src/modules/viewport-3d/Viewport3DModule.tsx",

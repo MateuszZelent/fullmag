@@ -277,6 +277,12 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("routes the Universe Boundary Faces node to its dedicated overview", () => {
+    expect(resolveInspectorPanel({ kind: "boundary-faces.root" })?.id).toBe(
+      "boundary-faces-overview",
+    );
+  });
+
   it("uses one production Debug panel for three distinct visualization selection kinds", () => {
     const kinds = [
       "airbox.visualization.debug",

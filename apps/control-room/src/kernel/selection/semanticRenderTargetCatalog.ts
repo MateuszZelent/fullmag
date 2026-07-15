@@ -36,7 +36,9 @@ export function semanticRenderTargetCarriersFromManifest(
   const seenMeshPartIds = new Set<string>();
   const meshParts = (manifest?.mesh_parts ?? []).filter((part) => {
     const id = part.id.trim();
-    if (!id || seenMeshPartIds.has(id)) return false;
+    if (!id || isUniverseOuterBoundaryCarrier(part) || seenMeshPartIds.has(id)) {
+      return false;
+    }
     seenMeshPartIds.add(id);
     return true;
   });
@@ -62,6 +64,12 @@ export function semanticRenderTargetCarriersFromManifest(
           ],
   );
   return [...meshParts, ...degradedSegments];
+}
+
+export function isUniverseOuterBoundaryCarrier(
+  part: Pick<VisualizationMeshPartLike, "role">,
+): boolean {
+  return part.role?.trim().toLowerCase().replace(/[ -]+/g, "_") === "outer_boundary";
 }
 
 export function buildSemanticRenderTargetCatalog({
@@ -103,6 +111,7 @@ export function buildSemanticRenderTargetCatalog({
   }
 
   for (const part of parts) {
+    if (isUniverseOuterBoundaryCarrier(part)) continue;
     const targetId = semanticTargetIdForMeshPart(part, canonicalSceneObjectIds);
     const existing = mutableEntries.get(targetId);
     if (existing) {

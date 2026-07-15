@@ -40,6 +40,7 @@ import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import {
   buildSemanticRenderTargetCatalog,
+  isUniverseOuterBoundaryCarrier,
   semanticRenderTargetCarriersFromManifest,
 } from "@/kernel/selection/semanticRenderTargetCatalog";
 import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
@@ -329,6 +330,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       meshName: manifest.data?.mesh_name,
       meshRevision: meshSummary.data?.revision ?? manifest.data?.revision,
       objectSegmentCount: manifest.data?.object_segments?.length ?? null,
+      outerBoundaryPartCount:
+        manifest.data?.mesh_parts?.filter(isUniverseOuterBoundaryCarrier).length ?? null,
       partCount: manifest.data?.mesh_parts?.length ?? null,
       qualityStatus: qualityStatus(qualityGates.data?.gates),
       realizedSizeFieldCount:

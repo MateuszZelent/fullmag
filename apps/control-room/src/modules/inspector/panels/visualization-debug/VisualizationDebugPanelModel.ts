@@ -224,9 +224,8 @@ export function buildVisualizationDebugPanelModel({
 export function resolveVisualizationDebugCarrierQuery(
   carrier: VisualizationDebugCarrierSnapshot,
 ): VisualizationDebugExactFieldQuery | null {
-  const payload = carrier.payload;
   const resourceKey = carrier.request.resourceKey;
-  if (!payload || !resourceKey) return null;
+  if (!resourceKey) return null;
 
   let url: URL;
   try {
@@ -246,15 +245,6 @@ export function resolveVisualizationDebugCarrierQuery(
   const component = url.searchParams.get("component") ?? "full";
   const scopeKind = url.searchParams.get("scope_kind") ?? "full";
   const scopeId = url.searchParams.get("scope_id");
-  if (
-    quantityId !== payload.quantityId ||
-    component !== payload.component ||
-    scopeKind !== payload.scopeKind ||
-    scopeId !== payload.scopeId
-  ) {
-    return null;
-  }
-
   const snapshotId = url.searchParams.get("snapshot_id");
   const stageId = url.searchParams.get("stage_id");
   const view = url.searchParams.get("view");
@@ -355,19 +345,54 @@ export function compareBackendAndRender({
   carrier: VisualizationDebugCarrierSnapshot;
   query: VisualizationDebugExactFieldQuery | null;
 }): VisualizationDebugBackendRenderComparison | null {
-  if (!backendMeta || !query || !carrier.payload) return null;
-  const compatible =
-    backendMeta.quantity_id === query.quantityId &&
-    backendMeta.domain_generation_id === carrier.revisions.domainGenerationId &&
-    String(backendMeta.field_revision) === carrier.revisions.fieldRevision &&
-    carrier.payload.component === query.component &&
-    carrier.payload.scopeKind === query.scopeKind &&
-    carrier.payload.scopeId === query.scopeId;
-  if (!compatible) return Object.freeze({ compatible: false, rangesMatch: null });
+  if (!backendMeta || !query) return null;
+  const payload = carrier.payload;
+  const renderedComponent = carrier.render.surface.colorMode;
+  const requestedFieldBufferId = carrier.render.requestedFieldBufferId;
+  const adoptedFieldBufferId = carrier.render.adoption.adoptedFieldBufferId;
+  const renderedScalarBufferKey = carrier.render.surface.bufferKey;
+  const adoptedScalarBufferKey = carrier.render.adoption.adoptedScalarBufferKey;
+  const adoptedResourceKey = carrier.render.adoption.adoptedResourceKey;
+  if (
+    backendMeta.quantity_id !== query.quantityId ||
+    (carrier.revisions.domainGenerationId !== null &&
+      backendMeta.domain_generation_id !==
+        carrier.revisions.domainGenerationId) ||
+    (carrier.revisions.fieldRevision !== null &&
+      String(backendMeta.field_revision) !== carrier.revisions.fieldRevision) ||
+    (payload !== null && payload.quantityId !== query.quantityId) ||
+    (payload !== null &&
+      payload.scopeKind !== null &&
+      (payload.scopeKind !== query.scopeKind ||
+        payload.scopeId !== query.scopeId)) ||
+    (renderedComponent !== null && renderedComponent !== query.component) ||
+    (requestedFieldBufferId !== null &&
+      adoptedFieldBufferId !== null &&
+      requestedFieldBufferId !== adoptedFieldBufferId) ||
+    (renderedScalarBufferKey !== null &&
+      adoptedScalarBufferKey !== null &&
+      renderedScalarBufferKey !== adoptedScalarBufferKey) ||
+    (adoptedResourceKey !== null &&
+      adoptedResourceKey !== query.vectorResourceKey)
+  ) {
+    return Object.freeze({ compatible: false, rangesMatch: null });
+  }
+  if (
+    payload === null ||
+    payload.scopeKind === null ||
+    carrier.revisions.domainGenerationId === null ||
+    carrier.revisions.fieldRevision === null ||
+    renderedComponent === null ||
+    requestedFieldBufferId === null ||
+    adoptedFieldBufferId === null ||
+    renderedScalarBufferKey === null ||
+    adoptedScalarBufferKey === null
+  ) {
+    return null;
+  }
 
   const rendered = carrier.statistics.find(
-    (entry) =>
-      entry.source === "render-derived" || entry.source === "decoded-payload",
+    (entry) => entry.source === "render-derived",
   );
   const stats = backendMeta.stats;
   const rangesMatch =

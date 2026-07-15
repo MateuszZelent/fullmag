@@ -56,6 +56,7 @@ type ExplorerNodeKind =
   | "airbox.mesh.build"
   | "airbox.visualization"
   | "airbox.visualization.debug"
+  | "boundary-faces.root"
   | "mesh.root"
   | "mesh.shared-domain"
   | "mesh.builds"
@@ -209,6 +210,7 @@ export type ExplorerNodeStatus =
   | "failed"
   | "degraded"
   | "warning"
+  | "unavailable"
   | "unsupported";
 
 export type ExplorerIconToken =
@@ -476,6 +478,7 @@ export interface ModelTreeMeshSnapshot {
   meshName?: string | null;
   meshRevision?: number | string | null;
   objectSegmentCount?: number | null;
+  outerBoundaryPartCount?: number | null;
   partCount?: number | null;
   qualityStatus?: string | null;
   realizedSizeFieldCount?: number | null;

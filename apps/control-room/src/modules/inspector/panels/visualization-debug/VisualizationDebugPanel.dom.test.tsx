@@ -92,6 +92,8 @@ describe("VisualizationDebugPanel mounted interaction", () => {
     expect(container.textContent).toContain("Evidence export");
     expect(container.textContent).toContain("Snapshot is stale");
     expect(container.textContent).toContain("Evidence is internally consistent");
+    expect(container.textContent).toContain("Requested componentfull");
+    expect(container.textContent).toContain("Decoded component— (not encoded)");
 
     const copySnapshot = findButton(container, "Copy snapshot");
     const copyResourceKey = findButton(container, "Copy resource key");
@@ -322,7 +324,7 @@ function mountedSnapshot(): VisualizationDebugSnapshot {
         carrierRole: "magnetic",
         memory: [],
         payload: {
-          component: "full",
+          component: null,
           dtype: "float64",
           formatVersion: 3,
           grid: [1, 1, 1],

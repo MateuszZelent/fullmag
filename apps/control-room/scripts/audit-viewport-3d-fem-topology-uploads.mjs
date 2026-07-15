@@ -230,6 +230,87 @@ async function verifySemanticTargetExplorerInvariant({ browser, url }) {
       const row = page.locator(`[data-node-id="${nodeId}"]`);
       await row.waitFor({ state: "visible", timeout: 5_000 });
     }
+    const boundaryFacesRow = page.locator('[data-node-id="model:boundary-faces"]');
+    await boundaryFacesRow.waitFor({ state: "visible", timeout: 5_000 });
+    const boundaryFacesStatus = await boundaryFacesRow.getAttribute("data-status");
+    if (boundaryFacesStatus !== "mesh-ready") {
+      throw new Error(
+        `Boundary Faces Explorer row is not mesh-ready: ${boundaryFacesStatus ?? "missing"}`,
+      );
+    }
+    const leakedOuterBoundary = page.locator(
+      '[data-node-id="model:mesh:unassigned:semantic-outer-boundary"]',
+    );
+    if (await leakedOuterBoundary.count()) {
+      throw new Error("Outer boundary leaked into Unassigned mesh.");
+    }
+    await boundaryFacesRow.click();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-node-id="model:boundary-faces"]')
+          ?.getAttribute("aria-selected") === "true",
+      undefined,
+      { timeout: 5_000 },
+    );
+    const boundaryFacesInspector = page.locator(".fm-inspector-panel", {
+      hasText: "Boundary Faces Overview",
+    });
+    await boundaryFacesInspector.waitFor({ state: "visible", timeout: 5_000 });
+    const boundaryFacesInspectorText = await boundaryFacesInspector.innerText();
+    if (!boundaryFacesInspectorText.includes("not an Airbox or unassigned mesh target")) {
+      throw new Error(
+        `Boundary Faces Inspector did not expose its Universe scope: ${boundaryFacesInspectorText}`,
+      );
+    }
+    const boundaryFacesFields = Object.fromEntries(
+      await boundaryFacesInspector
+        .locator(".fm-inspector-field-row")
+        .evaluateAll((rows) =>
+          rows.map((row) => [
+            row.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() ?? "",
+            row.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? "",
+          ]),
+        ),
+    );
+    const expectedBoundaryFacesFields = {
+      "Boundary faces": "4",
+      "Manifest state": "ready",
+      "Realized carriers": "1",
+    };
+    for (const [label, expectedValue] of Object.entries(expectedBoundaryFacesFields)) {
+      if (boundaryFacesFields[label] !== expectedValue) {
+        throw new Error(
+          `Boundary Faces Inspector field ${label}=${JSON.stringify(boundaryFacesFields[label])}; expected ${expectedValue}.`,
+        );
+      }
+    }
+    const postInteractionWebgl = await canvas.evaluate((element) => {
+      const gl =
+        element.getContext("webgl2") ??
+        element.getContext("webgl") ??
+        element.getContext("experimental-webgl");
+      return {
+        drawingBufferHeight: gl?.drawingBufferHeight ?? 0,
+        drawingBufferWidth: gl?.drawingBufferWidth ?? 0,
+        isContextLost: gl ? gl.isContextLost() : true,
+      };
+    });
+    if (
+      postInteractionWebgl.isContextLost ||
+      postInteractionWebgl.drawingBufferWidth <= 0 ||
+      postInteractionWebgl.drawingBufferHeight <= 0
+    ) {
+      throw new Error(
+        `Boundary Faces interaction left WebGL unrenderable: ${JSON.stringify(postInteractionWebgl)}`,
+      );
+    }
+    await page.screenshot({
+      path: path.join(
+        auditArtifactsDirectory,
+        "semantic-target-boundary-faces-success.png",
+      ),
+    });
     const diagnostics = await readViewportDiagnostics(page);
     if (diagnostics.raw.includes("unaddressable-render-target:")) {
       throw new Error(`Addressable fixture emitted rejection: ${diagnostics.raw}`);
@@ -241,7 +322,14 @@ async function verifySemanticTargetExplorerInvariant({ browser, url }) {
       "Semantic target Explorer invariant passed:",
       [...selectedNodeIds].sort().join(","),
     );
-    return { selectedNodeIds: [...selectedNodeIds].sort(), webgl };
+    return {
+      boundaryFacesExplorerNodeId: "model:boundary-faces",
+      boundaryFacesFields,
+      boundaryFacesInspectorVisible: true,
+      outerBoundaryUnassignedNodeCount: 0,
+      selectedNodeIds: [...selectedNodeIds].sort(),
+      webgl: postInteractionWebgl,
+    };
   } finally {
     await page.close();
   }
@@ -492,6 +580,13 @@ function createSemanticTargetExplorerFixture() {
       nodeStart: 8,
       objectId: "deleted-semantic-object",
       role: "magnetic",
+    }),
+    semanticFixturePart({
+      faceIndex: 2,
+      id: "semantic-outer-boundary",
+      label: "Outer Boundary",
+      nodeStart: 8,
+      role: "outer_boundary",
     }),
   ];
   return {

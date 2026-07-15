@@ -9,6 +9,7 @@ import { AirboxMeshStatisticsPanel } from "./panels/airbox/AirboxMeshStatisticsP
 import { AirboxMeshTopologyPanel } from "./panels/airbox/AirboxMeshTopologyPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
 import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
+import { BoundaryFacesOverviewPanel } from "./panels/boundary-faces/BoundaryFacesOverviewPanel";
 import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
 import { CrossSectionInspectorPanel } from "./panels/CrossSectionInspectorPanel";
 import {
@@ -475,6 +476,12 @@ const PANELS: InspectorPanelContribution[] = [
     title: "Airbox Overview",
     selectionKinds: ["airbox.root"],
     component: AirboxOverviewPanel,
+  },
+  {
+    id: "boundary-faces-overview",
+    title: "Boundary Faces",
+    selectionKinds: ["boundary-faces.root"],
+    component: BoundaryFacesOverviewPanel,
   },
   {
     id: "object-visualization",

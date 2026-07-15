@@ -142,6 +142,16 @@ węzeł. Explorer przełącza kartę, rozwija ścieżkę, zachowuje zaznaczenie 
 filtra i przewija wiersz. F3D-032 nie jest jeszcze oznaczone jako całkowicie
 zamknięte, bo browser gate nie policzył jeszcze pojedynczych passów Airboxa.
 
+Aktualizacja `outer_boundary` z 2026-07-15: pomocniczy carrier o tej roli jest
+odrzucany zarówno przy projekcji manifestu, jak i bezpośrednio w kanonicznym
+builderze katalogu, więc nie może utworzyć `part:*` ani węzła `Unassigned mesh`.
+Explorer wystawia stabilne `Universe -> Boundary Faces`; status jest
+`unavailable` bez carriera, `mesh-stale` dla nieaktualnej generacji i
+`mesh-ready` wyłącznie dla aktualnego manifestu z `outer_boundary`. Produkcyjny
+audyt Chromium potwierdził `outerBoundaryUnassignedNodeCount=0`, jeden carrier,
+cztery ściany, manifest `ready`, dedykowany Inspector oraz zdrowy WebGL po
+kliknięciu. Zakres Airboxa pozostaje weryfikowany oddzielnie.
+
 ## Macierz 28 historycznych findings
 
 | Finding | Stan 2026-07-14 | Aktualny dowód / ograniczenie |

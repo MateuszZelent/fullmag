@@ -7,6 +7,22 @@ import {
 } from "./semanticRenderTargetCatalog";
 
 describe("semantic render target catalog", () => {
+  it("never addresses the Universe outer boundary as a render target", () => {
+    const catalog = buildSemanticRenderTargetCatalog({
+      parts: [
+        {
+          id: "part:outer-boundary",
+          label: "Outer Boundary",
+          role: "outer_boundary",
+        },
+      ],
+      sceneObjectIds: new Set(),
+    });
+
+    expect(catalog.byCarrierId.has("part:outer-boundary")).toBe(false);
+    expect(catalog.entries.some((entry) => entry.targetKind === "part")).toBe(false);
+  });
+
   it.each(["air", "airbox"])(
     "maps a %s carrier to the single canonical Airbox address",
     (role) => {
@@ -143,6 +159,33 @@ describe("semantic render target catalog", () => {
 });
 
 describe("semanticRenderTargetCarriersFromManifest", () => {
+  it("keeps the realized outer boundary out of orphan render targets", () => {
+    const carriers = semanticRenderTargetCarriersFromManifest({
+      mesh_parts: [
+        {
+          boundary_face_count: 128,
+          boundary_face_start: 0,
+          element_count: 0,
+          element_start: 0,
+          id: "part:outer-boundary",
+          label: "Outer Boundary",
+          node_count: 0,
+          node_start: 0,
+          role: "outer_boundary",
+        },
+      ],
+      object_segments: [],
+    });
+
+    expect(carriers).toEqual([]);
+    const catalog = buildSemanticRenderTargetCatalog({
+      parts: carriers,
+      sceneObjectIds: new Set(),
+    });
+    expect(catalog.byCarrierId.has("part:outer-boundary")).toBe(false);
+    expect(catalog.entries.some((entry) => entry.targetKind === "part")).toBe(false);
+  });
+
   it("includes a degraded object segment when no mesh part owns it", () => {
     const carriers = semanticRenderTargetCarriersFromManifest({
       mesh_parts: [],

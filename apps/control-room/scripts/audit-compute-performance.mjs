@@ -1823,7 +1823,9 @@ function checkVisualizationDebugLifecycleBudgets() {
     "MAX_VISUALIZATION_DEBUG_SNAPSHOT_BYTES = 64 * 1024",
     "getLifecycleStats",
     "activeDemandCount",
+    "demandSubscriptionCount",
     "retainedSnapshotCount",
+    "snapshotSubscriptionCount",
   ]);
   requireTokens(scanner, "visualization debug bounded samples", [
     "MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS = 12",

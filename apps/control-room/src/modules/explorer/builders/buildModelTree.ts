@@ -1014,6 +1014,13 @@ export function buildModelTree(
   const objects = (snapshot?.objects ?? []).filter(
     (object) => !isVisualizationAirboxIdentity({ id: object.id, role: object.objectRole }),
   );
+  const boundaryFacesStatus: ExplorerNodeStatus =
+    (snapshot?.mesh?.outerBoundaryPartCount ?? 0) > 0
+      ? meshFreshnessStatus(
+          meshFreshnessState(snapshot?.mesh),
+          meshRootStatus(snapshot?.mesh),
+        )
+      : "unavailable";
   const sessionChildren: ExplorerNode[] = [
     {
       id: "model:universe",
@@ -1102,6 +1109,20 @@ export function buildModelTree(
               ],
             },
           ],
+        },
+        {
+          id: "model:boundary-faces",
+          kind: "boundary-faces.root",
+          label: "Boundary Faces",
+          parentId: "model:universe",
+          badge:
+            boundaryFacesStatus === "mesh-ready"
+              ? "realized"
+              : boundaryFacesStatus === "unavailable"
+                ? "mesh required"
+                : meshStatusBadge(boundaryFacesStatus),
+          icon: "mesh",
+          status: boundaryFacesStatus,
         },
       ],
     },

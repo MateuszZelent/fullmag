@@ -175,11 +175,12 @@ export function VisualizationDebugPanelView({
       </InspectorSection>
 
       <InspectorSection title="Request & transport" badge={`${model.transport.length}`}>
-        {observations.map(({ carrier }, index) => (
+        {observations.map(({ carrier, query }, index) => (
           <div className="fm-visualization-debug-subsection" key={`request:${carrier.carrierId}:${index}`}>
             <h4>{carrier.carrierId}</h4>
             <FieldRow label="Planner request ID" value={carrier.request.plannerRequestId ?? "—"} />
             <FieldRow label="Canonical resource key" value={carrier.request.resourceKey ?? "—"} />
+            <FieldRow label="Requested component" value={query?.component ?? "—"} />
           </div>
         ))}
         <div className="fm-visualization-debug-table-wrap">
@@ -216,6 +217,7 @@ export function VisualizationDebugPanelView({
               <FieldRow label="Dtype / FMVP" value={`${carrier.payload.dtype} / v${carrier.payload.formatVersion ?? "—"}`} />
               <FieldRow label="Grid" value={carrier.payload.grid.join(" × ")} />
               <FieldRow label="nComp" value={carrier.payload.nComp.toLocaleString("en-US")} />
+              <FieldRow label="Decoded component" value={carrier.payload.component ?? "— (not encoded)"} />
               <FieldRow label="Points / values" value={`${carrier.payload.pointCount.toLocaleString("en-US")} / ${carrier.payload.valueCount.toLocaleString("en-US")}`} />
               <FieldRow label="Indexing / node indices" value={`${carrier.payload.indexing} / ${carrier.payload.nodeIndexCount?.toLocaleString("en-US") ?? "—"}`} />
               <FieldRow label="Scope" value={`${carrier.payload.scopeKind ?? "—"}:${carrier.payload.scopeId ?? "—"}`} />

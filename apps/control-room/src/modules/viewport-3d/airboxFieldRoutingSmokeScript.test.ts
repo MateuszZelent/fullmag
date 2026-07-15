@@ -55,4 +55,41 @@ describe("airbox field routing smoke script", () => {
     expect(smokeScript).toContain("debugIdlePublishDelta");
     expect(smokeScript).toContain("assertVisualizationDebugIdleBudgets");
   });
+
+  it("proves Airbox, object, and real region Debug inspectors without renderer churn", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("CONTROL_ROOM_VISUALIZATION_DEBUG_ARTIFACT_DIR");
+    expect(smokeScript).toContain("assertVisualizationDebugScenarios");
+    expect(smokeScript).toContain("resolveVisualizationDebugRegionScenario");
+    expect(smokeScript).toContain("model:airbox:visualization:debug");
+    expect(smokeScript).toContain("object.visualization.debug");
+    expect(smokeScript).toContain("region.visualization.debug");
+    expect(smokeScript).toContain("fieldMetaRequests");
+    expect(smokeScript).toContain("networkFailures");
+    expect(smokeScript).toContain("waitForExactVisualizationDebugEvidence");
+    expect(smokeScript).toContain("assertVisualizationStateUnchanged");
+    expect(smokeScript).toContain("assertVisualizationDebugKeyboardOrder");
+    expect(smokeScript).toContain("assertVisualizationDebugStatusText");
+    expect(smokeScript).toContain("canvasSha256");
+    expect(smokeScript).toContain("drawingBufferWidth");
+    expect(smokeScript).toContain("isContextLost");
+    expect(smokeScript).toContain("navigationCount !== 1");
+    expect(smokeScript).toContain("fieldVectorRequestDeltaAfterSettle !== 0");
+    expect(smokeScript).toContain("fieldMetaRequestDeltaAfterSettle > 1");
+    expect(smokeScript).toContain("idleFrameDelta !== 0");
+    expect(smokeScript).toContain("idleScanDelta !== 0");
+    expect(smokeScript).toContain("idlePublishDelta !== 0");
+    expect(smokeScript).toContain("idleRequestDelta !== 0");
+    expect(smokeScript).toContain("before-visualization.png");
+    expect(smokeScript).toContain("after-debug.png");
+    expect(smokeScript).toContain("fieldVectorRequestDeltaAfterSettle");
+    expect(smokeScript).toContain("fieldMetaRequestDeltaAfterSettle");
+    expect(smokeScript).toContain("resetInspectorScroll");
+    expect(smokeScript).toContain('"Decoded component"');
+    expect(smokeScript).toContain('"Grid"');
+    expect(smokeScript).toContain('"nComp"');
+    expect(smokeScript).toContain('"Indexing / node indices"');
+    expect(smokeScript).toContain("— (not encoded)");
+  });
 });

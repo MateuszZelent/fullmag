@@ -63,7 +63,7 @@ export interface VisualizationDebugCarrierSnapshot {
   geometryMaskDescription?: string | null;
   memory: readonly VisualizationDebugMemoryRow[];
   payload: {
-    component: string;
+    component: string | null;
     dtype: "float64";
     formatVersion: number | null;
     grid: readonly [number, number, number];

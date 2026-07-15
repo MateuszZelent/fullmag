@@ -247,6 +247,14 @@ browserową asercję click/reveal dla regionu. Osobno nadal brakuje browserowej
 asercji liczącej pojedyncze passy Airboxa; dlatego finding pozostaje częściowo,
 a nie całkowicie zamknięty.
 
+Domknięcie `outer_boundary` (2026-07-15): rola jest autorytatywnie wyłączona z
+obu dróg budowania katalogu render-targetów, a zrealizowana granica ma osobny
+adres `model:boundary-faces` pod `model:universe` i dedykowany Inspector.
+Regresyjny production smoke zawiera równocześnie prawdziwy orphan i
+`outer_boundary`; wymaga braku drugiego pod `Unassigned mesh`, dokładnych pól
+Inspektora (`1` carrier, `4` faces, manifest `ready`) oraz nieutraconego
+kontekstu WebGL po interakcji. Nie zmienia to odrębnego statusu prac Airboxa.
+
 ### Twardy kontrakt i plan naprawy
 
 1. Zbudować w warstwie kernel/domain jeden kanoniczny katalog semantycznych,
