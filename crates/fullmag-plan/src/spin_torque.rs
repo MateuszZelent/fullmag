@@ -202,6 +202,9 @@ pub(crate) fn resolve_legacy_spin_torque(
                     )],
                 });
             }
+            (SpinTorqueExecutableLane::Fdm, PrescribedSotFormulaIR::LegacyFullmagV0 { .. }) => {
+                LegacySpinTorqueFields::default()
+            }
             (_, PrescribedSotFormulaIR::LegacyFullmagV0 { .. }) => {
                 return Err(PlanError {
                     reasons: vec![
@@ -235,6 +238,8 @@ pub(crate) struct ResolvedSotFields {
     pub xi_fl: Option<f64>,
     pub sigma: Option<[f64; 3]>,
     pub thickness: Option<f64>,
+    pub envelope: Option<TimeEnvelopeIR>,
+    pub drive: Option<PrescribedSotV1DriveIR>,
 }
 
 /// Extract SOT parameters from the first spin_torque_modules entry if it is SOT.
@@ -263,19 +268,18 @@ pub(crate) fn resolve_sot_fields(
                     sigma_hat,
                     envelope,
                 } => {
-                    let multiplier = match envelope {
-                        None => 1.0,
-                        Some(TimeEnvelopeIR::Constant { value }) => *value,
+                    match envelope {
+                        None | Some(TimeEnvelopeIR::Constant { .. }) => {}
                         Some(_) => {
                             return Err(PlanError {
                                 reasons: vec![
-                                    "prescribed_sot.fullmag.v1 non-constant TimeEnvelope is not executable in the M0 FDM constant-source lane"
+                                    "prescribed_sot.fullmag.v1 non-constant TimeEnvelope requires_stage_time_execution"
                                         .to_string(),
                                 ],
                             });
                         }
-                    };
-                    (*current_density_apm2 * multiplier, normalize_axis(*sigma_hat))
+                    }
+                    (*current_density_apm2, normalize_axis(*sigma_hat))
                 }
                 PrescribedSotV1DriveIR::VectorCurrentSource {
                     current_source_id,
@@ -301,17 +305,60 @@ pub(crate) fn resolve_sot_fields(
                 xi_fl: Some(*xi_fl),
                 sigma: Some(sigma),
                 thickness: Some(*free_layer_thickness_m),
+                envelope: match drive {
+                    PrescribedSotV1DriveIR::SignedScalar { envelope, .. } => envelope.clone(),
+                    PrescribedSotV1DriveIR::VectorCurrentSource { .. } => None,
+                },
+                drive: Some(drive.clone()),
             })
         }
         SpinTorqueModuleIR::PrescribedSot {
-            formula: PrescribedSotFormulaIR::LegacyFullmagV0 { .. },
+            target,
+            formula:
+                PrescribedSotFormulaIR::LegacyFullmagV0 {
+                    drive,
+                    raw_spin_polarization,
+                    xi_dl,
+                    xi_fl,
+                    free_layer_thickness_m,
+                    ..
+                },
             ..
-        } => Err(PlanError {
-            reasons: vec![
-                "prescribed_sot formula_version=prescribed_sot.legacy_fullmag.v0 is compatibility-only and fail_closed for execution"
-                    .to_string(),
-            ],
-        }),
+        } => {
+            if target.is_some() {
+                return Err(PlanError {
+                    reasons: vec![
+                        "prescribed_sot.legacy_fullmag.v0 must retain its historical global target=null"
+                            .to_string(),
+                    ],
+                });
+            }
+            let current_density = match drive {
+                fullmag_ir::PrescribedSotLegacyDriveIR::LegacyScalarMagnitude {
+                    raw_charge_current_density_apm2,
+                } => *raw_charge_current_density_apm2,
+                fullmag_ir::PrescribedSotLegacyDriveIR::LegacyCurrentSourceNorm {
+                    current_source_id,
+                } => {
+                    let current = resolve_current_density_source(
+                        current_transports,
+                        current_source_id,
+                    )?;
+                    dot(current, current).sqrt()
+                }
+            };
+            Ok(ResolvedSotFields {
+                formula_version: Some("prescribed_sot.legacy_fullmag.v0"),
+                target: None,
+                current_density: Some(current_density),
+                xi_dl: Some(*xi_dl),
+                xi_fl: Some(*xi_fl),
+                sigma: Some(*raw_spin_polarization),
+                thickness: Some(*free_layer_thickness_m),
+                envelope: None,
+                drive: None,
+            })
+        }
         SpinTorqueModuleIR::PrescribedSot { target: None, .. } => Err(PlanError {
             reasons: vec![
                 "prescribed_sot.fullmag.v1 requires an explicit target before planning"
@@ -369,7 +416,7 @@ mod tests {
                 drive: PrescribedSotV1DriveIR::SignedScalar {
                     current_density_apm2: -1.0e10,
                     sigma_hat: [0.0, 1.0, 0.0],
-                    envelope: None,
+                    envelope: Some(TimeEnvelopeIR::Constant { value: 0.25 }),
                 },
                 xi_dl: 0.1,
                 xi_fl: 0.0,
@@ -380,13 +427,65 @@ mod tests {
         let resolved = resolve_sot_fields(&problem, &[])
             .expect("canonical prescribed SOT must lower for FDM execution");
         assert_eq!(resolved.current_density, Some(-1.0e10));
+        assert_eq!(
+            resolved.envelope,
+            Some(TimeEnvelopeIR::Constant { value: 0.25 })
+        );
         assert_eq!(resolved.sigma, Some([0.0, 1.0, 0.0]));
         assert_eq!(resolved.xi_dl, Some(0.1));
         assert_eq!(resolved.thickness, Some(1.0e-9));
     }
 
     #[test]
-    fn legacy_prescribed_sot_formula_fails_closed() {
+    fn canonical_prescribed_sot_vector_binding_preserves_axes_and_reverses_signed_projection() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
+            schema_version: "prescribed_sot.v1".to_string(),
+            id: "sot".to_string(),
+            target: Some(RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula: PrescribedSotFormulaIR::FullmagV1 {
+                drive: PrescribedSotV1DriveIR::VectorCurrentSource {
+                    current_source_id: "drive".to_string(),
+                    drive_direction: [2.0, 0.0, 0.0],
+                    interface_normal: [0.0, 0.0, 3.0],
+                },
+                xi_dl: 0.1,
+                xi_fl: 0.0,
+                free_layer_thickness_m: 1.0e-9,
+            },
+        }];
+        let resolve = |jx| {
+            resolve_sot_fields(
+                &problem,
+                &[ResolvedCurrentTransport {
+                    name: "drive".to_string(),
+                    current_density: [jx, 4.0e9, 0.0],
+                    solve_region: None,
+                }],
+            )
+            .unwrap()
+        };
+        let positive = resolve(5.0e10);
+        let negative = resolve(-5.0e10);
+        assert_eq!(positive.current_density, Some(5.0e10));
+        assert_eq!(negative.current_density, Some(-5.0e10));
+        assert_eq!(positive.sigma, Some([0.0, 1.0, 0.0]));
+        assert_eq!(positive.drive, negative.drive);
+        assert!(matches!(
+            positive.drive,
+            Some(PrescribedSotV1DriveIR::VectorCurrentSource {
+                current_source_id,
+                drive_direction: [2.0, 0.0, 0.0],
+                interface_normal: [0.0, 0.0, 3.0],
+            }) if current_source_id == "drive"
+        ));
+    }
+
+    #[test]
+    fn legacy_prescribed_sot_formula_preserves_raw_global_evaluator_inputs() {
         let formula = PrescribedSotFormulaIR::LegacyFullmagV0 {
                 drive: PrescribedSotLegacyDriveIR::LegacyScalarMagnitude {
                     raw_charge_current_density_apm2: -1.0e10,
@@ -404,18 +503,46 @@ mod tests {
         problem.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
             schema_version: "prescribed_sot.v1".to_string(),
             id: "sot".to_string(),
-            target: Some(RegionRefIR {
-                object_id: "strip".to_string(),
-                region_id: None,
-            }),
+            target: None,
             formula,
         }];
-        let field_error = resolve_sot_fields(&problem, &[])
-            .expect_err("legacy prescribed SOT must remain fail-closed");
-        assert!(field_error.reasons.iter().any(|reason| {
-            reason.contains("prescribed_sot.legacy_fullmag.v0")
-                && reason.contains("fail_closed")
-        }));
+        let resolved = resolve_sot_fields(&problem, &[])
+            .expect("legacy prescribed SOT must remain executable without reinterpretation");
+        assert_eq!(
+            resolved.formula_version,
+            Some("prescribed_sot.legacy_fullmag.v0")
+        );
+        assert_eq!(resolved.current_density, Some(-1.0e10));
+        assert_eq!(resolved.sigma, Some([0.0, 1.0, 0.0]));
+        assert_eq!(resolved.target, None);
+    }
+
+    #[test]
+    fn migrated_v0_2_sot_lowers_to_legacy_evaluator_without_changing_raw_inputs() {
+        let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+        value["ir_version"] = serde_json::json!("0.2.0");
+        value["problem_meta"]["script_api_version"] = serde_json::json!("0.2.0");
+        value["problem_meta"]["serializer_version"] = serde_json::json!("0.2.0");
+        value["spin_torque_modules"] = serde_json::json!([{
+            "kind": "spin_orbit_torque",
+            "charge_current_density_a_per_m2": -5.0e10,
+            "damping_like_efficiency": 0.12,
+            "field_like_efficiency": -0.03,
+            "spin_polarization": [0.0, 2.0, 0.0],
+            "ferromagnet_thickness_m": 1.5e-9
+        }]);
+        let problem: ProblemIR = serde_json::from_value(value).expect("0.2 migration");
+        let resolved = resolve_sot_fields(&problem, &[]).expect("legacy lowering");
+
+        assert_eq!(
+            resolved.formula_version,
+            Some("prescribed_sot.legacy_fullmag.v0")
+        );
+        assert_eq!(resolved.current_density, Some(-5.0e10));
+        assert_eq!(resolved.sigma, Some([0.0, 2.0, 0.0]));
+        assert_eq!(resolved.xi_dl, Some(0.12));
+        assert_eq!(resolved.xi_fl, Some(-0.03));
+        assert_eq!(resolved.target, None);
     }
 
     #[test]

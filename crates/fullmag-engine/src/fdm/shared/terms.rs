@@ -92,6 +92,8 @@ pub struct SlonczewskiSttConfig {
 /// Both damping-like (DL) and field-like (FL) components are supported.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SotConfig {
+    /// Versioned evaluator contract.
+    pub formula: SotFormula,
     /// Signed conventional charge-current density J [A/m²] in the HM layer.
     pub current_density: f64,
     /// Damping-like efficiency ξ_DL (≈ spin Hall angle θ_SH, dimensionless).
@@ -104,6 +106,14 @@ pub struct SotConfig {
     pub thickness: f64,
     /// Optional per-cell torque target mask, already intersected with the magnetic active mask.
     pub active_mask: Option<Vec<bool>>,
+    /// Exact authored envelope. The M0 engine admits constant envelopes only.
+    pub envelope: Option<fullmag_ir::TimeEnvelopeIR>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SotFormula {
+    FullmagV1,
+    LegacyFullmagV0,
 }
 
 /// Oersted field configuration for infinite cylindrical conductor.

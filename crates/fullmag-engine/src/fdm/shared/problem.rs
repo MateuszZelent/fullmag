@@ -89,6 +89,24 @@ impl ExchangeLlgProblem {
                 )));
             }
         }
+        if let Some(sot) = terms.sot.as_ref() {
+            if let Some(mask) = sot.active_mask.as_ref() {
+                if mask.len() != grid.cell_count() {
+                    return Err(EngineError::new(format!(
+                        "prescribed SOT active_mask length {} does not match grid cell count {}",
+                        mask.len(),
+                        grid.cell_count()
+                    )));
+                }
+            }
+            if sot.envelope.as_ref().is_some_and(|envelope| {
+                !matches!(envelope, fullmag_ir::TimeEnvelopeIR::Constant { .. })
+            }) {
+                return Err(EngineError::new(
+                    "prescribed SOT non-constant envelope requires_stage_time_execution",
+                ));
+            }
+        }
         Ok(Self {
             grid,
             cell_size,

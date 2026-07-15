@@ -9,7 +9,7 @@ use fullmag_engine::{
     EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
     MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, SlonczewskiSttConfig,
-    ResolvedFdmPeriodicWorkspace, SotConfig, StepReport, TimeIntegrator,
+    ResolvedFdmPeriodicWorkspace, SotConfig, SotFormula, StepReport, TimeIntegrator,
     UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
 };
 use fullmag_ir::{
@@ -160,12 +160,17 @@ fn build_sot(plan: &FdmPlanIR) -> Option<SotConfig> {
         return None;
     }
     Some(SotConfig {
+        formula: match plan.sot_formula_version.as_deref() {
+            Some("prescribed_sot.fullmag.v1") => SotFormula::FullmagV1,
+            _ => SotFormula::LegacyFullmagV0,
+        },
         current_density: je,
         xi_dl: plan.sot_xi_dl.unwrap_or(0.0),
         xi_fl: plan.sot_xi_fl.unwrap_or(0.0),
         sigma,
         thickness,
         active_mask: plan.sot_active_mask.clone(),
+        envelope: plan.sot_envelope.clone(),
     })
 }
 
@@ -4214,6 +4219,25 @@ mod tests {
 
         assert_eq!(top.current_sign, 1.0);
         assert_eq!(bottom.current_sign, -1.0);
+    }
+
+    #[test]
+    fn prescribed_sot_builder_preserves_formula_mask_and_constant_envelope() {
+        let mut plan = make_test_plan();
+        plan.sot_formula_version = Some("prescribed_sot.fullmag.v1".to_string());
+        plan.sot_current_density = Some(-4.0e11);
+        plan.sot_xi_dl = Some(0.12);
+        plan.sot_xi_fl = Some(-0.03);
+        plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+        plan.sot_thickness = Some(1.5e-9);
+        plan.sot_active_mask = Some(vec![true; plan.initial_magnetization.len()]);
+        plan.sot_envelope = Some(fullmag_ir::TimeEnvelopeIR::Constant { value: 0.25 });
+
+        let config = build_sot(&plan).expect("complete SOT plan must build");
+        assert_eq!(config.formula, SotFormula::FullmagV1);
+        assert_eq!(config.current_density, -4.0e11);
+        assert_eq!(config.active_mask, plan.sot_active_mask);
+        assert_eq!(config.envelope, plan.sot_envelope);
     }
 
     #[test]

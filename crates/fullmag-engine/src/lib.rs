@@ -43,7 +43,7 @@ pub use fdm::{
     FdmDemagBoundary, FftWorkspace, ResolvedFdmPeriodicWorkspace,
     GridShape, IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
     OerstedCylinderConfig, ReferenceDemoReport, Result, RhsEvaluation, SlonczewskiSttConfig,
-    SolverSession, SotConfig, StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA,
+    SolverSession, SotConfig, SotFormula, StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA,
     ZhangLiSttConfig,
 };
 
@@ -2125,7 +2125,7 @@ mod tests {
 
     #[test]
     fn sot_direct_torque_soa_heun_step_matches_aos_and_moves_state() {
-        let grid = GridShape::new(1, 1, 1).expect("valid grid");
+        let grid = GridShape::new(2, 1, 1).expect("valid grid");
         let problem = ExchangeLlgProblem::with_terms(
             grid,
             CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
@@ -2135,18 +2135,53 @@ mod tests {
                 exchange: false,
                 demag: false,
                 sot: Some(SotConfig {
+                    formula: SotFormula::FullmagV1,
                     current_density: 1.0e6,
                     xi_dl: 1.0,
                     xi_fl: 0.0,
                     sigma: [0.0, 1.0, 0.0],
                     thickness: 1.0,
-                    active_mask: None,
+                    active_mask: Some(vec![true, false]),
+                    envelope: None,
                 }),
                 ..Default::default()
             },
         );
 
-        assert_heun_aos_soa_direct_torque_match(&problem, vec![[1.0, 0.0, 0.0]]);
+        assert_heun_aos_soa_direct_torque_match(
+            &problem,
+            vec![[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        );
+    }
+
+    #[test]
+    fn prescribed_sot_mask_length_is_rejected_during_problem_construction() {
+        let result = ExchangeLlgProblem::with_terms_and_mask(
+            GridShape::new(2, 1, 1).unwrap(),
+            CellSize::new(1.0, 1.0, 1.0).unwrap(),
+            MaterialParameters::new(1.0, 0.5 * MU0, 0.2).unwrap(),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).unwrap(),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                sot: Some(SotConfig {
+                    formula: SotFormula::FullmagV1,
+                    current_density: 1.0e6,
+                    xi_dl: 1.0,
+                    xi_fl: 0.0,
+                    sigma: [0.0, 1.0, 0.0],
+                    thickness: 1.0,
+                    active_mask: Some(vec![true]),
+                    envelope: None,
+                }),
+                ..Default::default()
+            },
+            None,
+        );
+        assert!(result
+            .expect_err("short SOT mask must fail construction")
+            .to_string()
+            .contains("prescribed SOT active_mask length"));
     }
 
     #[test]
@@ -2175,12 +2210,14 @@ mod tests {
                     current_sign: 1.0,
                 }),
                 sot: Some(SotConfig {
+                    formula: SotFormula::FullmagV1,
                     current_density: 1.0e6,
                     xi_dl: 1.0,
                     xi_fl: 0.0,
                     sigma: [0.0, 1.0, 0.0],
                     thickness: 1.0,
                     active_mask: None,
+                    envelope: None,
                 }),
                 ..Default::default()
             },

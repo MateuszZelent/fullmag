@@ -2,7 +2,7 @@
 
 use fullmag_engine::{
     magnetoelastic::{MagnetoelasticParams, PrescribedStrainField},
-    MagnetoelasticTermConfig, OerstedCylinderConfig, SlonczewskiSttConfig, SotConfig,
+    MagnetoelasticTermConfig, OerstedCylinderConfig, SlonczewskiSttConfig, SotConfig, SotFormula,
     ZhangLiSttConfig,
 };
 use fullmag_ir::FdmPlanIR;
@@ -28,12 +28,17 @@ pub(super) fn build_sot(plan: &FdmPlanIR) -> Option<SotConfig> {
         return None;
     }
     Some(SotConfig {
+        formula: match plan.sot_formula_version.as_deref() {
+            Some("prescribed_sot.fullmag.v1") => SotFormula::FullmagV1,
+            _ => SotFormula::LegacyFullmagV0,
+        },
         current_density: je,
         xi_dl: plan.sot_xi_dl.unwrap_or(0.0),
         xi_fl: plan.sot_xi_fl.unwrap_or(0.0),
         sigma,
         thickness,
         active_mask: plan.sot_active_mask.clone(),
+        envelope: plan.sot_envelope.clone(),
     })
 }
 

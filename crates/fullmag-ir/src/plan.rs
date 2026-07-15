@@ -490,7 +490,7 @@ pub struct FdmPlanIR {
     pub stt_fixed_layer_position: Option<String>,
 
     // ── Spin-Orbit Torque (SOT) ────────────────────────
-    /// Charge current density magnitude for SOT |Je| [A/m²]
+    /// Prescribed-SOT source current density [A/m²]: signed for v1, raw legacy scalar for v0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sot_current_density: Option<f64>,
     /// Damping-like efficiency ξ_DL (≈ spin Hall angle θ_SH)
@@ -514,6 +514,12 @@ pub struct FdmPlanIR {
     /// Per-cell target mask for prescribed SOT, intersected with `active_mask`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sot_active_mask: Option<Vec<bool>>,
+    /// Exact authored dimensionless source envelope; source amplitude remains in `sot_current_density`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_envelope: Option<crate::TimeEnvelopeIR>,
+    /// Exact canonical v1 authored drive identity and axes retained for provenance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_drive: Option<crate::PrescribedSotV1DriveIR>,
 
     // ── Oersted field (cylindrical conductor) ──
     /// Whether to include the Oersted field from a cylindrical conductor.

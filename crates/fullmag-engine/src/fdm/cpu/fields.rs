@@ -13,7 +13,7 @@ use crate::telemetry::{sections, StepTelemetry};
 use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, squared_norm, sub};
 use crate::{
     EffectiveFieldObservables, ExchangeLlgProblem, FftWorkspace, RhsEvaluation,
-    SlonczewskiSttConfig, SotConfig, Vector3, VectorFieldSoA, ZhangLiSttConfig, MU0,
+    SlonczewskiSttConfig, SotConfig, SotFormula, Vector3, VectorFieldSoA, ZhangLiSttConfig, MU0,
 };
 
 #[cfg(feature = "parallel")]
@@ -42,18 +42,41 @@ fn prescribed_sot_scales(
     alpha: f64,
 ) -> (f64, f64) {
     const HBAR: f64 = 1.054571817e-34;
-    const E_CHARGE: f64 = 1.60217662e-19;
+    const EXACT_E_CHARGE: f64 = 1.602176634e-19;
+    const LEGACY_E_CHARGE: f64 = 1.60217662e-19;
+    let envelope_multiplier = match cfg.envelope.as_ref() {
+        None => 1.0,
+        Some(fullmag_ir::TimeEnvelopeIR::Constant { value }) => *value,
+        Some(_) => unreachable!("non-constant SOT envelopes must fail construction"),
+    };
+    let current_density = cfg.current_density * envelope_multiplier;
 
-    let gamma_e = gamma0 / MU0;
-    let omega_base = gamma_e * HBAR * cfg.current_density
-        / (2.0 * E_CHARGE * saturation_magnetisation * cfg.thickness.max(1e-30));
-    let omega_dl = omega_base * cfg.xi_dl;
-    let omega_fl = omega_base * cfg.xi_fl;
-    let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
-    (
-        (omega_dl - alpha * omega_fl) * inv_gilbert,
-        (omega_fl + alpha * omega_dl) * inv_gilbert,
-    )
+    match cfg.formula {
+        SotFormula::FullmagV1 => {
+            let gamma_e = gamma0 / MU0;
+            let omega_base = gamma_e * HBAR * current_density
+                / (2.0
+                    * EXACT_E_CHARGE
+                    * saturation_magnetisation
+                    * cfg.thickness.max(1e-30));
+            let omega_dl = omega_base * cfg.xi_dl;
+            let omega_fl = omega_base * cfg.xi_fl;
+            let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+            (
+                (omega_dl - alpha * omega_fl) * inv_gilbert,
+                (omega_fl + alpha * omega_dl) * inv_gilbert,
+            )
+        }
+        SotFormula::LegacyFullmagV0 => {
+            let amplitude = current_density.abs() * HBAR
+                / (2.0
+                    * LEGACY_E_CHARGE
+                    * MU0
+                    * saturation_magnetisation
+                    * cfg.thickness.max(1e-30));
+            (amplitude * cfg.xi_dl, amplitude * cfg.xi_fl)
+        }
+    }
 }
 
 impl ExchangeLlgProblem {
@@ -2096,7 +2119,7 @@ impl ExchangeLlgProblem {
         cfg: &ZhangLiSttConfig,
     ) -> Vec<Vector3> {
         const MU_B: f64 = 9.274009994e-24;
-        const E_CHARGE: f64 = 1.60217662e-19;
+        const E_CHARGE: f64 = 1.602176634e-19;
 
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let beta = cfg.non_adiabaticity;
@@ -3648,16 +3671,18 @@ mod stt_tests {
     #[test]
     fn prescribed_sot_matches_signed_si_gilbert_source_oracle() {
         const HBAR: f64 = 1.054571817e-34;
-        const E_CHARGE: f64 = 1.60217662e-19;
+        const EXACT_E_CHARGE: f64 = 1.602176634e-19;
 
         let problem = one_cell_problem(0.2);
         let cfg = SotConfig {
+            formula: SotFormula::FullmagV1,
             current_density: -1.0e12,
             xi_dl: 0.12,
             xi_fl: -0.03,
             sigma: [0.0, 1.0, 0.0],
             thickness: 1.5e-9,
             active_mask: None,
+            envelope: None,
         };
         let m = [1.0, 0.0, 0.0];
         let torque = problem.sot_torque(&[m], &cfg)[0];
@@ -3665,7 +3690,7 @@ mod stt_tests {
         let gamma_e = problem.dynamics.gyromagnetic_ratio / MU0;
         let omega_base = gamma_e * HBAR * cfg.current_density
             / (2.0
-                * E_CHARGE
+                * EXACT_E_CHARGE
                 * problem.material.saturation_magnetisation
                 * cfg.thickness);
         let omega_dl = omega_base * cfg.xi_dl;
@@ -3691,12 +3716,14 @@ mod stt_tests {
     fn prescribed_sot_reverses_with_signed_current() {
         let problem = one_cell_problem(0.1);
         let mut cfg = SotConfig {
+            formula: SotFormula::FullmagV1,
             current_density: 7.0e11,
             xi_dl: 0.2,
             xi_fl: 0.05,
             sigma: [0.0, 1.0, 0.0],
             thickness: 1.0e-9,
             active_mask: None,
+            envelope: None,
         };
         let positive = problem.sot_torque(&[[1.0, 0.0, 0.0]], &cfg)[0];
         cfg.current_density = -cfg.current_density;
@@ -3716,17 +3743,48 @@ mod stt_tests {
             LlgConfig::default(),
         );
         let cfg = SotConfig {
+            formula: SotFormula::FullmagV1,
             current_density: 7.0e11,
             xi_dl: 0.2,
             xi_fl: 0.05,
             sigma: [0.0, 1.0, 0.0],
             thickness: 1.0e-9,
             active_mask: Some(vec![true, false]),
+            envelope: None,
         };
 
         let torque = problem.sot_torque(&[[1.0, 0.0, 0.0]; 2], &cfg);
         assert!(torque[0].iter().any(|component| *component != 0.0));
         assert_eq!(torque[1], [0.0; 3]);
+    }
+
+    #[test]
+    fn legacy_prescribed_sot_preserves_historical_abs_field_like_evaluator() {
+        const HBAR: f64 = 1.054571817e-34;
+        const LEGACY_E_CHARGE: f64 = 1.60217662e-19;
+
+        let problem = one_cell_problem(0.2);
+        let cfg = SotConfig {
+            formula: SotFormula::LegacyFullmagV0,
+            current_density: -1.0e12,
+            xi_dl: 0.12,
+            xi_fl: -0.03,
+            sigma: [0.0, 1.0, 0.0],
+            thickness: 1.5e-9,
+            active_mask: None,
+            envelope: None,
+        };
+        let torque = problem.sot_torque(&[[1.0, 0.0, 0.0]], &cfg)[0];
+        let amplitude = cfg.current_density.abs() * HBAR
+            / (2.0
+                * LEGACY_E_CHARGE
+                * MU0
+                * problem.material.saturation_magnetisation
+                * cfg.thickness);
+        let expected = [0.0, amplitude * cfg.xi_dl, amplitude * cfg.xi_fl];
+        for component in 0..3 {
+            check_close(torque[component], expected[component], 1.0e-15);
+        }
     }
 
     #[test]

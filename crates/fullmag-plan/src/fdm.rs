@@ -1164,6 +1164,8 @@ pub(crate) fn plan_fdm(
         sot_formula_version: sot.formula_version.map(str::to_string),
         sot_target: sot.target,
         sot_active_mask,
+        sot_envelope: sot.envelope,
+        sot_drive: sot.drive,
     };
 
     for (term_index, term) in problem.energy_terms.iter().enumerate() {
