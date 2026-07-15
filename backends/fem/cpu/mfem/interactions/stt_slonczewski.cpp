@@ -74,7 +74,8 @@ void add_slonczewski_stt_rhs_aos(
     }
 
     constexpr double HBAR = 1.054571817e-34;
-    constexpr double E_CHARGE = 1.60217662e-19;
+    constexpr double E_CHARGE_LEGACY = 1.60217662e-19;
+    constexpr double E_CHARGE_EXACT = 1.602176634e-19;
 
     const Vec3 current_density = {
         ctx.stt.current_density_am2[0],
@@ -85,13 +86,22 @@ void add_slonczewski_stt_rhs_aos(
         current_density[0],
         current_density[1],
         current_density[2]);
-    if (!(j_mag > 0.0)) {
+    const bool canonical_v1 =
+        ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1;
+    const double signed_current = canonical_v1
+        ? dot3(current_density, ctx.stt.stack_normal)
+        : ctx.stt.current_sign * j_mag;
+    if (signed_current == 0.0) {
         return;
     }
-    const Vec3 axis = scale3(current_density, 1.0 / j_mag);
-    const double thickness = ctx.stt.free_layer_thickness > 0.0
+    const Vec3 axis = j_mag > 0.0
+        ? scale3(current_density, 1.0 / j_mag)
+        : ctx.stt.stack_normal;
+    const double thickness = canonical_v1
         ? ctx.stt.free_layer_thickness
-        : effective_magnetic_thickness_along_axis(ctx, axis);
+        : (ctx.stt.free_layer_thickness > 0.0
+            ? ctx.stt.free_layer_thickness
+            : effective_magnetic_thickness_along_axis(ctx, axis));
     const double lambda = ctx.stt.lambda;
     const double lambda_sq = lambda * lambda;
     const double degree = ctx.stt.degree > 0.0 ? ctx.stt.degree : 1.0;
@@ -100,6 +110,9 @@ void add_slonczewski_stt_rhs_aos(
     const size_t n = m_xyz.size() / 3u;
     for (size_t i = 0; i < n; ++i) {
         if (!ctx.mesh.magnetic_node_mask.empty() && ctx.mesh.magnetic_node_mask[i] == 0u) {
+            continue;
+        }
+        if (!ctx.stt.active_node_mask.empty() && ctx.stt.active_node_mask[i] == 0u) {
             continue;
         }
         const size_t base = i * 3u;
@@ -116,18 +129,19 @@ void add_slonczewski_stt_rhs_aos(
             i,
             ctx.material_fields.material.damping);
         const double prefactor =
-            (ctx.stt.current_sign * j_mag * HBAR *
+            (signed_current * HBAR *
              ctx.material_fields.material.gyromagnetic_ratio) /
-            (2.0 * E_CHARGE * kMu0 * ms * thickness);
+            (2.0 * (canonical_v1 ? E_CHARGE_EXACT : E_CHARGE_LEGACY) * kMu0 * ms * thickness);
         const double m_dot_p = dot3(m, p);
         const double g = (degree * lambda_sq) /
             ((lambda_sq + 1.0) + (lambda_sq - 1.0) * m_dot_p);
-        const double beta_stt = prefactor * g;
         const double inv_gilbert = 1.0 / (1.0 + alpha * alpha);
-        const double damping_like =
-            beta_stt * (1.0 + alpha * ctx.stt.epsilon_prime) * inv_gilbert;
-        const double field_like =
-            beta_stt * (ctx.stt.epsilon_prime - alpha) * inv_gilbert;
+        const double damping_like = canonical_v1
+            ? prefactor * (g + alpha * ctx.stt.epsilon_prime) * inv_gilbert
+            : prefactor * g * (1.0 + alpha * ctx.stt.epsilon_prime) * inv_gilbert;
+        const double field_like = canonical_v1
+            ? prefactor * (ctx.stt.epsilon_prime - alpha * g) * inv_gilbert
+            : prefactor * g * (ctx.stt.epsilon_prime - alpha) * inv_gilbert;
 
         const Vec3 m_cross_p = cross3(m, p);
         const Vec3 m_cross_m_cross_p = cross3(m, m_cross_p);

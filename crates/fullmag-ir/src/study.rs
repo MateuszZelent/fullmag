@@ -162,12 +162,24 @@ pub enum SpinTorqueModuleIR {
     },
     ZhangLi {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        schema_version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<RegionRefIR>,
+        #[serde(default = "default_legacy_zhang_li_formula_version")]
+        formula_version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operator_version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         current_density: Option<[f64; 3]>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         current_source: Option<String>,
         degree: f64,
         #[serde(default)]
         beta: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lande_g: Option<f64>,
     },
     InterfaceCpp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -216,6 +228,10 @@ pub enum SpinTorqueModuleIR {
 
 fn default_legacy_slonczewski_formula_version() -> String {
     "slonczewski.legacy_fullmag.v0".to_string()
+}
+
+fn default_legacy_zhang_li_formula_version() -> String {
+    "zhang_li.legacy_fullmag.v0".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

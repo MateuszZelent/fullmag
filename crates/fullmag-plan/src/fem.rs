@@ -887,6 +887,127 @@ fn segment_node_indices(
     Ok((start..end).collect())
 }
 
+fn materialize_fem_spin_torque_target_masks(
+    target: &fullmag_ir::RegionRefIR,
+    node_count: usize,
+    element_count: usize,
+    object_segments: &[fullmag_ir::FemObjectSegmentIR],
+    mesh_parts: &[fullmag_ir::FemMeshPartIR],
+) -> Result<(Vec<bool>, Vec<bool>), PlanError> {
+    if let Some(region_id) = target.region_id.as_deref() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "FEM spin-torque target region_id '{region_id}' is fail_closed until an exact FEM object-region realization is available"
+            )],
+        });
+    }
+    let matching = object_segments
+        .iter()
+        .filter(|segment| {
+            plan_object_ids_match(&segment.object_id, &target.object_id)
+                || segment.geometry_id.as_deref().is_some_and(|geometry_id| {
+                    plan_object_ids_match(geometry_id, &target.object_id)
+                })
+        })
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "FEM spin-torque target object_id '{}' is not present in the resolved magnetic mesh",
+                target.object_id
+            )],
+        });
+    }
+
+    let mut node_mask = vec![false; node_count];
+    let mut element_mask = vec![false; element_count];
+    for segment in matching {
+        for node in segment_node_indices(mesh_parts, segment, node_count)? {
+            node_mask[node] = true;
+        }
+        let start = segment.element_start as usize;
+        let end = start.saturating_add(segment.element_count as usize);
+        if end > element_count {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "FEM spin-torque target object '{}' element range {}..{} exceeds mesh element count {}",
+                    target.object_id, start, end, element_count
+                )],
+            });
+        }
+        element_mask[start..end].fill(true);
+    }
+    if !node_mask.iter().any(|selected| *selected)
+        || !element_mask.iter().any(|selected| *selected)
+    {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "FEM spin-torque target object_id '{}' selects no magnetic nodes or elements",
+                target.object_id
+            )],
+        });
+    }
+    Ok((node_mask, element_mask))
+}
+
+#[cfg(test)]
+mod spin_torque_target_tests {
+    use super::*;
+
+    fn segment(object_id: &str, node_start: u32, node_count: u32, element_start: u32, element_count: u32) -> fullmag_ir::FemObjectSegmentIR {
+        fullmag_ir::FemObjectSegmentIR {
+            object_id: object_id.to_string(),
+            geometry_id: None,
+            node_start,
+            node_count,
+            element_start,
+            element_count,
+            boundary_face_start: 0,
+            boundary_face_count: 0,
+        }
+    }
+
+    #[test]
+    fn fem_spin_torque_object_target_materializes_node_and_element_masks() {
+        let target = fullmag_ir::RegionRefIR {
+            object_id: "free".to_string(),
+            region_id: None,
+        };
+        let segments = vec![segment("fixed", 0, 4, 0, 1), segment("free", 4, 4, 1, 1)];
+
+        let (nodes, elements) = materialize_fem_spin_torque_target_masks(
+            &target,
+            8,
+            2,
+            &segments,
+            &[],
+        )
+        .expect("resolved FEM object target");
+
+        assert_eq!(nodes, vec![false, false, false, false, true, true, true, true]);
+        assert_eq!(elements, vec![false, true]);
+    }
+
+    #[test]
+    fn fem_spin_torque_region_target_fails_closed_without_region_realization() {
+        let target = fullmag_ir::RegionRefIR {
+            object_id: "free".to_string(),
+            region_id: Some("contact".to_string()),
+        };
+        let err = materialize_fem_spin_torque_target_masks(
+            &target,
+            4,
+            1,
+            &[segment("free", 0, 4, 0, 1)],
+            &[],
+        )
+        .expect_err("FEM region target must not broaden silently to its object");
+        assert!(err.reasons.iter().any(|reason| {
+            reason.contains("region_id 'contact'") && reason.contains("fail_closed")
+        }));
+    }
+}
+
 fn segment_element_node_indices(
     mesh: &fullmag_ir::MeshIR,
     segment: &fullmag_ir::FemObjectSegmentIR,
@@ -2471,6 +2592,37 @@ pub(crate) fn plan_fem(
     let dind_field = material.dind_field.clone();
     let dbulk_field = material.dbulk_field.clone();
     let antenna_zeeman_masks = resolve_prescribed_zeeman_masks(problem, &mesh.nodes, None)?;
+    let spin_torque_target = spin_torque
+        .slonczewski_target
+        .as_ref()
+        .or(spin_torque.zhang_li_target.as_ref());
+    let (stt_active_node_mask, stt_active_element_mask) = match spin_torque_target {
+        Some(target) => {
+            let (nodes, elements) = materialize_fem_spin_torque_target_masks(
+                target,
+                mesh.nodes.len(),
+                mesh.elements.len(),
+                &object_segments,
+                &resolved_mesh_parts,
+            )?;
+            (Some(nodes), Some(elements))
+        }
+        None => (None, None),
+    };
+    let spin_torque_contract = spin_torque
+        .slonczewski_formula_version
+        .as_ref()
+        .or(spin_torque.zhang_li_formula_version.as_ref())
+        .map(|formula_version| fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: formula_version.clone(),
+            operator_version: spin_torque.zhang_li_operator_version.clone(),
+            realization_version: spin_torque.slonczewski_realization_version.clone(),
+            target: spin_torque_target.cloned(),
+            stack_normal: spin_torque.slonczewski_stack_normal,
+            lande_g: spin_torque.zhang_li_lande_g,
+            active_node_mask: stt_active_node_mask,
+            active_element_mask: stt_active_element_mask,
+        });
 
     let mut fem_plan = FemPlanIR {
         mesh_name: mesh_name.clone(),
@@ -2518,6 +2670,7 @@ pub(crate) fn plan_fem(
         stt_epsilon_prime: spin_torque.stt_epsilon_prime,
         stt_thickness: spin_torque.stt_thickness,
         stt_fixed_layer_position: spin_torque.stt_fixed_layer_position.clone(),
+        spin_torque_contract,
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,

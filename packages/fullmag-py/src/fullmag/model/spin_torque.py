@@ -563,6 +563,11 @@ class ZhangLiSTT:
     current_source: str | None
     degree: float = 0.4
     beta: float = 0.0
+    id: str | None = None
+    target: RegionRef | None = None
+    lande_g: float | None = None
+    formula_version: str = "zhang_li.legacy_fullmag.v0"
+    operator_version: str | None = None
 
     def __init__(
         self,
@@ -572,6 +577,9 @@ class ZhangLiSTT:
         *,
         xi: float | None = None,
         current_source: str | None = None,
+        id: str | None = None,
+        target: RegionRef | None = None,
+        lande_g: float | None = None,
     ) -> None:
         # Resolve xi / beta alias
         resolved_beta = beta
@@ -590,13 +598,42 @@ class ZhangLiSTT:
         object.__setattr__(self, "current_source", resolved_source)
         object.__setattr__(self, "degree", _validated_degree(degree))
         object.__setattr__(self, "beta", _validated_beta(resolved_beta))
+        canonical = id is not None or target is not None or lande_g is not None
+        if canonical:
+            if id is None or target is None or lande_g is None:
+                raise ValueError("canonical ZhangLiSTT requires id, target, and lande_g")
+            if not isinstance(target, RegionRef):
+                raise TypeError("target must be a RegionRef")
+            require_positive(lande_g, "lande_g")
+            object.__setattr__(self, "id", require_non_empty(id, "id"))
+            object.__setattr__(self, "target", target)
+            object.__setattr__(self, "lande_g", float(lande_g))
+            object.__setattr__(self, "formula_version", "zhang_li.fullmag.v1")
+            object.__setattr__(self, "operator_version", "zl_central_reference_v1")
+        else:
+            object.__setattr__(self, "id", None)
+            object.__setattr__(self, "target", None)
+            object.__setattr__(self, "lande_g", None)
+            object.__setattr__(self, "formula_version", "zhang_li.legacy_fullmag.v0")
+            object.__setattr__(self, "operator_version", None)
 
     def to_ir_module(self) -> dict[str, object]:
         ir = {
             "kind": "zhang_li",
+            "formula_version": self.formula_version,
             "degree": self.degree,
             "beta": self.beta,
         }
+        if self.formula_version == "zhang_li.fullmag.v1":
+            assert self.id is not None and self.target is not None
+            assert self.lande_g is not None and self.operator_version is not None
+            ir.update({
+                "schema_version": "zhang_li_torque.v1",
+                "id": self.id,
+                "target": self.target.to_ir(),
+                "operator_version": self.operator_version,
+                "lande_g": self.lande_g,
+            })
         if self.current_density is not None:
             ir["current_density"] = list(self.current_density)
         if self.current_source is not None:
@@ -605,7 +642,7 @@ class ZhangLiSTT:
 
     def to_ir_fields(self) -> dict[str, object]:
         """Return the legacy executable STT fields used by the current runner."""
-        if self.current_density is None:
+        if self.current_density is None or self.formula_version != "zhang_li.legacy_fullmag.v0":
             return {}
         return {
             "current_density": list(self.current_density),

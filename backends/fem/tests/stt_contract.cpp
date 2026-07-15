@@ -7,6 +7,7 @@
 
 #include "context.hpp"
 #include "cpu/mfem/interactions/stt.hpp"
+#include "gpu/cuda/integrators/rk/rk.hpp"
 #include "tetra_geometry_oracle.hpp"
 
 #include <algorithm>
@@ -25,6 +26,7 @@ constexpr double kPiTest = 3.14159265358979323846;
 constexpr double kMu0Test = 4.0e-7 * kPiTest;
 constexpr double kHbarTest = 1.054571817e-34;
 constexpr double kElectronChargeTest = 1.60217662e-19;
+constexpr double kExactElectronChargeTest = 1.602176634e-19;
 constexpr double kBohrMagnetonTest = 9.274009994e-24;
 constexpr double kGammaMu0Test = 2.211e5;
 
@@ -501,6 +503,51 @@ void slonczewski_skips_nonmagnetic_nodes() {
     check_near(rhs[2], 3.0, 0.0, "masked Slonczewski rhs z");
 }
 
+void canonical_slonczewski_uses_signed_stack_current_exact_constants_and_target_mask() {
+    auto ctx = make_slonczewski_context();
+    ctx.mesh.n_nodes = 2;
+    ctx.stt.formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1;
+    ctx.stt.realization_version = FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_THIN_LAYER_V1;
+    ctx.stt.current_density_am2 = {3.0e12, -4.0e12, 0.0};
+    ctx.stt.stack_normal = {0.0, 1.0, 0.0};
+    ctx.stt.active_node_mask = {1u, 0u};
+    ctx.stt.epsilon_prime = 0.35;
+    ctx.material_fields.material.damping = 0.2;
+    const std::vector<double> m = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+    std::vector<double> rhs(6u, 0.0);
+
+    fullmag::fem::add_slonczewski_stt_rhs_aos(ctx, m, rhs);
+
+    const double jn = -4.0e12;
+    const double gamma_e = kGammaMu0Test / kMu0Test;
+    const double omega = gamma_e * kHbarTest * jn /
+        (2.0 * kExactElectronChargeTest * ctx.material_fields.material.saturation_magnetisation *
+         ctx.stt.free_layer_thickness);
+    const double epsilon = ctx.stt.degree * 0.5;
+    const double alpha = ctx.material_fields.material.damping;
+    const double inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+    const double damping_like = omega * (epsilon + alpha * ctx.stt.epsilon_prime) * inv_gilbert;
+    const double field_like = omega * (ctx.stt.epsilon_prime - alpha * epsilon) * inv_gilbert;
+    check_near(rhs[1], -field_like, std::abs(field_like) * 1e-12, "canonical Slonczewski independent epsilon_prime");
+    check_near(rhs[2], -damping_like, std::abs(damping_like) * 1e-12, "canonical Slonczewski signed J dot n_stack");
+    check_near(rhs[3], 0.0, 0.0, "canonical Slonczewski target mask x");
+    check_near(rhs[4], 0.0, 0.0, "canonical Slonczewski target mask y");
+    check_near(rhs[5], 0.0, 0.0, "canonical Slonczewski target mask z");
+
+    ctx.stt.current_density_am2 = {-3.0e12, 4.0e12, 0.0};
+    std::vector<double> reversed(6u, 0.0);
+    fullmag::fem::add_slonczewski_stt_rhs_aos(ctx, m, reversed);
+    check_near(reversed[1], -rhs[1], std::abs(rhs[1]) * 1e-12, "canonical Slonczewski current reversal y");
+    check_near(reversed[2], -rhs[2], std::abs(rhs[2]) * 1e-12, "canonical Slonczewski current reversal z");
+
+    ctx.stt.current_density_am2 = {3.0e12, -4.0e12, 0.0};
+    ctx.stt.stack_normal = {0.0, -1.0, 0.0};
+    std::vector<double> reversed_normal(6u, 0.0);
+    fullmag::fem::add_slonczewski_stt_rhs_aos(ctx, m, reversed_normal);
+    check_near(reversed_normal[1], -rhs[1], std::abs(rhs[1]) * 1e-12, "canonical Slonczewski stack-normal reversal y");
+    check_near(reversed_normal[2], -rhs[2], std::abs(rhs[2]) * 1e-12, "canonical Slonczewski stack-normal reversal z");
+}
+
 fullmag::fem::Context make_zhang_li_context() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 4;
@@ -551,6 +598,49 @@ void zhang_li_rhs_uses_gilbert_alpha_beta_projection() {
     check_near(rhs[3], -adiabatic, adiabatic * 1e-12, "Zhang-Li Gilbert node1 rhs x");
     check_near(rhs[4], nonadiabatic_y, std::abs(nonadiabatic_y) * 1e-12, "Zhang-Li Gilbert node1 rhs y");
     check_near(rhs[5], adiabatic, adiabatic * 1e-12, "Zhang-Li Gilbert node1 rhs z");
+}
+
+void canonical_zhang_li_uses_g_over_two_sign_and_no_beta_denominator() {
+    auto ctx = make_zhang_li_context();
+    ctx.stt.formula_version = FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1;
+    ctx.stt.operator_version = FULLMAG_FEM_STT_OPERATOR_ZL_CENTRAL_REFERENCE_V1;
+    ctx.stt.lande_g = 1.7;
+    ctx.stt.beta = 0.2;
+    ctx.material_fields.material.damping = 0.5;
+    const std::vector<double> m = {
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 1.0,
+        1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    std::vector<double> rhs(12u, 0.0);
+
+    fullmag::fem::add_zhang_li_stt_rhs_aos(ctx, m, rhs);
+
+    const double u_x =
+        (ctx.stt.lande_g * kBohrMagnetonTest * ctx.stt.degree *
+         ctx.stt.current_density_am2[0]) /
+        (2.0 * kExactElectronChargeTest * ctx.material_fields.material.saturation_magnetisation);
+    const double alpha = ctx.material_fields.material.damping;
+    const double inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+    const double expected_y = -(ctx.stt.beta - alpha) * u_x * inv_gilbert;
+    const double expected_z = -(1.0 + alpha * ctx.stt.beta) * u_x * inv_gilbert;
+    check_near(rhs[1], expected_y, std::abs(expected_y) * 1e-12, "canonical Zhang-Li cross coefficient");
+    check_near(rhs[2], expected_z, std::abs(expected_z) * 1e-12, "canonical Zhang-Li signed advection");
+
+    ctx.stt.active_element_mask = {0u};
+    std::vector<double> masked(12u, 0.0);
+    fullmag::fem::add_zhang_li_stt_rhs_aos(ctx, m, masked);
+    check(
+        std::all_of(masked.begin(), masked.end(), [](double value) { return value == 0.0; }),
+        "canonical Zhang-Li target element mask excludes inactive elements");
+
+    ctx.stt.active_element_mask = {1u};
+    ctx.stt.current_density_am2[0] *= -1.0;
+    std::vector<double> reversed(12u, 0.0);
+    fullmag::fem::add_zhang_li_stt_rhs_aos(ctx, m, reversed);
+    check_near(reversed[1], -rhs[1], std::abs(rhs[1]) * 1e-12, "canonical Zhang-Li current reversal y");
+    check_near(reversed[2], -rhs[2], std::abs(rhs[2]) * 1e-12, "canonical Zhang-Li current reversal z");
 }
 
 void zhang_li_rhs_uses_tetra_gradient_and_nodal_projection() {
@@ -768,6 +858,49 @@ void stt_plan_import_copies_parameters_and_validates_family() {
         "STT degree validation error should identify the field");
 }
 
+void canonical_stt_plan_import_rejects_interface_flux_and_missing_thin_layer_data() {
+    fullmag::fem::Context ctx;
+    fullmag_fem_plan_desc plan{};
+    plan.has_slonczewski_stt = 1;
+    plan.stt_formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1;
+    plan.stt_realization_version = FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_INTERFACE_FLUX_V1;
+    plan.stt_current_density_am2[2] = 1.0e12;
+    plan.stt_degree = 0.4;
+    plan.stt_spin_polarization[2] = 1.0;
+    plan.stt_stack_normal[2] = 1.0;
+    plan.stt_lambda = 1.0;
+    std::string error;
+    check(!fullmag::fem::initialize_stt_plan_fields(ctx, plan, error), "FEM InterfaceFlux must fail closed");
+    check(error.find("surface functional") != std::string::npos, "InterfaceFlux error identifies missing surface realization");
+
+    plan.stt_realization_version = FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_THIN_LAYER_V1;
+    check(!fullmag::fem::initialize_stt_plan_fields(ctx, plan, error), "canonical thin layer requires explicit thickness");
+    check(error.find("explicit free-layer thickness") != std::string::npos, "thin-layer error identifies thickness");
+}
+
+void canonical_stt_gpu_plan_fails_closed_before_device_provenance() {
+    auto slonczewski = make_slonczewski_context();
+    slonczewski.stt.formula_version = FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1;
+    std::string reason;
+    const auto slonczewski_plan =
+        fullmag::fem::gpu_rk_plan_device_resident(slonczewski, reason);
+    check(!slonczewski_plan.enabled, "canonical Slonczewski GPU plan must be disabled");
+    check(
+        reason.find("canonical Slonczewski") != std::string::npos &&
+            reason.find("not qualified") != std::string::npos,
+        "canonical Slonczewski GPU fail-closed reason must precede device prerequisites");
+
+    auto zhang_li = make_zhang_li_context();
+    zhang_li.stt.formula_version = FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1;
+    reason.clear();
+    const auto zhang_li_plan = fullmag::fem::gpu_rk_plan_device_resident(zhang_li, reason);
+    check(!zhang_li_plan.enabled, "canonical Zhang-Li GPU plan must be disabled");
+    check(
+        reason.find("canonical Zhang-Li") != std::string::npos &&
+            reason.find("not qualified") != std::string::npos,
+        "canonical Zhang-Li GPU fail-closed reason must precede device prerequisites");
+}
+
 } // namespace
 
 int main() {
@@ -783,12 +916,16 @@ int main() {
     slonczewski_uses_geometry_thickness_fallback_when_explicit_thickness_is_zero();
     slonczewski_direct_torque_matches_effective_field_form_with_gilbert_damping();
     slonczewski_skips_nonmagnetic_nodes();
+    canonical_slonczewski_uses_signed_stack_current_exact_constants_and_target_mask();
     zhang_li_rhs_uses_tetra_gradient_and_nodal_projection();
     zhang_li_skew_tetra_affine_rhs_matches_analytic_gradient();
     zhang_li_rhs_uses_gilbert_alpha_beta_projection();
+    canonical_zhang_li_uses_g_over_two_sign_and_no_beta_denominator();
     zhang_li_current_direction_reverses_rhs();
     zhang_li_adds_torque_without_scaling_existing_rhs();
     combined_stt_updates_max_rhs();
     stt_plan_import_copies_parameters_and_validates_family();
+    canonical_stt_plan_import_rejects_interface_flux_and_missing_thin_layer_data();
+    canonical_stt_gpu_plan_fails_closed_before_device_provenance();
     return 0;
 }

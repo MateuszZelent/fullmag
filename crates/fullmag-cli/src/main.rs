@@ -1003,6 +1003,7 @@ mod tests {
             current_density: None,
             stt_degree: None,
             stt_beta: None,
+            spin_torque_contract: None,
             stt_spin_polarization: None,
             stt_lambda: None,
             stt_epsilon_prime: None,

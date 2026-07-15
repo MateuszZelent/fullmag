@@ -26,6 +26,23 @@ typedef enum {
     FULLMAG_FEM_INTEGRATOR_RK45_DP54 = 4,
 } fullmag_fem_integrator;
 
+typedef enum {
+    FULLMAG_FEM_STT_FORMULA_LEGACY_FULLMAG_V0 = 0,
+    FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1 = 1,
+    FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1 = 2,
+} fullmag_fem_stt_formula_version;
+
+typedef enum {
+    FULLMAG_FEM_STT_REALIZATION_NONE = 0,
+    FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_THIN_LAYER_V1 = 1,
+    FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_INTERFACE_FLUX_V1 = 2,
+} fullmag_fem_stt_realization_version;
+
+typedef enum {
+    FULLMAG_FEM_STT_OPERATOR_NONE = 0,
+    FULLMAG_FEM_STT_OPERATOR_ZL_CENTRAL_REFERENCE_V1 = 1,
+} fullmag_fem_stt_operator_version;
+
 typedef struct {
     double atol;
     double rtol;
@@ -236,6 +253,15 @@ typedef struct {
     double                     stt_epsilon_prime;
     double                     stt_free_layer_thickness; /* free layer thickness [m]; 0 = geometry-derived */
     double                     stt_current_sign;         /* +1 top, -1 bottom for Slonczewski */
+    uint32_t                   stt_formula_version;
+    uint32_t                   stt_realization_version;
+    uint32_t                   stt_operator_version;
+    double                     stt_stack_normal[3];
+    double                     stt_lande_g;
+    const uint8_t             *stt_active_node_mask;
+    uint64_t                   stt_active_node_mask_len;
+    const uint8_t             *stt_active_element_mask;
+    uint64_t                   stt_active_element_mask_len;
 
     /* Oersted field from cylindrical conductor */
     int                        has_oersted_cylinder;

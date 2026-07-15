@@ -33,6 +33,11 @@ pub(crate) struct LegacySpinTorqueFields {
     pub slonczewski_formula_version: Option<String>,
     pub slonczewski_target: Option<RegionRefIR>,
     pub slonczewski_stack_normal: Option<[f64; 3]>,
+    pub slonczewski_realization_version: Option<String>,
+    pub zhang_li_formula_version: Option<String>,
+    pub zhang_li_operator_version: Option<String>,
+    pub zhang_li_target: Option<RegionRefIR>,
+    pub zhang_li_lande_g: Option<f64>,
     pub current_density: Option<[f64; 3]>,
     pub stt_degree: Option<f64>,
     pub stt_beta: Option<f64>,
@@ -49,6 +54,11 @@ impl LegacySpinTorqueFields {
             slonczewski_formula_version: None,
             slonczewski_target: None,
             slonczewski_stack_normal: None,
+            slonczewski_realization_version: None,
+            zhang_li_formula_version: None,
+            zhang_li_operator_version: None,
+            zhang_li_target: None,
+            zhang_li_lande_g: None,
             current_density: problem.current_density,
             stt_degree: problem.stt_degree,
             stt_beta: problem.stt_beta,
@@ -169,20 +179,19 @@ pub(crate) fn resolve_legacy_spin_torque(
             realization,
             ..
         } => {
-            if matches!(lane, SpinTorqueExecutableLane::Fdm)
-                && matches!(
-                    realization,
-                    Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
-                        realization_version,
-                        ..
-                    }) if realization_version == "slonczewski_interface_flux.v1"
-                )
-            {
+            if matches!(
+                realization,
+                Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
+                    realization_version,
+                    ..
+                }) if realization_version == "slonczewski_interface_flux.v1"
+            ) {
+                let reason = match lane {
+                    SpinTorqueExecutableLane::Fdm => "slonczewski_interface_flux.v1 is not executable on FDM; use the thin-layer homogenized realization",
+                    SpinTorqueExecutableLane::Fem => "slonczewski_interface_flux.v1 is fail_closed on FEM until a dedicated oriented surface functional is implemented; bulk 1/t lowering is prohibited",
+                };
                 return Err(PlanError {
-                    reasons: vec![
-                        "slonczewski_interface_flux.v1 is not executable on FDM; use the thin-layer homogenized realization or a supported FEM interface-flux lane"
-                            .to_string(),
-                    ],
+                    reasons: vec![reason.to_string()],
                 });
             }
             let canonical = formula_version == "slonczewski.fullmag.v1";
@@ -213,6 +222,14 @@ pub(crate) fn resolve_legacy_spin_torque(
                 slonczewski_formula_version: Some(formula_version.clone()),
                 slonczewski_target: target.clone(),
                 slonczewski_stack_normal: normalized_stack,
+                slonczewski_realization_version: realization.as_ref().map(|realization| match realization {
+                    fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized { realization_version }
+                    | fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux { realization_version, .. } => realization_version.clone(),
+                }),
+                zhang_li_formula_version: None,
+                zhang_li_operator_version: None,
+                zhang_li_target: None,
+                zhang_li_lande_g: None,
                 current_density: Some(match (current_density, current_source.as_deref()) {
                     (Some(current_density), None) => *current_density,
                     (None, Some(source)) => {
@@ -232,14 +249,24 @@ pub(crate) fn resolve_legacy_spin_torque(
             }
         }
         SpinTorqueModuleIR::ZhangLi {
+            target,
+            formula_version,
+            operator_version,
             current_density,
             current_source,
             degree,
             beta,
+            lande_g,
+            ..
         } => LegacySpinTorqueFields {
             slonczewski_formula_version: None,
             slonczewski_target: None,
             slonczewski_stack_normal: None,
+            slonczewski_realization_version: None,
+            zhang_li_formula_version: Some(formula_version.clone()),
+            zhang_li_operator_version: operator_version.clone(),
+            zhang_li_target: target.clone(),
+            zhang_li_lande_g: *lande_g,
             current_density: Some(match (current_density, current_source.as_deref()) {
                 (Some(current_density), None) => *current_density,
                 (None, Some(source)) => resolve_current_density_source(current_transports, source)?,
@@ -745,14 +772,53 @@ mod tests {
     }
 
     #[test]
+    fn fem_interface_flux_slonczewski_fails_closed_before_bulk_lowering() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: Some("slonczewski_torque.v1".to_string()),
+            id: Some("cpp-interface".to_string()),
+            target: Some(RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula_version: "slonczewski.fullmag.v1".to_string(),
+            current_density: Some([0.0, 0.0, 5e10]),
+            current_source: None,
+            degree: 0.4,
+            spin_polarization: [0.0, 0.0, 1.0],
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lambda_asymmetry: 1.0,
+            epsilon_prime: 0.0,
+            free_layer_thickness_m: None,
+            fixed_layer_position: None,
+            realization: Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
+                interface_id: "fixed-to-free".to_string(),
+                realization_version: "slonczewski_interface_flux.v1".to_string(),
+            }),
+        }];
+
+        let err = resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fem, &[])
+            .expect_err("FEM interface flux needs a real surface functional");
+        assert!(err.reasons.iter().any(|reason| {
+            reason.contains("slonczewski_interface_flux.v1")
+                && reason.contains("fail_closed")
+                && reason.contains("surface")
+        }));
+    }
+
+    #[test]
     fn rejects_multiple_modules_for_current_executable_lane() {
         let mut problem = ProblemIR::bootstrap_example();
         problem.spin_torque_modules = vec![
             SpinTorqueModuleIR::ZhangLi {
+                schema_version: None, id: None, target: None,
+                formula_version: "zhang_li.legacy_fullmag.v0".to_string(),
+                operator_version: None,
                 current_density: Some([1e11, 0.0, 0.0]),
                 current_source: None,
                 degree: 0.4,
                 beta: 0.02,
+                lande_g: None,
             },
             SpinTorqueModuleIR::Slonczewski {
                 schema_version: None, id: None, target: None,
@@ -781,10 +847,14 @@ mod tests {
     fn resolves_zhang_li_module_for_fem_lane() {
         let mut problem = ProblemIR::bootstrap_example();
         problem.spin_torque_modules = vec![SpinTorqueModuleIR::ZhangLi {
+            schema_version: None, id: None, target: None,
+            formula_version: "zhang_li.legacy_fullmag.v0".to_string(),
+            operator_version: None,
             current_density: Some([1e11, 0.0, 0.0]),
             current_source: None,
             degree: 0.4,
             beta: 0.02,
+            lande_g: None,
         }];
         let resolved =
             resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fem, &[]).unwrap();
@@ -796,10 +866,14 @@ mod tests {
     fn resolves_named_current_source_for_fdm() {
         let mut problem = ProblemIR::bootstrap_example();
         problem.spin_torque_modules = vec![SpinTorqueModuleIR::ZhangLi {
+            schema_version: None, id: None, target: None,
+            formula_version: "zhang_li.legacy_fullmag.v0".to_string(),
+            operator_version: None,
             current_density: None,
             current_source: Some("drive".to_string()),
             degree: 0.4,
             beta: 0.02,
+            lande_g: None,
         }];
         let resolved = resolve_legacy_spin_torque(
             &problem,

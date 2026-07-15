@@ -86,6 +86,75 @@ bool initialize_stt_plan_fields(
     ctx.stt.epsilon_prime = plan.stt_epsilon_prime;
     ctx.stt.free_layer_thickness = plan.stt_free_layer_thickness;
     ctx.stt.current_sign = plan.stt_current_sign;
+    ctx.stt.formula_version = plan.stt_formula_version;
+    ctx.stt.realization_version = plan.stt_realization_version;
+    ctx.stt.operator_version = plan.stt_operator_version;
+    ctx.stt.stack_normal = {
+        plan.stt_stack_normal[0], plan.stt_stack_normal[1], plan.stt_stack_normal[2],
+    };
+    ctx.stt.lande_g = plan.stt_lande_g;
+    ctx.stt.active_node_mask.clear();
+    ctx.stt.active_element_mask.clear();
+    if (plan.stt_active_node_mask != nullptr || plan.stt_active_node_mask_len != 0) {
+        if (plan.stt_active_node_mask == nullptr ||
+            plan.stt_active_node_mask_len != static_cast<uint64_t>(ctx.mesh.n_nodes)) {
+            error = "stt_active_node_mask length must match FEM node count";
+            return false;
+        }
+        ctx.stt.active_node_mask.assign(
+            plan.stt_active_node_mask,
+            plan.stt_active_node_mask + plan.stt_active_node_mask_len);
+    }
+    if (plan.stt_active_element_mask != nullptr || plan.stt_active_element_mask_len != 0) {
+        if (plan.stt_active_element_mask == nullptr ||
+            plan.stt_active_element_mask_len != static_cast<uint64_t>(ctx.mesh.n_elements)) {
+            error = "stt_active_element_mask length must match FEM element count";
+            return false;
+        }
+        ctx.stt.active_element_mask.assign(
+            plan.stt_active_element_mask,
+            plan.stt_active_element_mask + plan.stt_active_element_mask_len);
+    }
+
+    if (ctx.stt.slonczewski_enabled &&
+        ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1) {
+        if (ctx.stt.realization_version ==
+            FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_INTERFACE_FLUX_V1) {
+            error = "slonczewski_interface_flux.v1 requires a dedicated FEM oriented surface functional and is fail-closed";
+            return false;
+        }
+        if (ctx.stt.realization_version !=
+            FULLMAG_FEM_STT_REALIZATION_SLONCZEWSKI_THIN_LAYER_V1) {
+            error = "canonical Slonczewski requires thin-layer realization v1";
+            return false;
+        }
+        if (!(ctx.stt.free_layer_thickness > 0.0)) {
+            error = "canonical Slonczewski thin-layer realization requires explicit free-layer thickness";
+            return false;
+        }
+        const double normal_len = vector_norm3(
+            ctx.stt.stack_normal[0], ctx.stt.stack_normal[1], ctx.stt.stack_normal[2]);
+        if (!std::isfinite(normal_len) || normal_len <= 1e-30) {
+            error = "canonical Slonczewski stack normal must be finite and non-zero";
+            return false;
+        }
+        for (double &component : ctx.stt.stack_normal) {
+            component /= normal_len;
+        }
+    } else if (ctx.stt.zhang_li_enabled &&
+               ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1) {
+        if (ctx.stt.operator_version != FULLMAG_FEM_STT_OPERATOR_ZL_CENTRAL_REFERENCE_V1) {
+            error = "canonical FEM Zhang-Li requires zl_central_reference_v1";
+            return false;
+        }
+        if (!std::isfinite(ctx.stt.lande_g) || ctx.stt.lande_g <= 0.0) {
+            error = "canonical Zhang-Li lande_g must be finite and positive";
+            return false;
+        }
+    } else if (ctx.stt.formula_version != FULLMAG_FEM_STT_FORMULA_LEGACY_FULLMAG_V0) {
+        error = "unsupported FEM STT formula version";
+        return false;
+    }
 
     if (ctx.stt.slonczewski_enabled) {
         const double len = vector_norm3(

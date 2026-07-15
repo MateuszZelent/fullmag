@@ -2563,6 +2563,7 @@ fn frequency_response_demag_backend_plan(
         stt_epsilon_prime: None,
         stt_thickness: None,
         stt_fixed_layer_position: None,
+        spin_torque_contract: None,
         has_oersted_cylinder: false,
         oersted_current: None,
         oersted_radius: None,

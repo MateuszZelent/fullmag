@@ -957,6 +957,36 @@ impl NativeFemBackend {
                 ffi::fullmag_fem_precision::FULLMAG_FEM_PRECISION_DOUBLE
             }
         };
+        let stt_contract = plan.spin_torque_contract.as_ref();
+        let stt_active_node_mask = stt_contract
+            .and_then(|contract| contract.active_node_mask.as_ref())
+            .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let stt_active_element_mask = stt_contract
+            .and_then(|contract| contract.active_element_mask.as_ref())
+            .map(|mask| mask.iter().map(|selected| u8::from(*selected)).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let stt_formula_version = match stt_contract.map(|contract| contract.formula_version.as_str()) {
+            None | Some("slonczewski.legacy_fullmag.v0") | Some("zhang_li.legacy_fullmag.v0") => 0,
+            Some("slonczewski.fullmag.v1") => 1,
+            Some("zhang_li.fullmag.v1") => 2,
+            Some(_) => u32::MAX,
+        };
+        let stt_realization_version = match stt_contract
+            .and_then(|contract| contract.realization_version.as_deref())
+        {
+            None => 0,
+            Some("slonczewski_thin_layer_homogenized.v1") => 1,
+            Some("slonczewski_interface_flux.v1") => 2,
+            Some(_) => u32::MAX,
+        };
+        let stt_operator_version = match stt_contract
+            .and_then(|contract| contract.operator_version.as_deref())
+        {
+            None => 0,
+            Some("zl_central_reference_v1") => 1,
+            Some(_) => u32::MAX,
+        };
 
         let mut plan_desc = ffi::fullmag_fem_plan_desc {
             mesh,
@@ -1310,6 +1340,17 @@ impl NativeFemBackend {
                 Some("bottom") if has_slonczewski_stt(plan) => -1.0,
                 _ => 1.0,
             },
+            stt_formula_version,
+            stt_realization_version,
+            stt_operator_version,
+            stt_stack_normal: stt_contract
+                .and_then(|contract| contract.stack_normal)
+                .unwrap_or([0.0, 0.0, 1.0]),
+            stt_lande_g: stt_contract.and_then(|contract| contract.lande_g).unwrap_or(0.0),
+            stt_active_node_mask: optional_slice_ptr(&stt_active_node_mask),
+            stt_active_node_mask_len: stt_active_node_mask.len() as u64,
+            stt_active_element_mask: optional_slice_ptr(&stt_active_element_mask),
+            stt_active_element_mask_len: stt_active_element_mask.len() as u64,
             // Oersted field
             has_oersted_cylinder: if plan.has_oersted_cylinder { 1 } else { 0 },
             oersted_current: plan.oersted_current.unwrap_or(0.0),
@@ -2939,6 +2980,7 @@ mod tests {
             stt_epsilon_prime: None,
             stt_thickness: None,
             stt_fixed_layer_position: None,
+            spin_torque_contract: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,
@@ -4277,6 +4319,7 @@ mod tests {
             stt_epsilon_prime: None,
             stt_thickness: None,
             stt_fixed_layer_position: None,
+            spin_torque_contract: None,
             has_oersted_cylinder: false,
             oersted_current: None,
             oersted_radius: None,

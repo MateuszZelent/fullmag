@@ -730,6 +730,25 @@ pub struct FemRegionMaterialIR {
     pub element_marker: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FemSpinTorquePlanIR {
+    pub formula_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realization_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<RegionRefIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack_normal: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lande_g: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_node_mask: Option<Vec<bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_element_mask: Option<Vec<bool>>,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FemDomainMeshModeIR {
@@ -969,6 +988,9 @@ pub struct FemPlanIR {
     /// Slonczewski fixed-layer position: "top" or "bottom". Controls current sign.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stt_fixed_layer_position: Option<String>,
+    /// Versioned FEM spin-torque formula, target and discrete realization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spin_torque_contract: Option<FemSpinTorquePlanIR>,
 
     /// Oersted field from cylindrical conductor
     #[serde(default)]

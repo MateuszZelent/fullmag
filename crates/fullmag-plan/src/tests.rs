@@ -4979,10 +4979,16 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
     let cases = vec![
         (
             fullmag_ir::SpinTorqueModuleIR::ZhangLi {
+                schema_version: None,
+                id: None,
+                target: None,
+                formula_version: "zhang_li.legacy_fullmag.v0".to_string(),
+                operator_version: None,
                 current_density: Some([1e10, 0.0, 0.0]),
                 current_source: None,
                 degree: 0.5,
                 beta: 0.1,
+                lande_g: None,
             },
             "zhang_li",
         ),
@@ -5037,6 +5043,40 @@ fn relaxation_rejects_zhang_li_slonczewski_sot_and_thermal() {
     assert!(err.reasons.iter().any(|reason| {
         reason.contains("thermal noise") && reason.contains("conservative equilibrium")
     }));
+}
+
+#[test]
+fn fem_canonical_zhang_li_plan_preserves_identity_and_target_masks() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.backend_policy.requested_backend = BackendTarget::Fem;
+    attach_unit_fem_domain_mesh(&mut ir);
+    ir.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::ZhangLi {
+        schema_version: Some("zhang_li_torque.v1".to_string()),
+        id: Some("cip".to_string()),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula_version: "zhang_li.fullmag.v1".to_string(),
+        operator_version: Some("zl_central_reference_v1".to_string()),
+        current_density: Some([-1e11, 0.0, 0.0]),
+        current_source: None,
+        degree: 0.4,
+        beta: 0.02,
+        lande_g: Some(1.9),
+    }];
+
+    let planned = plan(&ir).expect("canonical FEM Zhang-Li should plan");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    let contract = fem.spin_torque_contract.expect("versioned FEM STT contract");
+    assert_eq!(contract.formula_version, "zhang_li.fullmag.v1");
+    assert_eq!(contract.operator_version.as_deref(), Some("zl_central_reference_v1"));
+    assert_eq!(contract.lande_g, Some(1.9));
+    assert_eq!(contract.target.as_ref().map(|target| target.object_id.as_str()), Some("strip"));
+    assert!(contract.active_node_mask.as_ref().is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected)));
+    assert!(contract.active_element_mask.as_ref().is_some_and(|mask| !mask.is_empty() && mask.iter().all(|selected| *selected)));
 }
 
 #[test]

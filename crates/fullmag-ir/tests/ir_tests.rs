@@ -4170,10 +4170,16 @@ fn eigenmodes_require_spectrum_or_mode_output() {
 fn spin_torque_current_source_must_reference_current_transport() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.spin_torque_modules = vec![SpinTorqueModuleIR::ZhangLi {
+        schema_version: None,
+        id: None,
+        target: None,
+        formula_version: "zhang_li.legacy_fullmag.v0".to_string(),
+        operator_version: None,
         current_density: None,
         current_source: Some("drive".to_string()),
         degree: 0.4,
         beta: 0.02,
+        lande_g: None,
     }];
 
     let errors = ir
@@ -4249,6 +4255,66 @@ fn canonical_slonczewski_rejects_nonfinite_scalar_coefficients() {
             "missing {name} diagnostic in {errors:?}"
         );
     }
+}
+
+#[test]
+fn canonical_slonczewski_interface_flux_does_not_require_bulk_thickness() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+        schema_version: Some("slonczewski_torque.v1".to_string()),
+        id: Some("cpp-interface".to_string()),
+        target: Some(fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: None,
+        }),
+        formula_version: "slonczewski.fullmag.v1".to_string(),
+        current_density: Some([0.0, 0.0, -5e10]),
+        current_source: None,
+        degree: 0.4,
+        spin_polarization: [0.0, 1.0, 0.0],
+        stack_normal: Some([0.0, 0.0, 1.0]),
+        lambda_asymmetry: 1.2,
+        epsilon_prime: 0.0,
+        free_layer_thickness_m: None,
+        fixed_layer_position: None,
+        realization: Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
+            interface_id: "fixed-to-free".to_string(),
+            realization_version: "slonczewski_interface_flux.v1".to_string(),
+        }),
+    }];
+
+    ir.validate().unwrap_or_else(|errors| {
+        panic!("surface Slonczewski realization must not invent bulk thickness: {errors:?}")
+    });
+}
+
+#[test]
+fn canonical_zhang_li_identity_survives_problem_ir_roundtrip() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["spin_torque_modules"] = serde_json::json!([{
+        "kind": "zhang_li",
+        "schema_version": "zhang_li_torque.v1",
+        "id": "cip",
+        "target": {"object_id": "strip"},
+        "formula_version": "zhang_li.fullmag.v1",
+        "operator_version": "zl_central_reference_v1",
+        "current_density": [5e10, 0.0, 0.0],
+        "degree": 0.4,
+        "beta": 0.02,
+        "lande_g": 2.0
+    }]);
+
+    let ir: ProblemIR = serde_json::from_value(value).expect("canonical Zhang-Li wire shape");
+    ir.validate()
+        .unwrap_or_else(|errors| panic!("canonical Zhang-Li should validate: {errors:?}"));
+    let roundtrip = serde_json::to_value(ir).unwrap();
+    let torque = &roundtrip["spin_torque_modules"][0];
+    assert_eq!(torque["schema_version"], "zhang_li_torque.v1");
+    assert_eq!(torque["id"], "cip");
+    assert_eq!(torque["target"]["object_id"], "strip");
+    assert_eq!(torque["formula_version"], "zhang_li.fullmag.v1");
+    assert_eq!(torque["operator_version"], "zl_central_reference_v1");
+    assert_eq!(torque["lande_g"], 2.0);
 }
 
 #[test]

@@ -1833,6 +1833,16 @@ def _render_spin_torques(
                 kwargs.append(f"degree={_py_number(module.degree)}")
             if module.beta != 0.0:
                 kwargs.append(f"beta={_py_number(module.beta)}")
+            if module.formula_version == "zhang_li.fullmag.v1":
+                assert module.id is not None and module.target is not None
+                assert module.lande_g is not None
+                kwargs.append(f"id={_py_repr(module.id)}")
+                kwargs.append(
+                    "target=fm.RegionRef("
+                    f"object_id={_py_repr(module.target.object_id)}, "
+                    f"region_id={'None' if module.target.region_id is None else _py_repr(module.target.region_id)})"
+                )
+                kwargs.append(f"lande_g={_py_number(module.lande_g)}")
             lines.append(f"fm.ZhangLiSTT({', '.join(kwargs)})")
             continue
         if isinstance(module, InterfaceCppSTT):
@@ -2175,7 +2185,10 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
             "fixed_layer_position", "formula_version", "schema_version", "id", "target",
             "stack_normal", "realization",
         },
-        "zhang_li": {"kind", "current_density", "current_source", "degree", "beta"},
+        "zhang_li": {
+            "kind", "schema_version", "id", "target", "formula_version",
+            "operator_version", "current_density", "current_source", "degree", "beta", "lande_g",
+        },
         "interface_cpp": {
             "kind", "current_density", "current_source", "spin_polarization",
             "interface_normal", "degree", "lambda_asymmetry", "epsilon_prime",
@@ -2255,6 +2268,30 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
             kwargs.append(
                 f"fixed_layer_position={_py_repr(_required_nonempty_string(entry, 'fixed_layer_position', context=str(kind)))}"
             )
+    if kind == "zhang_li":
+        formula_version = entry.get("formula_version", "zhang_li.legacy_fullmag.v0")
+        if formula_version == "zhang_li.fullmag.v1":
+            if _required_entry(entry, "schema_version", context=str(kind)) != "zhang_li_torque.v1":
+                raise ValueError("canonical zhang_li schema_version must be zhang_li_torque.v1")
+            if _required_entry(entry, "operator_version", context=str(kind)) != "zl_central_reference_v1":
+                raise ValueError("canonical zhang_li requires zl_central_reference_v1")
+            kwargs.append(f"id={_py_repr(_required_nonempty_string(entry, 'id', context=str(kind)))}")
+            target = _required_entry(entry, "target", context=str(kind))
+            if not isinstance(target, Mapping):
+                raise ValueError("zhang_li target must be an object")
+            object_id = _required_nonempty_string(target, "object_id", context="zhang_li.target")
+            region_id = target.get("region_id")
+            if region_id is not None and not isinstance(region_id, str):
+                raise ValueError("zhang_li target region_id must be a string")
+            kwargs.append(
+                "target=fm.RegionRef("
+                f"object_id={_py_repr(object_id)}, region_id={'None' if region_id is None else _py_repr(region_id)})"
+            )
+            kwargs.append(
+                f"lande_g={_required_roundtrip_number(entry, 'lande_g', context=str(kind))}"
+            )
+        elif formula_version != "zhang_li.legacy_fullmag.v0":
+            raise ValueError(f"unsupported zhang_li formula_version {formula_version!r}")
     return f"fm.{constructor}({', '.join(kwargs)})"
 
 

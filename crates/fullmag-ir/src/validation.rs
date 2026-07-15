@@ -627,7 +627,7 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                         "spin_torque_modules[{index}] slonczewski spin_polarization must contain finite values"
                     ));
                 }
-                if !(0.0 < *degree && *degree <= 1.0) {
+                if !degree.is_finite() || !(0.0 < *degree && *degree <= 1.0) {
                     errors.push(format!(
                         "spin_torque_modules[{index}] slonczewski degree must be in (0, 1]"
                     ));
@@ -680,15 +680,19 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                         if fixed_layer_position.is_some() {
                             errors.push(format!("spin_torque_modules[{index}] canonical slonczewski must not contain legacy fixed_layer_position"));
                         }
-                        if free_layer_thickness_m.is_none() {
-                            errors.push(format!("spin_torque_modules[{index}] canonical thin-layer slonczewski requires free_layer_thickness_m"));
-                        }
                         match realization {
                             Some(crate::SlonczewskiRealizationIR::ThinLayerHomogenized { realization_version })
-                                if realization_version == "slonczewski_thin_layer_homogenized.v1" => {}
+                                if realization_version == "slonczewski_thin_layer_homogenized.v1" => {
+                                    if free_layer_thickness_m.is_none() {
+                                        errors.push(format!("spin_torque_modules[{index}] canonical thin-layer slonczewski requires free_layer_thickness_m"));
+                                    }
+                                }
                             Some(crate::SlonczewskiRealizationIR::InterfaceFlux { interface_id, realization_version }) => {
                                 if interface_id.trim().is_empty() || realization_version != "slonczewski_interface_flux.v1" {
                                     errors.push(format!("spin_torque_modules[{index}] canonical interface-flux slonczewski has invalid identity"));
+                                }
+                                if free_layer_thickness_m.is_some() {
+                                    errors.push(format!("spin_torque_modules[{index}] canonical interface-flux slonczewski must not contain bulk free_layer_thickness_m"));
                                 }
                             }
                             _ => errors.push(format!("spin_torque_modules[{index}] canonical slonczewski requires a registered realization identity")),
@@ -703,21 +707,52 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                 }
             }
             SpinTorqueModuleIR::ZhangLi {
+                schema_version,
+                id,
+                target,
+                formula_version,
+                operator_version,
                 current_density,
                 current_source,
                 degree,
                 beta,
+                lande_g,
             } => {
                 validate_vector_binding(index, "zhang_li", current_density, current_source, errors);
-                if !(0.0 < *degree && *degree <= 1.0) {
+                if !degree.is_finite() || !(0.0 < *degree && *degree <= 1.0) {
                     errors.push(format!(
                         "spin_torque_modules[{index}] zhang_li degree must be in (0, 1]"
                     ));
                 }
-                if *beta < 0.0 {
+                if !beta.is_finite() || *beta < 0.0 {
                     errors.push(format!(
                         "spin_torque_modules[{index}] zhang_li beta must be >= 0"
                     ));
+                }
+                match formula_version.as_str() {
+                    "zhang_li.fullmag.v1" => {
+                        if schema_version.as_deref() != Some("zhang_li_torque.v1") {
+                            errors.push(format!("spin_torque_modules[{index}] canonical zhang_li schema_version must be zhang_li_torque.v1"));
+                        }
+                        if id.as_deref().is_none_or(|value| value.trim().is_empty()) {
+                            errors.push(format!("spin_torque_modules[{index}] canonical zhang_li id must not be empty"));
+                        }
+                        if target.as_ref().is_none_or(|target| target.object_id.trim().is_empty() || target.region_id.as_deref().is_some_and(|value| value.trim().is_empty())) {
+                            errors.push(format!("spin_torque_modules[{index}] canonical zhang_li requires a non-empty target"));
+                        }
+                        if operator_version.as_deref() != Some("zl_central_reference_v1") {
+                            errors.push(format!("spin_torque_modules[{index}] canonical FEM zhang_li requires operator_version zl_central_reference_v1"));
+                        }
+                        if lande_g.is_none_or(|value| !value.is_finite() || value <= 0.0) {
+                            errors.push(format!("spin_torque_modules[{index}] canonical zhang_li lande_g must be finite and > 0"));
+                        }
+                    }
+                    "zhang_li.legacy_fullmag.v0" => {
+                        if schema_version.is_some() || id.is_some() || target.is_some() || operator_version.is_some() || lande_g.is_some() {
+                            errors.push(format!("spin_torque_modules[{index}] legacy zhang_li must not contain canonical identity, target, operator_version, or lande_g"));
+                        }
+                    }
+                    other => errors.push(format!("spin_torque_modules[{index}] unsupported zhang_li formula_version '{other}'")),
                 }
             }
             SpinTorqueModuleIR::InterfaceCpp {

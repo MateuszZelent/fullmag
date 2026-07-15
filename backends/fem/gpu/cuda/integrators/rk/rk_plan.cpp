@@ -78,6 +78,17 @@ GpuRkPlan gpu_rk_plan_device_resident(const Context &ctx, std::string &reason)
     GpuRkPlan plan{};
     plan.stage_count = gpu_rk_stage_count(ctx.base_plan.integrator);
 
+    if (ctx.stt.slonczewski_enabled &&
+        ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_SLONCZEWSKI_V1) {
+        reason = "canonical Slonczewski v1 is not qualified on FEM GPU; strict GPU execution is fail-closed before provenance";
+        return plan;
+    }
+    if (ctx.stt.zhang_li_enabled &&
+        ctx.stt.formula_version == FULLMAG_FEM_STT_FORMULA_ZHANG_LI_V1) {
+        reason = "canonical Zhang-Li v1 is not qualified on FEM GPU; strict GPU execution is fail-closed before provenance";
+        return plan;
+    }
+
     if (!ctx.gpu_state.device.lifecycle.allocated) {
         reason = "GPU RK device-resident path requires allocated FemGpuState";
         return plan;

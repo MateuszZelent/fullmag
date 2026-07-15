@@ -103,6 +103,26 @@ class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, name):
                 fm.SlonczewskiSTT(**{**base, name: value})
 
+    def test_canonical_zhang_li_round_trip_preserves_formula_target_g_and_operator(self) -> None:
+        module = fm.ZhangLiSTT(
+            id="cip",
+            target=fm.RegionRef("layer"),
+            current_density=(-2e11, 0.0, 0.0),
+            degree=0.55,
+            beta=0.03,
+            lande_g=1.9,
+        )
+        entry = module.to_ir_module()
+        self.assertEqual(entry["schema_version"], "zhang_li_torque.v1")
+        self.assertEqual(entry["formula_version"], "zhang_li.fullmag.v1")
+        self.assertEqual(entry["operator_version"], "zl_central_reference_v1")
+        self.assertEqual(entry["target"], {"object_id": "layer"})
+        self.assertEqual(entry["lande_g"], 1.9)
+
+        rendered = _render_spin_torques(_problem(spin_torques=[module]), surface="flat")
+        rebuilt = _eval_rendered(rendered)
+        self.assertEqual(rebuilt.to_ir_module(), entry)
+
     def test_flat_registration_is_typed_returns_object_and_preserves_order(self) -> None:
         first = fm.ZhangLiSTT(current_density=(1e11, 0.0, 0.0))
         second = fm.SlonczewskiSTT(
