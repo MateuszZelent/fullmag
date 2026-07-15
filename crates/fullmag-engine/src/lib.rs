@@ -2577,6 +2577,90 @@ mod tests {
         );
     }
 
+    fn run_dynamic_oersted_abm3_full_branch_aos(
+        problem: &ExchangeLlgProblem,
+        step: BufferStepper,
+    ) -> [f64; 3] {
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]])
+            .expect("ABM3 AoS/scatter state should build");
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+        for _ in 0..4 {
+            step(
+                problem,
+                &mut state,
+                1.0e-3,
+                &mut ws,
+                &mut bufs,
+                EvaluationRequest::Minimal,
+            )
+            .expect("ABM3 AoS/scatter full-branch step should succeed");
+        }
+        state.magnetization()[0]
+    }
+
+    fn run_dynamic_oersted_abm3_full_branch_persistent(problem: &ExchangeLlgProblem) -> [f64; 3] {
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]])
+            .expect("ABM3 persistent SoA state should build")
+            .to_soa();
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+        for _ in 0..4 {
+            problem
+                .abm3_step_soa_state_buf(
+                    &mut state,
+                    1.0e-3,
+                    &mut ws,
+                    &mut bufs,
+                    EvaluationRequest::Minimal,
+                )
+                .expect("ABM3 persistent SoA full-branch step should succeed");
+        }
+        state.magnetization().gather_to_aos()[0]
+    }
+
+    #[test]
+    fn dynamic_oersted_uses_endpoint_time_in_full_abm3_branch_for_all_cpu_layouts() {
+        let dt = 1.0e-3;
+        let half_width = 1.0e-6;
+        let active = dynamic_oersted_problem(
+            TimeIntegrator::ABM3,
+            4.0 * dt - half_width,
+            4.0 * dt + half_width,
+        );
+        let inactive = dynamic_oersted_problem(TimeIntegrator::ABM3, 6.0 * dt, 7.0 * dt);
+
+        let aos_active =
+            run_dynamic_oersted_abm3_full_branch_aos(&active, ExchangeLlgProblem::abm3_step_buf);
+        let aos_inactive =
+            run_dynamic_oersted_abm3_full_branch_aos(&inactive, ExchangeLlgProblem::abm3_step_buf);
+        let scatter_active = run_dynamic_oersted_abm3_full_branch_aos(
+            &active,
+            ExchangeLlgProblem::abm3_step_soa_buf,
+        );
+        let scatter_inactive = run_dynamic_oersted_abm3_full_branch_aos(
+            &inactive,
+            ExchangeLlgProblem::abm3_step_soa_buf,
+        );
+        let persistent_active = run_dynamic_oersted_abm3_full_branch_persistent(&active);
+        let persistent_inactive = run_dynamic_oersted_abm3_full_branch_persistent(&inactive);
+
+        for (label, driven, baseline) in [
+            ("AoS", aos_active, aos_inactive),
+            ("scatter SoA", scatter_active, scatter_inactive),
+            ("persistent SoA", persistent_active, persistent_inactive),
+        ] {
+            assert!(
+                (driven[1] - baseline[1]).abs() + (driven[2] - baseline[2]).abs() > 1.0e-12,
+                "{label} full ABM3 branch must evaluate Oersted at predictor endpoint time"
+            );
+        }
+        assert_vector_close(aos_active, scatter_active, 1.0e-12);
+        assert_vector_close(aos_active, persistent_active, 1.0e-12);
+    }
+
     #[test]
     fn dynamic_oersted_final_report_is_refreshed_at_accepted_time() {
         let dt = 1.0e-3;

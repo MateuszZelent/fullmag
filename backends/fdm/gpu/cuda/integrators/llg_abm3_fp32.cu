@@ -15,7 +15,7 @@ namespace fdm {
 
 extern void launch_exchange_field_fp32(Context &ctx);
 extern void launch_demag_field_fp32(Context &ctx);
-extern void launch_effective_field_fp32(Context &ctx);
+extern void launch_effective_field_fp32(Context &ctx, double evaluation_time);
 extern double launch_exchange_energy_fp32(Context &ctx);
 extern double launch_demag_energy_fp32(Context &ctx);
 extern double launch_external_energy_fp32(Context &ctx);
@@ -107,7 +107,7 @@ static void abm3_fill_diagnostics_fp32(Context &ctx, double dt, fullmag_fdm_step
 
     if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-    launch_effective_field_fp32(ctx);
+    launch_effective_field_fp32(ctx, ctx.current_time);
 
     double e_ex = ctx.enable_exchange ? launch_exchange_energy_fp32(ctx) : 0.0;
     double e_demag = launch_demag_energy_fp32(ctx);
@@ -167,7 +167,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
         if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
         if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-        launch_effective_field_fp32(ctx);
+        launch_effective_field_fp32(ctx, step_start_time);
         if (abort_step_from_tmp(ctx, false)) return;
 
         llg_rhs_fp32_kernel<<<grid, 256>>>(
@@ -187,7 +187,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
         if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
         if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-        launch_effective_field_fp32(ctx);
+        launch_effective_field_fp32(ctx, step_start_time + dt);
         if (abort_step_from_tmp(ctx, false)) return;
 
         llg_rhs_fp32_kernel<<<grid, 256>>>(
@@ -211,7 +211,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
         if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
         if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-        launch_effective_field_fp32(ctx);
+        launch_effective_field_fp32(ctx, ctx.current_time);
 
         abm3_rotate_history_fp32(ctx, ctx.cell_count);
 
@@ -244,7 +244,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
     if (ctx.enable_exchange) launch_exchange_field_fp32(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp32(ctx);
-    launch_effective_field_fp32(ctx);
+    launch_effective_field_fp32(ctx, step_start_time + dt);
     if (abort_step_from_tmp(ctx, false)) return;
 
     llg_rhs_fp32_kernel<<<grid, 256>>>(

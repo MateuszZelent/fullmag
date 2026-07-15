@@ -417,7 +417,7 @@ struct SttParams {
     double  stt_cpp_pf          = 0.0;
 };
 
-inline double oersted_field_scale(const Context &ctx) {
+inline double oersted_field_scale(const Context &ctx, double evaluation_time) {
     if (!ctx.has_oersted_field) {
         return 0.0;
     }
@@ -426,7 +426,7 @@ inline double oersted_field_scale(const Context &ctx) {
     }
 
     double scale = ctx.oersted_current;
-    const double t = ctx.current_time;
+    const double t = evaluation_time;
     switch (ctx.oersted_time_dep_kind) {
         case 1: {
             const double f = ctx.oersted_time_dep_freq;

@@ -22,7 +22,7 @@ namespace fdm {
 // External declarations
 extern void launch_exchange_field_fp64(Context &ctx);
 extern void launch_demag_field_fp64(Context &ctx);
-extern void launch_effective_field_fp64(Context &ctx);
+extern void launch_effective_field_fp64(Context &ctx, double evaluation_time);
 extern double launch_exchange_energy_fp64(Context &ctx);
 extern double launch_demag_energy_fp64(Context &ctx);
 extern double launch_external_energy_fp64(Context &ctx);
@@ -208,7 +208,7 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
             return false;
         }
     }
-    launch_effective_field_fp64(ctx);
+    launch_effective_field_fp64(ctx, evaluation_time);
     if (poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx);
         return false;

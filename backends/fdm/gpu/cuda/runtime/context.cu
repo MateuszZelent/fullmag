@@ -27,8 +27,8 @@ extern void launch_demag_field_fp64(Context &ctx);
 extern void launch_demag_field_fp32(Context &ctx);
 extern void launch_anisotropy_field_fp64(Context &ctx);
 extern void launch_anisotropy_field_fp32(Context &ctx);
-extern void launch_effective_field_fp64(Context &ctx);
-extern void launch_effective_field_fp32(Context &ctx);
+extern void launch_effective_field_fp64(Context &ctx, double evaluation_time);
+extern void launch_effective_field_fp32(Context &ctx, double evaluation_time);
 extern void launch_newell_compute_spectra_fp64(Context &ctx);
 extern void launch_newell_compute_spectra_fp32(Context &ctx);
 extern bool launch_multilayer_dmi_field_fp64(Context &ctx);
@@ -2315,7 +2315,7 @@ static bool context_download_field_impl(
         case FULLMAG_FDM_OBSERVABLE_H_ANI: field = &ctx.h_ani; break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF: field = &ctx.work; break;
         case FULLMAG_FDM_OBSERVABLE_H_OE: {
-            const double scale = oersted_field_scale(ctx);
+            const double scale = oersted_field_scale(ctx, ctx.current_time);
             for (uint64_t i = 0; i < n; i++) {
                 const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
                 out_xyz[3 * i + 0] = 0.0;
@@ -2791,7 +2791,7 @@ static bool context_download_field_preview_impl(
     }
 
     if (observable == FULLMAG_FDM_OBSERVABLE_H_OE) {
-        const double scale = oersted_field_scale(ctx);
+        const double scale = oersted_field_scale(ctx, ctx.current_time);
         for (uint64_t i = 0; i < preview_count * 3u; ++i) {
             out_xyz[i] = static_cast<HostScalar>(static_cast<double>(out_xyz[i]) * scale);
         }
@@ -2942,7 +2942,7 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
                 err = cudaMemcpy(hz.data(), ctx.h_oe_static.z, component_bytes, cudaMemcpyDeviceToHost);
                 if (err != cudaSuccess) return fail("cudaMemcpy(snapshot.h_oe_z)", err);
                 auto *host = reinterpret_cast<double *>(snapshot->host_soa);
-                const double scale = oersted_field_scale(ctx);
+                const double scale = oersted_field_scale(ctx, ctx.current_time);
                 for (uint64_t i = 0; i < ctx.cell_count; ++i) {
                     const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
                     host[i] = (ctx.has_oersted_field && is_active) ? hx[i] * scale : 0.0;
@@ -2966,7 +2966,7 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
                 err = cudaMemcpy(hz.data(), ctx.h_oe_static.z, component_bytes, cudaMemcpyDeviceToHost);
                 if (err != cudaSuccess) return fail("cudaMemcpy(snapshot.h_oe_z)", err);
                 auto *host = reinterpret_cast<float *>(snapshot->host_soa);
-                const float scale = static_cast<float>(oersted_field_scale(ctx));
+                const float scale = static_cast<float>(oersted_field_scale(ctx, ctx.current_time));
                 for (uint64_t i = 0; i < ctx.cell_count; ++i) {
                     const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
                     host[i] = (ctx.has_oersted_field && is_active) ? hx[i] * scale : 0.0f;
@@ -3504,7 +3504,7 @@ bool context_refresh_observables(Context &ctx) {
         if (ctx.enable_demag) {
             launch_demag_field_fp64(ctx);
         }
-        launch_effective_field_fp64(ctx);
+        launch_effective_field_fp64(ctx, ctx.current_time);
     } else {
         if (ctx.enable_exchange) {
             launch_exchange_field_fp32(ctx);
@@ -3512,7 +3512,7 @@ bool context_refresh_observables(Context &ctx) {
         if (ctx.enable_demag) {
             launch_demag_field_fp32(ctx);
         }
-        launch_effective_field_fp32(ctx);
+        launch_effective_field_fp32(ctx, ctx.current_time);
     }
 
     cudaError_t err = cudaGetLastError();

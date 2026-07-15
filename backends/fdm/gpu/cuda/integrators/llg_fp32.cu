@@ -17,7 +17,7 @@ namespace fdm {
 extern void launch_exchange_field_fp32(Context &ctx);
 extern double launch_exchange_energy_fp32(Context &ctx);
 extern void launch_demag_field_fp32(Context &ctx);
-extern void launch_effective_field_fp32(Context &ctx);
+extern void launch_effective_field_fp32(Context &ctx, double evaluation_time);
 extern double launch_demag_energy_fp32(Context &ctx);
 extern double launch_external_energy_fp32(Context &ctx);
 extern double reduce_uniaxial_anisotropy_energy_fp32(Context &ctx);
@@ -332,7 +332,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp32(ctx);
     }
-    launch_effective_field_fp32(ctx);
+    launch_effective_field_fp32(ctx, step_start_time);
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 2: k1 = RHS(m, H_eff)
@@ -359,7 +359,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp32(ctx);
     }
-    launch_effective_field_fp32(ctx);
+    launch_effective_field_fp32(ctx, step_start_time + dt);
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Step 5: k2 = RHS(m_pred, H_eff_pred) → store in h_ex
@@ -394,7 +394,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (ctx.enable_demag) {
         launch_demag_field_fp32(ctx);
     }
-    launch_effective_field_fp32(ctx);
+    launch_effective_field_fp32(ctx, step_start_time + dt);
 
     double e_ex = 0.0;
     if (ctx.enable_exchange) {
