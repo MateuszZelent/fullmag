@@ -40,6 +40,19 @@ def _default_texture_transform() -> dict[str, object]:
     }
 
 
+def _copy_present_collection(
+    source: dict[str, Any],
+    destination: dict[str, Any],
+    key: str,
+) -> None:
+    if key not in source:
+        return
+    value = source[key]
+    if not isinstance(value, list):
+        raise ValueError(f"{key} must be a list when present")
+    destination[key] = list(value)
+
+
 _INTERACTION_ORDER = (
     "exchange",
     "demag",
@@ -252,7 +265,7 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             }
         )
 
-    return {
+    document = {
         "version": "scene.v2",
         "revision": int(builder.get("revision", 0)),
         "scene": {
@@ -269,8 +282,6 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "modules": builder.get("current_modules") or [],
             "excitation_analysis": builder.get("excitation_analysis"),
         },
-        "spin_torques": builder.get("spin_torques") or [],
-        "oersted_terms": builder.get("oersted_terms") or [],
         "couplings": builder.get("couplings") or [],
         "study": {
             "backend": builder.get("backend"),
@@ -307,6 +318,9 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "active_transform_scope": None,
         },
     }
+    _copy_present_collection(builder, document, "spin_torques")
+    _copy_present_collection(builder, document, "oersted_terms")
+    return document
 
 
 def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
@@ -390,7 +404,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
 
     study = dict(scene.get("study") or {})
     current_modules = dict(scene.get("current_modules") or {})
-    return {
+    builder = {
         "revision": int(scene.get("revision", 0)),
         "backend": study.get("backend"),
         "cpu_threads": study.get("requested_cpu_threads"),
@@ -410,16 +424,17 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "couplings": scene.get("couplings") or [],
         "current_modules": current_modules.get("modules") or [],
         "excitation_analysis": current_modules.get("excitation_analysis"),
-        "spin_torques": scene.get("spin_torques") or [],
-        "oersted_terms": scene.get("oersted_terms") or [],
     }
+    _copy_present_collection(scene, builder, "spin_torques")
+    _copy_present_collection(scene, builder, "oersted_terms")
+    return builder
 
 
 def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     builder = build_builder_from_scene_document(scene)
     solver = dict(builder.get("solver") or {})
     mesh = dict(builder.get("mesh") or {})
-    return {
+    overrides = {
         "runtime_selection": {
             "cpu_threads": _int_or_none(builder.get("cpu_threads")),
         },
@@ -534,9 +549,10 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "couplings": builder.get("couplings") or [],
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
-        "spin_torques": builder.get("spin_torques") or [],
-        "oersted_terms": builder.get("oersted_terms") or [],
     }
+    _copy_present_collection(builder, overrides, "spin_torques")
+    _copy_present_collection(builder, overrides, "oersted_terms")
+    return overrides
 
 
 def _number_or_none(value: Any) -> float | str | None:

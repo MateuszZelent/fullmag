@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -262,7 +263,9 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(current_module_lines)
 
-    oersted_lines = _render_oersted_terms(base_problem, overrides=overrides)
+    oersted_lines = _render_oersted_terms(
+        base_problem, overrides=overrides, surface=surface
+    )
     if oersted_lines:
         lines.append("")
         lines.extend(oersted_lines)
@@ -1858,13 +1861,65 @@ def _render_spin_torques(
         raise ValueError(
             f"canonical flat-script rewrite does not yet support spin torque {type(module).__name__}"
         )
-    return lines
+    register = _surface_call(surface, "spin_torque")
+    return [lines[0], *(f"{register}({expression})" for expression in lines[1:])]
 
 
 def _required_entry(entry: Mapping[str, object], key: str, *, context: str) -> object:
     if key not in entry:
         raise ValueError(f"{context} entry is missing required field {key!r}")
     return entry[key]
+
+
+def _required_roundtrip_number(
+    entry: Mapping[str, object], key: str, *, context: str
+) -> str:
+    value = _required_entry(entry, key, context=context)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{context}.{key} must be a finite number")
+    candidate = float(value)
+    if not math.isfinite(candidate):
+        raise ValueError(f"{context}.{key} must be a finite number")
+    return repr(value)
+
+
+def _roundtrip_literal(value: object, *, context: str) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (int, float)):
+        if not math.isfinite(float(value)):
+            raise ValueError(f"{context} must contain only finite numbers")
+        return repr(value)
+    if isinstance(value, str):
+        return _py_repr(value)
+    if isinstance(value, (list, tuple)):
+        opening, closing = ("[", "]") if isinstance(value, list) else ("(", ")")
+        return opening + ", ".join(
+            _roundtrip_literal(item, context=context) for item in value
+        ) + closing
+    if isinstance(value, dict):
+        return "{" + ", ".join(
+            f"{_py_repr(str(key))}: {_roundtrip_literal(item, context=context)}"
+            for key, item in sorted(value.items())
+        ) + "}"
+    raise ValueError(f"{context} contains unsupported value {type(value).__name__}")
+
+
+def _required_nonempty_string(
+    entry: Mapping[str, object], key: str, *, context: str
+) -> str:
+    value = _required_entry(entry, key, context=context)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{context}.{key} must be a non-empty string")
+    return value
+
+
+def _reject_unexpected_fields(
+    entry: Mapping[str, object], allowed: set[str], *, context: str
+) -> None:
+    unexpected = sorted(set(entry) - allowed)
+    if unexpected:
+        raise ValueError(f"{context} has unsupported fields {unexpected!r}")
 
 
 def _required_mapping(entry: Mapping[str, object], key: str, *, context: str) -> Mapping[str, object]:
@@ -1878,17 +1933,22 @@ def _required_vec3(entry: Mapping[str, object], key: str, *, context: str) -> Se
     value = _required_entry(entry, key, context=context)
     if not isinstance(value, (list, tuple)) or len(value) != 3:
         raise ValueError(f"{context}.{key} must be a three-component vector")
+    for index, component in enumerate(value):
+        if isinstance(component, bool) or not isinstance(component, (int, float)):
+            raise ValueError(f"{context}.{key}[{index}] must be a finite number")
+        if not math.isfinite(float(component)):
+            raise ValueError(f"{context}.{key}[{index}] must be a finite number")
     return value
 
 
 def _render_region_ref(entry: Mapping[str, object]) -> str:
-    object_id = _required_entry(entry, "object_id", context="prescribed_sot.target")
-    if not isinstance(object_id, str) or not object_id:
-        raise ValueError("prescribed_sot.target.object_id must be a non-empty string")
+    object_id = _required_nonempty_string(
+        entry, "object_id", context="prescribed_sot.target"
+    )
     kwargs = [_py_repr(object_id)]
     if "region_id" in entry:
         region_id = entry["region_id"]
-        if not isinstance(region_id, str) or not region_id:
+        if not isinstance(region_id, str) or not region_id.strip():
             raise ValueError("prescribed_sot.target.region_id must be a non-empty string")
         kwargs.append(_py_repr(region_id))
     return f"fm.RegionRef({', '.join(kwargs)})"
@@ -1897,22 +1957,36 @@ def _render_region_ref(entry: Mapping[str, object]) -> str:
 def _render_sot_envelope(entry: Mapping[str, object]) -> str:
     kind = _required_entry(entry, "kind", context="prescribed_sot.drive.envelope")
     context = f"prescribed_sot.drive.envelope[{kind}]"
+    allowed_by_kind = {
+        "constant": {"kind", "value"},
+        "sinusoidal": {"kind", "amplitude", "frequency_hz", "phase_rad", "offset"},
+        "pulse": {"kind", "amplitude", "t_on_s", "t_off_s"},
+        "piecewise_linear": {"kind", "points"},
+        "sinc": {"kind", "amplitude", "center_s", "bandwidth_hz", "offset"},
+        "tabulated": {
+            "kind", "artifact_ref", "interpolation", "extrapolation", "bandwidth_hz",
+        },
+    }
+    allowed = allowed_by_kind.get(str(kind))
+    if allowed is None:
+        raise ValueError(f"unsupported prescribed SOT envelope kind {kind!r}")
+    _reject_unexpected_fields(entry, allowed, context=context)
     if kind == "constant":
-        return f"fm.ConstantEnvelope({_py_number(_required_entry(entry, 'value', context=context))})"
+        return f"fm.ConstantEnvelope({_required_roundtrip_number(entry, 'value', context=context)})"
     if kind == "sinusoidal":
         return (
             "fm.SinusoidalEnvelope("
-            f"{_py_number(_required_entry(entry, 'amplitude', context=context))}, "
-            f"{_py_number(_required_entry(entry, 'frequency_hz', context=context))}, "
-            f"phase_rad={_py_number(_required_entry(entry, 'phase_rad', context=context))}, "
-            f"offset={_py_number(_required_entry(entry, 'offset', context=context))})"
+            f"{_required_roundtrip_number(entry, 'amplitude', context=context)}, "
+            f"{_required_roundtrip_number(entry, 'frequency_hz', context=context)}, "
+            f"phase_rad={_required_roundtrip_number(entry, 'phase_rad', context=context)}, "
+            f"offset={_required_roundtrip_number(entry, 'offset', context=context)})"
         )
     if kind == "pulse":
         return (
             "fm.PulseEnvelope("
-            f"{_py_number(_required_entry(entry, 'amplitude', context=context))}, "
-            f"{_py_number(_required_entry(entry, 't_on_s', context=context))}, "
-            f"{_py_number(_required_entry(entry, 't_off_s', context=context))})"
+            f"{_required_roundtrip_number(entry, 'amplitude', context=context)}, "
+            f"{_required_roundtrip_number(entry, 't_on_s', context=context)}, "
+            f"{_required_roundtrip_number(entry, 't_off_s', context=context)})"
         )
     if kind == "piecewise_linear":
         points = _required_entry(entry, "points", context=context)
@@ -1924,26 +1998,28 @@ def _render_sot_envelope(entry: Mapping[str, object]) -> str:
                 raise ValueError(f"{context}.points[{index}] must be an object")
             rendered_points.append(
                 "fm.TimeEnvelopePoint("
-                f"{_py_number(_required_entry(point, 'time_s', context=f'{context}.points[{index}]'))}, "
-                f"{_py_number(_required_entry(point, 'value', context=f'{context}.points[{index}]'))})"
+                f"{_required_roundtrip_number(point, 'time_s', context=f'{context}.points[{index}]')}, "
+                f"{_required_roundtrip_number(point, 'value', context=f'{context}.points[{index}]')})"
             )
         return f"fm.PiecewiseLinearEnvelope([{', '.join(rendered_points)}])"
     if kind == "sinc":
         return (
             "fm.SincEnvelope("
-            f"{_py_number(_required_entry(entry, 'amplitude', context=context))}, "
-            f"center_s={_py_number(_required_entry(entry, 'center_s', context=context))}, "
-            f"bandwidth_hz={_py_number(_required_entry(entry, 'bandwidth_hz', context=context))}, "
-            f"offset={_py_number(_required_entry(entry, 'offset', context=context))})"
+            f"{_required_roundtrip_number(entry, 'amplitude', context=context)}, "
+            f"center_s={_required_roundtrip_number(entry, 'center_s', context=context)}, "
+            f"bandwidth_hz={_required_roundtrip_number(entry, 'bandwidth_hz', context=context)}, "
+            f"offset={_required_roundtrip_number(entry, 'offset', context=context)})"
         )
     if kind == "tabulated":
         kwargs = [
-            _py_repr(_required_entry(entry, "artifact_ref", context=context)),
-            f"interpolation={_py_repr(_required_entry(entry, 'interpolation', context=context))}",
-            f"extrapolation={_py_repr(_required_entry(entry, 'extrapolation', context=context))}",
+            _py_repr(_required_nonempty_string(entry, "artifact_ref", context=context)),
+            f"interpolation={_py_repr(_required_nonempty_string(entry, 'interpolation', context=context))}",
+            f"extrapolation={_py_repr(_required_nonempty_string(entry, 'extrapolation', context=context))}",
         ]
         if "bandwidth_hz" in entry:
-            kwargs.append(f"bandwidth_hz={_py_number(entry['bandwidth_hz'])}")
+            kwargs.append(
+                f"bandwidth_hz={_required_roundtrip_number(entry, 'bandwidth_hz', context=context)}"
+            )
         return f"fm.TabulatedEnvelope({', '.join(kwargs)})"
     raise ValueError(f"unsupported prescribed SOT envelope kind {kind!r}")
 
@@ -1951,9 +2027,19 @@ def _render_sot_envelope(entry: Mapping[str, object]) -> str:
 def _render_prescribed_sot_drive(entry: Mapping[str, object]) -> str:
     kind = _required_entry(entry, "kind", context="prescribed_sot.drive")
     if kind == "signed_scalar":
+        _reject_unexpected_fields(
+            entry,
+            {"kind", "current_density_Apm2", "sigma_hat", "envelope"},
+            context="prescribed_sot.drive[signed_scalar]",
+        )
         kwargs = [
-            _py_number(_required_entry(entry, "current_density_Apm2", context="prescribed_sot.drive")),
-            _py_literal(list(_required_vec3(entry, "sigma_hat", context="prescribed_sot.drive"))),
+            _required_roundtrip_number(
+                entry, "current_density_Apm2", context="prescribed_sot.drive"
+            ),
+            _roundtrip_literal(
+                list(_required_vec3(entry, "sigma_hat", context="prescribed_sot.drive")),
+                context="prescribed_sot.drive.sigma_hat",
+            ),
         ]
         if "envelope" in entry:
             envelope = entry["envelope"]
@@ -1962,35 +2048,59 @@ def _render_prescribed_sot_drive(entry: Mapping[str, object]) -> str:
             kwargs.append(_render_sot_envelope(envelope))
         return f"fm.SignedScalarDrive({', '.join(kwargs)})"
     if kind == "vector_current_source":
+        _reject_unexpected_fields(
+            entry,
+            {"kind", "current_source_id", "drive_direction", "interface_normal"},
+            context="prescribed_sot.drive[vector_current_source]",
+        )
         return (
             "fm.VectorCurrentDrive("
-            f"{_py_repr(_required_entry(entry, 'current_source_id', context='prescribed_sot.drive'))}, "
-            f"{_py_literal(list(_required_vec3(entry, 'drive_direction', context='prescribed_sot.drive')))}, "
-            f"{_py_literal(list(_required_vec3(entry, 'interface_normal', context='prescribed_sot.drive')))})"
+            f"{_py_repr(_required_nonempty_string(entry, 'current_source_id', context='prescribed_sot.drive'))}, "
+            f"{_roundtrip_literal(list(_required_vec3(entry, 'drive_direction', context='prescribed_sot.drive')), context='prescribed_sot.drive.drive_direction')}, "
+            f"{_roundtrip_literal(list(_required_vec3(entry, 'interface_normal', context='prescribed_sot.drive')), context='prescribed_sot.drive.interface_normal')})"
         )
     raise ValueError(f"unsupported prescribed SOT drive kind {kind!r}")
 
 
 def _render_prescribed_sot_entry(entry: Mapping[str, object]) -> str:
+    if _required_entry(entry, "kind", context="prescribed_sot") != "prescribed_sot":
+        raise ValueError("unsupported prescribed SOT kind")
     if _required_entry(entry, "schema_version", context="prescribed_sot") != "prescribed_sot.v1":
         raise ValueError("unsupported prescribed SOT schema_version")
     formula = _required_entry(entry, "formula_version", context="prescribed_sot")
     module_id = _required_entry(entry, "id", context="prescribed_sot")
-    if not isinstance(module_id, str) or not module_id:
+    if not isinstance(module_id, str) or not module_id.strip():
         raise ValueError("prescribed_sot.id must be a non-empty string")
     if formula == "prescribed_sot.fullmag.v1":
+        _reject_unexpected_fields(
+            entry,
+            {
+                "kind", "schema_version", "id", "target", "formula_version",
+                "drive", "xi_dl", "xi_fl", "free_layer_thickness_m",
+            },
+            context="prescribed_sot",
+        )
         target = _required_mapping(entry, "target", context="prescribed_sot")
         drive = _required_mapping(entry, "drive", context="prescribed_sot")
         return (
             "fm.PrescribedSpinOrbitTorque("
             f"{_py_repr(module_id)}, {_render_region_ref(target)}, {_render_prescribed_sot_drive(drive)}, "
-            f"xi_dl={_py_number(_required_entry(entry, 'xi_dl', context='prescribed_sot'))}, "
-            f"xi_fl={_py_number(_required_entry(entry, 'xi_fl', context='prescribed_sot'))}, "
+            f"xi_dl={_required_roundtrip_number(entry, 'xi_dl', context='prescribed_sot')}, "
+            f"xi_fl={_required_roundtrip_number(entry, 'xi_fl', context='prescribed_sot')}, "
             "free_layer_thickness_m="
-            f"{_py_number(_required_entry(entry, 'free_layer_thickness_m', context='prescribed_sot'))})"
+            f"{_required_roundtrip_number(entry, 'free_layer_thickness_m', context='prescribed_sot')})"
         )
     if formula != "prescribed_sot.legacy_fullmag.v0":
         raise ValueError(f"unsupported prescribed SOT formula_version {formula!r}")
+    _reject_unexpected_fields(
+        entry,
+        {
+            "kind", "schema_version", "id", "target", "formula_version", "drive",
+            "raw_spin_polarization", "xi_dl", "xi_fl", "free_layer_thickness_m",
+            "compatibility_origin",
+        },
+        context="legacy prescribed_sot",
+    )
     prefix = "legacy_prescribed_sot_"
     if not module_id.startswith(prefix) or not module_id[len(prefix):].isdigit():
         raise ValueError("legacy prescribed SOT id must encode its module_index")
@@ -2000,14 +2110,24 @@ def _render_prescribed_sot_entry(entry: Mapping[str, object]) -> str:
     drive_kind = _required_entry(drive, "kind", context="prescribed_sot.drive")
     drive_kwarg: str
     if drive_kind == "legacy_scalar_magnitude":
+        _reject_unexpected_fields(
+            drive,
+            {"kind", "raw_charge_current_density_Apm2"},
+            context="legacy prescribed_sot.drive",
+        )
         drive_kwarg = (
             "raw_charge_current_density_Apm2="
-            f"{_py_number(_required_entry(drive, 'raw_charge_current_density_Apm2', context='prescribed_sot.drive'))}"
+            f"{_required_roundtrip_number(drive, 'raw_charge_current_density_Apm2', context='prescribed_sot.drive')}"
         )
     elif drive_kind == "legacy_current_source_norm":
+        _reject_unexpected_fields(
+            drive,
+            {"kind", "current_source_id"},
+            context="legacy prescribed_sot.drive",
+        )
         drive_kwarg = (
             "current_source_id="
-            f"{_py_repr(_required_entry(drive, 'current_source_id', context='prescribed_sot.drive'))}"
+            f"{_py_repr(_required_nonempty_string(drive, 'current_source_id', context='prescribed_sot.drive'))}"
         )
     else:
         raise ValueError(f"unsupported legacy prescribed SOT drive kind {drive_kind!r}")
@@ -2016,12 +2136,12 @@ def _render_prescribed_sot_entry(entry: Mapping[str, object]) -> str:
         "fm.PrescribedSpinOrbitTorque.from_legacy_v0("
         f"module_index={int(module_id[len(prefix):])}, target=None, {drive_kwarg}, "
         "raw_spin_polarization="
-        f"{_py_literal(list(_required_vec3(entry, 'raw_spin_polarization', context='prescribed_sot')))}, "
-        f"xi_dl={_py_number(_required_entry(entry, 'xi_dl', context='prescribed_sot'))}, "
-        f"xi_fl={_py_number(_required_entry(entry, 'xi_fl', context='prescribed_sot'))}, "
+        f"{_roundtrip_literal(list(_required_vec3(entry, 'raw_spin_polarization', context='prescribed_sot')), context='prescribed_sot.raw_spin_polarization')}, "
+        f"xi_dl={_required_roundtrip_number(entry, 'xi_dl', context='prescribed_sot')}, "
+        f"xi_fl={_required_roundtrip_number(entry, 'xi_fl', context='prescribed_sot')}, "
         "free_layer_thickness_m="
-        f"{_py_number(_required_entry(entry, 'free_layer_thickness_m', context='prescribed_sot'))}, "
-        f"compatibility_origin={_py_literal(dict(origin))})"
+        f"{_required_roundtrip_number(entry, 'free_layer_thickness_m', context='prescribed_sot')}, "
+        f"compatibility_origin={_roundtrip_literal(dict(origin), context='prescribed_sot.compatibility_origin')})"
     )
 
 
@@ -2038,13 +2158,36 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
     constructor = constructors.get(str(kind))
     if constructor is None:
         raise ValueError(f"unsupported spin torque kind {kind!r}")
+    fields_by_kind = {
+        "slonczewski": {
+            "kind", "current_density", "current_source", "spin_polarization", "degree",
+            "lambda_asymmetry", "epsilon_prime", "free_layer_thickness_m",
+            "fixed_layer_position",
+        },
+        "zhang_li": {"kind", "current_density", "current_source", "degree", "beta"},
+        "interface_cpp": {
+            "kind", "current_density", "current_source", "spin_polarization",
+            "interface_normal", "degree", "lambda_asymmetry", "epsilon_prime",
+        },
+        "drift_diffusion": {
+            "kind", "current_density", "current_source", "spin_polarization", "degree",
+            "beta", "spin_diffusion_length_m",
+        },
+    }
+    _reject_unexpected_fields(entry, fields_by_kind[str(kind)], context=str(kind))
     kwargs: list[str] = []
-    if "current_density" in entry:
+    has_density = "current_density" in entry
+    has_source = "current_source" in entry
+    if has_density == has_source:
+        raise ValueError(f"{kind} requires exactly one of current_density or current_source")
+    if has_density:
         kwargs.append(
-            f"current_density={_py_literal(list(_required_vec3(entry, 'current_density', context=str(kind))))}"
+            f"current_density={_roundtrip_literal(list(_required_vec3(entry, 'current_density', context=str(kind))), context=f'{kind}.current_density')}"
         )
-    elif "current_source" in entry:
-        kwargs.append(f"current_source={_py_repr(entry['current_source'])}")
+    elif has_source:
+        kwargs.append(
+            f"current_source={_py_repr(_required_nonempty_string(entry, 'current_source', context=str(kind)))}"
+        )
     else:
         raise ValueError(f"{kind} requires current_density or current_source")
     required_by_kind = {
@@ -2057,34 +2200,54 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
         value = _required_entry(entry, field, context=str(kind))
         if field in {"spin_polarization", "interface_normal"}:
             value = list(_required_vec3(entry, field, context=str(kind)))
-            kwargs.append(f"{field}={_py_literal(value)}")
+            kwargs.append(
+                f"{field}={_roundtrip_literal(value, context=f'{kind}.{field}')}"
+            )
         else:
-            kwargs.append(f"{field}={_py_number(value)}")
+            kwargs.append(
+                f"{field}={_required_roundtrip_number(entry, field, context=str(kind))}"
+            )
     if kind == "slonczewski":
         if "free_layer_thickness_m" in entry:
-            kwargs.append(f"free_layer_thickness_m={_py_number(entry['free_layer_thickness_m'])}")
+            kwargs.append(
+                "free_layer_thickness_m="
+                f"{_required_roundtrip_number(entry, 'free_layer_thickness_m', context=str(kind))}"
+            )
         if "fixed_layer_position" in entry:
-            kwargs.append(f"fixed_layer_position={_py_repr(entry['fixed_layer_position'])}")
+            kwargs.append(
+                f"fixed_layer_position={_py_repr(_required_nonempty_string(entry, 'fixed_layer_position', context=str(kind)))}"
+            )
     return f"fm.{constructor}({', '.join(kwargs)})"
 
 
 def _render_oersted_time_dependence(entry: Mapping[str, object]) -> str:
     kind = _required_entry(entry, "kind", context="oersted_cylinder.time_dependence")
     context = f"oersted_cylinder.time_dependence[{kind}]"
+    allowed_by_kind = {
+        "constant": {"kind"},
+        "sinusoidal": {"kind", "frequency_hz", "phase_rad", "offset"},
+        "pulse": {"kind", "t_on", "t_off"},
+        "piecewise_linear": {"kind", "points"},
+        "sinc_pulse": {"kind", "cutoff_hz", "t0", "amplitude"},
+    }
+    allowed = allowed_by_kind.get(str(kind))
+    if allowed is None:
+        raise ValueError(f"unsupported Oersted time-dependence kind {kind!r}")
+    _reject_unexpected_fields(entry, allowed, context=context)
     if kind == "constant":
         return "fm.model.Constant()"
     if kind == "sinusoidal":
         return (
             "fm.Sinusoidal("
-            f"{_py_number(_required_entry(entry, 'frequency_hz', context=context))}, "
-            f"phase_rad={_py_number(_required_entry(entry, 'phase_rad', context=context))}, "
-            f"offset={_py_number(_required_entry(entry, 'offset', context=context))})"
+            f"{_required_roundtrip_number(entry, 'frequency_hz', context=context)}, "
+            f"phase_rad={_required_roundtrip_number(entry, 'phase_rad', context=context)}, "
+            f"offset={_required_roundtrip_number(entry, 'offset', context=context)})"
         )
     if kind == "pulse":
         return (
             "fm.model.Pulse("
-            f"{_py_number(_required_entry(entry, 't_on', context=context))}, "
-            f"{_py_number(_required_entry(entry, 't_off', context=context))})"
+            f"{_required_roundtrip_number(entry, 't_on', context=context)}, "
+            f"{_required_roundtrip_number(entry, 't_off', context=context)})"
         )
     if kind == "piecewise_linear":
         points = _required_entry(entry, "points", context=context)
@@ -2094,14 +2257,23 @@ def _render_oersted_time_dependence(entry: Mapping[str, object]) -> str:
         for index, point in enumerate(points):
             if not isinstance(point, (list, tuple)) or len(point) != 2:
                 raise ValueError(f"{context}.points[{index}] must contain time and value")
+            for component in point:
+                if (
+                    isinstance(component, bool)
+                    or not isinstance(component, (int, float))
+                    or not math.isfinite(float(component))
+                ):
+                    raise ValueError(
+                        f"{context}.points[{index}] must contain finite numbers"
+                    )
             rendered_points.append([point[0], point[1]])
-        return f"fm.PiecewiseLinear({_py_literal(rendered_points)})"
+        return f"fm.PiecewiseLinear({_roundtrip_literal(rendered_points, context=context)})"
     if kind == "sinc_pulse":
         return (
             "fm.SincPulse("
-            f"{_py_number(_required_entry(entry, 'cutoff_hz', context=context))}, "
-            f"t0={_py_number(_required_entry(entry, 't0', context=context))}, "
-            f"amplitude={_py_number(_required_entry(entry, 'amplitude', context=context))})"
+            f"{_required_roundtrip_number(entry, 'cutoff_hz', context=context)}, "
+            f"t0={_required_roundtrip_number(entry, 't0', context=context)}, "
+            f"amplitude={_required_roundtrip_number(entry, 'amplitude', context=context)})"
         )
     raise ValueError(f"unsupported Oersted time-dependence kind {kind!r}")
 
@@ -2109,22 +2281,30 @@ def _render_oersted_time_dependence(entry: Mapping[str, object]) -> str:
 def _render_oersted_entry(entry: Mapping[str, object]) -> str:
     kind = _required_entry(entry, "kind", context="oersted")
     if kind == "oersted_field":
+        _reject_unexpected_fields(
+            entry,
+            {"kind", "model", "source"},
+            context="oersted_field",
+        )
         model = _required_entry(entry, "model", context="oersted_field")
         if model != "from_current_solution":
             raise ValueError(f"unsupported OerstedField model {model!r}")
-        source = _required_entry(entry, "source", context="oersted_field")
-        if not isinstance(source, str) or not source:
-            raise ValueError("oersted_field.source must be a non-empty string")
+        source = _required_nonempty_string(entry, "source", context="oersted_field")
         return f"fm.OerstedField(source={_py_repr(source)}, model={_py_repr(model)})"
     if kind != "oersted_cylinder":
         raise ValueError(f"unsupported Oersted term kind {kind!r}")
+    _reject_unexpected_fields(
+        entry,
+        {"kind", "current", "radius", "center", "axis", "time_dependence"},
+        context="oersted_cylinder",
+    )
     kwargs = [
-        f"current={_py_number(_required_entry(entry, 'current', context='oersted_cylinder'))}",
-        f"radius={_py_number(_required_entry(entry, 'radius', context='oersted_cylinder'))}",
+        f"current={_required_roundtrip_number(entry, 'current', context='oersted_cylinder')}",
+        f"radius={_required_roundtrip_number(entry, 'radius', context='oersted_cylinder')}",
         "center="
-        f"{_py_literal(list(_required_vec3(entry, 'center', context='oersted_cylinder')))}",
+        f"{_roundtrip_literal(list(_required_vec3(entry, 'center', context='oersted_cylinder')), context='oersted_cylinder.center')}",
         "axis="
-        f"{_py_literal(list(_required_vec3(entry, 'axis', context='oersted_cylinder')))}",
+        f"{_roundtrip_literal(list(_required_vec3(entry, 'axis', context='oersted_cylinder')), context='oersted_cylinder.axis')}",
     ]
     if "time_dependence" in entry:
         time_dependence = entry["time_dependence"]
@@ -2140,6 +2320,7 @@ def _render_oersted_terms(
     problem: Problem,
     *,
     overrides: dict[str, object],
+    surface: str = "flat",
 ) -> list[str]:
     if "oersted_terms" in overrides:
         override_terms = overrides["oersted_terms"]
@@ -2163,7 +2344,8 @@ def _render_oersted_terms(
             lines.append(_render_oersted_entry(term))
             continue
         raise ValueError(f"unsupported Oersted term {type(term).__name__}")
-    return lines
+    register = _surface_call(surface, "oersted")
+    return [lines[0], *(f"{register}({expression})" for expression in lines[1:])]
 
 
 def _render_excitation_analysis(

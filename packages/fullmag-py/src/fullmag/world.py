@@ -47,7 +47,25 @@ from fullmag.model.antenna import (
 )
 from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
 from fullmag.model.current_transport import CurrentTransport
-from fullmag.model.energy import BulkDMI, Demag, Exchange, InterfacialDMI, TimeDependence, Zeeman
+from fullmag.model.energy import (
+    BulkDMI,
+    Demag,
+    Exchange,
+    InterfacialDMI,
+    OerstedCylinder,
+    OerstedField,
+    TimeDependence,
+    Zeeman,
+)
+from fullmag.model.spin_torque import (
+    DriftDiffusionSpinTorque,
+    InterfaceCppSTT,
+    PrescribedSpinOrbitTorque,
+    SlonczewskiSTT,
+    SpinOrbitTorque,
+    SpinTorqueModule,
+    ZhangLiSTT,
+)
 from fullmag.model.dynamics import (
     ADAPTIVE_INTEGRATORS,
     INTEGRATOR_ALIASES,
@@ -1845,6 +1863,8 @@ class _WorldState:
     _outputs: list = field(default_factory=list)
     _table_autosave: TableAutosave | None = None
     _current_modules: list[AntennaFieldSource | CurrentTransport] = field(default_factory=list)
+    _spin_torques: list[SpinTorqueModule] = field(default_factory=list)
+    _oersted_terms: list[OerstedCylinder | OerstedField] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
     _last_result: Any | None = None
     _last_step: Any | None = None
@@ -4003,6 +4023,14 @@ class StudyBuilder:
             conductivity_s_per_m=conductivity_s_per_m,
         )
 
+    def spin_torque(self, module: SpinTorqueModule) -> SpinTorqueModule:
+        return spin_torque(module)
+
+    def oersted(
+        self, term: OerstedCylinder | OerstedField
+    ) -> OerstedCylinder | OerstedField:
+        return oersted(term)
+
     def spin_wave_excitation(
         self,
         *,
@@ -5836,6 +5864,32 @@ def current_transport(
     return module
 
 
+def spin_torque(module: SpinTorqueModule) -> SpinTorqueModule:
+    if not isinstance(
+        module,
+        (
+            SlonczewskiSTT,
+            ZhangLiSTT,
+            InterfaceCppSTT,
+            DriftDiffusionSpinTorque,
+            PrescribedSpinOrbitTorque,
+            SpinOrbitTorque,
+        ),
+    ):
+        raise TypeError("spin_torque() requires a canonical spin-torque module")
+    _state._spin_torques.append(module)
+    return module
+
+
+def oersted(
+    term: OerstedCylinder | OerstedField,
+) -> OerstedCylinder | OerstedField:
+    if not isinstance(term, (OerstedCylinder, OerstedField)):
+        raise TypeError("oersted() requires OerstedCylinder or OerstedField")
+    _state._oersted_terms.append(term)
+    return term
+
+
 def spin_wave_excitation(
     *,
     source: str,
@@ -6193,6 +6247,7 @@ def _build_problem(
             break
     if s._b_ext is not None:
         energy.append(Zeeman(B=s._b_ext))
+    energy.extend(s._oersted_terms)
 
     # Outputs
     outputs = s._outputs if s._outputs else [
@@ -6372,6 +6427,7 @@ def _build_problem(
         runtime_metadata=runtime_metadata,
         auxiliary_geometries=tuple(s._auxiliary_geometries),
         current_modules=tuple(s._current_modules),
+        spin_torques=tuple(s._spin_torques),
         couplings=s._couplings.items(),
         excitation_analysis=s._excitation_analysis,
         geometry_asset_cache=s._geometry_asset_cache,
