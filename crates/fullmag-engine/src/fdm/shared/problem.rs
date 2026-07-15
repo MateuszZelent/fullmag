@@ -240,13 +240,21 @@ impl ExchangeLlgProblem {
     pub fn effective_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         let mut ws = self.create_workspace();
-        Ok(self.effective_field_from_vectors_ws(state.magnetization(), &mut ws))
+        Ok(self.effective_field_from_vectors_ws_at_time(
+            state.magnetization(),
+            &mut ws,
+            state.time_seconds,
+        ))
     }
 
     pub fn observable_effective_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
         self.ensure_state_matches_grid(state)?;
         let mut ws = self.create_workspace();
-        Ok(self.observable_effective_field_from_vectors_ws(state.magnetization(), &mut ws))
+        Ok(self.observable_effective_field_from_vectors_ws_at_time(
+            state.magnetization(),
+            &mut ws,
+            state.time_seconds,
+        ))
     }
 
     pub fn dmi_field(&self, state: &ExchangeLlgState) -> Result<Vec<Vector3>> {
@@ -332,7 +340,12 @@ impl ExchangeLlgProblem {
 
     pub fn observe(&self, state: &ExchangeLlgState) -> Result<EffectiveFieldObservables> {
         self.ensure_state_matches_grid(state)?;
-        Ok(self.observe_vectors(state.magnetization()))
+        let mut ws = self.create_workspace();
+        Ok(self.observe_vectors_ws_at_time(
+            state.magnetization(),
+            &mut ws,
+            state.time_seconds,
+        ))
     }
 
     /// Single step using a disposable FFT workspace.

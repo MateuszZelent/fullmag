@@ -246,12 +246,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                 if self.oersted_field.is_none() {
                     self.oersted_field = Some(
                         self.problem
-                            .terms
-                            .per_node_field
-                            .clone()
-                            .unwrap_or_else(|| {
-                                vec![[0.0, 0.0, 0.0]; self.state.magnetization().len()]
-                            }),
+                            .oersted_field_at_time(self.state.time_seconds),
                     );
                 }
                 Ok(self.oersted_field.as_deref().expect("cached Oersted field"))

@@ -2630,6 +2630,29 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_oersted_observables_match_the_committed_state_time() {
+        let dt = 1.0e-3;
+        let problem = dynamic_oersted_problem(TimeIntegrator::Heun, dt, 2.0 * dt);
+        let mut state = problem
+            .new_state(vec![[0.0, 1.0, 0.0]])
+            .expect("state should build");
+        state.time_seconds = dt;
+
+        let expected_oersted = problem.oersted_field_at_time(state.time_seconds);
+        let observables = problem.observe(&state).expect("observables should build");
+
+        assert_vector_close(observables.effective_field[0], expected_oersted[0], 1.0e-12);
+        let expected_energy = -MU0 * expected_oersted[0][1] * problem.cell_size.volume();
+        assert!((observables.external_energy_joules - expected_energy).abs() <= 1.0e-12);
+        assert!((observables.total_energy_joules - expected_energy).abs() <= 1.0e-12);
+
+        state.time_seconds = 0.0;
+        let inactive = problem.observe(&state).expect("inactive observables should build");
+        assert_vector_close(inactive.effective_field[0], [0.0, 0.0, 0.0], 1.0e-15);
+        assert_eq!(inactive.external_energy_joules, 0.0);
+    }
+
+    #[test]
     fn dynamic_oersted_invalidates_rk45_fsal_cache() {
         let dt = 1.0e-3;
         let problem = dynamic_oersted_problem(TimeIntegrator::RK45, 0.0, 1.0e-6);

@@ -489,7 +489,10 @@ impl SolverSession {
 
     /// Compute full observables at the current state.
     pub fn observe(&mut self) -> EffectiveFieldObservables {
-        self.problem
-            .observe_vectors_ws(self.state.magnetization(), &mut self.fft_ws)
+        self.problem.observe_vectors_ws_at_time(
+            self.state.magnetization(),
+            &mut self.fft_ws,
+            self.state.time_seconds,
+        )
     }
 }

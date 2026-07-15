@@ -260,11 +260,7 @@ pub(crate) fn observe_state(
     } else {
         vec![[0.0, 0.0, 0.0]; state.magnetization().len()]
     };
-    let oersted_field = problem
-        .terms
-        .per_node_field
-        .clone()
-        .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
+    let oersted_field = problem.oersted_field_at_time(state.time_seconds);
     let anisotropy_field = problem.anisotropy_field(state.magnetization());
 
     let torque_field = compute_torque_field(

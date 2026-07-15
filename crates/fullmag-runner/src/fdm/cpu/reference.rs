@@ -1605,11 +1605,7 @@ fn observe_state_with_antenna_field(
     } else {
         vec![[0.0, 0.0, 0.0]; state.magnetization().len()]
     };
-    let oersted_field = problem
-        .terms
-        .per_node_field
-        .clone()
-        .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
+    let oersted_field = problem.oersted_field_at_time(state.time_seconds);
     let antenna_field = antenna_field_override
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
     let anisotropy_field = problem.anisotropy_field(state.magnetization());
@@ -1928,12 +1924,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                 if self.oersted_field.is_none() {
                     self.oersted_field = Some(
                         self.problem
-                            .terms
-                            .per_node_field
-                            .clone()
-                            .unwrap_or_else(|| {
-                                vec![[0.0, 0.0, 0.0]; self.state.magnetization().len()]
-                            }),
+                            .oersted_field_at_time(self.state.time_seconds),
                     );
                 }
                 Ok(self.oersted_field.as_deref().expect("cached Oersted field"))
@@ -3298,6 +3289,47 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_oersted_cylinder_is_materialized_at_the_committed_state_time() {
+        let problem = ExchangeLlgProblem::with_terms(
+            GridShape::new(1, 1, 1).expect("valid grid"),
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(1.0, 1.0e-30, 0.1).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid dynamics"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                oersted_cylinder: Some(OerstedCylinderConfig {
+                    current: 2.0,
+                    radius: 0.25,
+                    center: [0.0, 0.5, 0.5],
+                    axis: [0.0, 0.0, 1.0],
+                    time_dep_kind: 2,
+                    time_dep_freq: 0.0,
+                    time_dep_phase: 0.0,
+                    time_dep_offset: 0.0,
+                    time_dep_t_on: 1.0e-12,
+                    time_dep_t_off: 3.0e-12,
+                }),
+                ..Default::default()
+            },
+        );
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]])
+            .expect("state should build");
+        state.time_seconds = 2.0e-12;
+
+        let observables = observe_state(&problem, &state).expect("observables should build");
+        let expected = 2.0 / std::f64::consts::PI;
+        assert!((observables.oersted_field[0][1] - expected).abs() <= 1.0e-12);
+        assert!((observables.effective_field[0][1] - expected).abs() <= 1.0e-12);
+
+        state.time_seconds = 0.0;
+        let inactive = observe_state(&problem, &state).expect("inactive observables should build");
+        assert_eq!(inactive.oersted_field[0], [0.0, 0.0, 0.0]);
+        assert_eq!(inactive.effective_field[0], [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
     fn exchange_field_due_outputs_read_problem_field_without_reobserving_state() {
         reset_observe_state_calls();
 
@@ -3674,12 +3706,12 @@ mod tests {
             .observe(&state)
             .expect("observables should assemble")
             .effective_field;
-        assert_ne!(
+        assert_eq!(
             expected_effective,
             problem
                 .effective_field(&state)
                 .expect("public effective field should assemble"),
-            "this regression preserves the current H_eff artifact contract, not the broader stepping helper"
+            "public H_eff and observable H_eff must use the same committed-time Oersted field"
         );
         reset_observe_state_calls();
 

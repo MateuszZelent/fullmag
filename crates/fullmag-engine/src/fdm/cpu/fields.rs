@@ -137,15 +137,11 @@ impl ExchangeLlgProblem {
     // Observables
     // ===================================================================
 
-    pub(crate) fn observe_vectors(&self, magnetization: &[Vector3]) -> EffectiveFieldObservables {
-        let mut ws = self.create_workspace();
-        self.observe_vectors_ws(magnetization, &mut ws)
-    }
-
-    pub(crate) fn observe_vectors_ws(
+    pub(crate) fn observe_vectors_ws_at_time(
         &self,
         magnetization: &[Vector3],
         ws: &mut FftWorkspace,
+        time_seconds: f64,
     ) -> EffectiveFieldObservables {
         let exchange_field = if self.terms.exchange {
             self.exchange_field_from_vectors(magnetization)
@@ -172,6 +168,14 @@ impl ExchangeLlgProblem {
         for (i, h) in effective_field.iter_mut().enumerate() {
             *h = add(add(*h, ani_field[i]), dmi_field[i]);
         }
+        let mut cylinder_oersted_field = zero_vectors(self.grid.cell_count());
+        self.oersted_field_add_into_at_time(&mut cylinder_oersted_field, time_seconds);
+        for (effective, oersted) in effective_field
+            .iter_mut()
+            .zip(cylinder_oersted_field.iter())
+        {
+            *effective = add(*effective, *oersted);
+        }
         let rhs = {
             let compute = |i: usize| self.llg_rhs_from_field(magnetization[i], effective_field[i]);
             #[cfg(feature = "parallel")]
@@ -197,8 +201,16 @@ impl ExchangeLlgProblem {
         } else {
             0.0
         };
-        let external_energy_joules = if self.terms.external_field.is_some() {
-            self.external_energy_from_fields(magnetization, &external_field)
+        let external_energy_joules = if self.terms.external_field.is_some()
+            || self.terms.per_node_field.is_some()
+            || self.terms.oersted_cylinder.is_some()
+        {
+            let combined_external = external_field
+                .iter()
+                .zip(cylinder_oersted_field.iter())
+                .map(|(external, oersted)| add(*external, *oersted))
+                .collect::<Vec<_>>();
+            self.external_energy_from_fields(magnetization, &combined_external)
         } else {
             0.0
         };
@@ -1996,6 +2008,21 @@ impl ExchangeLlgProblem {
         self.oersted_field_add_into_at_time(h_eff, 0.0);
     }
 
+    pub fn oersted_field_at_time(&self, time_seconds: f64) -> Vec<Vector3> {
+        let mut field = self
+            .terms
+            .per_node_field
+            .clone()
+            .unwrap_or_else(|| zero_vectors(self.grid.cell_count()));
+        for (index, value) in field.iter_mut().enumerate() {
+            if !self.is_active(index) {
+                *value = [0.0, 0.0, 0.0];
+            }
+        }
+        self.oersted_field_add_into_at_time(&mut field, time_seconds);
+        field
+    }
+
     pub(crate) fn oersted_field_add_into_at_time(&self, h_eff: &mut [Vector3], time_seconds: f64) {
         let oe = match self.terms.oersted_cylinder {
             Some(ref cfg) => cfg,
@@ -3179,6 +3206,15 @@ impl ExchangeLlgProblem {
         magnetization: &[Vector3],
         ws: &mut FftWorkspace,
     ) -> Vec<Vector3> {
+        self.effective_field_from_vectors_ws_at_time(magnetization, ws, 0.0)
+    }
+
+    pub(crate) fn effective_field_from_vectors_ws_at_time(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        time_seconds: f64,
+    ) -> Vec<Vector3> {
         let exchange_field = if self.terms.exchange {
             self.exchange_field_from_vectors(magnetization)
         } else {
@@ -3253,15 +3289,16 @@ impl ExchangeLlgProblem {
         }
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
-        self.oersted_field_add_into(&mut h_eff);
+        self.oersted_field_add_into_at_time(&mut h_eff, time_seconds);
 
         h_eff
     }
 
-    pub(crate) fn observable_effective_field_from_vectors_ws(
+    pub(crate) fn observable_effective_field_from_vectors_ws_at_time(
         &self,
         magnetization: &[Vector3],
         ws: &mut FftWorkspace,
+        time_seconds: f64,
     ) -> Vec<Vector3> {
         let exchange_field = if self.terms.exchange {
             self.exchange_field_from_vectors(magnetization)
@@ -3283,6 +3320,7 @@ impl ExchangeLlgProblem {
         for (i, h) in h_eff.iter_mut().enumerate() {
             *h = add(add(add(*h, ani_field[i]), idmi_field[i]), bdmi_field[i]);
         }
+        self.oersted_field_add_into_at_time(&mut h_eff, time_seconds);
         h_eff
     }
 
