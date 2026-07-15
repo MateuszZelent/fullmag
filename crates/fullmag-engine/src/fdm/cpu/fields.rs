@@ -35,6 +35,27 @@ fn gilbert_zhang_li_scales(beta: f64, alpha: f64) -> (f64, f64) {
     )
 }
 
+fn prescribed_sot_scales(
+    cfg: &SotConfig,
+    saturation_magnetisation: f64,
+    gamma0: f64,
+    alpha: f64,
+) -> (f64, f64) {
+    const HBAR: f64 = 1.054571817e-34;
+    const E_CHARGE: f64 = 1.60217662e-19;
+
+    let gamma_e = gamma0 / MU0;
+    let omega_base = gamma_e * HBAR * cfg.current_density
+        / (2.0 * E_CHARGE * saturation_magnetisation * cfg.thickness.max(1e-30));
+    let omega_dl = omega_base * cfg.xi_dl;
+    let omega_fl = omega_base * cfg.xi_fl;
+    let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
+    (
+        (omega_dl - alpha * omega_fl) * inv_gilbert,
+        (omega_fl + alpha * omega_dl) * inv_gilbert,
+    )
+}
+
 impl ExchangeLlgProblem {
     // ===================================================================
     // Observables
@@ -2228,13 +2249,13 @@ impl ExchangeLlgProblem {
 
     #[allow(dead_code)]
     pub(crate) fn sot_torque(&self, magnetization: &[Vector3], cfg: &SotConfig) -> Vec<Vector3> {
-        const HBAR: f64 = 1.054571817e-34;
-        const E_CHARGE: f64 = 1.60217662e-19;
-        const MU0_CONST: f64 = 1.2566370614359173e-6;
-
         let ms = self.material.saturation_magnetisation.max(1e-30);
-        let d = cfg.thickness.max(1e-30);
-        let amp = (cfg.current_density.abs() * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let (damping_like, field_like) = prescribed_sot_scales(
+            cfg,
+            ms,
+            self.dynamics.gyromagnetic_ratio,
+            self.material.damping,
+        );
 
         let [sx, sy, sz] = cfg.sigma;
         let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
@@ -2242,13 +2263,16 @@ impl ExchangeLlgProblem {
         let sy = sy / snorm;
         let sz = sz / snorm;
 
-        let xi_dl = cfg.xi_dl;
-        let xi_fl = cfg.xi_fl;
         let n = self.grid.cell_count();
 
         (0..n)
             .map(|flat| {
-                if !self.is_active(flat) {
+                if !self.is_active(flat)
+                    || cfg
+                        .active_mask
+                        .as_ref()
+                        .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
+                {
                     return [0.0, 0.0, 0.0];
                 }
                 let [m0, m1, m2] = magnetization[flat];
@@ -2262,9 +2286,9 @@ impl ExchangeLlgProblem {
                 let mmxs_z = m0 * mxs_y - m1 * mxs_x;
 
                 [
-                    amp * (-xi_dl * mmxs_x + xi_fl * mxs_x),
-                    amp * (-xi_dl * mmxs_y + xi_fl * mxs_y),
-                    amp * (-xi_dl * mmxs_z + xi_fl * mxs_z),
+                    -damping_like * mmxs_x + field_like * mxs_x,
+                    -damping_like * mmxs_y + field_like * mxs_y,
+                    -damping_like * mmxs_z + field_like * mxs_z,
                 ]
             })
             .collect()
@@ -2599,13 +2623,13 @@ impl ExchangeLlgProblem {
         cfg: &SotConfig,
         out: &mut [Vector3],
     ) {
-        const HBAR: f64 = 1.054571817e-34;
-        const E_CHARGE: f64 = 1.60217662e-19;
-        const MU0_CONST: f64 = 1.2566370614359173e-6;
-
         let ms = self.material.saturation_magnetisation.max(1e-30);
-        let d = cfg.thickness.max(1e-30);
-        let amp = (cfg.current_density.abs() * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let (damping_like, field_like) = prescribed_sot_scales(
+            cfg,
+            ms,
+            self.dynamics.gyromagnetic_ratio,
+            self.material.damping,
+        );
 
         let [sx, sy, sz] = cfg.sigma;
         let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
@@ -2613,12 +2637,15 @@ impl ExchangeLlgProblem {
         let sy = sy / snorm;
         let sz = sz / snorm;
 
-        let xi_dl = cfg.xi_dl;
-        let xi_fl = cfg.xi_fl;
         let n = self.grid.cell_count();
 
         let compute = |flat: usize, o: &mut Vector3| {
-            if !self.is_active(flat) {
+            if !self.is_active(flat)
+                || cfg
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
+            {
                 return;
             }
             let [m0, m1, m2] = magnetization[flat];
@@ -2631,9 +2658,9 @@ impl ExchangeLlgProblem {
             let mmxs_y = m2 * mxs_x - m0 * mxs_z;
             let mmxs_z = m0 * mxs_y - m1 * mxs_x;
 
-            o[0] += amp * (-xi_dl * mmxs_x + xi_fl * mxs_x);
-            o[1] += amp * (-xi_dl * mmxs_y + xi_fl * mxs_y);
-            o[2] += amp * (-xi_dl * mmxs_z + xi_fl * mxs_z);
+            o[0] += -damping_like * mmxs_x + field_like * mxs_x;
+            o[1] += -damping_like * mmxs_y + field_like * mxs_y;
+            o[2] += -damping_like * mmxs_z + field_like * mxs_z;
         };
 
         #[cfg(feature = "parallel")]
@@ -2656,13 +2683,13 @@ impl ExchangeLlgProblem {
         cfg: &SotConfig,
         out: &mut VectorFieldSoA,
     ) {
-        const HBAR: f64 = 1.054571817e-34;
-        const E_CHARGE: f64 = 1.60217662e-19;
-        const MU0_CONST: f64 = 1.2566370614359173e-6;
-
         let ms = self.material.saturation_magnetisation.max(1e-30);
-        let d = cfg.thickness.max(1e-30);
-        let amp = (cfg.current_density.abs() * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let (damping_like, field_like) = prescribed_sot_scales(
+            cfg,
+            ms,
+            self.dynamics.gyromagnetic_ratio,
+            self.material.damping,
+        );
 
         let [sx, sy, sz] = cfg.sigma;
         let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
@@ -2670,11 +2697,13 @@ impl ExchangeLlgProblem {
         let sy = sy / snorm;
         let sz = sz / snorm;
 
-        let xi_dl = cfg.xi_dl;
-        let xi_fl = cfg.xi_fl;
-
         for flat in 0..self.grid.cell_count() {
-            if !self.is_active(flat) {
+            if !self.is_active(flat)
+                || cfg
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
+            {
                 continue;
             }
             let m0 = magnetization.x[flat];
@@ -2689,9 +2718,9 @@ impl ExchangeLlgProblem {
             let mmxs_y = m2 * mxs_x - m0 * mxs_z;
             let mmxs_z = m0 * mxs_y - m1 * mxs_x;
 
-            out.x[flat] += amp * (-xi_dl * mmxs_x + xi_fl * mxs_x);
-            out.y[flat] += amp * (-xi_dl * mmxs_y + xi_fl * mxs_y);
-            out.z[flat] += amp * (-xi_dl * mmxs_z + xi_fl * mxs_z);
+            out.x[flat] += -damping_like * mmxs_x + field_like * mxs_x;
+            out.y[flat] += -damping_like * mmxs_y + field_like * mxs_y;
+            out.z[flat] += -damping_like * mmxs_z + field_like * mxs_z;
         }
     }
 
@@ -3614,6 +3643,90 @@ mod stt_tests {
 
         assert_eq!(observables.max_torque_Apm, 0.0);
         assert!(observables.max_rhs_amplitude > 0.0);
+    }
+
+    #[test]
+    fn prescribed_sot_matches_signed_si_gilbert_source_oracle() {
+        const HBAR: f64 = 1.054571817e-34;
+        const E_CHARGE: f64 = 1.60217662e-19;
+
+        let problem = one_cell_problem(0.2);
+        let cfg = SotConfig {
+            current_density: -1.0e12,
+            xi_dl: 0.12,
+            xi_fl: -0.03,
+            sigma: [0.0, 1.0, 0.0],
+            thickness: 1.5e-9,
+            active_mask: None,
+        };
+        let m = [1.0, 0.0, 0.0];
+        let torque = problem.sot_torque(&[m], &cfg)[0];
+
+        let gamma_e = problem.dynamics.gyromagnetic_ratio / MU0;
+        let omega_base = gamma_e * HBAR * cfg.current_density
+            / (2.0
+                * E_CHARGE
+                * problem.material.saturation_magnetisation
+                * cfg.thickness);
+        let omega_dl = omega_base * cfg.xi_dl;
+        let omega_fl = omega_base * cfg.xi_fl;
+        let alpha = problem.material.damping;
+        let denominator = 1.0 + alpha * alpha;
+        let expected = [
+            0.0,
+            (omega_dl - alpha * omega_fl) / denominator,
+            (omega_fl + alpha * omega_dl) / denominator,
+        ];
+
+        for component in 0..3 {
+            check_close(
+                torque[component],
+                expected[component],
+                expected[component].abs() * 1.0e-12 + 1.0e-12,
+            );
+        }
+    }
+
+    #[test]
+    fn prescribed_sot_reverses_with_signed_current() {
+        let problem = one_cell_problem(0.1);
+        let mut cfg = SotConfig {
+            current_density: 7.0e11,
+            xi_dl: 0.2,
+            xi_fl: 0.05,
+            sigma: [0.0, 1.0, 0.0],
+            thickness: 1.0e-9,
+            active_mask: None,
+        };
+        let positive = problem.sot_torque(&[[1.0, 0.0, 0.0]], &cfg)[0];
+        cfg.current_density = -cfg.current_density;
+        let negative = problem.sot_torque(&[[1.0, 0.0, 0.0]], &cfg)[0];
+
+        for component in 0..3 {
+            check_close(negative[component], -positive[component], 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn prescribed_sot_applies_only_on_target_mask() {
+        let problem = ExchangeLlgProblem::new(
+            GridShape::new(2, 1, 1).unwrap(),
+            CellSize::new(1.0e-9, 1.0e-9, 1.0e-9).unwrap(),
+            MaterialParameters::new(800.0e3, 13.0e-12, 0.1).unwrap(),
+            LlgConfig::default(),
+        );
+        let cfg = SotConfig {
+            current_density: 7.0e11,
+            xi_dl: 0.2,
+            xi_fl: 0.05,
+            sigma: [0.0, 1.0, 0.0],
+            thickness: 1.0e-9,
+            active_mask: Some(vec![true, false]),
+        };
+
+        let torque = problem.sot_torque(&[[1.0, 0.0, 0.0]; 2], &cfg);
+        assert!(torque[0].iter().any(|component| *component != 0.0));
+        assert_eq!(torque[1], [0.0; 3]);
     }
 
     #[test]

@@ -149,6 +149,80 @@ fn validate_single_grid_budget_with_policy(
             ),
         });
     }
+    let has_any_prescribed_sot = plan.sot_current_density.is_some()
+        || plan.sot_xi_dl.is_some()
+        || plan.sot_xi_fl.is_some()
+        || plan.sot_sigma.is_some()
+        || plan.sot_thickness.is_some()
+        || plan.sot_formula_version.is_some()
+        || plan.sot_target.is_some()
+        || plan.sot_active_mask.is_some();
+    if has_any_prescribed_sot {
+        let complete = plan.sot_current_density.is_some()
+            && plan.sot_xi_dl.is_some()
+            && plan.sot_xi_fl.is_some()
+            && plan.sot_sigma.is_some()
+            && plan.sot_thickness.is_some()
+            && plan.sot_formula_version.as_deref() == Some("prescribed_sot.fullmag.v1")
+            && plan.sot_target.is_some()
+            && plan.sot_active_mask.is_some();
+        if !complete {
+            return Err(RunError {
+                message: "prescribed SOT runtime contract requires the complete prescribed_sot.fullmag.v1 formula, target, and target-mask payload"
+                    .to_string(),
+            });
+        }
+        let current_density = plan.sot_current_density.expect("complete contract checked above");
+        let xi_dl = plan.sot_xi_dl.expect("complete contract checked above");
+        let xi_fl = plan.sot_xi_fl.expect("complete contract checked above");
+        let sigma = plan.sot_sigma.expect("complete contract checked above");
+        let thickness = plan.sot_thickness.expect("complete contract checked above");
+        let sigma_norm_sq = sigma.iter().map(|component| component * component).sum::<f64>();
+        if !current_density.is_finite()
+            || !xi_dl.is_finite()
+            || !xi_fl.is_finite()
+            || !thickness.is_finite()
+            || thickness <= 0.0
+            || sigma.iter().any(|component| !component.is_finite())
+            || !sigma_norm_sq.is_finite()
+            || sigma_norm_sq <= 0.0
+        {
+            return Err(RunError {
+                message: "prescribed SOT runtime contract contains invalid physical parameters"
+                    .to_string(),
+            });
+        }
+        let target_mask = plan
+            .sot_active_mask
+            .as_ref()
+            .expect("complete contract checked above");
+        if target_mask.len() != cells {
+            return Err(RunError {
+                message: format!(
+                    "prescribed SOT runtime contract target-mask length {} does not equal resolved_cells={cells}",
+                    target_mask.len()
+                ),
+            });
+        }
+        if !target_mask.iter().any(|selected| *selected) {
+            return Err(RunError {
+                message: "prescribed SOT runtime contract target mask selects no active FDM cells"
+                    .to_string(),
+            });
+        }
+        if target_mask.iter().enumerate().any(|(index, selected)| {
+            *selected
+                && plan
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|active| !active[index])
+        }) {
+            return Err(RunError {
+                message: "prescribed SOT runtime contract target mask selects an inactive FDM cell"
+                    .to_string(),
+            });
+        }
+    }
     if !plan.region_mask.is_empty() && plan.region_mask.len() != cells {
         return Err(RunError {
             message: format!(
@@ -482,6 +556,23 @@ mod tests {
         let error = super::validate_single_grid_budget_with_policy(&plan, false)
             .expect_err("production policy must reject missing certificates");
         assert!(error.message.contains("certificate is required"));
+    }
+
+    #[test]
+    fn prescribed_sot_runtime_contract_rejects_missing_formula_and_target_mask() {
+        let mut plan = FdmPlanIR::default();
+        plan.grid.cells = [1, 1, 1];
+        plan.cell_size = [1.0, 1.0, 1.0];
+        plan.initial_magnetization = vec![[1.0, 0.0, 0.0]];
+        plan.sot_current_density = Some(1.0e11);
+        plan.sot_xi_dl = Some(0.1);
+        plan.sot_xi_fl = Some(0.0);
+        plan.sot_sigma = Some([0.0, 1.0, 0.0]);
+        plan.sot_thickness = Some(1.0e-9);
+
+        let error = validate_single_grid_budget(&plan)
+            .expect_err("unversioned and untargeted prescribed SOT must fail closed");
+        assert!(error.message.contains("prescribed SOT runtime contract"));
     }
 
     #[test]

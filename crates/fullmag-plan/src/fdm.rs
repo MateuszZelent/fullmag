@@ -236,6 +236,68 @@ fn materialize_object_region_mask(
     (mask, region_ids)
 }
 
+fn materialize_prescribed_sot_target_mask(
+    problem: &ProblemIR,
+    target: &fullmag_ir::RegionRefIR,
+    owner_names: &[&str],
+    region_mask: &[u32],
+    region_index_by_id: &BTreeMap<String, u32>,
+    active_mask: Option<&[bool]>,
+) -> Result<Vec<bool>, PlanError> {
+    if !owner_names.contains(&target.object_id.as_str()) {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "prescribed_sot target object_id '{}' is not the resolved single-grid FDM magnetic object",
+                target.object_id
+            )],
+        });
+    }
+
+    let selected_region = if let Some(region_id) = target.region_id.as_deref() {
+        let region = problem
+            .object_regions
+            .iter()
+            .find(|region| region.enabled && region.region_id == region_id)
+            .ok_or_else(|| PlanError {
+                reasons: vec![format!(
+                    "prescribed_sot target region_id '{region_id}' is not an enabled object region"
+                )],
+            })?;
+        if region.owner_object != target.object_id {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "prescribed_sot target region_id '{region_id}' belongs to object '{}' rather than '{}'",
+                    region.owner_object, target.object_id
+                )],
+            });
+        }
+        Some(*region_index_by_id.get(region_id).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "prescribed_sot target region_id '{region_id}' was not materialized in the FDM region mask"
+            )],
+        })?)
+    } else {
+        None
+    };
+
+    let mask = region_mask
+        .iter()
+        .enumerate()
+        .map(|(index, region)| {
+            active_mask.is_none_or(|active| active[index])
+                && selected_region.is_none_or(|selected| *region == selected)
+        })
+        .collect::<Vec<_>>();
+    if !mask.iter().any(|selected| *selected) {
+        return Err(PlanError {
+            reasons: vec![
+                "prescribed_sot target does not select any active FDM cells".to_string(),
+            ],
+        });
+    }
+    Ok(mask)
+}
+
 fn build_fdm_region_legend(
     problem: &ProblemIR,
     owner_names: &[&str],
@@ -811,6 +873,20 @@ pub(crate) fn plan_fdm(
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
+    let sot_active_mask = sot
+        .target
+        .as_ref()
+        .map(|target| {
+            materialize_prescribed_sot_target_mask(
+                problem,
+                target,
+                &owner_names,
+                &region_mask,
+                &region_index_by_id,
+                active_mask.as_deref(),
+            )
+        })
+        .transpose()?;
     apply_region_texture_overrides(
         problem,
         &region_index_by_id,
@@ -1085,6 +1161,9 @@ pub(crate) fn plan_fdm(
         sot_xi_fl: sot.xi_fl,
         sot_sigma: sot.sigma,
         sot_thickness: sot.thickness,
+        sot_formula_version: sot.formula_version.map(str::to_string),
+        sot_target: sot.target,
+        sot_active_mask,
     };
 
     for (term_index, term) in problem.energy_terms.iter().enumerate() {
@@ -1371,6 +1450,31 @@ mod tests {
         );
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert_eq!(mask, vec![1], "translated owner must be sampled in object coordinates");
+    }
+
+    #[test]
+    fn prescribed_sot_region_target_materializes_cell_mask() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.object_regions = vec![region(0)];
+        let target = fullmag_ir::RegionRefIR {
+            object_id: "strip".to_string(),
+            region_id: Some("strip:r0".to_string()),
+        };
+        let active_mask = vec![true, true, false];
+        let region_mask = vec![1, 0, 0];
+        let region_ids = BTreeMap::from([("strip:r0".to_string(), 1)]);
+
+        let mask = materialize_prescribed_sot_target_mask(
+            &problem,
+            &target,
+            &["strip"],
+            &region_mask,
+            &region_ids,
+            Some(&active_mask),
+        )
+        .expect("valid region target must materialize");
+
+        assert_eq!(mask, vec![true, false, false]);
     }
 }
 

@@ -1,4 +1,7 @@
-use fullmag_ir::{ProblemIR, SpinTorqueModuleIR};
+use fullmag_ir::{
+    PrescribedSotFormulaIR, PrescribedSotV1DriveIR, ProblemIR, RegionRefIR,
+    SpinTorqueModuleIR, TimeEnvelopeIR,
+};
 
 use crate::current_transport::ResolvedCurrentTransport;
 use crate::error::PlanError;
@@ -187,22 +190,27 @@ pub(crate) fn resolve_legacy_spin_torque(
                 )],
             });
         }
-        SpinTorqueModuleIR::PrescribedSot { formula, .. } => {
-            let formula_version = match formula {
-                fullmag_ir::PrescribedSotFormulaIR::FullmagV1 { .. } => {
-                    "prescribed_sot.fullmag.v1"
-                }
-                fullmag_ir::PrescribedSotFormulaIR::LegacyFullmagV0 { .. } => {
-                    "prescribed_sot.legacy_fullmag.v0"
-                }
-            };
-            return Err(PlanError {
-                reasons: vec![format!(
-                    "spin_torque_modules[0]=prescribed_sot formula_version={formula_version} is semantic_only and not_yet_lowered by the planner; {}",
-                    support_matrix_note(lane)
-                )],
-            });
-        }
+        SpinTorqueModuleIR::PrescribedSot { formula, .. } => match (lane, formula) {
+            (SpinTorqueExecutableLane::Fdm, PrescribedSotFormulaIR::FullmagV1 { .. }) => {
+                LegacySpinTorqueFields::default()
+            }
+            (_, PrescribedSotFormulaIR::FullmagV1 { .. }) => {
+                return Err(PlanError {
+                    reasons: vec![format!(
+                        "spin_torque_modules[0]=prescribed_sot formula_version=prescribed_sot.fullmag.v1 is not executable on this lane; {}",
+                        support_matrix_note(lane)
+                    )],
+                });
+            }
+            (_, PrescribedSotFormulaIR::LegacyFullmagV0 { .. }) => {
+                return Err(PlanError {
+                    reasons: vec![
+                        "spin_torque_modules[0]=prescribed_sot formula_version=prescribed_sot.legacy_fullmag.v0 is compatibility-only and fail_closed for execution"
+                            .to_string(),
+                    ],
+                });
+            }
+        },
         SpinTorqueModuleIR::SpinOrbitTorque { .. } => {
             return Err(PlanError {
                 reasons: vec![format!(
@@ -220,6 +228,8 @@ pub(crate) fn resolve_legacy_spin_torque(
 /// Resolved SOT-specific fields for populating the FDM/FEM plan.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedSotFields {
+    pub formula_version: Option<&'static str>,
+    pub target: Option<RegionRefIR>,
     pub current_density: Option<f64>,
     pub xi_dl: Option<f64>,
     pub xi_fl: Option<f64>,
@@ -230,27 +240,84 @@ pub(crate) struct ResolvedSotFields {
 /// Extract SOT parameters from the first spin_torque_modules entry if it is SOT.
 pub(crate) fn resolve_sot_fields(
     problem: &ProblemIR,
-    _current_transports: &[ResolvedCurrentTransport],
+    current_transports: &[ResolvedCurrentTransport],
 ) -> Result<ResolvedSotFields, PlanError> {
     if problem.spin_torque_modules.is_empty() {
         return Ok(ResolvedSotFields::default());
     }
     match &problem.spin_torque_modules[0] {
-        SpinTorqueModuleIR::PrescribedSot { formula, .. } => {
-            let formula_version = match formula {
-                fullmag_ir::PrescribedSotFormulaIR::FullmagV1 { .. } => {
-                    "prescribed_sot.fullmag.v1"
+        SpinTorqueModuleIR::PrescribedSot {
+            target: Some(target),
+            formula:
+                PrescribedSotFormulaIR::FullmagV1 {
+                    drive,
+                    xi_dl,
+                    xi_fl,
+                    free_layer_thickness_m,
+                },
+            ..
+        } => {
+            let (current_density, sigma) = match drive {
+                PrescribedSotV1DriveIR::SignedScalar {
+                    current_density_apm2,
+                    sigma_hat,
+                    envelope,
+                } => {
+                    let multiplier = match envelope {
+                        None => 1.0,
+                        Some(TimeEnvelopeIR::Constant { value }) => *value,
+                        Some(_) => {
+                            return Err(PlanError {
+                                reasons: vec![
+                                    "prescribed_sot.fullmag.v1 non-constant TimeEnvelope is not executable in the M0 FDM constant-source lane"
+                                        .to_string(),
+                                ],
+                            });
+                        }
+                    };
+                    (*current_density_apm2 * multiplier, normalize_axis(*sigma_hat))
                 }
-                fullmag_ir::PrescribedSotFormulaIR::LegacyFullmagV0 { .. } => {
-                    "prescribed_sot.legacy_fullmag.v0"
+                PrescribedSotV1DriveIR::VectorCurrentSource {
+                    current_source_id,
+                    drive_direction,
+                    interface_normal,
+                } => {
+                    let current = resolve_current_density_source(
+                        current_transports,
+                        current_source_id,
+                    )?;
+                    let drive_direction = normalize_axis(*drive_direction);
+                    let interface_normal = normalize_axis(*interface_normal);
+                    let signed_current = dot(current, drive_direction);
+                    let sigma = normalize_axis(cross(interface_normal, drive_direction));
+                    (signed_current, sigma)
                 }
             };
-            Err(PlanError {
-                reasons: vec![format!(
-                    "prescribed_sot formula_version={formula_version} is semantic_only and not_yet_lowered for SOT field resolution"
-                )],
+            Ok(ResolvedSotFields {
+                formula_version: Some("prescribed_sot.fullmag.v1"),
+                target: Some(target.clone()),
+                current_density: Some(current_density),
+                xi_dl: Some(*xi_dl),
+                xi_fl: Some(*xi_fl),
+                sigma: Some(sigma),
+                thickness: Some(*free_layer_thickness_m),
             })
         }
+        SpinTorqueModuleIR::PrescribedSot {
+            formula: PrescribedSotFormulaIR::LegacyFullmagV0 { .. },
+            ..
+        } => Err(PlanError {
+            reasons: vec![
+                "prescribed_sot formula_version=prescribed_sot.legacy_fullmag.v0 is compatibility-only and fail_closed for execution"
+                    .to_string(),
+            ],
+        }),
+        SpinTorqueModuleIR::PrescribedSot { target: None, .. } => Err(PlanError {
+            reasons: vec![
+                "prescribed_sot.fullmag.v1 requires an explicit target before planning"
+                    .to_string(),
+            ],
+        }),
         SpinTorqueModuleIR::SpinOrbitTorque { .. } => Err(PlanError {
             reasons: vec![
                 "spin_orbit_torque is a deprecated compatibility-only Rust variant and is fail_closed for SOT field resolution"
@@ -259,6 +326,25 @@ pub(crate) fn resolve_sot_fields(
         }),
         _ => Ok(ResolvedSotFields::default()),
     }
+}
+
+fn dot(left: [f64; 3], right: [f64; 3]) -> f64 {
+    left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+}
+
+fn cross(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ]
+}
+
+fn normalize_axis(axis: [f64; 3]) -> [f64; 3] {
+    let scale = axis.into_iter().map(f64::abs).fold(0.0, f64::max);
+    let scaled = axis.map(|component| component / scale);
+    let scaled_norm = dot(scaled, scaled).sqrt();
+    scaled.map(|component| component / scaled_norm)
 }
 
 #[cfg(test)]
@@ -270,9 +356,16 @@ mod tests {
     };
 
     #[test]
-    fn canonical_prescribed_sot_formulas_fail_closed_until_planner_lowering_exists() {
-        let formulas = [
-            PrescribedSotFormulaIR::FullmagV1 {
+    fn canonical_prescribed_sot_signed_scalar_preserves_current_sign() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
+            schema_version: "prescribed_sot.v1".to_string(),
+            id: "sot".to_string(),
+            target: Some(RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula: PrescribedSotFormulaIR::FullmagV1 {
                 drive: PrescribedSotV1DriveIR::SignedScalar {
                     current_density_apm2: -1.0e10,
                     sigma_hat: [0.0, 1.0, 0.0],
@@ -282,7 +375,19 @@ mod tests {
                 xi_fl: 0.0,
                 free_layer_thickness_m: 1.0e-9,
             },
-            PrescribedSotFormulaIR::LegacyFullmagV0 {
+        }];
+
+        let resolved = resolve_sot_fields(&problem, &[])
+            .expect("canonical prescribed SOT must lower for FDM execution");
+        assert_eq!(resolved.current_density, Some(-1.0e10));
+        assert_eq!(resolved.sigma, Some([0.0, 1.0, 0.0]));
+        assert_eq!(resolved.xi_dl, Some(0.1));
+        assert_eq!(resolved.thickness, Some(1.0e-9));
+    }
+
+    #[test]
+    fn legacy_prescribed_sot_formula_fails_closed() {
+        let formula = PrescribedSotFormulaIR::LegacyFullmagV0 {
                 drive: PrescribedSotLegacyDriveIR::LegacyScalarMagnitude {
                     raw_charge_current_density_apm2: -1.0e10,
                 },
@@ -294,36 +399,23 @@ mod tests {
                     source_ir_version: "0.2.0".to_string(),
                     authored_kind: "spin_orbit_torque".to_string(),
                 },
-            },
-        ];
-
-        for formula in formulas {
-            let mut problem = ProblemIR::bootstrap_example();
-            problem.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
-                schema_version: "prescribed_sot.v1".to_string(),
-                id: "sot".to_string(),
-                target: Some(RegionRefIR {
-                    object_id: "strip".to_string(),
-                    region_id: None,
-                }),
-                formula,
-            }];
-            let error = resolve_legacy_spin_torque(
-                &problem,
-                SpinTorqueExecutableLane::Fdm,
-                &[],
-            )
-            .expect_err("canonical prescribed_sot must not enter the legacy executable path");
-            assert!(error.reasons.iter().any(|reason| {
-                reason.contains("prescribed_sot") && reason.contains("not_yet_lowered")
-            }));
-
-            let field_error = resolve_sot_fields(&problem, &[])
-                .expect_err("canonical prescribed_sot must fail closed before field lowering");
-            assert!(field_error.reasons.iter().any(|reason| {
-                reason.contains("prescribed_sot") && reason.contains("not_yet_lowered")
-            }));
-        }
+            };
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::PrescribedSot {
+            schema_version: "prescribed_sot.v1".to_string(),
+            id: "sot".to_string(),
+            target: Some(RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula,
+        }];
+        let field_error = resolve_sot_fields(&problem, &[])
+            .expect_err("legacy prescribed SOT must remain fail-closed");
+        assert!(field_error.reasons.iter().any(|reason| {
+            reason.contains("prescribed_sot.legacy_fullmag.v0")
+                && reason.contains("fail_closed")
+        }));
     }
 
     #[test]

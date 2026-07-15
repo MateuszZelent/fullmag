@@ -165,6 +165,7 @@ fn build_sot(plan: &FdmPlanIR) -> Option<SotConfig> {
         xi_fl: plan.sot_xi_fl.unwrap_or(0.0),
         sigma,
         thickness,
+        active_mask: plan.sot_active_mask.clone(),
     })
 }
 

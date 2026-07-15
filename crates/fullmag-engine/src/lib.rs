@@ -2140,6 +2140,7 @@ mod tests {
                     xi_fl: 0.0,
                     sigma: [0.0, 1.0, 0.0],
                     thickness: 1.0,
+                    active_mask: None,
                 }),
                 ..Default::default()
             },
@@ -2179,6 +2180,7 @@ mod tests {
                     xi_fl: 0.0,
                     sigma: [0.0, 1.0, 0.0],
                     thickness: 1.0,
+                    active_mask: None,
                 }),
                 ..Default::default()
             },

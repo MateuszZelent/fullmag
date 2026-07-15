@@ -505,6 +505,15 @@ pub struct FdmPlanIR {
     /// FM layer thickness t_F [m] (for SOT amplitude)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sot_thickness: Option<f64>,
+    /// Versioned prescribed-SOT formula selected by the planner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_formula_version: Option<String>,
+    /// Authored target retained for provenance and runtime inspection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_target: Option<crate::RegionRefIR>,
+    /// Per-cell target mask for prescribed SOT, intersected with `active_mask`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sot_active_mask: Option<Vec<bool>>,
 
     // ── Oersted field (cylindrical conductor) ──
     /// Whether to include the Oersted field from a cylindrical conductor.

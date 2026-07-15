@@ -92,7 +92,7 @@ pub struct SlonczewskiSttConfig {
 /// Both damping-like (DL) and field-like (FL) components are supported.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SotConfig {
-    /// Charge current density magnitude |Je| [A/m²] in the HM layer.
+    /// Signed conventional charge-current density J [A/m²] in the HM layer.
     pub current_density: f64,
     /// Damping-like efficiency ξ_DL (≈ spin Hall angle θ_SH, dimensionless).
     pub xi_dl: f64,
@@ -102,6 +102,8 @@ pub struct SotConfig {
     pub sigma: Vector3,
     /// FM layer thickness t_F [m] (used in amplitude prefactor).
     pub thickness: f64,
+    /// Optional per-cell torque target mask, already intersected with the magnetic active mask.
+    pub active_mask: Option<Vec<bool>>,
 }
 
 /// Oersted field configuration for infinite cylindrical conductor.
