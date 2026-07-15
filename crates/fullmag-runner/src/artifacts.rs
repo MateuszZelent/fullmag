@@ -255,6 +255,80 @@ fn thermal_execution_provenance(plan: &fullmag_ir::ExecutionPlanIR, steps: &[Ste
     }))
 }
 
+fn fem_spin_torque_provenance(
+    problem: &fullmag_ir::ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    execution: &crate::types::ExecutionProvenance,
+) -> Option<serde_json::Value> {
+    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
+        return None;
+    };
+    let contract = fem.spin_torque_contract.as_ref()?;
+    let (authored_class, authored_id) = problem
+        .spin_torque_modules
+        .iter()
+        .find_map(|module| match module {
+            fullmag_ir::SpinTorqueModuleIR::Slonczewski { id, .. }
+                if contract.formula_version.starts_with("slonczewski.") =>
+            {
+                Some(("SlonczewskiSTT", id.as_deref()))
+            }
+            fullmag_ir::SpinTorqueModuleIR::ZhangLi { id, .. }
+                if contract.formula_version.starts_with("zhang_li.") =>
+            {
+                Some(("ZhangLiSTT", id.as_deref()))
+            }
+            _ => None,
+        })
+        .unwrap_or(("legacy_flat_stt", None));
+    let canonical_class = if contract.formula_version.starts_with("slonczewski.") {
+        "SlonczewskiSTT"
+    } else if contract.formula_version.starts_with("zhang_li.") {
+        "ZhangLiSTT"
+    } else {
+        "unknown"
+    };
+    let active_node_count = contract.active_node_mask.as_ref()
+        .map(|mask| mask.iter().filter(|active| **active).count());
+    let active_element_count = contract.active_element_mask.as_ref()
+        .map(|mask| mask.iter().filter(|active| **active).count());
+
+    Some(serde_json::json!({
+        "schema_version": "spin_torque_provenance.v1",
+        "artifact_path": "physics/spin_torque_provenance.v1.json",
+        "authored_class": authored_class,
+        "authored_id": authored_id,
+        "canonical_class": canonical_class,
+        "formula_version": contract.formula_version,
+        "operator_version": contract.operator_version,
+        "realization_version": contract.realization_version,
+        "target": contract.target,
+        "current_convention": "conventional_charge_current",
+        "current_density_unit": "A/m^2",
+        "current_density": fem.current_density,
+        "degree": fem.stt_degree,
+        "beta": fem.stt_beta,
+        "spin_polarization": fem.stt_spin_polarization,
+        "lambda_asymmetry": fem.stt_lambda,
+        "epsilon_prime": fem.stt_epsilon_prime,
+        "free_layer_thickness_m": fem.stt_thickness,
+        "free_layer_thickness_unit": "m",
+        "stack_normal": contract.stack_normal,
+        "lande_g": contract.lande_g,
+        "active_node_count": active_node_count,
+        "total_node_count": fem.mesh.nodes.len(),
+        "active_element_count": active_element_count,
+        "total_element_count": fem.mesh.elements.len(),
+        "material": {
+            "saturation_magnetisation_A_per_m": fem.material.saturation_magnetisation,
+            "gilbert_damping": fem.material.damping,
+        },
+        "resolved_execution_engine": execution.execution_engine,
+        "resolved_precision": execution.precision,
+        "resolved_fallback": execution.resolved_fallback,
+    }))
+}
+
 fn demag_amg_env_i64(name: &str, default_value: i64) -> i64 {
     env::var(name)
         .ok()
@@ -1029,6 +1103,13 @@ pub(crate) fn write_artifacts(
             .expect("ExecutionProvenance must serialize to an object")
             .insert("thermal".to_string(), thermal);
     }
+    let spin_torque_provenance = fem_spin_torque_provenance(problem, plan, &execution_provenance);
+    if let Some(spin_torque) = spin_torque_provenance.as_ref() {
+        execution_provenance_json
+            .as_object_mut()
+            .expect("ExecutionProvenance must serialize to an object")
+            .insert("spin_torque".to_string(), spin_torque.clone());
+    }
 
     let metadata = serde_json::json!({
         "problem_name": problem.problem_meta.name,
@@ -1065,6 +1146,12 @@ pub(crate) fn write_artifacts(
     let metadata_path = output_dir.join("metadata.json");
     let mut metadata_file = fs::File::create(&metadata_path)?;
     metadata_file.write_all(serde_json::to_string_pretty(&metadata).unwrap().as_bytes())?;
+
+    if let Some(spin_torque) = spin_torque_provenance {
+        let path = output_dir.join("physics/spin_torque_provenance.v1.json");
+        fs::create_dir_all(path.parent().expect("spin-torque artifact has parent"))?;
+        fs::write(path, serde_json::to_vec_pretty(&spin_torque).unwrap())?;
+    }
 
     if streamed.is_none_or(|summary| summary.scalar_rows_written == 0) {
         write_scalars_csv(&output_dir.join("scalars.csv"), &executed.result.steps)?;
@@ -3707,6 +3794,104 @@ mod tests {
         );
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn fem_canonical_stt_persists_complete_provenance_and_manifest() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![fullmag_ir::SpinTorqueModuleIR::Slonczewski {
+            schema_version: Some("slonczewski_torque.v1".to_string()),
+            id: Some("cpp".to_string()),
+            target: Some(fullmag_ir::RegionRefIR { object_id: "free".to_string(), region_id: None }),
+            formula_version: "slonczewski.fullmag.v1".to_string(),
+            current_density: Some([0.0, 0.0, -2.0e11]),
+            current_source: None,
+            degree: 0.55,
+            spin_polarization: [0.0, 1.0, 0.0],
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lambda_asymmetry: 1.4,
+            epsilon_prime: 0.03,
+            free_layer_thickness_m: Some(1.5e-9),
+            fixed_layer_position: None,
+            realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
+                realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
+            }),
+        }];
+        let mut plan = test_fem_execution_plan();
+        let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else { panic!("FEM fixture") };
+        fem.current_density = Some([0.0, 0.0, -2.0e11]);
+        fem.stt_degree = Some(0.55);
+        fem.stt_spin_polarization = Some([0.0, 1.0, 0.0]);
+        fem.stt_lambda = Some(1.4);
+        fem.stt_epsilon_prime = Some(0.03);
+        fem.stt_thickness = Some(1.5e-9);
+        fem.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: "slonczewski.fullmag.v1".to_string(),
+            operator_version: None,
+            realization_version: Some("slonczewski_thin_layer_homogenized.v1".to_string()),
+            target: Some(fullmag_ir::RegionRefIR { object_id: "free".to_string(), region_id: None }),
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lande_g: None,
+            active_node_mask: Some(vec![true, true, false, false]),
+            active_element_mask: Some(vec![true]),
+        });
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fem-stt-provenance-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).expect("clock drift").as_nanos()
+        ));
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance {
+                execution_engine: "fem_cpu_native".to_string(),
+                precision: "double".to_string(),
+                resolved_fallback: Some(ResolvedFallback {
+                    occurred: true,
+                    original_engine: "fem_native_gpu".to_string(),
+                    fallback_engine: "fem_cpu_native".to_string(),
+                    reason: "fem_gpu_rk_plan_ineligible".to_string(),
+                    message: "canonical FEM STT is CPU-only".to_string(),
+                }),
+                ..ExecutionProvenance::default()
+            },
+        };
+        write_artifacts(&output_dir, &problem, &plan, &executed, None).expect("write artifacts");
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json")).expect("metadata"),
+        ).expect("metadata JSON");
+        let provenance = &metadata["execution_provenance"]["spin_torque"];
+        assert_eq!(provenance["schema_version"], "spin_torque_provenance.v1");
+        assert_eq!(provenance["authored_class"], "SlonczewskiSTT");
+        assert_eq!(provenance["canonical_class"], "SlonczewskiSTT");
+        assert_eq!(provenance["formula_version"], "slonczewski.fullmag.v1");
+        assert_eq!(provenance["realization_version"], "slonczewski_thin_layer_homogenized.v1");
+        assert_eq!(provenance["current_convention"], "conventional_charge_current");
+        assert_eq!(provenance["current_density_unit"], "A/m^2");
+        assert_eq!(provenance["current_density"], serde_json::json!([0.0, 0.0, -2.0e11]));
+        assert_eq!(provenance["target"]["object_id"], "free");
+        assert_eq!(provenance["stack_normal"], serde_json::json!([0.0, 0.0, 1.0]));
+        assert_eq!(provenance["active_node_count"], 2);
+        assert_eq!(provenance["active_element_count"], 1);
+        assert_eq!(provenance["resolved_execution_engine"], "fem_cpu_native");
+        assert_eq!(provenance["resolved_precision"], "double");
+        assert_eq!(provenance["resolved_fallback"]["reason"], "fem_gpu_rk_plan_ineligible");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("physics/spin_torque_provenance.v1.json"))
+                .expect("spin-torque manifest"),
+        ).expect("manifest JSON");
+        assert_eq!(manifest, *provenance);
+        fs::remove_dir_all(output_dir).expect("remove fixture");
     }
 
     #[test]

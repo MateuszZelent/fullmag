@@ -6182,6 +6182,30 @@ mod tests {
         plan
     }
 
+    fn canonical_stt_fem_plan(formula_version: &str) -> FemPlanIR {
+        let mut plan = tiny_fem_plan();
+        plan.enable_exchange = true;
+        plan.current_density = Some([1.0e11, 0.0, 0.0]);
+        plan.stt_degree = Some(0.4);
+        plan.spin_torque_contract = Some(fullmag_ir::FemSpinTorquePlanIR {
+            formula_version: formula_version.to_string(),
+            operator_version: (formula_version == "zhang_li.fullmag.v1")
+                .then(|| "zl_central_reference_v1".to_string()),
+            realization_version: (formula_version == "slonczewski.fullmag.v1")
+                .then(|| "slonczewski_thin_layer_homogenized.v1".to_string()),
+            target: Some(fullmag_ir::RegionRefIR {
+                object_id: "free".to_string(),
+                region_id: None,
+            }),
+            stack_normal: (formula_version == "slonczewski.fullmag.v1")
+                .then_some([0.0, 0.0, 1.0]),
+            lande_g: (formula_version == "zhang_li.fullmag.v1").then_some(2.0),
+            active_node_mask: Some(vec![true; 4]),
+            active_element_mask: Some(vec![true]),
+        });
+        plan
+    }
+
     fn oersted_only_fem_plan() -> FemPlanIR {
         let mut plan = tiny_fem_plan();
         plan.enable_exchange = false;
@@ -9333,6 +9357,27 @@ mod tests {
     }
 
     #[test]
+    fn auto_fem_canonical_stt_falls_back_to_cpu_with_versioned_reason() {
+        for formula_version in ["slonczewski.fullmag.v1", "zhang_li.fullmag.v1"] {
+            let resolution = apply_fem_gpu_plan_constraints(
+                &canonical_stt_fem_plan(formula_version),
+                EngineResolution {
+                    engine: FemEngine::NativeGpu,
+                    fallback: None,
+                },
+                false,
+            )
+            .expect("auto FEM must resolve canonical CPU-only STT to CPU");
+
+            assert_eq!(resolution.engine, FemEngine::CpuNative);
+            let fallback = resolution.fallback.expect("typed fallback provenance");
+            assert_eq!(fallback.reason, "fem_gpu_rk_plan_ineligible");
+            assert!(fallback.message.contains(formula_version));
+            assert!(fallback.message.contains("canonical FEM STT"));
+        }
+    }
+
+    #[test]
     fn auto_fem_oersted_only_plan_falls_back_to_cpu_with_gpu_rk_reason() {
         let resolution = apply_fem_gpu_plan_constraints(
             &oersted_only_fem_plan(),
@@ -9364,6 +9409,25 @@ mod tests {
 
         assert!(err.message.contains("fem_gpu_rk_plan_ineligible"));
         assert!(err.message.contains("enable_exchange=true"));
+    }
+
+    #[test]
+    fn strict_fem_canonical_stt_gpu_fails_before_provenance() {
+        for formula_version in ["slonczewski.fullmag.v1", "zhang_li.fullmag.v1"] {
+            let err = apply_fem_gpu_plan_constraints(
+                &canonical_stt_fem_plan(formula_version),
+                EngineResolution {
+                    engine: FemEngine::NativeGpu,
+                    fallback: None,
+                },
+                true,
+            )
+            .expect_err("strict canonical FEM STT GPU must fail during selection");
+
+            assert!(err.message.contains("fem_gpu_rk_plan_ineligible"));
+            assert!(err.message.contains(formula_version));
+            assert!(err.message.contains("canonical FEM STT"));
+        }
     }
 
     #[test]
