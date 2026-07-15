@@ -3,14 +3,16 @@ import type {
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
 import {
+  normalizeManifestRenderableCarriers,
+  type ManifestCarrierSourceKind,
+  type ManifestRenderableCarrierDiagnostics,
+  type NormalizedManifestObjectSegmentCarrier,
+  type NormalizedManifestRenderableCarrier,
+} from "@/kernel/selection/manifestRenderableCarriers";
+import {
   isVisualizationAirboxIdentity,
   visualizationObjectIdForMeshPartLike,
 } from "@/kernel/selection/selectionTypes";
-import {
-  manifestCarrierOwnershipAliases,
-  resolveManifestRenderableCarrierKind,
-  type ManifestRenderableCarrierKind,
-} from "@/kernel/visualization/visualizationDisplayResolution";
 
 import {
   resolveDomainBounds,
@@ -21,13 +23,7 @@ type MeshPart = NonNullable<
   MeshSharedDomainManifestResource["mesh_parts"]
 >[number];
 
-type ObjectSegment = NonNullable<
-  MeshSharedDomainManifestResource["object_segments"]
->[number];
-
-export type ManifestRenderableCarrierSourceKind =
-  | "mesh-part"
-  | "object-segment";
+export type ManifestRenderableCarrierSourceKind = ManifestCarrierSourceKind;
 
 export type Viewport3DMeshPart =
   | (MeshPart & {
@@ -37,25 +33,12 @@ export type Viewport3DMeshPart =
   | Viewport3DObjectSegmentCarrier;
 
 export type Viewport3DObjectSegmentCarrier =
-  Omit<MeshPart, "geometry_id" | "object_id"> &
-  ObjectSegment & {
-    carrierKind: "object-segment";
-    fieldCapable: false;
-    id: string;
-    label: string;
-    role: "magnetic";
-  };
+  NormalizedManifestObjectSegmentCarrier;
 
 export type Viewport3DManifestRenderableCarrier =
-  | Viewport3DMeshPart
-  | Viewport3DObjectSegmentCarrier;
+  NormalizedManifestRenderableCarrier;
 
-export interface ManifestRenderableCarrierDiagnostics {
-  degradedCarrierCount: number;
-  kind: ManifestRenderableCarrierKind;
-  rejectedCarrierCount: number;
-  renderableCarrierCount: number;
-}
+export type { ManifestRenderableCarrierDiagnostics };
 
 export interface FdmGridRenderDomain {
   bounds: Viewport3DBounds | null;
@@ -158,7 +141,8 @@ export function adaptFemSharedDomainManifest(
 
   for (const part of carriers) {
     partsById.set(part.id, part);
-    if (isVisualizationAirboxIdentity(part)) {
+    const isAirbox = isVisualizationAirboxIdentity(part);
+    if (isAirbox) {
       airboxParts.push(part);
     } else if (isInterfaceSurfacePart(part)) {
       interfaceParts.push(part);
@@ -167,8 +151,10 @@ export function adaptFemSharedDomainManifest(
       addMagneticPartAliases(magneticPartIdsByAlias, part);
     }
 
-    addObjectPartAlias(objectPartIds, part.object_id, part.id);
-    addObjectPartAlias(objectPartIds, part.geometry_id, part.id);
+    if (!isAirbox) {
+      addObjectPartAlias(objectPartIds, part.object_id, part.id);
+      addObjectPartAlias(objectPartIds, part.geometry_id, part.id);
+    }
   }
 
   for (const part of interfaceParts) {
@@ -201,71 +187,13 @@ export function manifestRenderableCarriers(
 ): Viewport3DManifestRenderableCarrier[] & {
   diagnostics: ManifestRenderableCarrierDiagnostics;
 } {
-  const rawMeshParts = (manifest?.mesh_parts ?? []).map((part) => ({
-    ...part,
-    carrierKind: "mesh-part" as const,
-    fieldCapable: true as const,
-  }));
-  const seenMeshPartIds = new Set<string>();
-  const meshParts = rawMeshParts.filter((part) => {
-    const id = part.id.trim();
-    if (!id || seenMeshPartIds.has(id)) return false;
-    seenMeshPartIds.add(id);
-    return true;
-  });
-  const meshOwnership = new Set<string>();
-  for (const part of meshParts) {
-    for (const alias of manifestCarrierOwnershipAliases(part)) meshOwnership.add(alias);
-  }
-  const segments = (manifest?.object_segments ?? []).flatMap((segment, index) =>
-    carrierOwnershipAliases(segment).some((alias) => meshOwnership.has(alias))
-      ? []
-      : [objectSegmentCarrier(segment, index)],
-  );
-  const carriers = [...meshParts, ...segments] as Viewport3DManifestRenderableCarrier[] & {
-    diagnostics: ManifestRenderableCarrierDiagnostics;
-  };
-  carriers.diagnostics = {
-    degradedCarrierCount: segments.length,
-    kind: resolveManifestRenderableCarrierKind({
-      meshPartCount: meshParts.length,
-      objectSegmentCount: segments.length,
-    }),
-    rejectedCarrierCount: rawMeshParts.length - meshParts.length,
-    renderableCarrierCount: carriers.filter(
-      (carrier) =>
-        carrier.carrierKind === "object-segment" ||
-        isVisualizationAirboxIdentity(carrier) ||
-        isMagneticRenderablePart(carrier),
-    ).length,
-  };
-  return carriers;
+  return normalizeManifestRenderableCarriers(manifest);
 }
 
 export function isFieldCapableManifestRenderCarrier(
   part: Viewport3DMeshPart,
 ): boolean {
   return part.fieldCapable !== false;
-}
-
-function objectSegmentCarrier(
-  segment: ObjectSegment,
-  index: number,
-): Viewport3DObjectSegmentCarrier {
-  return {
-    ...segment,
-    carrierKind: "object-segment",
-    fieldCapable: false,
-    id: `segment:${segment.object_id}:${index}`,
-    label: segment.object_id,
-    role: "magnetic",
-  };
-}
-
-function carrierOwnershipAliases(
-  carrier: Pick<ObjectSegment, "geometry_id" | "object_id">,
-): string[] {
-  return manifestCarrierOwnershipAliases(carrier);
 }
 
 function addObjectPartAlias(

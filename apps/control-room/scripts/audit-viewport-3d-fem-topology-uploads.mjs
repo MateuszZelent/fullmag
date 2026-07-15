@@ -18,6 +18,8 @@ const configuredUrl = process.env.CONTROL_ROOM_URL ?? null;
 const semanticOnly = process.env.CONTROL_ROOM_AUDIT_SEMANTIC_ONLY === "1";
 const preCanvasOnly = process.env.CONTROL_ROOM_AUDIT_PRE_CANVAS_ONLY === "1";
 const requestedAuditPort = Number(process.env.CONTROL_ROOM_AUDIT_PORT ?? 0);
+const browserExecutablePath =
+  process.env.CONTROL_ROOM_BROWSER_EXECUTABLE_PATH?.trim() ?? "";
 const apiBase =
   process.env.CONTROL_ROOM_API_BASE_URL ??
   process.env.NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL ??
@@ -37,7 +39,9 @@ if (!playwright?.chromium) {
 
 const managedRuntime = configuredUrl ? null : await startAuditRuntime();
 const url = configuredUrl ?? managedRuntime.url;
-const browser = await playwright.chromium.launch();
+const browser = await playwright.chromium.launch({
+  executablePath: browserExecutablePath || undefined,
+});
 const measurements = [];
 
 try {
@@ -244,6 +248,18 @@ async function verifySemanticTargetExplorerInvariant({ browser, url }) {
     if (await leakedOuterBoundary.count()) {
       throw new Error("Outer boundary leaked into Unassigned mesh.");
     }
+    const leakedAirboxSegment = page.locator(
+      '[data-node-id="model:mesh:unassigned:segment%3A__air__%3A0"]',
+    );
+    if (await leakedAirboxSegment.count()) {
+      throw new Error("The production __air__ object segment leaked into Unassigned mesh.");
+    }
+    const airboxRows = page.locator('[data-node-id="model:airbox"]');
+    if ((await airboxRows.count()) !== 1) {
+      throw new Error(
+        `Expected one canonical Airbox Explorer row, found ${await airboxRows.count()}.`,
+      );
+    }
     await boundaryFacesRow.click();
     await page.waitForFunction(
       () =>
@@ -326,6 +342,8 @@ async function verifySemanticTargetExplorerInvariant({ browser, url }) {
       boundaryFacesExplorerNodeId: "model:boundary-faces",
       boundaryFacesFields,
       boundaryFacesInspectorVisible: true,
+      canonicalAirboxExplorerNodeCount: 1,
+      leakedAirboxSegmentNodeCount: 0,
       outerBoundaryUnassignedNodeCount: 0,
       selectedNodeIds: [...selectedNodeIds].sort(),
       webgl: postInteractionWebgl,
@@ -560,8 +578,8 @@ function createSemanticTargetExplorerFixture() {
   const meshParts = [
     semanticFixturePart({
       faceIndex: 0,
-      id: "semantic-air",
-      label: "Semantic Airbox",
+      id: "part:__air__",
+      label: "Airbox",
       nodeStart: 0,
       role: "air",
     }),
@@ -603,7 +621,18 @@ function createSemanticTargetExplorerFixture() {
       mesh_id: "semantic-target-fixture",
       mesh_name: "Semantic target Explorer fixture",
       mesh_parts: meshParts,
-      object_segments: [],
+      object_segments: [
+        {
+          boundary_face_count: meshParts[0].boundary_face_count,
+          boundary_face_start: meshParts[0].boundary_face_start,
+          element_count: meshParts[0].element_count,
+          element_start: meshParts[0].element_start,
+          geometry_id: null,
+          node_count: meshParts[0].node_count,
+          node_start: meshParts[0].node_start,
+          object_id: "__air__",
+        },
+      ],
       regions: [],
       revision: 1,
       source_scene_revision: 1,

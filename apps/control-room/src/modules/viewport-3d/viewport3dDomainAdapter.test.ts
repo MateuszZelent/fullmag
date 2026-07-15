@@ -207,6 +207,87 @@ describe("viewport3dDomainAdapter", () => {
     });
   });
 
+  it("collapses the production Airbox mesh part and segment into one carrier", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts = [
+      {
+        ...manifest.mesh_parts![0]!,
+        geometry_id: null,
+        id: "part:__air__",
+        object_id: null,
+        role: "air",
+      },
+    ];
+    manifest.object_segments = [
+      {
+        boundary_face_count: 60,
+        boundary_face_start: 0,
+        element_count: 175,
+        element_start: 0,
+        geometry_id: null,
+        node_count: 32,
+        node_start: 0,
+        object_id: "__air__",
+      },
+    ];
+
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect([...domain.partsById.keys()]).toEqual(["part:__air__"]);
+    expect(domain.airboxParts).toMatchObject([
+      {
+        carrierKind: "mesh-part",
+        fieldCapable: true,
+        id: "part:__air__",
+        role: "air",
+      },
+    ]);
+    expect(domain.magneticParts).toEqual([]);
+    expect(domain.objectPartIds.has("__air__")).toBe(false);
+    expect(domain.renderCarrierDiagnostics).toEqual({
+      degradedCarrierCount: 0,
+      kind: "mesh-parts",
+      rejectedCarrierCount: 0,
+      renderableCarrierCount: 1,
+    });
+  });
+
+  it("keeps a segment-only Airbox as a degraded Airbox without object ownership", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts = [];
+    manifest.object_segments = [
+      {
+        boundary_face_count: 60,
+        boundary_face_start: 0,
+        element_count: 175,
+        element_start: 0,
+        geometry_id: null,
+        node_count: 32,
+        node_start: 0,
+        object_id: "__air__",
+      },
+    ];
+
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.airboxParts).toMatchObject([
+      {
+        carrierKind: "object-segment",
+        fieldCapable: false,
+        label: "Airbox",
+        object_id: "__air__",
+        role: "air",
+      },
+    ]);
+    expect(domain.magneticParts).toEqual([]);
+    expect(domain.objectPartIds.has("__air__")).toBe(false);
+    expect(selectionForMeshPart(domain.airboxParts[0]!)).toMatchObject({
+      kind: "mesh-part-airbox",
+      label: "Airbox",
+      objectId: null,
+    });
+  });
+
   it("keeps helper boundary parts out of renderable FEM part lists", () => {
     const domain = adaptFemSharedDomainManifest(manifestFixture());
 

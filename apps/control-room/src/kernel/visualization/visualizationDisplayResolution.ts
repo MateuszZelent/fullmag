@@ -1,3 +1,5 @@
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+
 import type { VisualizationTargetSettings } from "./ObjectVisualizationController";
 
 export type VisualizationTopologyFreshness = "current" | "stale" | "unknown";
@@ -199,7 +201,11 @@ function manifestCoversVisibleSceneObjects(
     }
   }
 
-  return visibleSceneObjectIds.every((objectId) => manifestObjectIds.has(objectId));
+  return visibleSceneObjectIds.every((objectId) =>
+    manifestCarrierOwnershipAliases({ object_id: objectId }).some((alias) =>
+      manifestObjectIds.has(alias),
+    ),
+  );
 }
 
 export function resolveManifestRenderableCarrierKind({
@@ -232,6 +238,17 @@ export function resolveManifestRenderableCarrierKind({
 
 export function manifestCarrierOwnershipAliases(value: unknown): string[] {
   const record = asRecord(value);
+  if (
+    isVisualizationAirboxIdentity({
+      geometry_id:
+        typeof record?.geometry_id === "string" ? record.geometry_id : null,
+      id: typeof record?.id === "string" ? record.id : null,
+      object_id: typeof record?.object_id === "string" ? record.object_id : null,
+      role: typeof record?.role === "string" ? record.role : null,
+    })
+  ) {
+    return ["airbox"];
+  }
   const aliases = new Set<string>();
   for (const candidate of [record?.object_id, record?.geometry_id]) {
     if (typeof candidate !== "string" || !candidate) continue;

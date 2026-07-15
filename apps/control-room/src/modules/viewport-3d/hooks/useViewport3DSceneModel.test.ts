@@ -2483,6 +2483,42 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
+  it("keeps an explicitly visible region hidden when its owner object is hidden", () => {
+    const visualization = new ObjectVisualizationController();
+    const part = {
+      geometry_id: "periodic_antidot_film:r1",
+      id: "part:periodic_antidot_film:r1",
+      label: "periodic_antidot_film:r1",
+      object_id: "periodic_antidot_film",
+    } as never;
+    const regionTarget = {
+      id: "region:periodic_antidot_film:periodic_antidot_film%3Ar1",
+      kind: "region" as const,
+    };
+    visualization.patchTarget(
+      { id: "object:periodic_antidot_film", kind: "object" },
+      { visible: false },
+    );
+    visualization.patchTarget(regionTarget, {
+      shaderVisible: true,
+      visible: true,
+      wireframeVisible: true,
+    });
+
+    expect(
+      resolveViewport3DPartVisualizationSettings({
+        objectVisualizationSnapshot: visualization.getSnapshot(),
+        part,
+        regionTarget,
+        sceneObjectIds: new Set(["periodic_antidot_film"]),
+      }),
+    ).toMatchObject({
+      shaderVisible: false,
+      visible: false,
+      wireframeVisible: false,
+    });
+  });
+
   it("applies region component color overrides to mesh-backed part render plans", () => {
     const visualization = new ObjectVisualizationController();
     const part = {

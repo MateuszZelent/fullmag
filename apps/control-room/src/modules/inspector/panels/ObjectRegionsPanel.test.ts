@@ -3,6 +3,19 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("ObjectRegionsPanel physical scalar inputs", () => {
+  it("distinguishes the owner object from its authored subregion", () => {
+    const shared = readFileSync(
+      new URL("./region/shared.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(shared).toContain('title="Authored Subregion"');
+    expect(shared).toContain('label="Owner object ID"');
+    expect(shared).toContain('label="Subregion ID"');
+    expect(shared).not.toContain('<FieldRow label="Object ID" value={model.objectId} />');
+    expect(shared).not.toContain('<FieldRow label="Region ID" value={model.regionId} />');
+  });
+
   it("does not render Radius for Box regions", () => {
     const geometryPanel = readFileSync(
       new URL("./region/ObjectRegionGeometryPanel.tsx", import.meta.url),

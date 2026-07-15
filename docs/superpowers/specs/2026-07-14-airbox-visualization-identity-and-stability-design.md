@@ -2,6 +2,7 @@
 
 **Status:** Approved
 **Date:** 2026-07-14
+**Revised:** 2026-07-15
 
 ## Problem
 
@@ -19,15 +20,82 @@ The same interaction path contains three adjacent defects observed in the browse
 - Recharts tooltip payload identity changes can repeatedly emit identical hover events, while the viewport stores every event as new React state, producing a maximum-update-depth loop and excessive animation-frame/reflow work;
 - the API connection dialog does not explicitly connect its description to `DialogContent`, producing a Radix accessibility warning.
 
+A later production manifest exposed a fourth identity defect. The same realized
+air domain is published as both:
+
+- a mesh part with `id=part:__air__`, `role=air`, and no `object_id` or
+  `geometry_id`;
+- an object segment with `object_id=__air__`.
+
+The frontend ownership resolver compares only mesh-part `object_id` and
+`geometry_id`, so it does not recognize these records as two representations of
+one Airbox. It then rewrites the segment to `segment:__air__:<index>` with a
+magnetic role. That derived identity is no longer recognized as Airbox and is
+incorrectly exposed as an unassigned mesh part and a degraded magnetic render
+carrier.
+
 ## Canonical identity contract
 
 `airbox` is the only user-facing visualization target for the exterior air domain.
 
 - `object:__air__` is an internal solver compatibility identity. It must not appear in `visualization/state.targets.objects` and must not receive new visualization overrides.
 - A mesh part whose role is `air` or `airbox` is a data-plane carrier. It must not appear in `visualization/state.targets.parts`.
+- An object segment whose `object_id` or `geometry_id` is a reserved Airbox
+  identity is another data-plane representation of the same target. Rewriting
+  its carrier id must not erase its semantic Airbox ownership.
 - `part:<id>` remains a valid transport identifier for topology, histogram-bin membership, and field-sample requests.
 - Other mesh parts are published as visualization fallbacks only when they do not resolve to an authored scene object.
 - UI selection of an air-role mesh part resolves to the canonical `airbox` target even if an older backend still publishes the part incorrectly.
+
+## Manifest carrier ownership normalization
+
+The frontend establishes ownership once at the manifest boundary and reuses the
+result for Explorer addressing, viewport carrier selection, topology freshness,
+and render-carrier diagnostics.
+
+The implementation must expose one kernel-owned normalized manifest-carrier
+result. Both the semantic target catalog and the viewport domain adapter consume
+that result. They must not independently rewrite object segments into local
+carrier shapes. The normalized record preserves the raw transport fields while
+adding the carrier kind, field capability, canonical presentation, and ownership
+aliases needed by downstream consumers.
+
+Airbox identity is derived from all ownership-bearing fields:
+
+- carrier `id`;
+- carrier `role`;
+- `object_id`;
+- `geometry_id`.
+
+The reserved ids `airbox`, `__air__`, and `__airbox__`, including existing
+`part:` and `object:` transport prefixes, resolve to one canonical Airbox
+ownership alias. The ordinary unreserved name `air` does not become Airbox by
+name alone; it requires the explicit `air` or `airbox` role. This prevents an
+authored object named `air` from being captured accidentally.
+
+When a field-capable Airbox mesh part and an Airbox object segment coexist, the
+mesh part owns the render address and the segment is treated as its duplicate.
+It must not create a second Explorer node, magnetic carrier, picking target, or
+`mixed` carrier diagnostic.
+
+When the manifest has no matching Airbox mesh part, the object segment remains
+available as a degraded, non-field-capable Airbox carrier. Its visible label is
+`Airbox`; it resolves to `model:airbox`, returns no scene-object id, and never
+appears under `Unassigned mesh parts`. This preserves degraded topology display
+without inventing a magnetic object.
+
+The degraded Airbox carrier must also be absent from object-ownership indexes
+such as `objectPartIds`; `__air__` is not an authored scene object. Direct
+selection, colorbar eligibility, Inspector carrier lists, and visualization
+target resolution all consume the same canonical classification.
+
+Topology freshness and render-carrier-kind resolution use the same ownership
+aliases as carrier normalization. A duplicate Airbox segment cannot make an
+otherwise mesh-part-backed manifest appear `mixed`, and a mesh part can cover a
+legacy synthetic Airbox scene record without exposing that record as a target.
+
+Legitimate unowned magnetic segments keep their current behavior and remain
+explicit fallback targets. Universe outer-boundary carriers remain excluded.
 
 ## Override normalization
 
@@ -77,5 +145,25 @@ Clearing hover still emits one `null` transition. No continuous frame loop or po
 - Histogram regression: hover membership uses the manifest carrier id and identical hover values do not cause repeated viewport state updates.
 - Vector regression: enabling canonical Airbox vectors produces an Airbox-scoped request for the real carrier and sampled/explicit node indices produce nonempty glyph segments.
 - Dialog regression: description id and `aria-describedby` are connected.
+- Manifest ownership regression: the production pair `part:__air__` plus
+  `object_id=__air__` produces one Airbox carrier address, no unassigned
+  `__air__`, no magnetic duplicate, and `mesh-parts` rather than `mixed`
+  diagnostics.
+- Degraded-manifest regression: an Airbox object segment without a mesh part
+  remains one non-field-capable Airbox carrier labelled `Airbox`, returns a null
+  scene-object id, and creates no `objectPartIds["__air__"]` entry.
+- Collision regression: an unreserved object or segment named `air` is not
+  classified as Airbox without an explicit Airbox role.
+- Explorer/viewport integration regression: exactly one `model:airbox` address
+  exists and every realized Airbox carrier resolves to it.
+- Shared-normalizer regression: Explorer and viewport consume the same
+  normalized carrier identities; no second object-segment conversion path may
+  recreate `segment:__air__:<index>` as magnetic.
 - Frontend gates: focused tests, full test suite, lint, typecheck, React Doctor, idle-performance audit, and active-session 3D browser smoke with visible canvas, live WebGL context, and nonzero drawing buffer.
 
+## Revision scope
+
+This revision does not remove object segments from the backend manifest, rename
+solver ids, change FMVP field scope, or alter physical air-domain topology. It
+repairs semantic ownership at the frontend manifest boundary while preserving
+the existing data-plane carriers and degraded rendering contract.

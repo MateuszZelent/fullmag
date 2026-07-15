@@ -102,6 +102,22 @@ describe("resolveVisualizationTopologyFreshness", () => {
     ).toBe("mesh-parts");
   });
 
+  it("does not classify the production Airbox mesh part and segment pair as mixed", () => {
+    expect(
+      resolveManifestRenderableCarrierKind({
+        meshParts: [
+          {
+            geometry_id: null,
+            id: "part:__air__",
+            object_id: null,
+            role: "air",
+          },
+        ],
+        objectSegments: [{ geometry_id: null, object_id: "__air__" }],
+      }),
+    ).toBe("mesh-parts");
+  });
+
   it("covers a visible object through a mesh-part geometry alias", () => {
     expect(
       resolveVisualizationTopologyFreshness(
