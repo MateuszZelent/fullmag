@@ -9,9 +9,11 @@ pub use charge::{
 pub use oersted::biot_savart_midpoint_field;
 
 pub use spin_drift_diffusion::{
-    OrientedSpinFaceFluxes, ReactionChannels, SpinBalanceDiagnostics, SpinBoundaryCondition,
-    SpinBoundaryConditions, SpinDriftDiffusionProblem, SpinMaterialFields, SpinReactionLengths,
-    SpinSolution, SpinSolverConfig,
+    InternalSpinContact, OrientedSpinFaceFluxes, OrientedSpinInterface, ReactionChannels,
+    SpinBalanceDiagnostics, SpinBoundaryCondition, SpinBoundaryConditions,
+    SpinDriftDiffusionProblem, SpinFluxOperator, SpinInterfaceFluxObservation, SpinInterfaceLaw,
+    SpinMaterialFields, SpinReactionLengths, SpinSolution, SpinSolverConfig, SpinSolverTelemetry,
+    SpinTorqueTargets, StructuredSpinFace,
 };
 
 #[cfg(test)]

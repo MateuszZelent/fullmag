@@ -1,7 +1,8 @@
 use super::{
-    ChargeBoundaryConditions, SpinBoundaryCondition, SpinBoundaryConditions,
-    SpinDriftDiffusionProblem, SpinMaterialFields, SpinReactionLengths, SpinSolverConfig,
-    StructuredChargeProblem,
+    ChargeBoundaryConditions, InternalSpinContact, OrientedSpinInterface, SpinBoundaryCondition,
+    SpinBoundaryConditions, SpinDriftDiffusionProblem, SpinFluxOperator, SpinInterfaceLaw,
+    SpinMaterialFields, SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets,
+    StructuredChargeProblem, StructuredSpinFace,
 };
 use crate::fdm::shared::types::{CellSize, GridShape};
 
@@ -10,6 +11,35 @@ fn assert_close(actual: f64, expected: f64, tolerance: f64) {
         (actual - expected).abs() <= tolerance,
         "expected {expected:.16e}, got {actual:.16e} (tol {tolerance:.3e})"
     );
+}
+
+fn simple_problem(
+    grid: GridShape,
+    potential: Vec<f64>,
+    conductivity: Vec<f64>,
+    active: Option<Vec<bool>>,
+    materials: SpinMaterialFields,
+    boundary: SpinBoundaryConditions,
+) -> SpinDriftDiffusionProblem {
+    try_simple_problem(grid, potential, conductivity, active, materials, boundary).unwrap()
+}
+
+fn try_simple_problem(
+    grid: GridShape,
+    potential: Vec<f64>,
+    conductivity: Vec<f64>,
+    active: Option<Vec<bool>>,
+    materials: SpinMaterialFields,
+    boundary: SpinBoundaryConditions,
+) -> crate::fdm::shared::types::Result<SpinDriftDiffusionProblem> {
+    let charge = StructuredChargeProblem::new(
+        grid,
+        CellSize::new(1.0, 1.0, 1.0).unwrap(),
+        conductivity,
+        None,
+        ChargeBoundaryConditions::default(),
+    )?;
+    SpinDriftDiffusionProblem::new(charge, potential, materials, active, boundary)
 }
 
 fn diffusion_problem(nx: usize, length: f64, lambda: f64) -> SpinDriftDiffusionProblem {
@@ -111,6 +141,12 @@ fn spin_relaxation_modes_v1_have_correct_signs_and_torque_partition() {
         None,
         SpinBoundaryConditions::default(),
     )
+    .unwrap()
+    .with_torque_targets(super::SpinTorqueTargets {
+        target_cells: vec![true],
+        saturation_magnetization_a_per_m: vec![8.0e5],
+        gamma_e_rad_per_s_t: 1.760_859_630_23e11,
+    })
     .unwrap();
 
     let mu = [[2.0, -3.0, 5.0]];
@@ -172,6 +208,12 @@ fn restarted_gmres_solves_nonsymmetric_exchange_reaction_block() {
             ..Default::default()
         },
     )
+    .unwrap()
+    .with_torque_targets(super::SpinTorqueTargets {
+        target_cells: vec![true],
+        saturation_magnetization_a_per_m: vec![8.0e5],
+        gamma_e_rad_per_s_t: 1.760_859_630_23e11,
+    })
     .unwrap();
     let solution = problem.solve(SpinSolverConfig {
         restart: 2,
@@ -514,4 +556,351 @@ fn every_disconnected_spin_component_requires_its_own_coercive_anchor() {
     .unwrap();
     let error = problem.solve(SpinSolverConfig::default()).unwrap_err();
     assert!(error.to_string().contains("every disconnected"));
+}
+
+#[test]
+fn specified_spin_flux_is_outward_normal_on_min_and_max_faces_of_every_axis() {
+    let grid = GridShape::new(1, 1, 1).unwrap();
+    let q = [1.0, -2.0, 3.0];
+    let problem = simple_problem(
+        grid,
+        vec![0.0],
+        vec![1.0],
+        None,
+        SpinMaterialFields::nonmagnetic_isotropic(1, 1.0, 1.0),
+        SpinBoundaryConditions {
+            x_min: SpinBoundaryCondition::SpecifiedFlux(q),
+            x_max: SpinBoundaryCondition::SpecifiedFlux(q),
+            y_min: SpinBoundaryCondition::SpecifiedFlux(q),
+            y_max: SpinBoundaryCondition::SpecifiedFlux(q),
+            z_min: SpinBoundaryCondition::SpecifiedFlux(q),
+            z_max: SpinBoundaryCondition::SpecifiedFlux(q),
+        },
+    );
+    let flux = problem.face_fluxes(&[[0.0; 3]]).unwrap();
+    assert_eq!(flux.x, vec![[-1.0, 2.0, -3.0], q]);
+    assert_eq!(flux.y, vec![[-1.0, 2.0, -3.0], q]);
+    assert_eq!(flux.z, vec![[-1.0, 2.0, -3.0], q]);
+}
+
+#[test]
+fn upwind_v1_and_central_reference_v1_are_distinct_and_reverse_with_current() {
+    let build = |potential: Vec<f64>| {
+        simple_problem(
+            GridShape::new(2, 1, 1).unwrap(),
+            potential,
+            vec![2.0; 2],
+            None,
+            SpinMaterialFields {
+                spin_conductivity_s_per_m: vec![2.0; 2],
+                polarization: vec![0.5; 2],
+                spin_hall_angle: vec![0.0; 2],
+                magnetization: vec![[0.0, 1.0, 0.0], [0.0, -1.0, 0.0]],
+                reactions: vec![SpinReactionLengths::default(); 2],
+            },
+            SpinBoundaryConditions::default(),
+        )
+    };
+    let forward = build(vec![0.5, -0.5]);
+    let reverse = build(vec![-0.5, 0.5]);
+    let mu = [[0.0; 3]; 2];
+    let forward_upwind = forward.face_fluxes(&mu).unwrap().x[1];
+    let reverse_upwind = reverse.face_fluxes(&mu).unwrap().x[1];
+    let forward_central = forward
+        .clone()
+        .with_flux_operator(SpinFluxOperator::FvSpinCentralReferenceV1)
+        .face_fluxes(&mu)
+        .unwrap()
+        .x[1];
+    assert!(forward_upwind[1] > 0.0);
+    assert!(reverse_upwind[1] > 0.0);
+    assert_eq!(forward_central, [0.0; 3]);
+}
+
+#[test]
+fn validation_rejects_out_of_range_polarization_and_nonpositive_reduced_spin_conductivity() {
+    let make = |sigma_s: f64, p: f64| {
+        try_simple_problem(
+            GridShape::new(1, 1, 1).unwrap(),
+            vec![0.0],
+            vec![2.0],
+            None,
+            SpinMaterialFields {
+                spin_conductivity_s_per_m: vec![sigma_s],
+                polarization: vec![p],
+                spin_hall_angle: vec![0.0],
+                magnetization: vec![[0.0, 0.0, 1.0]],
+                reactions: vec![SpinReactionLengths::default()],
+            },
+            SpinBoundaryConditions::default(),
+        )
+    };
+    let out_of_range = make(4.0, 1.1).unwrap_err();
+    assert!(out_of_range.to_string().contains("[-1, 1]"));
+    let nonpositive = make(0.5, 0.5).unwrap_err();
+    assert!(nonpositive.to_string().contains("sigma_s - polarization"));
+}
+
+#[test]
+fn charge_gradient_reconstruction_uses_full_conducting_mask_not_spin_mask() {
+    let grid = GridShape::new(3, 1, 1).unwrap();
+    let problem = simple_problem(
+        grid,
+        vec![1.0, 0.0, -1.0],
+        vec![2.0; 3],
+        Some(vec![false, true, false]),
+        SpinMaterialFields {
+            spin_conductivity_s_per_m: vec![1.0; 3],
+            polarization: vec![0.0; 3],
+            spin_hall_angle: vec![0.25; 3],
+            magnetization: vec![[0.0, 0.0, 1.0]; 3],
+            reactions: vec![SpinReactionLengths::default(); 3],
+        },
+        SpinBoundaryConditions {
+            z_min: SpinBoundaryCondition::SpinSink,
+            z_max: SpinBoundaryCondition::SpinSink,
+            ..Default::default()
+        },
+    );
+    let flux = problem.face_fluxes(&[[0.0; 3]; 3]).unwrap();
+    let middle_z_min = 1;
+    assert_close(flux.z[middle_z_min][1], 0.5, 1.0e-14);
+}
+
+#[test]
+fn periodic_spin_pairs_are_conservative_and_one_sided_periodic_is_rejected() {
+    let grid = GridShape::new(3, 1, 1).unwrap();
+    let periodic = simple_problem(
+        grid,
+        vec![0.0; 3],
+        vec![1.0; 3],
+        None,
+        SpinMaterialFields::nonmagnetic_isotropic(3, 2.0, 1.0),
+        SpinBoundaryConditions {
+            x_min: SpinBoundaryCondition::PeriodicSpin,
+            x_max: SpinBoundaryCondition::PeriodicSpin,
+            ..Default::default()
+        },
+    );
+    let flux = periodic
+        .face_fluxes(&[[1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [4.0, 0.0, 0.0]])
+        .unwrap();
+    assert_eq!(flux.x[0], flux.x[3]);
+
+    let charge = StructuredChargeProblem::new(
+        grid,
+        CellSize::new(1.0, 1.0, 1.0).unwrap(),
+        vec![1.0; 3],
+        None,
+        ChargeBoundaryConditions::default(),
+    )
+    .unwrap();
+    let error = SpinDriftDiffusionProblem::new(
+        charge,
+        vec![0.0; 3],
+        SpinMaterialFields::nonmagnetic_isotropic(3, 1.0, 1.0),
+        None,
+        SpinBoundaryConditions {
+            x_min: SpinBoundaryCondition::PeriodicSpin,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("both x-axis"));
+}
+
+#[test]
+fn internal_structured_contact_executes_outward_flux_on_each_selected_side() {
+    let face = StructuredSpinFace {
+        axis: 0,
+        negative_cell: 0,
+        positive_cell: 1,
+    };
+    let problem = simple_problem(
+        GridShape::new(2, 1, 1).unwrap(),
+        vec![0.0; 2],
+        vec![1.0; 2],
+        None,
+        SpinMaterialFields::nonmagnetic_isotropic(2, 1.0, 1.0),
+        SpinBoundaryConditions::default(),
+    )
+    .with_internal_contacts(vec![InternalSpinContact {
+        face,
+        negative_cell_condition: Some(SpinBoundaryCondition::SpecifiedFlux([1.0, 0.0, 0.0])),
+        positive_cell_condition: Some(SpinBoundaryCondition::SpecifiedFlux([2.0, 0.0, 0.0])),
+    }])
+    .unwrap();
+    let flux = problem.face_fluxes(&[[0.0; 3]; 2]).unwrap();
+    assert_eq!(flux.x[1], [1.0, 0.0, 0.0]);
+    let divergence = problem.conservative_divergence(&flux).unwrap();
+    assert_eq!(divergence[0], [1.0, 0.0, 0.0]);
+    assert_eq!(divergence[1], [2.0, 0.0, 0.0]);
+}
+
+#[test]
+fn mixing_flux_balance_v1_resolves_longitudinal_absorbed_and_sml_channels() {
+    let face = StructuredSpinFace {
+        axis: 0,
+        negative_cell: 0,
+        positive_cell: 1,
+    };
+    let problem = simple_problem(
+        GridShape::new(2, 1, 1).unwrap(),
+        vec![1.0, 0.0],
+        vec![1.0; 2],
+        None,
+        SpinMaterialFields::nonmagnetic_isotropic(2, 1.0, 1.0),
+        SpinBoundaryConditions::default(),
+    )
+    .with_interfaces(
+        vec![1, 2],
+        vec![OrientedSpinInterface {
+            face,
+            from_cell: 0,
+            to_cell: 1,
+            law: SpinInterfaceLaw::MixingConductance {
+                g_up_s_per_m2: 4.0,
+                g_down_s_per_m2: 2.0,
+                g_r_s_per_m2: 3.0,
+                g_i_s_per_m2: 5.0,
+                g_sml_s_per_m2: 7.0,
+                magnetization: [0.0, 0.0, 1.0],
+            },
+        }],
+    )
+    .unwrap();
+    let flux = problem.face_fluxes(&[[1.0, 2.0, 3.0], [0.0; 3]]).unwrap();
+    let observation = flux.interface_observations[0];
+    assert_eq!(observation.incoming_longitudinal_a_per_m2, [0.0, 0.0, 2.0]);
+    assert_eq!(observation.backflow_longitudinal_a_per_m2, [0.0, 0.0, 9.0]);
+    assert_eq!(observation.absorbed_transverse_a_per_m2, [13.0, 1.0, 0.0]);
+    assert_eq!(observation.spin_memory_loss_a_per_m2, [7.0, 14.0, 21.0]);
+    assert_eq!(observation.from_side_outgoing_a_per_m2, [20.0, 15.0, 32.0]);
+    assert_eq!(observation.to_side_transmitted_a_per_m2, [0.0, 0.0, 11.0]);
+
+    let missing = simple_problem(
+        GridShape::new(2, 1, 1).unwrap(),
+        vec![0.0; 2],
+        vec![1.0; 2],
+        None,
+        SpinMaterialFields::nonmagnetic_isotropic(2, 1.0, 1.0),
+        SpinBoundaryConditions::default(),
+    )
+    .with_interfaces(vec![1, 2], vec![])
+    .unwrap();
+    assert!(missing
+        .face_fluxes(&[[0.0; 3]; 2])
+        .unwrap_err()
+        .to_string()
+        .contains("explicit"));
+}
+
+#[test]
+fn transport_gilbert_torque_has_canonical_negative_sign_and_units() {
+    let problem = simple_problem(
+        GridShape::new(1, 1, 1).unwrap(),
+        vec![0.0],
+        vec![1.0],
+        None,
+        SpinMaterialFields {
+            spin_conductivity_s_per_m: vec![2.0],
+            polarization: vec![0.0],
+            spin_hall_angle: vec![0.0],
+            magnetization: vec![[0.0, 0.0, 1.0]],
+            reactions: vec![SpinReactionLengths {
+                spin_flip_m: Some(1.0),
+                exchange_m: Some(2.0),
+                dephasing_m: Some(3.0),
+            }],
+        },
+        SpinBoundaryConditions {
+            x_min: SpinBoundaryCondition::SpecifiedPotential([1.0, 2.0, 0.0]),
+            x_max: SpinBoundaryCondition::SpecifiedPotential([1.0, 2.0, 0.0]),
+            ..Default::default()
+        },
+    )
+    .with_torque_targets(SpinTorqueTargets {
+        target_cells: vec![true],
+        saturation_magnetization_a_per_m: vec![8.0e5],
+        gamma_e_rad_per_s_t: 1.760_859_630_23e11,
+    })
+    .unwrap();
+    let solution = problem.solve(SpinSolverConfig::default()).unwrap();
+    let factor = -1.760_859_630_23e11 / 8.0e5 * (1.054_571_817e-34 / (2.0 * 1.602_176_634e-19));
+    for component in 0..3 {
+        assert_close(
+            solution.transport_gilbert_torque_per_s[0][component],
+            factor * solution.reaction_channels.magnetic_torque_sink[0][component],
+            1.0e-18,
+        );
+    }
+    assert_eq!(solution.telemetry.operator_version, "fv_spin_upwind_v1");
+    assert_eq!(
+        solution.telemetry.convergence_reason,
+        "converged_true_residual_and_balance"
+    );
+    assert!(solution.telemetry.relative_balance_closure <= 10.0e-10);
+}
+
+#[test]
+fn absorbed_mixing_flux_is_the_interface_gilbert_torque_source() {
+    let face = StructuredSpinFace {
+        axis: 0,
+        negative_cell: 0,
+        positive_cell: 1,
+    };
+    let problem = simple_problem(
+        GridShape::new(2, 1, 1).unwrap(),
+        vec![0.0; 2],
+        vec![1.0; 2],
+        None,
+        SpinMaterialFields {
+            spin_conductivity_s_per_m: vec![2.0; 2],
+            polarization: vec![0.0; 2],
+            spin_hall_angle: vec![0.0; 2],
+            magnetization: vec![[0.0, 0.0, 1.0]; 2],
+            reactions: vec![SpinReactionLengths::default(); 2],
+        },
+        SpinBoundaryConditions {
+            x_min: SpinBoundaryCondition::SpecifiedPotential([1.0, 2.0, 0.0]),
+            x_max: SpinBoundaryCondition::SpinSink,
+            ..Default::default()
+        },
+    )
+    .with_interfaces(
+        vec![1, 2],
+        vec![OrientedSpinInterface {
+            face,
+            from_cell: 0,
+            to_cell: 1,
+            law: SpinInterfaceLaw::MixingConductance {
+                g_up_s_per_m2: 0.0,
+                g_down_s_per_m2: 0.0,
+                g_r_s_per_m2: 3.0,
+                g_i_s_per_m2: 0.0,
+                g_sml_s_per_m2: 0.0,
+                magnetization: [0.0, 0.0, 1.0],
+            },
+        }],
+    )
+    .unwrap()
+    .with_torque_targets(SpinTorqueTargets {
+        target_cells: vec![false, true],
+        saturation_magnetization_a_per_m: vec![0.0, 8.0e5],
+        gamma_e_rad_per_s_t: 1.760_859_630_23e11,
+    })
+    .unwrap();
+    let solution = problem.solve(SpinSolverConfig::default()).unwrap();
+    let absorbed =
+        solution.spin_current_density.interface_observations[0].absorbed_transverse_a_per_m2;
+    let factor = -1.760_859_630_23e11 / 8.0e5 * (1.054_571_817e-34 / (2.0 * 1.602_176_634e-19));
+    assert_eq!(solution.transport_gilbert_torque_per_s[0], [0.0; 3]);
+    for component in 0..3 {
+        assert_close(
+            solution.transport_gilbert_torque_per_s[1][component],
+            factor * absorbed[component],
+            1.0e-18,
+        );
+    }
+    assert!(solution.telemetry.relative_balance_closure <= 10.0e-10);
 }
