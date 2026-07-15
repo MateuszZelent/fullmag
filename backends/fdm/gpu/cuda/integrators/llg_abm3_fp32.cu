@@ -154,6 +154,7 @@ void launch_abm3_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     float alpha_f = static_cast<float>(ctx.alpha);
     float gamma_bar_f = static_cast<float>(ctx.gamma / (1.0 + ctx.alpha * ctx.alpha));
     float dt_f = static_cast<float>(dt);
+    const double step_start_time = ctx.current_time;
 
     if (ctx.abm_last_dt > 0.0 && fabs(dt - ctx.abm_last_dt) / ctx.abm_last_dt > 0.1) {
         ctx.abm_startup = 0;

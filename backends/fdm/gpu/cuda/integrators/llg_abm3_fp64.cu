@@ -135,7 +135,6 @@ static void abm3_fill_diagnostics(Context &ctx, double dt, fullmag_fdm_step_stat
     int grid = (n + 255) / 256;
     double alpha = ctx.alpha;
     double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
-
     if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
     launch_effective_field_fp64(ctx, ctx.current_time);
@@ -195,6 +194,7 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
     double alpha = ctx.alpha;
     double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
+    const double step_start_time = ctx.current_time;
 
     // Check for dt change — restart if > 10% different
     if (ctx.abm_last_dt > 0.0 && fabs(dt - ctx.abm_last_dt) / ctx.abm_last_dt > 0.1) {

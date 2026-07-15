@@ -2062,14 +2062,29 @@ bool context_precompute_oersted_field(Context &ctx) {
 
     uint64_t n = ctx.cell_count;
     double R = ctx.oersted_radius;
-    double cx = ctx.oersted_center[0];
-    double cy = ctx.oersted_center[1];
-    // cz = ctx.oersted_center[2]; // unused for z-axis cylinder
+    const double center[3] = {
+        ctx.oersted_center[0],
+        ctx.oersted_center[1],
+        ctx.oersted_center[2],
+    };
+    const double axis_norm = sqrt(
+        ctx.oersted_axis[0] * ctx.oersted_axis[0]
+        + ctx.oersted_axis[1] * ctx.oersted_axis[1]
+        + ctx.oersted_axis[2] * ctx.oersted_axis[2]);
 
     if (R <= 0.0) {
         ctx.last_error = "oersted_radius must be positive";
         return false;
     }
+    if (!isfinite(axis_norm) || axis_norm <= 1e-30) {
+        ctx.last_error = "oersted_axis must be finite and nonzero";
+        return false;
+    }
+    const double axis[3] = {
+        ctx.oersted_axis[0] / axis_norm,
+        ctx.oersted_axis[1] / axis_norm,
+        ctx.oersted_axis[2] / axis_norm,
+    };
 
     double inv_2pi = 1.0 / (2.0 * M_PI);
     double R2 = R * R;
@@ -2083,13 +2098,19 @@ bool context_precompute_oersted_field(Context &ctx) {
         uint64_t iy = rem / ctx.nx;
         uint64_t ix = rem - iy * ctx.nx;
 
-        // Cell center coordinates
-        double x = (ix + 0.5) * ctx.dx;
-        double y = (iy + 0.5) * ctx.dy;
-
-        double dx = x - cx;
-        double dy = y - cy;
-        double r = sqrt(dx * dx + dy * dy);
+        const double rel[3] = {
+            (ix + 0.5) * ctx.dx - center[0],
+            (iy + 0.5) * ctx.dy - center[1],
+            (iz + 0.5) * ctx.dz - center[2],
+        };
+        const double axial = rel[0] * axis[0] + rel[1] * axis[1] + rel[2] * axis[2];
+        const double radial[3] = {
+            rel[0] - axial * axis[0],
+            rel[1] - axial * axis[1],
+            rel[2] - axial * axis[2],
+        };
+        const double r = sqrt(
+            radial[0] * radial[0] + radial[1] * radial[1] + radial[2] * radial[2]);
 
         double H_phi;
         if (r < 1e-30) {
@@ -2103,17 +2124,21 @@ bool context_precompute_oersted_field(Context &ctx) {
             H_phi = inv_2pi / r;
         }
 
-        // Convert azimuthal to Cartesian (phi-hat = (-sin(phi), cos(phi)))
-        double sin_phi = dy / r;
-        double cos_phi = dx / r;
         if (r < 1e-30) {
-            sin_phi = 0.0;
-            cos_phi = 0.0;
+            hx[idx] = 0.0;
+            hy[idx] = 0.0;
+            hz[idx] = 0.0;
+            continue;
         }
-
-        hx[idx] = -H_phi * sin_phi;
-        hy[idx] =  H_phi * cos_phi;
-        hz[idx] =  0.0;
+        const double rhat[3] = {radial[0] / r, radial[1] / r, radial[2] / r};
+        const double phi_hat[3] = {
+            axis[1] * rhat[2] - axis[2] * rhat[1],
+            axis[2] * rhat[0] - axis[0] * rhat[2],
+            axis[0] * rhat[1] - axis[1] * rhat[0],
+        };
+        hx[idx] = H_phi * phi_hat[0];
+        hy[idx] = H_phi * phi_hat[1];
+        hz[idx] = H_phi * phi_hat[2];
     }
 
     // Upload to device

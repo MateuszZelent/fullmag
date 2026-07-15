@@ -106,7 +106,7 @@ static void copy_field_d2d_fp32(DeviceVectorField &dst, const DeviceVectorField 
 }
 
 static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
-    int n, int grid, float gamma_bar, float alpha)
+    int n, int grid, float gamma_bar, float alpha, double evaluation_time)
 {
     if (ctx.enable_exchange) {
         launch_exchange_field_fp32(ctx);
@@ -153,6 +153,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     float alpha_f = static_cast<float>(ctx.alpha);
     float gamma_bar_f = static_cast<float>(ctx.gamma / (1.0 + ctx.alpha * ctx.alpha));
     float dt_f = static_cast<float>(dt);
+    const double step_start_time = ctx.current_time;
 
     const float A21 = 0.5f;
     const float A32 = 0.75f;
@@ -166,7 +167,8 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (ctx.fsal_valid) {
             copy_field_d2d_fp32(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));
         } else {
-            if (!compute_rhs_into_fp32(ctx, ctx.k1, n, grid, gamma_bar_f, alpha_f)) return;
+            if (!compute_rhs_into_fp32(ctx, ctx.k1, n, grid, gamma_bar_f, alpha_f,
+                                       step_start_time)) return;
         }
         if (abort_step_from_tmp(ctx)) return;
 
@@ -176,7 +178,8 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k1.x), static_cast<const float*>(ctx.k1.y), static_cast<const float*>(ctx.k1.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
             n, dt_f, A21);
-        if (!compute_rhs_into_fp32(ctx, ctx.k2, n, grid, gamma_bar_f, alpha_f)) return;
+        if (!compute_rhs_into_fp32(ctx, ctx.k2, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + static_cast<double>(A21) * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // Stage 3
@@ -185,7 +188,8 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k2.x), static_cast<const float*>(ctx.k2.y), static_cast<const float*>(ctx.k2.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
             n, dt_f, A32);
-        if (!compute_rhs_into_fp32(ctx, ctx.k3, n, grid, gamma_bar_f, alpha_f)) return;
+        if (!compute_rhs_into_fp32(ctx, ctx.k3, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + static_cast<double>(A32) * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // 3rd-order solution
@@ -199,7 +203,8 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (abort_step_from_tmp(ctx)) return;
 
         // FSAL: k4 = RHS(y3)
-        if (!compute_rhs_into_fp32(ctx, ctx.k_fsal, n, grid, gamma_bar_f, alpha_f)) return;
+        if (!compute_rhs_into_fp32(ctx, ctx.k_fsal, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // Error estimate (fp64 accumulators)

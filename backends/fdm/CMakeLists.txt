@@ -116,6 +116,11 @@ if(FULLMAG_ENABLE_CUDA)
     target_link_libraries(prescribed_sot_cuda_runtime PRIVATE fullmag_fdm)
     add_test(NAME fdm_prescribed_sot_cuda_runtime COMMAND prescribed_sot_cuda_runtime)
 
+    add_executable(oersted_cuda_runtime tests/oersted_cuda_runtime.cu)
+    target_include_directories(oersted_cuda_runtime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(oersted_cuda_runtime PRIVATE fullmag_fdm)
+    add_test(NAME fdm_oersted_cuda_runtime COMMAND oersted_cuda_runtime)
+
     add_executable(tier_a_compare tests/tier_a_compare.cu)
     target_link_libraries(tier_a_compare PRIVATE fullmag_fdm)
     add_test(NAME fdm_tier_a_compare COMMAND tier_a_compare)

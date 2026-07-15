@@ -169,7 +169,7 @@ static void copy_field_d2d(DeviceVectorField &dst, const DeviceVectorField &src,
 /* ── Compute fields + LLG RHS ── */
 
 static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
-    int n, int grid, double gamma_bar, double alpha)
+    int n, int grid, double gamma_bar, double alpha, double evaluation_time)
 {
     if (ctx.enable_exchange) {
         launch_exchange_field_fp64(ctx);
@@ -224,6 +224,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
     double alpha = ctx.alpha;
     double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
+    const double step_start_time = ctx.current_time;
 
     // BS23 Butcher A coefficients
     const double A21 = 1.0 / 2.0;
@@ -238,7 +239,7 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (ctx.fsal_valid) {
             copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));
         } else {
-            if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha)) return;
+            if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha, step_start_time)) return;
         }
         if (abort_step_from_tmp(ctx)) return;
 
@@ -248,7 +249,8 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k1.x), static_cast<const double*>(ctx.k1.y), static_cast<const double*>(ctx.k1.z),
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A21);
-        if (!compute_rhs_into(ctx, ctx.k2, n, grid, gamma_bar, alpha)) return;
+        if (!compute_rhs_into(ctx, ctx.k2, n, grid, gamma_bar, alpha,
+                              step_start_time + A21 * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // Stage 3: y3 = m0 + dt*(0*k1 + A32*k2) → compute k3
@@ -257,7 +259,8 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.k2.x), static_cast<const double*>(ctx.k2.y), static_cast<const double*>(ctx.k2.z),
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A32);
-        if (!compute_rhs_into(ctx, ctx.k3, n, grid, gamma_bar, alpha)) return;
+        if (!compute_rhs_into(ctx, ctx.k3, n, grid, gamma_bar, alpha,
+                              step_start_time + A32 * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // 3rd-order solution: y3 = m0 + dt*(B1*k1 + B2*k2 + B3*k3)
@@ -271,7 +274,8 @@ void launch_rk23_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (abort_step_from_tmp(ctx)) return;
 
         // Stage 4 (FSAL): k4 = RHS(y3) — this becomes k1 for next step
-        if (!compute_rhs_into(ctx, ctx.k_fsal, n, grid, gamma_bar, alpha)) return;
+        if (!compute_rhs_into(ctx, ctx.k_fsal, n, grid, gamma_bar, alpha,
+                              step_start_time + dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // Error estimate: |y3 - y2|

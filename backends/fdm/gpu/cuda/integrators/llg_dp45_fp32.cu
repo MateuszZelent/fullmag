@@ -146,7 +146,7 @@ static void copy_field_d2d_fp32(DeviceVectorField &dst, const DeviceVectorField 
 }
 
 static bool compute_rhs_into_fp32(Context &ctx, DeviceVectorField &rhs_out,
-    int n, int grid, float gamma_bar, float alpha)
+    int n, int grid, float gamma_bar, float alpha, double evaluation_time)
 {
     if (ctx.enable_exchange) {
         launch_exchange_field_fp32(ctx);
@@ -193,6 +193,7 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     float alpha_f = static_cast<float>(ctx.alpha);
     float gamma_bar_f = static_cast<float>(ctx.gamma / (1.0 + ctx.alpha * ctx.alpha));
     float dt_f;
+    const double step_start_time = ctx.current_time;
 
     const float A21 = 1.0f/5.0f;
     const float A31 = 3.0f/40.0f, A32 = 9.0f/40.0f;
@@ -209,7 +210,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (ctx.fsal_valid) {
             copy_field_d2d_fp32(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));
         } else {
-            if (!compute_rhs_into_fp32(ctx, ctx.k1, n, grid, gamma_bar_f, alpha_f)) return;
+            if (!compute_rhs_into_fp32(ctx, ctx.k1, n, grid, gamma_bar_f, alpha_f,
+                                       step_start_time)) return;
         }
         if (abort_step_from_tmp(ctx)) return;
 
@@ -218,7 +220,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k1.x), static_cast<const float*>(ctx.k1.y), static_cast<const float*>(ctx.k1.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
             n, dt_f, A21);
-        if (!compute_rhs_into_fp32(ctx, ctx.k2, n, grid, gamma_bar_f, alpha_f)) return;
+        if (!compute_rhs_into_fp32(ctx, ctx.k2, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + (1.0 / 5.0) * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         dp45_rk_stage_2_fp32_kernel<<<grid, 256>>>(
@@ -227,7 +230,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k2.x), static_cast<const float*>(ctx.k2.y), static_cast<const float*>(ctx.k2.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
             n, dt_f, A31, A32);
-        if (!compute_rhs_into_fp32(ctx, ctx.k3, n, grid, gamma_bar_f, alpha_f)) return;
+        if (!compute_rhs_into_fp32(ctx, ctx.k3, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + (3.0 / 10.0) * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         dp45_rk_stage_4_fp32_kernel<<<grid, 256>>>(
@@ -238,7 +242,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k3.x), static_cast<const float*>(ctx.k3.y), static_cast<const float*>(ctx.k3.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
             n, dt_f, A41, A42, A43, 0.0f);
-        if (!compute_rhs_into_fp32(ctx, ctx.k4, n, grid, gamma_bar_f, alpha_f)) return;
+        if (!compute_rhs_into_fp32(ctx, ctx.k4, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + (4.0 / 5.0) * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         dp45_rk_stage_4_fp32_kernel<<<grid, 256>>>(
@@ -249,7 +254,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k4.x), static_cast<const float*>(ctx.k4.y), static_cast<const float*>(ctx.k4.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
             n, dt_f, A51, A52, A53, A54);
-        if (!compute_rhs_into_fp32(ctx, ctx.k5, n, grid, gamma_bar_f, alpha_f)) return;
+        if (!compute_rhs_into_fp32(ctx, ctx.k5, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + (8.0 / 9.0) * dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         dp45_rk_stage_5_fp32_kernel<<<grid, 256>>>(
@@ -261,7 +267,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const float*>(ctx.k5.x), static_cast<const float*>(ctx.k5.y), static_cast<const float*>(ctx.k5.z),
             static_cast<float*>(ctx.m.x), static_cast<float*>(ctx.m.y), static_cast<float*>(ctx.m.z),
             n, dt_f, A61, A62, A63, A64, A65);
-        if (!compute_rhs_into_fp32(ctx, ctx.k6, n, grid, gamma_bar_f, alpha_f)) return;
+        if (!compute_rhs_into_fp32(ctx, ctx.k6, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         dp45_rk_stage_5_fp32_kernel<<<grid, 256>>>(
@@ -275,7 +282,8 @@ void launch_dp45_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             n, dt_f, B1, B3, B4, B5, B6);
         if (abort_step_from_tmp(ctx)) return;
 
-        if (!compute_rhs_into_fp32(ctx, ctx.k_fsal, n, grid, gamma_bar_f, alpha_f)) return;
+        if (!compute_rhs_into_fp32(ctx, ctx.k_fsal, n, grid, gamma_bar_f, alpha_f,
+                                   step_start_time + dt)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         dp45_error_fp32_kernel<<<grid, 256>>>(

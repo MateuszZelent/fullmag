@@ -206,8 +206,7 @@ __global__ void llg_rhs_fp64_kernel(
         rhs_x += sot_rhs.x;
         rhs_y += sot_rhs.y;
         rhs_z += sot_rhs.z;
-    } else if (sot.has_sot && sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0 &&
-               (!sot.has_active_mask || sot.active_mask[idx] != 0)) {
+    } else if (sot.has_sot && sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0) {
         const double m_dot_s = m0 * sot.sx + m1 * sot.sy + m2 * sot.sz;
         const double fl_x = m1 * sot.sz - m2 * sot.sy;
         const double fl_y = m2 * sot.sx - m0 * sot.sz;
@@ -329,6 +328,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
     double alpha = ctx.alpha;
     double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
+    const double step_start_time = ctx.current_time;
 
     // We need to save original m for the corrector step.
     // Use tmp as storage for original m.

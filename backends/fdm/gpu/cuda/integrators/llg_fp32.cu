@@ -199,8 +199,7 @@ __global__ void llg_rhs_fp32_kernel(
         rhs_x += sot_rhs.x;
         rhs_y += sot_rhs.y;
         rhs_z += sot_rhs.z;
-    } else if (sot.has_sot && sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0 &&
-               (!sot.has_active_mask || sot.active_mask[idx] != 0)) {
+    } else if (sot.has_sot && sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0) {
         const float sx = static_cast<float>(sot.sx);
         const float sy = static_cast<float>(sot.sy);
         const float sz = static_cast<float>(sot.sz);
@@ -318,6 +317,7 @@ void launch_heun_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     float alpha_f = static_cast<float>(ctx.alpha);
     float gamma_bar_f = static_cast<float>(ctx.gamma / (1.0 + ctx.alpha * ctx.alpha));
     float dt_f = static_cast<float>(dt);
+    const double step_start_time = ctx.current_time;
 
     // Save original m in tmp
     size_t bytes = n * sizeof(float);
