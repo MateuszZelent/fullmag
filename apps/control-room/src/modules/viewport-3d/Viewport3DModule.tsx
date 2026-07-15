@@ -36,6 +36,7 @@ import {
   useSelectionActions,
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import {
   resolveSemanticTargetForMeshPart,
   type SemanticRenderTargetCatalog,
@@ -632,7 +633,7 @@ export function buildViewport3DColorbarTargetPlans({
 function isViewport3DColorbarTargetPartEligible(
   part: Viewport3DColorbarTargetPart,
 ): boolean {
-  return part.role !== "air" && part.role !== "interface";
+  return !isVisualizationAirboxIdentity(part) && part.role !== "interface";
 }
 
 export function resolveViewport3DColorbarLegendsFromPlans({

@@ -1683,12 +1683,19 @@ fn canonicalize_visualization_overrides(
         .or_else(|| {
             overrides.iter().find(|entry| {
                 entry.scope == VisualizationScopeKind::Part
-                    && matches!(entry.scope_id.as_str(), "part:__air__" | "__air__")
+                    && is_airbox_identity_id(&entry.scope_id)
             })
         })
         .or_else(|| {
             overrides.iter().find(|entry| {
-                entry.scope == VisualizationScopeKind::Object && entry.scope_id == "__air__"
+                entry.scope == VisualizationScopeKind::Object
+                    && is_airbox_identity_id(&entry.scope_id)
+            })
+        })
+        .or_else(|| {
+            overrides.iter().find(|entry| {
+                entry.scope == VisualizationScopeKind::Airbox
+                    && is_airbox_identity_id(&entry.scope_id)
             })
         })
         .cloned()
@@ -1701,10 +1708,12 @@ fn canonicalize_visualization_overrides(
     let mut normalized = overrides
         .iter()
         .filter(|entry| {
-            !((entry.scope == VisualizationScopeKind::Airbox && entry.scope_id == "airbox")
-                || (entry.scope == VisualizationScopeKind::Object && entry.scope_id == "__air__")
-                || (entry.scope == VisualizationScopeKind::Part
-                    && matches!(entry.scope_id.as_str(), "part:__air__" | "__air__")))
+            !matches!(
+                entry.scope,
+                VisualizationScopeKind::Airbox
+                    | VisualizationScopeKind::Object
+                    | VisualizationScopeKind::Part
+            ) || !is_airbox_identity_id(&entry.scope_id)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -1794,11 +1803,26 @@ fn build_visualization_target_registry(
 }
 
 fn is_airbox_scene_object(object: &fullmag_authoring::SceneObject) -> bool {
-    object.id == "__air__" || matches!(object.role.as_str(), "air" | "airbox")
+    is_airbox_identity_id(&object.id) || is_airbox_role(&object.role)
 }
 
 fn is_airbox_mesh_part(part: &fullmag_runner::FemMeshPartPayload) -> bool {
-    matches!(part.role.as_str(), "air" | "airbox")
+    is_airbox_identity_id(&part.id) || is_airbox_role(&part.role)
+}
+
+fn is_airbox_role(role: &str) -> bool {
+    matches!(role.trim().to_ascii_lowercase().as_str(), "air" | "airbox")
+}
+
+fn is_airbox_identity_id(id: &str) -> bool {
+    let mut normalized = id.trim().to_ascii_lowercase();
+    while normalized.starts_with("part:") || normalized.starts_with("object:") {
+        normalized = normalized
+            .split_once(':')
+            .map(|(_, value)| value.to_string())
+            .unwrap_or_default();
+    }
+    matches!(normalized.as_str(), "airbox" | "__air__" | "__airbox__")
 }
 
 fn mesh_part_requires_visualization_fallback(

@@ -10,6 +10,13 @@ export interface VisualizationDebugPublisherToken {
   viewportId: string;
 }
 
+export interface VisualizationDebugLifecycleStats {
+  activeDemandCount: number;
+  activePublisherCount: number;
+  demandedTargetCount: number;
+  retainedSnapshotCount: number;
+}
+
 type Listener = () => void;
 
 interface PublishedSnapshot {
@@ -110,6 +117,21 @@ export class VisualizationDebugController {
 
   getSnapshots(targetId: string): readonly VisualizationDebugSnapshot[] {
     return this.targets.get(targetId)?.snapshot ?? EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS;
+  }
+
+  getLifecycleStats(): VisualizationDebugLifecycleStats {
+    let activeDemandCount = 0;
+    for (const count of this.demandCounts.values()) activeDemandCount += count;
+    let retainedSnapshotCount = 0;
+    for (const target of this.targets.values()) {
+      retainedSnapshotCount += target.published.length;
+    }
+    return {
+      activeDemandCount,
+      activePublisherCount: this.activePublisherGenerations.size,
+      demandedTargetCount: this.demandCounts.size,
+      retainedSnapshotCount,
+    };
   }
 
   registerPublisher(viewportId: string): VisualizationDebugPublisherToken {

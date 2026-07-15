@@ -273,6 +273,21 @@ describe("viewport3dDomainAdapter", () => {
     });
   });
 
+  it("keeps part:__air__ on the Airbox path when its role is degraded", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts![0]!.id = "part:__air__";
+    manifest.mesh_parts![0]!.role = "carrier";
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.airboxParts.map((part) => part.id)).toEqual(["part:__air__"]);
+    expect(domain.magneticParts.map((part) => part.id)).not.toContain("part:__air__");
+    expect(selectionForMeshPart(domain.airboxParts[0])).toMatchObject({
+      carrierPartId: "part:__air__",
+      kind: "mesh-part-airbox",
+      objectId: null,
+    });
+  });
+
   it("rejects blank and duplicate carrier identities before render or picking", () => {
     const manifest = manifestFixture();
     manifest.mesh_parts!.push({ ...manifest.mesh_parts![1]! });

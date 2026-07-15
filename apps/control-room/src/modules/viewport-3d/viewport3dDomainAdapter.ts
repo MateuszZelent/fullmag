@@ -2,7 +2,10 @@ import type {
   DomainMetaResource,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
-import { visualizationObjectIdForMeshPartLike } from "@/kernel/selection/selectionTypes";
+import {
+  isVisualizationAirboxIdentity,
+  visualizationObjectIdForMeshPartLike,
+} from "@/kernel/selection/selectionTypes";
 import {
   manifestCarrierOwnershipAliases,
   resolveManifestRenderableCarrierKind,
@@ -155,7 +158,7 @@ export function adaptFemSharedDomainManifest(
 
   for (const part of carriers) {
     partsById.set(part.id, part);
-    if (part.role === "air" || part.role === "airbox") {
+    if (isVisualizationAirboxIdentity(part)) {
       airboxParts.push(part);
     } else if (isInterfaceSurfacePart(part)) {
       interfaceParts.push(part);
@@ -232,7 +235,7 @@ export function manifestRenderableCarriers(
     renderableCarrierCount: carriers.filter(
       (carrier) =>
         carrier.carrierKind === "object-segment" ||
-        carrier.role === "air" ||
+        isVisualizationAirboxIdentity(carrier) ||
         isMagneticRenderablePart(carrier),
     ).length,
   };
@@ -403,7 +406,7 @@ export function selectionForMeshPart(
     boundaryFaceIndex,
     carrierPartId: part.id,
     kind:
-      part.role === "air" || part.role === "airbox"
+      isVisualizationAirboxIdentity(part)
         ? "mesh-part-airbox"
         : "mesh-part",
     label: part.label,

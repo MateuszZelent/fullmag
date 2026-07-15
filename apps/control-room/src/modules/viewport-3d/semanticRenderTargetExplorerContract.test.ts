@@ -14,7 +14,7 @@ import { viewportSelectionForMeshPart } from "./viewport3dSelection";
 describe("semantic render target to Explorer contract", () => {
   it("gives every pickable FEM carrier exactly one visible Explorer address", () => {
     const parts = [
-      { id: "part:__air__", label: "Airbox", role: "air" },
+      { id: "part:__air__", label: "Airbox carrier", role: "carrier" },
       {
         id: "part:film",
         label: "Film volume",

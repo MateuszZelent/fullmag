@@ -9,6 +9,10 @@ import type {
 import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 import type { VisualizationTargetRef } from "@/kernel/visualization/ObjectVisualizationController";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import {
+  recordVisualizationDebugPublish,
+  recordVisualizationDebugScan,
+} from "@/kernel/performance/visualizationDebugPerformanceProbe";
 
 import type {
   Viewport3DRenderAdoptionReceipt,
@@ -85,11 +89,18 @@ interface ActiveTarget {
   candidate: Viewport3DVisualizationDebugCandidate | null;
   releaseAdoptionDemand: () => void;
   revision: string;
+  lastCommittedFrameId: string | null;
 }
 
 export interface Viewport3DVisualizationDebugPublisher {
   commitFrame(frame: Viewport3DVisualizationDebugFrameCommit): void;
   dispose(): void;
+  getLifecycleStats(): {
+    activeTargetCount: number;
+    disposed: boolean;
+    pendingCandidateCount: number;
+    subscribedTargetCount: number;
+  };
   update(update: PublisherUpdate): void;
 }
 
@@ -133,8 +144,10 @@ export function createViewport3DVisualizationDebugPublisher({
       candidate: null,
       releaseAdoptionDemand: adoptionRegistry.retainDemand(targetId),
       revision,
+      lastCommittedFrameId: null,
     };
     active.set(targetId, state);
+    recordVisualizationDebugScan();
     void buildCandidate({ signal: abortController.signal, targetId })
       .then((candidate) => {
         if (
@@ -146,6 +159,7 @@ export function createViewport3DVisualizationDebugPublisher({
           return;
         }
         state.candidate = candidate;
+        state.lastCommittedFrameId = null;
         if (lastFrame) commitTarget(targetId, state, lastFrame);
       })
       .catch((error: unknown) => {
@@ -165,6 +179,8 @@ export function createViewport3DVisualizationDebugPublisher({
   ) => {
     if (!state.candidate || state.revision !== revision) return;
     if (!controller.getDemandSnapshot(targetId).expanded) return;
+    if (state.lastCommittedFrameId === frame.commitId) return;
+    recordVisualizationDebugPublish();
     controller.commit(
       publisherToken,
       targetId,
@@ -173,6 +189,7 @@ export function createViewport3DVisualizationDebugPublisher({
         receipts: adoptionRegistry.snapshot(targetId),
       }),
     );
+    state.lastCommittedFrameId = frame.commitId;
   };
 
   return {
@@ -191,6 +208,20 @@ export function createViewport3DVisualizationDebugPublisher({
       for (const targetId of [...active.keys()]) stopTarget(targetId);
       targetIds.clear();
       controller.clearPublisher(publisherToken);
+    },
+    getLifecycleStats() {
+      let pendingCandidateCount = 0;
+      for (const state of active.values()) {
+        if (state.candidate === null && !state.abortController.signal.aborted) {
+          pendingCandidateCount += 1;
+        }
+      }
+      return {
+        activeTargetCount: active.size,
+        disposed,
+        pendingCandidateCount,
+        subscribedTargetCount: demandUnsubscribers.size,
+      };
     },
     update(update) {
       if (disposed) return;

@@ -34,5 +34,11 @@ describe("airbox field routing smoke script", () => {
     expect(smokeScript).toContain("visualization/state");
     expect(smokeScript).toContain("data/fields/");
     expect(smokeScript).not.toContain("scope_kind=full&scope_id=part%3A__air__");
+    expect(smokeScript).toContain("debugFieldRequestDelta");
+    expect(smokeScript).toContain("debugIdleFieldRequestDelta");
+    expect(smokeScript).toContain("debugIdleFrameDelta");
+    expect(smokeScript).toContain("debugIdleScanDelta");
+    expect(smokeScript).toContain("debugIdlePublishDelta");
+    expect(smokeScript).toContain("assertVisualizationDebugIdleBudgets");
   });
 });

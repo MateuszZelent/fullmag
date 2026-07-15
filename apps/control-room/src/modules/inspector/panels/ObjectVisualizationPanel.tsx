@@ -72,7 +72,10 @@ import {
   useMeshRegionMembershipsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
+import {
+  isVisualizationAirboxIdentity,
+  visualizationTargetIdForSceneObject,
+} from "@/kernel/selection/selectionTypes";
 import { visualizationSceneObjectIds } from "@/kernel/selection/visualizationTargetResolver";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import { manifestRenderableCarriers } from "@/modules/viewport-3d/public";
@@ -91,7 +94,6 @@ import {
   fieldMetaScopeQueryForVisualizationTarget,
   formatScalarColorbarValueWithDisplayUnit,
   geometryScopeVectorBudgetPatch,
-  resolveVisualizationDebugTargetId,
   resolveVisualizationVectorBudgetRange,
   resolveVisualizationVectorAccounting,
   resolveObjectVisualizationPanelTopologyFreshness,
@@ -1392,13 +1394,7 @@ function useObjectVisualizationPanelState(
       visualizationState.data,
     ],
   );
-  const airboxPartIds =
-    manifest.data?.mesh_parts?.flatMap((part) =>
-      part.role === "air" || part.role === "airbox" ? [part.id] : [],
-    ) ?? [];
-  const visualizationDebugTargetId = resolvedTarget
-    ? resolveVisualizationDebugTargetId({ airboxPartIds, target: resolvedTarget })
-    : "";
+  const visualizationDebugTargetId = resolvedTarget?.id ?? "";
   const visualizationDebugSnapshots = useVisualizationDebugSnapshots(
     visualizationDebugTargetId,
   );
@@ -1406,6 +1402,10 @@ function useObjectVisualizationPanelState(
     if (!visualizationDebugTargetId) return;
     return visualizationDebug.request(visualizationDebugTargetId);
   }, [visualizationDebug, visualizationDebugTargetId]);
+  const airboxPartIds =
+    manifest.data?.mesh_parts?.flatMap((part) =>
+      isVisualizationAirboxIdentity(part) ? [part.id] : [],
+    ) ?? [];
   const regionId = useMemo(() => {
     if (resolvedTarget?.kind !== "region") return null;
     const parsed = parseRegionVisualizationTargetId(resolvedTarget.id);
@@ -1440,7 +1440,7 @@ function useObjectVisualizationPanelState(
     }
 
     for (const part of manifest.data?.mesh_parts ?? []) {
-      if (part.role === "air" || part.role === "airbox") continue;
+      if (isVisualizationAirboxIdentity(part)) continue;
       targets.push(
         resolveObjectVisualizationPanelTarget({
           part,

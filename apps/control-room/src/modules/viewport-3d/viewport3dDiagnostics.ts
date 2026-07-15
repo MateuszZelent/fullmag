@@ -4,6 +4,7 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
+import { recordVisualizationDebugViewportFrame } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import {
   DIAGNOSTIC_EVENT_NAMES,
   type DiagnosticViewport3DRecord,
@@ -209,6 +210,7 @@ export class Viewport3DResourceTracker {
   }
 
   recordDirtyFrame(reason: string): void {
+    recordVisualizationDebugViewportFrame();
     this.dirtyReasonCounts.set(
       reason,
       (this.dirtyReasonCounts.get(reason) ?? 0) + 1,

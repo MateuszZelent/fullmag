@@ -3,6 +3,7 @@ import type { VisualizationTargetRef } from "@/kernel/visualization/ObjectVisual
 
 import {
   canonicalVisualizationSceneObjectId,
+  isVisualizationAirboxIdentity,
   type VisualizationMeshPartLike,
   visualizationObjectIdForMeshPartLike,
   visualizationPartScopeIdFromTargetId,
@@ -17,7 +18,7 @@ export function resolveVisualizationTargetForMeshPart({
   sceneObjectIds: ReadonlySet<string>;
   targetRegistry: VisualizationStateResource["targets"] | null | undefined;
 }): VisualizationTargetRef {
-  if (part.role === "air" || part.role === "airbox") {
+  if (isVisualizationAirboxIdentity(part)) {
     return { id: "airbox", kind: "airbox", label: "Airbox" };
   }
 

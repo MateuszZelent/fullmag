@@ -180,6 +180,22 @@ const chartTableModelPath = path.join(
   appRoot,
   "src/modules/analysis-plots/chartTableModel.ts",
 );
+const visualizationDebugControllerPath = path.join(
+  appRoot,
+  "src/kernel/visualization/VisualizationDebugController.ts",
+);
+const visualizationDebugPublisherPath = path.join(
+  appRoot,
+  "src/modules/viewport-3d/hooks/useViewport3DVisualizationDebugPublisher.ts",
+);
+const visualizationDebugScannerPath = path.join(
+  appRoot,
+  "src/modules/viewport-3d/model/scanFieldVectorDebugStatistics.ts",
+);
+const visualizationDebugPanelModelPath = path.join(
+  appRoot,
+  "src/modules/inspector/panels/visualization-debug/VisualizationDebugPanelModel.ts",
+);
 const broadSessionStatusConsumerPaths = [
   "src/modules/explorer/ExplorerModule.tsx",
   "src/modules/ribbon/RibbonModule.tsx",
@@ -297,6 +313,7 @@ checkFooterDiagnosticsBatching();
 checkPerformanceDiagnosticsExport();
 checkReactRenderProfilerInstrumentation();
 checkVisualizationPatchHotPath();
+checkVisualizationDebugLifecycleBudgets();
 checkRibbonSliderCommandDebounce();
 checkViewportPerformanceMarks();
 checkPrimitiveGeometryKeyHotPath();
@@ -1793,6 +1810,39 @@ function checkComputePerformanceSmokeScript() {
     'startsWith("fullmag.api.requestBinaryResource.")',
     'startsWith("fullmag.viewport3d.")',
     "viewportMeasureTotals",
+  ]);
+}
+
+function checkVisualizationDebugLifecycleBudgets() {
+  const controller = readFileSync(visualizationDebugControllerPath, "utf8");
+  const publisher = readFileSync(visualizationDebugPublisherPath, "utf8");
+  const scanner = readFileSync(visualizationDebugScannerPath, "utf8");
+  const panelModel = readFileSync(visualizationDebugPanelModelPath, "utf8");
+
+  requireTokens(controller, "visualization debug bounded controller", [
+    "MAX_VISUALIZATION_DEBUG_SNAPSHOT_BYTES = 64 * 1024",
+    "getLifecycleStats",
+    "activeDemandCount",
+    "retainedSnapshotCount",
+  ]);
+  requireTokens(scanner, "visualization debug bounded samples", [
+    "MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS = 12",
+    "MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS = 8",
+  ]);
+  requireTokens(panelModel, "visualization debug bounded transport", [
+    "MAX_VISUALIZATION_DEBUG_TRANSPORT_ENTRIES = 8",
+  ]);
+  requireTokens(publisher, "visualization debug demand lifecycle", [
+    "getLifecycleStats",
+    "getDemandSnapshot(targetId).expanded",
+    "state.lastCommittedFrameId === frame.commitId",
+    "recordVisualizationDebugScan",
+    "recordVisualizationDebugPublish",
+  ]);
+  forbidTokens(publisher, "visualization debug demand lifecycle", [
+    "setInterval(",
+    "invalidate(",
+    "recordDirtyFrame(",
   ]);
 }
 

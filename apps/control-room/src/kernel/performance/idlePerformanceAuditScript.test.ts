@@ -25,5 +25,10 @@ describe("idle performance audit script", () => {
     expect(auditScript).toContain("viewport3dGpuUploadManager.ts");
     expect(auditScript).toContain("defaultScheduleFrame");
     expect(auditScript).toContain('frameloop="always"');
+    expect(auditScript).toContain("auditVisualizationDebugIdleContracts");
+    expect(auditScript).toContain("VisualizationDebugController.ts");
+    expect(auditScript).toContain("useViewport3DVisualizationDebugPublisher.ts");
+    expect(auditScript).toContain("scanFieldVectorDebugStatistics");
+    expect(auditScript).toContain("setInterval(");
   });
 });

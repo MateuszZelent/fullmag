@@ -8,6 +8,10 @@ import type {
   MeshUniverseQualityResource,
   MeshUniverseReportResource,
 } from "@/kernel/api/apiTypes";
+import {
+  isVisualizationAirboxId,
+  isVisualizationAirboxRole,
+} from "@/kernel/selection/selectionTypes";
 import { boundedDisplayText, boundedItems } from "./airboxDisplay";
 
 type AirboxMeshPart = NonNullable<
@@ -264,9 +268,8 @@ export function findCanonicalAirboxPart(
 ): AirboxMeshPart | null {
   if (!parts?.length) return null;
   return (
-    parts.find((part) => part.role === "air" || part.role === "airbox") ??
-    parts.find((part) => part.id === "part:__air__") ??
-    parts.find((part) => part.label.trim().toLowerCase() === "airbox") ??
+    parts.find((part) => isVisualizationAirboxRole(part.role)) ??
+    parts.find((part) => isVisualizationAirboxId(part.id)) ??
     null
   );
 }

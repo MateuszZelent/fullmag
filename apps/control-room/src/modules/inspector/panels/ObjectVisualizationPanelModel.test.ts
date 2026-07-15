@@ -42,7 +42,6 @@ import {
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
   resolveVisualizationVectorAccounting,
-  resolveVisualizationDebugTargetId,
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowSurfaceFieldColorbar,
@@ -65,15 +64,6 @@ import {
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
-  it("maps the semantic Airbox target to its renderer mesh-part debug target", () => {
-    expect(
-      resolveVisualizationDebugTargetId({
-        airboxPartIds: ["part:__air__"],
-        target: { id: "airbox", kind: "airbox", label: "Airbox" },
-      }),
-    ).toBe("part:__air__");
-  });
-
   it("reports decoded and adopted vector counts only for matching identities", () => {
     const snapshot = {
       capturedAtMs: 10,
@@ -1280,7 +1270,7 @@ describe("ObjectVisualizationPanelModel", () => {
         label: "Airbox",
         node_count: 16_940,
         node_indices: Array.from({ length: 16_940 }, (_, index) => index),
-        role: "air",
+        role: "carrier",
       }),
       meshPart({
         id: "arch_waveguide",

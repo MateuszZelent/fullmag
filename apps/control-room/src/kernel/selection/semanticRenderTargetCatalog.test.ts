@@ -42,6 +42,21 @@ describe("semantic render target catalog", () => {
     expect(catalog.entries.some((entry) => entry.targetKind === "part")).toBe(false);
   });
 
+  it("maps the canonical part:__air__ carrier id to Airbox even when its role is degraded", () => {
+    const part = { id: "part:__air__", label: "Exterior air", role: "carrier" };
+    const catalog = buildSemanticRenderTargetCatalog({
+      parts: [part],
+      sceneObjectIds: new Set(["film"]),
+    });
+
+    expect(resolveSemanticTargetForMeshPart(catalog, part)).toMatchObject({
+      carrierIds: ["part:__air__"],
+      targetId: "airbox",
+      targetKind: "airbox",
+    });
+    expect(catalog.entries.some((entry) => entry.targetKind === "part")).toBe(false);
+  });
+
   it("maps an owned magnetic carrier to its existing authored object", () => {
     const part = {
       id: "part:film",

@@ -2,10 +2,21 @@
   "measurements": [],
   "preCanvasErrorBoundaryProof": {
     "canvasCount": 0,
-    "componentStackBytes": 6021,
-    "errorStackBytes": 978,
+    "componentStackBytes": 6018,
+    "errorStackBytes": 977,
     "message": "Maximum update depth exceeded (viewport audit injection)",
     "retryVisible": true
   },
-  "semanticTargetExplorerProof": null
+  "semanticTargetExplorerProof": {
+    "selectedNodeIds": [
+      "model:airbox",
+      "model:mesh:unassigned:semantic-orphan",
+      "model:object:semantic-magnet"
+    ],
+    "webgl": {
+      "drawingBufferHeight": 483,
+      "drawingBufferWidth": 731,
+      "isContextLost": false
+    }
+  }
 }

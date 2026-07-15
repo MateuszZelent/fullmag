@@ -9,6 +9,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 import {
   canonicalVisualizationSceneObjectId,
+  isVisualizationAirboxIdentity,
   visualizationTargetIdForSceneObject,
   type Selection,
 } from "@/kernel/selection/selectionTypes";
@@ -315,7 +316,7 @@ export function resolveSelectedTargetVectorMeshParts({
   if (!target || !meshParts?.length) return [];
 
   if (target.kind === "airbox") {
-    return meshParts.filter((part) => part.role === "air" || part.role === "airbox");
+    return meshParts.filter(isVisualizationAirboxIdentity);
   }
 
   if (target.kind === "region") {
@@ -329,7 +330,7 @@ export function resolveSelectedTargetVectorMeshParts({
   }
 
   return meshParts.filter((part) => {
-    if (part.role === "air" || part.role === "airbox") return false;
+    if (isVisualizationAirboxIdentity(part)) return false;
     const partTarget = resolveObjectVisualizationPanelTarget({
       part,
       sceneObjectIds,
@@ -566,17 +567,6 @@ export interface VisualizationVectorAccounting {
   decodedSampleCount: number | null;
 }
 
-export function resolveVisualizationDebugTargetId({
-  airboxPartIds,
-  target,
-}: {
-  airboxPartIds: readonly string[];
-  target: VisualizationTargetRef;
-}): string {
-  if (target.kind !== "airbox") return target.id;
-  return airboxPartIds.length === 1 ? airboxPartIds[0]! : target.id;
-}
-
 export function resolveVisualizationVectorAccounting({
   availableNodeCount,
   currentTopologyHash,
@@ -702,8 +692,7 @@ export function resolveVisualizationVectorBudgetRange({
       ? canonicalMagneticParts
       : meshParts.filter(
           (part) =>
-            part.role !== "air" &&
-            part.role !== "airbox" &&
+            !isVisualizationAirboxIdentity(part) &&
             part.role !== "interface" &&
             Boolean(
               part.object_id ||
@@ -1060,7 +1049,7 @@ function meshPartMatchesVisualizationTarget(
   target: VisualizationTargetRef,
 ): boolean {
   if (target.kind === "airbox") {
-    return part.role === "air" || part.role === "airbox";
+    return isVisualizationAirboxIdentity(part);
   }
 
   if (target.kind === "region") {

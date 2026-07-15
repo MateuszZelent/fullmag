@@ -15,7 +15,7 @@ import type {
   VisualizationDebugSnapshot,
 } from "@/kernel/visualization/visualizationDebugTypes";
 
-const MAX_TRANSPORT_ENTRIES = 8;
+export const MAX_VISUALIZATION_DEBUG_TRANSPORT_ENTRIES = 8;
 
 export type VisualizationDebugPanelState =
   | "unsupported-target"
@@ -215,7 +215,7 @@ export function buildVisualizationDebugPanelModel({
             entry.resourceKey !== undefined &&
             resourceKeys.has(entry.resourceKey),
         )
-        .slice(0, MAX_TRANSPORT_ENTRIES),
+        .slice(0, MAX_VISUALIZATION_DEBUG_TRANSPORT_ENTRIES),
     ),
     viewports: Object.freeze(viewports),
   });

@@ -4,18 +4,18 @@ import type {
   VisualizationDebugSample,
 } from "@/kernel/visualization/visualizationDebugTypes";
 
-const MAX_SAMPLES = 12;
-const MAX_COMPONENTS = 8;
+export const MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS = 12;
+export const MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS = 8;
 const SCAN_CHUNK_SIZE = 65_536;
 
 export function selectFieldVectorDebugSampleIndices(pointCount: number): readonly number[] {
   const count = Math.max(0, Math.floor(pointCount));
-  if (count <= MAX_SAMPLES) return Object.freeze(Array.from({ length: count }, (_, index) => index));
+  if (count <= MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS) return Object.freeze(Array.from({ length: count }, (_, index) => index));
   const selected = new Set<number>([0, Math.floor((count - 1) / 2), count - 1]);
-  for (let slot = 0; selected.size < MAX_SAMPLES && slot < MAX_SAMPLES; slot += 1) {
-    selected.add(Math.round((slot * (count - 1)) / (MAX_SAMPLES - 1)));
+  for (let slot = 0; selected.size < MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS && slot < MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS; slot += 1) {
+    selected.add(Math.round((slot * (count - 1)) / (MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS - 1)));
   }
-  return Object.freeze([...selected].sort((left, right) => left - right).slice(0, MAX_SAMPLES));
+  return Object.freeze([...selected].sort((left, right) => left - right).slice(0, MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS));
 }
 
 export function buildFieldVectorDebugSamples({
@@ -29,11 +29,11 @@ export function buildFieldVectorDebugSamples({
   pointCount: number;
   values: Float64Array;
 }): { issues: readonly VisualizationDebugIssue[]; samples: readonly VisualizationDebugSample[] } {
-  const shownComponents = Math.min(Math.max(0, nComp), MAX_COMPONENTS);
+  const shownComponents = Math.min(Math.max(0, nComp), MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS);
   const samples = selectFieldVectorDebugSampleIndices(pointCount).map((pointIndex) => {
     const componentValues: (number | null)[] = [];
     let magnitudeSquared = 0;
-    let allFinite = nComp <= MAX_COMPONENTS;
+    let allFinite = nComp <= MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS;
     for (let component = 0; component < shownComponents; component += 1) {
       const value = values[pointIndex * nComp + component] ?? Number.NaN;
       if (Number.isFinite(value)) {
@@ -51,8 +51,8 @@ export function buildFieldVectorDebugSamples({
       pointIndex,
     });
   });
-  const issues: VisualizationDebugIssue[] = nComp > MAX_COMPONENTS
-    ? [Object.freeze({ code: "component-display-cap", evidence: Object.freeze([`nComp=${nComp}`, `shown=${MAX_COMPONENTS}`]), message: "Only the first eight components are displayed.", severity: "info", source: "ui-derived" })]
+  const issues: VisualizationDebugIssue[] = nComp > MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS
+    ? [Object.freeze({ code: "component-display-cap", evidence: Object.freeze([`nComp=${nComp}`, `shown=${MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS}`]), message: "Only the first eight components are displayed.", severity: "info", source: "ui-derived" })]
     : [];
   return Object.freeze({ issues: Object.freeze(issues), samples: Object.freeze(samples) });
 }

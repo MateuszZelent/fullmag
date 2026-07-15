@@ -26,6 +26,20 @@ describe("resolveVisualizationTargetForMeshPart", () => {
     ).toMatchObject({ id: "airbox", kind: "airbox", label: "Airbox" });
   });
 
+  it("maps part:__air__ to the canonical airbox when an older manifest labels its role as carrier", () => {
+    expect(
+      resolveVisualizationTargetForMeshPart({
+        part: {
+          id: "part:__air__",
+          label: "Airbox",
+          role: "carrier",
+        },
+        sceneObjectIds: new Set(),
+        targetRegistry: null,
+      }),
+    ).toMatchObject({ id: "airbox", kind: "airbox", label: "Airbox" });
+  });
+
   it("keeps a geometry-only part scoped to the part when the scene has no matching object", () => {
     expect(
       resolveVisualizationTargetForMeshPart({

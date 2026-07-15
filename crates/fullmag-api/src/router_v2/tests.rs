@@ -3008,6 +3008,7 @@ async fn visualization_state_exposes_one_canonical_airbox_and_only_orphan_part_f
     let mut mesh = sample_fem_mesh_payload_with_manifest();
     mesh.mesh_parts[0].id = "part:__air__".to_string();
     mesh.mesh_parts[0].label = "Airbox".to_string();
+    mesh.mesh_parts[0].role = "carrier".to_string();
     let mut orphan_part = mesh.mesh_parts[1].clone();
     orphan_part.id = "part:interface".to_string();
     orphan_part.label = "Interface".to_string();
@@ -3368,6 +3369,38 @@ async fn visualization_state_migrates_a_legacy_synthetic_object_airbox_override(
     assert_eq!(json["overrides"][0]["scope"], "airbox");
     assert_eq!(json["overrides"][0]["scope_id"], "airbox");
     assert_eq!(json["targets"]["airbox"]["settings"]["vector_length_scale"], 1.5);
+}
+
+#[tokio::test]
+async fn visualization_state_migrates_legacy_airbox_aliases_without_part_targets() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "overrides": [{
+                            "scope": "part",
+                            "scope_id": "part:__airbox__",
+                            "style": { "vector_budget": 321 }
+                        }]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["overrides"].as_array().unwrap().len(), 1);
+    assert_eq!(json["overrides"][0]["scope"], "airbox");
+    assert_eq!(json["overrides"][0]["scope_id"], "airbox");
+    assert_eq!(json["targets"]["airbox"]["settings"]["vector_budget"], 321);
 }
 
 #[tokio::test]

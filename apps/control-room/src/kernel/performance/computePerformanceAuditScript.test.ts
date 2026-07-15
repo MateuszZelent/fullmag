@@ -211,6 +211,12 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("startPerformanceMeasureDiagnostics");
     expect(auditScript).toContain("channel: \"performance\"");
     expect(auditScript).toContain("checkVisualizationPatchHotPath");
+    expect(auditScript).toContain("checkVisualizationDebugLifecycleBudgets");
+    expect(auditScript).toContain("MAX_VISUALIZATION_DEBUG_SNAPSHOT_BYTES");
+    expect(auditScript).toContain("MAX_VISUALIZATION_DEBUG_SAMPLE_ROWS");
+    expect(auditScript).toContain("MAX_VISUALIZATION_DEBUG_SAMPLE_COMPONENTS");
+    expect(auditScript).toContain("MAX_VISUALIZATION_DEBUG_TRANSPORT_ENTRIES");
+    expect(auditScript).toContain("getLifecycleStats");
     expect(auditScript).toContain("checkRibbonSliderCommandDebounce");
     expect(auditScript).toContain("useDraftSliderCommand");
     expect(auditScript).toContain("stageSliderCommand(next)");

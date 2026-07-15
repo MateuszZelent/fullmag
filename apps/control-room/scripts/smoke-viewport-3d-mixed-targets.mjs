@@ -737,10 +737,18 @@ function magneticTargetExists(scene, id) {
   );
 }
 
+function isAirboxMeshPart(part) {
+  const role = String(part?.role ?? "").trim().toLowerCase();
+  if (role === "air" || role === "airbox") return true;
+  let id = String(part?.id ?? "").trim().toLowerCase();
+  while (id.startsWith("part:") || id.startsWith("object:")) {
+    id = id.slice(id.indexOf(":") + 1);
+  }
+  return id === "airbox" || id === "__air__" || id === "__airbox__";
+}
+
 function resolveAirboxPartId(manifest) {
-  const match = (manifest.mesh_parts ?? []).find(
-    (part) => part.id === "part:__air__" || part.role === "air",
-  );
+  const match = (manifest.mesh_parts ?? []).find(isAirboxMeshPart);
   if (!match?.id) {
     throw new Error("Could not resolve airbox mesh part.");
   }
@@ -753,7 +761,7 @@ function resolveTargetPartIds(manifest, objectId) {
       (part) =>
         part.object_id === objectId &&
         typeof part.id === "string" &&
-        part.role !== "air" &&
+        !isAirboxMeshPart(part) &&
         part.role !== "outer_boundary",
     )
     .map((part) => part.id);

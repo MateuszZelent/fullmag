@@ -45,18 +45,26 @@ export interface VisualizationMeshPartLike {
   role?: string | null;
 }
 
-const LEGACY_AIRBOX_IDS = new Set(["__air__", "__airbox__"]);
+const AIRBOX_ROLES = new Set(["air", "airbox"]);
+const AIRBOX_IDS = new Set(["airbox", "__air__", "__airbox__"]);
+
+export function isVisualizationAirboxRole(role: string | null | undefined): boolean {
+  return AIRBOX_ROLES.has(role?.trim().toLowerCase() ?? "");
+}
+
+export function isVisualizationAirboxId(id: string | null | undefined): boolean {
+  let normalized = id?.trim().toLowerCase() ?? "";
+  while (normalized.startsWith("part:") || normalized.startsWith("object:")) {
+    normalized = normalized.slice(normalized.indexOf(":") + 1);
+  }
+  return AIRBOX_IDS.has(normalized);
+}
 
 export function isVisualizationAirboxIdentity(value: {
   id?: string | null;
   role?: string | null;
 }): boolean {
-  const role = value.role?.trim().toLowerCase();
-  return (
-    role === "air" ||
-    role === "airbox" ||
-    LEGACY_AIRBOX_IDS.has(value.id?.trim() ?? "")
-  );
+  return isVisualizationAirboxRole(value.role) || isVisualizationAirboxId(value.id);
 }
 
 export function visualizationTargetIdForSceneObject(

@@ -77,6 +77,11 @@ async function main() {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
       controlRoomApiBase: baseUrl,
     };
+    window.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__ = {
+      publishes: 0,
+      scans: 0,
+      viewportFrames: 0,
+    };
   }, apiBase);
 
   page.on("console", (message) => {
@@ -117,12 +122,17 @@ async function main() {
       fieldResponses,
       objectPartId,
     });
+    const debugIdleProof = await assertVisualizationDebugIdleBudgets({
+      fieldRequests,
+      page,
+    });
     if (errors.length > 0) {
       throw new Error("Browser console errors:\n" + errors.join("\n"));
     }
     console.log(
       `Airbox field routing proof: ${JSON.stringify({
         ...proof,
+        ...debugIdleProof,
         apiBase,
         workspaceUrl,
       })}`,
@@ -131,6 +141,62 @@ async function main() {
   } finally {
     await browser.close();
   }
+}
+
+async function assertVisualizationDebugIdleBudgets({ fieldRequests, page }) {
+  await waitForVisualizationDebugQuiet({ fieldRequests, page });
+  const before = await readVisualizationDebugPerformance(page);
+  const requestCountBefore = fieldRequests.length;
+  await page.waitForTimeout(750);
+  const after = await readVisualizationDebugPerformance(page);
+  const debugFieldRequestDelta = fieldRequests.length - requestCountBefore;
+  const debugIdleFieldRequestDelta = debugFieldRequestDelta;
+  const debugIdleFrameDelta = after.viewportFrames - before.viewportFrames;
+  const debugIdleScanDelta = after.scans - before.scans;
+  const debugIdlePublishDelta = after.publishes - before.publishes;
+  const metrics = {
+    debugFieldRequestDelta,
+    debugIdleFieldRequestDelta,
+    debugIdleFrameDelta,
+    debugIdlePublishDelta,
+    debugIdleScanDelta,
+  };
+  for (const [name, value] of Object.entries(metrics)) {
+    if (value !== 0) {
+      throw new Error(`Visualization Debug idle budget ${name} must be 0, got ${value}.`);
+    }
+  }
+  if (after.scans !== 0 || after.publishes !== 0) {
+    throw new Error(
+      `Closed Visualization Debug performed work: scans=${after.scans} publishes=${after.publishes}.`,
+    );
+  }
+  return metrics;
+}
+
+async function waitForVisualizationDebugQuiet({ fieldRequests, page }) {
+  let previous = null;
+  let stableSince = Date.now();
+  await poll("Visualization Debug idle settle", async () => {
+    const counters = await readVisualizationDebugPerformance(page);
+    const current = `${fieldRequests.length}:${counters.viewportFrames}:${counters.scans}:${counters.publishes}`;
+    if (current !== previous) {
+      previous = current;
+      stableSince = Date.now();
+      return null;
+    }
+    return Date.now() - stableSince >= 500 ? counters : null;
+  });
+}
+
+async function readVisualizationDebugPerformance(page) {
+  return page.evaluate(() =>
+    window.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__ ?? {
+      publishes: 0,
+      scans: 0,
+      viewportFrames: 0,
+    },
+  );
 }
 
 function buildVisualizationRoutingPatch(state) {
@@ -358,12 +424,19 @@ function resolveObjectPartId(manifest, id) {
   return match.id;
 }
 
+function isAirboxMeshPart(part) {
+  const role = String(part?.role ?? "").trim().toLowerCase();
+  if (role === "air" || role === "airbox") return true;
+  let id = String(part?.id ?? "").trim().toLowerCase();
+  while (id.startsWith("part:") || id.startsWith("object:")) {
+    id = id.slice(id.indexOf(":") + 1);
+  }
+  return id === "airbox" || id === "__air__" || id === "__airbox__";
+}
+
 function resolveAirboxPartId(manifest) {
   const parts = manifest.mesh_parts ?? [];
-  const match =
-    parts.find((part) => part.id === "part:__air__") ??
-    parts.find((part) => part.kind === "airbox") ??
-    parts.find((part) => String(part.id ?? "").includes("__air__"));
+  const match = parts.find(isAirboxMeshPart);
   if (!match?.id) {
     throw new Error("Could not resolve airbox mesh part.");
   }

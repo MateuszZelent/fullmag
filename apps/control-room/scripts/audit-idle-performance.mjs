@@ -11,6 +11,17 @@ const viewportTypes = readFileSync(
   path.join(viewportRoot, "viewport3dTypes.ts"),
   "utf8",
 );
+const visualizationDebugController = readFileSync(
+  path.join(appRoot, "src/kernel/visualization/VisualizationDebugController.ts"),
+  "utf8",
+);
+const visualizationDebugPublisher = readFileSync(
+  path.join(
+    viewportRoot,
+    "hooks/useViewport3DVisualizationDebugPublisher.ts",
+  ),
+  "utf8",
+);
 
 const failures = [];
 
@@ -39,12 +50,37 @@ for (const filePath of listSourceFiles(viewportRoot)) {
   }
 }
 
+auditVisualizationDebugIdleContracts();
+
 if (failures.length > 0) {
   console.error(`Idle performance audit failed:\n${failures.join("\n")}`);
   process.exit(1);
 }
 
 console.log("Idle performance audit passed.");
+
+function auditVisualizationDebugIdleContracts() {
+  const sources = [visualizationDebugController, visualizationDebugPublisher];
+  for (const source of sources) {
+    if (source.includes("setInterval(")) {
+      failures.push("Visualization Debug lifecycle uses setInterval().");
+    }
+  }
+  if (!visualizationDebugPublisher.includes("scanFieldVectorDebugStatistics")) {
+    failures.push("Visualization Debug publisher must own the demand-gated statistics scan.");
+  }
+  if (!visualizationDebugPublisher.includes("getDemandSnapshot(targetId).expanded")) {
+    failures.push("Visualization Debug publisher must gate scans and commits on exact demand.");
+  }
+  if (!visualizationDebugPublisher.includes("state.lastCommittedFrameId === frame.commitId")) {
+    failures.push("Visualization Debug publisher must suppress identical settled frame commits.");
+  }
+  for (const forbidden of ["invalidate(", "recordDirtyFrame("]) {
+    if (visualizationDebugPublisher.includes(forbidden)) {
+      failures.push(`Visualization Debug publisher must not call ${forbidden}.`);
+    }
+  }
+}
 
 function allowsViewport3DDemandFrameOneShots(relativePath, content) {
   if (
