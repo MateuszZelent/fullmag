@@ -89,6 +89,20 @@ fn has_slonczewski_stt(plan: &fullmag_ir::FdmPlanIR) -> bool {
         && plan.stt_lambda.is_some()
 }
 
+#[cfg(any(feature = "cuda", test))]
+fn ensure_cuda_slonczewski_supported(plan: &fullmag_ir::FdmPlanIR) -> Result<(), RunError> {
+    match plan.slonczewski_formula_version.as_deref() {
+        None | Some("slonczewski.legacy_fullmag.v0") => Ok(()),
+        Some("slonczewski.fullmag.v1") => Err(RunError {
+            message: "slonczewski.fullmag.v1 is not executable on FDM CUDA until the native descriptor carries formula version, signed stack-normal current, and the separate target mask; use FDM CPU reference"
+                .to_string(),
+        }),
+        Some(other) => Err(RunError {
+            message: format!("unsupported FDM CUDA Slonczewski formula_version '{other}'"),
+        }),
+    }
+}
+
 #[cfg(feature = "cuda")]
 fn ffi_prescribed_sot_formula(
     plan: &fullmag_ir::FdmPlanIR,
@@ -455,6 +469,7 @@ impl NativeFdmBackend {
     }
 
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
+        ensure_cuda_slonczewski_supported(plan)?;
         validate_single_grid_budget(plan)?;
         let sot_formula = ffi_prescribed_sot_formula(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
@@ -3478,7 +3493,23 @@ mod tests {
 
 #[cfg(test)]
 mod exact_metric_contract_tests {
-    use super::validate_native_step_metrics;
+    use super::{ensure_cuda_slonczewski_supported, validate_native_step_metrics};
+
+    #[test]
+    fn canonical_slonczewski_fails_before_native_cuda_construction() {
+        let mut plan = fullmag_ir::FdmPlanIR::default();
+        plan.slonczewski_formula_version = Some("slonczewski.fullmag.v1".to_string());
+        plan.current_density = Some([0.0, 0.0, 7.0e11]);
+        plan.stt_degree = Some(0.6);
+        plan.stt_spin_polarization = Some([0.0, 0.0, 1.0]);
+        plan.stt_lambda = Some(1.7);
+
+        let error = ensure_cuda_slonczewski_supported(&plan)
+            .expect_err("canonical Slonczewski must not reach the legacy CUDA descriptor");
+        assert!(error.message.contains("slonczewski.fullmag.v1"));
+        assert!(error.message.contains("CUDA"));
+        assert!(error.message.contains("target mask"));
+    }
 
     #[test]
     fn fdm_native_exact_torque_value_is_independent_of_rhs_norm() {
