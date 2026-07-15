@@ -1,5 +1,6 @@
 mod charge;
 mod oersted;
+mod reciprocal_constitutive;
 mod spin_drift_diffusion;
 
 pub use charge::{
@@ -7,6 +8,7 @@ pub use charge::{
     OrientedFaceFluxes, PotentialGauge, StructuredChargeProblem,
 };
 pub use oersted::biot_savart_midpoint_field;
+pub use reciprocal_constitutive::{ReciprocalConstitutiveMaterial, ReciprocalConstitutiveResponse};
 
 pub use spin_drift_diffusion::{
     InternalSpinContact, OrientedSpinFaceFluxes, OrientedSpinInterface, ReactionChannels,
