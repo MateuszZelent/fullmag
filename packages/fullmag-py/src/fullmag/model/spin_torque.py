@@ -432,6 +432,7 @@ class SlonczewskiSTT:
     id: str | None = None
     target: RegionRef | None = None
     stack_normal: tuple[float, float, float] | None = None
+    interface_id: str | None = None
     formula_version: str = "slonczewski.legacy_fullmag.v0"
     realization_version: str | None = None
 
@@ -449,6 +450,7 @@ class SlonczewskiSTT:
         id: str | None = None,
         target: RegionRef | None = None,
         stack_normal: Sequence[float] | None = None,
+        interface_id: str | None = None,
     ) -> None:
         resolved_density, resolved_source = _resolve_current_binding(
             current_density=current_density,
@@ -456,14 +458,23 @@ class SlonczewskiSTT:
         )
         object.__setattr__(self, "current_density", resolved_density)
         object.__setattr__(self, "current_source", resolved_source)
-        canonical = id is not None or target is not None or stack_normal is not None
+        canonical = (
+            id is not None
+            or target is not None
+            or stack_normal is not None
+            or interface_id is not None
+        )
         if canonical:
             if id is None or target is None or stack_normal is None:
                 raise ValueError("canonical SlonczewskiSTT requires id, target, and stack_normal")
             if not isinstance(target, RegionRef):
                 raise TypeError("target must be a RegionRef")
-            if free_layer_thickness_m is None:
+            if interface_id is None and free_layer_thickness_m is None:
                 raise ValueError("canonical thin-layer SlonczewskiSTT requires free_layer_thickness_m")
+            if interface_id is not None and free_layer_thickness_m is not None:
+                raise ValueError(
+                    "canonical interface-flux SlonczewskiSTT must not set free_layer_thickness_m"
+                )
             if fixed_layer_position is not None:
                 raise ValueError("fixed_layer_position is legacy-only; canonical SlonczewskiSTT uses stack_normal")
             _, polarization_hat = _normalized_axis(spin_polarization, "spin_polarization")
@@ -472,14 +483,28 @@ class SlonczewskiSTT:
             object.__setattr__(self, "id", require_non_empty(id, "id"))
             object.__setattr__(self, "target", target)
             object.__setattr__(self, "stack_normal", stack_hat)
+            object.__setattr__(
+                self,
+                "interface_id",
+                require_non_empty(interface_id, "interface_id")
+                if interface_id is not None
+                else None,
+            )
             object.__setattr__(self, "fixed_layer_position", None)
             object.__setattr__(self, "formula_version", "slonczewski.fullmag.v1")
-            object.__setattr__(self, "realization_version", "slonczewski_thin_layer_homogenized.v1")
+            object.__setattr__(
+                self,
+                "realization_version",
+                "slonczewski_interface_flux.v1"
+                if interface_id is not None
+                else "slonczewski_thin_layer_homogenized.v1",
+            )
         else:
             object.__setattr__(self, "spin_polarization", as_vector3(spin_polarization, "spin_polarization"))
             object.__setattr__(self, "id", None)
             object.__setattr__(self, "target", None)
             object.__setattr__(self, "stack_normal", None)
+            object.__setattr__(self, "interface_id", None)
             object.__setattr__(self, "fixed_layer_position", _validated_fixed_layer_position(fixed_layer_position or "top"))
             object.__setattr__(self, "formula_version", "slonczewski.legacy_fullmag.v0")
             object.__setattr__(self, "realization_version", None)
@@ -504,15 +529,24 @@ class SlonczewskiSTT:
         if self.formula_version == "slonczewski.fullmag.v1":
             assert self.id is not None and self.target is not None
             assert self.stack_normal is not None and self.realization_version is not None
+            realization: dict[str, object]
+            if self.interface_id is not None:
+                realization = {
+                    "kind": "interface_flux",
+                    "interface_id": self.interface_id,
+                    "realization_version": self.realization_version,
+                }
+            else:
+                realization = {
+                    "kind": "thin_layer_homogenized",
+                    "realization_version": self.realization_version,
+                }
             ir.update({
                 "schema_version": "slonczewski_torque.v1",
                 "id": self.id,
                 "target": self.target.to_ir(),
                 "stack_normal": list(self.stack_normal),
-                "realization": {
-                    "kind": "thin_layer_homogenized",
-                    "realization_version": self.realization_version,
-                },
+                "realization": realization,
             })
         else:
             ir["fixed_layer_position"] = self.fixed_layer_position

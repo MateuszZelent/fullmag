@@ -86,6 +86,39 @@ class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
         rebuilt = _eval_rendered(rendered)
         self.assertEqual(rebuilt.to_ir_module(), entry)
 
+    def test_canonical_slonczewski_interface_flux_round_trip_preserves_interface(self) -> None:
+        module = fm.SlonczewskiSTT(
+            id="cpp-interface",
+            target=fm.RegionRef("layer"),
+            current_source="transport",
+            spin_polarization=(0.0, 2.0, 0.0),
+            stack_normal=(0.0, 0.0, 3.0),
+            degree=0.55,
+            lambda_asymmetry=1.4,
+            epsilon_prime=0.03,
+            interface_id="fixed-to-free",
+        )
+        entry = module.to_ir_module()
+        self.assertEqual(
+            entry["realization"],
+            {
+                "kind": "interface_flux",
+                "interface_id": "fixed-to-free",
+                "realization_version": "slonczewski_interface_flux.v1",
+            },
+        )
+        self.assertNotIn("free_layer_thickness_m", entry)
+
+        object_rendered = _render_spin_torques(
+            _problem(spin_torques=[module]), surface="flat"
+        )
+        self.assertEqual(_eval_rendered(object_rendered).to_ir_module(), entry)
+
+        override_rendered = _render_spin_torques(
+            _problem(), surface="flat", overrides={"spin_torques": [entry]}
+        )
+        self.assertEqual(_eval_rendered(override_rendered).to_ir_module(), entry)
+
     def test_slonczewski_rejects_nonfinite_scalar_coefficients(self) -> None:
         base = {
             "id": "cpp",

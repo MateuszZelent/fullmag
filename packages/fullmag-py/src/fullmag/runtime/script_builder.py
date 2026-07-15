@@ -1806,6 +1806,8 @@ def _render_spin_torques(
                     f"region_id={'None' if module.target.region_id is None else _py_repr(module.target.region_id)})"
                 )
                 kwargs.append(f"stack_normal={_py_tuple3(module.stack_normal)}")
+                if module.interface_id is not None:
+                    kwargs.append(f"interface_id={_py_repr(module.interface_id)}")
             if module.current_density is not None:
                 kwargs.append(f"current_density={_py_tuple3(module.current_density)}")
             if module.current_source is not None:
@@ -2253,8 +2255,21 @@ def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
                 f"{_roundtrip_literal(list(_required_vec3(entry, 'stack_normal', context=str(kind))), context='slonczewski.stack_normal')}"
             )
             realization = _required_entry(entry, "realization", context=str(kind))
-            if not isinstance(realization, Mapping) or realization.get("kind") != "thin_layer_homogenized" or realization.get("realization_version") != "slonczewski_thin_layer_homogenized.v1":
-                raise ValueError("canonical slonczewski requires thin-layer realization v1")
+            if not isinstance(realization, Mapping):
+                raise ValueError("canonical slonczewski realization must be an object")
+            realization_kind = realization.get("kind")
+            if realization_kind == "thin_layer_homogenized":
+                if realization.get("realization_version") != "slonczewski_thin_layer_homogenized.v1":
+                    raise ValueError("canonical slonczewski requires thin-layer realization v1")
+            elif realization_kind == "interface_flux":
+                if realization.get("realization_version") != "slonczewski_interface_flux.v1":
+                    raise ValueError("canonical slonczewski requires interface-flux realization v1")
+                kwargs.append(
+                    "interface_id="
+                    f"{_py_repr(_required_nonempty_string(realization, 'interface_id', context='slonczewski.realization'))}"
+                )
+            else:
+                raise ValueError(f"unsupported canonical slonczewski realization {realization_kind!r}")
             if "fixed_layer_position" in entry:
                 raise ValueError("canonical slonczewski must not contain fixed_layer_position")
         elif formula_version != "slonczewski.legacy_fullmag.v0":
