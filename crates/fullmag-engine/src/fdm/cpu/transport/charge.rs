@@ -48,6 +48,17 @@ pub struct ChargeSolution {
     pub current_density: OrientedFaceFluxes,
     pub iterations: usize,
     pub residual_l2: f64,
+    pub balance: ChargeBalanceDiagnostics,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChargeBalanceDiagnostics {
+    /// Outward conventional current through x-min, x-max, y-min, y-max,
+    /// z-min, and z-max respectively, in amperes.
+    pub boundary_outward_current_a: [f64; 6],
+    pub net_boundary_current_a: f64,
+    pub boundary_current_l1_a: f64,
+    pub max_abs_divergence_a_per_m3: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -343,11 +354,53 @@ impl StructuredChargeProblem {
         }
         let current_density = self.face_fluxes(&potential)?;
         let physical_residual = self.charge_residual(&potential)?;
+        let balance = self.balance_diagnostics(&current_density)?;
         Ok(ChargeSolution {
             potential_volts: potential,
             current_density,
             iterations,
             residual_l2: l2_norm_active(&physical_residual, &self.active_cells),
+            balance,
+        })
+    }
+
+    pub fn balance_diagnostics(
+        &self,
+        fluxes: &OrientedFaceFluxes,
+    ) -> Result<ChargeBalanceDiagnostics> {
+        let divergence = self.conservative_divergence(fluxes)?;
+        let GridShape { nx, ny, nz } = self.grid;
+        let mut boundary = [0.0; 6];
+        let area_x = self.cell_size.dy * self.cell_size.dz;
+        let area_y = self.cell_size.dx * self.cell_size.dz;
+        let area_z = self.cell_size.dx * self.cell_size.dy;
+        for z in 0..nz {
+            for y in 0..ny {
+                boundary[0] -= fluxes.x[(nx + 1) * (y + ny * z)] * area_x;
+                boundary[1] += fluxes.x[nx + (nx + 1) * (y + ny * z)] * area_x;
+            }
+        }
+        for z in 0..nz {
+            for x in 0..nx {
+                boundary[2] -= fluxes.y[x + nx * ((ny + 1) * z)] * area_y;
+                boundary[3] += fluxes.y[x + nx * (ny + (ny + 1) * z)] * area_y;
+            }
+        }
+        for y in 0..ny {
+            for x in 0..nx {
+                boundary[4] -= fluxes.z[x + nx * y] * area_z;
+                boundary[5] += fluxes.z[x + nx * (y + ny * nz)] * area_z;
+            }
+        }
+        Ok(ChargeBalanceDiagnostics {
+            boundary_outward_current_a: boundary,
+            net_boundary_current_a: boundary.iter().sum(),
+            boundary_current_l1_a: boundary.iter().map(|value| value.abs()).sum(),
+            max_abs_divergence_a_per_m3: divergence
+                .iter()
+                .zip(&self.active_cells)
+                .filter_map(|(&value, &active)| active.then_some(value.abs()))
+                .fold(0.0, f64::max),
         })
     }
 
@@ -569,6 +622,22 @@ mod tests {
         for &jx in &solution.current_density.x {
             assert_close(jx, expected_jx, expected_jx.abs() * 1.0e-10);
         }
+        let cross_section = 3.0e-9 * 4.0e-9;
+        assert_close(
+            solution.balance.boundary_outward_current_a[0],
+            -expected_jx * cross_section,
+            expected_jx.abs() * cross_section * 1.0e-10,
+        );
+        assert_close(
+            solution.balance.boundary_outward_current_a[1],
+            expected_jx * cross_section,
+            expected_jx.abs() * cross_section * 1.0e-10,
+        );
+        assert_close(
+            solution.balance.net_boundary_current_a,
+            0.0,
+            expected_jx.abs() * cross_section * 1.0e-10,
+        );
         let residual_scale = expected_jx.abs() / dx * (grid.cell_count() as f64).sqrt();
         assert!(solution.residual_l2 / residual_scale < 1.0e-10);
     }
