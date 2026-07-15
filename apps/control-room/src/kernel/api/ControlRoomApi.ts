@@ -2380,18 +2380,39 @@ export class ControlRoomApi {
         const byteLength = buffer.byteLength;
 
         const decodeStartedAt = nowMs();
-        const data = await measureControlRoomApiPerformance(
-          `${measureBase}.decode`,
-          async () =>
-            decoderKind === "raw-bytes"
-              ? decode(buffer)
-              : await this.binaryDecodeScheduler({
-                  buffer,
-                  decodeInline: decode,
-                  kind: decoderKind,
-                  path: requestState.lastRequestPath,
-                }),
-        );
+        let data: TData;
+        try {
+          data = await measureControlRoomApiPerformance(
+            `${measureBase}.decode`,
+            async () =>
+              decoderKind === "raw-bytes"
+                ? decode(buffer)
+                : await this.binaryDecodeScheduler({
+                    buffer,
+                    decodeInline: decode,
+                    kind: decoderKind,
+                    path: requestState.lastRequestPath,
+                  }),
+          );
+        } catch (error) {
+          this.requestDiagnostics?.record({
+            byteLength,
+            channel: "http",
+            contentType: response.headers.get("content-type"),
+            detail: "binary decode failed",
+            direction: "rx",
+            durationMs: Math.max(0, nowMs() - decodeStartedAt),
+            etag,
+            method: "GET",
+            outcome: "error",
+            path: requestState.lastRequestPath,
+            requestId:
+              response.headers.get("x-request-id") ?? "binary-payload",
+            resourceKey: requestState.lastRequestPath,
+            status: response.status,
+          });
+          throw error;
+        }
         const decodeDurationMs = Math.max(0, nowMs() - decodeStartedAt);
 
         this.requestDiagnostics?.record({

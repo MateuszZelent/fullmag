@@ -433,6 +433,31 @@ describe("viewport3DTargetFieldBuffer", () => {
     expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(false);
   });
 
+  it("keeps current domain identity independent from decoded field identity", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      domain: {
+        domainGenerationId: "current-domain",
+        meshTopologyHash: "current-topology",
+        meshTopologyRevision: "current-topology-revision",
+        pointCount: 4,
+      },
+      fieldVector: vectorFixture({
+        domainGenerationId: "decoded-domain",
+        formatVersion: 3,
+        indexing: "full_domain",
+        meshTopologyHash: "decoded-topology",
+        meshTopologyRevision: "decoded-topology-revision",
+      }),
+      query: { component: "full", scope_kind: "full" },
+      targetIds: ["part-a"],
+    });
+
+    expect(buffer.domainGenerationId).toBe("decoded-domain");
+    expect(buffer.meshTopologyHash).toBe("decoded-topology");
+    expect(buffer.currentDomainGenerationId).toBe("current-domain");
+    expect(buffer.currentMeshTopologyHash).toBe("current-topology");
+  });
+
   it("treats synthetic airbox payloads as vector-capable render fallbacks", () => {
     const buffer = buildViewport3DTargetFieldBuffer({
       fieldVector: vectorFixture({ quantityId: "H_eff" }),

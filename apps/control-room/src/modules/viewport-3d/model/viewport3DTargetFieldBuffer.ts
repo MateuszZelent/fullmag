@@ -24,6 +24,8 @@ export interface Viewport3DTargetFieldBuffer {
   capability: Viewport3DFieldPayloadCapability;
   component: Exclude<Viewport3DFieldComponentDemand, "none">;
   componentCount: number;
+  currentDomainGenerationId: string | null;
+  currentMeshTopologyHash: string | null;
   domainCompatibility: Viewport3DFieldDomainCompatibility;
   domainGenerationId: string | null;
   complete: boolean;
@@ -116,6 +118,8 @@ export function buildViewport3DTargetFieldBuffer({
     capability,
     component,
     componentCount: fieldVector.nComp,
+    currentDomainGenerationId: domain?.domainGenerationId ?? null,
+    currentMeshTopologyHash: domain?.meshTopologyHash ?? null,
     domainCompatibility,
     domainGenerationId,
     complete: capability !== "full-vector-sampled",

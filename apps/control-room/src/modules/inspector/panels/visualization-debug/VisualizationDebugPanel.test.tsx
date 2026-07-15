@@ -116,6 +116,16 @@ describe("VisualizationDebugPanelView", () => {
     requestError.transport = [
       { ...requestError.transport[0]!, outcome: "error", status: 500 },
     ];
+    requestError.disposition = "blocked";
+    requestError.issues = [
+      {
+        code: "field-request-error",
+        evidence: ["request=http-request-7"],
+        message: "The newest completed exact field request failed.",
+        severity: "error",
+        source: "transport",
+      },
+    ];
     expect(
       renderToStaticMarkup(
         <VisualizationDebugPanelView model={requestError} nowMs={2_000} />,
@@ -195,7 +205,9 @@ describe("VisualizationDebugPanelView", () => {
 
 function emptyModel(): VisualizationDebugPanelModel {
   return {
+    disposition: "unknown",
     fieldQueries: [],
+    issues: [],
     state: "missing-snapshot",
     target: { id: "object:magnet", kind: "object" },
     transport: [],
@@ -236,7 +248,9 @@ function readyModel(): VisualizationDebugPanelModel {
     timestampMs: 1_010,
   };
   return {
+    disposition: "ready",
     fieldQueries: [],
+    issues: snapshot.issues,
     state: "ready",
     target: { id: "object:magnet", kind: "object" },
     transport: [transport],
@@ -252,6 +266,7 @@ function readyModel(): VisualizationDebugPanelModel {
                 carrier,
                 query: null,
                 snapshot,
+                wireByteLength: 1536,
               },
             ],
           },
@@ -392,6 +407,8 @@ function replaceSnapshot(
   const carrier = snapshot.carriers[0]!;
   return {
     ...model,
+    disposition: snapshot.disposition,
+    issues: snapshot.issues,
     viewports: model.viewports.map((viewport) => ({
       ...viewport,
       carriers: viewport.carriers.map((group) => ({

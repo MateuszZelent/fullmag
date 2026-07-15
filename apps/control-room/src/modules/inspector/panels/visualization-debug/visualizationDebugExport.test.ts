@@ -150,7 +150,9 @@ describe("visualization debug evidence export", () => {
 
 function exportModel(resourceKey: string): VisualizationDebugPanelModel {
   return {
+    disposition: "ready",
     fieldQueries: [],
+    issues: [],
     state: "ready",
     target: { id: "object:magnet", kind: "object" },
     transport: [],
@@ -194,6 +196,7 @@ function exportModel(resourceKey: string): VisualizationDebugPanelModel {
                   viewport: { contextLost: false, drawingBuffer: [640, 480], frameCommittedAtMs: 990, frameCommitId: "frame-1", viewportId: "viewport-primary" },
                   version: 1,
                 },
+                wireByteLength: null,
               },
             ],
           },

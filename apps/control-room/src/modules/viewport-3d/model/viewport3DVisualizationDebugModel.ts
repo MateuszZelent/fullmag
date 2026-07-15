@@ -32,38 +32,44 @@ export interface Viewport3DVisualizationDebugCarrierInput {
   adoptedScalarBufferKey?: string | null;
   adoptedVectorBuildKey?: string | null;
   adoptedVectorItemCount?: number | null;
-  backendStats?: { max: number; mean: number; min: number } | null;
   cache: Viewport3DFieldVectorCacheEntryDiagnostics | null;
   carrierId: string;
   carrierRole: string;
   decoded: DecodedFieldVector | null;
   expectedDomainGenerationId?: string | null;
-  expectedFieldRevision?: string | null;
   expectedTopologyHash?: string | null;
   fieldBufferId?: string | null;
   fieldBufferState: string;
-  fieldRequestError?: boolean;
   fieldRevision?: string | null;
   geometryMaskDescription?: string | null;
   plannerRequestId?: string | null;
   rangeDiagnostics?: ScalarRangeDiagnostics | null;
   rangeDiagnosticsComponent?: string | null;
   renderedComponent: string | null;
+  requestIdentityKnown: boolean;
   requestedComponent: string;
   requestedPasses: readonly ("surface" | "vector-glyph")[];
   requestedQuantityId: string;
   requestedScopeId: string | null;
   requestedScopeKind: string;
+  requestedSnapshotId?: string | null;
   resourceKey?: string | null;
   scalarBufferByteLength?: number | null;
   scalarBufferKey?: string | null;
+  scanState: "cancelled" | "complete" | "scanning" | "unavailable";
   scannedStats?: VisualizationDebugNumericStats | null;
+  surfaceDegradation: string | null;
+  surfaceProjectionMode: string | null;
+  surfaceAdoptedFieldBufferId: string | null;
+  surfaceAdoptedResourceKey: string | null;
   topologyByteLength?: number | null;
   vectorBuildKey?: string | null;
+  vectorDegradation: string | null;
+  vectorAdoptedFieldBufferId: string | null;
+  vectorAdoptedResourceKey: string | null;
   vectorSegmentByteLength?: number | null;
   vectorSegmentCount?: number | null;
   webglSharedByteLength?: number | null;
-  wireByteLength?: number | null;
 }
 
 export interface Viewport3DVisualizationDebugModelInput {
@@ -191,12 +197,17 @@ function buildCarrier(
   state.remainingSamples -= samples.length;
   const statistics = buildStatistics(carrier);
   const health = buildVisualizationDebugHealth(buildHealthEvidence(carrier, input, statistics));
+  const responseMetadataIssues = buildResponseMetadataIdentityIssues(carrier);
   const memory = buildMemory(carrier, state);
   const cache = carrier.cache;
 
   return {
     disposition: health.disposition,
-    issues: Object.freeze([...health.issues, ...sampleResult.issues]),
+    issues: Object.freeze([
+      ...health.issues,
+      ...responseMetadataIssues,
+      ...sampleResult.issues,
+    ]),
     snapshot: Object.freeze({
       cache: Object.freeze({
         byteLength: safeNullableByteLength(cache?.byteLength),
@@ -240,8 +251,8 @@ function buildCarrier(
         fieldBufferState: boundText(carrier.fieldBufferState),
         requestedFieldBufferId: boundNullableText(carrier.fieldBufferId),
         requestedPasses,
-        surface: Object.freeze({ bufferKey: boundNullableText(carrier.scalarBufferKey), colorMode: requestedPasses.includes("surface") ? boundNullableText(carrier.renderedComponent) : null, degradation: null, projectionMode: null, scalarByteLength: safeNullableByteLength(carrier.scalarBufferByteLength) }),
-        vectors: Object.freeze({ buildKey: boundNullableText(carrier.vectorBuildKey), degradation: null, segmentByteLength: safeNullableByteLength(carrier.vectorSegmentByteLength), segmentCount: carrier.vectorSegmentCount == null ? null : safeCount(carrier.vectorSegmentCount) }),
+        surface: Object.freeze({ bufferKey: boundNullableText(carrier.scalarBufferKey), colorMode: requestedPasses.includes("surface") ? boundNullableText(carrier.renderedComponent) : null, degradation: boundNullableText(carrier.surfaceDegradation), projectionMode: boundNullableText(carrier.surfaceProjectionMode), scalarByteLength: safeNullableByteLength(carrier.scalarBufferByteLength) }),
+        vectors: Object.freeze({ buildKey: boundNullableText(carrier.vectorBuildKey), degradation: boundNullableText(carrier.vectorDegradation), segmentByteLength: safeNullableByteLength(carrier.vectorSegmentByteLength), segmentCount: carrier.vectorSegmentCount == null ? null : safeCount(carrier.vectorSegmentCount) }),
       }),
       request: Object.freeze({ plannerRequestId: boundNullableText(carrier.plannerRequestId), resourceKey: boundNullableText(carrier.resourceKey) }),
       revisions: Object.freeze({
@@ -252,7 +263,7 @@ function buildCarrier(
         visualizationRevision: boundNullableText(input.visualizationRevision),
       }),
       samples,
-      scanState: carrier.scannedStats || matchingRangeDiagnostics(carrier) ? "complete" : decoded ? "idle" : "unavailable",
+      scanState: carrier.scanState,
       statistics,
     }),
   };
@@ -265,54 +276,131 @@ function buildHealthEvidence(
 ): VisualizationDebugHealthEvidence {
   const decoded = carrier.decoded;
   const stats = statistics.find((item) => item.source === "decoded-payload" || item.source === "render-derived");
-  const backend = carrier.backendStats;
-  const comparableRange = backend && stats?.min != null && stats.max != null
-    ? visualizationDebugRangesEqual(backend.min, stats.min) && visualizationDebugRangesEqual(backend.max, stats.max)
-    : null;
   const explicitIndexing = decoded?.indexing === "explicit_node_indices" || decoded?.indexing === "sampled_node_indices";
+  const domainGenerationMatches = compareWhenKnown(
+    decoded?.domainGenerationId,
+    carrier.expectedDomainGenerationId,
+  );
+  const fieldRevisionCurrent = carrier.fieldRevision == null ? null : true;
+  const responseMetadataMatches = compareResponseMetadata(carrier);
+  const topologyHashMatches = compareWhenKnown(
+    decoded?.meshTopologyHash,
+    carrier.expectedTopologyHash,
+  );
+  const surfaceAdoptionRequired = hasRequestedPass(carrier, "surface");
+  const vectorAdoptionRequired = hasRequestedPass(carrier, "vector-glyph");
+  const surfaceAdoptionComplete =
+    !surfaceAdoptionRequired ||
+    (carrier.surfaceAdoptedFieldBufferId != null &&
+      carrier.fieldBufferId != null &&
+      carrier.adoptedScalarBufferKey != null &&
+      carrier.scalarBufferKey != null);
+  const vectorAdoptionComplete =
+    !vectorAdoptionRequired ||
+    (carrier.vectorAdoptedFieldBufferId != null &&
+      carrier.fieldBufferId != null &&
+      carrier.adoptedVectorBuildKey != null &&
+      carrier.vectorBuildKey != null);
+  const surfaceAdoptionMismatch =
+    surfaceAdoptionRequired &&
+    (knownIdentityMismatch(
+      carrier.surfaceAdoptedFieldBufferId,
+      carrier.fieldBufferId,
+    ) ||
+      knownIdentityMismatch(
+        carrier.adoptedScalarBufferKey,
+        carrier.scalarBufferKey,
+      ) ||
+      knownIdentityMismatch(
+        carrier.surfaceAdoptedResourceKey,
+        carrier.resourceKey,
+      ));
+  const vectorAdoptionMismatch =
+    vectorAdoptionRequired &&
+    (knownIdentityMismatch(
+      carrier.vectorAdoptedFieldBufferId,
+      carrier.fieldBufferId,
+    ) ||
+      knownIdentityMismatch(
+        carrier.adoptedVectorBuildKey,
+        carrier.vectorBuildKey,
+      ) ||
+      knownIdentityMismatch(
+        carrier.vectorAdoptedResourceKey,
+        carrier.resourceKey,
+      ));
+  const surfaceAdoptionMatches = !surfaceAdoptionRequired
+    ? true
+    : surfaceAdoptionMismatch
+      ? false
+      : !surfaceAdoptionComplete
+        ? null
+        : true;
+  const vectorAdoptionMatches = !vectorAdoptionRequired
+    ? true
+    : vectorAdoptionMismatch
+      ? false
+      : !vectorAdoptionComplete
+        ? null
+        : true;
+  const adoptionEvidenceComplete =
+    surfaceAdoptionComplete &&
+    vectorAdoptionComplete;
+  const adoptedSourceMatches =
+    surfaceAdoptionMatches === false || vectorAdoptionMatches === false
+      ? false
+      : surfaceAdoptionMatches === null || vectorAdoptionMatches === null
+        ? null
+        : true;
   return {
     ...completeHealthEvidence(),
-    adoptedSourceMatches:
-      (!carrier.adoptedFieldBufferId || !carrier.fieldBufferId || carrier.adoptedFieldBufferId === carrier.fieldBufferId) &&
-      (!carrier.adoptedResourceKey || !carrier.resourceKey || carrier.adoptedResourceKey === carrier.resourceKey) &&
-      (!carrier.adoptedScalarBufferKey || !carrier.scalarBufferKey || carrier.adoptedScalarBufferKey === carrier.scalarBufferKey) &&
-      (!carrier.adoptedVectorBuildKey || !carrier.vectorBuildKey || carrier.adoptedVectorBuildKey === carrier.vectorBuildKey),
-    backendRenderRangeMatches: comparableRange,
-    domainGenerationMatches: compareWhenKnown(decoded?.domainGenerationId, carrier.expectedDomainGenerationId),
+    adoptedSourceMatches,
+    backendRenderRangeMatches: null,
+    domainGenerationMatches,
     evidenceComplete: Boolean(
       decoded &&
       input.frame.commitId &&
       decoded.formatVersion === 3 &&
+      carrier.requestIdentityKnown &&
       decoded.indexing &&
       decoded.scopeKind &&
       decoded.domainGenerationId != null &&
       decoded.meshTopologyHash != null &&
       decoded.meshTopologyRevision != null &&
-      (decoded.scopeKind === "full" || decoded.scopeId != null),
+      (decoded.scopeKind === "full" || decoded.scopeId != null) &&
+      domainGenerationMatches !== null &&
+      fieldRevisionCurrent !== null &&
+      responseMetadataMatches !== null &&
+      topologyHashMatches !== null &&
+      carrier.scanState !== "scanning" &&
+      carrier.scanState !== "cancelled" &&
+      adoptionEvidenceComplete,
     ),
     fieldBufferPresent: !fieldRequired(carrier) || carrier.fieldBufferId != null,
-    fieldRequestOk: !carrier.fieldRequestError,
-    fieldRevisionCurrent: compareWhenKnown(carrier.fieldRevision, carrier.expectedFieldRevision),
+    fieldRequestOk: true,
+    fieldRevisionCurrent,
     frameCommitted: Boolean(input.frame.commitId),
     nodeIndexCountMatches: !decoded || !explicitIndexing ? true : decoded.nodeIndices?.length === decoded.pointCount,
-    quantityMatches: !decoded || canonical(decoded.quantityId) === canonical(carrier.requestedQuantityId),
+    quantityMatches: !decoded || !carrier.requestIdentityKnown
+      ? null
+      : canonical(decoded.quantityId) === canonical(carrier.requestedQuantityId),
     rangeNotOutlierDominated: matchingRangeDiagnostics(carrier)?.outlierDominated === undefined
       ? null
       : !matchingRangeDiagnostics(carrier)!.outlierDominated,
-    responseMetadataMatches: carrier.cache?.responseMetadata?.identityIssues.length ? false : true,
+    responseMetadataMatches,
     scopeIdMatches:
-      !decoded
-        ? true
-        : decoded.scopeKind == null
+      !decoded || !carrier.requestIdentityKnown
+        ? null
+        : decoded.scopeKind == null && decoded.scopeId == null
           ? null
           : (decoded.scopeId ?? null) === carrier.requestedScopeId,
-    scopeKindMatches: !decoded
-      ? true
+    scopeKindMatches: !decoded || !carrier.requestIdentityKnown
+      ? null
       : compareWhenKnown(decoded.scopeKind, carrier.requestedScopeKind),
     surfacePassPresent: !hasRequestedPass(carrier, "surface") || carrier.scalarBufferByteLength != null,
     targetActive: true,
-    topologyHashMatches: compareWhenKnown(decoded?.meshTopologyHash, carrier.expectedTopologyHash),
-    transportCacheBytesMatch: carrier.wireByteLength == null || carrier.cache?.byteLength == null ? null : carrier.wireByteLength >= carrier.cache.byteLength,
+    topologyHashMatches,
+    transportCacheBytesMatch: null,
     valueCountMatches: !decoded || decoded.pointCount * decoded.nComp === decoded.valueCount,
     valuesAllZero: stats ? stats.finiteCount > 0 && stats.zeroCount === stats.finiteCount : null,
     valuesFinite: stats ? stats.nonFiniteCount === 0 : null,
@@ -333,17 +421,6 @@ function completeHealthEvidence(): VisualizationDebugHealthEvidence {
 
 function buildStatistics(carrier: Viewport3DVisualizationDebugCarrierInput): readonly VisualizationDebugNumericStats[] {
   const stats: VisualizationDebugNumericStats[] = [];
-  if (carrier.backendStats) stats.push(Object.freeze({
-    finiteCount: 0,
-    max: safeNullableNumber(carrier.backendStats.max),
-    mean: safeNullableNumber(carrier.backendStats.mean),
-    min: safeNullableNumber(carrier.backendStats.min),
-    nonFiniteCount: 0,
-    p01: null,
-    p99: null,
-    source: "backend-meta",
-    zeroCount: 0,
-  }));
   const rangeDiagnostics = matchingRangeDiagnostics(carrier);
   if (rangeDiagnostics) stats.push(Object.freeze({
     finiteCount: safeCount(rangeDiagnostics.finiteCount), max: safeNullableNumber(rangeDiagnostics.max), mean: safeNullableNumber(rangeDiagnostics.mean),
@@ -373,7 +450,7 @@ function matchingRangeDiagnostics(
 function buildMemory(carrier: Viewport3DVisualizationDebugCarrierInput, state: BuildOwnershipState): readonly VisualizationDebugMemoryRow[] {
   const decoded = carrier.decoded;
   const rows: VisualizationDebugMemoryRow[] = [];
-  rows.push(memoryRow("wire", "Wire transfer size", safeNullableByteLength(carrier.wireByteLength), "estimated", "transport"));
+  rows.push(memoryRow("wire", "Wire transfer size", null, "estimated", "transport"));
   rows.push(memoryRow("cache", "Cache accounting", safeNullableByteLength(carrier.cache?.byteLength), "estimated", "cache"));
   addBufferRow(rows, state, "values", "Decoded values", decoded?.values ?? null, "decoded-payload");
   addBufferRow(rows, state, "node-indices", "Decoded node indices", ArrayBuffer.isView(decoded?.nodeIndices) ? decoded.nodeIndices : null, "decoded-payload", decoded?.nodeIndices && !ArrayBuffer.isView(decoded.nodeIndices) ? decoded.nodeIndices.length * 8 : null);
@@ -389,6 +466,94 @@ function buildMemory(carrier: Viewport3DVisualizationDebugCarrierInput, state: B
     state.referencedByteLength = safeAddByteLength(state.referencedByteLength, topologyByteLength);
   }
   return Object.freeze(rows);
+}
+
+function compareResponseMetadata(
+  carrier: Viewport3DVisualizationDebugCarrierInput,
+): boolean | null {
+  const metadata = carrier.cache?.responseMetadata;
+  const decoded = carrier.decoded;
+  if (!metadata || !decoded) return null;
+  const expectedEncoding = `FMVP;version=${decoded.formatVersion}`;
+  if (
+    metadata.identityIssues.length > 0 ||
+    (metadata.component !== null &&
+      componentEvidenceIdentity(metadata.component) !==
+        componentEvidenceIdentity(carrier.requestedComponent)) ||
+    (metadata.encoding !== null && metadata.encoding !== expectedEncoding) ||
+    (carrier.requestedSnapshotId != null &&
+      metadata.snapshotId !== null &&
+      metadata.snapshotId !== carrier.requestedSnapshotId)
+  ) {
+    return false;
+  }
+  const complete =
+    metadata.component !== null &&
+    metadata.domainGenerationId !== null &&
+    metadata.encoding !== null &&
+    metadata.fieldIndexing !== null &&
+    metadata.fieldRevision !== null &&
+    metadata.meshTopologyHash !== null &&
+    metadata.nComp !== null &&
+    (decoded.indexing !== "explicit_node_indices" &&
+      decoded.indexing !== "sampled_node_indices" ||
+      metadata.nodeIndexCount !== null) &&
+    metadata.pointCount !== null &&
+    metadata.quantityId !== null &&
+    metadata.valueCount !== null &&
+    (carrier.requestedScopeKind === "full" ||
+      (metadata.scopeKind !== null && metadata.scopeId !== null)) &&
+    (carrier.requestedSnapshotId == null || metadata.snapshotId !== null);
+  return complete ? true : null;
+}
+
+function componentEvidenceIdentity(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  const aliases: Readonly<Record<string, string>> = {
+    abs_x: "abs_c0",
+    abs_y: "abs_c1",
+    abs_z: "abs_c2",
+    "expr:abs_x": "abs_c0",
+    "expr:abs_y": "abs_c1",
+    "expr:abs_z": "abs_c2",
+    "expr:m2": "magnitude_squared",
+    "expr:magnitude_squared": "magnitude_squared",
+    x: "c0",
+    y: "c1",
+    z: "c2",
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+function buildResponseMetadataIdentityIssues(
+  carrier: Viewport3DVisualizationDebugCarrierInput,
+): readonly VisualizationDebugIssue[] {
+  const issues: VisualizationDebugIssue[] = [];
+  for (const identityIssue of carrier.cache?.responseMetadata?.identityIssues ?? []) {
+    const code =
+      identityIssue.field === "valueCount"
+        ? "value-count-mismatch"
+        : identityIssue.field === "nodeIndexCount"
+          ? "node-index-count-mismatch"
+          : null;
+    if (!code) continue;
+    issues.push(
+      Object.freeze({
+        code,
+        evidence: Object.freeze([
+          `header=${String(identityIssue.headerValue)}`,
+          `payload=${String(identityIssue.payloadValue)}`,
+        ]),
+        message:
+          identityIssue.field === "valueCount"
+            ? "Response header value count differs from the decoded payload."
+            : "Response header node-index count differs from the decoded payload.",
+        severity: "error" as const,
+        source: "transport" as const,
+      }),
+    );
+  }
+  return Object.freeze(issues);
 }
 
 function addBufferRow(rows: VisualizationDebugMemoryRow[], state: BuildOwnershipState, id: string, label: string, view: ArrayBufferView | null, source: VisualizationDebugMemoryRow["source"], fallback: number | null = null): void {
@@ -418,6 +583,13 @@ function memoryRow(id: string, label: string, byteLength: number | null, ownersh
 
 function compareWhenKnown(left: string | null | undefined, right: string | null | undefined): boolean | null {
   return left == null || right == null ? null : left === right;
+}
+
+function knownIdentityMismatch(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  return left != null && right != null && left !== right;
 }
 
 function canonical(value: string): string { return value.trim().toLowerCase().replaceAll("-", "_"); }

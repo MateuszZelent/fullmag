@@ -21,6 +21,7 @@ import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualiz
 import {
   VisualizationDebugFieldMetaRegistry,
   VisualizationDebugPanelModelAdapter,
+  resolveVisualizationDebugFieldMetaRegistryValue,
   visualizationDebugFieldMetaHookInput,
   requestVisualizationDebugTarget,
 } from "./useVisualizationDebugPanelModel";
@@ -175,6 +176,36 @@ describe("useVisualizationDebugPanelModel", () => {
     expect(first.getSnapshot()).not.toBe(second.getSnapshot());
     release();
   });
+
+  it.each(["loading", "stale", "error"] as const)(
+    "clears retained ready field metadata when the exact resource becomes %s",
+    (status) => {
+      const registry = new VisualizationDebugFieldMetaRegistry();
+      const release = registry.retain("query-a");
+      const ready = {
+        components: 3,
+        domain_generation_id: "domain-1",
+        field_revision: 12,
+        kind: "vector",
+        label: "m",
+        location: "node",
+        quantity_id: "m",
+        stats: null,
+        unit: "A/m",
+      } satisfies FieldMetaResource;
+      registry.set("query-a", ready);
+      registry.set(
+        "query-a",
+        resolveVisualizationDebugFieldMetaRegistryValue({
+          data: ready,
+          status,
+        }),
+      );
+
+      expect(registry.getSnapshot().values.get("query-a")).toBeNull();
+      release();
+    },
+  );
 
   it("releases query data and subscriptions on query removal and dispose", () => {
     const registry = new VisualizationDebugFieldMetaRegistry();

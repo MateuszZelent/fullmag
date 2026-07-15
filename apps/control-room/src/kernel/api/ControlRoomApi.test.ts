@@ -3051,6 +3051,41 @@ describe("ControlRoomApi", () => {
     );
   });
 
+  it("records an exact terminal diagnostic when a successful binary response fails decoding", async () => {
+    const diagnostics = new RequestDiagnosticsController();
+    const invalid = makeFieldVectorBuffer();
+    new Uint8Array(invalid)[0] = "X".charCodeAt(0);
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      diagnostics,
+      fetchImpl: async () =>
+        binaryResponse(invalid, {
+          headers: { etag: '"bad-field"', ...contractHeaders },
+        }),
+      requestIdFactory: () => "req-decode-error",
+    });
+
+    await expect(api.data.fields.vector("m")).rejects.toThrow(
+      /Invalid FMVP magic/,
+    );
+
+    expect(diagnostics.list()).toContainEqual(
+      expect.objectContaining({
+        byteLength: invalid.byteLength,
+        detail: "binary decode failed",
+        direction: "rx",
+        outcome: "error",
+        path: "/v2/sessions/current/data/fields/m/samples/vector",
+        requestId: "binary-payload",
+        resourceKey: "/v2/sessions/current/data/fields/m/samples/vector",
+        status: 200,
+      }),
+    );
+    expect(JSON.stringify(diagnostics.list())).not.toContain(
+      "Invalid FMVP magic",
+    );
+  });
+
   it("patches visualization state through the typed v2 facade", async () => {
     let observedInit: RequestInit | undefined;
     let observedUrl = "";

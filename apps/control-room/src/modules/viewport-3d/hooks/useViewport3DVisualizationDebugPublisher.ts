@@ -9,6 +9,7 @@ import type {
 import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 import type { VisualizationTargetRef } from "@/kernel/visualization/ObjectVisualizationController";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { parseCanonicalFieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import {
   recordVisualizationDebugPublish,
   recordVisualizationDebugScan,
@@ -45,6 +46,8 @@ export interface Viewport3DVisualizationDebugCandidate {
     frame: Viewport3DVisualizationDebugFrameCommit;
     receipts: readonly Viewport3DRenderAdoptionReceipt[];
   }): VisualizationDebugSnapshot;
+  start?(): void;
+  subscribe?(listener: () => void): () => void;
 }
 
 export type Viewport3DVisualizationDebugCandidateBuilder = (input: {
@@ -58,6 +61,7 @@ export interface Viewport3DVisualizationDebugTargetSource {
 }
 
 export interface Viewport3DVisualizationDebugSource {
+  carrierRoles?: ReadonlyMap<string, string>;
   fieldModel: Viewport3DFieldRenderModel | null;
   fullFieldBufferIdentity?: {
     bufferId: string;
@@ -88,6 +92,7 @@ interface ActiveTarget {
   abortController: AbortController;
   candidate: Viewport3DVisualizationDebugCandidate | null;
   releaseAdoptionDemand: () => void;
+  releaseCandidateSubscription: () => void;
   revision: string;
   lastCommittedFrameId: string | null;
 }
@@ -127,6 +132,7 @@ export function createViewport3DVisualizationDebugPublisher({
     if (!current) return;
     active.delete(targetId);
     pendingAdoptionTargetIds.delete(targetId);
+    current.releaseCandidateSubscription();
     current.abortController.abort();
     current.releaseAdoptionDemand();
     adoptionRegistry.clearTarget(targetId);
@@ -146,11 +152,11 @@ export function createViewport3DVisualizationDebugPublisher({
       abortController,
       candidate: null,
       releaseAdoptionDemand: adoptionRegistry.retainDemand(targetId),
+      releaseCandidateSubscription: () => undefined,
       revision,
       lastCommittedFrameId: null,
     };
     active.set(targetId, state);
-    recordVisualizationDebugScan();
     void buildCandidate({ signal: abortController.signal, targetId })
       .then((candidate) => {
         if (
@@ -162,6 +168,19 @@ export function createViewport3DVisualizationDebugPublisher({
           return;
         }
         state.candidate = candidate;
+        state.releaseCandidateSubscription =
+          candidate.subscribe?.(() => {
+            if (
+              disposed ||
+              abortController.signal.aborted ||
+              active.get(targetId) !== state ||
+              !lastFrame
+            ) {
+              return;
+            }
+            state.lastCommittedFrameId = null;
+            commitTarget(targetId, state, lastFrame);
+          }) ?? (() => undefined);
         state.lastCommittedFrameId = null;
         if (lastFrame) commitTarget(targetId, state, lastFrame);
       })
@@ -193,6 +212,7 @@ export function createViewport3DVisualizationDebugPublisher({
       }),
     );
     state.lastCommittedFrameId = frame.commitId;
+    state.candidate.start?.();
   };
   const unsubscribeAdoption = adoptionRegistry.subscribe((targetId) => {
     if (disposed || !lastFrame || !active.has(targetId)) return;
@@ -363,9 +383,13 @@ export function groupViewport3DVisualizationDebugCarriers({
 }
 
 export function createViewport3DVisualizationDebugCandidateBuilder({
+  recordScan = recordVisualizationDebugScan,
+  scanStatistics = scanFieldVectorDebugStatistics,
   source,
   viewportId,
 }: {
+  recordScan?: () => void;
+  scanStatistics?: typeof scanFieldVectorDebugStatistics;
   source: Viewport3DVisualizationDebugSource;
   viewportId: string;
 }): Viewport3DVisualizationDebugCandidateBuilder {
@@ -376,15 +400,25 @@ export function createViewport3DVisualizationDebugCandidateBuilder({
       ? resolveCarrierSources(source, targetSource)
       : [];
     const scannedStats = new Map<string, Awaited<ReturnType<typeof scanFieldVectorDebugStatistics>>>();
+    const scanBuffers = new Map<string, Viewport3DTargetFieldBufferSource>();
     for (const carrier of carrierSources) {
-    const fieldBuffer = carrier.pass.fieldBuffer ?? carrier.fullFieldBuffer;
-      if (!fieldBuffer || scannedStats.has(fieldBuffer.bufferId)) continue;
-      scannedStats.set(
-        fieldBuffer.bufferId,
-        await scanFieldVectorDebugStatistics(fieldBuffer.values, { signal }),
-      );
+      const fieldBuffer = carrier.pass.fieldBuffer ?? carrier.fullFieldBuffer;
+      if (
+        !fieldBuffer ||
+        scanBuffers.has(fieldBuffer.bufferId) ||
+        hasExactRangeDiagnostics(carrier.pass)
+      ) {
+        continue;
+      }
+      scanBuffers.set(fieldBuffer.bufferId, fieldBuffer);
     }
-    if (signal.aborted) throw new DOMException("The debug scan was aborted.", "AbortError");
+    let scanState: Viewport3DVisualizationDebugCarrierInput["scanState"] =
+      scanBuffers.size > 0 ? "scanning" : "complete";
+    let started = false;
+    const listeners = new Set<() => void>();
+    const notify = () => {
+      for (const listener of [...listeners]) listener();
+    };
 
     return {
       materialize: ({ frame, receipts }) => {
@@ -400,6 +434,12 @@ export function createViewport3DVisualizationDebugCandidateBuilder({
             carrierId,
             fieldBuffer,
             pass,
+            scanState:
+              fieldBuffer && scanBuffers.has(fieldBuffer.bufferId)
+                ? scanState
+                : fieldBuffer
+                  ? "complete"
+                  : "unavailable",
             scannedStats: fieldBuffer ? scannedStats.get(fieldBuffer.bufferId) ?? null : null,
             source,
             surfaceReceipt,
@@ -427,8 +467,43 @@ export function createViewport3DVisualizationDebugCandidateBuilder({
           webglSharedByteLength: source.webglSharedByteLength,
         });
       },
+      start() {
+        if (started || scanBuffers.size === 0 || signal.aborted) return;
+        started = true;
+        void Promise.all(
+          [...scanBuffers.values()].map(async (fieldBuffer) => {
+            recordScan();
+            const stats = await scanStatistics(fieldBuffer.values, { signal });
+            scannedStats.set(fieldBuffer.bufferId, stats);
+          }),
+        )
+          .then(() => {
+            if (signal.aborted) return;
+            scanState = "complete";
+            notify();
+          })
+          .catch((error: unknown) => {
+            scanState = "cancelled";
+            notify();
+            if (!signal.aborted && !isAbortError(error)) return;
+          });
+      },
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
     };
   };
+}
+
+function hasExactRangeDiagnostics(
+  pass: Viewport3DTargetRenderPassModel,
+): boolean {
+  const scalarColors = pass.surface.scalarColors;
+  return Boolean(
+    scalarColors?.rangeDiagnostics &&
+      scalarColors.colorMode === pass.surface.scalarColorMode,
+  );
 }
 
 function appendUnique(
@@ -486,6 +561,8 @@ function targetFieldBufferSourceFromDecoded(
     component: fieldVector.nComp > 1 ? "full" : "magnitude",
     componentCount: fieldVector.nComp,
     consumers: Object.freeze([]),
+    currentDomainGenerationId: null,
+    currentMeshTopologyHash: null,
     decodedFieldVector: fieldVector,
     domainGenerationId: null,
     fieldRevision: null,
@@ -510,6 +587,7 @@ function buildCarrierInput({
   carrierId,
   fieldBuffer,
   pass,
+  scanState,
   scannedStats,
   source,
   surfaceReceipt,
@@ -518,13 +596,20 @@ function buildCarrierInput({
   carrierId: string;
   fieldBuffer: Viewport3DTargetFieldBufferSource | null;
   pass: Viewport3DTargetRenderPassModel;
+  scanState: Viewport3DVisualizationDebugCarrierInput["scanState"];
   scannedStats: Awaited<ReturnType<typeof scanFieldVectorDebugStatistics>> | null;
   source: Viewport3DVisualizationDebugSource;
   surfaceReceipt: Viewport3DRenderAdoptionReceipt | undefined;
   vectorReceipt: Viewport3DRenderAdoptionReceipt | undefined;
 }): Viewport3DVisualizationDebugCarrierInput {
   const resourceKey = fieldBuffer?.resourceKey ?? null;
+  const requestedQuery = resourceKey
+    ? parseCanonicalFieldVectorResourceKey(resourceKey)
+    : null;
   const scalarColors = pass.surface.scalarColors;
+  const cache = resourceKey
+    ? getViewport3DFieldVectorCacheEntryDiagnostics(resourceKey)
+    : null;
   return {
     adoptedFieldBufferId:
       surfaceReceipt?.fieldBufferId ?? vectorReceipt?.fieldBufferId ?? null,
@@ -533,44 +618,68 @@ function buildCarrierInput({
     adoptedScalarBufferKey: surfaceReceipt?.scalarBufferKey ?? null,
     adoptedVectorBuildKey: vectorReceipt?.vectorBuildKey ?? null,
     adoptedVectorItemCount: vectorReceipt?.itemCount ?? null,
-    cache: resourceKey
-      ? getViewport3DFieldVectorCacheEntryDiagnostics(resourceKey)
-      : null,
+    cache,
     carrierId,
-    carrierRole: carrierId === "fdm-domain" ? "fdm-domain" : carrierId,
+    carrierRole:
+      source.carrierRoles?.get(carrierId) ??
+      (carrierId === "fdm-domain" ? "fdm-domain" : "unknown"),
     decoded: fieldBuffer ? decodedFieldBuffer(fieldBuffer) : null,
-    expectedDomainGenerationId: fieldBuffer?.domainGenerationId ?? null,
-    expectedFieldRevision: fieldBuffer?.fieldRevision ?? null,
-    expectedTopologyHash: fieldBuffer?.meshTopologyHash ?? null,
+    expectedDomainGenerationId:
+      fieldBuffer?.currentDomainGenerationId ?? null,
+    expectedTopologyHash: fieldBuffer?.currentMeshTopologyHash ?? null,
     fieldBufferId: fieldBuffer?.bufferId ?? null,
     fieldBufferState: pass.fieldBufferState,
-    fieldRevision: fieldBuffer?.fieldRevision ?? null,
+    fieldRevision: cache?.responseMetadata?.fieldRevision ?? null,
     geometryMaskDescription:
       carrierId === "fdm-domain" ? "logical target geometry mask" : null,
     plannerRequestId: fieldBuffer?.requestId ?? null,
     rangeDiagnostics: scalarColors?.rangeDiagnostics ?? null,
     rangeDiagnosticsComponent: scalarColors?.colorMode ?? null,
     renderedComponent: pass.surface.scalarColorMode,
-    requestedComponent: fieldBuffer?.component ?? scalarColors?.colorMode ?? "full",
+    requestIdentityKnown: requestedQuery !== null,
+    requestedComponent:
+      requestedQuery?.component ??
+      fieldBuffer?.component ??
+      scalarColors?.colorMode ??
+      "full",
     requestedPasses: [
       ...(pass.surface.scalarColorMode ? (["surface"] as const) : []),
-      ...(pass.vectors.segments ? (["vector-glyph"] as const) : []),
+      ...(pass.vectors.buildReference ||
+      pass.vectors.segments ||
+      pass.vectors.degradation
+        ? (["vector-glyph"] as const)
+        : []),
     ],
-    requestedQuantityId: fieldBuffer?.quantityId ?? scalarColors?.quantityId ?? "unknown",
-    requestedScopeId: fieldBuffer?.scopeId ?? null,
-    requestedScopeKind: fieldBuffer?.scopeKind ?? "full",
+    requestedQuantityId:
+      requestedQuery?.quantityId ??
+      fieldBuffer?.quantityId ??
+      scalarColors?.quantityId ??
+      "unknown",
+    requestedScopeId: requestedQuery
+      ? requestedQuery.scopeId ?? null
+      : fieldBuffer?.scopeId ?? null,
+    requestedScopeKind:
+      requestedQuery?.scopeKind ?? fieldBuffer?.scopeKind ?? "full",
+    requestedSnapshotId: requestedQuery?.snapshotId ?? null,
     resourceKey,
     scalarBufferByteLength: scalarColors?.colors.byteLength ?? null,
     scalarBufferKey: scalarColors?.buildKey ?? null,
+    scanState,
     scannedStats,
+    surfaceDegradation: pass.surface.degradation,
+    surfaceProjectionMode: pass.surface.projectionMode ?? null,
+    surfaceAdoptedFieldBufferId: surfaceReceipt?.fieldBufferId ?? null,
+    surfaceAdoptedResourceKey: surfaceReceipt?.resourceKey ?? null,
     topologyByteLength: source.topologyByteLength,
     vectorBuildKey: pass.vectors.buildReference?.buildKey ?? null,
+    vectorDegradation: pass.vectors.degradation,
+    vectorAdoptedFieldBufferId: vectorReceipt?.fieldBufferId ?? null,
+    vectorAdoptedResourceKey: vectorReceipt?.resourceKey ?? null,
     vectorSegmentByteLength: pass.vectors.segments?.byteLength ?? null,
     vectorSegmentCount: pass.vectors.segments
       ? Math.floor(pass.vectors.segments.length / 7)
       : null,
     webglSharedByteLength: source.webglSharedByteLength,
-    wireByteLength: fieldBuffer?.values.byteLength ?? null,
   };
 }
 

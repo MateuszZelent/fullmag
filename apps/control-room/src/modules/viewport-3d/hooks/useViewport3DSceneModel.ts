@@ -4016,6 +4016,12 @@ export function useViewport3DSceneModel({
   ]);
   const visualizationDebugSource = useMemo(
     () => ({
+      carrierRoles: new Map(
+        [...femDomain.partsById].map(([carrierId, part]) => [
+          carrierId,
+          part.role,
+        ]),
+      ),
       fieldModel: fieldRenderModel,
       fullFieldBufferIdentity: fdmFieldVector
         ? {
@@ -4040,6 +4046,7 @@ export function useViewport3DSceneModel({
       fdmDomain,
       fdmFieldVector,
       fdmSettings.activeQuantityId,
+      femDomain.partsById,
       fieldRenderModel,
       fieldVectorResourceKey,
       primaryFieldQuantityId,

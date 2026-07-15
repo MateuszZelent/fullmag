@@ -184,6 +184,7 @@ function snapshot({
 function diagnostic(
   resourceKey: string,
   timestampMs: number,
+  overrides: Partial<RequestDiagnosticEntry> = {},
 ): RequestDiagnosticEntry {
   return {
     byteLength: 10,
@@ -202,6 +203,7 @@ function diagnostic(
     resourceKey,
     status: 200,
     timestampMs,
+    ...overrides,
   };
 }
 
@@ -503,6 +505,155 @@ describe("VisualizationDebugPanelModel", () => {
     expect(model.transport.every((item) => item.resourceKey === exact)).toBe(true);
   });
 
+  it("uses only the newest terminal exact transport outcome for composite health", () => {
+    const exact = carrier().request.resourceKey!;
+    const query = resolveVisualizationDebugCarrierQuery(carrier())!;
+    const build = (diagnostics: RequestDiagnosticEntry[]) =>
+      buildVisualizationDebugPanelModel({
+        activeViewportMainModuleId: "viewport-3d",
+        clientAcks: null,
+        diagnostics,
+        fieldMetaByQueryKey: new Map([[query.metaQueryKey, backendMeta(12)]]),
+        selection: selection({ kind: "object", objectId: "magnet" }),
+        snapshots: [snapshot()],
+      });
+    const decodeError = diagnostic(exact, 20, {
+      detail: "binary decode failed",
+      outcome: "error",
+      status: 200,
+    });
+    const olderSuccess = diagnostic(exact, 10, {
+      detail: "decoded binary payload",
+      outcome: "ok",
+    });
+    const blocked = build([olderSuccess, decodeError]);
+
+    expect(blocked.disposition).toBe("blocked");
+    expect(blocked.issues).toContainEqual(
+      expect.objectContaining({ code: "field-request-error" }),
+    );
+
+    const recovered = build([
+      decodeError,
+      diagnostic(exact, 30, {
+        detail: "decoded binary payload",
+        outcome: "ok",
+      }),
+      diagnostic(exact, 40, {
+        detail: "attempt 1",
+        direction: "tx",
+        outcome: "sent",
+        status: null,
+      }),
+    ]);
+    expect(recovered.disposition).toBe("ready");
+    expect(recovered.issues).not.toContainEqual(
+      expect.objectContaining({ code: "field-request-error" }),
+    );
+  });
+
+  it("derives backend range and exact wire/cache evidence at the panel join", () => {
+    const exactCarrier = carrier();
+    const exact = exactCarrier.request.resourceKey!;
+    const query = resolveVisualizationDebugCarrierQuery(exactCarrier)!;
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [
+        diagnostic(exact, 20, {
+          byteLength: 999,
+          detail: "decoded binary payload",
+        }),
+      ],
+      fieldMetaByQueryKey: new Map([
+        [
+          query.metaQueryKey,
+          { ...backendMeta(12), stats: { max: 30, mean: 20, min: 10 } },
+        ],
+      ]),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot()],
+    });
+
+    expect(model.disposition).toBe("degraded");
+    expect(model.issues).toContainEqual(
+      expect.objectContaining({ code: "backend-render-range-mismatch" }),
+    );
+    expect(model.issues).toContainEqual(
+      expect.objectContaining({ code: "transport-cache-byte-mismatch" }),
+    );
+    expect(
+      model.viewports[0]?.carriers[0]?.observations[0]?.wireByteLength,
+    ).toBe(999);
+  });
+
+  it("does not compare aggregated transport bytes or full-vector backend stats to a derived surface", () => {
+    const exactCarrier = carrier({ component: "x" });
+    const fullQueryCarrier = carrier();
+    fullQueryCarrier.render = {
+      ...fullQueryCarrier.render,
+      surface: { ...fullQueryCarrier.render.surface, colorMode: "x" },
+    };
+    const exact = fullQueryCarrier.request.resourceKey!;
+    const query = resolveVisualizationDebugCarrierQuery(fullQueryCarrier)!;
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [
+        diagnostic(exact, 20, {
+          byteLength: 1024,
+          detail: "decoded binary payload (x2 over 1ms)",
+        }),
+      ],
+      fieldMetaByQueryKey: new Map([[query.metaQueryKey, backendMeta(12)]]),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot({ carriers: [fullQueryCarrier] })],
+    });
+
+    expect(exactCarrier.render.surface.colorMode).toBe("x");
+    expect(model.issues).not.toContainEqual(
+      expect.objectContaining({ code: "backend-render-range-mismatch" }),
+    );
+    expect(model.issues).not.toContainEqual(
+      expect.objectContaining({ code: "transport-cache-byte-mismatch" }),
+    );
+    expect(
+      model.viewports[0]?.carriers[0]?.observations[0]?.wireByteLength,
+    ).toBeNull();
+  });
+
+  it("keeps composite health unknown without fresh exact backend metadata", () => {
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map(),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot()],
+    });
+
+    expect(model.disposition).toBe("unknown");
+  });
+
+  it("compares the physical response field revision without treating ETag as that revision", () => {
+    const exactCarrier = carrier();
+    exactCarrier.cache = { ...exactCarrier.cache, etag: '"opaque-etag"' };
+    const query = resolveVisualizationDebugCarrierQuery(exactCarrier)!;
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map([[query.metaQueryKey, backendMeta(12)]]),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot({ carriers: [exactCarrier] })],
+    });
+
+    expect(model.disposition).toBe("ready");
+    expect(model.issues).not.toContainEqual(
+      expect.objectContaining({ code: "field-revision-stale" }),
+    );
+  });
+
   it("compares backend and render ranges only with exact component and adopted surface evidence", () => {
     const base = buildVisualizationDebugPanelModel({
       activeViewportMainModuleId: "viewport-3d",
@@ -692,6 +843,15 @@ describe("VisualizationDebugPanelModel", () => {
       {
         backendMeta: { ...backendMeta(12), quantity_id: "H_demag" },
         carrier: legacyCarrier,
+      },
+      {
+        backendMeta: backendMeta(12),
+        carrier: {
+          ...legacyCarrier,
+          payload: legacyCarrier.payload
+            ? { ...legacyCarrier.payload, scopeId: "other" }
+            : null,
+        },
       },
       {
         backendMeta: backendMeta(12),

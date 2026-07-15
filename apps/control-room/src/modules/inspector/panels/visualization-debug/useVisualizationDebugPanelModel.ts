@@ -282,10 +282,19 @@ function VisualizationDebugFieldMetaObserver({
     visualizationDebugFieldMetaHookInput(query),
   );
   useEffect(() => {
-    if (resource.status !== "ready") return;
-    registry.set(query.metaQueryKey, resource.data);
+    registry.set(
+      query.metaQueryKey,
+      resolveVisualizationDebugFieldMetaRegistryValue(resource),
+    );
   }, [query.metaQueryKey, registry, resource.data, resource.status]);
   return null;
+}
+
+export function resolveVisualizationDebugFieldMetaRegistryValue(resource: {
+  data: FieldMetaResource | null;
+  status: string;
+}): FieldMetaResource | null {
+  return resource.status === "ready" ? resource.data : null;
 }
 
 export function visualizationDebugFieldMetaHookInput(

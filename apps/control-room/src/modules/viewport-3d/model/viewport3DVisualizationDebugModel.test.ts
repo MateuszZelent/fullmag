@@ -34,18 +34,41 @@ function carrier(overrides: Partial<Viewport3DVisualizationDebugCarrierInput> = 
     adoptedFieldBufferId: "buffer-1",
     adoptedScalarBufferKey: "scalar-1",
     adoptedVectorBuildKey: "vector-1",
-    cache: { byteLength: 240, entryState: "ready", etag: "etag-1", key: "resource-1", responseMetadata: null, retainCount: 1 },
+    cache: {
+      byteLength: 240,
+      entryState: "ready",
+      etag: "etag-1",
+      key: "resource-1",
+      responseMetadata: {
+        component: "full",
+        domainGenerationId: "domain-1",
+        encoding: "FMVP;version=3",
+        fieldIndexing: "explicit_node_indices",
+        fieldRevision: "field-1",
+        identityIssues: [],
+        meshTopologyHash: "topology-hash",
+        nComp: 3,
+        nodeIndexCount: 2,
+        pointCount: 2,
+        quantityId: "H_demag",
+        scopeId: "airbox",
+        scopeKind: "airbox",
+        snapshotId: null,
+        valueCount: 6,
+      },
+      retainCount: 1,
+    },
     carrierId: "part:__air__",
     carrierRole: "air",
     decoded,
     expectedDomainGenerationId: "domain-1",
-    expectedFieldRevision: "field-1",
     expectedTopologyHash: "topology-hash",
     fieldBufferId: "buffer-1",
     fieldBufferState: "target-buffer",
     fieldRevision: "field-1",
     plannerRequestId: "request-1",
     renderedComponent: "full",
+    requestIdentityKnown: true,
     requestedComponent: "full",
     requestedPasses: ["surface", "vector-glyph"],
     requestedQuantityId: "H_demag",
@@ -54,11 +77,29 @@ function carrier(overrides: Partial<Viewport3DVisualizationDebugCarrierInput> = 
     resourceKey: "resource-1",
     scalarBufferByteLength: 24,
     scalarBufferKey: "scalar-1",
+    scanState: "complete",
+    scannedStats: {
+      finiteCount: 6,
+      max: 6,
+      mean: 3.5,
+      min: 1,
+      nonFiniteCount: 0,
+      p01: 1,
+      p99: 6,
+      source: "decoded-payload",
+      zeroCount: 0,
+    },
+    surfaceDegradation: null,
+    surfaceProjectionMode: "magnitude",
+    surfaceAdoptedFieldBufferId: "buffer-1",
+    surfaceAdoptedResourceKey: "resource-1",
     topologyByteLength: 900,
     vectorBuildKey: "vector-1",
+    vectorDegradation: null,
+    vectorAdoptedFieldBufferId: "buffer-1",
+    vectorAdoptedResourceKey: "resource-1",
     vectorSegmentByteLength: 48,
     vectorSegmentCount: 2,
-    wireByteLength: 260,
     ...overrides,
   };
 }
@@ -81,12 +122,186 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     expect(result.target).toEqual({ carrierIds: ["part:__air__"], id: "airbox", kind: "airbox", label: "airbox" });
     expect(result.disposition).toBe("ready");
     expect(result.carriers[0]?.memory.map((row) => [row.id, row.byteLength, row.ownership])).toEqual([
-      ["wire", 260, "estimated"], ["cache", 240, "estimated"], ["values", 48, "owned"], ["node-indices", 8, "owned"],
+      ["wire", null, "estimated"], ["cache", 240, "estimated"], ["values", 48, "owned"], ["node-indices", 8, "owned"],
       ["scalar-buffer", 24, "owned"], ["vector-segments", 48, "owned"], ["topology", 900, "referenced"],
     ]);
     expect(Object.isFrozen(result.carriers)).toBe(true);
     expect(Object.isFrozen(result.carriers[0]!.memory)).toBe(true);
     expect(JSON.stringify(result).length).toBeLessThan(64 * 1024);
+  });
+
+  it.each([
+    ["actual field revision", { fieldRevision: null }],
+    ["current domain generation", { expectedDomainGenerationId: null }],
+    ["current topology hash", { expectedTopologyHash: null }],
+    [
+      "response metadata",
+      {
+        cache: {
+          byteLength: 240,
+          entryState: "ready" as const,
+          etag: "etag-1",
+          key: "resource-1",
+          responseMetadata: null,
+          retainCount: 1,
+        },
+      },
+    ],
+  ] as const)("keeps missing required %s proof unknown", (_label, overrides) => {
+    const result = snapshot([carrier(overrides)]);
+    expect(result.disposition).toBe("unknown");
+  });
+
+  it("keeps an all-null FMVP v3 response-metadata shell unknown", () => {
+    const result = snapshot([
+      carrier({
+        cache: {
+          byteLength: 240,
+          entryState: "ready",
+          etag: "etag-1",
+          key: "resource-1",
+          responseMetadata: {
+            component: null,
+            domainGenerationId: null,
+            encoding: null,
+            fieldIndexing: null,
+            fieldRevision: null,
+            identityIssues: [],
+            meshTopologyHash: null,
+            nComp: null,
+            nodeIndexCount: null,
+            pointCount: null,
+            quantityId: null,
+            scopeId: null,
+            scopeKind: null,
+            snapshotId: null,
+            valueCount: null,
+          },
+          retainCount: 1,
+        },
+      }),
+    ]);
+
+    expect(result.disposition).toBe("unknown");
+    expect(result.issues).not.toContainEqual(
+      expect.objectContaining({ code: "response-metadata-mismatch" }),
+    );
+  });
+
+  it("accepts legal full-domain metadata without scoped or node-index headers", () => {
+    const decoded = field("full", null);
+    decoded.indexing = "full_domain";
+    decoded.nodeIndices = null;
+    const result = snapshot([
+      carrier({
+        cache: {
+          ...carrier().cache!,
+          responseMetadata: {
+            ...carrier().cache!.responseMetadata!,
+            fieldIndexing: "full_domain",
+            nodeIndexCount: null,
+            scopeId: null,
+            scopeKind: null,
+          },
+        },
+        decoded,
+        requestedScopeId: null,
+        requestedScopeKind: "full",
+      }),
+    ]);
+
+    expect(result.disposition).toBe("ready");
+  });
+
+  it("accepts semantic component aliases but blocks a known component mismatch", () => {
+    const matching = snapshot([
+      carrier({
+        cache: {
+          ...carrier().cache!,
+          responseMetadata: {
+            ...carrier().cache!.responseMetadata!,
+            component: "c0",
+          },
+        },
+        renderedComponent: "x",
+        requestedComponent: "x",
+      }),
+    ]);
+    const mismatching = snapshot([
+      carrier({
+        cache: {
+          ...carrier().cache!,
+          responseMetadata: {
+            ...carrier().cache!.responseMetadata!,
+            component: "c1",
+          },
+        },
+        renderedComponent: "x",
+        requestedComponent: "x",
+      }),
+    ]);
+
+    expect(matching.disposition).toBe("ready");
+    expect(mismatching.disposition).toBe("blocked");
+    expect(mismatching.issues).toContainEqual(
+      expect.objectContaining({ code: "response-metadata-mismatch" }),
+    );
+  });
+
+  it("blocks a known response encoding mismatch", () => {
+    const result = snapshot([
+      carrier({
+        cache: {
+          ...carrier().cache!,
+          responseMetadata: {
+            ...carrier().cache!.responseMetadata!,
+            encoding: "FMVP;version=2",
+          },
+        },
+      }),
+    ]);
+
+    expect(result.disposition).toBe("blocked");
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({ code: "response-metadata-mismatch" }),
+    );
+  });
+
+  it.each([
+    ["valueCount", "value-count-mismatch"],
+    ["nodeIndexCount", "node-index-count-mismatch"],
+  ] as const)(
+    "maps a production response-metadata %s identity issue to its specific health code",
+    (fieldName, issueCode) => {
+      const result = snapshot([
+        carrier({
+          cache: {
+            ...carrier().cache!,
+            responseMetadata: {
+              ...carrier().cache!.responseMetadata!,
+              identityIssues: [
+                { field: fieldName, headerValue: 999, payloadValue: 6 },
+              ],
+            },
+          },
+        }),
+      ]);
+
+      expect(result.disposition).toBe("blocked");
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ code: issueCode }),
+      );
+    },
+  );
+
+  it("keeps optional range and outlier comparisons non-blocking", () => {
+    const result = snapshot([
+      carrier({
+        rangeDiagnostics: null,
+      }),
+    ]);
+
+    expect(result.disposition).toBe("ready");
   });
 
   it.each(["object", "region"] as const)("builds a scoped %s target", (kind) => {
@@ -151,6 +366,10 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     };
     const result = snapshot([
       carrier({
+        cache: {
+          ...carrier().cache!,
+          responseMetadata: null,
+        },
         decoded: legacyField,
         expectedDomainGenerationId: null,
         expectedTopologyHash: null,
@@ -176,6 +395,150 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     );
   });
 
+  it("evaluates a known decoded scope id independently of an unknown scope kind", () => {
+    const mismatching = snapshot([
+      carrier({
+        decoded: field(null, "other"),
+        requestedScopeId: "airbox",
+        requestedScopeKind: "airbox",
+      }),
+    ]);
+    const unknown = snapshot([
+      carrier({
+        decoded: field(null, null),
+        requestedScopeId: "airbox",
+        requestedScopeKind: "airbox",
+      }),
+    ]);
+
+    expect(mismatching.disposition).toBe("blocked");
+    expect(mismatching.issues).toContainEqual(
+      expect.objectContaining({ code: "scope-id-mismatch" }),
+    );
+    expect(unknown.disposition).toBe("unknown");
+    expect(unknown.issues).not.toContainEqual(
+      expect.objectContaining({ code: "scope-id-mismatch" }),
+    );
+  });
+
+  it("requires separate matching adoption evidence for every requested render pass", () => {
+    const missing = snapshot([
+      carrier({
+        adoptedFieldBufferId: null,
+        adoptedScalarBufferKey: null,
+        adoptedVectorBuildKey: null,
+        surfaceAdoptedFieldBufferId: null,
+        surfaceAdoptedResourceKey: null,
+        vectorAdoptedFieldBufferId: null,
+        vectorAdoptedResourceKey: null,
+      }),
+    ]);
+    const surfaceOnly = snapshot([
+      carrier({
+        adoptedVectorBuildKey: null,
+        vectorAdoptedFieldBufferId: null,
+        vectorAdoptedResourceKey: null,
+      }),
+    ]);
+    const vectorOnly = snapshot([
+      carrier({
+        adoptedScalarBufferKey: null,
+        surfaceAdoptedFieldBufferId: null,
+        surfaceAdoptedResourceKey: null,
+      }),
+    ]);
+    const matching = snapshot([carrier()]);
+    const mismatching = snapshot([
+      carrier({ adoptedVectorBuildKey: "other-vector" }),
+    ]);
+    const partialKnownMismatch = snapshot([
+      carrier({
+        adoptedScalarBufferKey: null,
+        surfaceAdoptedFieldBufferId: null,
+        surfaceAdoptedResourceKey: null,
+        vectorAdoptedFieldBufferId: "other-buffer",
+      }),
+    ]);
+
+    for (const incomplete of [missing, surfaceOnly, vectorOnly]) {
+      expect(incomplete.disposition).toBe("unknown");
+      expect(incomplete.issues).not.toContainEqual(
+        expect.objectContaining({ code: "adopted-source-mismatch" }),
+      );
+    }
+    expect(matching.disposition).toBe("ready");
+    expect(mismatching.disposition).toBe("degraded");
+    expect(mismatching.issues).toContainEqual(
+      expect.objectContaining({ code: "adopted-source-mismatch" }),
+    );
+    expect(partialKnownMismatch.disposition).toBe("degraded");
+    expect(partialKnownMismatch.issues).toContainEqual(
+      expect.objectContaining({ code: "adopted-source-mismatch" }),
+    );
+  });
+
+  it.each([
+    [
+      "surface field",
+      {
+        adoptedScalarBufferKey: null,
+        requestedPasses: ["surface"],
+        surfaceAdoptedFieldBufferId: "other-buffer",
+      },
+    ],
+    [
+      "surface scalar key",
+      {
+        adoptedScalarBufferKey: "other-scalar",
+        requestedPasses: ["surface"],
+        surfaceAdoptedFieldBufferId: null,
+      },
+    ],
+    [
+      "surface resource",
+      {
+        adoptedScalarBufferKey: null,
+        requestedPasses: ["surface"],
+        surfaceAdoptedFieldBufferId: null,
+        surfaceAdoptedResourceKey: "other-resource",
+      },
+    ],
+    [
+      "vector field",
+      {
+        adoptedVectorBuildKey: null,
+        requestedPasses: ["vector-glyph"],
+        vectorAdoptedFieldBufferId: "other-buffer",
+      },
+    ],
+    [
+      "vector build key",
+      {
+        adoptedVectorBuildKey: "other-vector",
+        requestedPasses: ["vector-glyph"],
+        vectorAdoptedFieldBufferId: null,
+      },
+    ],
+    [
+      "vector resource",
+      {
+        adoptedVectorBuildKey: null,
+        requestedPasses: ["vector-glyph"],
+        vectorAdoptedFieldBufferId: null,
+        vectorAdoptedResourceKey: "other-resource",
+      },
+    ],
+  ] as const)(
+    "does not hide a known %s mismatch behind missing same-pass proof",
+    (_label, overrides) => {
+      const result = snapshot([carrier(overrides)]);
+      expect(result.disposition).toBe("degraded");
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ code: "adopted-source-mismatch" }),
+      );
+    },
+  );
+
   it("treats a synthetic render field buffer as present without calling it decoded FMVP", () => {
     const result = snapshot([
       carrier({
@@ -186,6 +549,7 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
         requestedPasses: ["vector-glyph"],
         scalarBufferByteLength: null,
         scalarBufferKey: null,
+        vectorAdoptedFieldBufferId: "synthetic:airbox:vectors",
       }),
     ]);
 
@@ -206,7 +570,7 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
   });
 
   it("does not count shared bytes as owned and preserves unknown attribution as null", () => {
-    const result = snapshot([carrier({ cache: null, topologyByteLength: null, webglSharedByteLength: null, wireByteLength: null })]);
+    const result = snapshot([carrier({ cache: null, topologyByteLength: null, webglSharedByteLength: null })]);
     expect(result.carriers[0]?.memory).toContainEqual(expect.objectContaining({ id: "wire", byteLength: null }));
     expect(result.ownedByteLength).toBe(128);
     expect(result.sharedMemory).toContainEqual(expect.objectContaining({ id: "webgl", byteLength: null, ownership: "shared" }));
@@ -246,8 +610,8 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
       p99: 6,
       zeroCount: 0,
     };
-    const matching = snapshot([carrier({ rangeDiagnostics, rangeDiagnosticsComponent: "full" })]);
-    const mismatching = snapshot([carrier({ rangeDiagnostics, rangeDiagnosticsComponent: "x" })]);
+    const matching = snapshot([carrier({ rangeDiagnostics, rangeDiagnosticsComponent: "full", scannedStats: null })]);
+    const mismatching = snapshot([carrier({ rangeDiagnostics, rangeDiagnosticsComponent: "x", scannedStats: null })]);
     expect(matching.carriers[0]?.statistics).toContainEqual(expect.objectContaining({ source: "render-derived" }));
     expect(mismatching.carriers[0]?.statistics).toEqual([]);
     expect(mismatching.carriers[0]?.scanState).toBe("idle");
@@ -269,7 +633,6 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
       adoptedFieldBufferId: "wrong",
       decoded: field("part", "other"),
       fieldBufferId: null,
-      fieldRequestError: true,
       requestedPasses: Array.from({ length: 100 }, (_, index) => index % 2 ? "surface" : "vector-glyph"),
     });
     const result = snapshot(Array.from({ length: 8 }, (_, index) => ({ ...broken, carrierId: `part:${index}` })));
@@ -285,9 +648,16 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
       decoded: null,
       fieldBufferState: "missing",
       requestedPasses: [],
+      surfaceAdoptedFieldBufferId: null,
+      surfaceAdoptedResourceKey: null,
+      vectorAdoptedFieldBufferId: null,
+      vectorAdoptedResourceKey: null,
     })]);
     expect(result.issues).not.toContainEqual(expect.objectContaining({ code: "field-buffer-missing" }));
-    expect(result.disposition).not.toBe("blocked");
+    expect(result.issues).not.toContainEqual(
+      expect.objectContaining({ code: "adopted-source-mismatch" }),
+    );
+    expect(result.disposition).toBe("unknown");
   });
 
   it("normalizes unsafe numeric input and emits a deterministic bounded UTF-8 fallback", () => {

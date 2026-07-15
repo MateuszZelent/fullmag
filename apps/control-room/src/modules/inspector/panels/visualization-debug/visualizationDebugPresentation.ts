@@ -177,11 +177,24 @@ export function statisticsRows(
   });
 }
 
-export function memoryGroups(snapshots: readonly VisualizationDebugSnapshot[]) {
+export function memoryGroups(model: VisualizationDebugPanelModel) {
+  const snapshots = uniqueSnapshots(model);
   const rows = snapshots.flatMap((snapshot) => [
     ...snapshot.sharedMemory,
     ...snapshot.carriers.flatMap((carrier) => carrier.memory),
-  ]);
+  ]).concat(
+    allObservations(model).flatMap((observation) =>
+      observation.wireByteLength === null
+        ? []
+        : [{
+            byteLength: observation.wireByteLength,
+            id: `wire:${observation.carrier.carrierId}`,
+            label: "Exact decoded wire transfer",
+            ownership: "estimated" as const,
+            source: "transport" as const,
+          }],
+    ),
+  );
   return (["owned", "referenced", "shared", "estimated"] as const).map(
     (ownership) => {
       const groupRows = rows.filter((row) => row.ownership === ownership);
@@ -197,7 +210,7 @@ export function memoryGroups(snapshots: readonly VisualizationDebugSnapshot[]) {
 }
 
 export function allIssues(
-  snapshots: readonly VisualizationDebugSnapshot[],
+  model: VisualizationDebugPanelModel,
 ): VisualizationDebugIssue[] {
-  return snapshots.flatMap((snapshot) => [...snapshot.issues]);
+  return [...model.issues];
 }

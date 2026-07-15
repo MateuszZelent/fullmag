@@ -11,11 +11,14 @@ import {
 } from "@/kernel/resources/studyRuntimeResources";
 import { visualizationDebugRangesEqual } from "@/kernel/visualization/buildVisualizationDebugHealth";
 import type {
+  VisualizationDebugDisposition,
   VisualizationDebugCarrierSnapshot,
+  VisualizationDebugIssue,
   VisualizationDebugSnapshot,
 } from "@/kernel/visualization/visualizationDebugTypes";
 
 export const MAX_VISUALIZATION_DEBUG_TRANSPORT_ENTRIES = 8;
+export const MAX_VISUALIZATION_DEBUG_COMPOSITE_ISSUES = 20;
 
 export type VisualizationDebugPanelState =
   | "unsupported-target"
@@ -57,6 +60,7 @@ export interface VisualizationDebugCarrierObservation {
   carrier: VisualizationDebugCarrierSnapshot;
   query: VisualizationDebugExactFieldQuery | null;
   snapshot: VisualizationDebugSnapshot;
+  wireByteLength: number | null;
 }
 
 export interface VisualizationDebugCarrierPanelModel {
@@ -74,7 +78,9 @@ export interface VisualizationDebugViewportPanelModel {
 }
 
 export interface VisualizationDebugPanelModel {
+  disposition: VisualizationDebugDisposition;
   fieldQueries: readonly VisualizationDebugExactFieldQuery[];
+  issues: readonly VisualizationDebugIssue[];
   state: VisualizationDebugPanelState;
   target: VisualizationDebugTarget | null;
   transport: readonly RequestDiagnosticEntry[];
@@ -175,18 +181,45 @@ export function buildVisualizationDebugPanelModel({
         carrier,
         query,
         snapshot,
+        wireByteLength: null,
       });
       const observations = viewport.carrierGroups.get(carrier.carrierId);
       if (observations) observations.push(observation);
       else viewport.carrierGroups.set(carrier.carrierId, [observation]);
     }
   }
+  const exactDiagnostics = diagnostics
+    .filter(
+      (entry) =>
+        entry.resourceKey !== null &&
+        entry.resourceKey !== undefined &&
+        resourceKeys.has(entry.resourceKey),
+    )
+    .map((entry, index) => ({ entry, index }))
+    .sort(
+      (left, right) =>
+        right.entry.timestampMs - left.entry.timestampMs ||
+        left.index - right.index,
+    )
+    .map(({ entry }) => entry);
+  const terminalByResource = latestTerminalTransportByResource(exactDiagnostics);
   const viewports = [...viewportGroups.entries()].map(([viewportId, group]) => {
     const carriers = [...group.carrierGroups.entries()].map(
       ([carrierId, observations]) =>
         Object.freeze({
           carrierId,
-          observations: Object.freeze(observations),
+          observations: Object.freeze(
+            observations.map((observation) => {
+              const resourceKey = observation.query?.vectorResourceKey ?? null;
+              const terminal = resourceKey
+                ? terminalByResource.get(resourceKey) ?? null
+                : null;
+              return Object.freeze({
+                ...observation,
+                wireByteLength: exactDecodedWireByteLength(terminal),
+              });
+            }),
+          ),
         }),
     );
     return Object.freeze({
@@ -201,21 +234,22 @@ export function buildVisualizationDebugPanelModel({
     });
   });
 
+  const state = viewports.some((viewport) => viewport.carriers.length > 0)
+    ? "ready"
+    : "target-not-rendered";
+  const composite = buildCompositeHealth({
+    state,
+    terminalByResource,
+    viewports,
+  });
   return Object.freeze({
+    disposition: composite.disposition,
     fieldQueries: Object.freeze([...fieldQueries.values()]),
-    state: viewports.some((viewport) => viewport.carriers.length > 0)
-      ? "ready"
-      : "target-not-rendered",
+    issues: composite.issues,
+    state,
     target,
     transport: Object.freeze(
-      diagnostics
-        .filter(
-          (entry) =>
-            entry.resourceKey !== null &&
-            entry.resourceKey !== undefined &&
-            resourceKeys.has(entry.resourceKey),
-        )
-        .slice(0, MAX_VISUALIZATION_DEBUG_TRANSPORT_ENTRIES),
+      exactDiagnostics.slice(0, MAX_VISUALIZATION_DEBUG_TRANSPORT_ENTRIES),
     ),
     viewports: Object.freeze(viewports),
   });
@@ -363,8 +397,10 @@ export function compareBackendAndRender({
     (payload !== null && payload.quantityId !== query.quantityId) ||
     (payload !== null &&
       payload.scopeKind !== null &&
-      (payload.scopeKind !== query.scopeKind ||
-        payload.scopeId !== query.scopeId)) ||
+      payload.scopeKind !== query.scopeKind) ||
+    (payload !== null &&
+      (payload.scopeKind !== null || payload.scopeId !== null) &&
+      payload.scopeId !== query.scopeId) ||
     (renderedComponent !== null && renderedComponent !== query.component) ||
     (requestedFieldBufferId !== null &&
       adoptedFieldBufferId !== null &&
@@ -407,12 +443,254 @@ function emptyModel(
   state: VisualizationDebugPanelState,
   target: VisualizationDebugTarget | null,
 ): VisualizationDebugPanelModel {
+  const issues =
+    state === "missing-snapshot"
+      ? Object.freeze([
+          issue(
+            "frame-not-committed",
+            "warning",
+            "render-derived",
+            "The active target has no committed viewport snapshot.",
+            ["state=missing-snapshot"],
+          ),
+        ])
+      : Object.freeze([]);
   return Object.freeze({
+    disposition: "unknown",
     fieldQueries: Object.freeze([]),
+    issues,
     state,
     target,
     transport: Object.freeze([]),
     viewports: Object.freeze([]),
+  });
+}
+
+function latestTerminalTransportByResource(
+  diagnostics: readonly RequestDiagnosticEntry[],
+): ReadonlyMap<string, RequestDiagnosticEntry> {
+  const latest = new Map<string, RequestDiagnosticEntry>();
+  for (const entry of diagnostics) {
+    const resourceKey = entry.resourceKey ?? null;
+    if (!resourceKey || latest.has(resourceKey) || !isTerminalTransport(entry)) {
+      continue;
+    }
+    latest.set(resourceKey, entry);
+  }
+  return latest;
+}
+
+function isTerminalTransport(entry: RequestDiagnosticEntry): boolean {
+  if (entry.direction !== "rx") return false;
+  if (entry.outcome === "error" || entry.outcome === "network-error") {
+    return true;
+  }
+  if (entry.outcome !== "ok") return false;
+  return (
+    entry.status === 204 ||
+    entry.status === 304 ||
+    entry.detail?.startsWith("decoded binary payload") === true
+  );
+}
+
+function exactDecodedWireByteLength(
+  entry: RequestDiagnosticEntry | null,
+): number | null {
+  return entry?.outcome === "ok" &&
+    entry.status !== 204 &&
+    entry.status !== 304 &&
+    entry.detail === "decoded binary payload"
+    ? entry.byteLength
+    : null;
+}
+
+function buildCompositeHealth({
+  state,
+  terminalByResource,
+  viewports,
+}: {
+  state: VisualizationDebugPanelState;
+  terminalByResource: ReadonlyMap<string, RequestDiagnosticEntry>;
+  viewports: readonly VisualizationDebugViewportPanelModel[];
+}): {
+  disposition: VisualizationDebugDisposition;
+  issues: readonly VisualizationDebugIssue[];
+} {
+  const snapshotIssues = viewports.flatMap((viewport) =>
+    viewport.snapshots.flatMap((snapshot) => snapshot.issues),
+  );
+  const derivedIssues: VisualizationDebugIssue[] = [];
+  let panelEvidenceComplete = true;
+
+  if (state === "target-not-rendered") {
+    panelEvidenceComplete = false;
+    derivedIssues.push(
+      issue(
+        "target-not-active",
+        "warning",
+        "ui-derived",
+        "Target is not active in the current render model.",
+        ["state=target-not-rendered"],
+      ),
+    );
+  }
+
+  for (const [resourceKey, terminal] of terminalByResource) {
+    if (terminal.outcome !== "error" && terminal.outcome !== "network-error") {
+      continue;
+    }
+    derivedIssues.push(
+      issue(
+        "field-request-error",
+        "error",
+        "transport",
+        "The newest completed exact field request failed.",
+        [resourceKey, `outcome=${terminal.outcome}`, `request=${terminal.requestId}`],
+      ),
+    );
+  }
+
+  for (const viewport of viewports) {
+    for (const carrierGroup of viewport.carriers) {
+      for (const observation of carrierGroup.observations) {
+        const { backendMeta, backendRenderComparison, carrier, query } = observation;
+        if (!backendMeta || !query) {
+          panelEvidenceComplete = false;
+        } else {
+          const revision = comparePhysicalFieldRevision(
+            carrier.revisions.fieldRevision,
+            backendMeta.field_revision,
+          );
+          if (revision === "render-stale") {
+            derivedIssues.push(
+              issue(
+                "field-revision-stale",
+                "warning",
+                "render-derived",
+                "The rendered physical field revision is older than exact backend metadata.",
+                [
+                  `render=${carrier.revisions.fieldRevision ?? "unknown"}`,
+                  `backend=${String(backendMeta.field_revision)}`,
+                ],
+              ),
+            );
+          } else if (revision !== "current") {
+            panelEvidenceComplete = false;
+          }
+        }
+        if (backendRenderComparison?.rangesMatch === false) {
+          derivedIssues.push(
+            issue(
+              "backend-render-range-mismatch",
+              "warning",
+              "render-derived",
+              "Comparable backend and rendered ranges differ beyond tolerance.",
+              [carrier.carrierId],
+            ),
+          );
+        }
+        if (
+          observation.wireByteLength !== null &&
+          carrier.cache.byteLength !== null &&
+          observation.wireByteLength !== carrier.cache.byteLength
+        ) {
+          derivedIssues.push(
+            issue(
+              "transport-cache-byte-mismatch",
+              "info",
+              "cache",
+              "Exact decoded transport and cache byte counts differ.",
+              [
+                `wire=${observation.wireByteLength}`,
+                `cache=${carrier.cache.byteLength}`,
+              ],
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  const allUnbounded = [...snapshotIssues, ...derivedIssues];
+  const issues = deduplicateAndBoundIssues(allUnbounded);
+  const hasError = allUnbounded.some((entry) => entry.severity === "error");
+  const hasDegradingWarning = allUnbounded.some(
+    (entry) =>
+      entry.severity === "warning" &&
+      entry.code !== "target-not-active" &&
+      entry.code !== "frame-not-committed",
+  );
+  const snapshotDisposition = aggregateSnapshotDisposition(
+    viewports.flatMap((viewport) => viewport.snapshots),
+  );
+  const disposition: VisualizationDebugDisposition = hasError
+    ? "blocked"
+    : hasDegradingWarning || snapshotDisposition === "degraded"
+      ? "degraded"
+      : !panelEvidenceComplete || snapshotDisposition === "unknown"
+        ? "unknown"
+        : "ready";
+  return Object.freeze({ disposition, issues });
+}
+
+function comparePhysicalFieldRevision(
+  rendered: string | null,
+  backend: number,
+): "current" | "render-newer" | "render-stale" | "unknown" {
+  if (!rendered || !/^\d+$/.test(rendered) || !Number.isSafeInteger(backend)) {
+    return "unknown";
+  }
+  const renderedRevision = BigInt(rendered);
+  const backendRevision = BigInt(backend);
+  if (renderedRevision === backendRevision) return "current";
+  return renderedRevision < backendRevision ? "render-stale" : "render-newer";
+}
+
+function aggregateSnapshotDisposition(
+  snapshots: readonly VisualizationDebugSnapshot[],
+): VisualizationDebugDisposition {
+  for (const disposition of ["blocked", "degraded", "unknown", "ready"] as const) {
+    if (snapshots.some((snapshot) => snapshot.disposition === disposition)) {
+      return disposition;
+    }
+  }
+  return "unknown";
+}
+
+function deduplicateAndBoundIssues(
+  input: readonly VisualizationDebugIssue[],
+): readonly VisualizationDebugIssue[] {
+  const seen = new Set<string>();
+  const result: VisualizationDebugIssue[] = [];
+  for (const entry of input) {
+    const key = JSON.stringify([
+      entry.code,
+      entry.severity,
+      entry.source,
+      entry.message,
+      entry.evidence,
+    ]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(entry);
+    if (result.length === MAX_VISUALIZATION_DEBUG_COMPOSITE_ISSUES) break;
+  }
+  return Object.freeze(result);
+}
+
+function issue(
+  code: string,
+  severity: VisualizationDebugIssue["severity"],
+  source: VisualizationDebugIssue["source"],
+  message: string,
+  evidence: readonly string[],
+): VisualizationDebugIssue {
+  return Object.freeze({
+    code,
+    evidence: Object.freeze([...evidence]),
+    message,
+    severity,
+    source,
   });
 }
 

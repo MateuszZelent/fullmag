@@ -164,6 +164,8 @@ export interface Viewport3DTargetFieldBufferSource {
   capability: Viewport3DTargetFieldBuffer["capability"];
   component: Viewport3DTargetFieldBuffer["component"];
   consumers: readonly string[];
+  currentDomainGenerationId?: string | null;
+  currentMeshTopologyHash?: string | null;
   decodedFieldVector: DecodedFieldVector | null;
   fieldRevision: string | null;
   indexing?: Viewport3DTargetFieldBuffer["indexing"];
@@ -1168,6 +1170,8 @@ function targetFieldBufferSource(
     component: buffer.component,
     componentCount: buffer.componentCount,
     consumers: buffer.consumers,
+    currentDomainGenerationId: buffer.currentDomainGenerationId,
+    currentMeshTopologyHash: buffer.currentMeshTopologyHash,
     decodedFieldVector:
       buffer.capability === "synthetic-full-vector" ? null : buffer.fieldVector,
     fieldRevision: buffer.fieldRevision,

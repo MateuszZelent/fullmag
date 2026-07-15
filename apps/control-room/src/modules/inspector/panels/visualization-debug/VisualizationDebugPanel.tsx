@@ -13,7 +13,6 @@ import type {
   VisualizationDebugPanelModel,
 } from "./VisualizationDebugPanelModel";
 import {
-  aggregateDisposition,
   allIssues,
   allObservations,
   formatBackendStats,
@@ -113,18 +112,18 @@ export function VisualizationDebugPanelView({
 
   const observations = allObservations(model);
   const snapshots = uniqueSnapshots(model);
-  const disposition = aggregateDisposition(snapshots);
+  const disposition = model.disposition;
   const latestCapturedAtMs = latestSnapshotCaptureTime(model);
   const ageMs = Math.max(0, evidenceNowMs - latestCapturedAtMs);
-  const stale = ageMs > STALE_SNAPSHOT_AGE_MS || allIssues(snapshots).some(
+  const stale = ageMs > STALE_SNAPSHOT_AGE_MS || allIssues(model).some(
     (issue) => issue.code.includes("stale"),
   );
   const scanning = observations.some(({ carrier }) => carrier.scanState === "scanning");
   const noFieldRequested = observations.length > 0 && observations.every(
     ({ carrier }) => !carrier.request.resourceKey && !carrier.payload,
   );
-  const requestFailed = model.transport.some(
-    (entry) => entry.outcome === "error" || entry.outcome === "network-error",
+  const requestFailed = model.issues.some(
+    (entry) => entry.code === "field-request-error",
   );
   const rawJson = buildVisualizationDebugExport(model, evidenceNowMs).json;
 
@@ -240,7 +239,7 @@ export function VisualizationDebugPanelView({
       </InspectorSection>
 
       <InspectorSection title="Memory">
-        {memoryGroups(snapshots).map((group) => (
+        {memoryGroups(model).map((group) => (
           <div className="fm-visualization-debug-subsection" key={group.ownership}>
             <h4>{group.ownership}</h4>
             {group.rows.map((row) => <FieldRow key={`${row.source}:${row.id}`} label={`${row.label} · ${row.source}`} value={formatBytes(row.byteLength)} />)}
@@ -276,8 +275,8 @@ export function VisualizationDebugPanelView({
         ))}
       </InspectorSection>
 
-      <InspectorSection title="Detected inconsistencies" badge={`${allIssues(snapshots).length}`}>
-        {allIssues(snapshots).length > 0 ? <ul className="fm-visualization-debug-issues">{allIssues(snapshots).map((issue, index) => (
+      <InspectorSection title="Detected inconsistencies" badge={`${allIssues(model).length}`}>
+        {allIssues(model).length > 0 ? <ul className="fm-visualization-debug-issues">{allIssues(model).map((issue, index) => (
           <li data-severity={issue.severity} key={`${issue.code}:${index}`}><strong>{issue.severity}: {issue.code}</strong><span>{issue.source} — {issue.message}</span><code>{issue.evidence.join(" · ") || "No additional evidence"}</code></li>
         ))}</ul> : <p className="fm-visualization-debug-empty">No inconsistencies were detected.</p>}
       </InspectorSection>

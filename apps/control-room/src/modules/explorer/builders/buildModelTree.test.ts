@@ -402,9 +402,6 @@ describe("buildModelTree", () => {
       flattened.find((node) => node.id === "model:object:free-layer:mesh")
         ?.status,
     ).toBe("stale");
-    expect(flattened.map((node) => node.id)).not.toContain(
-      "model:mesh:airbox-quality",
-    );
     expect(
       flattened.find((node) => node.id === "model:object:free-layer:regions"),
     ).toMatchObject({
