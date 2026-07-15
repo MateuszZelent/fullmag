@@ -206,7 +206,8 @@ __global__ void llg_rhs_fp64_kernel(
         rhs_x += sot_rhs.x;
         rhs_y += sot_rhs.y;
         rhs_z += sot_rhs.z;
-    } else if (sot.has_sot && sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0) {
+    } else if (sot.has_sot && sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0 &&
+               (!sot.has_active_mask || sot.active_mask[idx] != 0)) {
         const double m_dot_s = m0 * sot.sx + m1 * sot.sy + m2 * sot.sz;
         const double fl_x = m1 * sot.sz - m2 * sot.sy;
         const double fl_y = m2 * sot.sx - m0 * sot.sz;

@@ -199,7 +199,8 @@ __global__ void llg_rhs_fp32_kernel(
         rhs_x += sot_rhs.x;
         rhs_y += sot_rhs.y;
         rhs_z += sot_rhs.z;
-    } else if (sot.has_sot && sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0) {
+    } else if (sot.has_sot && sot.formula == FULLMAG_FDM_PRESCRIBED_SOT_LEGACY_V0 &&
+               (!sot.has_active_mask || sot.active_mask[idx] != 0)) {
         const float sx = static_cast<float>(sot.sx);
         const float sy = static_cast<float>(sot.sy);
         const float sz = static_cast<float>(sot.sz);
