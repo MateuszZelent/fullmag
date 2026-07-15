@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import unittest
 import warnings
 from pathlib import Path
@@ -84,6 +85,23 @@ class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
         rendered = _render_spin_torques(_problem(spin_torques=[module]), surface="flat")
         rebuilt = _eval_rendered(rendered)
         self.assertEqual(rebuilt.to_ir_module(), entry)
+
+    def test_slonczewski_rejects_nonfinite_scalar_coefficients(self) -> None:
+        base = {
+            "id": "cpp",
+            "target": fm.RegionRef("layer"),
+            "current_density": (0.0, 0.0, 2e11),
+            "spin_polarization": (0.0, 1.0, 0.0),
+            "stack_normal": (0.0, 0.0, 1.0),
+            "free_layer_thickness_m": 1.5e-9,
+        }
+        for name, value in (
+            ("lambda_asymmetry", math.nan),
+            ("epsilon_prime", math.inf),
+            ("free_layer_thickness_m", math.nan),
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, name):
+                fm.SlonczewskiSTT(**{**base, name: value})
 
     def test_flat_registration_is_typed_returns_object_and_preserves_order(self) -> None:
         first = fm.ZhangLiSTT(current_density=(1e11, 0.0, 0.0))

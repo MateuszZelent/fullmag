@@ -351,9 +351,10 @@ def _validated_degree(degree: float) -> float:
 
 
 def _validated_lambda(lambda_asymmetry: float) -> float:
-    if lambda_asymmetry < 1.0:
-        raise ValueError(f"lambda_asymmetry (Lambda) must be >= 1, got {lambda_asymmetry}")
-    return float(lambda_asymmetry)
+    value = require_finite(lambda_asymmetry, "lambda_asymmetry")
+    if value < 1.0:
+        raise ValueError(f"lambda_asymmetry (Lambda) must be >= 1, got {value}")
+    return value
 
 
 def _validated_beta(beta: float) -> float:
@@ -484,7 +485,7 @@ class SlonczewskiSTT:
             object.__setattr__(self, "realization_version", None)
         object.__setattr__(self, "degree", _validated_degree(degree))
         object.__setattr__(self, "lambda_asymmetry", _validated_lambda(lambda_asymmetry))
-        object.__setattr__(self, "epsilon_prime", float(epsilon_prime))
+        object.__setattr__(self, "epsilon_prime", require_finite(epsilon_prime, "epsilon_prime"))
         if free_layer_thickness_m is not None:
             require_positive(free_layer_thickness_m, "free_layer_thickness_m")
             object.__setattr__(self, "free_layer_thickness_m", float(free_layer_thickness_m))

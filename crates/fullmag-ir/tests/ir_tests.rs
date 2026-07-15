@@ -4212,6 +4212,46 @@ fn canonical_slonczewski_requires_oriented_versioned_thin_layer_realization() {
 }
 
 #[test]
+fn canonical_slonczewski_rejects_nonfinite_scalar_coefficients() {
+    for (name, lambda_asymmetry, epsilon_prime, free_layer_thickness_m) in [
+        ("lambda_asymmetry", f64::NAN, 0.0, Some(1.5e-9)),
+        ("epsilon_prime", 1.2, f64::INFINITY, Some(1.5e-9)),
+        ("free_layer_thickness_m", 1.2, 0.0, Some(f64::NAN)),
+    ] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: Some("slonczewski_torque.v1".to_string()),
+            id: Some("cpp".to_string()),
+            target: Some(fullmag_ir::RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula_version: "slonczewski.fullmag.v1".to_string(),
+            current_density: Some([0.0, 0.0, -5e10]),
+            current_source: None,
+            degree: 0.4,
+            spin_polarization: [0.0, 1.0, 0.0],
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lambda_asymmetry,
+            epsilon_prime,
+            free_layer_thickness_m,
+            fixed_layer_position: None,
+            realization: Some(fullmag_ir::SlonczewskiRealizationIR::ThinLayerHomogenized {
+                realization_version: "slonczewski_thin_layer_homogenized.v1".to_string(),
+            }),
+        }];
+
+        let errors = ir
+            .validate()
+            .expect_err("nonfinite canonical Slonczewski coefficient must fail validation");
+        assert!(
+            errors.iter().any(|error| error.contains(name)),
+            "missing {name} diagnostic in {errors:?}"
+        );
+    }
+}
+
+#[test]
 fn slonczewski_fixed_layer_position_accepts_top_and_bottom() {
     for position in ["top", "bottom"] {
         let mut ir = ProblemIR::bootstrap_example();

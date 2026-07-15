@@ -609,6 +609,7 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                 spin_polarization,
                 stack_normal,
                 lambda_asymmetry,
+                epsilon_prime,
                 free_layer_thickness_m,
                 fixed_layer_position,
                 realization,
@@ -631,14 +632,21 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
                         "spin_torque_modules[{index}] slonczewski degree must be in (0, 1]"
                     ));
                 }
-                if *lambda_asymmetry < 1.0 {
+                if !lambda_asymmetry.is_finite() || *lambda_asymmetry < 1.0 {
                     errors.push(format!(
-                        "spin_torque_modules[{index}] slonczewski lambda_asymmetry must be >= 1"
+                        "spin_torque_modules[{index}] slonczewski lambda_asymmetry must be finite and >= 1"
                     ));
                 }
-                if free_layer_thickness_m.is_some_and(|value| value <= 0.0) {
+                if !epsilon_prime.is_finite() {
                     errors.push(format!(
-                        "spin_torque_modules[{index}] slonczewski free_layer_thickness_m must be > 0"
+                        "spin_torque_modules[{index}] slonczewski epsilon_prime must be finite"
+                    ));
+                }
+                if free_layer_thickness_m
+                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
+                {
+                    errors.push(format!(
+                        "spin_torque_modules[{index}] slonczewski free_layer_thickness_m must be > 0 and finite"
                     ));
                 }
                 if let Some(position) = fixed_layer_position.as_deref() {

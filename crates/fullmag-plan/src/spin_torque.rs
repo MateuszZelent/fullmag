@@ -6,6 +6,22 @@ use fullmag_ir::{
 use crate::current_transport::ResolvedCurrentTransport;
 use crate::error::PlanError;
 
+fn normalized_axis(axis: [f64; 3]) -> Option<[f64; 3]> {
+    let scale = axis
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0, f64::max);
+    if !scale.is_finite() || scale == 0.0 {
+        return None;
+    }
+    let scaled = [axis[0] / scale, axis[1] / scale, axis[2] / scale];
+    let norm = (scaled[0] * scaled[0] + scaled[1] * scaled[1] + scaled[2] * scaled[2]).sqrt();
+    if !norm.is_finite() || norm == 0.0 {
+        return None;
+    }
+    Some([scaled[0] / norm, scaled[1] / norm, scaled[2] / norm])
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SpinTorqueExecutableLane {
     Fdm,
@@ -150,24 +166,71 @@ pub(crate) fn resolve_legacy_spin_torque(
             epsilon_prime,
             free_layer_thickness_m,
             fixed_layer_position,
+            realization,
             ..
-        } => LegacySpinTorqueFields {
-            slonczewski_formula_version: Some(formula_version.clone()),
-            slonczewski_target: target.clone(),
-            slonczewski_stack_normal: *stack_normal,
-            current_density: Some(match (current_density, current_source.as_deref()) {
-                (Some(current_density), None) => *current_density,
-                (None, Some(source)) => resolve_current_density_source(current_transports, source)?,
-                _ => unreachable!("ProblemIR validation should enforce exclusive current binding"),
-            }),
-            stt_degree: Some(*degree),
-            stt_beta: None,
-            stt_spin_polarization: Some(*spin_polarization),
-            stt_lambda: Some(*lambda_asymmetry),
-            stt_epsilon_prime: Some(*epsilon_prime),
-            stt_thickness: *free_layer_thickness_m,
-            stt_fixed_layer_position: fixed_layer_position.clone(),
-        },
+        } => {
+            if matches!(lane, SpinTorqueExecutableLane::Fdm)
+                && matches!(
+                    realization,
+                    Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
+                        realization_version,
+                        ..
+                    }) if realization_version == "slonczewski_interface_flux.v1"
+                )
+            {
+                return Err(PlanError {
+                    reasons: vec![
+                        "slonczewski_interface_flux.v1 is not executable on FDM; use the thin-layer homogenized realization or a supported FEM interface-flux lane"
+                            .to_string(),
+                    ],
+                });
+            }
+            let canonical = formula_version == "slonczewski.fullmag.v1";
+            let normalized_polarization = if canonical {
+                normalized_axis(*spin_polarization).ok_or_else(|| PlanError {
+                    reasons: vec![
+                        "canonical Slonczewski spin_polarization must be a finite nonzero axis"
+                            .to_string(),
+                    ],
+                })?
+            } else {
+                *spin_polarization
+            };
+            let normalized_stack = if canonical {
+                Some(normalized_axis(stack_normal.ok_or_else(|| PlanError {
+                    reasons: vec!["canonical Slonczewski requires stack_normal".to_string()],
+                })?)
+                .ok_or_else(|| PlanError {
+                    reasons: vec![
+                        "canonical Slonczewski stack_normal must be a finite nonzero axis"
+                            .to_string(),
+                    ],
+                })?)
+            } else {
+                *stack_normal
+            };
+            LegacySpinTorqueFields {
+                slonczewski_formula_version: Some(formula_version.clone()),
+                slonczewski_target: target.clone(),
+                slonczewski_stack_normal: normalized_stack,
+                current_density: Some(match (current_density, current_source.as_deref()) {
+                    (Some(current_density), None) => *current_density,
+                    (None, Some(source)) => {
+                        resolve_current_density_source(current_transports, source)?
+                    }
+                    _ => {
+                        unreachable!("ProblemIR validation should enforce exclusive current binding")
+                    }
+                }),
+                stt_degree: Some(*degree),
+                stt_beta: None,
+                stt_spin_polarization: Some(normalized_polarization),
+                stt_lambda: Some(*lambda_asymmetry),
+                stt_epsilon_prime: Some(*epsilon_prime),
+                stt_thickness: *free_layer_thickness_m,
+                stt_fixed_layer_position: fixed_layer_position.clone(),
+            }
+        }
         SpinTorqueModuleIR::ZhangLi {
             current_density,
             current_source,
@@ -628,8 +691,8 @@ mod tests {
             current_density: Some([3.0e10, -4.0e10, 0.0]),
             current_source: None,
             degree: 0.4,
-            spin_polarization: [0.0, 0.0, 1.0],
-            stack_normal: Some([0.0, 1.0, 0.0]),
+            spin_polarization: [0.0, 0.0, 4.0],
+            stack_normal: Some([0.0, 2.0, 0.0]),
             lambda_asymmetry: 1.0,
             epsilon_prime: 0.0,
             free_layer_thickness_m: Some(1.0e-9),
@@ -643,7 +706,42 @@ mod tests {
         assert_eq!(resolved.slonczewski_formula_version.as_deref(), Some("slonczewski.fullmag.v1"));
         assert_eq!(resolved.slonczewski_target, Some(target));
         assert_eq!(resolved.slonczewski_stack_normal, Some([0.0, 1.0, 0.0]));
+        assert_eq!(resolved.stt_spin_polarization, Some([0.0, 0.0, 1.0]));
         assert_eq!(resolved.current_density, Some([3.0e10, -4.0e10, 0.0]));
+    }
+
+    #[test]
+    fn fdm_rejects_canonical_slonczewski_interface_flux_realization() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.spin_torque_modules = vec![SpinTorqueModuleIR::Slonczewski {
+            schema_version: Some("slonczewski_torque.v1".to_string()),
+            id: Some("cpp_interface".to_string()),
+            target: Some(RegionRefIR {
+                object_id: "strip".to_string(),
+                region_id: None,
+            }),
+            formula_version: "slonczewski.fullmag.v1".to_string(),
+            current_density: Some([0.0, 0.0, 4.0e10]),
+            current_source: None,
+            degree: 0.4,
+            spin_polarization: [0.0, 0.0, 1.0],
+            stack_normal: Some([0.0, 0.0, 1.0]),
+            lambda_asymmetry: 1.0,
+            epsilon_prime: 0.0,
+            free_layer_thickness_m: Some(1.0e-9),
+            fixed_layer_position: None,
+            realization: Some(fullmag_ir::SlonczewskiRealizationIR::InterfaceFlux {
+                interface_id: "fixed_to_free".to_string(),
+                realization_version: "slonczewski_interface_flux.v1".to_string(),
+            }),
+        }];
+
+        let error = resolve_legacy_spin_torque(&problem, SpinTorqueExecutableLane::Fdm, &[])
+            .expect_err("FDM must not lower interface flux to a homogenized volume torque");
+        assert!(error.reasons.iter().any(|reason| {
+            reason.contains("slonczewski_interface_flux.v1")
+                && reason.contains("not executable on FDM")
+        }));
     }
 
     #[test]
