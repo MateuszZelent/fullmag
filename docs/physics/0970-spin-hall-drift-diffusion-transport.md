@@ -307,6 +307,19 @@ BC-consistent one-sided reconstruction. Direct SHE and polarized contributions
 are summed before one face flux is inserted with opposite cell signs.
 Material interfaces use the explicit interface law, never arithmetic averaging.
 
+For the CPU-double structured oracle, `SpecifiedSpinFlux` is always the
+outward-normal quantity `n_i Q_ia`; storage in the globally positive face
+orientation therefore negates it on minimum-coordinate faces. The operator
+identifier is explicit: `fv_spin_upwind_v1` selects `m_f` from the upstream
+cell using the signed polarized face flux, while
+`fv_spin_central_reference_v1` uses the central magnetization only as a
+convergence oracle. Cross-region faces fail closed without one oriented
+transparent or mixing-conductance descriptor. Mixing records longitudinal
+injection/backflow, transverse absorption, and spin-memory loss separately;
+only transverse absorption contributes to magnetic torque. Internal contacts
+are likewise oriented structured faces with independent outward BCs on their
+selected sides.
+
 CPU double engines are matrix-free CG/AMG for symmetric M1 charge and block
 GMRES for spin; M2 uses block GMRES because Hall/iSHE make the system
 nonsymmetric. Residual and charge/spin balance are independently recomputed.
