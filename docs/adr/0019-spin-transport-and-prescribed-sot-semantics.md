@@ -147,6 +147,13 @@ current `0.3.0` and previous public `0.2.0`; writers emit only `0.3.0`.
 Historical `0.1.0` requires the explicit, audited chain
 `0.1.0 -> 0.2.0 -> 0.3.0` and is not silently accepted by the normal reader.
 
+Legacy 0.2 prescribed-SOT entries have no module id or target and historically
+apply to the global magnetic solve. Migration therefore assigns the stable id
+`legacy_prescribed_sot_<module-index>` and records `target:null` only on the
+`prescribed_sot.legacy_fullmag.v0` variant. That null is an explicit
+legacy-global target, never an inferred region. Canonical v1 requires a
+concrete target, and null without the exact migration origin fails closed.
+
 Native spin transport uses new independent descriptor families with exact
 `abi_version=1` and `struct_version=1` for both FDM and FEM. These values start
 at one because the current wide time-domain descriptors are unversioned; the

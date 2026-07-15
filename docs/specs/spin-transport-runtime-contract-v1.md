@@ -329,7 +329,8 @@ PrescribedSotV1 = {
 }
 
 PrescribedSotLegacyV0 = {
-  schema_version:"prescribed_sot.v1", id, target:RegionRef,
+  schema_version:"prescribed_sot.v1", id,
+  target:RegionRef|null,
   formula_version:"prescribed_sot.legacy_fullmag.v0",
   drive:
     | {kind:"legacy_scalar_magnitude",
@@ -362,6 +363,11 @@ drive-direction, interface-normal, and nonzero-axis validation.
 `PrescribedSotLegacyV0` instead preserves the raw finite polarization,
 including zero, and the raw signed scalar even though its evaluator applies
 `abs`, or preserves a source reference whose evaluator applies `norm(J)`.
+Only this migration-only variant permits `target:null`. Here `null` means the
+exact historical 0.2 scope: every magnetic target selected by the legacy
+global solve. It MUST NOT be interpreted as a default region, the first
+magnet, or a planner-selected target. Canonical v1 authoring always requires
+an explicit `RegionRef`.
 The two drive unions are disjoint; a legacy drive cannot appear with v1 and a
 v1 drive cannot appear with legacy v0.
 
@@ -1071,6 +1077,13 @@ Every `0.2.0` `SpinOrbitTorque` payload lowers to canonical class
 exactly by the executable FDM behavior at the `0.2.0` boundary.
 
 The normalized node is the `PrescribedSotLegacyV0` tagged variant from 3.5.
+Because the 0.2 entry has neither `id` nor `target`, migration assigns
+`id="legacy_prescribed_sot_<index>"`, where `<index>` is its zero-based
+position in `spin_torque_modules`, and writes `target:null`. The combination
+of that deterministic id, the explicit legacy-global null target, raw
+drive/polarization and `compatibility_origin` is lossless. Duplicate generated
+ids, an authored 0.3 null target, or null without the exact migration origin
+fail validation.
 Its legacy scalar drive stores the original signed scalar in
 `raw_charge_current_density_Apm2`; evaluation alone takes `abs`. Its source
 drive stores the source id and evaluation alone takes `norm(J_charge)`. Its
