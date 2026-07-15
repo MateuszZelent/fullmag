@@ -42,6 +42,7 @@ import {
   type PhysicsInteractionDraft,
   type PhysicsInteractionId,
 } from "./PhysicsInteractionPanelModel";
+import { SpinAuthoringInspector } from "./SpinAuthoringInspector";
 
 interface DraftState {
   draft: PhysicsInteractionDraft;
@@ -264,6 +265,14 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     } finally {
       dispatch({ type: "setPending", pending: false });
     }
+  }
+
+  if (
+    interactionId === "current_transport" ||
+    interactionId === "spin_torque" ||
+    interactionId === "oersted_field"
+  ) {
+    return <SpinAuthoringInspector key={interactionId} family={interactionId} />;
   }
 
   return (

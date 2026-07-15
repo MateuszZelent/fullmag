@@ -483,6 +483,30 @@ export const MODEL_SCENE_PATH = openApiV2Path(
   "/v2/sessions/current/model/scene",
 );
 
+export const MODEL_CURRENT_TRANSPORTS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/current-transports",
+);
+
+export const MODEL_CURRENT_TRANSPORT_PATH = openApiV2Path(
+  "/v2/sessions/current/model/current-transports/{id}",
+);
+
+export const MODEL_SPIN_TORQUES_PATH = openApiV2Path(
+  "/v2/sessions/current/model/spin-torques",
+);
+
+export const MODEL_SPIN_TORQUE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/spin-torques/{id}",
+);
+
+export const MODEL_OERSTED_FIELDS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/oersted-fields",
+);
+
+export const MODEL_OERSTED_FIELD_PATH = openApiV2Path(
+  "/v2/sessions/current/model/oersted-fields/{id}",
+);
+
 export const MODEL_STUDY_PATH = openApiV2Path(
   "/v2/sessions/current/model/study",
 );

@@ -87,6 +87,8 @@ import {
   MODEL_GEOMETRY_REALIZATIONS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_COUPLINGS_PATH,
+  MODEL_CURRENT_TRANSPORT_PATH,
+  MODEL_CURRENT_TRANSPORTS_PATH,
   MODEL_MAGNETIZATION_ASSET_PATH,
   MODEL_MATERIAL_FIELDS_PATH,
   MODEL_MATERIAL_PATH,
@@ -103,6 +105,10 @@ import {
   MODEL_REALIZED_REGIONS_PATH,
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
+  MODEL_SPIN_TORQUE_PATH,
+  MODEL_SPIN_TORQUES_PATH,
+  MODEL_OERSTED_FIELD_PATH,
+  MODEL_OERSTED_FIELDS_PATH,
   MODEL_STUDY_PATH,
   MODEL_TRANSACTIONS_PATH,
   MODEL_SYNCS_PATH,
@@ -273,6 +279,19 @@ import type {
   TableRowsQuery,
   TableRowsResource,
   SceneResource,
+  SceneCurrentTransport,
+  SceneSpinTorque,
+  SceneOerstedField,
+  CurrentTransportListResource,
+  CurrentTransportMutationRequest,
+  CurrentTransportCommitResource,
+  SpinTorqueListResource,
+  SpinTorqueMutationRequest,
+  SpinTorqueCommitResource,
+  OerstedFieldListResource,
+  OerstedFieldMutationRequest,
+  OerstedFieldCommitResource,
+  SpinAuthoringDeleteRequest,
   ScriptSyncRequest,
   ScriptSyncResponse,
   TopologicalChargeQuery,
@@ -1157,6 +1176,36 @@ export class ControlRoomApi {
   };
 
   readonly model = {
+    currentTransports: (options?: RequestOptions) =>
+      this.requestJson<CurrentTransportListResource>(MODEL_CURRENT_TRANSPORTS_PATH, options),
+    currentTransport: (id: string, options?: RequestOptions) =>
+      this.requestJson<SceneCurrentTransport>(MODEL_CURRENT_TRANSPORT_PATH, options, { path: { id } }),
+    createCurrentTransport: (request: CurrentTransportMutationRequest, options?: RequestOptions) =>
+      this.postJson<CurrentTransportCommitResource, CurrentTransportMutationRequest>(MODEL_CURRENT_TRANSPORTS_PATH, request, options),
+    replaceCurrentTransport: (id: string, request: CurrentTransportMutationRequest, options?: RequestOptions) =>
+      this.patchJson<CurrentTransportCommitResource, CurrentTransportMutationRequest>(MODEL_CURRENT_TRANSPORT_PATH, request, options, { path: { id } }),
+    deleteCurrentTransport: (id: string, request: SpinAuthoringDeleteRequest, options?: RequestOptions) =>
+      this.deleteJsonWithBody<CurrentTransportCommitResource, SpinAuthoringDeleteRequest>(MODEL_CURRENT_TRANSPORT_PATH, request, options, { path: { id } }),
+    spinTorques: (options?: RequestOptions) =>
+      this.requestJson<SpinTorqueListResource>(MODEL_SPIN_TORQUES_PATH, options),
+    spinTorque: (id: string, options?: RequestOptions) =>
+      this.requestJson<SceneSpinTorque>(MODEL_SPIN_TORQUE_PATH, options, { path: { id } }),
+    createSpinTorque: (request: SpinTorqueMutationRequest, options?: RequestOptions) =>
+      this.postJson<SpinTorqueCommitResource, SpinTorqueMutationRequest>(MODEL_SPIN_TORQUES_PATH, request, options),
+    replaceSpinTorque: (id: string, request: SpinTorqueMutationRequest, options?: RequestOptions) =>
+      this.patchJson<SpinTorqueCommitResource, SpinTorqueMutationRequest>(MODEL_SPIN_TORQUE_PATH, request, options, { path: { id } }),
+    deleteSpinTorque: (id: string, request: SpinAuthoringDeleteRequest, options?: RequestOptions) =>
+      this.deleteJsonWithBody<SpinTorqueCommitResource, SpinAuthoringDeleteRequest>(MODEL_SPIN_TORQUE_PATH, request, options, { path: { id } }),
+    oerstedFields: (options?: RequestOptions) =>
+      this.requestJson<OerstedFieldListResource>(MODEL_OERSTED_FIELDS_PATH, options),
+    oerstedField: (id: string, options?: RequestOptions) =>
+      this.requestJson<SceneOerstedField>(MODEL_OERSTED_FIELD_PATH, options, { path: { id } }),
+    createOerstedField: (request: OerstedFieldMutationRequest, options?: RequestOptions) =>
+      this.postJson<OerstedFieldCommitResource, OerstedFieldMutationRequest>(MODEL_OERSTED_FIELDS_PATH, request, options),
+    replaceOerstedField: (id: string, request: OerstedFieldMutationRequest, options?: RequestOptions) =>
+      this.patchJson<OerstedFieldCommitResource, OerstedFieldMutationRequest>(MODEL_OERSTED_FIELD_PATH, request, options, { path: { id } }),
+    deleteOerstedField: (id: string, request: SpinAuthoringDeleteRequest, options?: RequestOptions) =>
+      this.deleteJsonWithBody<OerstedFieldCommitResource, SpinAuthoringDeleteRequest>(MODEL_OERSTED_FIELD_PATH, request, options, { path: { id } }),
     commitTransaction: (
       transaction: AuthoringTransactionRequest,
       options?: RequestOptions,
@@ -1888,6 +1937,21 @@ export class ControlRoomApi {
     params?: Record<string, unknown>,
   ): Promise<TResponse> {
     const result = await this.transport.DELETE(path as never, {
+      cache: "no-store",
+      params,
+      signal: options.signal,
+    } as never);
+    return readOpenApiResult<TResponse>(result);
+  }
+
+  private async deleteJsonWithBody<TResponse, TBody>(
+    path: OpenApiV2Path,
+    body: TBody,
+    options: RequestOptions = {},
+    params?: Record<string, unknown>,
+  ): Promise<TResponse> {
+    const result = await this.transport.DELETE(path as never, {
+      body,
       cache: "no-store",
       params,
       signal: options.signal,
