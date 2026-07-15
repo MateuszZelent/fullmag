@@ -16,6 +16,7 @@ import { ObjectVisualizationController } from "@/kernel/visualization/ObjectVisu
 import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 
 import { ObjectVisualizationPanel } from "../ObjectVisualizationPanel";
+import { VisualizationVectorAccountingRows } from "../VisualizationVectorAccountingRows";
 import { VisualizationDebugPanel } from "./VisualizationDebugPanel";
 import {
   createVisualizationDebugEvidenceActions,
@@ -183,6 +184,49 @@ describe("VisualizationDebugPanel mounted interaction", () => {
     expect(subscribe).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
+    dom.restore();
+  });
+
+  it("requests bounded Airbox evidence only while its vector accounting rows are mounted", async () => {
+    const dom = installInteractiveTestDom();
+    const kernel = makeKernel();
+    const request = vi.spyOn(kernel.visualizationDebug, "request");
+    const subscribe = vi.spyOn(kernel.visualizationDebug, "subscribe");
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <VisualizationVectorAccountingRows
+            availableNodeCount={10_586}
+            currentTopologyHash="mesh-1"
+            exact
+            targetKind="airbox"
+          />
+        </KernelContext.Provider>,
+      );
+    });
+
+    expect(request).toHaveBeenCalledWith("airbox");
+    expect(subscribe).toHaveBeenCalledWith("airbox", expect.any(Function));
+    const publisher = kernel.visualizationDebug.registerPublisher("viewport-primary");
+    await act(async () => {
+      kernel.visualizationDebug.commit(
+        publisher,
+        "airbox",
+        airboxAccountingSnapshot(),
+      );
+    });
+    expect(container.textContent).toContain("Available air-only nodes10,586");
+    expect(container.textContent).toContain("Decoded field samples10,586");
+    expect(container.textContent).toContain("Adopted arrows10,586");
+
+    await act(async () => root.unmount());
+    expect(kernel.visualizationDebug.getDemandSnapshot("airbox").expanded).toBe(
+      false,
+    );
     dom.restore();
   });
 });
@@ -353,6 +397,57 @@ function mountedSnapshot(): VisualizationDebugSnapshot {
       viewportId: "viewport-primary",
     },
     version: 1,
+  };
+}
+
+function airboxAccountingSnapshot(): VisualizationDebugSnapshot {
+  const snapshot = mountedSnapshot();
+  const carrier = snapshot.carriers[0];
+  if (!carrier?.payload) throw new Error("Mounted snapshot payload is required.");
+  const resourceKey = `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "h_demag")}?component=full&scope_kind=airbox&scope_id=part%3A__air__`;
+  return {
+    ...snapshot,
+    carriers: [
+      {
+        ...carrier,
+        carrierId: "part:__air__",
+        payload: {
+          ...carrier.payload,
+          grid: [10_586, 1, 1],
+          nodeIndexCount: 10_586,
+          pointCount: 10_586,
+          quantityId: "h_demag",
+          scopeId: "part:__air__",
+          scopeKind: "airbox",
+          valueCount: 31_758,
+        },
+        render: {
+          ...carrier.render,
+          adoption: {
+            ...carrier.render.adoption,
+            adoptedFieldBufferId: "airbox-buffer",
+            adoptedResourceKey: resourceKey,
+            adoptedVectorBuildKey: "airbox-build",
+            adoptedVectorItemCount: 10_586,
+          },
+          requestedFieldBufferId: "airbox-buffer",
+          requestedPasses: ["vector-glyph"],
+          vectors: {
+            buildKey: "airbox-build",
+            degradation: null,
+            segmentByteLength: 508_128,
+            segmentCount: 10_586,
+          },
+        },
+        request: { plannerRequestId: "planner-airbox", resourceKey },
+      },
+    ],
+    target: {
+      carrierIds: ["part:__air__"],
+      id: "airbox",
+      kind: "airbox",
+      label: "Airbox",
+    },
   };
 }
 

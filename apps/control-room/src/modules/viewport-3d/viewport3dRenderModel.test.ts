@@ -1890,6 +1890,111 @@ describe("viewport3dRenderModel", () => {
     );
   });
 
+  it("preserves the exact decoded FMVP payload on target render-pass field sources", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const nodeIndices = new Uint32Array([0, 1, 2, 3]);
+    const values = new Float64Array(12);
+    const decodedFieldVector: DecodedFieldVector = {
+      domainGenerationId: "decoded-domain",
+      dtype: "float64",
+      formatVersion: 3,
+      grid: [4, 1, 1],
+      indexing: "explicit_node_indices",
+      meshTopologyHash: "decoded-topology-hash",
+      meshTopologyRevision: "decoded-topology-revision",
+      nComp: 3,
+      nodeIndices,
+      pointCount: 4,
+      quantityId: "H_demag",
+      scopeId: "part-a",
+      scopeKind: "part",
+      valueCount: 12,
+      values,
+    };
+    const targetBuffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: decodedFieldVector,
+      query: {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      {
+        partTargetFieldBuffers: new Map([["part-a", targetBuffer]]),
+        partVectorBudgets: new Map([["part-a", 0]]),
+        scalarColorsVisible: false,
+      },
+    );
+
+    const source = model?.targetPasses.get("part-a")?.fieldBuffer;
+    expect(source?.decodedFieldVector).toBe(decodedFieldVector);
+    expect(source?.decodedFieldVector?.nodeIndices).toBe(nodeIndices);
+    expect(source?.decodedFieldVector?.values).toBe(values);
+  });
+
+  it("does not expose synthetic render vectors as decoded FMVP payloads", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const syntheticVector: DecodedFieldVector = {
+      dtype: "float64",
+      grid: [4, 1, 1],
+      nComp: 3,
+      pointCount: 4,
+      quantityId: "synthetic_airbox",
+      valueCount: 12,
+      values: new Float64Array(12),
+    };
+    const targetBuffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: syntheticVector,
+      query: {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "airbox",
+      },
+      synthetic: true,
+      targetIds: ["part-a"],
+    });
+
+    const model = buildViewport3DFieldRenderModel(topologyModel, null, 0.5, {
+      partTargetFieldBuffers: new Map([["part-a", targetBuffer]]),
+      partVectorBudgets: new Map([["part-a", 0]]),
+      scalarColorsVisible: false,
+    });
+
+    expect(model?.targetPasses.get("part-a")?.fieldBuffer?.decodedFieldVector).toBeNull();
+  });
+
   it("builds face-expanded scalar colors for surface face projection plans", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),

@@ -130,6 +130,51 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     expect(result.carriers[0]?.geometryMaskDescription).toBe("object object:1");
   });
 
+  it("keeps missing legacy payload identity null and reports insufficient evidence as unknown", () => {
+    const legacyField: DecodedFieldVector = {
+      domainGenerationId: null,
+      dtype: "float64",
+      formatVersion: 2,
+      grid: [1, 1, 1],
+      indexing: "legacy_count_only",
+      meshTopologyHash: null,
+      meshTopologyRevision: null,
+      nComp: 3,
+      nodeIndices: null,
+      pointCount: 1,
+      quantityId: "m",
+      scopeId: null,
+      scopeKind: null,
+      valueCount: 3,
+      values: new Float64Array([1, 0, 0]),
+    };
+    const result = snapshot([
+      carrier({
+        decoded: legacyField,
+        expectedDomainGenerationId: null,
+        expectedTopologyHash: null,
+        requestedQuantityId: "m",
+        requestedScopeId: null,
+        requestedScopeKind: "full",
+      }),
+    ]);
+
+    expect(result.carriers[0]?.payload).toMatchObject({
+      formatVersion: 2,
+      scopeId: null,
+      scopeKind: null,
+    });
+    expect(result.carriers[0]?.revisions).toMatchObject({
+      domainGenerationId: null,
+      meshTopologyHash: null,
+      topologyRevision: null,
+    });
+    expect(result.disposition).toBe("unknown");
+    expect(result.issues).not.toContainEqual(
+      expect.objectContaining({ code: "scope-kind-mismatch" }),
+    );
+  });
+
   it("does not count shared bytes as owned and preserves unknown attribution as null", () => {
     const result = snapshot([carrier({ cache: null, topologyByteLength: null, webglSharedByteLength: null, wireByteLength: null })]);
     expect(result.carriers[0]?.memory).toContainEqual(expect.objectContaining({ id: "wire", byteLength: null }));

@@ -191,6 +191,13 @@ export function createViewport3DVisualizationDebugPublisher({
     );
     state.lastCommittedFrameId = frame.commitId;
   };
+  const unsubscribeAdoption = adoptionRegistry.subscribe(() => {
+    if (disposed || !lastFrame) return;
+    for (const [targetId, state] of active) {
+      state.lastCommittedFrameId = null;
+      commitTarget(targetId, state, lastFrame);
+    }
+  });
 
   return {
     commitFrame(frame) {
@@ -203,6 +210,7 @@ export function createViewport3DVisualizationDebugPublisher({
     dispose() {
       if (disposed) return;
       disposed = true;
+      unsubscribeAdoption();
       for (const unsubscribe of demandUnsubscribers.values()) unsubscribe();
       demandUnsubscribers.clear();
       for (const targetId of [...active.keys()]) stopTarget(targetId);
@@ -456,6 +464,7 @@ function targetFieldBufferSourceFromDecoded(
     component: fieldVector.nComp > 1 ? "full" : "magnitude",
     componentCount: fieldVector.nComp,
     consumers: Object.freeze([]),
+    decodedFieldVector: fieldVector,
     domainGenerationId: null,
     fieldRevision: null,
     indexing: fieldVector.indexing,
@@ -545,18 +554,7 @@ function buildCarrierInput({
 function decodedFieldBuffer(
   fieldBuffer: Viewport3DTargetFieldBufferSource,
 ) {
-  return {
-    dtype: "float64" as const,
-    formatVersion: 3 as const,
-    grid: [fieldBuffer.pointCount, 1, 1] as [number, number, number],
-    indexing: fieldBuffer.indexing ?? "legacy_count_only",
-    nComp: fieldBuffer.componentCount,
-    nodeIndices: fieldBuffer.nodeIndices ?? undefined,
-    pointCount: fieldBuffer.pointCount,
-    quantityId: fieldBuffer.quantityId,
-    valueCount: fieldBuffer.values.length,
-    values: fieldBuffer.values,
-  };
+  return fieldBuffer.decodedFieldVector;
 }
 
 function debugTargetKind(

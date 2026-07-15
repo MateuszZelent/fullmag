@@ -1,38 +1,67 @@
 import { describe, expect, it } from "vitest";
 
-import type { DecodedComplexFieldVector } from "@/kernel/api/codecs";
+import type { DecodedComplexFieldVector, DecodedFieldVector } from "@/kernel/api/codecs";
 import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 
-import type { Viewport3DTargetRenderPassModel } from "../viewport3dRenderModel";
+import type {
+  Viewport3DTargetFieldBufferSource,
+  Viewport3DTargetRenderPassModel,
+} from "../viewport3dRenderModel";
 
 import { planViewport3DDerivedWorkItems } from "./viewport3DDerivedWorkPlan";
+
+function targetFieldBufferSource(
+  overrides: Partial<Viewport3DTargetFieldBufferSource> = {},
+): Viewport3DTargetFieldBufferSource {
+  const componentCount = overrides.componentCount ?? 3;
+  const pointCount = overrides.pointCount ?? 4;
+  const quantityId = overrides.quantityId ?? "m";
+  const values = overrides.values ?? new Float64Array(pointCount * componentCount);
+  const decodedFieldVector: DecodedFieldVector = overrides.decodedFieldVector ?? {
+    dtype: "float64",
+    formatVersion: 3,
+    grid: [pointCount, 1, 1],
+    indexing: overrides.indexing ?? "legacy_count_only",
+    nComp: componentCount,
+    nodeIndices: overrides.nodeIndices ?? null,
+    pointCount,
+    quantityId,
+    scopeId: overrides.scopeId ?? "part-a",
+    scopeKind: overrides.scopeKind ?? "part",
+    valueCount: values.length,
+    values,
+  };
+  return {
+    bufferId: "buffer:part-a",
+    capability: "full-vector-complete",
+    component: "full",
+    componentCount,
+    consumers: ["part-a:surface", "part-a:vector-glyph"],
+    decodedFieldVector,
+    fieldRevision: "field-1",
+    pointCount,
+    quantityId,
+    requestId: "quantity=m&component=full&scope_kind=part&scope_id=part-a",
+    resourceKey: fieldVectorResourceKey("m", {
+      component: "full",
+      scope_id: "part-a",
+      scope_kind: "part",
+    }),
+    sampled: false,
+    scopeId: "part-a",
+    scopeKind: "part",
+    topologyRevision: "mesh-1",
+    values,
+    vectorComponentCount: componentCount,
+    ...overrides,
+  };
+}
 
 function targetPass(
   overrides: Partial<Viewport3DTargetRenderPassModel> = {},
 ): Viewport3DTargetRenderPassModel {
   return {
-    fieldBuffer: {
-      bufferId: "buffer:part-a",
-      capability: "full-vector-complete",
-      component: "full",
-      componentCount: 3,
-      consumers: ["part-a:surface", "part-a:vector-glyph"],
-      fieldRevision: "field-1",
-      pointCount: 4,
-      quantityId: "m",
-      requestId: "quantity=m&component=full&scope_kind=part&scope_id=part-a",
-      resourceKey: fieldVectorResourceKey("m", {
-        component: "full",
-        scope_id: "part-a",
-        scope_kind: "part",
-      }),
-      sampled: false,
-      scopeId: "part-a",
-      scopeKind: "part",
-      topologyRevision: "mesh-1",
-      values: new Float64Array(12),
-      vectorComponentCount: 3,
-    },
+    fieldBuffer: targetFieldBufferSource(),
     fieldBufferState: "target-buffer",
     surface: {
       degradation: null,
@@ -298,7 +327,7 @@ describe("viewport3DDerivedWorkPlan", () => {
         [
           "part-a",
           targetPass({
-            fieldBuffer: {
+            fieldBuffer: targetFieldBufferSource({
               bufferId: "buffer:sampled",
               capability: "full-vector-sampled",
               component: "full",
@@ -321,7 +350,7 @@ describe("viewport3DDerivedWorkPlan", () => {
               topologyRevision: "mesh-1",
               values: new Float64Array(12),
               vectorComponentCount: 3,
-            },
+            }),
             surface: {
               degradation: "sampled-buffer-not-surface-capable",
               passId: "part-a:surface",

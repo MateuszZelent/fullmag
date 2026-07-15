@@ -129,7 +129,6 @@ import {
   parseRegionVisualizationTargetId,
   type ScalarColorbarDisplayUnit,
 } from "./ObjectVisualizationPanelModel";
-import { formatCount } from "./MeshResourceView";
 import { VisualizationVectorAccountingRows } from "./VisualizationVectorAccountingRows";
 import {
   nextVisualizationRadioValue,
@@ -1017,9 +1016,9 @@ function VisualizationVectorsSection({
   sectionDisabled,
   settings,
   targetKind,
-  vectorAccounting,
   vectorBudgetRange,
   vectorBudgetRanges,
+  vectorTopologyHash,
 }: {
   meshParts?: ReadonlyArray<{
     actionTargetLabel: string;
@@ -1043,12 +1042,12 @@ function VisualizationVectorsSection({
   sectionDisabled: SectionDisabled;
   settings: VisualizationTargetSettings;
   targetKind: VisualizationTargetKind;
-  vectorAccounting: VisualizationVectorAccounting;
   vectorBudgetRange: VisualizationVectorBudgetRange;
   vectorBudgetRanges: Record<
     VisualizationGeometryScope,
     VisualizationVectorBudgetRange
   >;
+  vectorTopologyHash: string | null;
 }) {
   const vectorBudgetValue = Math.max(
     vectorBudgetRange.min,
@@ -1086,25 +1085,11 @@ function VisualizationVectorsSection({
         value={vectorBudgetValue}
         onChange={(value) => patchNumber("vectorBudget", value)}
       />
-      <FieldRow
-        label={targetKind === "airbox" ? "Available air-only nodes" : "Available nodes"}
-        value={`${formatCount(vectorBudgetRange.availableNodeCount)}${vectorBudgetRange.exact ? "" : " est."}`}
-      />
-      <FieldRow
-        label="Decoded field samples"
-        value={
-          vectorAccounting.decodedSampleCount === null
-            ? "waiting"
-            : formatCount(vectorAccounting.decodedSampleCount)
-        }
-      />
-      <FieldRow
-        label="Adopted arrows"
-        value={
-          vectorAccounting.adoptedGlyphCount === null
-            ? "waiting"
-            : formatCount(vectorAccounting.adoptedGlyphCount)
-        }
+      <VisualizationVectorAccountingRows
+        availableNodeCount={vectorBudgetRange.availableNodeCount}
+        currentTopologyHash={vectorTopologyHash}
+        exact={vectorBudgetRange.exact}
+        targetKind={targetKind}
       />
       <div className="fm-visualization-toggle-grid">
         {targetKind === "airbox" ? (

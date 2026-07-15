@@ -218,7 +218,7 @@ export function VisualizationDebugPanelView({
               <FieldRow label="nComp" value={carrier.payload.nComp.toLocaleString("en-US")} />
               <FieldRow label="Points / values" value={`${carrier.payload.pointCount.toLocaleString("en-US")} / ${carrier.payload.valueCount.toLocaleString("en-US")}`} />
               <FieldRow label="Indexing / node indices" value={`${carrier.payload.indexing} / ${carrier.payload.nodeIndexCount?.toLocaleString("en-US") ?? "—"}`} />
-              <FieldRow label="Scope" value={`${carrier.payload.scopeKind}:${carrier.payload.scopeId ?? "—"}`} />
+              <FieldRow label="Scope" value={`${carrier.payload.scopeKind ?? "—"}:${carrier.payload.scopeId ?? "—"}`} />
             </> : <p className="fm-visualization-debug-empty">No decoded field payload is available.</p>}
           </div>
         ))}

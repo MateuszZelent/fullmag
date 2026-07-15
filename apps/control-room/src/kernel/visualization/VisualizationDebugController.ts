@@ -13,8 +13,10 @@ export interface VisualizationDebugPublisherToken {
 export interface VisualizationDebugLifecycleStats {
   activeDemandCount: number;
   activePublisherCount: number;
+  demandSubscriptionCount: number;
   demandedTargetCount: number;
   retainedSnapshotCount: number;
+  snapshotSubscriptionCount: number;
 }
 
 type Listener = () => void;
@@ -129,8 +131,10 @@ export class VisualizationDebugController {
     return {
       activeDemandCount,
       activePublisherCount: this.activePublisherGenerations.size,
+      demandSubscriptionCount: listenerCount(this.demandListeners),
       demandedTargetCount: this.demandCounts.size,
       retainedSnapshotCount,
+      snapshotSubscriptionCount: listenerCount(this.snapshotListeners),
     };
   }
 
@@ -252,6 +256,12 @@ export class VisualizationDebugController {
       this.notify(this.snapshotListeners.get(targetId));
     }
   }
+}
+
+function listenerCount(listenersByTarget: Map<string, Set<Listener>>): number {
+  let count = 0;
+  for (const listeners of listenersByTarget.values()) count += listeners.size;
+  return count;
 }
 
 function normalizeAndBoundSnapshot(

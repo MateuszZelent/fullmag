@@ -7,6 +7,11 @@ const apiBase = (
 ).replace(/\/$/, "");
 const workspaceUrl =
   process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
+const browserApiBase = (
+  process.env.CONTROL_ROOM_BROWSER_API_BASE_URL ?? apiBase
+).replace(/\/$/, "");
+const browserHostResolverIp =
+  process.env.CONTROL_ROOM_BROWSER_HOST_RESOLVER_IP?.trim() ?? "";
 const timeoutMs = Number(
   process.env.CONTROL_ROOM_AIRBOX_FIELD_SMOKE_TIMEOUT_MS ?? 180_000,
 );
@@ -19,6 +24,7 @@ const vectorBudget = Number(
   process.env.CONTROL_ROOM_AIRBOX_FIELD_VECTOR_BUDGET ?? 192,
 );
 const VIEWPORT_3D_CANVAS_SELECTOR = ".fm-viewport-3d canvas";
+const VIEWPORT_IDLE_SETTLE_MS = 2_000;
 const FIELD_VECTOR_PATH_RE =
   /^\/v2\/sessions\/current\/data\/fields\/([^/]+)\/samples\/vector$/;
 const TERMINAL_COMMAND_STATUSES = new Set([
@@ -35,20 +41,29 @@ async function main() {
     "/v2/sessions/current/meshing/meshes/shared-domain/manifest",
   );
   const objectPartId = resolveObjectPartId(manifest, objectId);
-  resolveAirboxPartId(manifest);
+  const airboxPartId = resolveAirboxPartId(manifest);
+  const availableAirOnlyNodeCount = resolveAirOnlyNodeCount(manifest);
 
-  await ensureComputeFieldsReady();
-  await assertBinaryVectorEndpointReady(objectQuantityId, {
-    component: "full",
-    max_samples: vectorBudget,
-    scope_id: objectPartId,
-    scope_kind: "part",
-  });
-  await assertBinaryVectorEndpointReady(airboxQuantityId, {
-    component: "full",
-    max_samples: vectorBudget,
-    scope_kind: "airbox",
-  });
+  await ensureBinaryVectorEndpointsReady([
+    {
+      quantityId: objectQuantityId,
+      query: {
+        component: "full",
+        max_samples: vectorBudget,
+        scope_id: objectPartId,
+        scope_kind: "part",
+      },
+    },
+    {
+      quantityId: airboxQuantityId,
+      query: {
+        component: "full",
+        max_samples: vectorBudget,
+        scope_id: airboxPartId,
+        scope_kind: "airbox",
+      },
+    },
+  ]);
 
   const visualizationState = await getJson(
     "/v2/sessions/current/visualization/state",
@@ -66,7 +81,15 @@ async function main() {
     );
   }
 
-  const browser = await playwright.chromium.launch();
+  const browser = await playwright.chromium.launch(
+    browserHostResolverIp
+      ? {
+          args: [
+            `--host-resolver-rules=MAP localhost ${browserHostResolverIp}`,
+          ],
+        }
+      : undefined,
+  );
   const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
   const fieldRequests = [];
   const fieldResponses = [];
@@ -80,9 +103,10 @@ async function main() {
     window.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__ = {
       publishes: 0,
       scans: 0,
+      viewportFrameReasons: {},
       viewportFrames: 0,
     };
-  }, apiBase);
+  }, browserApiBase);
 
   page.on("console", (message) => {
     if (message.type() !== "error") return;
@@ -104,6 +128,7 @@ async function main() {
     if (!parsed) return;
     fieldResponses.push({
       ...parsed,
+      headers: response.headers(),
       status: response.status(),
       timestamp: Date.now(),
       url: response.url(),
@@ -120,11 +145,19 @@ async function main() {
     const proof = await waitForFieldRoutingProof({
       fieldRequests,
       fieldResponses,
+      airboxPartId,
       objectPartId,
     });
     const debugIdleProof = await assertVisualizationDebugIdleBudgets({
       fieldRequests,
       page,
+    });
+    const accountingProof = await assertAirboxInspectorAccounting({
+      airboxPartId,
+      availableAirOnlyNodeCount,
+      fieldRequests,
+      page,
+      proof,
     });
     if (errors.length > 0) {
       throw new Error("Browser console errors:\n" + errors.join("\n"));
@@ -133,7 +166,9 @@ async function main() {
       `Airbox field routing proof: ${JSON.stringify({
         ...proof,
         ...debugIdleProof,
+        ...accountingProof,
         apiBase,
+        browserApiBase,
         workspaceUrl,
       })}`,
     );
@@ -149,9 +184,14 @@ async function assertVisualizationDebugIdleBudgets({ fieldRequests, page }) {
   const requestCountBefore = fieldRequests.length;
   await page.waitForTimeout(750);
   const after = await readVisualizationDebugPerformance(page);
+  const debugIdleFieldRequests = fieldRequests.slice(requestCountBefore);
   const debugFieldRequestDelta = fieldRequests.length - requestCountBefore;
   const debugIdleFieldRequestDelta = debugFieldRequestDelta;
   const debugIdleFrameDelta = after.viewportFrames - before.viewportFrames;
+  const debugIdleFrameReasons = subtractCounterMaps(
+    after.viewportFrameReasons,
+    before.viewportFrameReasons,
+  );
   const debugIdleScanDelta = after.scans - before.scans;
   const debugIdlePublishDelta = after.publishes - before.publishes;
   const metrics = {
@@ -163,7 +203,9 @@ async function assertVisualizationDebugIdleBudgets({ fieldRequests, page }) {
   };
   for (const [name, value] of Object.entries(metrics)) {
     if (value !== 0) {
-      throw new Error(`Visualization Debug idle budget ${name} must be 0, got ${value}.`);
+      throw new Error(
+        `Visualization Debug idle budget ${name} must be 0, got ${value}; dirty reasons=${JSON.stringify(debugIdleFrameReasons)}; field requests=${JSON.stringify(debugIdleFieldRequests)}.`,
+      );
     }
   }
   if (after.scans !== 0 || after.publishes !== 0) {
@@ -185,7 +227,7 @@ async function waitForVisualizationDebugQuiet({ fieldRequests, page }) {
       stableSince = Date.now();
       return null;
     }
-    return Date.now() - stableSince >= 500 ? counters : null;
+    return Date.now() - stableSince >= VIEWPORT_IDLE_SETTLE_MS ? counters : null;
   });
 }
 
@@ -194,8 +236,17 @@ async function readVisualizationDebugPerformance(page) {
     window.__FULLMAG_VISUALIZATION_DEBUG_PERFORMANCE__ ?? {
       publishes: 0,
       scans: 0,
+      viewportFrameReasons: {},
       viewportFrames: 0,
     },
+  );
+}
+
+function subtractCounterMaps(after = {}, before = {}) {
+  return Object.fromEntries(
+    Object.entries(after)
+      .map(([key, value]) => [key, value - (before[key] ?? 0)])
+      .filter(([, value]) => value > 0),
   );
 }
 
@@ -301,6 +352,7 @@ function assertVisualizationRoutingState(state) {
 async function waitForFieldRoutingProof({
   fieldRequests,
   fieldResponses,
+  airboxPartId,
   objectPartId,
 }) {
   return poll("viewport field routing proof", async () => {
@@ -316,12 +368,14 @@ async function waitForFieldRoutingProof({
       (entry) =>
         normalizeQuantityId(entry.quantityId) === "h_demag" &&
         entry.params.scope_kind === "airbox" &&
-        !entry.params.scope_id,
+        entry.params.scope_id === airboxPartId,
     );
     const forbiddenHdemagRequests = fieldRequests.filter(
       (entry) =>
         normalizeQuantityId(entry.quantityId) === "h_demag" &&
-        (entry.params.scope_kind === "full" || !entry.params.scope_kind),
+        (entry.params.scope_kind === "full" ||
+          !entry.params.scope_kind ||
+          !entry.params.scope_id),
     );
     const failedResponses = fieldResponses.filter((entry) => entry.status >= 400);
     if (failedResponses.length > 0) {
@@ -351,12 +405,83 @@ async function waitForFieldRoutingProof({
     }
     return {
       airboxRequest: responseSummary(airboxResponse),
+      airboxPointCount: responsePointCount(airboxResponse),
       forbiddenHdemagFullDomainRequestCount: forbiddenHdemagRequests.length,
       objectRequest: responseSummary(objectResponse),
       requestCount: fieldRequests.length,
       responseCount: fieldResponses.length,
     };
   });
+}
+
+async function assertAirboxInspectorAccounting({
+  airboxPartId,
+  availableAirOnlyNodeCount,
+  fieldRequests,
+  page,
+  proof,
+}) {
+  const airboxRow = page.locator(
+    '[data-node-id="model:airbox:visualization"]',
+  );
+  await airboxRow.waitFor({ state: "visible", timeout: timeoutMs });
+  await airboxRow.click({ timeout: timeoutMs });
+
+  const accounting = await poll("Airbox Inspector accounting", async () => {
+    const available = await readInspectorCount(
+      page,
+      "Available air-only nodes",
+    );
+    const decoded = await readInspectorCount(page, "Decoded field samples");
+    const adopted = await readInspectorCount(page, "Adopted arrows");
+    return available === null || decoded === null || adopted === null
+      ? null
+      : { adopted, available, decoded };
+  });
+  if (accounting.available !== availableAirOnlyNodeCount) {
+    throw new Error(
+      `Inspector available Airbox nodes ${accounting.available} != derived ${availableAirOnlyNodeCount}.`,
+    );
+  }
+  if (accounting.decoded !== proof.airboxPointCount) {
+    throw new Error(
+      `Inspector decoded samples ${accounting.decoded} != FMVP ${proof.airboxPointCount}.`,
+    );
+  }
+  if (accounting.adopted !== accounting.decoded) {
+    throw new Error(
+      `Inspector adopted arrows ${accounting.adopted} != decoded samples ${accounting.decoded}.`,
+    );
+  }
+  const matchingRequests = fieldRequests.filter(
+    (entry) =>
+      normalizeQuantityId(entry.quantityId) === "h_demag" &&
+      entry.params.scope_kind === "airbox" &&
+      entry.params.scope_id === airboxPartId,
+  );
+  if (matchingRequests.length !== 1) {
+    throw new Error(
+      `Expected one exact Airbox FMVP request, observed ${matchingRequests.length}.`,
+    );
+  }
+  return {
+    inspectorAdoptedArrowCount: accounting.adopted,
+    inspectorAvailableAirOnlyNodeCount: accounting.available,
+    inspectorDecodedSampleCount: accounting.decoded,
+    matchingAirboxFieldRequestCount: matchingRequests.length,
+  };
+}
+
+async function readInspectorCount(page, label) {
+  const row = page
+    .locator(".fm-inspector-field-row")
+    .filter({ hasText: label })
+    .first();
+  if ((await row.count()) === 0) return null;
+  const value = await row.locator(".fm-inspector-field-row__value").textContent();
+  if (!value || value.trim().toLowerCase() === "waiting") return null;
+  const parsed = Number(value.replace(/[^0-9-]/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function matchingResponse(responses, request) {
@@ -376,6 +501,14 @@ function responseSummary(response) {
     scopeKind: response.params.scope_kind ?? null,
     status: response.status,
   };
+}
+
+function responsePointCount(response) {
+  const value = Number(response.headers?.["x-fullmag-point-count"]);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error("Airbox FMVP response did not publish x-fullmag-point-count.");
+  }
+  return value;
 }
 
 async function ensureViewport3DActive(page) {
@@ -443,6 +576,46 @@ function resolveAirboxPartId(manifest) {
   return match.id;
 }
 
+function resolveAirOnlyNodeCount(manifest) {
+  const airNodes = new Set();
+  const magneticNodes = new Set();
+  for (const part of manifest.mesh_parts ?? []) {
+    const destination = isAirboxMeshPart(part)
+      ? airNodes
+      : isMagneticMeshPart(part)
+        ? magneticNodes
+        : null;
+    if (!destination) continue;
+    for (const nodeIndex of meshPartNodeIndices(part)) {
+      destination.add(nodeIndex);
+    }
+  }
+  for (const nodeIndex of magneticNodes) airNodes.delete(nodeIndex);
+  if (airNodes.size === 0) {
+    throw new Error("Could not derive a non-empty air-only node carrier.");
+  }
+  return airNodes.size;
+}
+
+function isMagneticMeshPart(part) {
+  const role = String(part?.role ?? "").trim().toLowerCase();
+  return (
+    !isAirboxMeshPart(part) &&
+    role !== "interface" &&
+    role !== "outer_boundary" &&
+    Boolean(part?.object_id)
+  );
+}
+
+function meshPartNodeIndices(part) {
+  if (Array.isArray(part?.node_indices) && part.node_indices.length > 0) {
+    return part.node_indices;
+  }
+  const start = Number(part?.node_start ?? 0);
+  const count = Number(part?.node_count ?? 0);
+  return Array.from({ length: count }, (_, index) => start + index);
+}
+
 async function ensureComputeFieldsReady() {
   const response = await postJson("/v2/sessions/current/simulation/commands", {
     kind: "compute_fields",
@@ -459,6 +632,20 @@ async function ensureComputeFieldsReady() {
         detail.error ?? detail.completion_reason ?? ""
       }`,
     );
+  }
+}
+
+async function ensureBinaryVectorEndpointsReady(requests) {
+  try {
+    for (const request of requests) {
+      await assertBinaryVectorEndpointReady(request.quantityId, request.query);
+    }
+    return;
+  } catch {
+    await ensureComputeFieldsReady();
+  }
+  for (const request of requests) {
+    await assertBinaryVectorEndpointReady(request.quantityId, request.query);
   }
 }
 

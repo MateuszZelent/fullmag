@@ -1,6 +1,7 @@
 export interface VisualizationDebugPerformanceCounters {
   publishes: number;
   scans: number;
+  viewportFrameReasons?: Record<string, number>;
   viewportFrames: number;
 }
 
@@ -20,9 +21,12 @@ export function recordVisualizationDebugScan(): void {
   if (counters) counters.scans += 1;
 }
 
-export function recordVisualizationDebugViewportFrame(): void {
+export function recordVisualizationDebugViewportFrame(reason: string): void {
   const counters = readCounters();
-  if (counters) counters.viewportFrames += 1;
+  if (!counters) return;
+  counters.viewportFrames += 1;
+  const reasons = (counters.viewportFrameReasons ??= {});
+  reasons[reason] = (reasons[reason] ?? 0) + 1;
 }
 
 function readCounters(): VisualizationDebugPerformanceCounters | undefined {

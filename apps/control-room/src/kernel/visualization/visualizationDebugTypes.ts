@@ -73,7 +73,7 @@ export interface VisualizationDebugCarrierSnapshot {
     pointCount: number;
     quantityId: string;
     scopeId: string | null;
-    scopeKind: string;
+    scopeKind: string | null;
     valueCount: number;
   } | null;
   render: {

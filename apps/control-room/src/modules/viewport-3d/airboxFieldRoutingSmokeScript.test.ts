@@ -22,15 +22,29 @@ describe("airbox field routing smoke script", () => {
     expect(smokeScript).toContain("CONTROL_ROOM_AIRBOX_FIELD_OBJECT_ID");
     expect(smokeScript).toContain("CONTROL_ROOM_AIRBOX_FIELD_OBJECT_QUANTITY_ID");
     expect(smokeScript).toContain("CONTROL_ROOM_AIRBOX_FIELD_AIRBOX_QUANTITY_ID");
+    expect(smokeScript).toContain("CONTROL_ROOM_BROWSER_API_BASE_URL");
+    expect(smokeScript).toContain("CONTROL_ROOM_BROWSER_HOST_RESOLVER_IP");
     expect(smokeScript).toContain("compute_fields");
     expect(smokeScript).toContain("scope_kind: \"part\"");
     expect(smokeScript).toContain("scope_kind: \"airbox\"");
+    expect(smokeScript).toContain("scope_id: airboxPartId");
+    expect(smokeScript).toContain(
+      "entry.params.scope_id === airboxPartId",
+    );
     expect(smokeScript).toContain("!entry.params.scope_id");
     expect(smokeScript).toContain("domain: \"airbox_only\"");
     expect(smokeScript).toContain("forbiddenHdemagFullDomainRequestCount");
     expect(smokeScript).toContain("H_demag used full-domain field-vector requests");
     expect(smokeScript).toContain("status?.session?.session_id");
     expect(smokeScript).toContain("canvas.getContext(\"webgl2\")");
+    expect(smokeScript).toContain(
+      '[data-node-id="model:airbox:visualization"]',
+    );
+    expect(smokeScript).toContain("Available air-only nodes");
+    expect(smokeScript).toContain("Decoded field samples");
+    expect(smokeScript).toContain("Adopted arrows");
+    expect(smokeScript).toContain("matchingAirboxFieldRequestCount");
+    expect(smokeScript).toContain("x-fullmag-point-count");
     expect(smokeScript).toContain("visualization/state");
     expect(smokeScript).toContain("data/fields/");
     expect(smokeScript).not.toContain("scope_kind=full&scope_id=part%3A__air__");

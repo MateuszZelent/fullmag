@@ -221,7 +221,7 @@ function buildCarrier(
         pointCount: safeCount(decoded.pointCount),
         quantityId: boundText(decoded.quantityId),
         scopeId: boundNullableText(decoded.scopeId),
-        scopeKind: boundText(decoded.scopeKind ?? "full"),
+        scopeKind: boundNullableText(decoded.scopeKind),
         valueCount: safeCount(decoded.valueCount),
       }) : null,
       render: Object.freeze({
@@ -278,7 +278,17 @@ function buildHealthEvidence(
       (!carrier.adoptedVectorBuildKey || !carrier.vectorBuildKey || carrier.adoptedVectorBuildKey === carrier.vectorBuildKey),
     backendRenderRangeMatches: comparableRange,
     domainGenerationMatches: compareWhenKnown(decoded?.domainGenerationId, carrier.expectedDomainGenerationId),
-    evidenceComplete: Boolean(decoded && input.frame.commitId),
+    evidenceComplete: Boolean(
+      decoded &&
+      input.frame.commitId &&
+      decoded.formatVersion === 3 &&
+      decoded.indexing &&
+      decoded.scopeKind &&
+      decoded.domainGenerationId != null &&
+      decoded.meshTopologyHash != null &&
+      decoded.meshTopologyRevision != null &&
+      (decoded.scopeKind === "full" || decoded.scopeId != null),
+    ),
     fieldBufferPresent: !fieldRequired(carrier) || decoded !== null,
     fieldRequestOk: !carrier.fieldRequestError,
     fieldRevisionCurrent: compareWhenKnown(carrier.fieldRevision, carrier.expectedFieldRevision),
@@ -289,8 +299,15 @@ function buildHealthEvidence(
       ? null
       : !matchingRangeDiagnostics(carrier)!.outlierDominated,
     responseMetadataMatches: carrier.cache?.responseMetadata?.identityIssues.length ? false : true,
-    scopeIdMatches: !decoded || (decoded.scopeId ?? null) === carrier.requestedScopeId,
-    scopeKindMatches: !decoded || (decoded.scopeKind ?? "full") === carrier.requestedScopeKind,
+    scopeIdMatches:
+      !decoded
+        ? true
+        : decoded.scopeKind == null
+          ? null
+          : (decoded.scopeId ?? null) === carrier.requestedScopeId,
+    scopeKindMatches: !decoded
+      ? true
+      : compareWhenKnown(decoded.scopeKind, carrier.requestedScopeKind),
     surfacePassPresent: !hasRequestedPass(carrier, "surface") || carrier.scalarBufferByteLength != null,
     targetActive: true,
     topologyHashMatches: compareWhenKnown(decoded?.meshTopologyHash, carrier.expectedTopologyHash),

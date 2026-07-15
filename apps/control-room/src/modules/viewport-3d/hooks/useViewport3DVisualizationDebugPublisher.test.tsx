@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
+import type { DecodedFieldVector } from "@/kernel/api/codecs";
 
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import {
@@ -301,6 +302,47 @@ describe("viewport visualization debug publisher", () => {
     release();
     publisher.dispose();
   });
+
+  it("re-materializes the latest frame when a late adoption receipt arrives", async () => {
+    const controller = new VisualizationDebugController();
+    const registry = createViewport3DRenderAdoptionRegistry();
+    const publisher = createViewport3DVisualizationDebugPublisher({
+      adoptionRegistry: registry,
+      buildCandidate: async ({ targetId }) => ({
+        materialize: ({ frame, receipts }) => ({
+          ...snapshot(targetId, frame.commitId),
+          ownedByteLength: receipts[0]?.itemCount ?? 0,
+        }),
+      }),
+      controller,
+      viewportId: "viewport-main",
+    });
+    const release = controller.request("airbox");
+    publisher.update({
+      carrierTargets: new Map([["part:__air__", ["airbox"]]]),
+      revision: "field-22",
+      targetIds: ["airbox"],
+    });
+    await Promise.resolve();
+    publisher.commitFrame({ commitId: "frame-latest" });
+    expect(controller.getSnapshots("airbox")[0]?.ownedByteLength).toBe(0);
+
+    registry.recordVectorAdoption({
+      byteLength: 291_256,
+      carrierId: "part:__air__",
+      fieldBufferId: "field-22",
+      itemCount: 10_604,
+      resourceKey: "resource-22",
+      vectorBuildKey: "vector-22",
+    });
+
+    expect(controller.getSnapshots("airbox")[0]).toMatchObject({
+      ownedByteLength: 10_604,
+      viewport: { frameCommitId: "frame-latest" },
+    });
+    release();
+    publisher.dispose();
+  });
 });
 
 describe("groupViewport3DVisualizationDebugCarriers", () => {
@@ -331,28 +373,50 @@ describe("groupViewport3DVisualizationDebugCarriers", () => {
 
 describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
   it("materializes separate multi-carrier snapshots with actual adoption identities", async () => {
-    const field = (id: string) => ({
-      bufferId: `field-${id}`,
-      capability: "full-vector-complete" as const,
-      component: "full" as const,
-      componentCount: 3,
-      consumers: [],
-      domainGenerationId: null,
-      fieldRevision: "field-1",
-      indexing: "legacy_count_only" as const,
-      meshTopologyHash: null,
-      nodeIndexCount: null,
-      pointCount: 1,
-      quantityId: "m",
-      requestId: `request-${id}`,
-      resourceKey: `resource-${id}`,
-      sampled: false,
-      scopeId: id,
-      scopeKind: "part" as const,
-      topologyRevision: "mesh-1",
-      values: new Float64Array([1, 0, 0]),
-      vectorComponentCount: 3,
-    });
+    const field = (id: string) => {
+      const values = new Float64Array([1, 0, 0]);
+      const decodedFieldVector: DecodedFieldVector = {
+        domainGenerationId: "domain-1",
+        dtype: "float64",
+        formatVersion: 3,
+        grid: [1, 1, 1],
+        indexing: "legacy_count_only",
+        meshTopologyHash: "topology-hash-1",
+        meshTopologyRevision: "mesh-1",
+        nComp: 3,
+        nodeIndices: null,
+        pointCount: 1,
+        quantityId: "m",
+        scopeId: id,
+        scopeKind: "part",
+        valueCount: 3,
+        values,
+      };
+      return {
+        bufferId: `field-${id}`,
+        capability: "full-vector-complete" as const,
+        component: "full" as const,
+        componentCount: 3,
+        consumers: [],
+        decodedFieldVector,
+        domainGenerationId: "domain-1",
+        fieldRevision: "field-1",
+        indexing: "legacy_count_only" as const,
+        meshTopologyHash: "topology-hash-1",
+        nodeIndexCount: null,
+        nodeIndices: null,
+        pointCount: 1,
+        quantityId: "m",
+        requestId: `request-${id}`,
+        resourceKey: `resource-${id}`,
+        sampled: false,
+        scopeId: id,
+        scopeKind: "part" as const,
+        topologyRevision: "mesh-1",
+        values,
+        vectorComponentCount: 3,
+      };
+    };
     const pass = (id: string) => ({
       fieldBuffer: field(id),
       fieldBufferState: "target-buffer" as const,
@@ -427,23 +491,154 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
       surface: { bufferKey: "scalar-part:a" },
     });
     expect(result.carriers[0]?.request.resourceKey).toBe("resource-part:a");
+    expect(result.carriers[0]?.payload).toMatchObject({
+      scopeId: "part:a",
+      scopeKind: "part",
+    });
+    expect(result.carriers[0]?.revisions).toMatchObject({
+      domainGenerationId: "domain-1",
+      meshTopologyHash: "topology-hash-1",
+      topologyRevision: "mesh-1",
+    });
     expect(result.carriers[0]?.render.surface.colorMode).toBe("full");
     expect(result.issues.map((issue) => issue.code)).toContain("adopted-source-mismatch");
     expect(result.carriers[1]?.render.adoption.adoptedScalarBufferKey).toBeNull();
   });
 
-  it("reports an FDM derived-global carrier as full scope with a logical geometry mask", async () => {
-    const values = new Float64Array([1, 0, 0]);
-    const fullFieldVector = {
-      dtype: "float64" as const,
-      formatVersion: 3 as const,
-      grid: [1, 1, 1] as [number, number, number],
-      indexing: "full_domain" as const,
+  it("reports exact FMVP v3 payload identity instead of normalized request identity", async () => {
+    const values = new Float64Array([1, 2, 3]);
+    const nodeIndices = new Uint32Array([7]);
+    const decodedFieldVector: DecodedFieldVector = {
+      domainGenerationId: "decoded-domain",
+      dtype: "float64",
+      formatVersion: 3,
+      grid: [1, 1, 1],
+      indexing: "explicit_node_indices",
+      meshTopologyHash: "decoded-topology-hash",
+      meshTopologyRevision: "decoded-topology-revision",
       nComp: 3,
+      nodeIndices,
+      pointCount: 1,
+      quantityId: "H_demag",
+      scopeId: "part:__air__",
+      scopeKind: "airbox",
+      valueCount: 3,
+      values,
+    };
+    const fieldBuffer = {
+      bufferId: "field-airbox",
+      capability: "full-vector-complete" as const,
+      component: "full" as const,
+      componentCount: 3,
+      consumers: [],
+      decodedFieldVector,
+      domainGenerationId: "request-domain",
+      fieldRevision: "field-1",
+      indexing: "legacy_count_only" as const,
+      meshTopologyHash: "request-topology-hash",
+      nodeIndexCount: null,
+      nodeIndices: null,
+      pointCount: 1,
+      quantityId: "m",
+      requestId: "request-airbox",
+      resourceKey: "resource-airbox",
+      sampled: false,
+      scopeId: "query-part",
+      scopeKind: "part" as const,
+      topologyRevision: "request-topology-revision",
+      values,
+      vectorComponentCount: 3,
+    };
+    const pass = {
+      fieldBuffer,
+      fieldBufferState: "target-buffer" as const,
+      surface: {
+        degradation: null,
+        passId: "part:__air__:surface",
+        scalarColorMode: null,
+        scalarColors: null,
+      },
+      vectors: {
+        buildReference: null,
+        degradation: null,
+        passId: "part:__air__:vector-glyph",
+        segments: new Float32Array([0, 0, 0, 1, 0, 0, 0]),
+      },
+    };
+    const builder = createViewport3DVisualizationDebugCandidateBuilder({
+      source: {
+        fieldModel: {
+          complexFieldVector: null,
+          derivedWorkItems: [],
+          fullVectorBuild: null,
+          fullVectorSegments: null,
+          partVectorBuilds: new Map(),
+          partVectorSegments: new Map(),
+          scalarColors: null,
+          scalarColorsByMode: new Map(),
+          scalarColorsByPartAndMode: new Map(),
+          targetDiagnostics: [],
+          targetPasses: new Map([["part:__air__", pass]]),
+          visualizationPhaseRad: null,
+        },
+        fullFieldVector: null,
+        targets: [{
+          carrierIds: ["part:__air__"],
+          target: { id: "airbox", kind: "airbox", label: "Airbox" },
+        }],
+        topologyByteLength: null,
+        visualizationRevision: "viz-1",
+        webglSharedByteLength: null,
+      },
+      viewportId: "viewport-main",
+    });
+
+    const candidate = await builder({
+      signal: new AbortController().signal,
+      targetId: "airbox",
+    });
+    const result = candidate.materialize({
+      frame: { commitId: "frame-airbox", committedAtMs: 5 },
+      receipts: [],
+    });
+
+    expect(result.carriers[0]?.payload).toEqual({
+      component: "full",
+      dtype: "float64",
+      formatVersion: 3,
+      grid: [1, 1, 1],
+      indexing: "explicit_node_indices",
+      nComp: 3,
+      nodeIndexCount: 1,
+      pointCount: 1,
+      quantityId: "H_demag",
+      scopeId: "part:__air__",
+      scopeKind: "airbox",
+      valueCount: 3,
+    });
+    expect(result.carriers[0]?.revisions).toMatchObject({
+      domainGenerationId: "decoded-domain",
+      meshTopologyHash: "decoded-topology-hash",
+      topologyRevision: "decoded-topology-revision",
+    });
+  });
+
+  it("keeps legacy FMVP v2 fallback payload identity unknown instead of fabricating v3 full scope", async () => {
+    const values = new Float64Array([1, 0, 0]);
+    const fullFieldVector: DecodedFieldVector = {
+      domainGenerationId: null,
+      dtype: "float64" as const,
+      formatVersion: 2,
+      grid: [1, 1, 1] as [number, number, number],
+      indexing: "legacy_count_only",
+      meshTopologyHash: null,
+      meshTopologyRevision: null,
+      nComp: 3,
+      nodeIndices: null,
       pointCount: 1,
       quantityId: "m",
       scopeId: null,
-      scopeKind: "full" as const,
+      scopeKind: null,
       valueCount: 3,
       values,
     };
@@ -509,10 +704,24 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
       carrierId: "fdm-domain",
       carrierRole: "fdm-domain",
       geometryMaskDescription: "logical target geometry mask",
-      payload: { scopeId: null, scopeKind: "full" },
+      payload: {
+        formatVersion: 2,
+        indexing: "legacy_count_only",
+        scopeId: null,
+        scopeKind: null,
+      },
       request: { resourceKey: "resource-fdm" },
       render: { requestedFieldBufferId: "field-fdm" },
+      revisions: {
+        domainGenerationId: null,
+        meshTopologyHash: null,
+        topologyRevision: null,
+      },
     });
+    expect(result.disposition).toBe("unknown");
+    expect(result.issues).not.toContainEqual(
+      expect.objectContaining({ code: "scope-kind-mismatch" }),
+    );
   });
 });
 import { readFileSync } from "node:fs";

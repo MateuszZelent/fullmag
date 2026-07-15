@@ -210,7 +210,7 @@ export class Viewport3DResourceTracker {
   }
 
   recordDirtyFrame(reason: string): void {
-    recordVisualizationDebugViewportFrame();
+    recordVisualizationDebugViewportFrame(reason);
     this.dirtyReasonCounts.set(
       reason,
       (this.dirtyReasonCounts.get(reason) ?? 0) + 1,
