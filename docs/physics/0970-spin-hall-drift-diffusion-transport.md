@@ -194,8 +194,31 @@ of `J_c` and `mu_s`, electrode balance, angular-momentum balance, and
 dt ||delta T_transport|| <= eta_transport LTE_m
 ```
 
-with starting `eta_transport=0.1`. Failure rejects the outer LLG step; it does
-not commit the last nonlinear iterate.
+The norm is a backend-independent volume-normalized `L2` norm on the union
+`Omega_T` of magnetic target regions receiving transport torque:
+
+```text
+||delta T_transport||_T =
+  sqrt[integral_Omega_T |T_transport^(k+1)-T_transport^k|^2 dV
+       / integral_Omega_T 1 dV],             [1/s]
+
+LTE_m = sqrt[integral_Omega_T |delta m_embedded|^2 dV
+             / integral_Omega_T 1 dV].       [1]
+```
+
+Thus `dt ||delta T_transport||_T` and `LTE_m` are both dimensionless and
+`eta_transport` is dimensionless, with starting value `0.1`. Empty
+`Omega_T` makes the transport-torque criterion vacuous, but does not disable
+charge/spin residual and balance criteria. FDM evaluates the same integral as
+`sum_K V_K |.|^2/sum_K V_K` over active target cells. FEM evaluates it with
+the consistent vector `L2` mass matrix (or quadrature algebraically equivalent
+to that matrix), not an unweighted coefficient-vector norm. Masked/nonmagnetic
+degrees of freedom carry zero weight. Both norms use the same target scope and
+the embedded LLG estimator before magnetization renormalization; this freezes
+cross-backend weighting and prevents mesh-dependent solver tolerances.
+
+Failure of any convergence criterion rejects the outer LLG step; it does not
+commit the last nonlinear iterate.
 
 M3 is stiff. Production target `coupled_imex_ark2` treats diffusion and all
 spin reactions implicitly and couples LLG explicitly or semi-implicitly under
@@ -218,6 +241,11 @@ reference oracle. Subcycling requires a coupled error/order proof.
 | `G_up/down/r/i/SML` | interface conductance | S/m^2 |
 | `m` | reduced magnetization | 1 |
 | `T_tr,G` | Gilbert torque source | s^-1 |
+| `delta T_transport` | change of transport Gilbert-source torque between nonlinear iterates | s^-1 |
+| `||.||_T` | volume-normalized vector `L2` norm on active magnetic torque targets | unit of its argument |
+| `delta m_embedded`, `LTE_m` | embedded LLG state error and its target-domain norm before renormalization | 1 |
+| `eta_transport` | allowed transport-to-outer-error fraction | 1; initial contract `0.1` |
+| `dt` | current outer LLG step size | s, `>0` |
 
 ### 2.8 Assumptions and validity limits
 

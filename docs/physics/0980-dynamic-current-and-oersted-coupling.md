@@ -50,6 +50,44 @@ sinc(amplitude,center,bandwidth_hz,offset)
 tabulated(artifact,interpolation,extrapolation)
 ```
 
+The envelope is a dimensionless scalar multiplier `a(t)` of the SI-valued base
+drive. Its arguments have one frozen interpretation:
+
+| Argument | Meaning | Unit / constraint |
+|---|---|---|
+| `value` | constant multiplier | 1, finite |
+| `amplitude` | signed multiplier amplitude for sinusoid, pulse, or sinc | 1, finite |
+| `offset` | additive multiplier offset | 1, finite |
+| `frequency_hz` | sinusoidal cycles per second | Hz, finite and `>=0` |
+| `phase_rad` | phase added to `2 pi frequency_hz t` | rad (dimensionless), finite |
+| `t_on`, `t_off` | pulse half-open interval bounds | s, finite and `t_off>=t_on` |
+| `(t_i,y_i)` | PWL knot time and dimensionless multiplier | s and 1; finite, strictly increasing `t_i` |
+| `center` | time origin of the sinc argument | s, finite |
+| `bandwidth_hz` | sinc bandwidth and declared significant source bandwidth | Hz, finite and `>0` |
+| `artifact` | table identity whose abscissa is time and ordinate is multiplier | metadata requires s and 1 |
+| `interpolation`, `extrapolation` | versioned enum policies, not numerical values | 1 |
+
+For the canonical sinc convention, `sinc(x)=sin(pi x)/(pi x)` and
+`a(t)=offset+amplitude*sinc(bandwidth_hz*(t-center))`; changing normalized
+sinc convention requires a formula version. A source API that authors absolute
+SI amplitudes must normalize them into the base drive and this dimensionless
+envelope exactly once, preserving both values in provenance.
+
+The remaining canonical evaluations are
+
+```text
+constant:   a(t)=value,
+sinusoidal: a(t)=offset+amplitude
+                  sin(2 pi frequency_hz t+phase_rad),
+pulse:      a(t)=amplitude for t_on<=t<t_off, otherwise 0,
+PWL:        linear interpolation between adjacent (t_i,y_i) knots.
+```
+
+PWL values outside the authored knot interval and tabulated interpolation/
+extrapolation are controlled by explicit versioned policies; no backend may
+silently clamp, wrap, or extrapolate them differently. If a PWL source omits
+such a policy, canonical validation rejects evaluation outside its knot range.
+
 Torque and Oersted bind to that source; they do not carry independent copies.
 For a separable linear solve,
 
@@ -165,6 +203,10 @@ to the RHS state they describe.
 | `omega` | highest significant angular frequency | s^-1 |
 | `delta`, `d`, `L` | lengths | m |
 | `t`, `dt` | time | s |
+| `a(t)`, envelope `value/amplitude/offset/y_i` | source multiplier and ordinates | 1 |
+| `frequency_hz`, `bandwidth_hz` | cyclic frequency and bandwidth | Hz |
+| `phase_rad` | sinusoidal phase | rad (dimensionless) |
+| `center`, `t_on`, `t_off`, `t_i` | envelope times | s |
 
 ### 2.8 Assumptions and validity limits
 

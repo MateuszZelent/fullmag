@@ -174,14 +174,20 @@ The minus sign is mandatory for `gamma_e>0` and LLG precession
 `-gamma0 m x H`. In transient transport the full divergence cannot replace
 `R_J+R_phi`, because spin accumulation stores angular momentum.
 
-At an interface,
+At an interface, `Q_n,in` and `Q_n,out` are evaluated with one frozen normal
+orientation. Any spin-memory-loss flux `q_SML` and any other explicitly
+modelled nonmagnetic reservoir flux `q_other` must be removed before forming
+the flux transferred to magnetization:
 
 ```text
-q_abs = Q_n,in-Q_n,out,                       [A/m^2]
-T_int,G = -gamma_e hbar/(2 e M_s t_F) q_abs. [1/s]
+q_mag = Q_n,in-Q_n,out-q_SML-q_other,         [A/m^2]
+T_int,G = -gamma_e hbar/(2 e M_s t_F) q_mag. [1/s]
 ```
 
-FEM may retain the surface functional instead of inventing a thickness.
+The shortcut `q_mag=Q_n,in-Q_n,out` is valid only when the interface contract
+proves `q_SML=0` and `q_other=0`. SML/lattice flux never contributes to the
+magnetization torque. FEM may retain the `q_mag` surface functional instead of
+inventing a thickness.
 
 ### 2.6 Symbols and SI units
 
@@ -192,16 +198,31 @@ FEM may retain the surface functional instead of inventing a thickness.
 | `mu0` | vacuum permeability | H/m |
 | `gamma_e` | angular gyromagnetic magnitude | s^-1 T^-1, `>0` |
 | `gamma0` | `mu0 gamma_e` | m A^-1 s^-1 |
-| `m`, `p`, `sigma_hat` | unit directions | 1 |
+| `m`, `p`, `sigma_hat` | reduced magnetization, fixed polarization, spin-polarization direction | 1; unit vectors |
+| `n_AB`, `n_stack`, `n_NF`, `t_drive` | generic A-to-B normal, fixed-to-free normal, N-to-F normal, fixed drive direction | 1; unit vectors with stored orientation |
 | `M_s` | saturation magnetization | A/m, `>0` on target |
-| `alpha`, `beta`, `P`, `Lambda`, `xi_DL`, `xi_FL` | coefficients | 1 |
+| `alpha` | Gilbert damping | 1, `>=0` |
+| `beta` | Zhang–Li nonadiabaticity | 1, finite |
+| `P` | polarization magnitude in the torque formulas | 1, `[0,1]` |
+| `Lambda` | Slonczewski asymmetry parameter | 1, `>=1` |
+| `xi_DL`, `xi_FL` | prescribed damping-like and field-like efficiencies | 1, finite and signed |
+| `g` | effective Landé factor used by Zhang–Li | 1, finite and `>0` |
+| `mu_B` | Bohr magneton | J/T |
+| `c=m dot p` | Slonczewski alignment cosine | 1, `[-1,1]` |
+| `epsilon(c)` | Slonczewski angular efficiency | 1, finite with positive denominator |
+| `epsilon_prime` | independent field-like Slonczewski coefficient | 1, finite; the name is not a derivative of `epsilon(c)` |
+| `epsilon_axis` | minimum admissible norm for the cross-product defining a polarization axis | 1, finite and `>0`; versioned numerical validation tolerance |
+| `Omega_J`, `Omega_DL`, `Omega_FL` | signed torque-frequency scales | s^-1 |
 | `H_eff` | effective field | A/m |
-| `J_c`, `J_n` | charge-current density | A/m^2 |
+| `J_c`, `J_n`, `J_signed` | vector, stack-normal, and drive-projected conventional current density | A/m^2; signed |
 | `u` | spin-drift velocity | m/s |
 | `t_F` | resolved/homogenized free-layer thickness | m, `>0` |
-| `T_G`, `dm/dt` | magnetization rate | s^-1 |
-| `Q_ia`, `q_abs` | charge-equivalent spin flux | A/m^2 |
-| `R_J`, `R_phi` | charge-equivalent volumetric absorption | A/m^3 |
+| `W`, `T_G`, `T_explicit`, `T_ZL,G`, `T_SL,G`, `T_SOT,G`, `T_tr,G`, `T_int,G`, `dm/dt` | magnetization rates | s^-1 |
+| `v`, `v_perp` | advective derivative and its tangent projection | s^-1 |
+| `Q_ia`, `Q_n,in`, `Q_n,out`, `q_mag`, `q_SML`, `q_other` | charge-equivalent spin fluxes | A/m^2 |
+| `mathcal J^s` | spin angular-momentum flux | J/m^2 |
+| `R_J`, `R_phi`, `r_m^Q` | charge-equivalent volumetric absorption | A/m^3 |
+| `mathcal R_m` | angular-momentum transfer density | J/m^3 |
 
 ### 2.7 Assumptions, validity, and prohibited interpretations
 
@@ -229,6 +250,12 @@ Production baseline `zl_upwind_first_order_v1` selects the upwind state and
 must define inflow, zero-gradient outflow, mask boundary, and PBC per axis.
 `zl_central_reference_v1` is the smooth-interior accuracy oracle. A future
 MUSCL/TVD operator requires a new formula version.
+
+Here `V_K [m^3]` is cell volume, `A_f [m^2]` is face area, `n_Kf [1]` is
+the outward unit normal of cell `K`, `u_f [m/s]` is signed face drift velocity,
+`m_K,m_f [1]` are cell and reconstructed face magnetizations, and
+`D_u m [1/s]` is the discrete advective derivative. These geometric weights
+and orientations are part of the operator contract, not backend conventions.
 
 Local Slonczewski and prescribed SOT are evaluated in each magnetic target
 cell from signed stage current, then passed through the common Gilbert
