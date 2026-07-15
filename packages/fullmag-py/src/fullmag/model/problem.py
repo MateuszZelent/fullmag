@@ -45,9 +45,9 @@ from fullmag.model.structure import (
 )
 from fullmag.model.study import Eigenmodes, FrequencyResponse, Relaxation, TimeEvolution
 
-IR_VERSION = "0.2.0"
-API_VERSION = "0.2.0"
-SERIALIZER_VERSION = "0.2.0"
+IR_VERSION = "0.3.0"
+API_VERSION = "0.3.0"
+SERIALIZER_VERSION = "0.3.0"
 
 _FEM_MESH_CACHE_VERSION = "v5"
 
