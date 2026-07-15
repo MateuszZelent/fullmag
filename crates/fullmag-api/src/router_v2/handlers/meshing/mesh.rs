@@ -1643,7 +1643,18 @@ pub async fn get_mesh_shared_domain_manifest(
                     .iter()
                     .map(MeshObjectSegmentResource::from)
                     .collect(),
-                mesh_parts: mesh.mesh_parts.iter().map(MeshPartResource::from).collect(),
+                mesh_parts: mesh
+                    .mesh_parts
+                    .iter()
+                    .map(|part| {
+                        let mut resource = MeshPartResource::from(part);
+                        resource.surface_node_indices =
+                            crate::router_v2::handlers::shared::mesh_part_surface_node_indices(
+                                mesh, part,
+                            );
+                        resource
+                    })
+                    .collect(),
                 regions: snapshot
                     .scene_document
                     .as_ref()

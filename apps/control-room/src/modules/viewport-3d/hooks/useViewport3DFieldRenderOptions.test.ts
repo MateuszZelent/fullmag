@@ -223,6 +223,31 @@ describe("sameViewport3DFieldRenderOptions", () => {
     expect(limited.partVectorBudgets?.get("part:film")).toBe(6_099);
   });
 
+  it("does not allocate a Surface Airbox budget without surface membership", () => {
+    const limited = limitViewport3DFieldRenderVectorBudgets(
+      {
+        partVectorBudgets: new Map([["part:__air__", 10_586]]),
+        partVectorScopes: new Map([["part:__air__", "surface"]]),
+      },
+      {
+        airboxParts: [
+          {
+            fullNodeSelection: {
+              nodeIndices: Array.from({ length: 10_586 }, (_, index) => index),
+            },
+            part: { id: "part:__air__", role: "air" },
+            surfaceNodeSelection: null,
+          },
+        ],
+        magneticParts: [],
+        nodeCount: 10_586,
+      } as never,
+      16_384,
+    );
+
+    expect(limited.partVectorBudgets).toEqual(new Map());
+  });
+
   it("keeps small requested vector budgets below the interactive cap", () => {
     expect(clampViewport3DInteractiveVectorBudget(512, 2048)).toBe(512);
     expect(clampViewport3DInteractiveVectorBudget(48_461, 2048)).toBe(2048);

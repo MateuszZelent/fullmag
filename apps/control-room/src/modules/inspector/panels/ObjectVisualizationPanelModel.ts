@@ -358,7 +358,7 @@ export function resolveSelectedTargetVectorMeshPartRows(input: {
   return resolveSelectedTargetVectorMeshParts(input).map((part) => ({
     actionTargetLabel,
     id: part.id,
-    label: part.label,
+    label: input.target?.kind === "airbox" ? "Airbox" : part.label,
   }));
 }
 
@@ -583,7 +583,11 @@ export function resolveVisualizationVectorAccounting({
   const snapshot = [...snapshots].sort(
     (left, right) => right.capturedAtMs - left.capturedAtMs,
   )[0];
-  if (!snapshot || available === null) {
+  if (
+    !snapshot ||
+    available === null ||
+    snapshot.disposition === "blocked"
+  ) {
     return {
       adoptedGlyphCount: null,
       availableNodeCount: available,
@@ -703,12 +707,21 @@ export function resolveVisualizationVectorBudgetRange({
   let exact = true;
   const max = matchingParts.reduce((total, part) => {
     if (target.kind === "airbox") {
+      if (
+        geometryScope === "surface" &&
+        part.surface_node_indices == null
+      ) {
+        exact = false;
+        return total;
+      }
+      const airSelection =
+        geometryScope === "surface"
+          ? { nodeIndices: part.surface_node_indices ?? [] }
+          : part;
       const selection = buildAirOnlyVisualizationNodeSelection({
-        airSelection: part,
+        airSelection,
         magneticSelections: magneticParts,
         nodeCount: topologyNodeCount,
-        surfaceFaces:
-          geometryScope === "surface" ? part.surface_faces : undefined,
       });
       return (
         total + countVisualizationNodeSelection(selection, topologyNodeCount)
@@ -719,7 +732,20 @@ export function resolveVisualizationVectorBudgetRange({
     return total + count.nodeCount;
   }, 0);
 
+  if (target.kind === "airbox" && geometryScope === "surface" && !exact) {
+    return fallbackVisualizationVectorBudgetRange();
+  }
+
   if (max <= 0) {
+    if (target.kind === "airbox" && matchingParts.length > 0) {
+      return {
+        availableNodeCount: 0,
+        exact: true,
+        max: 0,
+        min: 0,
+        step: 1,
+      };
+    }
     return fallbackVisualizationVectorBudgetRange();
   }
 

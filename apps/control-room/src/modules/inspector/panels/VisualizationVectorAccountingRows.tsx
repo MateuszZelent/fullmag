@@ -74,7 +74,11 @@ function VectorAccountingRows({
             ? "Available air-only nodes"
             : "Available nodes"
         }
-        value={`${formatCount(availableNodeCount)}${exact ? "" : " est."}`}
+        value={
+          targetKind === "airbox" && !exact
+            ? "waiting"
+            : `${formatCount(availableNodeCount)}${exact ? "" : " est."}`
+        }
       />
       <FieldRow
         label="Decoded field samples"

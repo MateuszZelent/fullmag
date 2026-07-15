@@ -26,6 +26,16 @@ describe("MeshPartLayer", () => {
       } as never),
     ).toBe(fullNodeSelection);
   });
+
+  it("keeps Surface points empty while canonical surface membership is unavailable", () => {
+    expect(
+      resolveMeshPartPointNodeSelection("surface", {
+        fullNodeSelection: { nodeIndices: [4, 5, 6] },
+        part: { node_indices: [0, 1, 2, 3, 4, 5, 6] },
+        surfaceNodeSelection: null,
+      } as never),
+    ).toEqual({ nodeIndices: [] });
+  });
   it("records the actually visible retained scalar buffer, not merely the requested candidate", () => {
     const registry = createViewport3DRenderAdoptionRegistry();
     registry.setCarrierTargets(new Map([["part:a", ["object:a"]]]));

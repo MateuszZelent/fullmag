@@ -72,7 +72,7 @@ export function viewportSelectionForMeshPart(
   if (address.targetKind === "airbox") {
     return {
       kind: "airbox.root",
-      label: hit.label,
+      label: address.label,
       nodeId: address.explorerNodeId,
       objectId: null,
       ref: {

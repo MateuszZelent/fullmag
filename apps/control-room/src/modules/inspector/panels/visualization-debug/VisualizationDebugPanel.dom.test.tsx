@@ -231,6 +231,35 @@ describe("VisualizationDebugPanel mounted interaction", () => {
     );
     dom.restore();
   });
+
+  it("reports waiting instead of the fallback budget when Airbox availability is not exact", async () => {
+    const dom = installInteractiveTestDom();
+    const kernel = makeKernel();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <VisualizationVectorAccountingRows
+            availableNodeCount={4096}
+            currentTopologyHash={null}
+            exact={false}
+            targetKind="airbox"
+          />
+        </KernelContext.Provider>,
+      );
+    });
+
+    expect(container.textContent).toContain("Available air-only nodeswaiting");
+    expect(container.textContent).toContain("Decoded field sampleswaiting");
+    expect(container.textContent).toContain("Adopted arrowswaiting");
+    expect(container.textContent).not.toContain("4,096 est.");
+
+    await act(async () => root.unmount());
+    dom.restore();
+  });
 });
 
 const debugSelection: Selection = {

@@ -71,6 +71,12 @@ pub struct FieldVectorQuery {
     pub scope_kind: Option<String>,
     /// Scope identifier for `object` and `part` scopes.
     pub scope_id: Option<String>,
+    /// Optional geometric subset for scoped vector samples.
+    ///
+    /// Accepted values: `full` (default) and `surface`. `surface` is currently
+    /// supported for `airbox` scope and is resolved from the selected mesh
+    /// part's canonical surface-node membership before `max_samples` is applied.
+    pub geometry_scope: Option<String>,
     /// Optional hard cap for vector samples returned by the binary payload.
     ///
     /// FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.

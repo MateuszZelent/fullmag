@@ -80,7 +80,7 @@ describe("viewport3dSelection", () => {
       ),
     ).toEqual({
       kind: "airbox.root",
-      label: "Exterior air",
+      label: "Airbox",
       nodeId: "model:airbox",
       objectId: null,
       ref: {

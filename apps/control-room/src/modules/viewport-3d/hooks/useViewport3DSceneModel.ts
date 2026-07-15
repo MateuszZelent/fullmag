@@ -1572,19 +1572,24 @@ export function resolveViewport3DReplayFieldQuery(
 }
 
 export function resolveViewport3DScopedVectorFieldQuery({
+  geometryScope,
   maxSamples,
   surfaceColorMode,
   vectorsVisible,
 }: {
+  geometryScope: "full" | "surface";
   maxSamples: number;
   surfaceColorMode: string | null;
   vectorsVisible: boolean;
 }): FieldVectorQuery {
-  return resolveViewport3DScopedFieldQuery({
+  const query = resolveViewport3DScopedFieldQuery({
     maxSamples,
     surfaceColorMode,
     vectorsVisible,
   });
+  return geometryScope === "surface"
+    ? { ...query, geometry_scope: "surface" }
+    : query;
 }
 
 export function resolveViewport3DPrimaryFieldRenderOptions({
@@ -2940,7 +2945,7 @@ export function useViewport3DSceneModel({
         total +
         resolveNodeSelectionCount(
           airboxSettings.geometryScope === "surface"
-            ? partModel.surfaceNodeSelection ?? partModel.fullNodeSelection
+            ? partModel.surfaceNodeSelection ?? { nodeIndices: [] }
             : partModel.fullNodeSelection,
           fieldCompatibleTopologyRenderModel,
         ),
@@ -2950,6 +2955,7 @@ export function useViewport3DSceneModel({
   const airboxFieldQuery = useMemo(
     () =>
       resolveViewport3DScopedVectorFieldQuery({
+        geometryScope: airboxSettings.geometryScope,
         maxSamples: resolveViewport3DAirboxVectorSampleBudget(
           airboxSettings.vectorBudget,
           airboxAvailableNodeCount,
@@ -2958,6 +2964,7 @@ export function useViewport3DSceneModel({
         vectorsVisible: airboxVectorsVisible,
       }),
     [
+      airboxSettings.geometryScope,
       airboxSettings.vectorBudget,
       airboxAvailableNodeCount,
       airboxSurfaceColorMode,

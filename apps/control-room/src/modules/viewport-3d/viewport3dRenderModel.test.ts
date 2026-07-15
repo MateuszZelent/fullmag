@@ -469,6 +469,33 @@ describe("viewport3dRenderModel", () => {
     expect(topologyModel?.magneticParts[0]?.volumeEdgeIndices).toBeNull();
   });
 
+  it("uses canonical surface membership while topology indices are pending", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part:__air__",
+          node_indices: [0, 1, 2, 3],
+          role: "air",
+          surface_node_indices: [0, 1, 2],
+        },
+      ],
+      undefined,
+      {},
+      { topologyIndexState: "pending" },
+    );
+
+    expect(
+      topologyModel?.airboxParts[0]?.surfaceNodeSelection?.nodeIndices,
+    ).toEqual([0, 1, 2]);
+    expect(topologyModel?.airboxParts[0]?.surfaceNodeIndices).toEqual(
+      new Uint32Array([0, 1, 2]),
+    );
+  });
+
   it("builds sampled normalized vector line segments", () => {
     const segments = buildVectorLineSegments(
       topologyFixture(),
@@ -3659,5 +3686,11 @@ describe("viewport3dRenderModel", () => {
         { nodeCount: 10 },
       ),
     ).toBe(6);
+    expect(
+      resolveNodeSelectionCount(
+        { node_indices: [] },
+        { nodeCount: 10 },
+      ),
+    ).toBe(0);
   });
 });

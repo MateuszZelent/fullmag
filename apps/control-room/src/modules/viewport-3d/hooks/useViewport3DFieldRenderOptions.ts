@@ -295,7 +295,7 @@ export function limitViewport3DFieldRenderVectorBudgets(
     const availableNodeCount = partModel
       ? resolveNodeSelectionCount(
           vectorScope === "surface"
-            ? partModel.surfaceNodeSelection ?? partModel.part
+            ? partModel.surfaceNodeSelection ?? { nodeIndices: [] }
             : partModel.fullNodeSelection,
           topologyRenderModel,
         )
