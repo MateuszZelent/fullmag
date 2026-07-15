@@ -53,6 +53,13 @@ The frontend establishes ownership once at the manifest boundary and reuses the
 result for Explorer addressing, viewport carrier selection, topology freshness,
 and render-carrier diagnostics.
 
+The implementation must expose one kernel-owned normalized manifest-carrier
+result. Both the semantic target catalog and the viewport domain adapter consume
+that result. They must not independently rewrite object segments into local
+carrier shapes. The normalized record preserves the raw transport fields while
+adding the carrier kind, field capability, canonical presentation, and ownership
+aliases needed by downstream consumers.
+
 Airbox identity is derived from all ownership-bearing fields:
 
 - carrier `id`;
@@ -76,6 +83,16 @@ available as a degraded, non-field-capable Airbox carrier. Its visible label is
 `Airbox`; it resolves to `model:airbox`, returns no scene-object id, and never
 appears under `Unassigned mesh parts`. This preserves degraded topology display
 without inventing a magnetic object.
+
+The degraded Airbox carrier must also be absent from object-ownership indexes
+such as `objectPartIds`; `__air__` is not an authored scene object. Direct
+selection, colorbar eligibility, Inspector carrier lists, and visualization
+target resolution all consume the same canonical classification.
+
+Topology freshness and render-carrier-kind resolution use the same ownership
+aliases as carrier normalization. A duplicate Airbox segment cannot make an
+otherwise mesh-part-backed manifest appear `mixed`, and a mesh part can cover a
+legacy synthetic Airbox scene record without exposing that record as a target.
 
 Legitimate unowned magnetic segments keep their current behavior and remain
 explicit fallback targets. Universe outer-boundary carriers remain excluded.
@@ -133,11 +150,15 @@ Clearing hover still emits one `null` transition. No continuous frame loop or po
   `__air__`, no magnetic duplicate, and `mesh-parts` rather than `mixed`
   diagnostics.
 - Degraded-manifest regression: an Airbox object segment without a mesh part
-  remains one non-field-capable Airbox carrier labelled `Airbox`.
+  remains one non-field-capable Airbox carrier labelled `Airbox`, returns a null
+  scene-object id, and creates no `objectPartIds["__air__"]` entry.
 - Collision regression: an unreserved object or segment named `air` is not
   classified as Airbox without an explicit Airbox role.
 - Explorer/viewport integration regression: exactly one `model:airbox` address
   exists and every realized Airbox carrier resolves to it.
+- Shared-normalizer regression: Explorer and viewport consume the same
+  normalized carrier identities; no second object-segment conversion path may
+  recreate `segment:__air__:<index>` as magnetic.
 - Frontend gates: focused tests, full test suite, lint, typecheck, React Doctor, idle-performance audit, and active-session 3D browser smoke with visible canvas, live WebGL context, and nonzero drawing buffer.
 
 ## Revision scope
