@@ -2153,10 +2153,7 @@ mod tests {
             },
         );
 
-        assert_heun_aos_soa_direct_torque_match(
-            &problem,
-            vec![[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
-        );
+        assert_heun_aos_soa_direct_torque_match(&problem, vec![[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
     }
 
     #[test]
@@ -2376,6 +2373,178 @@ mod tests {
             .expect("SoA minimal step should succeed");
 
         assert_step_report_close(soa_full_report, soa_minimal_report, 1e-12);
+    }
+
+    fn dynamic_oersted_problem(
+        integrator: TimeIntegrator,
+        t_on: f64,
+        t_off: f64,
+    ) -> ExchangeLlgProblem {
+        let adaptive = AdaptiveStepConfig {
+            max_error: 1.0,
+            dt_min: 1.0e-3,
+            dt_max: 1.0e-3,
+            headroom: 0.8,
+            rtol: 0.0,
+            growth_limit: 1.0,
+            shrink_limit: 1.0,
+        };
+        ExchangeLlgProblem::with_terms(
+            GridShape::new(1, 1, 1).expect("valid grid"),
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(1.0, 1.0e-30, 0.1).expect("valid material"),
+            LlgConfig::new(1.0, integrator)
+                .expect("valid LLG config")
+                .with_adaptive(adaptive),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                oersted_cylinder: Some(OerstedCylinderConfig {
+                    current: 2.0,
+                    radius: 0.25,
+                    center: [0.0, 0.5, 0.5],
+                    axis: [0.0, 0.0, 1.0],
+                    time_dep_kind: 2,
+                    time_dep_freq: 0.0,
+                    time_dep_phase: 0.0,
+                    time_dep_offset: 0.0,
+                    time_dep_t_on: t_on,
+                    time_dep_t_off: t_off,
+                }),
+                ..Default::default()
+            },
+        )
+    }
+
+    fn assert_dynamic_oersted_stage_time(
+        integrator: TimeIntegrator,
+        stage_fraction: f64,
+        aos_step: BufferStepper,
+        soa_step: BufferStepper,
+    ) {
+        let dt = 1.0e-3;
+        let half_width = 1.0e-6;
+        let active_problem = dynamic_oersted_problem(
+            integrator,
+            stage_fraction * dt - half_width,
+            stage_fraction * dt + half_width,
+        );
+        let inactive_problem = dynamic_oersted_problem(integrator, 2.0 * dt, 3.0 * dt);
+
+        let run = |problem: &ExchangeLlgProblem, step: BufferStepper| {
+            let mut state = problem
+                .new_state(vec![[1.0, 0.0, 0.0]])
+                .expect("state should build");
+            let mut ws = problem.create_workspace();
+            let mut bufs = problem.create_integrator_buffers();
+            step(
+                problem,
+                &mut state,
+                dt,
+                &mut ws,
+                &mut bufs,
+                EvaluationRequest::Minimal,
+            )
+            .expect("dynamic Oersted step should succeed");
+            state.magnetization()[0]
+        };
+
+        let aos_active = run(&active_problem, aos_step);
+        let soa_active = run(&active_problem, soa_step);
+        let aos_inactive = run(&inactive_problem, aos_step);
+        let soa_inactive = run(&inactive_problem, soa_step);
+
+        assert!(
+            (aos_active[1].abs() + aos_active[2].abs()) > 1.0e-12,
+            "{integrator:?} must evaluate the Oersted pulse at its RK stage time"
+        );
+        assert_vector_close(aos_active, soa_active, 1.0e-12);
+        assert_vector_close(aos_inactive, [1.0, 0.0, 0.0], 1.0e-15);
+        assert_vector_close(soa_inactive, [1.0, 0.0, 0.0], 1.0e-15);
+    }
+
+    #[test]
+    fn dynamic_oersted_uses_stage_time_in_every_cpu_integrator_and_layout() {
+        assert_dynamic_oersted_stage_time(
+            TimeIntegrator::Heun,
+            1.0,
+            ExchangeLlgProblem::heun_step_buf,
+            ExchangeLlgProblem::heun_step_soa_buf,
+        );
+        assert_dynamic_oersted_stage_time(
+            TimeIntegrator::RK4,
+            0.5,
+            ExchangeLlgProblem::rk4_step_buf,
+            ExchangeLlgProblem::rk4_step_soa_buf,
+        );
+        assert_dynamic_oersted_stage_time(
+            TimeIntegrator::RK23,
+            0.75,
+            ExchangeLlgProblem::rk23_step_buf,
+            ExchangeLlgProblem::rk23_step_soa_buf,
+        );
+        assert_dynamic_oersted_stage_time(
+            TimeIntegrator::RK45,
+            0.8,
+            ExchangeLlgProblem::rk45_step_buf,
+            ExchangeLlgProblem::rk45_step_soa_buf,
+        );
+        assert_dynamic_oersted_stage_time(
+            TimeIntegrator::ABM3,
+            1.0,
+            ExchangeLlgProblem::abm3_step_buf,
+            ExchangeLlgProblem::abm3_step_soa_buf,
+        );
+    }
+
+    #[test]
+    fn dynamic_oersted_final_report_is_refreshed_at_accepted_time() {
+        let dt = 1.0e-3;
+        let problem = dynamic_oersted_problem(TimeIntegrator::Heun, dt, 2.0 * dt);
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]])
+            .expect("state should build");
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+
+        let report = problem
+            .heun_step_buf(&mut state, dt, &mut ws, &mut bufs, EvaluationRequest::Full)
+            .expect("dynamic Oersted step should succeed");
+        let mut final_field = vec![[0.0; 3]; 1];
+        problem.effective_field_into_ws_at_time(
+            state.magnetization(),
+            &mut ws,
+            &mut final_field,
+            state.time_seconds,
+        );
+
+        assert!(report.max_effective_field_amplitude > 0.0);
+        assert!((report.max_effective_field_amplitude - norm(final_field[0])).abs() <= 1.0e-12);
+    }
+
+    #[test]
+    fn dynamic_oersted_invalidates_rk45_fsal_cache() {
+        let dt = 1.0e-3;
+        let problem = dynamic_oersted_problem(TimeIntegrator::RK45, 0.0, 1.0e-6);
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0]])
+            .expect("state should build");
+        state.k_fsal = Some(vec![[0.0; 3]; 1]);
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+
+        problem
+            .rk45_step_buf(
+                &mut state,
+                dt,
+                &mut ws,
+                &mut bufs,
+                EvaluationRequest::Minimal,
+            )
+            .expect("dynamic Oersted RK45 step should succeed");
+
+        assert!((state.magnetization()[0][1].abs() + state.magnetization()[0][2].abs()) > 1.0e-12);
+        assert!(state.k_fsal.is_none());
     }
 
     #[test]

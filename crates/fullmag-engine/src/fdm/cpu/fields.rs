@@ -12,8 +12,9 @@ use crate::magnetoelastic;
 use crate::telemetry::{sections, StepTelemetry};
 use crate::vector::{add, cross, dot, max_cross_norm, max_norm, norm, scale, squared_norm, sub};
 use crate::{
-    EffectiveFieldObservables, ExchangeLlgProblem, FftWorkspace, RhsEvaluation,
-    SlonczewskiFormula, SlonczewskiSttConfig, SotConfig, SotFormula, Vector3, VectorFieldSoA,
+    EffectiveFieldObservables, ExchangeLlgProblem, FftWorkspace, OerstedCylinderConfig,
+    RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig, SotConfig, SotFormula, Vector3,
+    VectorFieldSoA,
     ZhangLiSttConfig, MU0,
 };
 
@@ -71,6 +72,25 @@ fn gilbert_zhang_li_scales(beta: f64, alpha: f64) -> (f64, f64) {
     )
 }
 
+fn oersted_envelope_at_time(cfg: &OerstedCylinderConfig, time_seconds: f64) -> f64 {
+    match cfg.time_dep_kind {
+        0 => 1.0,
+        1 => {
+            (2.0 * std::f64::consts::PI * cfg.time_dep_freq * time_seconds + cfg.time_dep_phase)
+                .sin()
+                + cfg.time_dep_offset
+        }
+        2 => {
+            if time_seconds >= cfg.time_dep_t_on && time_seconds < cfg.time_dep_t_off {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
+    }
+}
+
 fn prescribed_sot_scales(
     cfg: &SotConfig,
     saturation_magnetisation: f64,
@@ -91,10 +111,7 @@ fn prescribed_sot_scales(
         SotFormula::FullmagV1 => {
             let gamma_e = gamma0 / MU0;
             let omega_base = gamma_e * HBAR * current_density
-                / (2.0
-                    * EXACT_E_CHARGE
-                    * saturation_magnetisation
-                    * cfg.thickness.max(1e-30));
+                / (2.0 * EXACT_E_CHARGE * saturation_magnetisation * cfg.thickness.max(1e-30));
             let omega_dl = omega_base * cfg.xi_dl;
             let omega_fl = omega_base * cfg.xi_fl;
             let inv_gilbert = 1.0 / (1.0 + alpha * alpha);
@@ -1300,16 +1317,22 @@ impl ExchangeLlgProblem {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn oersted_field_add_into_soa(&self, h_eff: &mut VectorFieldSoA) {
+        self.oersted_field_add_into_soa_at_time(h_eff, 0.0);
+    }
+
+    pub(crate) fn oersted_field_add_into_soa_at_time(
+        &self,
+        h_eff: &mut VectorFieldSoA,
+        time_seconds: f64,
+    ) {
         let oe = match self.terms.oersted_cylinder {
             Some(ref cfg) => cfg,
             None => return,
         };
 
-        let envelope = match oe.time_dep_kind {
-            0 => 1.0,
-            _ => 1.0,
-        };
+        let envelope = oersted_envelope_at_time(oe, time_seconds);
 
         let current = oe.current * envelope;
         if current == 0.0 {
@@ -1414,11 +1437,31 @@ impl ExchangeLlgProblem {
         self.effective_field_into_soa_fft_backend(magnetization, ws, h_eff);
     }
 
+    pub(crate) fn effective_field_into_soa_ws_at_time(
+        &self,
+        magnetization: &VectorFieldSoA,
+        ws: &mut FftWorkspace,
+        h_eff: &mut VectorFieldSoA,
+        time_seconds: f64,
+    ) {
+        self.effective_field_into_soa_fft_backend_at_time(magnetization, ws, h_eff, time_seconds);
+    }
+
     pub(crate) fn effective_field_into_soa_fft_backend(
         &self,
         magnetization: &VectorFieldSoA,
         fft_backend: &mut dyn FdmFftBackend,
         h_eff: &mut VectorFieldSoA,
+    ) {
+        self.effective_field_into_soa_fft_backend_at_time(magnetization, fft_backend, h_eff, 0.0);
+    }
+
+    pub(crate) fn effective_field_into_soa_fft_backend_at_time(
+        &self,
+        magnetization: &VectorFieldSoA,
+        fft_backend: &mut dyn FdmFftBackend,
+        h_eff: &mut VectorFieldSoA,
+        time_seconds: f64,
     ) {
         h_eff.fill_zero();
 
@@ -1434,7 +1477,7 @@ impl ExchangeLlgProblem {
         self.thermal_field_add_into_soa(h_eff);
         self.interfacial_dmi_field_add_into_soa(magnetization, h_eff);
         self.bulk_dmi_field_add_into_soa(magnetization, h_eff);
-        self.oersted_field_add_into_soa(h_eff);
+        self.oersted_field_add_into_soa_at_time(h_eff, time_seconds);
     }
 
     pub(crate) fn llg_rhs_soa_into(
@@ -1947,22 +1990,19 @@ impl ExchangeLlgProblem {
     /// H_φ(r) = I / (2π·r)      for r > R
     ///
     /// The field is purely azimuthal around the conductor axis.
-    /// Currently supports constant time-dependence (kind=0) only; sinusoidal
-    /// and pulse envelopes require threading simulation time through the
-    /// effective-field call chain — tracked as a future enhancement.
+    /// Sinusoidal and pulse envelopes are evaluated at the explicit RK stage
+    /// time supplied by the integrator.
     pub(crate) fn oersted_field_add_into(&self, h_eff: &mut [Vector3]) {
+        self.oersted_field_add_into_at_time(h_eff, 0.0);
+    }
+
+    pub(crate) fn oersted_field_add_into_at_time(&self, h_eff: &mut [Vector3], time_seconds: f64) {
         let oe = match self.terms.oersted_cylinder {
             Some(ref cfg) => cfg,
             None => return,
         };
 
-        // Time-dependence envelope (constant only for CPU reference).
-        let envelope = match oe.time_dep_kind {
-            0 => 1.0, // Constant
-            // Sinusoidal / pulse require current sim time — not available in
-            // the current effective-field signature.  Fall back to DC.
-            _ => 1.0,
-        };
+        let envelope = oersted_envelope_at_time(oe, time_seconds);
 
         let current = oe.current * envelope;
         if current == 0.0 {
@@ -2058,6 +2098,16 @@ impl ExchangeLlgProblem {
         ws: &mut FftWorkspace,
         h_eff: &mut [Vector3],
     ) {
+        self.effective_field_into_ws_at_time(magnetization, ws, h_eff, 0.0);
+    }
+
+    pub(crate) fn effective_field_into_ws_at_time(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        h_eff: &mut [Vector3],
+        time_seconds: f64,
+    ) {
         for h in h_eff.iter_mut() {
             *h = [0.0, 0.0, 0.0];
         }
@@ -2081,7 +2131,7 @@ impl ExchangeLlgProblem {
         self.bulk_dmi_field_add_into(magnetization, h_eff);
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
-        self.oersted_field_add_into(h_eff);
+        self.oersted_field_add_into_at_time(h_eff, time_seconds);
     }
 
     /// Effective field accumulation with telemetry instrumentation.
@@ -2283,9 +2333,10 @@ impl ExchangeLlgProblem {
         (0..n)
             .map(|flat| {
                 if !self.is_active(flat)
-                    || cfg.active_mask.as_ref().is_some_and(|mask| {
-                        !mask.get(flat).copied().unwrap_or(false)
-                    })
+                    || cfg
+                        .active_mask
+                        .as_ref()
+                        .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
                 {
                     return [0.0, 0.0, 0.0];
                 }
@@ -2604,9 +2655,10 @@ impl ExchangeLlgProblem {
 
         let compute = |flat: usize, o: &mut Vector3| {
             if !self.is_active(flat)
-                || cfg.active_mask.as_ref().is_some_and(|mask| {
-                    !mask.get(flat).copied().unwrap_or(false)
-                })
+                || cfg
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
             {
                 return;
             }
@@ -2676,9 +2728,10 @@ impl ExchangeLlgProblem {
 
         for flat in 0..self.grid.cell_count() {
             if !self.is_active(flat)
-                || cfg.active_mask.as_ref().is_some_and(|mask| {
-                    !mask.get(flat).copied().unwrap_or(false)
-                })
+                || cfg
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask.get(flat).copied().unwrap_or(false))
             {
                 continue;
             }
@@ -2826,7 +2879,7 @@ impl ExchangeLlgProblem {
     ///
     /// Uses `h_scratch` for individual field components to compute decomposed
     /// energies, accumulates into `h_eff`, then computes RHS into `rhs_out`.
-    #[allow(non_snake_case)]
+    #[allow(dead_code, non_snake_case)]
     pub(crate) fn compute_step_observables_zero_alloc(
         &self,
         magnetization: &[Vector3],
@@ -2834,6 +2887,26 @@ impl ExchangeLlgProblem {
         h_eff: &mut [Vector3],
         h_scratch: &mut [Vector3],
         rhs_out: &mut [Vector3],
+    ) -> RhsEvaluation {
+        self.compute_step_observables_zero_alloc_at_time(
+            magnetization,
+            ws,
+            h_eff,
+            h_scratch,
+            rhs_out,
+            0.0,
+        )
+    }
+
+    #[allow(non_snake_case)]
+    pub(crate) fn compute_step_observables_zero_alloc_at_time(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        h_eff: &mut [Vector3],
+        h_scratch: &mut [Vector3],
+        rhs_out: &mut [Vector3],
+        time_seconds: f64,
     ) -> RhsEvaluation {
         let n = magnetization.len();
 
@@ -2894,7 +2967,7 @@ impl ExchangeLlgProblem {
         self.interfacial_dmi_field_add_into(magnetization, &mut h_eff[..n]);
         self.bulk_dmi_field_add_into(magnetization, &mut h_eff[..n]);
         self.thermal_field_add_into(&mut h_eff[..n]);
-        self.oersted_field_add_into(&mut h_eff[..n]);
+        self.oersted_field_add_into_at_time(&mut h_eff[..n], time_seconds);
 
         let mel_energy_joules = self.magnetoelastic_energy(magnetization);
         let ani_energy_joules = {
@@ -2973,8 +3046,20 @@ impl ExchangeLlgProblem {
         h_eff: &mut [Vector3],
         rhs_out: &mut [Vector3],
     ) -> RhsEvaluation {
+        self.compute_step_observables_minimal_at_time(magnetization, ws, h_eff, rhs_out, 0.0)
+    }
+
+    #[allow(dead_code, non_snake_case)]
+    pub(crate) fn compute_step_observables_minimal_at_time(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        h_eff: &mut [Vector3],
+        rhs_out: &mut [Vector3],
+        time_seconds: f64,
+    ) -> RhsEvaluation {
         // Compute h_eff in-place (zero + accumulate all terms)
-        self.effective_field_into_ws(magnetization, ws, h_eff);
+        self.effective_field_into_ws_at_time(magnetization, ws, h_eff, time_seconds);
 
         let n = magnetization.len();
         let max_effective_field_amplitude = max_norm(&h_eff[..n]);
@@ -3036,16 +3121,42 @@ impl ExchangeLlgProblem {
         rhs_out: &mut [Vector3],
         request: crate::EvaluationRequest,
     ) -> RhsEvaluation {
+        self.compute_step_observables_at_time(
+            magnetization,
+            ws,
+            h_eff,
+            h_scratch,
+            rhs_out,
+            request,
+            0.0,
+        )
+    }
+
+    pub(crate) fn compute_step_observables_at_time(
+        &self,
+        magnetization: &[Vector3],
+        ws: &mut FftWorkspace,
+        h_eff: &mut [Vector3],
+        h_scratch: &mut [Vector3],
+        rhs_out: &mut [Vector3],
+        request: crate::EvaluationRequest,
+        time_seconds: f64,
+    ) -> RhsEvaluation {
         match request {
-            crate::EvaluationRequest::Minimal => {
-                self.compute_step_observables_minimal(magnetization, ws, h_eff, rhs_out)
-            }
-            crate::EvaluationRequest::Full => self.compute_step_observables_zero_alloc(
+            crate::EvaluationRequest::Minimal => self.compute_step_observables_minimal_at_time(
+                magnetization,
+                ws,
+                h_eff,
+                rhs_out,
+                time_seconds,
+            ),
+            crate::EvaluationRequest::Full => self.compute_step_observables_zero_alloc_at_time(
                 magnetization,
                 ws,
                 h_eff,
                 h_scratch,
                 rhs_out,
+                time_seconds,
             ),
         }
     }
@@ -3797,6 +3908,53 @@ mod stt_tests {
     }
 
     #[test]
+    fn oersted_envelope_is_evaluated_at_requested_stage_time_for_aos_and_soa() {
+        let mut problem = one_cell_problem(0.1);
+        problem.terms.exchange = false;
+        problem.terms.demag = false;
+        problem.terms.oersted_cylinder = Some(OerstedCylinderConfig {
+            current: 2.0,
+            radius: 0.25e-9,
+            center: [0.0, 0.5e-9, 0.5e-9],
+            axis: [0.0, 0.0, 1.0],
+            time_dep_kind: 1,
+            time_dep_freq: 1.0,
+            time_dep_phase: 0.0,
+            time_dep_offset: 0.0,
+            time_dep_t_on: 0.0,
+            time_dep_t_off: 0.0,
+        });
+
+        let mut aos_zero = vec![[0.0; 3]; 1];
+        problem.oersted_field_add_into_at_time(&mut aos_zero, 0.0);
+        assert_eq!(aos_zero, vec![[0.0; 3]; 1]);
+
+        let mut aos_peak = vec![[0.0; 3]; 1];
+        problem.oersted_field_add_into_at_time(&mut aos_peak, 0.25);
+        assert!(aos_peak[0][1] > 0.0);
+
+        let mut soa_peak = VectorFieldSoA::zeros(1);
+        problem.oersted_field_add_into_soa_at_time(&mut soa_peak, 0.25);
+        check_close(soa_peak.x[0], aos_peak[0][0], 1.0e-12);
+        check_close(soa_peak.y[0], aos_peak[0][1], 1.0e-12);
+        check_close(soa_peak.z[0], aos_peak[0][2], 1.0e-12);
+
+        let cfg = problem.terms.oersted_cylinder.as_mut().unwrap();
+        cfg.time_dep_kind = 2;
+        cfg.time_dep_t_on = 2.0;
+        cfg.time_dep_t_off = 3.0;
+        let mut pulse_before = vec![[0.0; 3]; 1];
+        problem.oersted_field_add_into_at_time(&mut pulse_before, 1.999);
+        assert_eq!(pulse_before, vec![[0.0; 3]; 1]);
+        let mut pulse_on = vec![[0.0; 3]; 1];
+        problem.oersted_field_add_into_at_time(&mut pulse_on, 2.0);
+        assert!(pulse_on[0][1] > 0.0);
+        let mut pulse_off = vec![[0.0; 3]; 1];
+        problem.oersted_field_add_into_at_time(&mut pulse_off, 3.0);
+        assert_eq!(pulse_off, vec![[0.0; 3]; 1]);
+    }
+
+    #[test]
     fn slonczewski_direct_torque_matches_effective_field_form() {
         let problem = one_cell_problem(0.2);
         let cfg = SlonczewskiSttConfig {
@@ -3893,10 +4051,7 @@ mod stt_tests {
 
         let gamma_e = problem.dynamics.gyromagnetic_ratio / MU0;
         let omega_base = gamma_e * HBAR * cfg.current_density
-            / (2.0
-                * EXACT_E_CHARGE
-                * problem.material.saturation_magnetisation
-                * cfg.thickness);
+            / (2.0 * EXACT_E_CHARGE * problem.material.saturation_magnetisation * cfg.thickness);
         let omega_dl = omega_base * cfg.xi_dl;
         let omega_fl = omega_base * cfg.xi_fl;
         let alpha = problem.material.damping;
