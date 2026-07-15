@@ -132,8 +132,9 @@ async function main() {
   const fieldMetaRequests = [];
   const fieldResponses = [];
   const errors = [];
+  const frameNavigationEvents = [];
+  const mainFrameDocumentNavigations = [];
   const networkFailures = [];
-  let navigationCount = 0;
 
   await page.addInitScript((baseUrl) => {
     window.__FULLMAG_CONFIG__ = {
@@ -159,9 +160,22 @@ async function main() {
   });
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("framenavigated", (frame) => {
-    if (frame === page.mainFrame()) navigationCount += 1;
+    if (frame === page.mainFrame()) {
+      frameNavigationEvents.push({ timestamp: Date.now(), url: frame.url() });
+    }
   });
   page.on("request", (request) => {
+    if (
+      request.isNavigationRequest() &&
+      request.resourceType() === "document" &&
+      request.frame() === page.mainFrame()
+    ) {
+      mainFrameDocumentNavigations.push({
+        method: request.method(),
+        timestamp: Date.now(),
+        url: request.url(),
+      });
+    }
     if (request.method() !== "GET") return;
     const parsed = parseFieldVectorUrl(request.url());
     if (parsed) {
@@ -204,11 +218,10 @@ async function main() {
     });
     await page.locator("main").waitFor({ state: "visible", timeout: timeoutMs });
     await ensureViewport3DActive(page);
-    if (navigationCount !== 1) {
-      throw new Error(
-        `Expected exactly one workspace navigation, observed ${navigationCount}.`,
-      );
-    }
+    assertSingleDocumentNavigation(
+      { frameNavigationEvents, mainFrameDocumentNavigations },
+      "initial workspace",
+    );
     const proof = await waitForFieldRoutingProof({
       fieldRequests,
       fieldResponses,
@@ -234,7 +247,10 @@ async function main() {
       fieldMetaRequests,
       fieldRequests,
       fieldResponses,
-      getNavigationCount: () => navigationCount,
+      getNavigationProof: () => ({
+        frameNavigationEvents,
+        mainFrameDocumentNavigations,
+      }),
       networkFailures,
       objectPartId,
       page,
@@ -306,11 +322,18 @@ async function assertVisualizationDebugIdleBudgets({ fieldRequests, page }) {
 
 async function waitForVisualizationDebugQuiet({ fieldRequests, page }) {
   let previous = null;
-  let stableSince = Date.now();
+  let stableSince = null;
   await poll("Visualization Debug idle settle", async () => {
     const counters = await readVisualizationDebugPerformance(page);
+    const regionMeshOverlayAdoptionCount =
+      counters.viewportFrameReasons?.["region-mesh-overlay"] ?? 0;
+    if (regionMeshOverlayAdoptionCount < 1) {
+      previous = null;
+      stableSince = null;
+      return null;
+    }
     const current = `${fieldRequests.length}:${counters.viewportFrames}:${counters.scans}:${counters.publishes}`;
-    if (current !== previous) {
+    if (current !== previous || stableSince === null) {
       previous = current;
       stableSince = Date.now();
       return null;
@@ -344,7 +367,10 @@ function buildVisualizationRoutingPatch(state, regionScenario) {
       !(
         (entry.scope === "airbox" && entry.scope_id === "airbox") ||
         (entry.scope === "object" && entry.scope_id === objectId) ||
-        (entry.scope === "part" && entry.scope_id === regionScenario.carrierId)
+        (entry.scope === "region" &&
+          entry.scope_id === regionScenario.targetId) ||
+        (entry.scope === "part" &&
+          entry.scope_id === regionScenario.carrierId)
       ),
   );
   overrides.push({
@@ -390,8 +416,8 @@ function buildVisualizationRoutingPatch(state, regionScenario) {
       wireframe: { visible: true },
     },
     quantity: { active_quantity_id: objectQuantityId },
-    scope: "part",
-    scope_id: regionScenario.carrierId,
+    scope: "region",
+    scope_id: regionScenario.targetId,
     style: {
       vector_budget: vectorBudget,
       vector_color_mode: "orientation",
@@ -433,10 +459,20 @@ function assertVisualizationRoutingState(state, regionScenario) {
     state.targets?.airbox?.settings?.active_quantity_id ??
     state.quantity?.active_quantity_id ??
     state.active_quantity_id;
-  const regionOverride = (state.overrides ?? []).find(
+  const regionOverrides = (state.overrides ?? []).filter(
+    (entry) =>
+      entry.scope === "region" && entry.scope_id === regionScenario.targetId,
+  );
+  const legacyRegionCarrierOverride = (state.overrides ?? []).find(
     (entry) =>
       entry.scope === "part" && entry.scope_id === regionScenario.carrierId,
   );
+  if (regionOverrides.length !== 1 || legacyRegionCarrierOverride) {
+    throw new Error(
+      `Region proof requires one canonical override and no legacy carrier override: ${JSON.stringify({ legacyRegionCarrierOverride, regionOverrides })}.`,
+    );
+  }
+  const [regionOverride] = regionOverrides;
   if (normalizeQuantityId(state.quantity?.active_quantity_id) !== "m") {
     throw new Error(
       `Global visualization quantity was not patched to m: ${state.quantity?.active_quantity_id}`,
@@ -620,7 +656,7 @@ async function assertVisualizationDebugScenarios({
   fieldMetaRequests,
   fieldRequests,
   fieldResponses,
-  getNavigationCount,
+  getNavigationProof,
   networkFailures,
   objectPartId,
   page,
@@ -630,6 +666,9 @@ async function assertVisualizationDebugScenarios({
     {
       debugNodeId: "model:airbox:visualization:debug",
       expectedCarrierId: airboxPartId,
+      expectedCarrierRole: "air",
+      expectedHealthDisposition: "unknown",
+      expectedHealthIssueCode: "backend-meta-incomparable",
       expectedScopeId: airboxPartId,
       expectedScopeKind: "airbox",
       expectedSelectionKind: "airbox.visualization.debug",
@@ -643,6 +682,9 @@ async function assertVisualizationDebugScenarios({
     {
       debugNodeId: `model:object:${objectId}:visualization:debug`,
       expectedCarrierId: objectPartId,
+      expectedCarrierRole: null,
+      expectedHealthDisposition: "unknown",
+      expectedHealthIssueCode: "backend-meta-incomparable",
       expectedScopeId: objectPartId,
       expectedScopeKind: "part",
       expectedSelectionKind: "object.visualization.debug",
@@ -656,9 +698,12 @@ async function assertVisualizationDebugScenarios({
     {
       debugNodeId: regionScenario.debugNodeId,
       expectedCarrierId: regionScenario.carrierId,
+      expectedCarrierRole: null,
+      expectedHealthDisposition: "unknown",
+      expectedHealthIssueCode: "backend-meta-incomparable",
       expectedScopeId: regionScenario.carrierId,
       expectedScopeKind: "part",
-      expectedSelectionKind: "region.visualization.debug",
+      expectedSelectionKind: "object.region.visualization.debug",
       expectedTargetId: regionScenario.targetId,
       expectedTargetKind: "region",
       explorerAncestors: regionScenario.explorerAncestors,
@@ -675,7 +720,7 @@ async function assertVisualizationDebugScenarios({
         fieldMetaRequests,
         fieldRequests,
         fieldResponses,
-        getNavigationCount,
+        getNavigationProof,
         networkFailures,
         page,
         scenario,
@@ -683,6 +728,7 @@ async function assertVisualizationDebugScenarios({
     );
   }
   return {
+    navigationProof: getNavigationProof(),
     visualizationDebugArtifactDir,
     visualizationDebugScenarios: results,
   };
@@ -693,12 +739,15 @@ async function assertVisualizationDebugScenario({
   fieldMetaRequests,
   fieldRequests,
   fieldResponses,
-  getNavigationCount,
+  getNavigationProof,
   networkFailures,
   page,
   scenario,
 }) {
-  assertSingleNavigation(getNavigationCount(), `${scenario.key} ordinary`);
+  assertSingleDocumentNavigation(
+    getNavigationProof(),
+    `${scenario.key} ordinary`,
+  );
   await revealExplorerNode(page, scenario, false);
   await page.locator(`[data-node-id="${scenario.ordinaryNodeId}"]`).click({
     timeout: timeoutMs,
@@ -742,7 +791,7 @@ async function assertVisualizationDebugScenario({
     path: `${visualizationDebugArtifactDir}/${scenario.key}-after-debug.png`,
   });
 
-  assertSingleNavigation(getNavigationCount(), `${scenario.key} Debug`);
+  assertSingleDocumentNavigation(getNavigationProof(), `${scenario.key} Debug`);
   assertVisualizationStateUnchanged(scenario.key, beforeState, afterState);
   if (beforeCanvas.canvasSha256 !== afterCanvas.canvasSha256) {
     throw new Error(
@@ -758,23 +807,16 @@ async function assertVisualizationDebugScenario({
       `${scenario.key} Debug added ${fieldVectorRequestDeltaAfterSettle} FMVP field-vector request(s) after settle.`,
     );
   }
-  if (fieldMetaRequestDeltaAfterSettle > 1) {
-    throw new Error(
-      `${scenario.key} Debug added ${fieldMetaRequestDeltaAfterSettle} field-meta request(s) after settle.`,
-    );
-  }
   const debugMetaRequestsAfterSettle = fieldMetaRequests.slice(fieldMetaCountBefore);
-  if (
-    debugMetaRequestsAfterSettle.some(
-      (request) =>
-        request.params.scope_kind !== scenario.expectedScopeKind ||
-        request.params.scope_id !== scenario.expectedScopeId,
-    )
-  ) {
-    throw new Error(
-      `${scenario.key} Debug field-meta request was not exact after settle: ${JSON.stringify(debugMetaRequestsAfterSettle)}.`,
-    );
-  }
+  assertExactVisualizationDebugMetaRequests({
+    activeCarrierIds:
+      visualizationDebugFieldValue(evidence.dom, "Carrier IDs")
+        ?.split(", ")
+        .filter(Boolean) ?? [],
+    fieldRequests,
+    metaRequests: debugMetaRequestsAfterSettle,
+    scenario,
+  });
 
   const idleBefore = await readVisualizationDebugPerformance(page);
   const idleRequestCountBefore = fieldRequests.length + fieldMetaRequests.length;
@@ -805,7 +847,10 @@ async function assertVisualizationDebugScenario({
     throw new Error(`${scenario.key} keyboard proof added a debug data request.`);
   }
   assertVisualizationDebugStatusText(evidence.dom.statusText, scenario.key);
-  assertSingleNavigation(getNavigationCount(), `${scenario.key} keyboard proof`);
+  assertSingleDocumentNavigation(
+    getNavigationProof(),
+    `${scenario.key} keyboard proof`,
+  );
   if (errors.length > 0) {
     throw new Error(`${scenario.key} browser errors: ${JSON.stringify(errors)}.`);
   }
@@ -830,6 +875,10 @@ async function assertVisualizationDebugScenario({
     idleRequestDelta,
     idleScanDelta,
     keyboard,
+    carrierRole: visualizationDebugFieldValue(evidence.dom, "Carrier role"),
+    healthDisposition: evidence.dom.healthDisposition,
+    healthIssueCodes: evidence.dom.issueCodes,
+    memoryEvidence: evidence.memoryEvidence,
     memoryGroupTotals: evidence.dom.memoryGroupTotals,
     pointCount: evidence.pointCount,
     screenshots: {
@@ -838,6 +887,7 @@ async function assertVisualizationDebugScenario({
     },
     statisticsRows: evidence.dom.statisticsRows.length - 1,
     targetId: scenario.expectedTargetId,
+    transportRows: evidence.dom.transportRows.length - 1,
     valueCount: evidence.valueCount,
   };
 }
@@ -887,6 +937,7 @@ async function waitForExactVisualizationDebugEvidence({
 }) {
   const start = Date.now();
   let lastReason = "no DOM snapshot";
+  let lastEvidence = null;
   while (Date.now() - start < timeoutMs) {
     const dom = await readVisualizationDebugDom(page);
     const request = [...fieldRequests].reverse().find(
@@ -900,20 +951,41 @@ async function waitForExactVisualizationDebugEvidence({
     const resourceKey = request ? `${request.path}?${request.search}` : null;
     const pointCount = Number(response?.headers?.["x-fullmag-point-count"]);
     const valueCount = Number(response?.headers?.["x-fullmag-value-count"]);
+    const responseIndexing =
+      response?.headers?.["x-fullmag-field-indexing"] ?? null;
+    const nodeIndexCount = Number(
+      response?.headers?.["x-fullmag-node-index-count"],
+    );
     const [domPointCount, domValueCount] = parseInspectorCountPair(
       visualizationDebugFieldValue(dom, "Points / values"),
     );
+    const domIndexingValue = visualizationDebugFieldValue(
+      dom,
+      "Indexing / node indices",
+    );
+    const domIndexing = domIndexingValue?.split(" / ")[0] ?? null;
     const [domNodeIndexCount] = parseInspectorCountPair(
-      visualizationDebugFieldValue(dom, "Indexing / node indices"),
+      domIndexingValue,
     );
     const grid = visualizationDebugFieldValue(dom, "Grid");
+    const memoryEvidence = assertVisualizationDebugMemoryEvidence(dom);
     const checks = [
       [dom.header?.includes("Visualization Debug"), "Debug Inspector header"],
       [visualizationDebugFieldValue(dom, "Selection kind") === scenario.expectedSelectionKind, "selection kind"],
       [visualizationDebugFieldValue(dom, "Target kind") === scenario.expectedTargetKind, "target kind"],
       [visualizationDebugFieldValue(dom, "Target ID") === scenario.expectedTargetId, "target ID"],
       [visualizationDebugFieldValue(dom, "Carrier IDs")?.split(", ").includes(scenario.expectedCarrierId), "carrier ID"],
+      [
+        scenario.expectedCarrierRole === null ||
+          visualizationDebugFieldValue(dom, "Carrier role") ===
+            scenario.expectedCarrierRole,
+        "carrier role",
+      ],
+      [dom.healthDisposition === scenario.expectedHealthDisposition, "honest health disposition"],
+      [dom.issueCodes.includes(scenario.expectedHealthIssueCode), "explicit backend-meta incomparable reason"],
+      [dom.issues.every((issue) => issue.severity === "info"), "no degraded or blocked issue"],
       [visualizationDebugFieldValue(dom, "Canonical resource key") === resourceKey, "canonical resource key"],
+      [visualizationDebugFieldValue(dom, "Planner request ID") !== "—", "planner request ID"],
       [visualizationDebugFieldValue(dom, "Dtype / FMVP") === "float64 / v3", "FMVP version"],
       [Boolean(grid && grid !== "—" && /^\d[\d,]*( × \d[\d,]*){2}$/.test(grid)), "grid dimensions"],
       [visualizationDebugFieldValue(dom, "nComp") === "3", "component count"],
@@ -921,28 +993,131 @@ async function waitForExactVisualizationDebugEvidence({
       [domPointCount === pointCount && Number.isInteger(pointCount), "point count"],
       [domValueCount === valueCount && Number.isInteger(valueCount), "value count"],
       [
-        visualizationDebugFieldValue(dom, "Indexing / node indices")?.startsWith("sampled_node_indices / ") &&
-          domNodeIndexCount === pointCount,
-        "sampled node indexing",
+        responseIndexing !== null &&
+          domIndexing === responseIndexing &&
+          Number.isInteger(nodeIndexCount) &&
+          domNodeIndexCount === nodeIndexCount,
+        "exact field indexing and node-index count",
       ],
       [visualizationDebugFieldValue(dom, "Scope") === `${scenario.expectedScopeKind}:${scenario.expectedScopeId}`, "decoded scope"],
       [response?.status === 200, "field response status"],
       [response?.headers?.["x-fullmag-encoding"] === "FMVP;version=3", "FMVP response header"],
+      [hasExactVisualizationTransportEvidence(dom.transportRows, request, resourceKey), "exact transport row"],
+      [hasExactVisualizationRenderEvidence(dom, resourceKey), "adopted render evidence"],
       [dom.statisticsRows.length > 1 && hasVisualizationDebugMinMax(dom.statisticsRows), "min/max statistics"],
       [dom.sampleRows.length > 1, "bounded sample values"],
-      [dom.memoryGroupTotals.some((value) => value !== "0 B" && value !== "—"), "memory totals"],
+      [memoryEvidence !== null, "named memory evidence"],
       [dom.statusText.length > 0 && !/loading visualization evidence/i.test(dom.statusText), "status text"],
       [!dom.issueCodes.some((code) => /stale/i.test(code)), "fresh snapshot"],
     ];
     const failed = checks.find(([passed]) => !passed);
     if (!failed) {
-      return { dom, pointCount, request, resourceKey, response, valueCount };
+      return {
+        dom,
+        fieldIndexing: responseIndexing,
+        memoryEvidence,
+        nodeIndexCount,
+        pointCount,
+        request,
+        resourceKey,
+        response,
+        valueCount,
+      };
     }
+    lastEvidence = {
+      actual: {
+        adoptedSource: visualizationDebugFieldValue(dom, "Adopted source"),
+        canonicalResourceKey: visualizationDebugFieldValue(
+          dom,
+          "Canonical resource key",
+        ),
+        fieldBuffer: visualizationDebugFieldValue(dom, "Field buffer"),
+        healthDisposition: dom.healthDisposition,
+        issueCodes: dom.issueCodes,
+        issues: dom.issues,
+        requestedSource: visualizationDebugFieldValue(dom, "Requested source"),
+        statusText: dom.statusText,
+      },
+      expected: {
+        healthDisposition: scenario.expectedHealthDisposition,
+        healthIssueCode: scenario.expectedHealthIssueCode,
+        resourceKey,
+      },
+      request: request
+        ? {
+            params: request.params,
+            path: request.path,
+            search: request.search,
+          }
+        : null,
+      response: response
+        ? {
+            fieldIndexing: responseIndexing,
+            nodeIndexCount,
+            pointCount,
+            status: response.status,
+            valueCount,
+          }
+        : null,
+    };
     lastReason = failed[1];
     await page.waitForTimeout(250);
   }
   throw new Error(
-    `Timed out waiting for ${scenario.key} exact Visualization Debug evidence; last missing check=${lastReason}.`,
+    `Timed out waiting for ${scenario.key} exact Visualization Debug evidence; last missing check=${lastReason}; last evidence=${JSON.stringify(lastEvidence)}.`,
+  );
+}
+
+function assertExactVisualizationDebugMetaRequests({
+  activeCarrierIds,
+  fieldRequests,
+  metaRequests,
+  scenario,
+}) {
+  const metaRequestKeys = metaRequests.map(visualizationDebugMetaRequestKey);
+  if (new Set(metaRequestKeys).size !== metaRequestKeys.length) {
+    throw new Error(
+      `${scenario.key} Debug repeated an exact field-meta query: ${JSON.stringify(metaRequests)}.`,
+    );
+  }
+  const invalid = metaRequests.filter(
+    (metaRequest) =>
+      normalizeQuantityId(metaRequest.quantityId) !==
+        normalizeQuantityId(scenario.quantityId) ||
+      !activeCarrierIds.includes(metaRequest.params.scope_id) ||
+      !fieldRequests.some((fieldRequest) =>
+        visualizationDebugMetaMatchesFieldRequest(metaRequest, fieldRequest),
+      ),
+  );
+  if (invalid.length > 0) {
+    throw new Error(
+      `${scenario.key} Debug field-meta request was not exact for an active carrier: ${JSON.stringify({ activeCarrierIds, invalid })}.`,
+    );
+  }
+}
+
+function visualizationDebugMetaRequestKey(request) {
+  return JSON.stringify([
+    normalizeQuantityId(request.quantityId),
+    request.params.component ?? null,
+    request.params.scope_kind ?? null,
+    request.params.scope_id ?? null,
+    request.params.snapshot_id ?? null,
+    request.params.stage_id ?? null,
+  ]);
+}
+
+function visualizationDebugMetaMatchesFieldRequest(metaRequest, fieldRequest) {
+  return (
+    normalizeQuantityId(metaRequest.quantityId) ===
+      normalizeQuantityId(fieldRequest.quantityId) &&
+    metaRequest.params.component === fieldRequest.params.component &&
+    metaRequest.params.scope_kind === fieldRequest.params.scope_kind &&
+    metaRequest.params.scope_id === fieldRequest.params.scope_id &&
+    (metaRequest.params.snapshot_id ?? null) ===
+      (fieldRequest.params.snapshot_id ?? null) &&
+    (metaRequest.params.stage_id ?? null) ===
+      (fieldRequest.params.stage_id ?? null)
   );
 }
 
@@ -961,12 +1136,24 @@ async function readVisualizationDebugDom(page) {
         value: row.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? "",
       }),
     );
+    const issues = [
+      ...(panel?.querySelectorAll(".fm-visualization-debug-issues li") ?? []),
+    ].map((item) => {
+      const label = item.querySelector("strong")?.textContent?.trim() ?? "";
+      return {
+        code: label.includes(": ") ? label.slice(label.indexOf(": ") + 2) : label,
+        severity: item.getAttribute("data-severity") ?? "unknown",
+      };
+    });
     return {
       fields,
+      healthDisposition:
+        panel
+          ?.querySelector(".fm-visualization-debug-health")
+          ?.getAttribute("data-disposition") ?? null,
       header: document.querySelector(".fm-inspector__header")?.textContent?.trim() ?? "",
-      issueCodes: [...(panel?.querySelectorAll(".fm-visualization-debug-issues strong") ?? [])].map(
-        (node) => node.textContent?.trim() ?? "",
-      ),
+      issueCodes: issues.map((issue) => issue.code),
+      issues,
       memoryGroupTotals: fields
         .filter((field) => field.label === "Group total")
         .map((field) => field.value),
@@ -976,6 +1163,9 @@ async function readVisualizationDebugDom(page) {
         tables.find((table) => table.label === "Statistics by evidence source")?.rows ?? [],
       statusText:
         panel?.querySelector('[role="status"]')?.textContent?.trim() ?? "",
+      transportRows:
+        tables.find((table) => table.label === "Matched field transport requests")
+          ?.rows ?? [],
     };
   });
 }
@@ -988,6 +1178,46 @@ function parseInspectorCountPair(value) {
   return (String(value ?? "").match(/[\d,]+/g) ?? [])
     .slice(0, 2)
     .map((entry) => Number(entry.replaceAll(",", "")));
+}
+
+function assertVisualizationDebugMemoryEvidence(dom) {
+  const requiredLabels = [
+    "Decoded values · decoded-payload",
+    "Cache accounting · cache",
+    "Exact decoded wire transfer · transport",
+  ];
+  const rows = Object.fromEntries(
+    requiredLabels.map((label) => [label, visualizationDebugFieldValue(dom, label)]),
+  );
+  return requiredLabels.every(
+    (label) => rows[label] && rows[label] !== "—" && rows[label] !== "0 B",
+  )
+    ? rows
+    : null;
+}
+
+function hasExactVisualizationTransportEvidence(rows, request, resourceKey) {
+  if (!request) return false;
+  return rows.slice(1).some(
+    (cells) =>
+      cells[1] === resourceKey &&
+      cells[2] === "200" &&
+      Boolean(cells[4] && cells[4] !== "—" && cells[4] !== "0 B"),
+  );
+}
+
+function hasExactVisualizationRenderEvidence(dom, resourceKey) {
+  if (!resourceKey) return false;
+  const fieldBuffer = visualizationDebugFieldValue(dom, "Field buffer");
+  const surface = visualizationDebugFieldValue(dom, "Surface");
+  const vectors = visualizationDebugFieldValue(dom, "Vectors");
+  return (
+    visualizationDebugFieldValue(dom, "Requested source") === resourceKey &&
+    visualizationDebugFieldValue(dom, "Adopted source") === resourceKey &&
+    Boolean(fieldBuffer && !/missing|not adopted/i.test(fieldBuffer)) &&
+    Boolean(surface && !/^none\b/i.test(surface) && /not degraded/i.test(surface)) &&
+    Boolean(vectors && !/^not built\b/i.test(vectors) && /not degraded/i.test(vectors))
+  );
 }
 
 function hasVisualizationDebugMinMax(rows) {
@@ -1051,7 +1281,10 @@ async function captureVisualizationDebugCanvas(page, path) {
   ) {
     throw new Error(`Viewport canvas is not renderable: ${JSON.stringify(state)}.`);
   }
-  const png = await canvas.screenshot({ path });
+  const png = await canvas.screenshot({
+    path,
+    style: ".fm-viewport-3d__hud { visibility: hidden !important; }",
+  });
   return {
     ...state,
     canvasSha256: createHash("sha256").update(png).digest("hex"),
@@ -1158,10 +1391,10 @@ function assertVisualizationDebugStatusText(statusText, key) {
   }
 }
 
-function assertSingleNavigation(navigationCount, label) {
-  if (navigationCount !== 1) {
+function assertSingleDocumentNavigation(navigationProof, label) {
+  if (navigationProof.mainFrameDocumentNavigations.length !== 1) {
     throw new Error(
-      `${label} expected navigationCount !== 1 to be false; observed ${navigationCount} (HMR/reload).`,
+      `${label} expected exactly one main-frame Document navigation request; observed ${navigationProof.mainFrameDocumentNavigations.length}; documents=${JSON.stringify(navigationProof.mainFrameDocumentNavigations)}; frame events=${JSON.stringify(navigationProof.frameNavigationEvents)}.`,
     );
   }
 }

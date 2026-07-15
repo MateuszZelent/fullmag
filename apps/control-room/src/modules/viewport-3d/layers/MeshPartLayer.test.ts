@@ -60,6 +60,27 @@ describe("MeshPartLayer", () => {
       scalarBufferKey: "scalar-retained",
     });
   });
+  it("records a canonical scalar key when synchronous colors have no build key", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([["part:a", ["object:a"]]]));
+    registry.retainDemand("object:a");
+
+    recordMeshPartSurfaceAdoption({
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      registry,
+      scalarBuffer: {
+        colors: new Float32Array(6),
+        colorMode: "x",
+        quantityId: "H_demag",
+        range: { max: 1, min: 0 },
+      },
+    });
+
+    expect(registry.snapshot("object:a")[0]?.scalarBufferKey).toBe(
+      "scalar:H_demag:x:24",
+    );
+  });
   it("clears only its exact surface receipt when the adopted buffer is hidden or unmounted", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),

@@ -724,6 +724,14 @@ export function resolveViewport3DResolvedPartFieldBuffers({
   }
 
   if (airboxSyntheticVectorsEnabled && topology) {
+    const syntheticTopologyIdentity =
+      resolvedTopologyRevision ??
+      (topology.meshRevision == null ? null : String(topology.meshRevision)) ??
+      topology.meshTopologyHash ??
+      topology.meshGenerationId;
+    const syntheticFieldRevision = syntheticTopologyIdentity
+      ? `synthetic:airbox:+z:topology=${encodeURIComponent(syntheticTopologyIdentity)}`
+      : null;
     for (const partModel of topology.airboxParts) {
       const partId = partModel.part.id;
       if (partFieldVectors.has(partId) || partTargetFieldBuffers.has(partId)) {
@@ -737,6 +745,7 @@ export function resolveViewport3DResolvedPartFieldBuffers({
       partTargetFieldBuffers.set(
         partId,
         buildViewport3DTargetFieldBuffer({
+          fieldRevision: syntheticFieldRevision,
           fieldVector,
           domain: {
             domainGenerationId: topology.meshGenerationId,
@@ -830,6 +839,19 @@ function resolveViewport3DPartScalarRangeResourceKey(
     : `${DATA_FIELDS_PATH}#viewport-3d:part-scalar-ranges:none`;
 }
 
+function resolveViewport3DPartScalarRangesRevision(
+  data: ReadonlyMap<string, ReadonlyMap<string, ScalarRange>>,
+): string | null {
+  return (
+    Array.from(data)
+      .map(([partId, ranges]) => {
+        const range = ranges.values().next().value as ScalarRange | undefined;
+        return range ? `${partId}:${range.min}:${range.max}` : `${partId}:none`;
+      })
+      .join("|") || null
+  );
+}
+
 function partScalarRangeMetaUnavailable(error: unknown): boolean {
   return error instanceof ControlRoomApiError && error.status === 404;
 }
@@ -885,13 +907,7 @@ function useViewport3DPartScalarRanges(
     enabled: enabled && requests.size > 0,
     load,
     pauseLoad: options.pauseLoad,
-    resolveRevision: (data) =>
-      Array.from(data)
-        .map(([partId, ranges]) => {
-          const range = ranges.values().next().value as ScalarRange | undefined;
-          return range ? `${partId}:${range.min}:${range.max}` : `${partId}:none`;
-        })
-        .join("|") || null,
+    resolveRevision: resolveViewport3DPartScalarRangesRevision,
     resourceKey,
   });
 }
@@ -4043,6 +4059,7 @@ export function useViewport3DSceneModel({
       fullFieldBufferIdentity: fdmFieldVector
         ? {
             bufferId: `decoded:${fdmFieldVector.quantityId}:${fdmFieldVector.pointCount}:${fdmFieldVector.values.byteLength}`,
+            currentDomainGenerationId: fdmDomainGenerationId,
             resourceKey:
               sameViewport3DQuantityId(
                 fdmSettings.activeQuantityId,
@@ -4061,6 +4078,7 @@ export function useViewport3DSceneModel({
     }),
     [
       fdmDomain,
+      fdmDomainGenerationId,
       fdmFieldVector,
       fdmSettings.activeQuantityId,
       femDomain.partsById,

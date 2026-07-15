@@ -2,7 +2,10 @@ import type {
   Viewport3DFieldRenderModel,
   Viewport3DVectorBuildReference,
 } from "../viewport3dRenderModel";
-import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
+import {
+  resolveViewport3DScalarColorBufferKey,
+  type ScalarColorBuffer,
+} from "../viewport3dFieldMapping";
 
 interface Viewport3DTargetSurfaceLayerFieldModel {
   scalarColorsByMode: ReadonlyMap<string, ScalarColorBuffer | null>;
@@ -121,7 +124,9 @@ export function resolveViewport3DTargetLayerRequestedSourceIdentity({
   const pass = fieldModel?.targetPasses.get(partId);
   return {
     fieldBufferId: pass?.fieldBuffer?.bufferId ?? null,
-    scalarBufferKey: pass?.surface.scalarColors?.buildKey ?? null,
+    scalarBufferKey: resolveViewport3DScalarColorBufferKey(
+      pass?.surface.scalarColors,
+    ),
     vectorBuildKey: pass?.vectors.buildReference?.buildKey ?? null,
   };
 }

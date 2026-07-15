@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildVisualizationDebugHealth,
+  prioritizeAndBoundVisualizationDebugIssues,
   visualizationDebugRangesEqual,
   type VisualizationDebugHealthEvidence,
 } from "./buildVisualizationDebugHealth";
@@ -50,6 +51,7 @@ function healthy(): VisualizationDebugHealthEvidence {
     topologyHashMatches: true,
     transportCacheBytesMatch: true,
     valueCountMatches: true,
+    valueStatisticsSource: "decoded-payload",
     valuesAllZero: false,
     valuesFinite: true,
     vectorPassPresent: true,
@@ -68,6 +70,45 @@ describe("buildVisualizationDebugHealth", () => {
     expect(result.issues).toContainEqual(expect.objectContaining({ code: "all-zero-values", severity: "info" }));
   });
 
+  it("keeps the complete 21-code production health catalog reachable", () => {
+    const codes = new Set(
+      CODE_CASES.flatMap(([field]) =>
+        buildVisualizationDebugHealth({ ...healthy(), [field]: false }).issues
+          .map((entry) => entry.code),
+      ).concat(
+        buildVisualizationDebugHealth({ ...healthy(), valuesAllZero: true })
+          .issues.map((entry) => entry.code),
+      ),
+    );
+
+    expect(codes).toEqual(
+      new Set([...CODE_CASES.map(([, code]) => code), "all-zero-values"]),
+    );
+    expect(codes.size).toBe(21);
+  });
+
+  it("attributes value issues to the statistics source", () => {
+    const source = "render-derived" as const;
+    expect(
+      buildVisualizationDebugHealth({
+        ...healthy(),
+        valueStatisticsSource: source,
+        valuesFinite: false,
+      }).issues,
+    ).toContainEqual(
+      expect.objectContaining({ code: "non-finite-values", source }),
+    );
+    expect(
+      buildVisualizationDebugHealth({
+        ...healthy(),
+        valueStatisticsSource: source,
+        valuesAllZero: true,
+      }).issues,
+    ).toContainEqual(
+      expect.objectContaining({ code: "all-zero-values", source }),
+    );
+  });
+
   it("prioritizes blocked, then degraded, then unknown, then ready", () => {
     expect(buildVisualizationDebugHealth({ ...healthy(), fieldBufferPresent: false }).disposition).toBe("blocked");
     expect(buildVisualizationDebugHealth({ ...healthy(), valuesFinite: false }).disposition).toBe("degraded");
@@ -79,5 +120,29 @@ describe("buildVisualizationDebugHealth", () => {
     expect(visualizationDebugRangesEqual(1, 1 + 1e-10)).toBe(true);
     expect(visualizationDebugRangesEqual(0, 1e-12)).toBe(true);
     expect(visualizationDebugRangesEqual(1, 1 + 2e-9)).toBe(false);
+  });
+
+  it("keeps a late error when bounding more than twenty unique issues", () => {
+    const notes = Array.from({ length: 25 }, (_, index) => ({
+      code: `note-${index}`,
+      evidence: [`index=${index}`],
+      message: `Note ${index}`,
+      severity: "info" as const,
+      source: "ui-derived" as const,
+    }));
+    const error = {
+      code: "late-error",
+      evidence: ["late"],
+      message: "Late error",
+      severity: "error" as const,
+      source: "transport" as const,
+    };
+
+    const bounded = prioritizeAndBoundVisualizationDebugIssues(
+      [...notes, error],
+      20,
+    );
+    expect(bounded).toHaveLength(20);
+    expect(bounded[0]).toEqual(error);
   });
 });

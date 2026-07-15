@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   canonicalFieldVectorQuery,
+  fieldVectorComponentsSemanticallyEqual,
   fieldVectorResourceKey,
   parseCanonicalFieldVectorResourceKey,
   serializeCanonicalFieldVectorResourceKey,
@@ -83,5 +84,24 @@ describe("fieldQueryIdentity", () => {
         view: "phase_rotated_real",
       }),
     );
+  });
+
+  it.each([
+    ["x", "c0"],
+    ["y", "c1"],
+    ["z", "c2"],
+    ["abs_x", "abs_c0"],
+    ["expr:abs_y", "abs_c1"],
+    ["expr:m2", "magnitude_squared"],
+    ["expr:magnitude_squared", "magnitude_squared"],
+    ["full", "full"],
+    ["magnitude", "magnitude"],
+  ])("treats %s and %s as the same component evidence", (left, right) => {
+    expect(fieldVectorComponentsSemanticallyEqual(left, right)).toBe(true);
+  });
+
+  it("does not equate distinct component evidence", () => {
+    expect(fieldVectorComponentsSemanticallyEqual("x", "c1")).toBe(false);
+    expect(fieldVectorComponentsSemanticallyEqual("full", "magnitude")).toBe(false);
   });
 });

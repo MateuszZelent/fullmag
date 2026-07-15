@@ -1,6 +1,7 @@
 import type {
   VisualizationDebugDisposition,
   VisualizationDebugIssue,
+  VisualizationDebugMemoryRow,
   VisualizationDebugSnapshot,
 } from "@/kernel/visualization/visualizationDebugTypes";
 
@@ -179,11 +180,38 @@ export function statisticsRows(
 
 export function memoryGroups(model: VisualizationDebugPanelModel) {
   const snapshots = uniqueSnapshots(model);
-  const rows = snapshots.flatMap((snapshot) => [
-    ...snapshot.sharedMemory,
-    ...snapshot.carriers.flatMap((carrier) => carrier.memory),
-  ]).concat(
-    allObservations(model).flatMap((observation) =>
+  const rows: Array<VisualizationDebugMemoryRow & { renderKey: string }> =
+    snapshots.flatMap((snapshot, snapshotIndex) => [
+      ...snapshot.sharedMemory.map((row, rowIndex) => ({
+        ...row,
+        renderKey: memoryRenderKey([
+          "shared",
+          snapshot.viewport.viewportId,
+          snapshot.target.id,
+          snapshotIndex,
+          row.source,
+          row.id,
+          rowIndex,
+        ]),
+      })),
+      ...snapshot.carriers.flatMap((carrier, carrierIndex) =>
+        carrier.memory.map((row, rowIndex) => ({
+          ...row,
+          renderKey: memoryRenderKey([
+            "carrier",
+            snapshot.viewport.viewportId,
+            snapshot.target.id,
+            snapshotIndex,
+            carrier.carrierId,
+            carrierIndex,
+            row.source,
+            row.id,
+            rowIndex,
+          ]),
+        })),
+      ),
+    ]).concat(
+    allObservations(model).flatMap((observation, observationIndex) =>
       observation.wireByteLength === null
         ? []
         : [{
@@ -191,6 +219,14 @@ export function memoryGroups(model: VisualizationDebugPanelModel) {
             id: `wire:${observation.carrier.carrierId}`,
             label: "Exact decoded wire transfer",
             ownership: "estimated" as const,
+            renderKey: memoryRenderKey([
+              "wire",
+              observation.snapshot.viewport.viewportId,
+              observation.snapshot.target.id,
+              observation.carrier.carrierId,
+              observation.carrier.request.resourceKey,
+              observationIndex,
+            ]),
             source: "transport" as const,
           }],
     ),
@@ -207,6 +243,10 @@ export function memoryGroups(model: VisualizationDebugPanelModel) {
       };
     },
   );
+}
+
+function memoryRenderKey(parts: readonly unknown[]): string {
+  return JSON.stringify(parts);
 }
 
 export function allIssues(

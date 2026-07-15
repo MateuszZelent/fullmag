@@ -1856,6 +1856,7 @@ describe("viewport3dRenderModel", () => {
     );
     const fieldVector = fieldVectorFixture();
     const targetBuffer = buildViewport3DTargetFieldBuffer({
+      fieldRevision: "field-1",
       fieldVector,
       query: {
         component: "full",
@@ -3523,6 +3524,7 @@ describe("viewport3dRenderModel", () => {
         meshTopologyRevision: "7",
         pointCount: 12,
       },
+      fieldRevision: "H_demag-37",
       fieldVector,
       query: {
         component: "full",
@@ -3535,15 +3537,26 @@ describe("viewport3dRenderModel", () => {
     });
 
     const fieldModel = buildViewport3DFieldRenderModel(topologyModel, null, 1, {
+      fieldRevision: "m-332",
       partQuantityIds: new Map([["airbox", "H_demag"]]),
       partTargetFieldBuffers: new Map([["airbox", targetBuffer]]),
       partVectorBudgets: new Map([["airbox", 2]]),
       scalarColorsVisible: false,
+      topologyRevision: "7",
     });
 
     expect(targetBuffer.capability).toBe("full-vector-sampled");
     expect(fieldModel?.partVectorSegments.get("airbox")?.length).toBe(14);
     expect(fieldModel?.targetPasses.get("airbox")?.vectors.degradation).toBeNull();
+    expect(
+      fieldModel?.targetPasses.get("airbox")?.vectors.buildReference,
+    ).toMatchObject({ fieldRevision: "H_demag-37" });
+    expect(
+      fieldModel?.targetPasses.get("airbox")?.vectors.buildReference?.buildKey,
+    ).toContain("H_demag-37");
+    expect(
+      fieldModel?.targetPasses.get("airbox")?.vectors.buildReference?.buildKey,
+    ).not.toContain("m-332");
   });
 
   it("builds sampled magnetic part vectors at matching global topology positions", () => {

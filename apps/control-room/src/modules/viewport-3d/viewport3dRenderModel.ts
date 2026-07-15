@@ -1299,7 +1299,9 @@ function buildVectorGlyphBuildReference({
   const topologyRevision = revisionToString(
     options.topologyRevision ?? topology.meshRevision,
   );
-  const fieldRevision = revisionToString(options.fieldRevision);
+  const fieldRevision = revisionToString(
+    fieldBuffer ? fieldBuffer.fieldRevision : options.fieldRevision,
+  );
   if (!topologyRevision || !fieldRevision) return null;
 
   const sessionId = options.buildSessionId ?? "current";

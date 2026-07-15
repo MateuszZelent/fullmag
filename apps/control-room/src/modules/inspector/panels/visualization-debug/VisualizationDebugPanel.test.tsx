@@ -9,6 +9,7 @@ import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualiz
 
 import type { VisualizationDebugPanelModel } from "./VisualizationDebugPanelModel";
 import { VisualizationDebugPanelView } from "./VisualizationDebugPanel";
+import { memoryGroups } from "./visualizationDebugPresentation";
 
 const SECTION_TITLES = [
   "Health",
@@ -52,6 +53,34 @@ describe("VisualizationDebugPanelView", () => {
     expect(html).toContain("data-collapsed=\"true\"");
   });
 
+  it("keeps memory row identities unique across carriers with local entry IDs", () => {
+    const rowKeys = memoryGroups(multiCarrierMemoryModel()).flatMap((group) =>
+      group.rows.map(
+        (row) => (row as typeof row & { renderKey?: string }).renderKey,
+      ),
+    );
+
+    expect(rowKeys.every((key) => typeof key === "string" && key.length > 0)).toBe(
+      true,
+    );
+    expect(new Set(rowKeys).size).toBe(rowKeys.length);
+  });
+
+  it("renders the canonical region selection kind without reconstructing it", () => {
+    const model = readyModel();
+    model.target = {
+      id: "region:magnet:core",
+      kind: "region",
+      selectionKind: "object.region.visualization.debug",
+    };
+
+    const html = renderToStaticMarkup(
+      <VisualizationDebugPanelView model={model} nowMs={2_000} />,
+    );
+
+    expect(html).toContain(">object.region.visualization.debug<");
+  });
+
   it.each([
     ["missing-snapshot", "Loading visualization evidence"],
     ["active-non-3d", "No active 3D viewport"],
@@ -67,6 +96,38 @@ describe("VisualizationDebugPanelView", () => {
     );
     expect(html).toContain(expected);
   });
+
+  it.each([
+    ["missing-snapshot", "frame-not-committed"],
+    ["target-not-rendered", "target-not-active"],
+  ] as const)(
+    "keeps %s health evidence and export controls observable",
+    (state, code) => {
+      const model = {
+        ...emptyModel(),
+        disposition: "unknown" as const,
+        issues: [
+          {
+            code,
+            evidence: [`state=${state}`],
+            message: `Evidence for ${state}`,
+            severity: "warning" as const,
+            source: "render-derived" as const,
+          },
+        ],
+        state,
+      };
+      const html = renderToStaticMarkup(
+        <VisualizationDebugPanelView model={model} nowMs={2_000} />,
+      );
+
+      expect(html).toContain("Detected inconsistencies");
+      expect(html).toContain(code);
+      expect(html).toContain("Evidence export");
+      expect(html).toContain('aria-label="Export JSON"');
+      expect(html).toContain(`&quot;code&quot;: &quot;${code}&quot;`);
+    },
+  );
 
   it.each([
     ["ready", "Evidence is internally consistent"],
@@ -209,7 +270,11 @@ function emptyModel(): VisualizationDebugPanelModel {
     fieldQueries: [],
     issues: [],
     state: "missing-snapshot",
-    target: { id: "object:magnet", kind: "object" },
+    target: {
+      id: "object:magnet",
+      kind: "object",
+      selectionKind: "object.visualization.debug",
+    },
     transport: [],
     viewports: [],
   };
@@ -252,7 +317,11 @@ function readyModel(): VisualizationDebugPanelModel {
     fieldQueries: [],
     issues: snapshot.issues,
     state: "ready",
-    target: { id: "object:magnet", kind: "object" },
+    target: {
+      id: "object:magnet",
+      kind: "object",
+      selectionKind: "object.visualization.debug",
+    },
     transport: [transport],
     viewports: [
       {
@@ -397,6 +466,57 @@ function debugSnapshot(): VisualizationDebugSnapshot {
       viewportId: "viewport-primary",
     },
     version: 1,
+  };
+}
+
+function multiCarrierMemoryModel(): VisualizationDebugPanelModel {
+  const model = readyModel();
+  const viewport = model.viewports[0]!;
+  const snapshot = viewport.snapshots[0]!;
+  const firstCarrier = snapshot.carriers[0]!;
+  const secondCarrier = {
+    ...firstCarrier,
+    carrierId: "part:magnet-secondary",
+  };
+  const multiCarrierSnapshot = {
+    ...snapshot,
+    carriers: [firstCarrier, secondCarrier],
+    target: {
+      ...snapshot.target,
+      carrierIds: [firstCarrier.carrierId, secondCarrier.carrierId],
+    },
+  };
+  const firstObservation = viewport.carriers[0]!.observations[0]!;
+
+  return {
+    ...model,
+    viewports: [
+      {
+        ...viewport,
+        carriers: [
+          {
+            carrierId: firstCarrier.carrierId,
+            observations: [
+              {
+                ...firstObservation,
+                snapshot: multiCarrierSnapshot,
+              },
+            ],
+          },
+          {
+            carrierId: secondCarrier.carrierId,
+            observations: [
+              {
+                ...firstObservation,
+                carrier: secondCarrier,
+                snapshot: multiCarrierSnapshot,
+              },
+            ],
+          },
+        ],
+        snapshots: [multiCarrierSnapshot],
+      },
+    ],
   };
 }
 

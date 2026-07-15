@@ -1,6 +1,9 @@
 import { MAX_VISUALIZATION_DEBUG_SNAPSHOT_BYTES } from "@/kernel/visualization/VisualizationDebugController";
 
-import type { VisualizationDebugPanelModel } from "./VisualizationDebugPanelModel";
+import {
+  MAX_VISUALIZATION_DEBUG_COMPOSITE_ISSUES,
+  type VisualizationDebugPanelModel,
+} from "./VisualizationDebugPanelModel";
 
 export const VISUALIZATION_DEBUG_EXPORT_SCHEMA_VERSION =
   "fullmag.visualization-debug.v1" as const;
@@ -20,6 +23,8 @@ export interface VisualizationDebugExportDocument {
   exportedAtMs: number;
   issues: readonly VisualizationDebugExportIssue[];
   model: Readonly<Record<string, unknown>> & {
+    disposition: VisualizationDebugPanelModel["disposition"];
+    issues: VisualizationDebugPanelModel["issues"];
     state: VisualizationDebugPanelModel["state"];
   };
   schemaVersion: typeof VISUALIZATION_DEBUG_EXPORT_SCHEMA_VERSION;
@@ -94,6 +99,13 @@ export function buildVisualizationDebugExport(
       },
     ],
     model: {
+      disposition: model.disposition,
+      issues: model.issues
+        .slice(0, MAX_VISUALIZATION_DEBUG_COMPOSITE_ISSUES)
+        .map((entry) => ({
+          ...entry,
+          evidence: [...entry.evidence],
+        })),
       state: model.state,
       target: model.target ? { ...model.target } : null,
       transportEntryCount: model.transport.length,

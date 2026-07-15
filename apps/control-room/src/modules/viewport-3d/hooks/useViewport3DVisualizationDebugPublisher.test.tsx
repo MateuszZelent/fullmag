@@ -13,6 +13,7 @@ import {
 
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { buildViewport3DTargetFieldBuffer } from "../model/viewport3DTargetFieldBuffer";
+import { recordMeshPartSurfaceAdoption } from "../layers/MeshPartLayer";
 import {
   createViewport3DVisualizationDebugPublisher,
   createViewport3DVisualizationDebugCandidateBuilder,
@@ -687,6 +688,63 @@ describe("viewport visualization debug publisher", () => {
     release();
     publisher.dispose();
   });
+
+  it("aborts an active scan on revision change without publishing stale completion", async () => {
+    const signals: AbortSignal[] = [];
+    const resolvers: Array<(value: VisualizationDebugNumericStats) => void> = [];
+    const scanStatistics = vi.fn(
+      (
+        _values: Float64Array,
+        options?: { signal?: AbortSignal; yieldToMain?: () => Promise<void> },
+      ) => {
+        if (options?.signal) signals.push(options.signal);
+        return new Promise<VisualizationDebugNumericStats>((resolve) => {
+          resolvers.push(resolve);
+        });
+      },
+    );
+    const controller = new VisualizationDebugController();
+    const publisher = createViewport3DVisualizationDebugPublisher({
+      adoptionRegistry: createViewport3DRenderAdoptionRegistry(),
+      buildCandidate: createViewport3DVisualizationDebugCandidateBuilder({
+        scanStatistics,
+        source: syntheticScanSource(),
+        viewportId: "viewport-main",
+      }),
+      controller,
+      viewportId: "viewport-main",
+    });
+    const release = controller.request("airbox");
+    publisher.update({ revision: "field-1", targetIds: ["airbox"] });
+    await Promise.resolve();
+    await Promise.resolve();
+    publisher.commitFrame({ commitId: "frame-1", committedAtMs: 1 });
+    expect(controller.getSnapshots("airbox")[0]?.carriers[0]?.scanState).toBe(
+      "scanning",
+    );
+
+    publisher.update({ revision: "field-2", targetIds: ["airbox"] });
+    expect(signals[0]?.aborted).toBe(true);
+    expect(controller.getSnapshots("airbox")).toEqual([]);
+    resolvers[0]?.({
+      finiteCount: 6,
+      max: 6,
+      mean: 3.5,
+      min: 1,
+      nonFiniteCount: 0,
+      p01: null,
+      p99: null,
+      source: "decoded-payload",
+      zeroCount: 0,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(controller.getSnapshots("airbox")).toEqual([]);
+
+    release();
+    publisher.dispose();
+  });
 });
 
 describe("groupViewport3DVisualizationDebugCarriers", () => {
@@ -716,6 +774,45 @@ describe("groupViewport3DVisualizationDebugCarriers", () => {
 });
 
 describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
+  it("publishes cancelled once when an actual scan is aborted", async () => {
+    let resolveScan!: (value: VisualizationDebugNumericStats) => void;
+    const abortController = new AbortController();
+    const candidate = await createViewport3DVisualizationDebugCandidateBuilder({
+      scanStatistics: () =>
+        new Promise<VisualizationDebugNumericStats>((resolve) => {
+          resolveScan = resolve;
+        }),
+      source: syntheticScanSource(),
+      viewportId: "viewport-main",
+    })({ signal: abortController.signal, targetId: "airbox" });
+    const listener = vi.fn();
+    const unsubscribe = candidate.subscribe?.(listener) ?? (() => undefined);
+    candidate.start?.();
+
+    abortController.abort();
+    expect(candidate.materialize({
+      frame: { commitId: "frame-cancelled", committedAtMs: 1 },
+      receipts: [],
+    }).carriers[0]?.scanState).toBe("cancelled");
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    resolveScan({
+      finiteCount: 6,
+      max: 6,
+      mean: 3.5,
+      min: 1,
+      nonFiniteCount: 0,
+      p01: null,
+      p99: null,
+      source: "decoded-payload",
+      zeroCount: 0,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
   it("reuses exact render range diagnostics without starting a full scan or probe", async () => {
     const recordScan = vi.fn();
     const scanStatistics = vi.fn();
@@ -743,6 +840,81 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
       expect.objectContaining({ source: "render-derived", min: 1, max: 4 }),
     );
   });
+
+  it("uses the receipt scalar key for synchronous colors without a derived build key", async () => {
+    const source = syntheticScanSource({ exactRange: true });
+    const pass = source.fieldModel!.targetPasses.get("part:__air__")!;
+    const scalarColors = pass.surface.scalarColors!;
+    delete scalarColors.buildKey;
+    const candidate = await createViewport3DVisualizationDebugCandidateBuilder({
+      source,
+      viewportId: "viewport-main",
+    })({ signal: new AbortController().signal, targetId: "airbox" });
+    await settleCandidate(candidate);
+
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([["part:__air__", ["airbox"]]]));
+    registry.retainDemand("airbox");
+    recordMeshPartSurfaceAdoption({
+      carrierId: "part:__air__",
+      fieldBufferId: pass.fieldBuffer?.bufferId ?? null,
+      registry,
+      scalarBuffer: scalarColors,
+    });
+    const receipts = registry.snapshot("airbox");
+    const result = candidate.materialize({
+      frame: { commitId: "frame-sync-scalar", committedAtMs: 1 },
+      receipts,
+    });
+
+    expect(receipts[0]?.scalarBufferKey).toBe("scalar:synthetic-airbox:x:8");
+    expect(result.carriers[0]?.render.surface.bufferKey).toBe(
+      receipts[0]?.scalarBufferKey,
+    );
+    expect(result.issues.map((issue) => issue.code)).not.toContain(
+      "adopted-source-mismatch",
+    );
+  });
+
+  it.each([
+    ["c0", false],
+    ["full", true],
+  ] as const)(
+    "treats range component %s against rendered x with semantic exactness",
+    async (rangeComponent, shouldScan) => {
+      const source = syntheticScanSource({ exactRange: true });
+      const pass = source.fieldModel!.targetPasses.get("part:__air__")!;
+      pass.surface.scalarColors = {
+        ...pass.surface.scalarColors!,
+        colorMode: rangeComponent,
+      };
+      const recordScan = vi.fn();
+      const scanStatistics = vi.fn(async () => ({
+        finiteCount: 6,
+        max: 6,
+        mean: 3.5,
+        min: 1,
+        nonFiniteCount: 0,
+        p01: null,
+        p99: null,
+        source: "render-derived" as const,
+        zeroCount: 0,
+      }));
+      const candidate = await createViewport3DVisualizationDebugCandidateBuilder({
+        recordScan,
+        scanStatistics,
+        source,
+        viewportId: "viewport-main",
+      })({ signal: new AbortController().signal, targetId: "airbox" });
+
+      candidate.start?.();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(recordScan).toHaveBeenCalledTimes(shouldScan ? 1 : 0);
+      expect(scanStatistics).toHaveBeenCalledTimes(shouldScan ? 1 : 0);
+    },
+  );
 
   it("labels scanned synthetic render values as render-derived without decoded payload evidence", async () => {
     const values = new Float64Array([1, 2, 3, 4, 5, 6]);
@@ -1330,6 +1502,7 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
         },
         fullFieldBufferIdentity: {
           bufferId: "field-fdm",
+          currentDomainGenerationId: "current-fdm-domain",
           resourceKey: "resource-fdm",
         },
         fullFieldVector,

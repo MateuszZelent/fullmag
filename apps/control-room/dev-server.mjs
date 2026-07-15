@@ -21,6 +21,8 @@ import { createServer } from "node:http";
 import { resolve, dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolvePnpmInvocation } from "./scripts/resolve-pnpm-invocation.mjs";
+
 const appDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(appDir, "../..");
 const args = process.argv.slice(2);
@@ -51,10 +53,29 @@ function startDevServer() {
   process.stderr.write(`[control-room dev-server] starting on :${port}\n`);
   removeStaleNextDevLock();
 
-  const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  let pnpm;
+  try {
+    pnpm = resolvePnpmInvocation();
+  } catch (error) {
+    process.stderr.write(
+      `[control-room dev-server] ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exit(1);
+    return;
+  }
+
   const child = spawn(
-    pnpmCmd,
-    ["--dir", appDir, "dev", "--hostname", hostname, "--port", port],
+    pnpm.command,
+    [
+      ...pnpm.argsPrefix,
+      "--dir",
+      appDir,
+      "dev",
+      "--hostname",
+      hostname,
+      "--port",
+      port,
+    ],
     {
       cwd: repoRoot,
       detached: process.platform !== "win32",
@@ -120,7 +141,7 @@ function startDevServer() {
   });
   child.on("error", (err) => {
     process.stderr.write(
-      `[control-room dev-server] failed to spawn pnpm: ${err.message}\n`,
+      `[control-room dev-server] failed to spawn pnpm via ${pnpm.source}: ${err.message}\n`,
     );
     process.exit(1);
   });

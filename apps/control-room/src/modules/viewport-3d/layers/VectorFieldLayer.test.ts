@@ -18,6 +18,7 @@ import {
   ensureWhiteVertexColorAttribute,
   identifyVectorGlyphBuildResult,
   recordVectorFieldAdoption,
+  resolveVectorFieldAdoptionBuildKey,
   resolveVectorFieldLayerStyle,
   syncVectorGlyphMaterialStyle,
   syncVectorGlyphColorState,
@@ -72,7 +73,24 @@ describe("VectorFieldLayer performance contracts", () => {
     expect(retained).toMatchObject({
       sourceFieldBufferId: "field-old",
       sourceResourceKey: "resource-old",
+      sourceVectorBuildKey: "vector-old",
     });
+    expect(resolveVectorFieldAdoptionBuildKey(retained)).toBe("vector-old");
+  });
+  it("does not fabricate an adoption source from a decorated upload key", () => {
+    expect(
+      resolveVectorFieldAdoptionBuildKey({
+        colors: null,
+        transforms: {
+          count: 0,
+          directions: new Float32Array(),
+          headCenters: new Float32Array(),
+          headScales: new Float32Array(),
+          shaftCenters: new Float32Array(),
+          shaftScales: new Float32Array(),
+        },
+      }),
+    ).toBeNull();
   });
   it("records target-specific vector evidence only after visible adoption", () => {
     const registry = createViewport3DRenderAdoptionRegistry();

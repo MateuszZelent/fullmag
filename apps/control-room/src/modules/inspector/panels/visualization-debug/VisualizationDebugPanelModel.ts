@@ -5,11 +5,20 @@ import type {
   VisualizationClientAckResource,
 } from "@/kernel/api/apiTypes";
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
+import {
+  fieldVectorComponentEvidenceIdentity,
+  fieldVectorComponentsSemanticallyEqual,
+  parseCanonicalFieldVectorResourceKey,
+  serializeCanonicalFieldVectorResourceKey,
+} from "@/kernel/api/fieldQueryIdentity";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import {
   resolveFieldMetaResourceKey,
 } from "@/kernel/resources/studyRuntimeResources";
-import { visualizationDebugRangesEqual } from "@/kernel/visualization/buildVisualizationDebugHealth";
+import {
+  prioritizeAndBoundVisualizationDebugIssues,
+  visualizationDebugRangesEqual,
+} from "@/kernel/visualization/buildVisualizationDebugHealth";
 import type {
   VisualizationDebugDisposition,
   VisualizationDebugCarrierSnapshot,
@@ -28,14 +37,22 @@ export type VisualizationDebugPanelState =
   | "target-not-rendered"
   | "ready";
 
+export type VisualizationDebugSelectionKind =
+  | "airbox.visualization.debug"
+  | "object.visualization.debug"
+  | "object.region.visualization.debug";
+
 export interface VisualizationDebugTarget {
   id: string;
   kind: "airbox" | "object" | "region";
+  selectionKind: VisualizationDebugSelectionKind;
 }
 
 export interface VisualizationDebugExactFieldQuery {
   component: string;
+  geometryScope: string | null;
   key: string;
+  maxSamples: number | null;
   metaQuery: FieldMetaQuery;
   metaQueryKey: string;
   metaResourceKey: string;
@@ -53,6 +70,12 @@ export interface VisualizationDebugBackendRenderComparison {
   compatible: boolean;
   rangesMatch: boolean | null;
 }
+
+type VisualizationDebugSurfaceComponentComparison =
+  | "comparable"
+  | "derived"
+  | "incompatible"
+  | "missing";
 
 export interface VisualizationDebugCarrierObservation {
   backendMeta: FieldMetaResource | null;
@@ -108,12 +131,20 @@ export function resolveVisualizationDebugTarget(
     return null;
   }
   const id = selection.visualizationTargetId;
-  if (id === "airbox") return Object.freeze({ id, kind: "airbox" });
-  if (id.startsWith("object:")) {
-    return Object.freeze({ id, kind: "object" });
+  if (selection.kind === "airbox.visualization.debug" && id === "airbox") {
+    return Object.freeze({ id, kind: "airbox", selectionKind: selection.kind });
   }
-  if (id.startsWith("region:")) {
-    return Object.freeze({ id, kind: "region" });
+  if (
+    selection.kind === "object.visualization.debug" &&
+    id.startsWith("object:")
+  ) {
+    return Object.freeze({ id, kind: "object", selectionKind: selection.kind });
+  }
+  if (
+    selection.kind === "object.region.visualization.debug" &&
+    id.startsWith("region:")
+  ) {
+    return Object.freeze({ id, kind: "region", selectionKind: selection.kind });
   }
   return null;
 }
@@ -166,10 +197,8 @@ export function buildVisualizationDebugPanelModel({
       const query = resolveVisualizationDebugCarrierQuery(carrier);
       if (query) fieldQueries.set(query.key, query);
       addCarrierResourceKeys(resourceKeys, carrier);
-      const backendMeta = query
-        ? (fieldMetaByQueryKey.get(query.metaQueryKey) ??
-          fieldMetaByQueryKey.get(query.key) ??
-          null)
+      const backendMeta = query && visualizationDebugQuerySupportsFieldMeta(query)
+        ? (fieldMetaByQueryKey.get(query.metaQueryKey) ?? null)
         : null;
       const observation = Object.freeze({
         backendMeta,
@@ -260,33 +289,18 @@ export function resolveVisualizationDebugCarrierQuery(
 ): VisualizationDebugExactFieldQuery | null {
   const resourceKey = carrier.request.resourceKey;
   if (!resourceKey) return null;
-
-  let url: URL;
-  try {
-    url = new URL(resourceKey, "http://fullmag.invalid");
-  } catch {
-    return null;
-  }
-  const match = /\/data\/fields\/([^/]+)\/samples\/vector$/.exec(url.pathname);
-  if (!match) return null;
-
-  let quantityId: string;
-  try {
-    quantityId = decodeURIComponent(match[1]!);
-  } catch {
-    return null;
-  }
-  const component = url.searchParams.get("component") ?? "full";
-  const scopeKind = url.searchParams.get("scope_kind") ?? "full";
-  const scopeId = url.searchParams.get("scope_id");
-  const snapshotId = url.searchParams.get("snapshot_id");
-  const stageId = url.searchParams.get("stage_id");
-  const view = url.searchParams.get("view");
-  const phaseText = url.searchParams.get("phase_rad");
-  const parsedPhase = phaseText === null ? null : Number(phaseText);
-  const phaseRad = parsedPhase !== null && Number.isFinite(parsedPhase)
-    ? parsedPhase
-    : null;
+  const parsed = parseCanonicalFieldVectorResourceKey(resourceKey);
+  if (!parsed) return null;
+  const component = parsed.component;
+  const geometryScope = parsed.geometryScope ?? null;
+  const maxSamples = parsed.maxSamples ?? null;
+  const phaseRad = parsed.phaseRad ?? null;
+  const quantityId = parsed.quantityId;
+  const scopeId = parsed.scopeId ?? null;
+  const scopeKind = parsed.scopeKind;
+  const snapshotId = parsed.snapshotId ?? null;
+  const stageId = parsed.stageId ?? null;
+  const view = parsed.view ?? null;
   const metaQuery: FieldMetaQuery = Object.freeze({
     component,
     scope_id: scopeId,
@@ -302,20 +316,13 @@ export function resolveVisualizationDebugCarrierQuery(
     snapshotId,
     stageId,
   });
-  const key = canonicalVisualizationDebugExactQueryKey({
-    component,
-    phaseRad,
-    quantityId,
-    scopeId,
-    scopeKind,
-    snapshotId,
-    stageId,
-    view,
-  });
+  const key = serializeCanonicalFieldVectorResourceKey(parsed);
 
   return Object.freeze({
     component,
+    geometryScope,
     key,
+    maxSamples,
     metaQuery,
     metaQueryKey,
     metaResourceKey: resolveFieldMetaResourceKey(quantityId, metaQuery),
@@ -348,28 +355,6 @@ export function canonicalVisualizationDebugFieldMetaQueryKey(input: {
   ]);
 }
 
-export function canonicalVisualizationDebugExactQueryKey(input: {
-  component: string;
-  phaseRad: number | null;
-  quantityId: string;
-  scopeId: string | null;
-  scopeKind: string;
-  snapshotId: string | null;
-  stageId: string | null;
-  view: string | null;
-}): string {
-  return JSON.stringify([
-    input.quantityId,
-    input.component,
-    input.scopeKind,
-    input.scopeId,
-    input.snapshotId,
-    input.stageId,
-    input.view,
-    input.phaseRad,
-  ]);
-}
-
 export function compareBackendAndRender({
   backendMeta,
   carrier,
@@ -380,20 +365,33 @@ export function compareBackendAndRender({
   query: VisualizationDebugExactFieldQuery | null;
 }): VisualizationDebugBackendRenderComparison | null {
   if (!backendMeta || !query) return null;
+  if (!visualizationDebugQuerySupportsFieldMeta(query)) {
+    return null;
+  }
   const payload = carrier.payload;
-  const renderedComponent = carrier.render.surface.colorMode;
   const requestedFieldBufferId = carrier.render.requestedFieldBufferId;
   const adoptedFieldBufferId = carrier.render.adoption.adoptedFieldBufferId;
   const renderedScalarBufferKey = carrier.render.surface.bufferKey;
   const adoptedScalarBufferKey = carrier.render.adoption.adoptedScalarBufferKey;
+  const renderedVectorBuildKey = carrier.render.vectors.buildKey;
+  const adoptedVectorBuildKey = carrier.render.adoption.adoptedVectorBuildKey;
   const adoptedResourceKey = carrier.render.adoption.adoptedResourceKey;
+  const surfaceRequested = carrier.render.requestedPasses.includes("surface");
+  const vectorRequested = carrier.render.requestedPasses.includes("vector-glyph");
+  const surfaceComponentComparison = compareSurfaceComponentEvidence(
+    carrier,
+    query,
+  );
+  const fieldRevisionComparison = comparePhysicalFieldRevision(
+    carrier.revisions.fieldRevision,
+    backendMeta.field_revision,
+  );
   if (
     backendMeta.quantity_id !== query.quantityId ||
     (carrier.revisions.domainGenerationId !== null &&
       backendMeta.domain_generation_id !==
         carrier.revisions.domainGenerationId) ||
-    (carrier.revisions.fieldRevision !== null &&
-      String(backendMeta.field_revision) !== carrier.revisions.fieldRevision) ||
+    fieldRevisionComparison === "render-stale" ||
     (payload !== null && payload.quantityId !== query.quantityId) ||
     (payload !== null &&
       payload.scopeKind !== null &&
@@ -401,28 +399,41 @@ export function compareBackendAndRender({
     (payload !== null &&
       (payload.scopeKind !== null || payload.scopeId !== null) &&
       payload.scopeId !== query.scopeId) ||
-    (renderedComponent !== null && renderedComponent !== query.component) ||
+    surfaceComponentComparison === "incompatible" ||
     (requestedFieldBufferId !== null &&
       adoptedFieldBufferId !== null &&
       requestedFieldBufferId !== adoptedFieldBufferId) ||
-    (renderedScalarBufferKey !== null &&
+    (surfaceRequested &&
+      renderedScalarBufferKey !== null &&
       adoptedScalarBufferKey !== null &&
       renderedScalarBufferKey !== adoptedScalarBufferKey) ||
+    (vectorRequested &&
+      renderedVectorBuildKey !== null &&
+      adoptedVectorBuildKey !== null &&
+      renderedVectorBuildKey !== adoptedVectorBuildKey) ||
     (adoptedResourceKey !== null &&
       adoptedResourceKey !== query.vectorResourceKey)
   ) {
     return Object.freeze({ compatible: false, rangesMatch: null });
   }
+  if (surfaceComponentComparison === "derived") {
+    return null;
+  }
   if (
     payload === null ||
     payload.scopeKind === null ||
     carrier.revisions.domainGenerationId === null ||
-    carrier.revisions.fieldRevision === null ||
-    renderedComponent === null ||
+    fieldRevisionComparison !== "current" ||
+    (!surfaceRequested && !vectorRequested) ||
     requestedFieldBufferId === null ||
     adoptedFieldBufferId === null ||
-    renderedScalarBufferKey === null ||
-    adoptedScalarBufferKey === null
+    adoptedResourceKey === null ||
+    (surfaceRequested &&
+      (surfaceComponentComparison === "missing" ||
+        renderedScalarBufferKey === null ||
+        adoptedScalarBufferKey === null)) ||
+    (vectorRequested &&
+      (renderedVectorBuildKey === null || adoptedVectorBuildKey === null))
   ) {
     return null;
   }
@@ -432,11 +443,22 @@ export function compareBackendAndRender({
   );
   const stats = backendMeta.stats;
   const rangesMatch =
-    rendered?.min == null || rendered.max == null || !stats
+    !surfaceRequested || rendered?.min == null || rendered.max == null || !stats
       ? null
       : visualizationDebugRangesEqual(stats.min, rendered.min) &&
         visualizationDebugRangesEqual(stats.max, rendered.max);
   return Object.freeze({ compatible: true, rangesMatch });
+}
+
+export function visualizationDebugQuerySupportsFieldMeta(
+  query: VisualizationDebugExactFieldQuery,
+): boolean {
+  return (
+    query.view === null &&
+    query.phaseRad === null &&
+    query.maxSamples === null &&
+    (query.geometryScope === null || query.geometryScope === "full")
+  );
 }
 
 function emptyModel(
@@ -524,15 +546,17 @@ function buildCompositeHealth({
 
   if (state === "target-not-rendered") {
     panelEvidenceComplete = false;
-    derivedIssues.push(
-      issue(
-        "target-not-active",
-        "warning",
-        "ui-derived",
-        "Target is not active in the current render model.",
-        ["state=target-not-rendered"],
-      ),
-    );
+    if (!snapshotIssues.some((entry) => entry.code === "target-not-active")) {
+      derivedIssues.push(
+        issue(
+          "target-not-active",
+          "warning",
+          "ui-derived",
+          "Target is not active in the current render model.",
+          ["state=target-not-rendered"],
+        ),
+      );
+    }
   }
 
   for (const [resourceKey, terminal] of terminalByResource) {
@@ -556,6 +580,38 @@ function buildCompositeHealth({
         const { backendMeta, backendRenderComparison, carrier, query } = observation;
         if (!backendMeta || !query) {
           panelEvidenceComplete = false;
+          if (query && !visualizationDebugQuerySupportsFieldMeta(query)) {
+            derivedIssues.push(
+              issue(
+                "backend-meta-incomparable",
+                "info",
+                "ui-derived",
+                "Exact query shape cannot be compared with base-field backend metadata.",
+                [
+                  `carrier=${carrier.carrierId}`,
+                  `query=${query.key}`,
+                  `geometry_scope=${query.geometryScope ?? "full"}`,
+                  `max_samples=${query.maxSamples ?? "all"}`,
+                  `view=${query.view ?? "none"}`,
+                  `phase_rad=${query.phaseRad ?? "none"}`,
+                ],
+              ),
+            );
+          } else if (query && !backendMeta) {
+            derivedIssues.push(
+              issue(
+                "backend-meta-incomparable",
+                "info",
+                "ui-derived",
+                "Exact backend metadata is unavailable, so rendered field evidence cannot be compared.",
+                [
+                  `carrier=${carrier.carrierId}`,
+                  `query=${query.key}`,
+                  "backend_meta=unavailable",
+                ],
+              ),
+            );
+          }
         } else {
           const revision = comparePhysicalFieldRevision(
             carrier.revisions.fieldRevision,
@@ -577,6 +633,42 @@ function buildCompositeHealth({
           } else if (revision !== "current") {
             panelEvidenceComplete = false;
           }
+        }
+        if (backendRenderComparison === null) {
+          panelEvidenceComplete = false;
+          if (
+            backendMeta &&
+            query &&
+            compareSurfaceComponentEvidence(carrier, query) === "derived"
+          ) {
+            derivedIssues.push(
+              issue(
+                "backend-meta-incomparable",
+                "info",
+                "ui-derived",
+                "The rendered surface is a derived projection of the exact full-vector field, so base-field statistics are not directly comparable.",
+                [
+                  `carrier=${carrier.carrierId}`,
+                  `query=${query.key}`,
+                  `query_component=${query.component}`,
+                  `rendered_component=${carrier.render.surface.colorMode ?? "unknown"}`,
+                ],
+              ),
+            );
+          }
+        } else if (backendRenderComparison.compatible === false) {
+          derivedIssues.push(
+            issue(
+              "backend-render-incompatible",
+              "warning",
+              "ui-derived",
+              "Exact backend metadata and rendered adoption evidence identify incompatible fields.",
+              [
+                `carrier=${carrier.carrierId}`,
+                `query=${query?.key ?? "unavailable"}`,
+              ],
+            ),
+          );
         }
         if (backendRenderComparison?.rangesMatch === false) {
           derivedIssues.push(
@@ -633,6 +725,25 @@ function buildCompositeHealth({
   return Object.freeze({ disposition, issues });
 }
 
+function compareSurfaceComponentEvidence(
+  carrier: VisualizationDebugCarrierSnapshot,
+  query: VisualizationDebugExactFieldQuery,
+): VisualizationDebugSurfaceComponentComparison {
+  if (!carrier.render.requestedPasses.includes("surface")) {
+    return "comparable";
+  }
+  const renderedComponent = carrier.render.surface.colorMode;
+  if (renderedComponent === null) return "missing";
+  if (
+    fieldVectorComponentsSemanticallyEqual(renderedComponent, query.component)
+  ) {
+    return "comparable";
+  }
+  return fieldVectorComponentEvidenceIdentity(query.component) === "full"
+    ? "derived"
+    : "incompatible";
+}
+
 function comparePhysicalFieldRevision(
   rendered: string | null,
   backend: number,
@@ -660,22 +771,10 @@ function aggregateSnapshotDisposition(
 function deduplicateAndBoundIssues(
   input: readonly VisualizationDebugIssue[],
 ): readonly VisualizationDebugIssue[] {
-  const seen = new Set<string>();
-  const result: VisualizationDebugIssue[] = [];
-  for (const entry of input) {
-    const key = JSON.stringify([
-      entry.code,
-      entry.severity,
-      entry.source,
-      entry.message,
-      entry.evidence,
-    ]);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(entry);
-    if (result.length === MAX_VISUALIZATION_DEBUG_COMPOSITE_ISSUES) break;
-  }
-  return Object.freeze(result);
+  return prioritizeAndBoundVisualizationDebugIssues(
+    input,
+    MAX_VISUALIZATION_DEBUG_COMPOSITE_ISSUES,
+  );
 }
 
 function issue(

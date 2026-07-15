@@ -20,6 +20,7 @@ import {
   resolveVisualizationDebugTarget,
 } from "./VisualizationDebugPanelModel";
 import { visualizationDebugFieldMetaHookInput } from "./useVisualizationDebugPanelModel";
+import { buildVisualizationDebugExport } from "./visualizationDebugExport";
 
 const VECTOR_PATH = DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m");
 
@@ -59,7 +60,7 @@ function carrier({
   component = "full",
   fieldRevision = "12",
   quantityId = "m",
-  resourceKey = `${VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&snapshot_id=snap-4&stage_id=relax&view=phase_rotated_real`,
+  resourceKey = `${VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&snapshot_id=snap-4&stage_id=relax`,
   scopeId = "magnet",
   scopeKind = "object",
 }: Partial<{
@@ -226,17 +227,26 @@ describe("VisualizationDebugPanelModel", () => {
     expect(resolveVisualizationDebugTarget(selection({ kind: "airbox" }))).toEqual({
       id: "airbox",
       kind: "airbox",
+      selectionKind: "airbox.visualization.debug",
     });
     expect(
       resolveVisualizationDebugTarget(
         selection({ kind: "object", objectId: "free-layer" }),
       ),
-    ).toEqual({ id: "object:free-layer", kind: "object" });
+    ).toEqual({
+      id: "object:free-layer",
+      kind: "object",
+      selectionKind: "object.visualization.debug",
+    });
     expect(
       resolveVisualizationDebugTarget(
         selection({ kind: "region", objectId: "free-layer", regionId: "edge A" }),
       ),
-    ).toEqual({ id: "region:free-layer:edge%20A", kind: "region" });
+    ).toEqual({
+      id: "region:free-layer:edge%20A",
+      kind: "region",
+      selectionKind: "object.region.visualization.debug",
+    });
     expect(
       resolveVisualizationDebugTarget({
         kind: "study.root",
@@ -244,6 +254,24 @@ describe("VisualizationDebugPanelModel", () => {
         type: "study",
       }),
     ).toBeNull();
+    for (const mismatched of [
+      {
+        ...selection({ kind: "airbox" }),
+        visualizationTargetId: "object:free-layer" as const,
+      },
+      {
+        ...selection({ kind: "object", objectId: "free-layer" }),
+        visualizationTargetId: "region:free-layer:core" as const,
+      },
+      {
+        ...selection({ kind: "region", objectId: "free-layer", regionId: "core" }),
+        visualizationTargetId: "object:free-layer" as const,
+      },
+    ]) {
+      expect(
+        resolveVisualizationDebugTarget(mismatched as unknown as SelectionRef),
+      ).toBeNull();
+    }
     expect(
       resolveVisualizationDebugTarget({
         kind: "object.root",
@@ -377,9 +405,9 @@ describe("VisualizationDebugPanelModel", () => {
   });
 
   it("deduplicates canonical exact queries independent of URL parameter order while preserving view and phase evidence", () => {
-    const ordered = `${VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&snapshot_id=snap-4&stage_id=relax&view=phase_rotated_real&phase_rad=1.25`;
-    const reordered = `${VECTOR_PATH}?phase_rad=1.25&view=phase_rotated_real&stage_id=relax&snapshot_id=snap-4&scope_id=magnet&scope_kind=object&component=full`;
-    const otherPhase = `${VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&snapshot_id=snap-4&stage_id=relax&view=phase_rotated_real&phase_rad=2.5`;
+    const ordered = `${VECTOR_PATH}?component=full&geometry_scope=surface&max_samples=128&scope_kind=object&scope_id=magnet&snapshot_id=snap-4&stage_id=relax&view=phase_rotated_real&phase_rad=1.25`;
+    const reordered = `${VECTOR_PATH}?phase_rad=1.25&view=phase_rotated_real&stage_id=relax&snapshot_id=snap-4&scope_id=magnet&scope_kind=object&max_samples=128&geometry_scope=surface&component=full`;
+    const otherPhase = `${VECTOR_PATH}?component=full&geometry_scope=surface&max_samples=128&scope_kind=object&scope_id=magnet&snapshot_id=snap-4&stage_id=relax&view=phase_rotated_real&phase_rad=2.5`;
     const model = buildVisualizationDebugPanelModel({
       activeViewportMainModuleId: "viewport-3d",
       clientAcks: null,
@@ -436,7 +464,7 @@ describe("VisualizationDebugPanelModel", () => {
     const hookInput = visualizationDebugFieldMetaHookInput(first);
     expect(hookInput).toEqual({
       component: "full",
-      enabled: true,
+      enabled: false,
       quantityId: "m",
       scope_id: "magnet",
       scope_kind: "object",
@@ -474,14 +502,93 @@ describe("VisualizationDebugPanelModel", () => {
 
     expect(model.fieldQueries).toEqual([
       expect.objectContaining({
-        component: "x",
-        quantityId: "m",
+      component: "x",
+      geometryScope: null,
+      quantityId: "m",
         scopeId: "other",
         scopeKind: "object",
       }),
     ]);
     expect(model.viewports[0]?.carriers[0]?.observations[0]?.query).not.toBeNull();
   });
+
+  it("keeps geometry scope and sample limit in exact query identity", () => {
+    const base = carrier();
+    const surface = carrier({
+      carrierId: "part:surface",
+      resourceKey: `${VECTOR_PATH}?component=full&geometry_scope=surface&scope_kind=object&scope_id=magnet&snapshot_id=snap-4&stage_id=relax`,
+    });
+    const sampled = carrier({
+      carrierId: "part:sampled",
+      resourceKey: `${VECTOR_PATH}?component=full&max_samples=128&scope_kind=object&scope_id=magnet&snapshot_id=snap-4&stage_id=relax`,
+    });
+    const baseQuery = resolveVisualizationDebugCarrierQuery(base)!;
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map([
+        [baseQuery.metaQueryKey, backendMeta(12)],
+      ]),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot({ carriers: [base, surface, sampled] })],
+    });
+    const observations = model.viewports[0]!.carriers.flatMap(
+      (group) => group.observations,
+    );
+
+    expect(new Set(model.fieldQueries.map((query) => query.key)).size).toBe(3);
+    expect(model.fieldQueries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ geometryScope: "surface", maxSamples: null }),
+        expect.objectContaining({ geometryScope: null, maxSamples: 128 }),
+      ]),
+    );
+    expect(observations[0]?.backendMeta).toEqual(backendMeta(12));
+    expect(observations[1]?.backendMeta).toBeNull();
+    expect(observations[2]?.backendMeta).toBeNull();
+    expect(model.disposition).toBe("unknown");
+  });
+
+  it.each(["base-first", "complex-first"] as const)(
+    "does not attach base metadata to a coexisting complex query (%s)",
+    (order) => {
+      const baseCarrier = carrier({ carrierId: "part:base" });
+      const complexCarrier = carrier({
+        carrierId: "part:complex",
+        resourceKey: `${VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&snapshot_id=snap-4&stage_id=relax&view=phase_rotated_real&phase_rad=1.25`,
+      });
+      const baseQuery = resolveVisualizationDebugCarrierQuery(baseCarrier)!;
+      const carriers =
+        order === "base-first"
+          ? [baseCarrier, complexCarrier]
+          : [complexCarrier, baseCarrier];
+      const model = buildVisualizationDebugPanelModel({
+        activeViewportMainModuleId: "viewport-3d",
+        clientAcks: null,
+        diagnostics: [],
+        fieldMetaByQueryKey: new Map([
+          [baseQuery.metaQueryKey, backendMeta(12)],
+        ]),
+        selection: selection({ kind: "object", objectId: "magnet" }),
+        snapshots: [snapshot({ carriers })],
+      });
+      const observations = model.viewports[0]!.carriers.flatMap(
+        (group) => group.observations,
+      );
+
+      expect(
+        observations.find((entry) => entry.carrier.carrierId === "part:base")
+          ?.backendMeta,
+      ).toEqual(backendMeta(12));
+      expect(
+        observations.find(
+          (entry) => entry.carrier.carrierId === "part:complex",
+        )?.backendMeta,
+      ).toBeNull();
+      expect(model.disposition).toBe("unknown");
+    },
+  );
 
   it("filters transport by exact carrier resource keys only and caps the total at eight", () => {
     const exact = carrier().request.resourceKey!;
@@ -620,6 +727,59 @@ describe("VisualizationDebugPanelModel", () => {
     expect(
       model.viewports[0]?.carriers[0]?.observations[0]?.wireByteLength,
     ).toBeNull();
+    expect(
+      model.viewports[0]?.carriers[0]?.observations[0]
+        ?.backendRenderComparison,
+    ).toBeNull();
+    expect(model.disposition).toBe("unknown");
+    expect(model.issues).toContainEqual(
+      expect.objectContaining({
+        code: "backend-meta-incomparable",
+        severity: "info",
+      }),
+    );
+    expect(model.issues).not.toContainEqual(
+      expect.objectContaining({ code: "backend-render-incompatible" }),
+    );
+  });
+
+  it("treats orientation coloring as a derived projection of an exact full-vector field", () => {
+    const fullVectorCarrier = carrier();
+    fullVectorCarrier.render = {
+      ...fullVectorCarrier.render,
+      surface: {
+        ...fullVectorCarrier.render.surface,
+        colorMode: "orientation",
+      },
+    };
+    const query = resolveVisualizationDebugCarrierQuery(fullVectorCarrier)!;
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map([[query.metaQueryKey, backendMeta(12)]]),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot({ carriers: [fullVectorCarrier] })],
+    });
+
+    expect(
+      model.viewports[0]?.carriers[0]?.observations[0]
+        ?.backendRenderComparison,
+    ).toBeNull();
+    expect(model.disposition).toBe("unknown");
+    expect(model.issues).toContainEqual(
+      expect.objectContaining({
+        code: "backend-meta-incomparable",
+        evidence: expect.arrayContaining([
+          "query_component=full",
+          "rendered_component=orientation",
+        ]),
+        severity: "info",
+      }),
+    );
+    expect(model.issues).not.toContainEqual(
+      expect.objectContaining({ code: "backend-render-incompatible" }),
+    );
   });
 
   it("keeps composite health unknown without fresh exact backend metadata", () => {
@@ -633,6 +793,13 @@ describe("VisualizationDebugPanelModel", () => {
     });
 
     expect(model.disposition).toBe("unknown");
+    expect(model.issues).toContainEqual(
+      expect.objectContaining({
+        code: "backend-meta-incomparable",
+        evidence: expect.arrayContaining(["backend_meta=unavailable"]),
+        severity: "info",
+      }),
+    );
   });
 
   it("compares the physical response field revision without treating ETag as that revision", () => {
@@ -654,6 +821,241 @@ describe("VisualizationDebugPanelModel", () => {
     );
   });
 
+  it.each([
+    ["11", 12, "degraded", true],
+    ["13", 12, "unknown", false],
+    ["opaque", 12, "unknown", false],
+  ] as const)(
+    "classifies rendered physical revision %s against backend %s",
+    (fieldRevision, backendRevision, disposition, stale) => {
+      const exactCarrier = carrier({ fieldRevision });
+      const query = resolveVisualizationDebugCarrierQuery(exactCarrier)!;
+      const model = buildVisualizationDebugPanelModel({
+        activeViewportMainModuleId: "viewport-3d",
+        clientAcks: null,
+        diagnostics: [],
+        fieldMetaByQueryKey: new Map([
+          [query.metaQueryKey, backendMeta(backendRevision)],
+        ]),
+        selection: selection({ kind: "object", objectId: "magnet" }),
+        snapshots: [snapshot({ carriers: [exactCarrier] })],
+      });
+
+      expect(model.disposition).toBe(disposition);
+      expect(
+        model.issues.some((entry) => entry.code === "field-revision-stale"),
+      ).toBe(stale);
+    },
+  );
+
+  it("compares semantic component aliases but not different components", () => {
+    const xResourceKey = `${VECTOR_PATH}?component=x&scope_kind=object&scope_id=magnet&snapshot_id=snap-4&stage_id=relax`;
+    const c0Carrier = carrier({
+      component: "c0",
+      resourceKey: xResourceKey,
+    });
+    const c1Carrier = carrier({
+      component: "c1",
+      resourceKey: xResourceKey,
+    });
+    const query = resolveVisualizationDebugCarrierQuery(c0Carrier)!;
+
+    expect(
+      compareBackendAndRender({
+        backendMeta: backendMeta(12),
+        carrier: c0Carrier,
+        query,
+      }),
+    ).toEqual({ compatible: true, rangesMatch: true });
+    expect(
+      compareBackendAndRender({
+        backendMeta: backendMeta(12),
+        carrier: c1Carrier,
+        query,
+      }),
+    ).toEqual({ compatible: false, rangesMatch: null });
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map([
+        [query.metaQueryKey, backendMeta(12)],
+      ]),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot({ carriers: [c1Carrier] })],
+    });
+    expect(model.disposition).toBe("degraded");
+    expect(model.issues).toContainEqual(
+      expect.objectContaining({ code: "backend-render-incompatible" }),
+    );
+  });
+
+  it("deduplicates and globally caps composite issues at twenty", () => {
+    const issues = Array.from({ length: 25 }, (_, index) => ({
+      code: `issue-${index}`,
+      evidence: [`index=${index}`],
+      message: `Issue ${index}`,
+      severity: "warning" as const,
+      source: "render-derived" as const,
+    }));
+    const noisySnapshot = {
+      ...snapshot(),
+      disposition: "degraded" as const,
+      issues: [issues[0]!, ...issues],
+    };
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map(),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [noisySnapshot],
+    });
+
+    expect(model.issues).toHaveLength(20);
+    expect(model.issues.map((entry) => entry.code)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `issue-${index}`),
+    );
+  });
+
+  it("keeps a late blocking transport cause inside the bounded issue list", () => {
+    const exact = carrier().request.resourceKey!;
+    const infoIssues = Array.from({ length: 25 }, (_, index) => ({
+      code: `note-${index}`,
+      evidence: [`index=${index}`],
+      message: `Note ${index}`,
+      severity: "info" as const,
+      source: "ui-derived" as const,
+    }));
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [
+        diagnostic(exact, 100, {
+          detail: "binary decode failed",
+          outcome: "error",
+          status: 200,
+        }),
+      ],
+      fieldMetaByQueryKey: new Map(),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [
+        {
+          ...snapshot(),
+          disposition: "ready",
+          issues: infoIssues,
+        },
+      ],
+    });
+
+    expect(model.disposition).toBe("blocked");
+    expect(model.issues).toHaveLength(20);
+    expect(model.issues[0]).toMatchObject({
+      code: "field-request-error",
+      severity: "error",
+    });
+  });
+
+  it("publishes target-not-active only once when snapshot and panel evidence agree", () => {
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map(),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [
+        {
+          ...snapshot({ carriers: [] }),
+          disposition: "unknown",
+          issues: [
+            {
+              code: "target-not-active",
+              evidence: ["targetActive"],
+              message: "Target is not active in the current render model.",
+              severity: "warning",
+              source: "ui-derived",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(model.issues.filter((entry) => entry.code === "target-not-active"))
+      .toHaveLength(1);
+  });
+
+  it("treats vector-only exact adoption as comparable without range evidence", () => {
+    const vectorOnly = carrier();
+    vectorOnly.render = {
+      ...vectorOnly.render,
+      requestedPasses: ["vector-glyph"],
+      surface: {
+        bufferKey: null,
+        colorMode: null,
+        degradation: null,
+        projectionMode: null,
+        scalarByteLength: null,
+      },
+    };
+    const query = resolveVisualizationDebugCarrierQuery(vectorOnly)!;
+
+    expect(
+      compareBackendAndRender({
+        backendMeta: backendMeta(12),
+        carrier: vectorOnly,
+        query,
+      }),
+    ).toEqual({ compatible: true, rangesMatch: null });
+
+    const wrongBuild = {
+      ...vectorOnly,
+      render: {
+        ...vectorOnly.render,
+        adoption: {
+          ...vectorOnly.render.adoption,
+          adoptedVectorBuildKey: "vectors-other",
+        },
+      },
+    };
+    expect(
+      compareBackendAndRender({
+        backendMeta: backendMeta(12),
+        carrier: wrongBuild,
+        query,
+      }),
+    ).toEqual({ compatible: false, rangesMatch: null });
+
+    const ready = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map([
+        [query.metaQueryKey, backendMeta(12)],
+      ]),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot({ carriers: [vectorOnly] })],
+    });
+    expect(ready.disposition).toBe("ready");
+
+    const degraded = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map([
+        [query.metaQueryKey, backendMeta(12)],
+      ]),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot({ carriers: [wrongBuild] })],
+    });
+    expect(degraded.disposition).toBe("degraded");
+    expect(degraded.issues).toContainEqual(
+      expect.objectContaining({
+        code: "backend-render-incompatible",
+        severity: "warning",
+      }),
+    );
+  });
+
   it("compares backend and render ranges only with exact component and adopted surface evidence", () => {
     const base = buildVisualizationDebugPanelModel({
       activeViewportMainModuleId: "viewport-3d",
@@ -663,7 +1065,7 @@ describe("VisualizationDebugPanelModel", () => {
       selection: selection({ kind: "object", objectId: "magnet" }),
       snapshots: [snapshot()],
     });
-    const queryKey = base.fieldQueries[0]!.key;
+    const queryKey = base.fieldQueries[0]!.metaQueryKey;
 
     const compatible = buildVisualizationDebugPanelModel({
       activeViewportMainModuleId: "viewport-3d",
@@ -678,7 +1080,7 @@ describe("VisualizationDebugPanelModel", () => {
       rangesMatch: true,
     });
 
-    const stale = buildVisualizationDebugPanelModel({
+    const backendOlderThanRender = buildVisualizationDebugPanelModel({
       activeViewportMainModuleId: "viewport-3d",
       clientAcks: null,
       diagnostics: [],
@@ -686,10 +1088,10 @@ describe("VisualizationDebugPanelModel", () => {
       selection: selection({ kind: "object", objectId: "magnet" }),
       snapshots: [snapshot()],
     });
-    expect(stale.viewports[0]?.carriers[0]?.observations[0]?.backendRenderComparison).toEqual({
-      compatible: false,
-      rangesMatch: null,
-    });
+    expect(
+      backendOlderThanRender.viewports[0]?.carriers[0]?.observations[0]
+        ?.backendRenderComparison,
+    ).toBeNull();
 
     const query = base.fieldQueries[0]!;
     expect(
@@ -788,6 +1190,81 @@ describe("VisualizationDebugPanelModel", () => {
     ).toEqual({ compatible: false, rangesMatch: null });
   });
 
+  it("keeps backend metadata incomparable for complex, surface, and subsampled queries", () => {
+    const complexResourceKey = `${VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&snapshot_id=snap-4&stage_id=relax&view=phase_rotated_real&phase_rad=1.25`;
+    const complexCarrier = carrier({ resourceKey: complexResourceKey });
+    const base = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map(),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot({ carriers: [complexCarrier] })],
+    });
+    const query = base.fieldQueries[0]!;
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: null,
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map([[query.metaQueryKey, backendMeta(12)]]),
+      selection: selection({ kind: "object", objectId: "magnet" }),
+      snapshots: [snapshot({ carriers: [complexCarrier] })],
+    });
+
+    expect(
+      model.viewports[0]?.carriers[0]?.observations[0]?.backendRenderComparison,
+    ).toBeNull();
+    expect(
+      compareBackendAndRender({
+        backendMeta: backendMeta(12),
+        carrier: complexCarrier,
+        query,
+      }),
+    ).toBeNull();
+    expect(model.issues).toContainEqual(
+      expect.objectContaining({
+        code: "backend-meta-incomparable",
+        severity: "info",
+      }),
+    );
+    expect(buildVisualizationDebugExport(model, 1_234).document.model.issues)
+      .toContainEqual(
+        expect.objectContaining({ code: "backend-meta-incomparable" }),
+      );
+    for (const resourceKey of [
+      `${VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&geometry_scope=surface`,
+      `${VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&max_samples=128`,
+    ]) {
+      const unsupportedCarrier = carrier({ resourceKey });
+      const unsupportedQuery =
+        resolveVisualizationDebugCarrierQuery(unsupportedCarrier);
+      expect(unsupportedQuery).not.toBeNull();
+      expect(
+        compareBackendAndRender({
+          backendMeta: backendMeta(12),
+          carrier: unsupportedCarrier,
+          query: unsupportedQuery,
+        }),
+      ).toBeNull();
+      const unsupportedModel = buildVisualizationDebugPanelModel({
+        activeViewportMainModuleId: "viewport-3d",
+        clientAcks: null,
+        diagnostics: [],
+        fieldMetaByQueryKey: new Map(),
+        selection: selection({ kind: "object", objectId: "magnet" }),
+        snapshots: [snapshot({ carriers: [unsupportedCarrier] })],
+      });
+      expect(unsupportedModel.disposition).toBe("unknown");
+      expect(unsupportedModel.issues).toContainEqual(
+        expect.objectContaining({
+          code: "backend-meta-incomparable",
+          severity: "info",
+        }),
+      );
+    }
+    expect(model.disposition).toBe("unknown");
+  });
+
   it("keeps backend/render compatibility unknown when legacy FMVP omits scope and domain evidence", () => {
     const legacyCarrier = carrier();
     legacyCarrier.payload = legacyCarrier.payload
@@ -816,7 +1293,7 @@ describe("VisualizationDebugPanelModel", () => {
       }),
     ).toBeNull();
 
-    const knownMismatches = [
+    const derivedProjectionsWithoutCompleteEvidence = [
       {
         backendMeta: backendMeta(12),
         carrier: {
@@ -827,6 +1304,28 @@ describe("VisualizationDebugPanelModel", () => {
           },
         },
       },
+      {
+        backendMeta: backendMeta(12),
+        carrier: {
+          ...legacyCarrier,
+          payload: null,
+          render: {
+            ...legacyCarrier.render,
+            surface: { ...legacyCarrier.render.surface, colorMode: "x" },
+          },
+        },
+      },
+    ];
+    for (const projection of derivedProjectionsWithoutCompleteEvidence) {
+      expect(
+        compareBackendAndRender({
+          ...projection,
+          query,
+        }),
+      ).toBeNull();
+    }
+
+    const knownMismatches = [
       {
         backendMeta: backendMeta(12),
         carrier: {
@@ -851,17 +1350,6 @@ describe("VisualizationDebugPanelModel", () => {
           payload: legacyCarrier.payload
             ? { ...legacyCarrier.payload, scopeId: "other" }
             : null,
-        },
-      },
-      {
-        backendMeta: backendMeta(12),
-        carrier: {
-          ...legacyCarrier,
-          payload: null,
-          render: {
-            ...legacyCarrier.render,
-            surface: { ...legacyCarrier.render.surface, colorMode: "x" },
-          },
         },
       },
     ];

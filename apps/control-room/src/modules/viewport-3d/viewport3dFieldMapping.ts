@@ -64,6 +64,25 @@ export interface ScalarColorBuffer {
   vectorValues?: Float32Array;
 }
 
+export function resolveViewport3DScalarColorBufferKey(
+  scalarBuffer: ScalarColorBuffer,
+): string;
+export function resolveViewport3DScalarColorBufferKey(
+  scalarBuffer: null | undefined,
+): null;
+export function resolveViewport3DScalarColorBufferKey(
+  scalarBuffer: ScalarColorBuffer | null | undefined,
+): string | null;
+export function resolveViewport3DScalarColorBufferKey(
+  scalarBuffer: ScalarColorBuffer | null | undefined,
+): string | null {
+  if (!scalarBuffer) return null;
+  return (
+    scalarBuffer.buildKey ??
+    `scalar:${scalarBuffer.quantityId ?? "unknown"}:${scalarBuffer.colorMode ?? "unknown"}:${scalarBuffer.colors.byteLength}`
+  );
+}
+
 export interface ChunkedFieldTransformOptions {
   chunkSize?: number;
   colorMode?: string;

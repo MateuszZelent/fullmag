@@ -9,7 +9,10 @@ import type {
 import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 import type { VisualizationTargetRef } from "@/kernel/visualization/ObjectVisualizationController";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
-import { parseCanonicalFieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
+import {
+  fieldVectorComponentsSemanticallyEqual,
+  parseCanonicalFieldVectorResourceKey,
+} from "@/kernel/api/fieldQueryIdentity";
 import {
   recordVisualizationDebugPublish,
   recordVisualizationDebugScan,
@@ -33,6 +36,7 @@ import type {
   Viewport3DTargetFieldBufferSource,
   Viewport3DTargetRenderPassModel,
 } from "../viewport3dRenderModel";
+import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
 
 export interface Viewport3DVisualizationDebugFrameCommit {
   commitId: string;
@@ -65,6 +69,7 @@ export interface Viewport3DVisualizationDebugSource {
   fieldModel: Viewport3DFieldRenderModel | null;
   fullFieldBufferIdentity?: {
     bufferId: string;
+    currentDomainGenerationId: string | null;
     resourceKey: string | null;
   } | null;
   fullFieldVector: DecodedFieldVector | null;
@@ -419,6 +424,11 @@ export function createViewport3DVisualizationDebugCandidateBuilder({
     const notify = () => {
       for (const listener of [...listeners]) listener();
     };
+    const cancelScan = () => {
+      if (scanState !== "scanning" || !started) return;
+      scanState = "cancelled";
+      notify();
+    };
 
     return {
       materialize: ({ frame, receipts }) => {
@@ -470,6 +480,7 @@ export function createViewport3DVisualizationDebugCandidateBuilder({
       start() {
         if (started || scanBuffers.size === 0 || signal.aborted) return;
         started = true;
+        signal.addEventListener("abort", cancelScan, { once: true });
         void Promise.all(
           [...scanBuffers.values()].map(async (fieldBuffer) => {
             recordScan();
@@ -479,12 +490,16 @@ export function createViewport3DVisualizationDebugCandidateBuilder({
         )
           .then(() => {
             if (signal.aborted) return;
+            signal.removeEventListener("abort", cancelScan);
             scanState = "complete";
             notify();
           })
           .catch((error: unknown) => {
-            scanState = "cancelled";
-            notify();
+            signal.removeEventListener("abort", cancelScan);
+            if (scanState !== "cancelled") {
+              scanState = "cancelled";
+              notify();
+            }
             if (!signal.aborted && !isAbortError(error)) return;
           });
       },
@@ -502,7 +517,12 @@ function hasExactRangeDiagnostics(
   const scalarColors = pass.surface.scalarColors;
   return Boolean(
     scalarColors?.rangeDiagnostics &&
-      scalarColors.colorMode === pass.surface.scalarColorMode,
+      typeof scalarColors.colorMode === "string" &&
+      pass.surface.scalarColorMode !== null &&
+      fieldVectorComponentsSemanticallyEqual(
+        scalarColors.colorMode,
+        pass.surface.scalarColorMode,
+      ),
   );
 }
 
@@ -551,7 +571,11 @@ function resolveCarrierSources(
 
 function targetFieldBufferSourceFromDecoded(
   fieldVector: DecodedFieldVector,
-  identity: { bufferId: string; resourceKey: string | null } | null,
+  identity: {
+    bufferId: string;
+    currentDomainGenerationId: string | null;
+    resourceKey: string | null;
+  } | null,
 ): Viewport3DTargetFieldBufferSource {
   return {
     bufferId:
@@ -561,7 +585,7 @@ function targetFieldBufferSourceFromDecoded(
     component: fieldVector.nComp > 1 ? "full" : "magnitude",
     componentCount: fieldVector.nComp,
     consumers: Object.freeze([]),
-    currentDomainGenerationId: null,
+    currentDomainGenerationId: identity?.currentDomainGenerationId ?? null,
     currentMeshTopologyHash: null,
     decodedFieldVector: fieldVector,
     domainGenerationId: null,
@@ -663,7 +687,7 @@ function buildCarrierInput({
     requestedSnapshotId: requestedQuery?.snapshotId ?? null,
     resourceKey,
     scalarBufferByteLength: scalarColors?.colors.byteLength ?? null,
-    scalarBufferKey: scalarColors?.buildKey ?? null,
+    scalarBufferKey: resolveViewport3DScalarColorBufferKey(scalarColors),
     scanState,
     scannedStats,
     surfaceDegradation: pass.surface.degradation,

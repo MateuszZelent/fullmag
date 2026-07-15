@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -21,16 +22,17 @@ import {
   EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS,
   type VisualizationDebugController,
 } from "@/kernel/visualization/VisualizationDebugController";
+import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 import { useVisualizationClientAcksResource } from "@/kernel/visualization/useVisualizationClientAcksResource";
 
 import {
   buildVisualizationDebugPanelModel,
   resolveVisualizationDebugTarget,
+  visualizationDebugQuerySupportsFieldMeta,
   type VisualizationDebugExactFieldQuery,
   type VisualizationDebugPanelModel,
 } from "./VisualizationDebugPanelModel";
 
-const DIAGNOSTICS_SERVER_VERSION = 0;
 const EMPTY_REQUEST_DIAGNOSTICS: readonly RequestDiagnosticEntry[] =
   Object.freeze([]);
 const EMPTY_FIELD_META_SNAPSHOT: VisualizationDebugFieldMetaSnapshot =
@@ -57,6 +59,12 @@ export function requestVisualizationDebugTarget(
 interface VisualizationDebugFieldMetaSnapshot {
   version: number;
   values: ReadonlyMap<string, FieldMetaResource | null>;
+}
+
+interface VisualizationDebugDiagnosticsSnapshot {
+  entries: readonly RequestDiagnosticEntry[];
+  resourceKeys: string;
+  signature: string;
 }
 
 export class VisualizationDebugFieldMetaRegistry {
@@ -166,6 +174,7 @@ export function VisualizationDebugPanelModelAdapter({
   const metaQueries = useMemo(() => {
     const queries = new Map<string, VisualizationDebugExactFieldQuery>();
     for (const query of model.fieldQueries) {
+      if (!visualizationDebugQuerySupportsFieldMeta(query)) continue;
       if (!queries.has(query.metaQueryKey)) {
         queries.set(query.metaQueryKey, query);
       }
@@ -232,16 +241,48 @@ function useVisualizationDebugPanelModelState({
     () => EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS,
   );
 
-  const diagnosticsVersion = useSyncExternalStore(
-    (listener) => kernel.diagnostics.subscribe(listener),
-    () => kernel.diagnostics.getVersion(),
-    () => DIAGNOSTICS_SERVER_VERSION,
+  const diagnosticsResourceKeys = useMemo(
+    () => visualizationDebugDiagnosticResourceKeys(snapshots),
+    [snapshots],
   );
-  const diagnostics = useMemo(() => {
-    return diagnosticsVersion === DIAGNOSTICS_SERVER_VERSION
-      ? EMPTY_REQUEST_DIAGNOSTICS
-      : kernel.diagnostics.listNewestFirst();
-  }, [diagnosticsVersion, kernel.diagnostics]);
+  const diagnosticsSnapshotRef = useRef<VisualizationDebugDiagnosticsSnapshot | null>(
+    null,
+  );
+  const subscribeDiagnostics = useCallback(
+    (listener: () => void) => kernel.diagnostics.subscribe(listener),
+    [kernel.diagnostics],
+  );
+  const getDiagnosticsSnapshot = useCallback(() => {
+    if (diagnosticsResourceKeys.size === 0) {
+      diagnosticsSnapshotRef.current = null;
+      return EMPTY_REQUEST_DIAGNOSTICS;
+    }
+    const entries = kernel.diagnostics
+      .listNewestFirst()
+      .filter(
+        (entry) =>
+          entry.resourceKey !== null &&
+          entry.resourceKey !== undefined &&
+          diagnosticsResourceKeys.has(entry.resourceKey),
+      );
+    const resourceKeys = [...diagnosticsResourceKeys].sort().join("\u0000");
+    const signature = visualizationDebugDiagnosticsSignature(entries);
+    const previous = diagnosticsSnapshotRef.current;
+    if (
+      previous?.resourceKeys === resourceKeys &&
+      previous.signature === signature
+    ) {
+      return previous.entries;
+    }
+    const next = Object.freeze([...entries]);
+    diagnosticsSnapshotRef.current = { entries: next, resourceKeys, signature };
+    return next;
+  }, [diagnosticsResourceKeys, kernel.diagnostics]);
+  const diagnostics = useSyncExternalStore(
+    subscribeDiagnostics,
+    getDiagnosticsSnapshot,
+    () => EMPTY_REQUEST_DIAGNOSTICS,
+  );
   const clientAcks = useVisualizationClientAcksResource({
     enabled: target !== null,
   });
@@ -267,6 +308,46 @@ function useVisualizationDebugPanelModelState({
   );
 }
 
+function visualizationDebugDiagnosticResourceKeys(
+  snapshots: readonly VisualizationDebugSnapshot[],
+): ReadonlySet<string> {
+  const resourceKeys = new Set<string>();
+  for (const snapshot of snapshots) {
+    for (const carrier of snapshot.carriers) {
+      const requested = carrier.request.resourceKey;
+      const adopted = carrier.render.adoption.adoptedResourceKey;
+      if (requested) resourceKeys.add(requested);
+      if (adopted) resourceKeys.add(adopted);
+    }
+  }
+  return resourceKeys;
+}
+
+function visualizationDebugDiagnosticsSignature(
+  entries: readonly RequestDiagnosticEntry[],
+): string {
+  return JSON.stringify(
+    entries.map((entry) => [
+      entry.id,
+      entry.timestampMs,
+      entry.requestId,
+      entry.resourceKey ?? null,
+      entry.channel,
+      entry.direction,
+      entry.method,
+      entry.outcome,
+      entry.status,
+      entry.byteLength,
+      entry.durationMs,
+      entry.contentType,
+      entry.etag ?? null,
+      entry.messageType,
+      entry.detail,
+      entry.path,
+    ]),
+  );
+}
+
 function VisualizationDebugFieldMetaObserver({
   query,
   registry,
@@ -278,15 +359,15 @@ function VisualizationDebugFieldMetaObserver({
     () => registry.retain(query.metaQueryKey),
     [query.metaQueryKey, registry],
   );
-  const resource = useFieldMetaResource(
+  const { data, status } = useFieldMetaResource(
     visualizationDebugFieldMetaHookInput(query),
   );
   useEffect(() => {
     registry.set(
       query.metaQueryKey,
-      resolveVisualizationDebugFieldMetaRegistryValue(resource),
+      resolveVisualizationDebugFieldMetaRegistryValue({ data, status }),
     );
-  }, [query.metaQueryKey, registry, resource.data, resource.status]);
+  }, [data, query.metaQueryKey, registry, status]);
   return null;
 }
 
@@ -302,7 +383,8 @@ export function visualizationDebugFieldMetaHookInput(
 ): Parameters<typeof useFieldMetaResource>[0] {
   return {
     component: query?.component ?? null,
-    enabled: query !== null,
+    enabled:
+      query !== null && visualizationDebugQuerySupportsFieldMeta(query),
     quantityId: query?.quantityId ?? "m",
     scope_id: query?.scopeId ?? null,
     scope_kind: query?.scopeKind ?? null,

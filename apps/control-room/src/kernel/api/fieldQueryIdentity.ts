@@ -29,12 +29,41 @@ const FIELD_VECTOR_QUERY_ORDER = [
   "view",
 ] as const;
 
+const FIELD_VECTOR_COMPONENT_EVIDENCE_ALIASES: Readonly<Record<string, string>> = {
+  abs_x: "abs_c0",
+  abs_y: "abs_c1",
+  abs_z: "abs_c2",
+  "expr:abs_x": "abs_c0",
+  "expr:abs_y": "abs_c1",
+  "expr:abs_z": "abs_c2",
+  "expr:m2": "magnitude_squared",
+  "expr:magnitude_squared": "magnitude_squared",
+  x: "c0",
+  y: "c1",
+  z: "c2",
+};
+
 function nonEmptyString(value: string | null | undefined): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function finiteNumber(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export function fieldVectorComponentEvidenceIdentity(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return FIELD_VECTOR_COMPONENT_EVIDENCE_ALIASES[normalized] ?? normalized;
+}
+
+export function fieldVectorComponentsSemanticallyEqual(
+  left: string,
+  right: string,
+): boolean {
+  return (
+    fieldVectorComponentEvidenceIdentity(left) ===
+    fieldVectorComponentEvidenceIdentity(right)
+  );
 }
 
 function canonicalScopeId(scopeKind: string, scopeId: string | undefined): string | undefined {

@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import type { FieldMetaResource } from "@/kernel/api/apiTypes";
+import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -42,6 +43,10 @@ const objectSelection: SelectionRef = {
   type: "scene-object",
   visualizationTargetId: "object:magnet",
 };
+const MOUNTED_VECTOR_PATH = DATA_FIELD_VECTOR_PATH.replace(
+  "{quantity_id}",
+  "m",
+);
 
 function Probe({
   model,
@@ -105,14 +110,15 @@ describe("useVisualizationDebugPanelModel", () => {
     expect(controller.getDemandSnapshot("object:magnet").expanded).toBe(false);
   });
 
-  it("enables the existing field-meta resource only after an exact carrier query exists", () => {
+  it("enables field meta only for exact queries supported by the meta contract", () => {
     expect(visualizationDebugFieldMetaHookInput(null)).toMatchObject({
       enabled: false,
     });
-    expect(
-      visualizationDebugFieldMetaHookInput({
+    const complexQuery = {
         component: "x",
+        geometryScope: null,
         key: "vector-key",
+        maxSamples: null,
         metaQuery: {
           component: "x",
           scope_id: "part-a",
@@ -130,16 +136,23 @@ describe("useVisualizationDebugPanelModel", () => {
         stageId: "stage-2",
         vectorResourceKey: "vector-key",
         view: "phase_rotated_real",
-      }),
-    ).toEqual({
+      } as const;
+    expect(visualizationDebugFieldMetaHookInput(complexQuery)).toEqual({
       component: "x",
-      enabled: true,
+      enabled: false,
       quantityId: "m",
       scope_id: "part-a",
       scope_kind: "part",
       snapshot_id: "snapshot-4",
       stage_id: "stage-2",
     });
+    expect(
+      visualizationDebugFieldMetaHookInput({
+        ...complexQuery,
+        phaseRad: null,
+        view: null,
+      }),
+    ).toMatchObject({ enabled: true });
     expect(hookSource).toContain("useFieldMetaResource");
     expect(hookSource).toContain("visualizationDebugFieldMetaHookInput(query)");
     expect(hookSource).not.toContain("modules/viewport-3d");
@@ -252,13 +265,80 @@ describe("useVisualizationDebugPanelModel", () => {
     expect(registry.stats().entryCount).toBe(0);
   });
 
-  it("uses a deterministic diagnostics server snapshot instead of mutable live diagnostics", () => {
-    expect(hookSource).toContain("const DIAGNOSTICS_SERVER_VERSION = 0");
-    expect(hookSource).toContain("() => DIAGNOSTICS_SERVER_VERSION");
-    expect(hookSource).toContain(
-      "diagnosticsVersion === DIAGNOSTICS_SERVER_VERSION",
-    );
+  it("uses a deterministic empty server snapshot and exact resource filtering", () => {
+    expect(hookSource).toContain("visualizationDebugDiagnosticResourceKeys");
+    expect(hookSource).toContain("visualizationDebugDiagnosticsSignature");
+    expect(hookSource).toContain("diagnosticsResourceKeys.has(entry.resourceKey)");
+    expect(hookSource).toContain("() => EMPTY_REQUEST_DIAGNOSTICS");
     expect(hookSource).toContain("EMPTY_REQUEST_DIAGNOSTICS");
+  });
+
+  it("does not rerender for unrelated diagnostics and updates once for an exact resource", async () => {
+    const dom = installTestDom();
+    const kernel = makeMountedKernel({ meta: vi.fn(async () => null) });
+    const observations: VisualizationDebugPanelModel[] = [];
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const resourceKey = `${MOUNTED_VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&snapshot_id=snapshot-4&stage_id=relax&view=phase_rotated_real&phase_rad=1.25`;
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <VisualizationDebugPanelModelAdapter selection={objectSelection}>
+            {(model) => <Probe model={model} observations={observations} />}
+          </VisualizationDebugPanelModelAdapter>
+        </KernelContext.Provider>,
+      );
+    });
+    const token = kernel.visualizationDebug.registerPublisher("viewport-primary");
+    await act(async () => {
+      kernel.visualizationDebug.commit(
+        token,
+        "object:magnet",
+        mountedSnapshot(resourceKey),
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+
+    const beforeUnrelated = observations.length;
+    await act(async () => {
+      kernel.diagnostics.record({
+        detail: "captured console warning",
+        method: "DIAGNOSTIC",
+        outcome: "ok",
+        path: "fullmag.diagnostic.console.warning",
+        requestId: "console-warning-1",
+        resourceKey: null,
+      });
+      await Promise.resolve();
+    });
+    expect(observations).toHaveLength(beforeUnrelated);
+
+    const beforeExact = observations.length;
+    await act(async () => {
+      kernel.diagnostics.record({
+        byteLength: 96,
+        detail: "decoded binary payload",
+        direction: "rx",
+        method: "GET",
+        outcome: "ok",
+        path: resourceKey,
+        requestId: "field-vector-1",
+        resourceKey,
+        status: 200,
+      });
+      await Promise.resolve();
+    });
+    expect(observations).toHaveLength(beforeExact + 1);
+    expect(observations.at(-1)?.transport).toContainEqual(
+      expect.objectContaining({
+        requestId: "field-vector-1",
+        resourceKey,
+      }),
+    );
+
+    await act(async () => root.unmount());
+    dom.restore();
   });
 
   it("publishes a snapshot, requests exact field meta, and joins the response into the mounted public model", async () => {
@@ -365,6 +445,140 @@ describe("useVisualizationDebugPanelModel", () => {
     dom.restore();
   });
 
+  it.each([
+    {
+      expected: { phaseRad: 1.25, view: "phase_rotated_real" },
+      label: "complex view",
+      resourceKey: `${MOUNTED_VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&snapshot_id=snapshot-4&stage_id=relax&view=phase_rotated_real&phase_rad=1.25`,
+    },
+    {
+      expected: { geometryScope: "surface" },
+      label: "surface geometry",
+      resourceKey: `${MOUNTED_VECTOR_PATH}?component=full&geometry_scope=surface&scope_kind=object&scope_id=magnet&snapshot_id=snapshot-4&stage_id=relax`,
+    },
+    {
+      expected: { maxSamples: 128 },
+      label: "sample limit",
+      resourceKey: `${MOUNTED_VECTOR_PATH}?component=full&max_samples=128&scope_kind=object&scope_id=magnet&snapshot_id=snapshot-4&stage_id=relax`,
+    },
+  ])("preserves $label evidence without fetching non-exact base metadata", async ({ expected, resourceKey }) => {
+    const dom = installTestDom();
+    const meta = vi.fn(async () => null);
+    const kernel = makeMountedKernel({ meta });
+    const observations: VisualizationDebugPanelModel[] = [];
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <VisualizationDebugPanelModelAdapter selection={objectSelection}>
+            {(model) => <Probe model={model} observations={observations} />}
+          </VisualizationDebugPanelModelAdapter>
+        </KernelContext.Provider>,
+      );
+    });
+    const token = kernel.visualizationDebug.registerPublisher("viewport-primary");
+    await act(async () => {
+      kernel.visualizationDebug.commit(
+        token,
+        "object:magnet",
+        mountedSnapshot(
+          resourceKey,
+        ),
+      );
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+
+    const latest = observations.at(-1)!;
+    expect(meta).not.toHaveBeenCalled();
+    expect(latest.fieldQueries[0]).toMatchObject(expected);
+    expect(
+      latest.viewports[0]?.carriers[0]?.observations[0]?.backendMeta,
+    ).toBeNull();
+    expect(latest.disposition).toBe("unknown");
+
+    await act(async () => root.unmount());
+    dom.restore();
+  });
+
+  it.each(["base-first", "complex-first"] as const)(
+    "fetches base metadata once and never joins it to a complex observation (%s)",
+    async (order) => {
+      const dom = installTestDom();
+      const fieldMeta = {
+        components: 3,
+        domain_generation_id: "domain-1",
+        field_revision: 12,
+        kind: "vector",
+        label: "Magnetization",
+        location: "node",
+        quantity_id: "m",
+        stats: { max: 3, mean: 2, min: 1 },
+        unit: "A/m",
+      } satisfies FieldMetaResource;
+      const meta = vi.fn(async () => fieldMeta);
+      const kernel = makeMountedKernel({ meta });
+      const observations: VisualizationDebugPanelModel[] = [];
+      const container = dom.document.createElement("div");
+      const root = createRoot(container as unknown as Element);
+
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <VisualizationDebugPanelModelAdapter selection={objectSelection}>
+              {(model) => <Probe model={model} observations={observations} />}
+            </VisualizationDebugPanelModelAdapter>
+          </KernelContext.Provider>,
+        );
+      });
+      const base = mountedSnapshot();
+      const complex = mountedSnapshot(
+        `${MOUNTED_VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&snapshot_id=snapshot-4&stage_id=relax&view=phase_rotated_real&phase_rad=1.25`,
+      );
+      const baseCarrier = { ...base.carriers[0]!, carrierId: "part:base" };
+      const complexCarrier = {
+        ...complex.carriers[0]!,
+        carrierId: "part:complex",
+      };
+      const carriers = order === "base-first"
+        ? [baseCarrier, complexCarrier]
+        : [complexCarrier, baseCarrier];
+      const token = kernel.visualizationDebug.registerPublisher("viewport-primary");
+      await act(async () => {
+        kernel.visualizationDebug.commit(token, "object:magnet", {
+          ...base,
+          carriers,
+          target: {
+            ...base.target,
+            carrierIds: carriers.map((entry) => entry.carrierId),
+          },
+        });
+      });
+      for (let index = 0; index < 5 && meta.mock.calls.length === 0; index += 1) {
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        });
+      }
+
+      expect(meta).toHaveBeenCalledTimes(1);
+      const joined = observations.at(-1)!.viewports[0]!.carriers.flatMap(
+        (group) => group.observations,
+      );
+      expect(
+        joined.find((entry) => entry.carrier.carrierId === "part:base")
+          ?.backendMeta,
+      ).toEqual(fieldMeta);
+      expect(
+        joined.find((entry) => entry.carrier.carrierId === "part:complex")
+          ?.backendMeta,
+      ).toBeNull();
+
+      await act(async () => root.unmount());
+      dom.restore();
+    },
+  );
+
   it("hydrates with the server diagnostics version when live diagnostics change between SSR and hydration", async () => {
     const kernel = makeMountedKernel({ meta: vi.fn(async () => null) });
     const serverObservations: unknown[] = [];
@@ -445,9 +659,9 @@ function makeMountedKernel({
   } as unknown as KernelApi;
 }
 
-function mountedSnapshot(): VisualizationDebugSnapshot {
-  const resourceKey =
-    "/data/fields/m/samples/vector?component=full&scope_kind=object&scope_id=magnet&snapshot_id=snapshot-4&stage_id=relax&view=phase_rotated_real";
+function mountedSnapshot(
+  resourceKey = `${MOUNTED_VECTOR_PATH}?component=full&scope_kind=object&scope_id=magnet&snapshot_id=snapshot-4&stage_id=relax`,
+): VisualizationDebugSnapshot {
   return {
     capturedAtMs: 12,
     carriers: [

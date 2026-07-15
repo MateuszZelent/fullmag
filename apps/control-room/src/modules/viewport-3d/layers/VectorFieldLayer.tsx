@@ -773,7 +773,14 @@ export function identifyVectorGlyphBuildResult(
     ...result,
     sourceFieldBufferId: buildReference?.fieldBufferId ?? null,
     sourceResourceKey: buildReference?.resourceKey ?? null,
+    sourceVectorBuildKey: buildReference?.buildKey ?? null,
   };
+}
+
+export function resolveVectorFieldAdoptionBuildKey(
+  result: VectorGlyphBuildResult | null,
+): string | null {
+  return result?.sourceVectorBuildKey ?? null;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -809,7 +816,7 @@ function useVectorGlyphUpload({
   invalidate: () => void;
   material: MeshBasicMaterial;
   materialColor: string;
-  onAdopted?: (buildKey: string, byteLength: number) => void;
+  onAdopted?: (byteLength: number) => void;
   shaftRef: RefObject<InstancedMesh | null>;
   targetRevision?: string | null;
   tracker: Viewport3DResourceTracker;
@@ -1049,10 +1056,7 @@ function useVectorGlyphUpload({
         measured = true;
         tracker.recordDirtyFrame("vector-glyphs");
         if (buildKey) {
-          onAdopted?.(
-            buildKey,
-            transformByteLength + (glyphColors?.byteLength ?? 0),
-          );
+          onAdopted?.(transformByteLength + (glyphColors?.byteLength ?? 0));
         }
         invalidate();
       },
@@ -1164,10 +1168,11 @@ export function VectorFieldLayer({
     resourceKey: string | null;
   } | null>(null);
   const recordAdoption = useCallback(
-    (buildKey: string, byteLength: number) => {
-      if (!adoptionRegistry || !carrierId) return;
+    (byteLength: number) => {
+      const sourceVectorBuildKey = resolveVectorFieldAdoptionBuildKey(glyphBuild);
+      if (!adoptionRegistry || !carrierId || !sourceVectorBuildKey) return;
       lastAdoptionRef.current = {
-        buildKey,
+        buildKey: sourceVectorBuildKey,
         byteLength,
         fieldBufferId:
           glyphBuild?.sourceFieldBufferId ?? fieldBufferId ?? null,
@@ -1175,7 +1180,7 @@ export function VectorFieldLayer({
         resourceKey: glyphBuild?.sourceResourceKey ?? null,
       };
       recordVectorFieldAdoption({
-        buildKey,
+        buildKey: sourceVectorBuildKey,
         byteLength,
         carrierId,
         fieldBufferId:

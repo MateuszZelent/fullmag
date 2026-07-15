@@ -97,26 +97,16 @@ export function VisualizationDebugPanelView({
   useEffect(() => () => actions.dispose(), [actions]);
 
   const emptyMessage = visualizationDebugEmptyStateMessage(model.state);
-  if (emptyMessage) {
-    return (
-      <div className="fm-visualization-debug-panel" data-state={model.state}>
-        <InspectorSection title="Health" badge="unknown">
-          <div className="fm-visualization-debug-state" role="status">
-            <strong>{emptyMessage.title}</strong>
-            <span>{emptyMessage.detail}</span>
-          </div>
-        </InspectorSection>
-      </div>
-    );
-  }
-
   const observations = allObservations(model);
   const snapshots = uniqueSnapshots(model);
   const disposition = model.disposition;
   const latestCapturedAtMs = latestSnapshotCaptureTime(model);
-  const ageMs = Math.max(0, evidenceNowMs - latestCapturedAtMs);
-  const stale = ageMs > STALE_SNAPSHOT_AGE_MS || allIssues(model).some(
-    (issue) => issue.code.includes("stale"),
+  const ageMs = snapshots.length > 0
+    ? Math.max(0, evidenceNowMs - latestCapturedAtMs)
+    : 0;
+  const stale = snapshots.length > 0 && (
+    ageMs > STALE_SNAPSHOT_AGE_MS ||
+    allIssues(model).some((issue) => issue.code.includes("stale"))
   );
   const scanning = observations.some(({ carrier }) => carrier.scanState === "scanning");
   const noFieldRequested = observations.length > 0 && observations.every(
@@ -130,23 +120,30 @@ export function VisualizationDebugPanelView({
   return (
     <div className="fm-visualization-debug-panel" data-state={model.state}>
       <InspectorSection title="Health" badge={disposition}>
-        <div
-          className="fm-visualization-debug-health"
-          data-disposition={disposition}
-          role="status"
-        >
-          <strong>{disposition}</strong>
-          <span>{healthDiagnosis(disposition)}</span>
-          <span>Snapshot age {formatDuration(ageMs)}</span>
-        </div>
-        {stale ? <FeedbackBanner kind="warning" message="Snapshot is stale." /> : null}
-        {scanning ? <FeedbackBanner kind="warning" message="Statistics scan in progress." /> : null}
-        {noFieldRequested ? <FeedbackBanner kind="warning" message="No field requested for this target." /> : null}
-        {requestFailed ? <FeedbackBanner kind="error" message="Matched field request failed." /> : null}
+        {emptyMessage ? (
+          <div className="fm-visualization-debug-state" role="status">
+            <strong>{emptyMessage.title}</strong>
+            <span>{emptyMessage.detail}</span>
+          </div>
+        ) : (
+          <div
+            className="fm-visualization-debug-health"
+            data-disposition={disposition}
+            role="status"
+          >
+            <strong>{disposition}</strong>
+            <span>{healthDiagnosis(disposition)}</span>
+            <span>Snapshot age {formatDuration(ageMs)}</span>
+          </div>
+        )}
+        {!emptyMessage && stale ? <FeedbackBanner kind="warning" message="Snapshot is stale." /> : null}
+        {!emptyMessage && scanning ? <FeedbackBanner kind="warning" message="Statistics scan in progress." /> : null}
+        {!emptyMessage && noFieldRequested ? <FeedbackBanner kind="warning" message="No field requested for this target." /> : null}
+        {!emptyMessage && requestFailed ? <FeedbackBanner kind="error" message="Matched field request failed." /> : null}
       </InspectorSection>
 
       <InspectorSection title="Active target">
-        <FieldRow label="Selection kind" value={`${model.target?.kind ?? "unknown"}.visualization.debug`} />
+        <FieldRow label="Selection kind" value={model.target?.selectionKind ?? "unknown"} />
         <FieldRow label="Target kind" value={model.target?.kind ?? "—"} />
         <FieldRow label="Target ID" value={model.target?.id ?? "—"} />
         <FieldRow label="Target label" value={snapshots[0]?.target.label ?? "—"} />
@@ -180,6 +177,9 @@ export function VisualizationDebugPanelView({
             <FieldRow label="Planner request ID" value={carrier.request.plannerRequestId ?? "—"} />
             <FieldRow label="Canonical resource key" value={carrier.request.resourceKey ?? "—"} />
             <FieldRow label="Requested component" value={query?.component ?? "—"} />
+            <FieldRow label="Geometry scope" value={query?.geometryScope ?? "full"} />
+            <FieldRow label="Maximum samples" value={query?.maxSamples?.toLocaleString("en-US") ?? "all"} />
+            <FieldRow label="Complex view / phase" value={query?.view ? `${query.view} / ${query.phaseRad ?? "default"}` : "none"} />
           </div>
         ))}
         <div className="fm-visualization-debug-table-wrap">
@@ -242,7 +242,7 @@ export function VisualizationDebugPanelView({
         {memoryGroups(model).map((group) => (
           <div className="fm-visualization-debug-subsection" key={group.ownership}>
             <h4>{group.ownership}</h4>
-            {group.rows.map((row) => <FieldRow key={`${row.source}:${row.id}`} label={`${row.label} · ${row.source}`} value={formatBytes(row.byteLength)} />)}
+            {group.rows.map((row) => <FieldRow key={row.renderKey} label={`${row.label} · ${row.source}`} value={formatBytes(row.byteLength)} />)}
             <FieldRow label="Group total" value={formatBytes(group.total)} />
           </div>
         ))}

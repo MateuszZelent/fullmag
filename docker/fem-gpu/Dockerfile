@@ -81,7 +81,7 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS fem-gpu-dev
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV NODE_MAJOR=22
+ENV NODE_MAJOR=24
 ENV PNPM_HOME=/pnpm
 ENV INSTALL_PREFIX=/opt/fullmag-deps
 ENV CUDA_HOME=/usr/local/cuda

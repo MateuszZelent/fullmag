@@ -1,7 +1,7 @@
 FROM rust:1.86-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV NODE_MAJOR=22
+ENV NODE_MAJOR=24
 ENV PNPM_HOME=/pnpm
 ENV PATH=/root/.cargo/bin:${PNPM_HOME}:${PATH}
 

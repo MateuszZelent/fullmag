@@ -1,5 +1,6 @@
 import type {
   VisualizationDebugDisposition,
+  VisualizationDebugEvidenceSource,
   VisualizationDebugIssue,
 } from "./visualizationDebugTypes";
 
@@ -23,6 +24,7 @@ export interface VisualizationDebugHealthEvidence {
   topologyHashMatches: boolean | null;
   transportCacheBytesMatch: boolean | null;
   valueCountMatches: boolean | null;
+  valueStatisticsSource: VisualizationDebugEvidenceSource | null;
   valuesAllZero: boolean | null;
   valuesFinite: boolean | null;
   vectorPassPresent: boolean | null;
@@ -70,7 +72,16 @@ export function buildVisualizationDebugHealth(
   const issues: VisualizationDebugIssue[] = [];
   for (const [field, code, severity, source, message] of RULES) {
     if (evidence[field] !== false) continue;
-    issues.push(Object.freeze({ code, evidence: Object.freeze([field]), message, severity, source }));
+    issues.push(Object.freeze({
+      code,
+      evidence: Object.freeze([field]),
+      message,
+      severity,
+      source:
+        field === "valuesFinite"
+          ? evidence.valueStatisticsSource ?? source
+          : source,
+    }));
   }
   if (evidence.valuesAllZero === true) {
     issues.push(Object.freeze({
@@ -78,7 +89,7 @@ export function buildVisualizationDebugHealth(
       evidence: Object.freeze(["valuesAllZero"]),
       message: "All comparable values are zero.",
       severity: "info",
-      source: "decoded-payload",
+      source: evidence.valueStatisticsSource ?? "decoded-payload",
     }));
   }
   const frozenIssues = Object.freeze(issues);
@@ -95,4 +106,48 @@ export function buildVisualizationDebugHealth(
 export function visualizationDebugRangesEqual(left: number, right: number): boolean {
   if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
   return Math.abs(left - right) <= Math.max(1e-12, 1e-9 * Math.max(Math.abs(left), Math.abs(right), 1));
+}
+
+export function prioritizeAndBoundVisualizationDebugIssues(
+  input: readonly VisualizationDebugIssue[],
+  limit: number,
+): readonly VisualizationDebugIssue[] {
+  const seen = new Set<string>();
+  const unique = input.flatMap((entry, index) => {
+    const key = JSON.stringify([
+      entry.code,
+      entry.severity,
+      entry.source,
+      entry.message,
+      entry.evidence,
+    ]);
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ entry, index }];
+  });
+  unique.sort(
+    (left, right) =>
+      visualizationDebugIssuePriority(left.entry) -
+        visualizationDebugIssuePriority(right.entry) ||
+      left.index - right.index,
+  );
+  return Object.freeze(
+    unique
+      .slice(0, Math.max(0, Math.trunc(limit)))
+      .map(({ entry }) => entry),
+  );
+}
+
+function visualizationDebugIssuePriority(
+  issue: VisualizationDebugIssue,
+): number {
+  if (issue.severity === "error") return 0;
+  if (
+    issue.severity === "warning" &&
+    issue.code !== "target-not-active" &&
+    issue.code !== "frame-not-committed"
+  ) {
+    return 1;
+  }
+  return issue.severity === "warning" ? 2 : 3;
 }

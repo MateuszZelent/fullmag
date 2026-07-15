@@ -8,7 +8,7 @@ import {
   DEFAULT_OBJECT_VISUALIZATION,
   ObjectVisualizationController,
 } from "@/kernel/visualization/ObjectVisualizationController";
-import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
 import {
   canonicalFieldVectorQuery,
   fieldVectorResourceKey,
@@ -71,7 +71,11 @@ import {
 } from "../model/viewport3DTargets";
 import { summarizeViewport3DFieldDemandDiagnostics } from "../model/viewport3DFieldDataPlan";
 import { resolveViewport3DFieldVectorResourceKey } from "../viewport3dResources";
-import { viewport3DFieldRenderOptionsNeedFieldData } from "../viewport3dRenderModel";
+import {
+  buildViewport3DFieldRenderModel,
+  buildViewport3DTopologyRenderModel,
+  viewport3DFieldRenderOptionsNeedFieldData,
+} from "../viewport3dRenderModel";
 import {
   buildViewport3DTargetFieldBuffer as buildViewport3DTargetFieldBufferWithResourceKey,
 } from "../model/viewport3DTargetFieldBuffer";
@@ -79,6 +83,11 @@ import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
   type Viewport3DCommandState,
 } from "../viewport3dStore";
+import {
+  identifyVectorGlyphBuildResult,
+  recordVectorFieldAdoption,
+} from "../layers/VectorFieldLayer";
+import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
 const sceneModelSourceUrl = new URL("./useViewport3DSceneModel.ts", import.meta.url);
 const visualizationStateResourceSourceUrl = new URL(
@@ -505,6 +514,126 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
+  it("gives production synthetic airbox vectors a stable topology-local build identity", () => {
+    const decodedTopology: DecodedTopology = {
+      boundaryFaceCount: 0,
+      boundaryFaces: new Uint32Array(),
+      boundaryMarkers: new Uint32Array(),
+      elementCount: 0,
+      elementMarkers: new Uint32Array(),
+      indices: new Uint32Array(),
+      nodeCount: 2,
+      positions: new Float64Array([0, 0, 0, 1, 0, 0]),
+    };
+    const topology = buildViewport3DTopologyRenderModel(
+      decodedTopology,
+      [],
+      [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          element_count: 0,
+          element_start: 0,
+          id: "airbox",
+          label: "Airbox",
+          node_count: 2,
+          node_indices: [0, 1],
+          node_start: 0,
+          role: "air" as const,
+        },
+      ],
+      undefined,
+      {
+        meshGenerationId: "generation-7",
+        meshRevision: 7,
+        meshTopologyHash: "topology-hash-7",
+      },
+    );
+    expect(topology).not.toBeNull();
+    const resolveSyntheticBuffers = () =>
+      resolveViewport3DResolvedPartFieldBuffers({
+        airboxSyntheticVectorsEnabled: true,
+        getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+        topology,
+        topologyRevision: "topology-r2",
+      });
+    const resolved = resolveSyntheticBuffers();
+    const syntheticBuffer = resolved.partTargetFieldBuffers.get("airbox");
+
+    expect(syntheticBuffer?.fieldRevision).not.toBeNull();
+    expect(syntheticBuffer?.fieldRevision ?? "").toContain(
+      "synthetic:airbox:+z",
+    );
+    expect(syntheticBuffer?.fieldRevision ?? "").toContain("topology-r2");
+    expect(
+      resolveSyntheticBuffers().partTargetFieldBuffers.get("airbox")
+        ?.fieldRevision,
+    ).toBe(syntheticBuffer?.fieldRevision);
+
+    const fieldModel = buildViewport3DFieldRenderModel(topology, null, 1, {
+      fieldRevision: "m-332",
+      partQuantityIds: new Map([
+        ["airbox", syntheticBuffer?.quantityId ?? "unknown"],
+      ]),
+      partTargetFieldBuffers: resolved.partTargetFieldBuffers,
+      partVectorBudgets: new Map([["airbox", 2]]),
+      scalarColorsVisible: false,
+      topologyRevision: "topology-r2",
+    });
+    const buildReference = fieldModel?.targetPasses.get("airbox")?.vectors
+      .buildReference;
+
+    expect(buildReference).toMatchObject({
+      fieldBufferId: syntheticBuffer?.bufferId,
+      fieldRevision: syntheticBuffer?.fieldRevision,
+      resourceKey: null,
+    });
+    expect(buildReference?.buildKey).not.toContain("m-332");
+    if (!buildReference) {
+      throw new Error("Expected a synthetic Airbox vector build reference");
+    }
+    const identifiedGlyphBuild = identifyVectorGlyphBuildResult(
+      {
+        colors: null,
+        transforms: {
+          count: 1,
+          directions: new Float32Array(3),
+          headCenters: new Float32Array(3),
+          headScales: new Float32Array(3),
+          shaftCenters: new Float32Array(3),
+          shaftScales: new Float32Array(3),
+        },
+      },
+      buildReference,
+    );
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([["airbox", ["airbox"]]]));
+    registry.retainDemand("airbox");
+    const sourceVectorBuildKey = identifiedGlyphBuild.sourceVectorBuildKey;
+    expect(sourceVectorBuildKey).toBe(buildReference.buildKey);
+    if (!sourceVectorBuildKey) {
+      throw new Error("Expected an identified synthetic vector source key");
+    }
+    recordVectorFieldAdoption({
+      buildKey: sourceVectorBuildKey,
+      byteLength: 60,
+      carrierId: "airbox",
+      fieldBufferId: identifiedGlyphBuild.sourceFieldBufferId ?? null,
+      glyphCount: 1,
+      resourceKey: identifiedGlyphBuild.sourceResourceKey,
+      registry,
+    });
+    const receipt = registry.snapshot("airbox").find(
+      ({ kind }) => kind === "vector",
+    );
+
+    expect(receipt).toMatchObject({
+      fieldBufferId: syntheticBuffer?.bufferId,
+      vectorBuildKey: buildReference.buildKey,
+    });
+    expect(receipt?.vectorBuildKey).not.toContain("m-332");
+  });
+
   it("can disable vector glyphs and field colors independently for diagnostics", () => {
     const options = applyViewport3DFieldLayerDiagnosticOverrides(
       {
@@ -545,6 +674,15 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("magneticPartFieldQueries.size > 0");
     expect(source).toContain("targetQuantityFieldRequests.size > 0");
     expect(source).toContain("fieldVectorEnabled,");
+  });
+
+  it("keeps the part scalar range revision resolver stable across renders", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain(
+      "resolveRevision: resolveViewport3DPartScalarRangesRevision",
+    );
+    expect(source).not.toContain("resolveRevision: (data) =>");
   });
 
   it("keeps large full-domain scalar color builds out of the synchronous render model", () => {

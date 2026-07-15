@@ -28,6 +28,14 @@ describe("visualization debug evidence export", () => {
 
   it("replaces oversized evidence with a bounded, explicit size-limit summary", () => {
     const model = exportModel(`/data/fields/m/${"x".repeat(80_000)}`);
+    model.disposition = "blocked";
+    model.issues = Array.from({ length: 20 }, (_, index) => ({
+      code: `issue-${index}`,
+      evidence: [`index=${index}`],
+      message: `Issue ${index}`,
+      severity: index === 0 ? "error" as const : "warning" as const,
+      source: "render-derived" as const,
+    }));
     const result = buildVisualizationDebugExport(model, 1_234);
 
     expect(result.document.issues).toEqual(
@@ -38,6 +46,10 @@ describe("visualization debug evidence export", () => {
     expect(new TextEncoder().encode(result.json).byteLength).toBeLessThanOrEqual(
       MAX_VISUALIZATION_DEBUG_EXPORT_BYTES,
     );
+    expect(result.document.model).toMatchObject({
+      disposition: model.disposition,
+      issues: model.issues,
+    });
   });
 
   it("copies snapshot and exact resource key with bounded success feedback", async () => {
@@ -154,7 +166,11 @@ function exportModel(resourceKey: string): VisualizationDebugPanelModel {
     fieldQueries: [],
     issues: [],
     state: "ready",
-    target: { id: "object:magnet", kind: "object" },
+    target: {
+      id: "object:magnet",
+      kind: "object",
+      selectionKind: "object.visualization.debug",
+    },
     transport: [],
     viewports: [
       {

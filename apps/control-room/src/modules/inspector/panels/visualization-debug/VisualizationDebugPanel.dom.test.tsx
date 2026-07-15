@@ -500,8 +500,11 @@ function createInspectableTimers() {
 
 async function settleMountedPanel(container: TestElement): Promise<void> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    if (container.textContent.includes("Evidence export")) return;
+    if (container.textContent.includes("Evidence is internally consistent")) {
+      return;
+    }
     await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
       await Promise.resolve();
     });
   }

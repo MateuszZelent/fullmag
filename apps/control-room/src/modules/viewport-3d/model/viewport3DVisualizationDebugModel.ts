@@ -1,7 +1,8 @@
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { fieldVectorComponentsSemanticallyEqual } from "@/kernel/api/fieldQueryIdentity";
 import {
   buildVisualizationDebugHealth,
-  visualizationDebugRangesEqual,
+  prioritizeAndBoundVisualizationDebugIssues,
   type VisualizationDebugHealthEvidence,
 } from "@/kernel/visualization/buildVisualizationDebugHealth";
 import type {
@@ -146,7 +147,7 @@ export function buildViewport3DVisualizationDebugSnapshot(
     capturedAtMs: safeNumber(input.capturedAtMs),
     carriers: Object.freeze(carriers),
     disposition,
-    issues: Object.freeze(issues.slice(0, MAX_DEBUG_ISSUES)),
+    issues: prioritizeAndBoundVisualizationDebugIssues(issues, MAX_DEBUG_ISSUES),
     memoryTotals: Object.freeze({
       owned: state.ownedByteLength,
       referenced: state.referencedAttributionKnown
@@ -402,6 +403,7 @@ function buildHealthEvidence(
     topologyHashMatches,
     transportCacheBytesMatch: null,
     valueCountMatches: !decoded || decoded.pointCount * decoded.nComp === decoded.valueCount,
+    valueStatisticsSource: stats?.source ?? null,
     valuesAllZero: stats ? stats.finiteCount > 0 && stats.zeroCount === stats.finiteCount : null,
     valuesFinite: stats ? stats.nonFiniteCount === 0 : null,
     vectorPassPresent: !hasRequestedPass(carrier, "vector-glyph") || carrier.vectorSegmentByteLength != null,
@@ -415,6 +417,7 @@ function completeHealthEvidence(): VisualizationDebugHealthEvidence {
     frameCommitted: true, nodeIndexCountMatches: true, quantityMatches: true, rangeNotOutlierDominated: null,
     responseMetadataMatches: true, scopeIdMatches: true, scopeKindMatches: true, surfacePassPresent: true,
     targetActive: true, topologyHashMatches: true, transportCacheBytesMatch: null, valueCountMatches: true,
+    valueStatisticsSource: null,
     valuesAllZero: null, valuesFinite: null, vectorPassPresent: true,
   };
 }
@@ -442,7 +445,12 @@ function matchingRangeDiagnostics(
   carrier: Viewport3DVisualizationDebugCarrierInput,
 ): ScalarRangeDiagnostics | null {
   if (!carrier.rangeDiagnostics) return null;
-  return carrier.rangeDiagnosticsComponent === carrier.renderedComponent
+  return carrier.rangeDiagnosticsComponent != null &&
+    carrier.renderedComponent != null &&
+    fieldVectorComponentsSemanticallyEqual(
+      carrier.rangeDiagnosticsComponent,
+      carrier.renderedComponent,
+    )
     ? carrier.rangeDiagnostics
     : null;
 }
@@ -478,8 +486,10 @@ function compareResponseMetadata(
   if (
     metadata.identityIssues.length > 0 ||
     (metadata.component !== null &&
-      componentEvidenceIdentity(metadata.component) !==
-        componentEvidenceIdentity(carrier.requestedComponent)) ||
+      !fieldVectorComponentsSemanticallyEqual(
+        metadata.component,
+        carrier.requestedComponent,
+      )) ||
     (metadata.encoding !== null && metadata.encoding !== expectedEncoding) ||
     (carrier.requestedSnapshotId != null &&
       metadata.snapshotId !== null &&
@@ -505,24 +515,6 @@ function compareResponseMetadata(
       (metadata.scopeKind !== null && metadata.scopeId !== null)) &&
     (carrier.requestedSnapshotId == null || metadata.snapshotId !== null);
   return complete ? true : null;
-}
-
-function componentEvidenceIdentity(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  const aliases: Readonly<Record<string, string>> = {
-    abs_x: "abs_c0",
-    abs_y: "abs_c1",
-    abs_z: "abs_c2",
-    "expr:abs_x": "abs_c0",
-    "expr:abs_y": "abs_c1",
-    "expr:abs_z": "abs_c2",
-    "expr:m2": "magnitude_squared",
-    "expr:magnitude_squared": "magnitude_squared",
-    x: "c0",
-    y: "c1",
-    z: "c2",
-  };
-  return aliases[normalized] ?? normalized;
 }
 
 function buildResponseMetadataIdentityIssues(

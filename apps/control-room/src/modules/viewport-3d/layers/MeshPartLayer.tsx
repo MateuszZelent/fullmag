@@ -37,7 +37,10 @@ import {
   useViewport3DScalarColorUpload,
   useViewport3DScalarShaderColorUpload,
 } from "../hooks/useViewport3DScalarColorUpload";
-import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
+import {
+  resolveViewport3DScalarColorBufferKey,
+  type ScalarColorBuffer,
+} from "../viewport3dFieldMapping";
 import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
 import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry";
 import { attachViewport3DSharedTopologyPosition } from "../viewport3dSharedTopologyPositions";
@@ -837,9 +840,7 @@ export function recordMeshPartSurfaceAdoption({
     fieldBufferId: scalarBuffer.sourceFieldBufferId ?? fieldBufferId,
     kind: "surface" as const,
     resourceKey: scalarBuffer.sourceResourceKey ?? null,
-    scalarBufferKey:
-      scalarBuffer.buildKey ??
-      `scalar:${scalarBuffer.quantityId ?? "unknown"}:${scalarBuffer.colorMode ?? "unknown"}:${scalarBuffer.colors.byteLength}`,
+    scalarBufferKey: resolveViewport3DScalarColorBufferKey(scalarBuffer),
     vectorBuildKey: null,
   };
   registry.recordSurfaceAdoption({

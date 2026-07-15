@@ -18,21 +18,22 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const controlRoomLauncher = resolve(
+  repoRoot,
+  "apps/control-room/dev-server.mjs",
+);
 const args = process.argv.slice(2);
 
 const portIdx = args.indexOf("--port");
 const port = portIdx >= 0 ? (args[portIdx + 1] ?? "3100") : "3100";
-const hostnameIdx = args.indexOf("--hostname");
-const hostname = hostnameIdx >= 0 ? (args[hostnameIdx + 1] ?? "0.0.0.0") : "0.0.0.0";
 const apiTargetIdx = args.indexOf("--api-target");
 const apiTarget = apiTargetIdx >= 0 ? (args[apiTargetIdx + 1] ?? "http://localhost:8081") : "http://localhost:8081";
 
 process.stderr.write(`[dev-server shim] delegating to apps/control-room dev on :${port}\n`);
 
-const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const child = spawn(
-  pnpmCmd,
-  ["--dir", "apps/control-room", "dev", "--hostname", hostname, "--port", port],
+  process.execPath,
+  [controlRoomLauncher, ...args],
   {
     cwd: repoRoot,
     detached: process.platform !== "win32",
@@ -94,6 +95,8 @@ child.on("exit", (code, signal) => {
   process.exit(code ?? 0);
 });
 child.on("error", (err) => {
-  process.stderr.write(`[dev-server shim] failed to spawn pnpm: ${err.message}\n`);
+  process.stderr.write(
+    `[dev-server shim] failed to spawn control-room launcher: ${err.message}\n`,
+  );
   process.exit(1);
 });
