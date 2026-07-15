@@ -182,7 +182,7 @@ class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
             {"revision": 1, "geometries": [], "spin_torques": [], "oersted_terms": []}
         )
         self.assertEqual(cleared_scene["spin_torques"], [])
-        self.assertEqual(cleared_scene["oersted_terms"], [])
+        self.assertEqual(cleared_scene["oersted_fields"], [])
         self.assertEqual(builder_overrides_from_scene_document(cleared_scene)["spin_torques"], [])
         self.assertEqual(builder_overrides_from_scene_document(cleared_scene)["oersted_terms"], [])
 
@@ -194,7 +194,12 @@ class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
                     )
                 with self.subTest(scene_key=key, invalid=invalid), self.assertRaises(ValueError):
                     builder_overrides_from_scene_document(
-                        {"version": "scene.v2", "revision": 1, "objects": [], key: invalid}
+                        {
+                            "version": "scene.v2",
+                            "revision": 1,
+                            "objects": [],
+                            "oersted_fields" if key == "oersted_terms" else key: invalid,
+                        }
                     )
 
     def test_prescribed_scalar_all_envelopes_render_canonically_without_loss(self) -> None:
@@ -311,7 +316,14 @@ class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
         inverse = build_builder_from_scene_document(scene)
         overrides = builder_overrides_from_scene_document(scene)
         self.assertEqual(scene["spin_torques"], spin_torques)
-        self.assertEqual(scene["oersted_terms"], oersted_terms)
+        self.assertEqual(
+            [
+                {key: value for key, value in entry.items() if key != "id"}
+                for entry in scene["oersted_fields"]
+            ],
+            oersted_terms,
+        )
+        self.assertNotIn("oersted_terms", scene)
         self.assertEqual(inverse["spin_torques"], spin_torques)
         self.assertEqual(inverse["oersted_terms"], oersted_terms)
         self.assertEqual(overrides["spin_torques"], spin_torques)
@@ -327,6 +339,65 @@ class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
             [_eval_rendered([line]).to_ir() for line in rendered_oersted[1:]],
             oersted_terms,
         )
+
+    def test_scene_document_splits_typed_current_transports_from_legacy_modules(self) -> None:
+        transport_entries = [
+            fm.CurrentTransport(
+                name="prescribed",
+                current_density=(1.25e11, -2.5e10, 3.75e9),
+                solve_region="layer",
+            ).to_ir(),
+            fm.CurrentTransport(
+                name="ohmic",
+                model="ohmic_poisson",
+                solve_region="conductor",
+                conductivity_s_per_m=5.8e7,
+            ).to_ir(),
+        ]
+        antenna = {"kind": "antenna_field_source", "name": "rf"}
+        scene = build_scene_document_from_builder(
+            {
+                "revision": 7,
+                "geometries": [],
+                "current_modules": [antenna, *transport_entries],
+            }
+        )
+
+        self.assertEqual(scene["current_transports"], transport_entries)
+        self.assertEqual(scene["current_modules"]["modules"], [antenna])
+        self.assertEqual(
+            build_builder_from_scene_document(scene)["current_modules"],
+            [antenna, *transport_entries],
+        )
+
+    def test_scene_document_typed_codecs_fail_closed_without_rewriting_input(self) -> None:
+        malformed = {
+            "kind": "oersted_cylinder",
+            "current": 0.001,
+            "radius": 1e-8,
+            "center": [0.0, 0.0, 0.0],
+            "axis": [0.0, 0.0, 0.0],
+        }
+        scene = {
+            "version": "scene.v2",
+            "revision": 2,
+            "objects": [],
+            "oersted_fields": [{"id": "oe:0", **malformed}],
+        }
+        original = {key: (list(value) if isinstance(value, list) else value) for key, value in scene.items()}
+        with self.assertRaisesRegex(ValueError, "axis"):
+            build_builder_from_scene_document(scene)
+        self.assertEqual(scene, original)
+
+        unknown = {
+            "version": "scene.v2",
+            "revision": 2,
+            "objects": [],
+            "spin_torques": [{"id": "future", "kind": "future_torque", "coefficient": 1.0}],
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported spin torque"):
+            build_builder_from_scene_document(unknown)
+        self.assertEqual(unknown["spin_torques"][0]["coefficient"], 1.0)
 
     def test_spin_override_is_consumed_and_invalid_entries_fail_closed(self) -> None:
         torque = fm.PrescribedSpinOrbitTorque(
