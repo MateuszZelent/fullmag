@@ -20,7 +20,12 @@ from fullmag.model.discretization import DiscretizationHints, FEM
 from fullmag.model.dynamics import LLG
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds
 from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, ThermalNoise, UniaxialAnisotropy, Zeeman
-from fullmag.model.spin_torque import LegacySpinTorque, SpinTorqueModule
+from fullmag.model.spin_torque import (
+    LegacySpinTorque,
+    PrescribedSpinOrbitTorque,
+    SpinOrbitTorque,
+    SpinTorqueModule,
+)
 from fullmag.model.mechanics import (
     ElasticBody,
     ElasticMaterial,
@@ -1119,6 +1124,14 @@ class Problem:
             self.spin_torques,
         )
         object.__setattr__(self, "spin_torques", normalized_spin_torques)
+        ensure_unique_names(
+            (
+                module.name
+                for module in normalized_spin_torques
+                if isinstance(module, (PrescribedSpinOrbitTorque, SpinOrbitTorque))
+            ),
+            "prescribed SOT ids",
+        )
 
         if self.temperature is not None and self.temperature < 0.0:
             raise ValueError("temperature must be >= 0")

@@ -44,7 +44,7 @@ def _normalized_axis(
     value: Sequence[float], field_name: str
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     authored = _finite_vector3(value, field_name)
-    norm = math.sqrt(sum(component * component for component in authored))
+    norm = math.hypot(*authored)
     if norm <= PRESCRIBED_SOT_V1_EPSILON_AXIS:
         raise ValueError(
             f"{field_name} norm must be greater than epsilon_axis "
@@ -312,7 +312,7 @@ class VectorCurrentDrive:
             normal_hat[2] * drive_hat[0] - normal_hat[0] * drive_hat[2],
             normal_hat[0] * drive_hat[1] - normal_hat[1] * drive_hat[0],
         )
-        if math.sqrt(sum(component * component for component in cross)) <= PRESCRIBED_SOT_V1_EPSILON_AXIS:
+        if math.hypot(*cross) <= PRESCRIBED_SOT_V1_EPSILON_AXIS:
             raise ValueError(
                 "interface_normal and drive_direction must not be parallel within epsilon_axis"
             )
@@ -688,10 +688,10 @@ class PrescribedSpinOrbitTorque:
 
     def __init__(
         self,
-        *,
         name: str,
         target: RegionRef,
         drive: PrescribedSotDrive,
+        *,
         xi_dl: float,
         xi_fl: float = 0.0,
         free_layer_thickness_m: float,
@@ -838,7 +838,7 @@ class SpinOrbitTorque:
         self,
         charge_current_density_a_per_m2: float | None = None,
         damping_like_efficiency: float = 0.0,
-        spin_polarization: Sequence[float] = (0.0, 0.0, 1.0),
+        spin_polarization: Sequence[float] | None = None,
         ferromagnet_thickness_m: float = 1e-9,
         field_like_efficiency: float = 0.0,
         *,
@@ -867,6 +867,11 @@ class SpinOrbitTorque:
                     "current_source migration requires explicit drive_direction and "
                     "interface_normal; axes cannot be inferred from spin_polarization"
                 )
+            if spin_polarization is not None:
+                raise ValueError(
+                    "spin_polarization is not accepted with current_source; "
+                    "use drive_direction and interface_normal only"
+                )
             drive: PrescribedSotDrive = VectorCurrentDrive(
                 current_source,
                 drive_direction,
@@ -883,7 +888,7 @@ class SpinOrbitTorque:
                 )
             drive = SignedScalarDrive(
                 charge_current_density_a_per_m2,
-                sigma=spin_polarization,
+                sigma=(0.0, 0.0, 1.0) if spin_polarization is None else spin_polarization,
             )
         canonical = PrescribedSpinOrbitTorque(
             name=name,
@@ -901,12 +906,23 @@ class SpinOrbitTorque:
         )
         object.__setattr__(self, "current_source", current_source)
         object.__setattr__(self, "damping_like_efficiency", canonical.xi_dl)
-        object.__setattr__(self, "spin_polarization", _finite_vector3(spin_polarization, "spin_polarization"))
+        object.__setattr__(
+            self,
+            "spin_polarization",
+            _finite_vector3(
+                (0.0, 0.0, 1.0) if spin_polarization is None else spin_polarization,
+                "spin_polarization",
+            ),
+        )
         object.__setattr__(self, "ferromagnet_thickness_m", canonical.free_layer_thickness_m)
         object.__setattr__(self, "field_like_efficiency", canonical.xi_fl)
 
     def to_ir_module(self) -> dict[str, object]:
         return self._canonical.to_ir_module()
+
+    @property
+    def name(self) -> str:
+        return self._canonical.name
 
 
 SpinTorqueModule = (

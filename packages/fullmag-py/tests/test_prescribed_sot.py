@@ -167,12 +167,32 @@ class TestPrescribedSotDrives(unittest.TestCase):
             },
         )
 
+    def test_overflow_safe_normalization_preserves_signed_axis_directions(self) -> None:
+        root_half = math.sqrt(0.5)
+        scalar = fm.SignedScalarDrive(
+            1.0,
+            sigma=(-1e308, 1e308, 0.0),
+        )
+        vector = fm.VectorCurrentDrive(
+            "charge",
+            drive_direction=(-1e308, 0.0, 0.0),
+            interface_normal=(0.0, 0.0, -1e308),
+        )
+
+        self.assertEqual(scalar.sigma, (-1e308, 1e308, 0.0))
+        self.assertAlmostEqual(scalar.to_ir()["sigma_hat"][0], -root_half)  # type: ignore[index]
+        self.assertAlmostEqual(scalar.to_ir()["sigma_hat"][1], root_half)  # type: ignore[index]
+        self.assertEqual(vector.to_ir()["drive_direction"], [-1.0, 0.0, 0.0])
+        self.assertEqual(vector.to_ir()["interface_normal"], [0.0, 0.0, -1.0])
+
     def test_nonfinite_near_zero_and_parallel_axes_fail_closed(self) -> None:
         invalid_factories = [
             lambda: fm.SignedScalarDrive(math.inf, sigma=(0.0, 1.0, 0.0)),
             lambda: fm.SignedScalarDrive(1.0, sigma=(1e-13, 0.0, 0.0)),
             lambda: fm.VectorCurrentDrive("", (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
             lambda: fm.VectorCurrentDrive("charge", (math.nan, 0.0, 0.0), (0.0, 0.0, 1.0)),
+            lambda: fm.VectorCurrentDrive("charge", (1e-13, 0.0, 0.0), (0.0, 0.0, 1.0)),
+            lambda: fm.VectorCurrentDrive("charge", (1.0, 0.0, 0.0), (0.0, 0.0, 1e-13)),
             lambda: fm.VectorCurrentDrive("charge", (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)),
             lambda: fm.VectorCurrentDrive("charge", (1.0, 0.0, 0.0), (1.0, 1e-13, 0.0)),
         ]
@@ -182,6 +202,16 @@ class TestPrescribedSotDrives(unittest.TestCase):
 
 
 class TestPrescribedSpinOrbitTorque(unittest.TestCase):
+    def test_constructor_accepts_positional_name_target_and_drive(self) -> None:
+        torque = fm.PrescribedSpinOrbitTorque(
+            "sot",
+            fm.RegionRef("free"),
+            fm.SignedScalarDrive(1.0, sigma=(0.0, 0.0, 1.0)),
+            xi_dl=0.1,
+            free_layer_thickness_m=1e-9,
+        )
+        self.assertEqual(torque.to_ir_module()["id"], "sot")
+
     def test_canonical_v1_json_is_exact(self) -> None:
         torque = fm.PrescribedSpinOrbitTorque(
             name="sot",
@@ -258,8 +288,89 @@ class TestPrescribedSpinOrbitTorque(unittest.TestCase):
                 target=fm.RegionRef("free"),
                 current_source="charge",
                 damping_like_efficiency=0.2,
+                ferromagnet_thickness_m=2e-9,
+            )
+
+    def test_deprecated_alias_source_with_axes_emits_canonical_v1(self) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            torque = fm.SpinOrbitTorque(
+                name="source_sot",
+                target=fm.RegionRef("free"),
+                current_source="charge",
+                drive_direction=(-2.0, 0.0, 0.0),
+                interface_normal=(0.0, 0.0, -4.0),
+                damping_like_efficiency=0.2,
+                field_like_efficiency=-0.01,
+                ferromagnet_thickness_m=2e-9,
+            )
+        self.assertTrue(any(item.category is DeprecationWarning for item in caught))
+        self.assertEqual(
+            torque.to_ir_module()["drive"],
+            {
+                "kind": "vector_current_source",
+                "current_source_id": "charge",
+                "drive_direction": [-1.0, 0.0, 0.0],
+                "interface_normal": [0.0, 0.0, -1.0],
+            },
+        )
+
+    def test_deprecated_alias_source_rejects_explicit_legacy_spin_polarization(self) -> None:
+        with self.assertRaisesRegex(ValueError, "spin_polarization.*current_source"):
+            fm.SpinOrbitTorque(
+                name="source_sot",
+                target=fm.RegionRef("free"),
+                current_source="charge",
+                drive_direction=(1.0, 0.0, 0.0),
+                interface_normal=(0.0, 0.0, 1.0),
                 spin_polarization=(0.0, 1.0, 0.0),
                 ferromagnet_thickness_m=2e-9,
+            )
+
+    def test_deprecated_scalar_alias_defaults_sigma_to_positive_z(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            torque = fm.SpinOrbitTorque(
+                name="scalar_sot",
+                target=fm.RegionRef("free"),
+                charge_current_density_a_per_m2=1.0,
+            )
+        self.assertEqual(torque.to_ir_module()["drive"]["sigma_hat"], [0.0, 0.0, 1.0])  # type: ignore[index]
+
+    def test_problem_rejects_duplicate_prescribed_sot_ids(self) -> None:
+        geometry = fm.Box(size=(10e-9, 10e-9, 1e-9), name="free")
+        material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
+        magnet = fm.Ferromagnet(name="free", geometry=geometry, material=material)
+        drive = fm.SignedScalarDrive(1.0, sigma=(0.0, 1.0, 0.0))
+        modules = [
+            fm.PrescribedSpinOrbitTorque(
+                "duplicate",
+                fm.RegionRef("free"),
+                drive,
+                xi_dl=0.1,
+                free_layer_thickness_m=1e-9,
+            ),
+            fm.PrescribedSpinOrbitTorque(
+                "duplicate",
+                fm.RegionRef("free"),
+                drive,
+                xi_dl=0.2,
+                free_layer_thickness_m=1e-9,
+            ),
+        ]
+        with self.assertRaisesRegex(ValueError, "prescribed SOT ids.*unique"):
+            fm.Problem(
+                name="duplicate_sot",
+                magnets=[magnet],
+                energy=[fm.Exchange()],
+                study=fm.TimeEvolution(
+                    dynamics=fm.LLG(),
+                    outputs=[fm.SaveScalar("E_total", every=1e-12)],
+                ),
+                discretization=fm.DiscretizationHints(
+                    fdm=fm.FDM(cell=(1e-9, 1e-9, 1e-9))
+                ),
+                spin_torques=modules,
             )
 
     def test_legacy_v0_bridge_preserves_global_scope_zero_sigma_and_raw_sign(self) -> None:
@@ -365,6 +476,7 @@ class TestPublicContract(unittest.TestCase):
             "PiecewiseLinearEnvelope",
             "SincEnvelope",
             "TabulatedEnvelope",
+            "TimeEnvelope",
             "SignedScalarDrive",
             "VectorCurrentDrive",
             "PrescribedSpinOrbitTorque",
