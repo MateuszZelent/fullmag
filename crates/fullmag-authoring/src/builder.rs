@@ -715,6 +715,12 @@ pub struct ScriptBuilderState {
     pub mesh_interfaces: Vec<ScriptBuilderMeshInterfaceState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_modules: Vec<ScriptBuilderCurrentModuleState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_transports: Vec<crate::SceneCurrentTransport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_torques: Vec<crate::SceneSpinTorque>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub oersted_terms: Vec<crate::SceneOerstedField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excitation_analysis: Option<ScriptBuilderExcitationAnalysisState>,
 }

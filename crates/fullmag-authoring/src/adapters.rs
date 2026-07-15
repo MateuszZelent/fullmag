@@ -44,6 +44,15 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         .map(|geometry| magnetization_asset_from_geometry(&geometry.name, &geometry.magnetization))
         .collect::<Vec<_>>();
 
+    let mut spin_torques = builder.spin_torques.clone();
+    for (index, torque) in spin_torques.iter_mut().enumerate() {
+        torque.ensure_authoring_id(format!("spin-torque:{index}"));
+    }
+    let mut oersted_fields = builder.oersted_terms.clone();
+    for (index, field) in oersted_fields.iter_mut().enumerate() {
+        field.ensure_authoring_id(format!("oersted-field:{index}"));
+    }
+
     SceneDocument {
         version: "scene.v2".to_string(),
         revision: builder.revision,
@@ -62,6 +71,9 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             modules: builder.current_modules.clone(),
             excitation_analysis: builder.excitation_analysis.clone(),
         },
+        current_transports: builder.current_transports.clone(),
+        spin_torques,
+        oersted_fields,
         study: SceneStudyState {
             backend: builder.backend.clone(),
             requested_backend: builder
@@ -215,6 +227,9 @@ pub fn scene_document_to_script_builder(
             .map(builder_mesh_interface_from_scene)
             .collect(),
         current_modules: normalized_scene.current_modules.modules.clone(),
+        current_transports: normalized_scene.current_transports.clone(),
+        spin_torques: normalized_scene.spin_torques.clone(),
+        oersted_terms: normalized_scene.oersted_fields.clone(),
         excitation_analysis: normalized_scene.current_modules.excitation_analysis.clone(),
     })
 }
@@ -370,6 +385,15 @@ pub fn scene_document_to_script_builder_overrides(
                 "waveform": module.drive.waveform,
             },
         })).collect::<Vec<_>>(),
+        "current_transports": builder.current_transports.iter()
+            .map(|transport| serde_json::to_value(transport).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
+        "spin_torques": builder.spin_torques.iter()
+            .map(spin_torque_override_value)
+            .collect::<Vec<_>>(),
+        "oersted_terms": builder.oersted_terms.iter()
+            .map(oersted_override_value)
+            .collect::<Vec<_>>(),
         "excitation_analysis": builder.excitation_analysis.as_ref().map(|analysis| serde_json::json!({
             "source": analysis.source,
             "method": analysis.method,
@@ -378,6 +402,32 @@ pub fn scene_document_to_script_builder_overrides(
             "samples": analysis.samples,
         })).unwrap_or(Value::Null),
     }))
+}
+
+fn spin_torque_override_value(torque: &crate::SceneSpinTorque) -> Value {
+    let mut value = serde_json::to_value(torque).unwrap_or(Value::Null);
+    let strip_id = matches!(torque, crate::SceneSpinTorque::ZhangLi { .. })
+        || matches!(
+            torque,
+            crate::SceneSpinTorque::Slonczewski {
+                formula_version: crate::SlonczewskiFormulaVersion::LegacyFullmagV0,
+                ..
+            }
+        );
+    if strip_id {
+        if let Value::Object(entry) = &mut value {
+            entry.remove("id");
+        }
+    }
+    value
+}
+
+fn oersted_override_value(field: &crate::SceneOerstedField) -> Value {
+    let mut value = serde_json::to_value(field).unwrap_or(Value::Null);
+    if let Value::Object(entry) = &mut value {
+        entry.remove("id");
+    }
+    value
 }
 
 fn scene_mesh_interface_from_builder(
@@ -2122,6 +2172,9 @@ mod tests {
                     waveform: None,
                 },
             }],
+            current_transports: Vec::new(),
+            spin_torques: Vec::new(),
+            oersted_terms: Vec::new(),
             excitation_analysis: Some(crate::ScriptBuilderExcitationAnalysisState {
                 source: "cpw_1".to_string(),
                 method: "dispersion".to_string(),
@@ -2566,5 +2619,57 @@ mod tests {
             panic!("first projected study node should be primitive");
         };
         assert_eq!(projected_first_node.label, expected_id);
+    }
+
+    #[test]
+    fn scene_builder_adapters_preserve_typed_spin_authoring_collections() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport", "name": "transport", "model": "prescribed_density",
+            "current_density": [1.0e11, 0.0, 0.0], "solve_region": "body"
+        }])).unwrap();
+        scene.spin_torques = serde_json::from_value(serde_json::json!([{
+            "id": "zl", "kind": "zhang_li", "current_source": "transport",
+            "degree": 0.4, "beta": 0.02
+        }])).unwrap();
+        scene.oersted_fields = serde_json::from_value(serde_json::json!([{
+            "id": "oe", "kind": "oersted_field", "source": "transport",
+            "model": "from_current_solution"
+        }])).unwrap();
+        scene.current_transports[0].solve_region = Some(scene.objects[0].id.clone());
+
+        let builder = scene_document_to_script_builder(&scene).expect("typed projection");
+        assert_eq!(builder.current_transports, scene.current_transports);
+        assert_eq!(builder.spin_torques, scene.spin_torques);
+        assert_eq!(builder.oersted_terms, scene.oersted_fields);
+
+        let rebuilt = scene_document_from_script_builder(&builder);
+        assert_eq!(rebuilt.current_transports, scene.current_transports);
+        assert_eq!(rebuilt.spin_torques, scene.spin_torques);
+        assert_eq!(rebuilt.oersted_fields, scene.oersted_fields);
+
+        let overrides = scene_document_to_script_builder_overrides(&scene).expect("overrides");
+        assert_eq!(overrides["current_transports"][0]["name"], "transport");
+        assert_eq!(overrides["spin_torques"][0]["kind"], "zhang_li");
+        assert!(overrides["spin_torques"][0].get("id").is_none());
+        assert_eq!(overrides["oersted_terms"][0]["kind"], "oersted_field");
+        assert!(overrides["oersted_terms"][0].get("id").is_none());
+    }
+
+    #[test]
+    fn builder_projection_assigns_deterministic_authoring_ids() {
+        let mut builder = sample_builder();
+        builder.spin_torques = serde_json::from_value(serde_json::json!([{
+            "kind": "zhang_li", "current_density": [1.0e11, 0.0, 0.0],
+            "degree": 0.4, "beta": 0.02
+        }])).expect("builder torque without authoring id");
+        builder.oersted_terms = serde_json::from_value(serde_json::json!([{
+            "kind": "oersted_cylinder", "current": 0.001, "radius": 1.0e-8,
+            "center": [0.0, 0.0, 0.0], "axis": [0.0, 0.0, 1.0]
+        }])).expect("builder field without authoring id");
+
+        let scene = scene_document_from_script_builder(&builder);
+        assert_eq!(scene.spin_torques[0].id(), "spin-torque:0");
+        assert_eq!(scene.oersted_fields[0].id(), "oersted-field:0");
     }
 }

@@ -3,6 +3,7 @@ use crate::{
     ScriptBuilderInitialState, ScriptBuilderMagneticInteractionEntry, ScriptBuilderMaterialState,
     ScriptBuilderMeshState, ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState,
     ScriptBuilderStageState, ScriptBuilderUniverseState, StudyPipelineDocument,
+    SceneCurrentTransport, SceneOerstedField, SceneSpinTorque,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,6 +29,12 @@ pub struct SceneDocument {
     pub magnetization_assets: Vec<MagnetizationAsset>,
     #[serde(default)]
     pub current_modules: SceneCurrentModulesState,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_transports: Vec<SceneCurrentTransport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_torques: Vec<SceneSpinTorque>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub oersted_fields: Vec<SceneOerstedField>,
     #[serde(default)]
     pub study: SceneStudyState,
     #[serde(default)]
@@ -1123,4 +1130,60 @@ pub enum SceneCouplingCapabilityPolicy {
     #[default]
     RequireRuntime,
     AuthoredOnly,
+}
+
+#[cfg(test)]
+mod spin_authoring_tests {
+    use super::*;
+
+    #[test]
+    fn scene_document_round_trips_typed_spin_authoring_collections() {
+        let value = serde_json::json!({
+            "version": "scene.v2",
+            "current_transports": [{
+                "kind": "current_transport",
+                "name": "transport",
+                "model": "prescribed_density",
+                "current_density": [1.25e11, -2.5e10, 3.75e9],
+                "solve_region": "layer"
+            }],
+            "spin_torques": [{
+                "id": "zl:0",
+                "kind": "zhang_li",
+                "current_source": "transport",
+                "degree": 0.45,
+                "beta": 0.03
+            }],
+            "oersted_fields": [{
+                "id": "oe:0",
+                "kind": "oersted_cylinder",
+                "current": -0.003,
+                "radius": 2.2e-8,
+                "center": [1.0e-9, -2.0e-9, 3.0e-9],
+                "axis": [1.0, 2.0, 3.0],
+                "time_dependence": {
+                    "kind": "piecewise_linear",
+                    "points": [[0.0, 0.0], [2.0e-12, 1.0]]
+                }
+            }]
+        });
+        let scene: SceneDocument = serde_json::from_value(value.clone()).expect("typed scene");
+        assert_eq!(scene.current_transports.len(), 1);
+        assert_eq!(scene.spin_torques.len(), 1);
+        assert_eq!(scene.oersted_fields.len(), 1);
+        let serialized = serde_json::to_value(scene).expect("serialize typed scene");
+        assert_eq!(serialized["current_transports"], value["current_transports"]);
+        assert_eq!(serialized["spin_torques"], value["spin_torques"]);
+        assert_eq!(serialized["oersted_fields"], value["oersted_fields"]);
+    }
+
+    #[test]
+    fn typed_spin_authoring_rejects_unknown_variants() {
+        let error = serde_json::from_value::<SceneDocument>(serde_json::json!({
+            "version": "scene.v2",
+            "spin_torques": [{"id": "future", "kind": "future_torque"}]
+        }))
+        .expect_err("unknown torque must fail closed");
+        assert!(error.to_string().contains("unknown variant"), "{error}");
+    }
 }
