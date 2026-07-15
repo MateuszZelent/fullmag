@@ -24,6 +24,7 @@ from fullmag.model.discretization import FDM, FEM, FDMDemag, FemLinearSolverPoli
 from fullmag.model.spin_torque import (
     DriftDiffusionSpinTorque,
     InterfaceCppSTT,
+    PrescribedSpinOrbitTorque,
     SlonczewskiSTT,
     SpinOrbitTorque,
     ZhangLiSTT,
@@ -149,6 +150,11 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "spin_torques": [
             _export_spin_torque_entry(module) for module in base_problem.spin_torques
         ],
+        "oersted_terms": [
+            term.to_ir()
+            for term in base_problem.energy
+            if isinstance(term, (OerstedCylinder, OerstedField))
+        ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
 
@@ -256,7 +262,14 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(current_module_lines)
 
-    spin_torque_lines = _render_spin_torques(base_problem, surface=surface)
+    oersted_lines = _render_oersted_terms(base_problem, overrides=overrides)
+    if oersted_lines:
+        lines.append("")
+        lines.extend(oersted_lines)
+
+    spin_torque_lines = _render_spin_torques(
+        base_problem, surface=surface, overrides=overrides
+    )
     if spin_torque_lines:
         lines.append("")
         lines.extend(spin_torque_lines)
@@ -1757,12 +1770,27 @@ def _render_spin_torques(
     problem: Problem,
     *,
     surface: str,
+    overrides: dict[str, object] | None = None,
 ) -> list[str]:
     """Render the spin_torques list as canonical script lines."""
-    if not problem.spin_torques:
+    resolved_overrides = overrides or {}
+    if "spin_torques" in resolved_overrides:
+        override_modules = resolved_overrides["spin_torques"]
+        if not isinstance(override_modules, list):
+            raise ValueError("spin_torques override must be a list")
+        modules: Sequence[object] = override_modules
+    else:
+        modules = problem.spin_torques
+    if not modules:
         return []
     lines = ["# Spin torques"]
-    for module in problem.spin_torques:
+    for module in modules:
+        if isinstance(module, dict):
+            lines.append(_render_spin_torque_override(module))
+            continue
+        if isinstance(module, PrescribedSpinOrbitTorque):
+            lines.append(_render_prescribed_sot_entry(module.to_ir_module()))
+            continue
         if isinstance(module, SlonczewskiSTT):
             kwargs = []
             if module.current_density is not None:
@@ -1825,27 +1853,316 @@ def _render_spin_torques(
             lines.append(f"fm.DriftDiffusionSpinTorque({', '.join(kwargs)})")
             continue
         if isinstance(module, SpinOrbitTorque):
-            kwargs = []
-            if module.charge_current_density_a_per_m2 is not None:
-                kwargs.append(
-                    f"charge_current_density_a_per_m2={_py_number(module.charge_current_density_a_per_m2)}"
-                )
-            if module.current_source is not None:
-                kwargs.append(f"current_source={_py_repr(module.current_source)}")
-            kwargs.append(f"damping_like_efficiency={_py_number(module.damping_like_efficiency)}")
-            kwargs.append(f"spin_polarization={_py_tuple3(module.spin_polarization)}")
-            kwargs.append(
-                f"ferromagnet_thickness_m={_py_number(module.ferromagnet_thickness_m)}"
-            )
-            if module.field_like_efficiency != 0.0:
-                kwargs.append(
-                    f"field_like_efficiency={_py_number(module.field_like_efficiency)}"
-                )
-            lines.append(f"fm.SpinOrbitTorque({', '.join(kwargs)})")
+            lines.append(_render_prescribed_sot_entry(module.to_ir_module()))
             continue
         raise ValueError(
             f"canonical flat-script rewrite does not yet support spin torque {type(module).__name__}"
         )
+    return lines
+
+
+def _required_entry(entry: Mapping[str, object], key: str, *, context: str) -> object:
+    if key not in entry:
+        raise ValueError(f"{context} entry is missing required field {key!r}")
+    return entry[key]
+
+
+def _required_mapping(entry: Mapping[str, object], key: str, *, context: str) -> Mapping[str, object]:
+    value = _required_entry(entry, key, context=context)
+    if not isinstance(value, dict):
+        raise ValueError(f"{context}.{key} must be an object")
+    return value
+
+
+def _required_vec3(entry: Mapping[str, object], key: str, *, context: str) -> Sequence[object]:
+    value = _required_entry(entry, key, context=context)
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"{context}.{key} must be a three-component vector")
+    return value
+
+
+def _render_region_ref(entry: Mapping[str, object]) -> str:
+    object_id = _required_entry(entry, "object_id", context="prescribed_sot.target")
+    if not isinstance(object_id, str) or not object_id:
+        raise ValueError("prescribed_sot.target.object_id must be a non-empty string")
+    kwargs = [_py_repr(object_id)]
+    if "region_id" in entry:
+        region_id = entry["region_id"]
+        if not isinstance(region_id, str) or not region_id:
+            raise ValueError("prescribed_sot.target.region_id must be a non-empty string")
+        kwargs.append(_py_repr(region_id))
+    return f"fm.RegionRef({', '.join(kwargs)})"
+
+
+def _render_sot_envelope(entry: Mapping[str, object]) -> str:
+    kind = _required_entry(entry, "kind", context="prescribed_sot.drive.envelope")
+    context = f"prescribed_sot.drive.envelope[{kind}]"
+    if kind == "constant":
+        return f"fm.ConstantEnvelope({_py_number(_required_entry(entry, 'value', context=context))})"
+    if kind == "sinusoidal":
+        return (
+            "fm.SinusoidalEnvelope("
+            f"{_py_number(_required_entry(entry, 'amplitude', context=context))}, "
+            f"{_py_number(_required_entry(entry, 'frequency_hz', context=context))}, "
+            f"phase_rad={_py_number(_required_entry(entry, 'phase_rad', context=context))}, "
+            f"offset={_py_number(_required_entry(entry, 'offset', context=context))})"
+        )
+    if kind == "pulse":
+        return (
+            "fm.PulseEnvelope("
+            f"{_py_number(_required_entry(entry, 'amplitude', context=context))}, "
+            f"{_py_number(_required_entry(entry, 't_on_s', context=context))}, "
+            f"{_py_number(_required_entry(entry, 't_off_s', context=context))})"
+        )
+    if kind == "piecewise_linear":
+        points = _required_entry(entry, "points", context=context)
+        if not isinstance(points, list):
+            raise ValueError(f"{context}.points must be a list")
+        rendered_points: list[str] = []
+        for index, point in enumerate(points):
+            if not isinstance(point, dict):
+                raise ValueError(f"{context}.points[{index}] must be an object")
+            rendered_points.append(
+                "fm.TimeEnvelopePoint("
+                f"{_py_number(_required_entry(point, 'time_s', context=f'{context}.points[{index}]'))}, "
+                f"{_py_number(_required_entry(point, 'value', context=f'{context}.points[{index}]'))})"
+            )
+        return f"fm.PiecewiseLinearEnvelope([{', '.join(rendered_points)}])"
+    if kind == "sinc":
+        return (
+            "fm.SincEnvelope("
+            f"{_py_number(_required_entry(entry, 'amplitude', context=context))}, "
+            f"center_s={_py_number(_required_entry(entry, 'center_s', context=context))}, "
+            f"bandwidth_hz={_py_number(_required_entry(entry, 'bandwidth_hz', context=context))}, "
+            f"offset={_py_number(_required_entry(entry, 'offset', context=context))})"
+        )
+    if kind == "tabulated":
+        kwargs = [
+            _py_repr(_required_entry(entry, "artifact_ref", context=context)),
+            f"interpolation={_py_repr(_required_entry(entry, 'interpolation', context=context))}",
+            f"extrapolation={_py_repr(_required_entry(entry, 'extrapolation', context=context))}",
+        ]
+        if "bandwidth_hz" in entry:
+            kwargs.append(f"bandwidth_hz={_py_number(entry['bandwidth_hz'])}")
+        return f"fm.TabulatedEnvelope({', '.join(kwargs)})"
+    raise ValueError(f"unsupported prescribed SOT envelope kind {kind!r}")
+
+
+def _render_prescribed_sot_drive(entry: Mapping[str, object]) -> str:
+    kind = _required_entry(entry, "kind", context="prescribed_sot.drive")
+    if kind == "signed_scalar":
+        kwargs = [
+            _py_number(_required_entry(entry, "current_density_Apm2", context="prescribed_sot.drive")),
+            _py_literal(list(_required_vec3(entry, "sigma_hat", context="prescribed_sot.drive"))),
+        ]
+        if "envelope" in entry:
+            envelope = entry["envelope"]
+            if not isinstance(envelope, dict):
+                raise ValueError("prescribed_sot.drive.envelope must be an object")
+            kwargs.append(_render_sot_envelope(envelope))
+        return f"fm.SignedScalarDrive({', '.join(kwargs)})"
+    if kind == "vector_current_source":
+        return (
+            "fm.VectorCurrentDrive("
+            f"{_py_repr(_required_entry(entry, 'current_source_id', context='prescribed_sot.drive'))}, "
+            f"{_py_literal(list(_required_vec3(entry, 'drive_direction', context='prescribed_sot.drive')))}, "
+            f"{_py_literal(list(_required_vec3(entry, 'interface_normal', context='prescribed_sot.drive')))})"
+        )
+    raise ValueError(f"unsupported prescribed SOT drive kind {kind!r}")
+
+
+def _render_prescribed_sot_entry(entry: Mapping[str, object]) -> str:
+    if _required_entry(entry, "schema_version", context="prescribed_sot") != "prescribed_sot.v1":
+        raise ValueError("unsupported prescribed SOT schema_version")
+    formula = _required_entry(entry, "formula_version", context="prescribed_sot")
+    module_id = _required_entry(entry, "id", context="prescribed_sot")
+    if not isinstance(module_id, str) or not module_id:
+        raise ValueError("prescribed_sot.id must be a non-empty string")
+    if formula == "prescribed_sot.fullmag.v1":
+        target = _required_mapping(entry, "target", context="prescribed_sot")
+        drive = _required_mapping(entry, "drive", context="prescribed_sot")
+        return (
+            "fm.PrescribedSpinOrbitTorque("
+            f"{_py_repr(module_id)}, {_render_region_ref(target)}, {_render_prescribed_sot_drive(drive)}, "
+            f"xi_dl={_py_number(_required_entry(entry, 'xi_dl', context='prescribed_sot'))}, "
+            f"xi_fl={_py_number(_required_entry(entry, 'xi_fl', context='prescribed_sot'))}, "
+            "free_layer_thickness_m="
+            f"{_py_number(_required_entry(entry, 'free_layer_thickness_m', context='prescribed_sot'))})"
+        )
+    if formula != "prescribed_sot.legacy_fullmag.v0":
+        raise ValueError(f"unsupported prescribed SOT formula_version {formula!r}")
+    prefix = "legacy_prescribed_sot_"
+    if not module_id.startswith(prefix) or not module_id[len(prefix):].isdigit():
+        raise ValueError("legacy prescribed SOT id must encode its module_index")
+    if _required_entry(entry, "target", context="prescribed_sot") is not None:
+        raise ValueError("legacy prescribed SOT target must be explicitly null")
+    drive = _required_mapping(entry, "drive", context="prescribed_sot")
+    drive_kind = _required_entry(drive, "kind", context="prescribed_sot.drive")
+    drive_kwarg: str
+    if drive_kind == "legacy_scalar_magnitude":
+        drive_kwarg = (
+            "raw_charge_current_density_Apm2="
+            f"{_py_number(_required_entry(drive, 'raw_charge_current_density_Apm2', context='prescribed_sot.drive'))}"
+        )
+    elif drive_kind == "legacy_current_source_norm":
+        drive_kwarg = (
+            "current_source_id="
+            f"{_py_repr(_required_entry(drive, 'current_source_id', context='prescribed_sot.drive'))}"
+        )
+    else:
+        raise ValueError(f"unsupported legacy prescribed SOT drive kind {drive_kind!r}")
+    origin = _required_mapping(entry, "compatibility_origin", context="prescribed_sot")
+    return (
+        "fm.PrescribedSpinOrbitTorque.from_legacy_v0("
+        f"module_index={int(module_id[len(prefix):])}, target=None, {drive_kwarg}, "
+        "raw_spin_polarization="
+        f"{_py_literal(list(_required_vec3(entry, 'raw_spin_polarization', context='prescribed_sot')))}, "
+        f"xi_dl={_py_number(_required_entry(entry, 'xi_dl', context='prescribed_sot'))}, "
+        f"xi_fl={_py_number(_required_entry(entry, 'xi_fl', context='prescribed_sot'))}, "
+        "free_layer_thickness_m="
+        f"{_py_number(_required_entry(entry, 'free_layer_thickness_m', context='prescribed_sot'))}, "
+        f"compatibility_origin={_py_literal(dict(origin))})"
+    )
+
+
+def _render_spin_torque_override(entry: Mapping[str, object]) -> str:
+    kind = _required_entry(entry, "kind", context="spin_torque")
+    if kind == "prescribed_sot":
+        return _render_prescribed_sot_entry(entry)
+    constructors = {
+        "slonczewski": "SlonczewskiSTT",
+        "zhang_li": "ZhangLiSTT",
+        "interface_cpp": "InterfaceCppSTT",
+        "drift_diffusion": "DriftDiffusionSpinTorque",
+    }
+    constructor = constructors.get(str(kind))
+    if constructor is None:
+        raise ValueError(f"unsupported spin torque kind {kind!r}")
+    kwargs: list[str] = []
+    if "current_density" in entry:
+        kwargs.append(
+            f"current_density={_py_literal(list(_required_vec3(entry, 'current_density', context=str(kind))))}"
+        )
+    elif "current_source" in entry:
+        kwargs.append(f"current_source={_py_repr(entry['current_source'])}")
+    else:
+        raise ValueError(f"{kind} requires current_density or current_source")
+    required_by_kind = {
+        "slonczewski": ("spin_polarization", "degree", "lambda_asymmetry", "epsilon_prime"),
+        "zhang_li": ("degree", "beta"),
+        "interface_cpp": ("spin_polarization", "interface_normal", "degree", "lambda_asymmetry", "epsilon_prime"),
+        "drift_diffusion": ("spin_polarization", "degree", "beta", "spin_diffusion_length_m"),
+    }
+    for field in required_by_kind[str(kind)]:
+        value = _required_entry(entry, field, context=str(kind))
+        if field in {"spin_polarization", "interface_normal"}:
+            value = list(_required_vec3(entry, field, context=str(kind)))
+            kwargs.append(f"{field}={_py_literal(value)}")
+        else:
+            kwargs.append(f"{field}={_py_number(value)}")
+    if kind == "slonczewski":
+        if "free_layer_thickness_m" in entry:
+            kwargs.append(f"free_layer_thickness_m={_py_number(entry['free_layer_thickness_m'])}")
+        if "fixed_layer_position" in entry:
+            kwargs.append(f"fixed_layer_position={_py_repr(entry['fixed_layer_position'])}")
+    return f"fm.{constructor}({', '.join(kwargs)})"
+
+
+def _render_oersted_time_dependence(entry: Mapping[str, object]) -> str:
+    kind = _required_entry(entry, "kind", context="oersted_cylinder.time_dependence")
+    context = f"oersted_cylinder.time_dependence[{kind}]"
+    if kind == "constant":
+        return "fm.model.Constant()"
+    if kind == "sinusoidal":
+        return (
+            "fm.Sinusoidal("
+            f"{_py_number(_required_entry(entry, 'frequency_hz', context=context))}, "
+            f"phase_rad={_py_number(_required_entry(entry, 'phase_rad', context=context))}, "
+            f"offset={_py_number(_required_entry(entry, 'offset', context=context))})"
+        )
+    if kind == "pulse":
+        return (
+            "fm.model.Pulse("
+            f"{_py_number(_required_entry(entry, 't_on', context=context))}, "
+            f"{_py_number(_required_entry(entry, 't_off', context=context))})"
+        )
+    if kind == "piecewise_linear":
+        points = _required_entry(entry, "points", context=context)
+        if not isinstance(points, list):
+            raise ValueError(f"{context}.points must be a list")
+        rendered_points: list[list[object]] = []
+        for index, point in enumerate(points):
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                raise ValueError(f"{context}.points[{index}] must contain time and value")
+            rendered_points.append([point[0], point[1]])
+        return f"fm.PiecewiseLinear({_py_literal(rendered_points)})"
+    if kind == "sinc_pulse":
+        return (
+            "fm.SincPulse("
+            f"{_py_number(_required_entry(entry, 'cutoff_hz', context=context))}, "
+            f"t0={_py_number(_required_entry(entry, 't0', context=context))}, "
+            f"amplitude={_py_number(_required_entry(entry, 'amplitude', context=context))})"
+        )
+    raise ValueError(f"unsupported Oersted time-dependence kind {kind!r}")
+
+
+def _render_oersted_entry(entry: Mapping[str, object]) -> str:
+    kind = _required_entry(entry, "kind", context="oersted")
+    if kind == "oersted_field":
+        model = _required_entry(entry, "model", context="oersted_field")
+        if model != "from_current_solution":
+            raise ValueError(f"unsupported OerstedField model {model!r}")
+        source = _required_entry(entry, "source", context="oersted_field")
+        if not isinstance(source, str) or not source:
+            raise ValueError("oersted_field.source must be a non-empty string")
+        return f"fm.OerstedField(source={_py_repr(source)}, model={_py_repr(model)})"
+    if kind != "oersted_cylinder":
+        raise ValueError(f"unsupported Oersted term kind {kind!r}")
+    kwargs = [
+        f"current={_py_number(_required_entry(entry, 'current', context='oersted_cylinder'))}",
+        f"radius={_py_number(_required_entry(entry, 'radius', context='oersted_cylinder'))}",
+        "center="
+        f"{_py_literal(list(_required_vec3(entry, 'center', context='oersted_cylinder')))}",
+        "axis="
+        f"{_py_literal(list(_required_vec3(entry, 'axis', context='oersted_cylinder')))}",
+    ]
+    if "time_dependence" in entry:
+        time_dependence = entry["time_dependence"]
+        if not isinstance(time_dependence, dict):
+            raise ValueError("oersted_cylinder.time_dependence must be an object")
+        kwargs.append(
+            f"time_dependence={_render_oersted_time_dependence(time_dependence)}"
+        )
+    return f"fm.OerstedCylinder({', '.join(kwargs)})"
+
+
+def _render_oersted_terms(
+    problem: Problem,
+    *,
+    overrides: dict[str, object],
+) -> list[str]:
+    if "oersted_terms" in overrides:
+        override_terms = overrides["oersted_terms"]
+        if not isinstance(override_terms, list):
+            raise ValueError("oersted_terms override must be a list")
+        terms: Sequence[object] = override_terms
+    else:
+        terms = tuple(
+            term
+            for term in problem.energy
+            if isinstance(term, (OerstedCylinder, OerstedField))
+        )
+    if not terms:
+        return []
+    lines = ["# Oersted terms"]
+    for term in terms:
+        if isinstance(term, (OerstedCylinder, OerstedField)):
+            lines.append(_render_oersted_entry(term.to_ir()))
+            continue
+        if isinstance(term, dict):
+            lines.append(_render_oersted_entry(term))
+            continue
+        raise ValueError(f"unsupported Oersted term {type(term).__name__}")
     return lines
 
 

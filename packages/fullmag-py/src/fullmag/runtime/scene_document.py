@@ -269,6 +269,8 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "modules": builder.get("current_modules") or [],
             "excitation_analysis": builder.get("excitation_analysis"),
         },
+        "spin_torques": builder.get("spin_torques") or [],
+        "oersted_terms": builder.get("oersted_terms") or [],
         "couplings": builder.get("couplings") or [],
         "study": {
             "backend": builder.get("backend"),
@@ -408,6 +410,8 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "couplings": scene.get("couplings") or [],
         "current_modules": current_modules.get("modules") or [],
         "excitation_analysis": current_modules.get("excitation_analysis"),
+        "spin_torques": scene.get("spin_torques") or [],
+        "oersted_terms": scene.get("oersted_terms") or [],
     }
 
 
@@ -530,6 +534,8 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "couplings": builder.get("couplings") or [],
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
+        "spin_torques": builder.get("spin_torques") or [],
+        "oersted_terms": builder.get("oersted_terms") or [],
     }
 
 
