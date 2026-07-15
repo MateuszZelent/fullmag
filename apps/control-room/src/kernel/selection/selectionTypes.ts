@@ -57,14 +57,22 @@ export function isVisualizationAirboxId(id: string | null | undefined): boolean 
   while (normalized.startsWith("part:") || normalized.startsWith("object:")) {
     normalized = normalized.slice(normalized.indexOf(":") + 1);
   }
+  if (normalized.endsWith("_geom")) {
+    normalized = normalized.slice(0, -"_geom".length);
+  }
   return AIRBOX_IDS.has(normalized);
 }
 
 export function isVisualizationAirboxIdentity(value: {
+  geometry_id?: string | null;
   id?: string | null;
+  object_id?: string | null;
   role?: string | null;
 }): boolean {
-  return isVisualizationAirboxRole(value.role) || isVisualizationAirboxId(value.id);
+  return (
+    isVisualizationAirboxRole(value.role) ||
+    [value.id, value.object_id, value.geometry_id].some(isVisualizationAirboxId)
+  );
 }
 
 export function visualizationTargetIdForSceneObject(

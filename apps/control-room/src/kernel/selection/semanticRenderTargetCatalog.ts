@@ -1,6 +1,6 @@
 import type { MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
-import { manifestCarrierOwnershipAliases } from "@/kernel/visualization/visualizationDisplayResolution";
 
+import { normalizeManifestRenderableCarriers } from "./manifestRenderableCarriers";
 import {
   canonicalVisualizationPartTargetId,
   canonicalVisualizationSceneObjectId,
@@ -33,37 +33,9 @@ type SemanticManifest = Pick<
 export function semanticRenderTargetCarriersFromManifest(
   manifest: SemanticManifest | null | undefined,
 ): VisualizationMeshPartLike[] {
-  const seenMeshPartIds = new Set<string>();
-  const meshParts = (manifest?.mesh_parts ?? []).filter((part) => {
-    const id = part.id.trim();
-    if (!id || isUniverseOuterBoundaryCarrier(part) || seenMeshPartIds.has(id)) {
-      return false;
-    }
-    seenMeshPartIds.add(id);
-    return true;
-  });
-  const meshOwnership = new Set<string>();
-  for (const part of meshParts) {
-    for (const alias of manifestCarrierOwnershipAliases(part)) {
-      meshOwnership.add(alias);
-    }
-  }
-  const degradedSegments = (manifest?.object_segments ?? []).flatMap(
-    (segment, index) =>
-      manifestCarrierOwnershipAliases(segment).some((alias) =>
-        meshOwnership.has(alias),
-      )
-        ? []
-        : [
-            {
-              ...segment,
-              id: `segment:${segment.object_id}:${index}`,
-              label: segment.object_id,
-              role: "magnetic" as const,
-            },
-          ],
+  return normalizeManifestRenderableCarriers(manifest).filter(
+    (carrier) => !isUniverseOuterBoundaryCarrier(carrier),
   );
-  return [...meshParts, ...degradedSegments];
 }
 
 export function isUniverseOuterBoundaryCarrier(

@@ -69,9 +69,9 @@ export function ObjectRegionInlineDiagnostics({
 
 export function ObjectRegionMetadataSection({ model }: { model: ObjectRegionPanelModel }) {
   return (
-    <InspectorSection value="regions" title="Object Regions" collapsible defaultCollapsed={false}>
-      <FieldRow label="Object ID" value={model.objectId} />
-      <FieldRow label="Region ID" value={model.regionId} />
+    <InspectorSection value="regions" title="Authored Subregion" collapsible defaultCollapsed={false}>
+      <FieldRow label="Owner object ID" value={model.objectId} />
+      <FieldRow label="Subregion ID" value={model.regionId} />
       <FieldRow label="Source" value={model.source} />
       <FieldRow label="Material ref" value={model.materialRef} />
       <FieldRow label="Magnetization ref" value={model.magnetizationRef} />

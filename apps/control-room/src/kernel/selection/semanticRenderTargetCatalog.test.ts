@@ -5,6 +5,7 @@ import {
   resolveSemanticTargetForMeshPart,
   semanticRenderTargetCarriersFromManifest,
 } from "./semanticRenderTargetCatalog";
+import { isVisualizationAirboxIdentity } from "./selectionTypes";
 
 describe("semantic render target catalog", () => {
   it("never addresses the Universe outer boundary as a render target", () => {
@@ -159,6 +160,13 @@ describe("semantic render target catalog", () => {
 });
 
 describe("semanticRenderTargetCarriersFromManifest", () => {
+  it("recognizes reserved Airbox ownership fields without capturing a plain air name", () => {
+    expect(isVisualizationAirboxIdentity({ object_id: "__air__" })).toBe(true);
+    expect(isVisualizationAirboxIdentity({ geometry_id: "__air___geom" })).toBe(true);
+    expect(isVisualizationAirboxIdentity({ id: "air" })).toBe(false);
+    expect(isVisualizationAirboxIdentity({ id: "air", role: "air" })).toBe(true);
+  });
+
   it("keeps the realized outer boundary out of orphan render targets", () => {
     const carriers = semanticRenderTargetCarriersFromManifest({
       mesh_parts: [
@@ -253,6 +261,81 @@ describe("semanticRenderTargetCarriersFromManifest", () => {
     });
 
     expect(carriers.map((carrier) => carrier.id)).toEqual(["part:film"]);
+  });
+
+  it("collapses the production Airbox mesh part and object segment into one semantic carrier", () => {
+    const carriers = semanticRenderTargetCarriersFromManifest({
+      mesh_parts: [
+        {
+          boundary_face_count: 60,
+          boundary_face_start: 0,
+          element_count: 175,
+          element_start: 0,
+          geometry_id: null,
+          id: "part:__air__",
+          label: "Airbox",
+          node_count: 32,
+          node_start: 0,
+          object_id: null,
+          role: "air",
+        },
+      ],
+      object_segments: [
+        {
+          boundary_face_count: 60,
+          boundary_face_start: 0,
+          element_count: 175,
+          element_start: 0,
+          geometry_id: null,
+          node_count: 32,
+          node_start: 0,
+          object_id: "__air__",
+        },
+      ],
+    });
+    const catalog = buildSemanticRenderTargetCatalog({
+      parts: carriers,
+      sceneObjectIds: new Set(["__air__"]),
+    });
+
+    expect(carriers.map((carrier) => carrier.id)).toEqual(["part:__air__"]);
+    expect(catalog.byTargetId.get("airbox")?.carrierIds).toEqual([
+      "part:__air__",
+    ]);
+    expect(catalog.entries.filter((entry) => entry.targetKind === "part")).toEqual([]);
+  });
+
+  it("keeps a segment-only Airbox out of unassigned semantic targets", () => {
+    const carriers = semanticRenderTargetCarriersFromManifest({
+      mesh_parts: [],
+      object_segments: [
+        {
+          boundary_face_count: 60,
+          boundary_face_start: 0,
+          element_count: 175,
+          element_start: 0,
+          geometry_id: null,
+          node_count: 32,
+          node_start: 0,
+          object_id: "__air__",
+        },
+      ],
+    });
+    const catalog = buildSemanticRenderTargetCatalog({
+      parts: carriers,
+      sceneObjectIds: new Set(),
+    });
+
+    expect(carriers).toMatchObject([
+      {
+        carrierKind: "object-segment",
+        fieldCapable: false,
+        label: "Airbox",
+        role: "air",
+      },
+    ]);
+    expect(catalog.byTargetId.get("airbox")?.carrierIds).toHaveLength(1);
+    expect(catalog.entries.filter((entry) => entry.targetKind === "part")).toEqual([]);
   });
 
   it("rejects blank and duplicate mesh carrier ids before Explorer addressing", () => {
