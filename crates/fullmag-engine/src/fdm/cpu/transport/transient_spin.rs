@@ -127,8 +127,18 @@ impl<'a> TransientSpinIntegrator<'a> {
     pub fn validate_state(&self, state: &TransientSpinState) -> Result<()> {
         let count = self.problem.grid().cell_count();
         validate_vectors(&state.spin_potential_v, count, "spin_potential_v")?;
+        validate_inactive_zero(
+            &state.spin_potential_v,
+            self.problem.active_cells(),
+            "spin_potential_v",
+        )?;
         if let Some(previous) = &state.previous_spin_potential_v {
             validate_vectors(previous, count, "previous_spin_potential_v")?;
+            validate_inactive_zero(
+                previous,
+                self.problem.active_cells(),
+                "previous_spin_potential_v",
+            )?;
             if state.previous_dt_s.is_none() {
                 return Err(EngineError::new("BDF2 history requires previous_dt_s"));
             }
@@ -158,6 +168,7 @@ impl<'a> TransientSpinIntegrator<'a> {
     ) -> Result<TransientStepAttempt> {
         self.validate_state(state)?;
         validate_dt(dt_s)?;
+        let (next_time_s, next_revision) = next_state_metadata(state, dt_s)?;
         let (full, full_iterations) = self.ars232_step(&state.spin_potential_v, dt_s)?;
         let (half, first_half_iterations) =
             self.ars232_step(&state.spin_potential_v, 0.5 * dt_s)?;
@@ -168,9 +179,9 @@ impl<'a> TransientSpinIntegrator<'a> {
         let candidate = accepted.then(|| TransientSpinState {
             spin_potential_v: two_half,
             previous_spin_potential_v: Some(state.spin_potential_v.clone()),
-            time_s: state.time_s + dt_s,
+            time_s: next_time_s,
             previous_dt_s: Some(dt_s),
-            state_revision: state.state_revision.saturating_add(1),
+            state_revision: next_revision,
         });
         Ok(TransientStepAttempt {
             candidate,
@@ -195,6 +206,7 @@ impl<'a> TransientSpinIntegrator<'a> {
     ) -> Result<(TransientSpinState, usize)> {
         self.validate_state(state)?;
         validate_dt(dt_s)?;
+        let (next_time_s, next_revision) = next_state_metadata(state, dt_s)?;
         let (next, iterations) = match (
             state.previous_spin_potential_v.as_ref(),
             state.previous_dt_s,
@@ -230,9 +242,9 @@ impl<'a> TransientSpinIntegrator<'a> {
             TransientSpinState {
                 spin_potential_v: next,
                 previous_spin_potential_v: Some(state.spin_potential_v.clone()),
-                time_s: state.time_s + dt_s,
+                time_s: next_time_s,
                 previous_dt_s: Some(dt_s),
-                state_revision: state.state_revision.saturating_add(1),
+                state_revision: next_revision,
             },
             iterations,
         ))
@@ -337,6 +349,31 @@ fn validate_dt(dt_s: f64) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_inactive_zero(values: &[Vector3], active_cells: &[bool], name: &str) -> Result<()> {
+    if values
+        .iter()
+        .zip(active_cells)
+        .any(|(value, active)| !*active && *value != [0.0; 3])
+    {
+        return Err(EngineError::new(format!(
+            "{name} must be exactly zero outside the active spin domain"
+        )));
+    }
+    Ok(())
+}
+
+fn next_state_metadata(state: &TransientSpinState, dt_s: f64) -> Result<(f64, u64)> {
+    let time_s = state.time_s + dt_s;
+    if !time_s.is_finite() {
+        return Err(EngineError::new("transient spin time overflow"));
+    }
+    let revision = state
+        .state_revision
+        .checked_add(1)
+        .ok_or_else(|| EngineError::new("transient spin state revision overflow"))?;
+    Ok((time_s, revision))
 }
 
 fn mass_scale(values: &[Vector3], capacitance: &[f64], factor: f64) -> Vec<Vector3> {
@@ -651,5 +688,18 @@ mod tests {
             second.previous_spin_potential_v,
             Some(first.spin_potential_v)
         );
+    }
+
+    #[test]
+    fn state_revision_overflow_and_inactive_payload_fail_before_solve() {
+        let problem = decay_problem(1.0, 4.0);
+        let integrator = integrator(&problem, 1.0e-12);
+        let mut state = initial_state();
+        state.state_revision = u64::MAX;
+        assert!(integrator
+            .try_adaptive_step(&state, 0.1)
+            .unwrap_err()
+            .to_string()
+            .contains("revision overflow"));
     }
 }
