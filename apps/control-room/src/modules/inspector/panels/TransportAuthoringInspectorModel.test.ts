@@ -23,10 +23,11 @@ describe("transport authoring drafts", () => {
       materials: [{ region: { object_id: "stack", region_id: "normal" }, material: { sigma_Spm: 5.8e7 } }],
       boundaries: [{ id: "left", kind: "voltage_electrode" as const, potential_V: 0.1, surfaces: [{ object_id: "stack", surface_id: "x_min", orientation: [-1, 0, 0] }] }],
       gauge: "dirichlet_reference" as const,
-      solver: { engine: "cg", linear: { relative_tolerance: 1e-10, absolute_tolerance: 1e-14, max_iterations: 123 }, operator_version: "charge.v1", physical_residual_version: "balance.v1" },
+      solver: { engine: "block_gmres", linear: { relative_tolerance: 1e-10, absolute_tolerance: 1e-14, max_iterations: 123 }, operator_version: "fdm_coupled_charge_spin_fv_block_gmres.v1", physical_residual_version: "transport_balance_integrated_l2.v1" },
       solve_region: "legacy",
       conductivity_s_per_m: 12,
     };
+    expect(isKnownCurrentTransport(resource)).toBe(true);
     expect(buildCurrentTransport(currentTransportDraft(resource))).toEqual(resource);
   });
 
@@ -40,10 +41,19 @@ describe("transport authoring drafts", () => {
       materials: [{ region: { object_id: "stack", region_id: "normal" }, material: { sigma_s_Spm: 2, polarization_p: 0.4, theta_sh: 0.1, lambda_sf_m: 1e-9, lambda_j_m: 2e-9, lambda_phi_m: "disabled" as const } }],
       interfaces: [{ id: "nf", kind: "transparent" as const, side_a: { object_id: "stack", region_id: "normal" }, side_b: { object_id: "stack", region_id: "free" }, normal_a_to_b: [1, 0, 0] }],
       boundaries: [{ id: "sink", kind: "spin_sink" as const, surfaces: [{ object_id: "stack", surface_id: "x_max", orientation: [1, 0, 0] }] }],
-      solver: { engine: "gmres", linear: { relative_tolerance: 1e-9, absolute_tolerance: 1e-13, max_iterations: 321 }, physical_residual_version: "spin.balance.v1", operator_version: "spin.v1", default_external_boundary: "spin_insulating" },
+      solver: { engine: "gmres", linear: { relative_tolerance: 1e-9, absolute_tolerance: 1e-13, max_iterations: 321 }, physical_residual_version: "transport_balance_integrated_l2.v1", operator_version: "fv_spin_upwind_v1", default_external_boundary: "spin_insulating" },
       requested_execution: { discretization: "fem" as const, device: "cpu" as const, precision: "double" as const, execution_mode: "extended" as const },
-      constitutive_version: "constitutive.v1",
+      constitutive_version: "transport_constitutive.one_way.fullmag.v1",
     };
+    expect(isKnownSpinTransport(resource)).toBe(true);
+    expect(isKnownSpinTransport({
+      ...resource,
+      constitutive_version: "transport_constitutive.reciprocal.fullmag.v1",
+      solver: {
+        ...resource.solver,
+        operator_version: "fdm_coupled_charge_spin_fv_block_gmres.v1",
+      },
+    })).toBe(true);
     expect(buildSpinTransport(spinTransportDraft(resource))).toEqual(resource);
   });
 
@@ -96,6 +106,60 @@ describe("transport authoring drafts", () => {
     expect(isKnownCurrentTransport(unknown)).toBe(false);
     expect(isKnownSpinTransport(unknown)).toBe(false);
     expect(JSON.parse(readonlyTransportPayload(unknown))).toEqual(unknown);
+  });
+
+  it("fails closed for a future current model that otherwise matches the known shape", () => {
+    const future = {
+      coupling: "one_way",
+      current_density: [1, 2, 3],
+      future_solver_metadata: { exact: ["keep", 7] },
+      kind: "current_transport",
+      model: "magnetoresistive_poisson.v2",
+      name: "future-charge",
+    };
+
+    expect(isKnownCurrentTransport(future)).toBe(false);
+    expect(JSON.parse(readonlyTransportPayload(future))).toEqual(future);
+  });
+
+  it("fails closed for future constitutive and operator versions in a known spin schema", () => {
+    const future = {
+      boundaries: [],
+      constitutive_version: "transport_constitutive.future.fullmag.v2",
+      current_source_id: "charge",
+      domain: [],
+      id: "future-spin",
+      interfaces: [],
+      materials: [],
+      mode: "steady",
+      requested_execution: {
+        device: "cpu",
+        discretization: "fdm",
+        execution_mode: "strict",
+        precision: "double",
+      },
+      schema_version: "spin_transport.v1",
+      solver: {
+        default_external_boundary: "spin_insulating",
+        engine: "gmres",
+        linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 },
+        operator_version: "v2",
+        physical_residual_version: "v2",
+      },
+    };
+
+    expect(isKnownSpinTransport(future)).toBe(false);
+    expect(JSON.parse(readonlyTransportPayload(future))).toEqual(future);
+  });
+
+  it("fails closed when generated required transport fields are incomplete", () => {
+    expect(isKnownCurrentTransport({ kind: "current_transport", model: "prescribed_density" })).toBe(false);
+    expect(isKnownSpinTransport({
+      current_source_id: "charge",
+      id: "partial",
+      requested_execution: {},
+      schema_version: "spin_transport.v1",
+    })).toBe(false);
   });
 
   it("resolves a stable spin transport id before a stale list index", () => {

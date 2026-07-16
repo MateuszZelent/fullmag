@@ -152,9 +152,9 @@ export function TransportAuthoringInspector({
           <SpinFields draft={draft as SpinTransportDraft} patch={patch} />
         )}
         {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
-        <Button disabled={!known || pending || active.status !== "ready"} onClick={() => void save()}>
+        {known ? <Button disabled={pending || active.status !== "ready"} onClick={() => void save()}>
           {pending ? "Committing…" : selected ? "Replace" : "Create"}
-        </Button>
+        </Button> : null}
         {selected && known ? <Button disabled={pending} variant="danger" onClick={() => void remove()}>Delete</Button> : null}
       </InspectorSection>
     </div>
