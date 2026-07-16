@@ -520,13 +520,19 @@ Typed `ResolvedCurrentTransportPlanIR` and `OerstedSourceIR`/
 `ResolvedOerstedPlanIR` preserve source identity, signed convention, envelope,
 electrodes/BC, closure, method/operator versions, validity assessment,
 refresh/coupling, energy semantics, mesh/source revisions, and requested lane.
+Authored `OerstedSourceIR` carries `current_source_id` plus geometry/meshing
+intent only; it cannot carry a current-view reference, artifact revision,
+face-record count or digest. The resolved plan obtains
+`ConservativeCurrentViewRef` only from the executed named source revision and
+its verified data-plane artifact.
 Legacy flat fields are accepted only by a versioned migrator that cannot drop
 parameters. Normalized four-path authoring round-trip is field-for-field equal.
 `ResolvedOerstedPlanIR` additionally pins the conservative-current-view
 operator, source/mesh/topology/closure revisions and digests, observation and
 projection spaces, boundary/gauge variant, quadrature profile or block-solver
-profile, and expected work-snapshot semantics. Raw RT0 degree arrays remain a
-runtime data-plane payload rather than JSON `ProblemIR`.
+profile, and expected work-snapshot semantics. Canonical face-flux record
+streams remain runtime data-plane payloads rather than JSON `ProblemIR` and
+are independent of MFEM numbering/storage.
 
 ### 4.3 Planner and capability matrix
 

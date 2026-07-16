@@ -424,10 +424,10 @@ velocity is outflow at that face. Ambiguous inflow fails planning.
 OerstedSource = {
   schema_version:"oersted_source.v1", id, current_source_id,
   circuit_closure:
-    | {kind:"closed_geometry", volume_mesh_ref, current_view_ref}
+    | {kind:"closed_geometry", geometry_ref, volume_mesh_intent}
     | {kind:"external_lead_extension", version,
        closure_current_operator:"fem_closed_current_extension.v1",
-       volume_mesh_ref, parameters}
+       geometry_ref, volume_mesh_intent, parameters}
     | {kind:"analytic_return_path", version, parameters},
   method:"auto"|"analytic_cylinder"|"fdm_fft_cell_integrated"
          |"direct_biot_savart"|"fem_vector_potential",
@@ -630,13 +630,22 @@ ConservativeCurrentViewRef = {
 }
 ```
 
-The referenced payload is an oriented RT0 true-dof array, not the nodal
-`J_charge` visualization buffer. The transport owner creates it by a
-conservative reconstruction and certifies element divergence, internal-face
-normal-flux cancellation, electrode balance and completed circuit closure.
+The referenced data-plane payload is a canonical stream of globally oriented
+face-flux records `(face_key, flux_A)`, independent of MFEM numbering/storage
+and distinct from the nodal `J_charge` visualization buffer. The transport
+owner creates it by a conservative reconstruction and certifies element
+divergence, internal-face normal-flux cancellation, electrode balance and
+completed circuit closure.
 Any stale revision, digest mismatch, unpaired terminal flux or missing
 certificate invalidates the Oersted plan/cache. OE-F1 and OE-F2 consume the
 same view and cannot independently evaluate `-sigma grad V`.
+
+`OerstedSource` authoring contains only geometry/meshing intent. It MUST NOT
+contain `ConservativeCurrentViewRef`, artifact paths, record counts or digests.
+Normalization resolves `current_source_id`; after the exact current-source
+revision executes, the planner/runner binds the resulting immutable
+`ConservativeCurrentViewRef` and artifact revision on the resolved/data-plane
+side. An authored attempt to inject that resolved reference fails validation.
 
 The artifact digest uses `fem_rt0_canonical_face_digest.v1`, not MFEM
 true-dof order. Each record is `(canonical global face identity, flux_A)`.

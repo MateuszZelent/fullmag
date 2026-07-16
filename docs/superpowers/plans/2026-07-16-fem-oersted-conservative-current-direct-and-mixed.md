@@ -56,9 +56,43 @@
 | `apps/control-room/src/kernel/api/generated/*`, `ControlRoomApi.ts`, and `kernel/resources/spinAuthoringResources.ts` | generated transport, typed facade and resource hooks |
 | `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspectorModel.ts` and `SpinAuthoringInspector.tsx` | current-view/Oersted authoring, capability and inspector projection through typed API |
 | `backends/fem/tests/*oersted*` | native independent physics and numerical contracts |
-| `justfile` | one managed CPU-double OE-F1/OE-F2 verification recipe |
+| `justfile` | managed CPU-only steady-transport, time-domain, OE-F1 and OE-F2 verification recipes plus configuration audit |
 
 ---
+
+### Task 0: Prerequisite managed CPU-only verification lane
+
+This task is a hard prerequisite for Tasks 1--7. Existing native steady-
+transport and time-domain recipes are not admissible because they select a
+GPU-backed build/profile. Do not invoke them anywhere in this plan.
+
+**Files:**
+- Modify: `justfile`
+- Modify: the managed FEM CPU container/build configuration selected by `justfile`
+- Test: the recipe configuration audit added beside the managed FEM recipes
+
+- [ ] Add `verify-fem-steady-transport-cpu-only-contract` and
+  `verify-fem-time-domain-cpu-only-contract`, plus the OE-F1/OE-F2 CPU recipes
+  named below. Every recipe must create or select a managed runtime whose
+  configure evidence records `CUDA=OFF` and `FEM_GPU=OFF`, links only the
+  prebuilt CPU MFEM/hypre library, enables no Rust GPU feature, and selects no
+  GPU image, compose profile or device runtime.
+- [ ] Make each recipe fail before build if its CMake cache, Rust feature list,
+  container image/profile or linked FEM library is not demonstrably CPU-only.
+  Persist this configuration audit with the test result.
+- [ ] Add this documentation guard to CI/review (the split regexes avoid
+  matching the guard itself):
+
+```bash
+plan=docs/superpowers/plans/2026-07-16-fem-oersted-conservative-current-direct-and-mixed.md
+if rg -n 'verify-fem-(steady-transport|time-domain)-native-contract|fem[-]gpu|(?i:gpu[-_ ]profile)' "$plan"; then
+  exit 1
+fi
+```
+
+- [ ] Run each new CPU-only recipe once and retain configure output proving the
+  above invariants. No later task may substitute a legacy/native recipe whose
+  transitive build configuration is GPU-backed.
 
 ### Task 1: OE-T0 conservative RT0 current-view contract
 
@@ -149,7 +183,7 @@ Keep `charge_current_density()` as the current nodal visualization quantity. Add
 
 ```bash
 just verify-fem-oersted-oef1-cpu-contract
-just verify-fem-steady-transport-native-contract
+just verify-fem-steady-transport-cpu-only-contract
 ```
 
 Expected: all OE-T0 cases pass; existing M1 steady-transport ABI/physics gates remain green.
@@ -255,7 +289,7 @@ just verify-fem-oersted-oef1-cpu-contract
 just verify-fem-oersted-oet0-cpu-contract
 ```
 
-Both commands are managed CPU-only recipes and link the Rust ABI tests against the prebuilt CPU-only FEM library; neither configures CUDA nor enables a GPU feature. Review must confirm raw arrays are data-plane artifacts and JSON never embeds the heavy current field.
+Both commands are managed CPU-only recipes and link the Rust ABI tests against the prebuilt CPU-only FEM library; neither configures CUDA nor enables a GPU feature. Review must confirm canonical face-flux record streams are data-plane artifacts and JSON never embeds the heavy current field.
 
 - [ ] **Step 6: Commit OE-T0 bridge**
 
@@ -317,7 +351,7 @@ Reject requests above an explicit source-target pair budget before allocation. R
 
 ```bash
 just verify-fem-oersted-oef1-cpu-contract
-just verify-fem-time-domain-native-contract
+just verify-fem-time-domain-cpu-only-contract
 ```
 
 Expected: direct tests, existing Oersted observable tests, and the full native time-domain contract pass in the managed container.
@@ -373,7 +407,7 @@ git commit -m "feat(fem): add direct tetrahedral Oersted oracle"
 
 - [ ] **Step 1: Write failing four-path serializer/planner tests**
 
-Test the same exact closure and direct-policy fields through four independent routes: Python -> canonical scene, API payload -> canonical scene, UI edit -> API payload -> canonical scene, and canonical script export -> parse -> canonical scene. Assert lossless preservation of `current_source`, `closure.kind`, volumetric geometry/lead references, `closure_operator_version`, additive analytic-return identity, method, quadrature profile, tolerances, pair budget, projection version and work semantics. Planner accepts only FEM/CPU/double/strict, globally closed tetrahedral source, complete OE-T0 ref, finite tolerances and pair budget. It rejects any GPU device, any single precision, missing closure, nodal-only current, stale digest, PBC, pair-budget excess and an attempt to reuse vector-potential Krylov parameters.
+Test the same exact closure and direct-policy fields through four independent routes: Python -> canonical scene, API payload -> canonical scene, UI edit -> API payload -> canonical scene, and canonical script export -> parse -> canonical scene. Assert lossless preservation of `current_source_id`, `closure.kind`, authored `geometry_ref`/`volume_mesh_intent`, `closure_operator_version`, additive analytic-return identity, method, quadrature profile, tolerances, pair budget, projection version and work semantics. Every authoring route must reject `current_view_ref`, artifact paths, record counts and digests as resolved/data-plane injection. Planner accepts only FEM/CPU/double/strict, globally closed tetrahedral source, complete OE-T0 ref, finite tolerances and pair budget. It rejects any GPU device, any single precision, missing closure, nodal-only current, stale digest, PBC, pair-budget excess and an attempt to reuse vector-potential Krylov parameters.
 
 The Rust scene owner is `crates/fullmag-authoring`, not `ProblemIR`: add tagged schemas in `spin_transport.rs`, fail-closed rules in `validation.rs`, API conversion in `adapters.rs`, builder preservation in `builder.rs`, and focused round-trip tests. Python must propagate the same fields through `model/energy.py`, `model/problem.py`, `runtime/scene_document.py`, `runtime/script_builder.py`, and `world.py`. The API must expose them through `schemas/authoring.rs`, `router_v2/handlers/model/authoring.rs`, and `openapi_v2.rs`; regenerate the checked-in client before facade/resource tests.
 
@@ -395,6 +429,11 @@ ResolvedFemDirectTetraOerstedIR = {
 ```
 
 Add a separate ABI request/result family; do not append fields to the wide time-domain plan or route numerical work through `dispatch.rs`.
+
+Resolution looks up `current_source_id`, pins the executed source revision and
+artifact revision, validates its canonical face-flux manifest, and only then
+places `ConservativeCurrentViewRef` in the resolved plan. No authoring adapter
+may synthesize, accept or round-trip that resolved reference.
 
 The dedicated C++ adapter in `oersted_c_api.cpp` validates every bounded descriptor and deep-copies it into native owners before OE-F1 construction. Add C ABI request/result tamper tests for source identity, component/FE tags, certificate bytes, lengths and lifetime; a Rust layout test alone is insufficient.
 
@@ -468,7 +507,7 @@ Compute compatible RT0 `B_oe=curl A` with the discrete `CurlInterpolator`, divid
 ```bash
 just verify-fem-oersted-oef2-cpu-contract
 just verify-fem-oersted-oef1-cpu-contract
-just verify-fem-time-domain-native-contract
+just verify-fem-time-domain-cpu-only-contract
 ```
 
 Require at least three geometrically similar airboxes, monotone/asymptotic convergence in the fixed magnetic target domain, and OE-F2-vs-OE-F1 field/energy convergence under mesh refinement. Store numerical tolerances in the fixture, not prose-only assertions.
@@ -519,7 +558,7 @@ Physics review checks strong/weak form, exact spaces, BC, topology, SI/sign/ener
 
 - [ ] **Step 1: Write failing four-path round-trip and capability tests**
 
-Verify Python -> scene, API -> scene, UI -> API -> scene, and canonical script export -> parse preserve `boundary_gauge_variant`, Krylov policy, harmonic policy, current source, closure kind, volumetric geometry/lead reference and `fem_closed_current_extension.v1` byte-for-byte. Empty/default selection normalizes to `tangential_A_h1_0.v1`; explicitly authored zero-mean variant rejects as unavailable rather than silently running baseline. `analytic_return_path` rejects for OE-F2 even if OE-F1 accepts it as the separately tagged additive `oersted_analytic_return_additive.v1` realization. Any GPU or single-precision request rejects before native construction.
+Verify Python -> scene, API -> scene, UI -> API -> scene, and canonical script export -> parse preserve `boundary_gauge_variant`, Krylov policy, harmonic policy, `current_source_id`, closure kind, authored `geometry_ref`/`volume_mesh_intent` and `fem_closed_current_extension.v1` byte-for-byte. All four reject an authored `current_view_ref`, artifact revision, face-record count or digest. Separate planner/runner tests prove that the resolved plan binds `ConservativeCurrentViewRef` only from the executed `current_source_id` revision and its verified artifact. Empty/default selection normalizes to `tangential_A_h1_0.v1`; explicitly authored zero-mean variant rejects as unavailable rather than silently running baseline. `analytic_return_path` rejects for OE-F2 even if OE-F1 accepts it as the separately tagged additive `oersted_analytic_return_additive.v1` realization. Any GPU or single-precision request rejects before native construction.
 
 - [ ] **Step 2: Wire typed plans and ABI without generic ownership**
 
@@ -563,15 +602,15 @@ One reviewer traces a single source revision from Python/UI through IR, plan, AB
 
 - [ ] **Step 1: Freeze managed verification recipes**
 
-Add `just verify-fem-oersted-oef1-cpu-contract` and `just verify-fem-oersted-oef2-cpu-contract` that configure/build/run the exact native tests and Rust ABI checks inside the managed CPU-only FEM container against its prebuilt CPU library. Add one public end-to-end recipe that runs canonical Python authoring, planner, native CPU-double execution, artifact validation and quantity readback.
+Confirm the four Task 0 CPU-only recipes retain their configuration assertions, then freeze `just verify-fem-oersted-oef1-cpu-contract` and `just verify-fem-oersted-oef2-cpu-contract` around the exact native tests and Rust ABI checks inside the managed CPU-only FEM container against its prebuilt CPU library. Add one public end-to-end recipe that runs canonical Python authoring, planner, native CPU-double execution, artifact validation and quantity readback.
 
 - [ ] **Step 2: Run complete evidence matrix**
 
 ```bash
-just verify-fem-steady-transport-native-contract
+just verify-fem-steady-transport-cpu-only-contract
 just verify-fem-oersted-oef1-cpu-contract
 just verify-fem-oersted-oef2-cpu-contract
-just verify-fem-time-domain-native-contract
+just verify-fem-time-domain-cpu-only-contract
 just check
 pnpm --dir apps/control-room typecheck
 pnpm --dir apps/control-room lint -- --max-warnings=0
