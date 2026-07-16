@@ -13,6 +13,7 @@ pub const FULLMAG_FEM_ERR_INVALID: i32 = -1;
 pub const FULLMAG_FEM_ERR_UNAVAILABLE: i32 = -2;
 pub const FULLMAG_FEM_ERR_INTERNAL: i32 = -3;
 pub const FULLMAG_FEM_ERR_INTERRUPTED: i32 = -4;
+pub const FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION: u32 = 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -315,6 +316,98 @@ pub struct fullmag_fem_plan_desc {
     pub stt_active_node_mask_len: u64,
     pub stt_active_element_mask: *const u8,
     pub stt_active_element_mask_len: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_steady_transport_execution_lane {
+    FULLMAG_FEM_STEADY_TRANSPORT_CPU_DOUBLE = 1,
+    FULLMAG_FEM_STEADY_TRANSPORT_GPU_DOUBLE = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_steady_transport_interface_model {
+    FULLMAG_FEM_STEADY_TRANSPORT_TRANSPARENT_CONFORMING_H1 = 1,
+    FULLMAG_FEM_STEADY_TRANSPORT_MIXING_BROKEN_H1 = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum fullmag_fem_steady_transport_charge_gauge {
+    FULLMAG_FEM_STEADY_TRANSPORT_BOUNDARY_REFERENCE = 1,
+    FULLMAG_FEM_STEADY_TRANSPORT_ZERO_MEAN_POTENTIAL = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_request_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub execution_lane: fullmag_fem_steady_transport_execution_lane,
+    pub interface_model: fullmag_fem_steady_transport_interface_model,
+    pub charge_gauge: fullmag_fem_steady_transport_charge_gauge,
+    pub constitutive_version: *const c_char,
+    pub operator_version: *const c_char,
+    pub physical_residual_version: *const c_char,
+    pub mesh: fullmag_fem_mesh_desc,
+    pub charge_conductivity_spm_per_element: *const f64,
+    pub charge_conductivity_spm_per_element_len: u64,
+    pub magnetization_xyz: *const f64,
+    pub magnetization_xyz_len: u64,
+    pub sigma_s_spm: f64,
+    pub polarization_p: f64,
+    pub theta_sh: f64,
+    pub lambda_sf_m: f64,
+    pub has_lambda_j: i32,
+    pub lambda_j_m: f64,
+    pub has_lambda_phi: i32,
+    pub lambda_phi_m: f64,
+    pub gamma_e_per_ts: f64,
+    pub saturation_magnetization_apm: f64,
+    pub relative_tolerance: f64,
+    pub absolute_tolerance: f64,
+    pub maximum_iterations: u32,
+    pub charge_dirichlet_boundary_attributes: *const u32,
+    pub charge_dirichlet_values_v: *const f64,
+    pub charge_dirichlet_count: u64,
+    pub spin_dirichlet_boundary_attributes: *const u32,
+    pub spin_dirichlet_values_v: *const f64,
+    pub spin_dirichlet_count: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fem_steady_transport_result_v1 {
+    pub abi_version: u32,
+    pub reserved_flags: u32,
+    pub struct_size: u64,
+    pub electric_potential_v: *mut f64,
+    pub electric_potential_v_len: u64,
+    pub charge_current_density_xyz_apm2: *mut f64,
+    pub charge_current_density_xyz_apm2_len: u64,
+    pub spin_potential_xyz_v: *mut f64,
+    pub spin_potential_xyz_v_len: u64,
+    pub spin_current_tensor_row_major_qia_apm2: *mut f64,
+    pub spin_current_tensor_row_major_qia_apm2_len: u64,
+    pub torque_xyz_per_s: *mut f64,
+    pub torque_xyz_len: u64,
+    pub charge_converged: i32,
+    pub charge_iterations: u32,
+    pub charge_relative_residual: f64,
+    pub net_boundary_current_a: f64,
+    pub current_density_volume_average_apm2: [f64; 3],
+    pub spin_converged: i32,
+    pub spin_iterations: u32,
+    pub spin_relative_residual: f64,
+    pub boundary_spin_flux_a: [f64; 3],
+    pub reaction_integral_a: [f64; 3],
+    pub angular_momentum_balance_apm2: [f64; 3],
+    pub torque_volume_average_per_s: [f64; 3],
+    pub torque_l2_per_s: f64,
+    pub error_message: [c_char; 256],
+    pub diagnostics_json: [c_char; 1024],
 }
 
 #[repr(C)]
@@ -1048,6 +1141,10 @@ pub struct fullmag_fem_snapshot_desc {
 
 extern "C" {
     pub fn fullmag_fem_is_available() -> i32;
+    pub fn fullmag_fem_solve_steady_transport_v1(
+        request: *const fullmag_fem_steady_transport_request_v1,
+        result: *mut fullmag_fem_steady_transport_result_v1,
+    ) -> i32;
     pub fn fullmag_fem_get_availability_info(out_info: *mut fullmag_fem_availability_info) -> i32;
     pub fn fullmag_fem_get_frequency_domain_availability_info(
         request: *const fullmag_fem_frequency_domain_availability_request,
@@ -1347,6 +1444,32 @@ mod tests {
         assert!(
             std::mem::offset_of!(fullmag_fem_plan_desc, stt_active_element_mask_len)
                 > std::mem::offset_of!(fullmag_fem_plan_desc, stt_formula_version)
+        );
+    }
+
+    #[test]
+    fn steady_transport_v1_request_and_result_are_self_describing_and_append_only() {
+        assert_eq!(FULLMAG_FEM_STEADY_TRANSPORT_ABI_VERSION, 1);
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_steady_transport_request_v1, abi_version),
+            0
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_steady_transport_request_v1, struct_size)
+                > std::mem::offset_of!(fullmag_fem_steady_transport_request_v1, abi_version)
+        );
+        assert!(
+            std::mem::offset_of!(
+                fullmag_fem_steady_transport_request_v1,
+                spin_dirichlet_values_v
+            ) > std::mem::offset_of!(fullmag_fem_steady_transport_request_v1, mesh)
+        );
+        assert!(
+            std::mem::offset_of!(fullmag_fem_steady_transport_result_v1, torque_xyz_len)
+                > std::mem::offset_of!(
+                    fullmag_fem_steady_transport_result_v1,
+                    electric_potential_v
+                )
         );
     }
 

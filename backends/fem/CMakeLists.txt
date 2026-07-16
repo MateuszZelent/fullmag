@@ -22,6 +22,7 @@ set(FEM_SOURCES
     core/fem_mesh.cpp
     core/fem_plan_fields.cpp
     core/fem_state.cpp
+    cpu/mfem/transport/steady_transport_c_api.cpp
     gpu/cuda/exchange/exchange_plan.cpp
     gpu/cuda/exchange/exchange_upload.cpp
     gpu/cuda/fields/field_buffer_memory.cpp
@@ -369,6 +370,16 @@ if(FULLMAG_USE_MFEM_STACK)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     add_test(NAME fem_steady_transport_contract COMMAND fem_steady_transport_contract)
+
+    add_executable(
+        fem_steady_transport_abi_contract
+        tests/steady_transport_abi_contract.cpp
+    )
+    target_link_libraries(fem_steady_transport_abi_contract PRIVATE fullmag_fem)
+    target_include_directories(fem_steady_transport_abi_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    add_test(NAME fem_steady_transport_abi_contract COMMAND fem_steady_transport_abi_contract)
 endif()
 
 add_executable(fem_gpu_state_info tests/gpu_state_info.cpp)

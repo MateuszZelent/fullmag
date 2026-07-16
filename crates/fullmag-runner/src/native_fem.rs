@@ -15,6 +15,8 @@ mod frequency_domain;
 mod plan;
 #[cfg(feature = "fem-gpu")]
 mod runtime_info;
+#[cfg(feature = "fem-gpu")]
+mod steady_transport;
 #[allow(unused_imports)]
 pub(crate) use availability::{
     is_cpu_available, is_gpu_available, native_availability, native_frequency_domain_availability,
@@ -53,6 +55,13 @@ pub(crate) use plan::{
 pub(crate) use runtime_info::{
     stage_completion_from_ffi, DeviceInfo, NativeFemDataResidency, NativeFemGpuRkPlanInfo,
     NativeFemGpuStateInfo,
+};
+#[allow(unused_imports)]
+#[cfg(feature = "fem-gpu")]
+pub(crate) use steady_transport::{
+    solve_native_fem_steady_transport, NativeFemSteadyTransportExecution,
+    NativeFemSteadyTransportGauge, NativeFemSteadyTransportInterface,
+    NativeFemSteadyTransportRequest, NativeFemSteadyTransportResult,
 };
 
 #[cfg(feature = "fem-gpu")]

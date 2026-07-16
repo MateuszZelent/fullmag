@@ -192,14 +192,18 @@ public:
         : mesh(mesh), conductivity(charge_conductivity), magnetization(magnetization),
           parameters(parameters), collection(1, mesh.Dimension()),
           scalar_space(&mesh, &collection), vector_space(&mesh, &collection, 3, mfem::Ordering::byVDIM),
-          potential(&scalar_space), spin(&vector_space), torque(&vector_space)
+          tensor_space(&mesh, &collection, 9, mfem::Ordering::byVDIM),
+          potential(&scalar_space), current(&vector_space), spin(&vector_space),
+          spin_current(&tensor_space), torque(&vector_space)
     {
         validate_parameters(parameters);
         if (mesh.Dimension() != 3) {
             throw std::invalid_argument("the M1.3 FEM oracle currently requires a three-dimensional mesh");
         }
         potential = 0.0;
+        current = 0.0;
         spin = 0.0;
+        spin_current = 0.0;
         torque = 0.0;
         validate_material_coefficients();
     }
@@ -277,6 +281,7 @@ public:
         solver.Mult(system_rhs, solution);
         const double residual = independent_relative_residual(matrix, solution, system_rhs);
         form.RecoverFEMSolution(solution, rhs, potential);
+        project_charge_current();
 
         if (gauge == ChargeGauge::ZeroMeanPotential) {
             mfem::LinearForm mass_weights(&scalar_space);
@@ -356,6 +361,7 @@ public:
         const double residual = independent_relative_residual(
             *system_operator.Ptr(), solution, system_rhs);
         form.RecoverFEMSolution(solution, rhs, spin);
+        project_spin_current();
         mfem::Vector full_weak_residual(rhs.Size());
         form.Mult(spin, full_weak_residual);
         full_weak_residual -= rhs;
@@ -392,6 +398,69 @@ public:
                 source(i, a) = values[i];
             }
         }
+    }
+
+    void project_charge_current()
+    {
+        class ChargeCurrentCoefficient final : public mfem::VectorCoefficient {
+        public:
+            ChargeCurrentCoefficient(
+                mfem::GridFunction &potential,
+                mfem::Coefficient &conductivity)
+                : mfem::VectorCoefficient(3), potential_(potential), conductivity_(conductivity)
+            {
+            }
+
+            void Eval(
+                mfem::Vector &value,
+                mfem::ElementTransformation &transformation,
+                const mfem::IntegrationPoint &point) override
+            {
+                potential_.GetGradient(transformation, value);
+                value *= -conductivity_.Eval(transformation, point);
+            }
+
+        private:
+            mfem::GridFunction &potential_;
+            mfem::Coefficient &conductivity_;
+        } coefficient(potential, conductivity);
+
+        current.ProjectCoefficient(coefficient);
+    }
+
+    void project_spin_current()
+    {
+        class SpinCurrentCoefficient final : public mfem::VectorCoefficient {
+        public:
+            explicit SpinCurrentCoefficient(Impl &owner)
+                : mfem::VectorCoefficient(9), owner_(owner)
+            {
+            }
+
+            void Eval(
+                mfem::Vector &value,
+                mfem::ElementTransformation &transformation,
+                const mfem::IntegrationPoint &point) override
+            {
+                mfem::DenseMatrix gradient;
+                owner_.spin.GetVectorGradient(transformation, gradient);
+                mfem::DenseMatrix source;
+                owner_.source_matrix(transformation, point, source);
+                value.SetSize(9);
+                for (int flow = 0; flow < 3; ++flow) {
+                    for (int component = 0; component < 3; ++component) {
+                        value[flow * 3 + component] =
+                            -0.5 * owner_.parameters.sigma_s_spm * gradient(component, flow) +
+                            source(flow, component);
+                    }
+                }
+            }
+
+        private:
+            Impl &owner_;
+        } coefficient(*this);
+
+        spin_current.ProjectCoefficient(coefficient);
     }
 
     void accumulate_charge_diagnostics(ChargeSolveDiagnostics &diagnostics)
@@ -642,8 +711,11 @@ public:
     mfem::H1_FECollection collection;
     mfem::FiniteElementSpace scalar_space;
     mfem::FiniteElementSpace vector_space;
+    mfem::FiniteElementSpace tensor_space;
     mfem::GridFunction potential;
+    mfem::GridFunction current;
     mfem::GridFunction spin;
+    mfem::GridFunction spin_current;
     mfem::GridFunction torque;
     std::vector<std::unique_ptr<SpinSourceColumnCoefficient>> source_coefficients;
     std::array<double, 3> last_spin_weak_balance{};
@@ -683,6 +755,16 @@ const mfem::GridFunction &SteadyTransportOracle::electric_potential() const
 const mfem::GridFunction &SteadyTransportOracle::spin_potential() const
 {
     return impl_->spin;
+}
+
+const mfem::GridFunction &SteadyTransportOracle::charge_current_density() const
+{
+    return impl_->current;
+}
+
+const mfem::GridFunction &SteadyTransportOracle::spin_current_tensor() const
+{
+    return impl_->spin_current;
 }
 
 const mfem::GridFunction &SteadyTransportOracle::transport_torque() const
