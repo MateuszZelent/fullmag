@@ -29,6 +29,54 @@ def test_table_autosave_lowers_default_columns_to_sampling_ir() -> None:
     }
 
 
+def test_table_autosave_accepts_auto_sinc_policy() -> None:
+    table = fm.TableAutosave(t_sampl="auto", quantities=["t", "mx"])
+
+    assert table.to_ir() == {
+        "kind": "table_autosave",
+        "table_id": "default",
+        "sample_period_policy": {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        },
+        "quantities": ["t", "mx"],
+    }
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    ["AUTO", "fast", True, False, 0.0, -1e-12, float("nan"), float("inf")],
+)
+def test_sampling_period_rejects_noncanonical_or_invalid_values(invalid: object) -> None:
+    with pytest.raises(ValueError, match='positive finite number or "auto"'):
+        fm.TableAutosave(t_sampl=invalid)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match='positive finite number or "auto"'):
+        fm.SaveField("m", every=invalid)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match='positive finite number or "auto"'):
+        fm.SaveScalar("E_total", every=invalid)  # type: ignore[arg-type]
+
+
+def test_automatic_field_and_scalar_outputs_lower_to_policy_ir() -> None:
+    assert fm.SaveField("m", every="auto").to_ir() == {
+        "kind": "field_auto",
+        "name": "m",
+        "sample_period_policy": {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        },
+    }
+    assert fm.SaveScalar("E_total", every="auto").to_ir() == {
+        "kind": "scalar_auto",
+        "name": "E_total",
+        "sample_period_policy": {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        },
+    }
+
+
 def test_table_autosave_accepts_custom_quantities_and_rejects_empty_lists() -> None:
     autosave = fm.TableAutosave(
         t_sampl=5e-13,
@@ -252,3 +300,45 @@ def test_scene_document_table_autosave_override_rewrites_script() -> None:
 
     assert 'fm.tableautosave(4e-12, quantities=["step", "t", "e_total"])' in rewritten
     assert 'fm.tableautosave(2e-12, quantities=["step", "mx"])' not in rewritten
+
+
+def test_scene_document_auto_table_override_preserves_requested_policy() -> None:
+    script = textwrap.dedent(
+        """
+        import fullmag as fm
+
+        fm.name("table_scene_auto_override")
+        fm.engine("fdm")
+        fm.cell(2e-9, 2e-9, 2e-9)
+        body = fm.geometry(fm.Box(20e-9, 10e-9, 2e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+        fm.tableautosave(2e-12, quantities=["step", "mx"])
+        fm.run(10e-12)
+        """
+    )
+
+    with TemporaryDirectory() as tmpdir:
+        script_path = Path(tmpdir) / "table_scene_auto_override.py"
+        script_path.write_text(script, encoding="utf-8")
+        loaded = load_problem_from_script(script_path, lightweight_assets=True)
+        draft = export_builder_draft(loaded)
+        scene = build_scene_document_from_builder(draft)
+        scene["study"]["table_autosave"] = {
+            "kind": "table_autosave",
+            "table_id": "default",
+            "sample_period_policy": {
+                "kind": "auto_sinc_cutoff",
+                "nyquist_guard_factor": 1.3,
+            },
+            "resolved_sample_period_s": 7.6923e-11,
+            "quantities": ["step", "mx"],
+        }
+        rewritten = rewrite_loaded_problem_script(
+            loaded,
+            overrides=builder_overrides_from_scene_document(scene),
+        )["rendered_source"]
+
+    assert 'fm.tableautosave("auto", quantities=["step", "mx"])' in rewritten
+    assert "7.6923e-11" not in rewritten

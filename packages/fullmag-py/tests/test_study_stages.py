@@ -283,6 +283,43 @@ study.stages.add_run(stage_id="unsampled", until=1e-9)
                     f"{attribute} must pass unchanged through configuration stage {action_index}",
                 )
 
+    def test_stage_sampling_accepts_auto_and_preserves_policy_intent(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.tableautosave("auto", quantities=["t", "mx"], stage_id="table-auto")
+study.stages.autosave("m", every="auto", stage_id="field-auto")
+study.stages.autosave("E_total", every="auto", stage_id="scalar-auto")
+study.stages.add_run(stage_id="excite", until=2e-9)
+"""
+        )
+
+        sampling = loaded.stages[-1].problem.to_ir(include_geometry_assets=False)["study"]["sampling"]
+        policy = {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        }
+        self.assertEqual(
+            sampling["table_autosave"],
+            {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "sample_period_policy": policy,
+                "quantities": ["t", "mx"],
+            },
+        )
+        self.assertEqual(
+            sampling["outputs"],
+            [
+                {"kind": "field_auto", "name": "m", "sample_period_policy": policy},
+                {
+                    "kind": "scalar_auto",
+                    "name": "E_total",
+                    "sample_period_policy": policy,
+                },
+            ],
+        )
+
     def test_add_run_primary_signature_contains_only_time_and_stage_id(self) -> None:
         fm.reset()
         study = fm.study("simple-run-signature")

@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from fullmag._validation import AUTO_SINC_NYQUIST_GUARD_FACTOR, SamplingPeriod
 from fullmag.init.magnetization import (
     RandomMagnetization,
     SampledMagnetization,
@@ -2933,12 +2934,12 @@ def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: s
     for output in outputs:
         if isinstance(output, SaveField):
             lines.append(
-                f"{_surface_call(surface, 'save')}({_py_repr(output.field)}, every={_py_number(output.every)})"
+                f"{_surface_call(surface, 'save')}({_py_repr(output.field)}, every={_py_sampling_period(output.every)})"
             )
             continue
         if isinstance(output, SaveScalar):
             lines.append(
-                f"{_surface_call(surface, 'save')}({_py_repr(output.scalar)}, every={_py_number(output.every)})"
+                f"{_surface_call(surface, 'save')}({_py_repr(output.scalar)}, every={_py_sampling_period(output.every)})"
             )
             continue
         if isinstance(output, Snapshot):
@@ -2985,7 +2986,7 @@ def _render_table_autosave(
     if table_autosave is None:
         return []
 
-    kwargs = [f"{_py_number(table_autosave.t_sampl)}"]
+    kwargs = [f"{_py_sampling_period(table_autosave.t_sampl)}"]
     quantities = tuple(table_autosave.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES)
     if quantities != DEFAULT_TABLE_AUTOSAVE_QUANTITIES:
         kwargs.append(f"quantities={_py_literal(list(quantities))}")
@@ -3000,12 +3001,12 @@ def _table_autosave_from_override(value: object) -> TableAutosave | None:
         return None
     if value.get("kind") not in {None, "table_autosave"}:
         return None
-    sample_period = value.get("sample_period_s")
-    if not isinstance(sample_period, (int, float)):
+    sample_period = _requested_sampling_period_from_ir(value, "sample_period_s")
+    if sample_period is None:
         return None
     quantities = value.get("quantities")
     return TableAutosave(
-        t_sampl=float(sample_period),
+        t_sampl=sample_period,
         quantities=quantities if isinstance(quantities, list) else None,
         table_id=str(value.get("table_id") or "default"),
     )
@@ -3065,10 +3066,10 @@ def _render_stages(
                 call_parts: list[str] = []
                 if bool(stage.action.get("enabled", True)):
                     table = _normalize_mapping(stage.action.get("table_autosave"))
-                    sample_period = table.get("sample_period_s")
-                    if not isinstance(sample_period, (int, float)):
-                        raise ValueError("enabled table_autosave action requires sample_period_s")
-                    call_parts.append(_py_number(float(sample_period)))
+                    sample_period = _requested_sampling_period_from_ir(table, "sample_period_s")
+                    if sample_period is None:
+                        raise ValueError("enabled table_autosave action requires a sampling cadence")
+                    call_parts.append(_py_sampling_period(sample_period))
                     quantities = table.get("quantities")
                     if isinstance(quantities, list):
                         call_parts.append(f"quantities={_py_literal(quantities)}")
@@ -3087,13 +3088,13 @@ def _render_stages(
                 if enabled:
                     output = _normalize_mapping(stage.action.get("output"))
                     output_name = _text_value(output.get("name")) or quantity
-                    every_seconds = output.get("every_seconds")
-                    if not output_name or not isinstance(every_seconds, (int, float)):
+                    every = _requested_sampling_period_from_ir(output, "every_seconds")
+                    if not output_name or every is None:
                         raise ValueError("enabled autosave action requires output name and cadence")
                     call_parts.extend(
                         [
                             _py_repr(output_name),
-                            f"every={_py_number(float(every_seconds))}",
+                            f"every={_py_sampling_period(every)}",
                         ]
                     )
                 else:
@@ -5242,6 +5243,31 @@ def _normalize_mapping(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _requested_sampling_period_from_ir(
+    value: Mapping[str, object],
+    numeric_key: str,
+) -> SamplingPeriod | None:
+    policy_value = value.get("sample_period_policy")
+    if policy_value is not None:
+        policy = _normalize_mapping(policy_value)
+        guard = policy.get("nyquist_guard_factor")
+        if (
+            policy.get("kind") != "auto_sinc_cutoff"
+            or isinstance(guard, bool)
+            or not isinstance(guard, (int, float))
+            or float(guard) != AUTO_SINC_NYQUIST_GUARD_FACTOR
+        ):
+            raise ValueError("unsupported automatic sampling period policy")
+        if value.get(numeric_key) is not None:
+            raise ValueError("automatic sampling intent must not contain an explicit cadence")
+        return "auto"
+
+    numeric = value.get(numeric_key)
+    if isinstance(numeric, bool) or not isinstance(numeric, (int, float)):
+        return None
+    return float(numeric)
+
+
 def _override_string(overrides: dict[str, object], key: str, fallback: str | None) -> str | None:
     value = overrides.get(key, fallback)
     if value is None:
@@ -5479,6 +5505,10 @@ def _py_repr(value: str) -> str:
 
 def _py_number(value: float) -> str:
     return format(float(value), ".12g")
+
+
+def _py_sampling_period(value: SamplingPeriod) -> str:
+    return _py_repr("auto") if value == "auto" else _py_number(value)
 
 
 def _py_literal(value: object) -> str:

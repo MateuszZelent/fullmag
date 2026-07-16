@@ -16,7 +16,13 @@ from fullmag.model.outputs import (
     SaveSpectrum,
     Snapshot,
 )
-from fullmag._validation import require_non_empty, require_positive
+from fullmag._validation import (
+    SamplingPeriod,
+    auto_sinc_sampling_policy_ir,
+    normalize_sampling_period,
+    require_non_empty,
+    require_positive,
+)
 
 _UNSET = object()
 
@@ -258,13 +264,17 @@ TABLE_AUTOSAVE_QUANTITY_ALIASES = {
 
 @dataclass(frozen=True, slots=True)
 class TableAutosave:
-    t_sampl: float
+    t_sampl: SamplingPeriod
     quantities: Sequence[str] | None = None
     extra_quantities: Sequence[str] = ()
     table_id: str = "default"
 
     def __post_init__(self) -> None:
-        require_positive(self.t_sampl, "t_sampl")
+        object.__setattr__(
+            self,
+            "t_sampl",
+            normalize_sampling_period(self.t_sampl, "t_sampl"),
+        )
         table_id = require_non_empty(self.table_id, "table_id")
         base_quantities = (
             DEFAULT_TABLE_AUTOSAVE_QUANTITIES
@@ -282,12 +292,16 @@ class TableAutosave:
         object.__setattr__(self, "extra_quantities", normalized_extra)
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "kind": "table_autosave",
             "table_id": self.table_id,
-            "sample_period_s": self.t_sampl,
             "quantities": list(self.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES),
         }
+        if self.t_sampl == "auto":
+            payload["sample_period_policy"] = auto_sinc_sampling_policy_ir()
+        else:
+            payload["sample_period_s"] = self.t_sampl
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -480,7 +494,7 @@ class TimeEvolution:
     def table_autosave(
         self,
         *,
-        t_sampl: float,
+        t_sampl: SamplingPeriod,
         quantities: Sequence[str] | None = None,
         extra_quantities: Sequence[str] = (),
         table_id: str = "default",

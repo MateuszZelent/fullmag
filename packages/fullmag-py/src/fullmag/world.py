@@ -39,7 +39,13 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence, cast
 
 from fullmag._progress import emit_progress
-from fullmag._validation import as_vector3, require_non_empty, require_non_negative, require_positive
+from fullmag._validation import (
+    SamplingPeriod,
+    as_vector3,
+    require_non_empty,
+    require_non_negative,
+    require_positive,
+)
 from fullmag.model.antenna import (
     AntennaFieldSource,
     Antenna,
@@ -3154,7 +3160,7 @@ class StudyStagesBuilder:
 
     def tableautosave(
         self,
-        t_sampling: float | None = None,
+        t_sampling: SamplingPeriod | None = None,
         quantities: Sequence[str] | None = None,
         *,
         enabled: bool = True,
@@ -3166,7 +3172,7 @@ class StudyStagesBuilder:
             if t_sampling is None:
                 raise TypeError("tableautosave() requires t_sampling when enabled=True")
             configured = TableAutosave(
-                t_sampl=float(t_sampling),
+                t_sampl=t_sampling,
                 quantities=quantities,
             )
         else:
@@ -3200,7 +3206,7 @@ class StudyStagesBuilder:
     def autosave(
         self,
         quantity: str | None = None,
-        every: float | None = None,
+        every: SamplingPeriod | None = None,
         *,
         enabled: bool = True,
         stage_id: str | None = None,
@@ -4279,7 +4285,7 @@ class StudyBuilder:
         self,
         quantity: str,
         *,
-        every: float | None = None,
+        every: SamplingPeriod | None = None,
         indices: Sequence[int] | None = None,
     ) -> "StudyBuilder":
         save(quantity, every=every, indices=indices)
@@ -4305,7 +4311,7 @@ class StudyBuilder:
 
     def tableautosave(
         self,
-        every: float,
+        every: SamplingPeriod,
         quantities: Sequence[str] | None = None,
     ) -> "StudyBuilder":
         tableautosave(every, quantities=quantities)
@@ -6241,7 +6247,7 @@ _EIGEN_QUANTITIES = {"spectrum", "mode", "dispersion"}
 def save(
     quantity: str,
     *,
-    every: float | None = None,
+    every: SamplingPeriod | None = None,
     indices: Sequence[int] | None = None,
 ) -> None:
     """Register an output quantity to save periodically.
@@ -6252,9 +6258,9 @@ def save(
         Field name (``"m"``, ``"H_demag"``, ``"H_eff"``),
         scalar name (``"E_ex"``, ``"E_total"``, ``"max_h_eff"``),
         or eigen quantity (``"spectrum"``, ``"mode"``, ``"dispersion"``).
-    every : float, optional
-        Save interval in seconds.  Required for field/scalar outputs,
-        ignored for eigen outputs.
+    every : float or "auto", optional
+        Save interval in seconds, or automatic sampling derived from an active
+        sinc drive. Required for field/scalar outputs, ignored for eigen outputs.
     indices : sequence of int, optional
         Mode indices for ``"mode"`` output.
     """
@@ -6274,7 +6280,7 @@ def save(
     _state._outputs.append(_periodic_output(quantity, every))
 
 
-def _periodic_output(quantity: str, every: float) -> SaveField | SaveScalar:
+def _periodic_output(quantity: str, every: SamplingPeriod) -> SaveField | SaveScalar:
     normalized = require_non_empty(quantity, "quantity")
     if normalized in _SCALAR_QUANTITIES or normalized.startswith("E_"):
         return SaveScalar(scalar=normalized, every=every)
@@ -6357,7 +6363,7 @@ def snapshot(
     _state._outputs.append(Snapshot(field=field, component=component, every=every, layer=layer_name))
 
 
-def tableautosave(every: float, quantities: Sequence[str] | None = None) -> None:
+def tableautosave(every: SamplingPeriod, quantities: Sequence[str] | None = None) -> None:
     """Configure a mumax-style scalar table autosave cadence.
 
     Registers the canonical ``sampling.table_autosave`` observable table.

@@ -150,6 +150,50 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             after["problem_meta"]["runtime_metadata"]["spin_wave_response"],
         )
 
+    def test_automatic_sampling_stages_roundtrip_as_literal_auto(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("auto-sampling-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.tableautosave("auto", quantities=["t", "mx"], stage_id="table-auto")
+        study.stages.autosave("m", every="auto", stage_id="field-auto")
+        study.stages.add_run(stage_id="excite", until=2e-9)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn('study.stages.tableautosave("auto"', rendered)
+        self.assertIn('study.stages.autosave("m", every="auto"', rendered)
+        before = loaded.stages[-1].problem.to_ir(include_geometry_assets=False)
+        after = rewritten.stages[-1].problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(before["study"]["sampling"], after["study"]["sampling"])
+
+    def test_auto_sampling_export_ignores_resolved_cadence(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("auto-sampling-resolved")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.tableautosave("auto", stage_id="table-auto")
+        study.stages.add_run(stage_id="excite", until=2e-9)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            loaded.stages[0].action["table_autosave"]["resolved_sample_period_s"] = 7.6923e-11
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+
+        self.assertIn('study.stages.tableautosave("auto"', rendered)
+        self.assertNotIn("7.6923e-11", rendered)
+
     def test_canonical_rewrite_preserves_drives_and_stage_ids(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
