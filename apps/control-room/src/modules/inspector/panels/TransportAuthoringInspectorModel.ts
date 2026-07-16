@@ -172,13 +172,13 @@ function json<T>(value: string, label: string): T {
 }
 
 export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurrentTransport {
+  if (!draft.name.trim()) throw new Error("Name is required.");
   const resource: KnownSceneCurrentTransport = {
     kind: "current_transport",
     model: draft.model,
-    name: draft.name.trim(),
+    name: draft.name,
     coupling: draft.coupling,
   };
-  if (!resource.name) throw new Error("Name is required.");
   if (draft.model === "prescribed_density") {
     resource.current_density = json<number[]>(draft.currentDensity, "Current density");
     if (draft.solveRegion.trim()) resource.solve_region = draft.solveRegion.trim();
@@ -230,7 +230,7 @@ export function buildSpinTransport(draft: SpinTransportDraft): SceneSpinTranspor
     constitutive_version: draft.constitutiveVersion.trim(),
     current_source_id: draft.currentSourceId.trim(),
     domain: json(draft.domain, "Spin domain"),
-    id: draft.id.trim(),
+    id: draft.id,
     interfaces: json(draft.interfaces, "Spin interfaces"),
     materials: materials as KnownSceneSpinTransport["materials"],
     mode: draft.mode,

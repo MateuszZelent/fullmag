@@ -18,7 +18,7 @@ describe("transport authoring drafts", () => {
     const resource = {
       kind: "current_transport" as const,
       model: "ohmic_poisson" as const,
-      name: "charge",
+      name: " charge ",
       coupling: "bidirectional" as const,
       domain: [{ object_id: "stack", region_id: "normal" }],
       materials: [{ region: { object_id: "stack", region_id: "normal" }, material: { sigma_Spm: 5.8e7 } }],
@@ -35,7 +35,7 @@ describe("transport authoring drafts", () => {
   it("round-trips every spin-transport field including requested execution", () => {
     const resource = {
       schema_version: "spin_transport.v1",
-      id: "spin",
+      id: " spin ",
       current_source_id: "charge",
       mode: "steady" as const,
       domain: [{ object_id: "stack", region_id: "normal" }],
@@ -264,6 +264,31 @@ describe("transport authoring drafts", () => {
       resourceId: " spin ",
       resourceIndex: 0,
     })).toBe(spaced);
+  });
+
+  it("keeps spaced current and spin payload identities distinct from compact identities", () => {
+    const spacedCurrentDraft = currentTransportDraft();
+    spacedCurrentDraft.name = " charge ";
+    const compactCurrentDraft = currentTransportDraft();
+    compactCurrentDraft.name = "charge";
+    const spacedSpinDraft = spinTransportDraft();
+    spacedSpinDraft.id = " spin ";
+    const compactSpinDraft = spinTransportDraft();
+    compactSpinDraft.id = "spin";
+
+    const spacedCurrent = buildCurrentTransport(spacedCurrentDraft);
+    const compactCurrent = buildCurrentTransport(compactCurrentDraft);
+    const spacedSpin = buildSpinTransport(spacedSpinDraft);
+    const compactSpin = buildSpinTransport(compactSpinDraft);
+
+    expect(spacedCurrent.name).toBe(" charge ");
+    expect(spacedSpin.id).toBe(" spin ");
+    expect(transportSelectionKey("current_transport", spacedCurrent, 0)).not.toBe(
+      transportSelectionKey("current_transport", compactCurrent, 1),
+    );
+    expect(transportSelectionKey("spin_transport", spacedSpin, 0)).not.toBe(
+      transportSelectionKey("spin_transport", compactSpin, 1),
+    );
   });
 
   it("resolves a stable spin transport id before a stale list index", () => {

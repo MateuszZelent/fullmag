@@ -4307,4 +4307,72 @@ describe("ControlRoomApi", () => {
       "http://127.0.0.1:8765/v2/sessions/current/model/spin-transports/%20spin%20",
     ]);
   });
+
+  it("preserves exact spaced transport identities in replace routes and payloads", async () => {
+    const requests: Array<{ body: unknown; method: string; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestJsonBody(init.body) : null,
+          method: init?.method ?? "GET",
+          url: String(url),
+        });
+        return jsonResponse({ items: [], scene_revision: 7 });
+      },
+    });
+    const currentRequest = {
+      base_revision: 7,
+      resource: {
+        coupling: "one_way" as const,
+        current_density: [1, 0, 0],
+        kind: "current_transport" as const,
+        model: "prescribed_density" as const,
+        name: " charge ",
+      },
+    };
+    const spinRequest = {
+      base_revision: 7,
+      resource: {
+        boundaries: [],
+        constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+        current_source_id: "charge",
+        domain: [],
+        id: " spin ",
+        interfaces: [],
+        materials: [],
+        mode: "steady" as const,
+        requested_execution: {
+          device: "auto" as const,
+          discretization: "auto" as const,
+          execution_mode: "strict" as const,
+          precision: "double" as const,
+        },
+        schema_version: "spin_transport.v1",
+        solver: {
+          default_external_boundary: "spin_insulating",
+          engine: "gmres",
+          linear: { absolute_tolerance: 1e-14, max_iterations: 1000, relative_tolerance: 1e-10 },
+          operator_version: "fv_spin_upwind_v1",
+          physical_residual_version: "transport_balance_integrated_l2.v1",
+        },
+      },
+    };
+
+    await api.model.replaceCurrentTransport(" charge ", currentRequest);
+    await api.model.replaceSpinTransport(" spin ", spinRequest);
+
+    expect(requests).toEqual([
+      {
+        body: currentRequest,
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/current-transports/%20charge%20",
+      },
+      {
+        body: spinRequest,
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/spin-transports/%20spin%20",
+      },
+    ]);
+  });
 });
