@@ -23,12 +23,12 @@ pub use spin_drift_diffusion::{
     SpinBalanceDiagnostics, SpinBoundaryCondition, SpinBoundaryConditions,
     SpinDriftDiffusionProblem, SpinFluxOperator, SpinInterfaceFluxObservation, SpinInterfaceLaw,
     SpinMaterialFields, SpinReactionLengths, SpinSolution, SpinSolverConfig, SpinSolverTelemetry,
-    SpinTorqueTargets, StructuredSpinFace,
+    SpinTorqueTargets, StructuredSpinFace, TransientSpinObservation,
 };
 pub use transient_spin::{
+    TransientCoupledRestartIdentity, TransientCoupledState, TransientErrorControllerState,
     TransientSpinCheckpoint, TransientSpinIntegrator, TransientSpinMaterial,
-    TransientSpinRestartIdentity, TransientSpinSolverConfig, TransientSpinState,
-    TransientStepAttempt, TransientStepTelemetry,
+    TransientSpinSolverConfig, TransientSpinState, TransientStepAttempt, TransientStepTelemetry,
 };
 
 #[cfg(test)]

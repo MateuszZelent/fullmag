@@ -1006,6 +1006,70 @@ mod tests {
     }
 
     #[test]
+    fn coupled_ars232_fixed_step_is_transactional_and_refreshes_accepted_state() {
+        let problem = simple_problem(0.1, 1.0);
+        let initial = problem
+            .new_state(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+            .expect("state should build");
+        for failure_call in 1..=4 {
+            let mut state = initial.clone();
+            let mut ws = problem.create_workspace();
+            let mut bufs = problem.create_integrator_buffers();
+            let mut calls = 0;
+            let error = problem
+                .coupled_imex_ark2_fixed_step_with_external_stage_terms(
+                    &mut state,
+                    1e-3,
+                    &mut ws,
+                    &mut bufs,
+                    EvaluationRequest::Full,
+                    |_m, _time| {
+                        calls += 1;
+                        if calls == failure_call {
+                            return Err(EngineError::new(format!("stage {failure_call} failed")));
+                        }
+                        Ok(ExternalStageTerms {
+                            additional_field_apm: vec![[0.0, 0.0, 1.0]; 3],
+                            direct_torque_per_s: vec![[0.0; 3]; 3],
+                        })
+                    },
+                )
+                .expect_err("any stage failure must reject the coupled transaction");
+            assert!(error
+                .to_string()
+                .contains(&format!("stage {failure_call} failed")));
+            assert_eq!(state, initial);
+        }
+
+        let mut state = initial;
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+        let mut stage_times = Vec::new();
+        problem
+            .coupled_imex_ark2_fixed_step_with_external_stage_terms(
+                &mut state,
+                1e-3,
+                &mut ws,
+                &mut bufs,
+                EvaluationRequest::Full,
+                |_m, time| {
+                    stage_times.push(time);
+                    Ok(ExternalStageTerms {
+                        additional_field_apm: vec![[0.0, 0.0, 1.0]; 3],
+                        direct_torque_per_s: vec![[0.0; 3]; 3],
+                    })
+                },
+            )
+            .expect("coupled ARS fixed step");
+        assert_eq!(stage_times.len(), 4);
+        assert_eq!(stage_times[0], 0.0);
+        assert!((stage_times[1] - 0.292_893_218_813_452_4e-3).abs() < 1e-15);
+        assert_eq!(stage_times[2], 1e-3);
+        assert_eq!(stage_times[3], 1e-3);
+        assert_eq!(state.time_seconds, 1e-3);
+    }
+
+    #[test]
     fn heun_soa_buffer_step_matches_aos_buffer_step_for_supported_terms() {
         let grid = GridShape::new(4, 1, 1).expect("valid grid");
         let problem = ExchangeLlgProblem::with_terms(

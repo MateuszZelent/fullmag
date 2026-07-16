@@ -1,6 +1,7 @@
 use super::spin_drift_diffusion::restarted_gmres;
 use super::SpinDriftDiffusionProblem;
 use crate::fdm::shared::types::{EngineError, Result};
+use serde::{Deserialize, Serialize};
 
 type Vector3 = [f64; 3];
 
@@ -36,7 +37,7 @@ impl Default for TransientSpinSolverConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TransientSpinState {
     pub spin_potential_v: Vec<Vector3>,
     pub previous_spin_potential_v: Option<Vec<Vector3>>,
@@ -62,24 +63,58 @@ pub struct TransientStepAttempt {
     pub telemetry: TransientStepTelemetry,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TransientSpinRestartIdentity {
-    pub topology_revision: u64,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransientCoupledRestartIdentity {
+    pub requested_discretization: String,
+    pub requested_device: String,
+    pub requested_precision: String,
+    pub execution_mode: String,
+    pub resolved_lane: String,
+    pub resolved_precision: String,
+    pub scene_revision: u64,
+    pub plan_revision: u64,
+    pub mesh_revision: u64,
     pub material_revision: u64,
-    pub operator_revision: u64,
-    pub cache_identity: String,
+    pub current_operator_revision: u64,
+    pub spin_operator_revision: u64,
+    pub oersted_operator_revision: u64,
+    pub charge_cache_identity: String,
+    pub spin_cache_identity: String,
+    pub oersted_cache_identity: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct TransientSpinCheckpoint {
-    pub state: TransientSpinState,
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TransientErrorControllerState {
+    pub next_dt_s: f64,
+    pub last_normalized_error: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransientCoupledState {
+    pub magnetization: Vec<Vector3>,
     pub charge_potential_v: Vec<f64>,
+    pub charge_current_density_apm2: Vec<Vector3>,
+    pub spin: TransientSpinState,
+    pub spin_current_tensor_apm2: Vec<[f64; 9]>,
     pub charge_nonlinear_history: Vec<f64>,
+    pub spin_nonlinear_history: Vec<f64>,
+    pub torque_cache_per_s: Vec<Vector3>,
+    pub oersted_cache_apm: Vec<Vector3>,
+    pub error_controller: TransientErrorControllerState,
+    pub accepted_steps: u64,
+    pub rejected_steps: u64,
+    pub telemetry_cursor: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransientSpinCheckpoint {
+    pub state: TransientCoupledState,
     pub spin_capacitance_as_per_v_m3: Vec<f64>,
     pub capacitance_formula_version: String,
     pub transient_formula_version: String,
     pub integrator_version: String,
-    pub restart_identity: TransientSpinRestartIdentity,
+    pub integrator_implementation_revision: String,
+    pub restart_identity: TransientCoupledRestartIdentity,
 }
 
 pub struct TransientSpinIntegrator<'a> {
@@ -90,7 +125,9 @@ pub struct TransientSpinIntegrator<'a> {
 
 impl<'a> TransientSpinIntegrator<'a> {
     pub const FORMULA_VERSION: &'static str = "transient_spin_balance.fullmag.v1";
-    pub const INTEGRATOR_VERSION: &'static str = "imex_ars_232_step_doubling.fullmag.v1";
+    pub const INTEGRATOR_VERSION: &'static str = "coupled_imex_ark2.v1";
+    pub const INTEGRATOR_IMPLEMENTATION_REVISION: &'static str =
+        "imex_ars_232_step_doubling.fullmag.v1";
     pub const BDF2_REFERENCE_VERSION: &'static str = "bdf2_constant_step.fullmag.v1";
 
     pub fn new(
@@ -250,30 +287,19 @@ impl<'a> TransientSpinIntegrator<'a> {
 
     pub fn checkpoint(
         &self,
-        state: &TransientSpinState,
-        charge_potential_v: Vec<f64>,
-        charge_nonlinear_history: Vec<f64>,
-        restart_identity: TransientSpinRestartIdentity,
+        state: &TransientCoupledState,
+        restart_identity: TransientCoupledRestartIdentity,
     ) -> Result<TransientSpinCheckpoint> {
-        self.validate_state(state)?;
-        if charge_potential_v.iter().any(|value| !value.is_finite())
-            || charge_nonlinear_history
-                .iter()
-                .any(|value| !value.is_finite())
-            || restart_identity.cache_identity.trim().is_empty()
-        {
-            return Err(EngineError::new(
-                "transient spin checkpoint charge state/history/cache identity is invalid",
-            ));
-        }
+        self.validate_coupled_state(state)?;
+        validate_restart_identity(&restart_identity)?;
         Ok(TransientSpinCheckpoint {
             state: state.clone(),
-            charge_potential_v,
-            charge_nonlinear_history,
             spin_capacitance_as_per_v_m3: self.material.spin_capacitance_as_per_v_m3.clone(),
             capacitance_formula_version: self.material.capacitance_formula_version.clone(),
             transient_formula_version: Self::FORMULA_VERSION.to_string(),
             integrator_version: Self::INTEGRATOR_VERSION.to_string(),
+            integrator_implementation_revision: Self::INTEGRATOR_IMPLEMENTATION_REVISION
+                .to_string(),
             restart_identity,
         })
     }
@@ -281,39 +307,63 @@ impl<'a> TransientSpinIntegrator<'a> {
     pub fn restore_checkpoint(
         &self,
         checkpoint: &TransientSpinCheckpoint,
-        expected: &TransientSpinRestartIdentity,
-    ) -> Result<TransientSpinState> {
-        if checkpoint.restart_identity.topology_revision != expected.topology_revision {
-            return Err(EngineError::new(
-                "transient spin checkpoint topology revision mismatch",
-            ));
-        }
-        if checkpoint.restart_identity.material_revision != expected.material_revision {
-            return Err(EngineError::new(
-                "transient spin checkpoint material revision mismatch",
-            ));
-        }
-        if checkpoint.restart_identity.operator_revision != expected.operator_revision {
-            return Err(EngineError::new(
-                "transient spin checkpoint operator revision mismatch",
-            ));
-        }
-        if checkpoint.restart_identity.cache_identity != expected.cache_identity {
-            return Err(EngineError::new(
-                "transient spin checkpoint cache identity mismatch",
-            ));
-        }
+        expected: &TransientCoupledRestartIdentity,
+    ) -> Result<TransientCoupledState> {
+        validate_restart_identity(expected)?;
+        compare_restart_identity(&checkpoint.restart_identity, expected)?;
         if checkpoint.spin_capacitance_as_per_v_m3 != self.material.spin_capacitance_as_per_v_m3
             || checkpoint.capacitance_formula_version != self.material.capacitance_formula_version
             || checkpoint.transient_formula_version != Self::FORMULA_VERSION
             || checkpoint.integrator_version != Self::INTEGRATOR_VERSION
+            || checkpoint.integrator_implementation_revision
+                != Self::INTEGRATOR_IMPLEMENTATION_REVISION
         {
             return Err(EngineError::new(
                 "transient spin checkpoint formula/integrator/material contract mismatch",
             ));
         }
-        self.validate_state(&checkpoint.state)?;
+        self.validate_coupled_state(&checkpoint.state)?;
         Ok(checkpoint.state.clone())
+    }
+
+    fn validate_coupled_state(&self, state: &TransientCoupledState) -> Result<()> {
+        self.validate_state(&state.spin)?;
+        let count = self.problem.grid().cell_count();
+        validate_vectors(&state.magnetization, count, "magnetization")?;
+        validate_scalars(&state.charge_potential_v, count, "charge_potential_v")?;
+        validate_vectors(
+            &state.charge_current_density_apm2,
+            count,
+            "charge_current_density_apm2",
+        )?;
+        if state.spin_current_tensor_apm2.len() != count
+            || state
+                .spin_current_tensor_apm2
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+        {
+            return Err(EngineError::new(format!(
+                "spin_current_tensor_apm2 must contain {count} finite tensors"
+            )));
+        }
+        validate_vectors(&state.torque_cache_per_s, count, "torque_cache_per_s")?;
+        validate_vectors(&state.oersted_cache_apm, count, "oersted_cache_apm")?;
+        if state
+            .charge_nonlinear_history
+            .iter()
+            .chain(&state.spin_nonlinear_history)
+            .any(|value| !value.is_finite())
+            || !state.error_controller.next_dt_s.is_finite()
+            || state.error_controller.next_dt_s <= 0.0
+            || !state.error_controller.last_normalized_error.is_finite()
+            || state.error_controller.last_normalized_error < 0.0
+        {
+            return Err(EngineError::new(
+                "transient coupled history/error-controller state is invalid",
+            ));
+        }
+        Ok(())
     }
 
     /// Constant-step fully implicit BDF2 reference. If no history exists, a
@@ -458,6 +508,69 @@ fn validate_vectors(values: &[Vector3], count: usize, name: &str) -> Result<()> 
             "{name} must contain {count} finite vectors"
         )));
     }
+    Ok(())
+}
+
+fn validate_scalars(values: &[f64], count: usize, name: &str) -> Result<()> {
+    if values.len() != count || values.iter().any(|value| !value.is_finite()) {
+        return Err(EngineError::new(format!(
+            "{name} must contain {count} finite values"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_restart_identity(identity: &TransientCoupledRestartIdentity) -> Result<()> {
+    let strings = [
+        &identity.requested_discretization,
+        &identity.requested_device,
+        &identity.requested_precision,
+        &identity.execution_mode,
+        &identity.resolved_lane,
+        &identity.resolved_precision,
+        &identity.charge_cache_identity,
+        &identity.spin_cache_identity,
+        &identity.oersted_cache_identity,
+    ];
+    if strings.iter().any(|value| value.trim().is_empty()) {
+        return Err(EngineError::new(
+            "transient coupled restart identity strings must be non-empty",
+        ));
+    }
+    Ok(())
+}
+
+fn compare_restart_identity(
+    actual: &TransientCoupledRestartIdentity,
+    expected: &TransientCoupledRestartIdentity,
+) -> Result<()> {
+    macro_rules! compare {
+        ($field:ident, $label:literal) => {
+            if actual.$field != expected.$field {
+                return Err(EngineError::new(concat!(
+                    "transient coupled checkpoint ",
+                    $label,
+                    " mismatch"
+                )));
+            }
+        };
+    }
+    compare!(requested_discretization, "requested discretization");
+    compare!(requested_device, "requested device");
+    compare!(requested_precision, "requested precision");
+    compare!(execution_mode, "execution mode");
+    compare!(resolved_lane, "resolved lane");
+    compare!(resolved_precision, "resolved precision");
+    compare!(scene_revision, "scene revision");
+    compare!(plan_revision, "plan revision");
+    compare!(mesh_revision, "mesh revision");
+    compare!(material_revision, "material revision");
+    compare!(current_operator_revision, "current operator revision");
+    compare!(spin_operator_revision, "spin operator revision");
+    compare!(oersted_operator_revision, "oersted operator revision");
+    compare!(charge_cache_identity, "charge cache identity");
+    compare!(spin_cache_identity, "spin cache identity");
+    compare!(oersted_cache_identity, "oersted cache identity");
     Ok(())
 }
 
@@ -862,7 +975,7 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_restart_is_exact_and_rejects_revision_mismatch() {
+    fn checkpoint_restart_rehydrates_complete_coupled_state_and_rejects_each_identity_mismatch() {
         let problem = decay_problem(1.0, 4.0);
         let integrator = integrator(&problem, 1.0e-12);
         let first = integrator
@@ -870,20 +983,53 @@ mod tests {
             .unwrap()
             .candidate
             .unwrap();
-        let identity = TransientSpinRestartIdentity {
-            topology_revision: 11,
-            material_revision: 12,
-            operator_revision: 13,
-            cache_identity: "charge-spin-cache.v1".into(),
+        let coupled_state = TransientCoupledState {
+            magnetization: vec![[0.0, 0.0, 1.0]],
+            charge_potential_v: vec![0.25],
+            charge_current_density_apm2: vec![[3.0, 0.0, 0.0]],
+            spin: first.clone(),
+            spin_current_tensor_apm2: vec![[0.5; 9]],
+            charge_nonlinear_history: vec![1.0e-9, 2.0e-10],
+            spin_nonlinear_history: vec![3.0e-9],
+            torque_cache_per_s: vec![[0.0, 2.0, 0.0]],
+            oersted_cache_apm: vec![[0.0, 0.0, 4.0]],
+            error_controller: TransientErrorControllerState {
+                next_dt_s: 0.075,
+                last_normalized_error: 0.25,
+            },
+            accepted_steps: 4,
+            rejected_steps: 2,
+            telemetry_cursor: 6,
+        };
+        let identity = TransientCoupledRestartIdentity {
+            requested_discretization: "fdm".into(),
+            requested_device: "cpu".into(),
+            requested_precision: "double".into(),
+            execution_mode: "strict".into(),
+            resolved_lane: "fdm_cpu".into(),
+            resolved_precision: "double".into(),
+            scene_revision: 10,
+            plan_revision: 11,
+            mesh_revision: 12,
+            material_revision: 13,
+            current_operator_revision: 14,
+            spin_operator_revision: 15,
+            oersted_operator_revision: 16,
+            charge_cache_identity: "charge-cache.v1".into(),
+            spin_cache_identity: "spin-cache.v1".into(),
+            oersted_cache_identity: "oersted-cache.v1".into(),
         };
         let checkpoint = integrator
-            .checkpoint(&first, vec![0.25], vec![1.0e-9, 2.0e-10], identity.clone())
+            .checkpoint(&coupled_state, identity.clone())
             .unwrap();
+        let persisted = serde_json::to_vec(&checkpoint).expect("checkpoint persistence payload");
+        let checkpoint: TransientSpinCheckpoint =
+            serde_json::from_slice(&persisted).expect("checkpoint persistence round-trip");
         let restored = integrator
             .restore_checkpoint(&checkpoint, &identity)
             .expect("compatible restart");
         let continued = integrator
-            .try_fixed_step(&restored, 0.1)
+            .try_fixed_step(&restored.spin, 0.1)
             .unwrap()
             .candidate
             .unwrap();
@@ -893,18 +1039,58 @@ mod tests {
             .candidate
             .unwrap();
         assert_eq!(continued, uninterrupted);
-        assert_eq!(checkpoint.charge_potential_v, [0.25]);
-        assert_eq!(checkpoint.charge_nonlinear_history, [1.0e-9, 2.0e-10]);
+        assert_eq!(restored, coupled_state);
+        assert_eq!(checkpoint.integrator_version, "coupled_imex_ark2.v1");
         assert_eq!(
-            checkpoint.capacitance_formula_version,
-            "dos_constant_test.v1"
+            checkpoint.integrator_implementation_revision,
+            "imex_ars_232_step_doubling.fullmag.v1"
         );
-        let mut incompatible = identity;
-        incompatible.operator_revision += 1;
-        assert!(integrator
-            .restore_checkpoint(&checkpoint, &incompatible)
-            .unwrap_err()
-            .to_string()
-            .contains("operator revision"));
+
+        let mut mismatches: Vec<(&str, TransientCoupledRestartIdentity)> = Vec::new();
+        macro_rules! mismatch {
+            ($name:literal, $field:ident, $value:expr) => {{
+                let mut changed = identity.clone();
+                changed.$field = $value;
+                mismatches.push(($name, changed));
+            }};
+        }
+        mismatch!(
+            "requested discretization",
+            requested_discretization,
+            "fem".into()
+        );
+        mismatch!("requested device", requested_device, "gpu".into());
+        mismatch!("requested precision", requested_precision, "single".into());
+        mismatch!("execution mode", execution_mode, "extended".into());
+        mismatch!("resolved lane", resolved_lane, "fdm_gpu".into());
+        mismatch!("resolved precision", resolved_precision, "single".into());
+        mismatch!("scene revision", scene_revision, 20);
+        mismatch!("plan revision", plan_revision, 21);
+        mismatch!("mesh revision", mesh_revision, 22);
+        mismatch!("material revision", material_revision, 23);
+        mismatch!("current operator revision", current_operator_revision, 24);
+        mismatch!("spin operator revision", spin_operator_revision, 25);
+        mismatch!("oersted operator revision", oersted_operator_revision, 26);
+        mismatch!(
+            "charge cache identity",
+            charge_cache_identity,
+            "other-charge".into()
+        );
+        mismatch!(
+            "spin cache identity",
+            spin_cache_identity,
+            "other-spin".into()
+        );
+        mismatch!(
+            "oersted cache identity",
+            oersted_cache_identity,
+            "other-oersted".into()
+        );
+        for (name, incompatible) in mismatches {
+            let error = integrator
+                .restore_checkpoint(&checkpoint, &incompatible)
+                .expect_err("every identity mismatch must fail closed");
+            assert!(error.to_string().contains(name), "{name}: {error}");
+        }
     }
 }

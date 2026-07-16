@@ -625,6 +625,71 @@ pub(crate) fn build_snapshot_problem_and_state(
 ///
 /// Pass `live: Some(LiveStepConsumer { .. })` for per-step callbacks /
 /// live preview, and `artifact_writer: Some(sender)` for streaming artifacts.
+fn execute_coupled_ars_trial(
+    problem: &ExchangeLlgProblem,
+    state: &mut ExchangeLlgState,
+    workflow: &mut FdmSpinTransportWorkflow,
+    dt: f64,
+    fft_workspace: &mut FftWorkspace,
+    integrator_bufs: &mut IntegratorBuffers,
+) -> Result<StepReport, RunError> {
+    let mut candidate: Option<FdmSpinTransportEvaluation> = None;
+    workflow.begin_attempt()?;
+    let result = problem.coupled_imex_ark2_fixed_step_with_external_stage_terms(
+        state,
+        dt,
+        fft_workspace,
+        integrator_bufs,
+        EvaluationRequest::Full,
+        |magnetization, time_s| {
+            let previous_stage = candidate.as_ref();
+            let evaluation = workflow
+                .evaluate_stage_with_lte(magnetization, time_s, None, previous_stage)
+                .map_err(|error| EngineError::new(error.message))?;
+            let terms = ExternalStageTerms {
+                additional_field_apm: evaluation
+                    .combined_oersted_field_apm
+                    .clone()
+                    .unwrap_or_else(|| vec![[0.0; 3]; magnetization.len()]),
+                direct_torque_per_s: evaluation.combined_transport_torque_per_s.clone(),
+            };
+            candidate = Some(evaluation);
+            Ok(terms)
+        },
+    );
+    match result {
+        Ok(report) => {
+            let accepted = candidate.ok_or_else(|| RunError {
+                message: "coupled ARS step produced no final spin-transport evaluation".into(),
+            })?;
+            workflow.commit(accepted)?;
+            Ok(report)
+        }
+        Err(error) => {
+            workflow.rollback();
+            Err(RunError {
+                message: error.to_string(),
+            })
+        }
+    }
+}
+
+fn normalized_step_doubling_difference(
+    full: &[[f64; 3]],
+    half: &[[f64; 3]],
+    atol: f64,
+    rtol: f64,
+) -> f64 {
+    let mut sum = 0.0;
+    let mut count = 0usize;
+    for (full, half) in full.iter().flatten().zip(half.iter().flatten()) {
+        let scale = atol + rtol * full.abs().max(half.abs());
+        sum += (((half - full) / 3.0) / scale).powi(2);
+        count += 1;
+    }
+    (sum / count.max(1) as f64).sqrt()
+}
+
 pub(crate) fn execute_reference_fdm(
     plan: &FdmPlanIR,
     until_seconds: f64,
@@ -651,12 +716,16 @@ pub(crate) fn execute_reference_fdm(
     }
     let mut spin_transport = FdmSpinTransportWorkflow::from_plan(plan)?;
     if spin_transport.is_some() {
-        if plan.integrator.unwrap_or(IntegratorChoice::Heun) != IntegratorChoice::Heun {
+        let transient = spin_transport
+            .as_ref()
+            .is_some_and(FdmSpinTransportWorkflow::has_transient);
+        if !transient && plan.integrator.unwrap_or(IntegratorChoice::Heun) != IntegratorChoice::Heun
+        {
             return Err(RunError {
                 message: "FDM CPU-double spin transport currently requires the fixed-step Heun integrator; integrator fallback is forbidden".to_string(),
             });
         }
-        if plan.adaptive_timestep.is_some() {
+        if !transient && plan.adaptive_timestep.is_some() {
             return Err(RunError {
                 message: "FDM CPU-double spin transport does not yet support adaptive-step rejection; use a fixed timestep".to_string(),
             });
@@ -1064,50 +1133,150 @@ pub(crate) fn execute_reference_fdm(
             }
             let wall_start = Instant::now();
             let report = if let Some(workflow) = spin_transport.as_mut() {
-                let mut candidate: Option<FdmSpinTransportEvaluation> = None;
-                workflow.begin_attempt()?;
-                let result = problem.heun_step_with_external_stage_terms_and_lte(
-                    &mut state,
-                    dt_step,
-                    &mut fft_workspace,
-                    &mut integrator_bufs,
-                    EvaluationRequest::Full,
-                    |magnetization, time_s, stage_error_budget| {
-                        let previous_stage = candidate.as_ref();
-                        let evaluation = workflow
-                            .evaluate_stage_with_lte(
-                                magnetization,
-                                time_s,
-                                stage_error_budget,
-                                previous_stage,
-                            )
-                            .map_err(|error| EngineError::new(error.message))?;
-                        let terms = ExternalStageTerms {
-                            additional_field_apm: evaluation
-                                .combined_oersted_field_apm
-                                .clone()
-                                .unwrap_or_else(|| vec![[0.0; 3]; magnetization.len()]),
-                            direct_torque_per_s: evaluation.combined_transport_torque_per_s.clone(),
-                        };
-                        candidate = Some(evaluation);
-                        Ok(terms)
-                    },
-                );
-                match result {
-                    Ok(report) => {
-                        let accepted = candidate.take().ok_or_else(|| RunError {
-                            message:
-                                "coupled Heun step produced no final spin-transport evaluation"
-                                    .to_string(),
+                let transient = workflow.has_transient();
+                if transient {
+                    if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
+                        let committed_state = state.clone();
+                        let committed_workflow = workflow.clone();
+                        let accepted_before = committed_workflow.accepted_steps();
+                        let rejected_before = committed_workflow.rejected_steps();
+                        let mut rejected_trials = 0u64;
+                        let mut attempted_dt = dt_step;
+                        loop {
+                            let mut full_state = committed_state.clone();
+                            let mut full_workflow = committed_workflow.clone();
+                            let _full_report = execute_coupled_ars_trial(
+                                &problem,
+                                &mut full_state,
+                                &mut full_workflow,
+                                attempted_dt,
+                                &mut fft_workspace,
+                                &mut integrator_bufs,
+                            )?;
+                            let mut half_state = committed_state.clone();
+                            let mut half_workflow = committed_workflow.clone();
+                            execute_coupled_ars_trial(
+                                &problem,
+                                &mut half_state,
+                                &mut half_workflow,
+                                0.5 * attempted_dt,
+                                &mut fft_workspace,
+                                &mut integrator_bufs,
+                            )?;
+                            let mut half_report = execute_coupled_ars_trial(
+                                &problem,
+                                &mut half_state,
+                                &mut half_workflow,
+                                0.5 * attempted_dt,
+                                &mut fft_workspace,
+                                &mut integrator_bufs,
+                            )?;
+                            let magnetic_error = normalized_step_doubling_difference(
+                                full_state.magnetization(),
+                                half_state.magnetization(),
+                                adaptive.atol,
+                                adaptive.rtol,
+                            );
+                            let transport_error = full_workflow.normalized_transient_difference(
+                                &half_workflow,
+                                adaptive.atol,
+                                adaptive.rtol,
+                            )?;
+                            let error = magnetic_error.max(transport_error);
+                            let factor = if error == 0.0 {
+                                adaptive.growth_limit
+                            } else {
+                                (adaptive.safety * error.powf(-1.0 / 3.0))
+                                    .clamp(adaptive.shrink_limit, adaptive.growth_limit)
+                            };
+                            let next_dt = (attempted_dt * factor)
+                                .max(adaptive.dt_min)
+                                .min(adaptive.dt_max.unwrap_or(f64::INFINITY));
+                            if error <= 1.0 {
+                                *workflow = half_workflow;
+                                workflow.set_step_counters(
+                                    accepted_before.saturating_add(1),
+                                    rejected_before.saturating_add(rejected_trials),
+                                );
+                                state = half_state;
+                                half_report.dt_used = attempted_dt;
+                                half_report.suggested_next_dt = Some(next_dt);
+                                problem.commit_coupled_imex_ark2_step();
+                                break half_report;
+                            }
+                            rejected_trials = rejected_trials.saturating_add(1);
+                            if attempted_dt <= adaptive.dt_min {
+                                return Err(RunError {
+                                    message: format!(
+                                        "Step {step_count}: coupled ARS LTE {error:.6e} exceeds 1 at dt_min"
+                                    ),
+                                });
+                            }
+                            attempted_dt = next_dt;
+                        }
+                    } else {
+                        let report = execute_coupled_ars_trial(
+                            &problem,
+                            &mut state,
+                            workflow,
+                            dt_step,
+                            &mut fft_workspace,
+                            &mut integrator_bufs,
+                        )
+                        .map_err(|error| RunError {
+                            message: format!("Step {step_count}: {}", error.message),
                         })?;
-                        workflow.commit(accepted)?;
+                        problem.commit_coupled_imex_ark2_step();
                         report
                     }
-                    Err(error) => {
-                        workflow.rollback();
-                        return Err(RunError {
-                            message: format!("Step {}: {}", step_count, error),
-                        });
+                } else {
+                    let mut candidate: Option<FdmSpinTransportEvaluation> = None;
+                    workflow.begin_attempt()?;
+                    let result = problem.heun_step_with_external_stage_terms_and_lte(
+                        &mut state,
+                        dt_step,
+                        &mut fft_workspace,
+                        &mut integrator_bufs,
+                        EvaluationRequest::Full,
+                        |magnetization, time_s, stage_error_budget| {
+                            let previous_stage = candidate.as_ref();
+                            let evaluation = workflow
+                                .evaluate_stage_with_lte(
+                                    magnetization,
+                                    time_s,
+                                    stage_error_budget,
+                                    previous_stage,
+                                )
+                                .map_err(|error| EngineError::new(error.message))?;
+                            let terms = ExternalStageTerms {
+                                additional_field_apm: evaluation
+                                    .combined_oersted_field_apm
+                                    .clone()
+                                    .unwrap_or_else(|| vec![[0.0; 3]; magnetization.len()]),
+                                direct_torque_per_s: evaluation
+                                    .combined_transport_torque_per_s
+                                    .clone(),
+                            };
+                            candidate = Some(evaluation);
+                            Ok(terms)
+                        },
+                    );
+                    match result {
+                        Ok(report) => {
+                            let accepted = candidate.take().ok_or_else(|| RunError {
+                                message:
+                                    "coupled Heun step produced no final spin-transport evaluation"
+                                        .to_string(),
+                            })?;
+                            workflow.commit(accepted)?;
+                            report
+                        }
+                        Err(error) => {
+                            workflow.rollback();
+                            return Err(RunError {
+                                message: format!("Step {}: {}", step_count, error),
+                            });
+                        }
                     }
                 }
             } else {
@@ -1340,8 +1509,22 @@ pub(crate) fn execute_reference_fdm(
         .as_ref()
         .and_then(FdmSpinTransportWorkflow::accepted)
         .map(|evaluation| {
+            let transient = spin_transport
+                .as_ref()
+                .is_some_and(FdmSpinTransportWorkflow::has_transient);
+            let accepted_steps = spin_transport
+                .as_ref()
+                .map_or(0, FdmSpinTransportWorkflow::accepted_steps);
+            let rejected_steps = spin_transport
+                .as_ref()
+                .map_or(0, FdmSpinTransportWorkflow::rejected_steps);
             serde_json::to_vec_pretty(&serde_json::json!({
                 "schema": "fullmag.fdm.spin_transport.accepted.v1",
+                "integrator_version": transient.then_some("coupled_imex_ark2.v1"),
+                "integrator_implementation_revision": transient.then_some("imex_ars_232_step_doubling.fullmag.v1"),
+                "timestep_mode": transient.then_some(if plan.adaptive_timestep.is_some() { "adaptive" } else { "fixed" }),
+                "accepted_steps": accepted_steps,
+                "rejected_steps": rejected_steps,
                 "evaluation": evaluation,
             }))
             .map(|bytes| crate::types::AuxiliaryArtifact {

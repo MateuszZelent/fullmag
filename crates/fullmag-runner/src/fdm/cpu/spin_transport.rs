@@ -1,12 +1,15 @@
+use std::collections::BTreeMap;
+
 use fullmag_engine::fdm::cpu::transport::{
-    biot_savart_midpoint_field, ChargeBoundaryCondition, ChargeBoundaryConditions,
+    biot_savart_midpoint_field, ChargeBoundaryCondition, ChargeBoundaryConditions, ChargeSolution,
     ChargeSolverConfig, CoupledChargeSpinBoundaryConditions, CoupledChargeSpinMaterialFields,
     CoupledChargeSpinProblem, CoupledChargeSpinSolverConfig, CoupledChargeSpinWarmStart,
-    CoupledTransportOuterErrorBudget,
-    OrientedSpinInterface, PotentialGauge, ReciprocalConstitutiveMaterial,
-    SpinBoundaryCondition, SpinBoundaryConditions, SpinDriftDiffusionProblem, SpinFluxOperator,
-    SpinInterfaceLaw, SpinMaterialFields, SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets,
-    StructuredChargeProblem, StructuredSpinFace,
+    CoupledTransportOuterErrorBudget, OrientedSpinInterface, PotentialGauge,
+    ReciprocalConstitutiveMaterial, SpinBoundaryCondition, SpinBoundaryConditions,
+    SpinDriftDiffusionProblem, SpinFluxOperator, SpinInterfaceLaw, SpinMaterialFields,
+    SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets, StructuredChargeProblem,
+    StructuredSpinFace, TransientSpinIntegrator, TransientSpinMaterial, TransientSpinSolverConfig,
+    TransientSpinState,
 };
 use fullmag_engine::fdm::TransportStageErrorBudget;
 use fullmag_engine::{CellSize, GridShape};
@@ -106,6 +109,11 @@ pub(crate) struct FdmSpinTransportWorkflow {
     refresh_count: u64,
     accepted: Option<FdmSpinTransportEvaluation>,
     attempt_checkpoint: Option<(u64, u64)>,
+    transient_states: BTreeMap<String, TransientSpinState>,
+    transient_attempt_origin: Option<BTreeMap<String, TransientSpinState>>,
+    transient_candidates: BTreeMap<String, TransientSpinState>,
+    accepted_steps: u64,
+    rejected_steps: u64,
 }
 
 impl FdmSpinTransportWorkflow {
@@ -126,6 +134,7 @@ impl FdmSpinTransportWorkflow {
         .map_err(engine_error("spin transport grid"))?;
         let cell_size = CellSize::new(plan.cell_size[0], plan.cell_size[1], plan.cell_size[2])
             .map_err(engine_error("spin transport cell size"))?;
+        let mut transient_states = BTreeMap::new();
         for resolved in &plan.spin_transport_plans {
             if resolved.resolved_discretization != fullmag_ir::BackendTarget::Fdm
                 || resolved.resolved_device != fullmag_ir::ExecutionDevice::Cpu
@@ -138,10 +147,17 @@ impl FdmSpinTransportWorkflow {
             }
             if let Some(descriptor) = resolved.fdm_cpu_double_transient.as_ref() {
                 validate_transient_descriptor(descriptor, grid.cell_count(), &resolved.module_id)?;
-                return Err(run_error(format!(
-                    "spin transport '{}' has a valid CPU transient descriptor, but the coupled m/charge/spin ARS transaction owner is not implemented; no fallback and no artifacts are allowed",
-                    resolved.module_id
-                )));
+                transient_states.insert(
+                    resolved.module_id.clone(),
+                    TransientSpinState {
+                        spin_potential_v: vec![[0.0; 3]; grid.cell_count()],
+                        previous_spin_potential_v: None,
+                        time_s: 0.0,
+                        previous_dt_s: None,
+                        state_revision: 0,
+                    },
+                );
+                continue;
             }
             match (
                 resolved.fdm_cpu_double.as_ref(),
@@ -150,15 +166,15 @@ impl FdmSpinTransportWorkflow {
                 (Some(descriptor), None) => {
                     validate_descriptor(descriptor, grid.cell_count(), &resolved.module_id)?
                 }
-                (None, Some(descriptor)) => validate_coupled_descriptor(
-                    descriptor,
-                    grid.cell_count(),
-                    &resolved.module_id,
-                )?,
-                _ => return Err(run_error(format!(
-                    "spin transport '{}' must carry exactly one FDM CPU-double descriptor",
-                    resolved.module_id
-                ))),
+                (None, Some(descriptor)) => {
+                    validate_coupled_descriptor(descriptor, grid.cell_count(), &resolved.module_id)?
+                }
+                _ => {
+                    return Err(run_error(format!(
+                        "spin transport '{}' must carry exactly one FDM CPU-double descriptor",
+                        resolved.module_id
+                    )))
+                }
             }
         }
         Ok(Some(Self {
@@ -169,6 +185,11 @@ impl FdmSpinTransportWorkflow {
             refresh_count: 0,
             accepted: None,
             attempt_checkpoint: None,
+            transient_states,
+            transient_attempt_origin: None,
+            transient_candidates: BTreeMap::new(),
+            accepted_steps: 0,
+            rejected_steps: 0,
         }))
     }
 
@@ -177,7 +198,15 @@ impl FdmSpinTransportWorkflow {
             return Err(run_error("spin transport step attempt is already active"));
         }
         self.attempt_checkpoint = Some((self.next_revision, self.refresh_count));
+        self.transient_attempt_origin = Some(self.transient_states.clone());
+        self.transient_candidates.clear();
         Ok(())
+    }
+
+    pub(crate) fn has_transient(&self) -> bool {
+        self.plans
+            .iter()
+            .any(|resolved| resolved.fdm_cpu_double_transient.is_some())
     }
 
     #[cfg(test)]
@@ -215,18 +244,50 @@ impl FdmSpinTransportWorkflow {
         let mut combined_torque = vec![[0.0; 3]; self.grid.cell_count()];
         let mut combined_oersted: Option<Vec<[f64; 3]>> = None;
         for resolved in &self.plans {
-            let module = if let Some(descriptor) = resolved.fdm_cpu_double.as_ref() {
-                solve_module(self.grid, self.cell_size, resolved, descriptor, magnetization)?
+            let module = if let Some(descriptor) = resolved.fdm_cpu_double_transient.as_ref() {
+                let origin = self
+                    .transient_attempt_origin
+                    .as_ref()
+                    .and_then(|states| states.get(&resolved.module_id))
+                    .ok_or_else(|| {
+                        run_error("transient stage evaluation requires an active transaction")
+                    })?;
+                let (snapshot, candidate) = solve_transient_module(
+                    self.grid,
+                    self.cell_size,
+                    resolved,
+                    descriptor,
+                    magnetization,
+                    origin,
+                    stage_time_s,
+                )?;
+                self.transient_candidates
+                    .insert(resolved.module_id.clone(), candidate);
+                snapshot
+            } else if let Some(descriptor) = resolved.fdm_cpu_double.as_ref() {
+                solve_module(
+                    self.grid,
+                    self.cell_size,
+                    resolved,
+                    descriptor,
+                    magnetization,
+                )?
             } else {
                 let descriptor = resolved
                     .fdm_cpu_double_reciprocal
                     .as_ref()
                     .expect("exactly one descriptor was validated during workflow construction");
                 let accepted = self.accepted.as_ref().and_then(|evaluation| {
-                    evaluation.modules.iter().find(|module| module.module_id == resolved.module_id)
+                    evaluation
+                        .modules
+                        .iter()
+                        .find(|module| module.module_id == resolved.module_id)
                 });
                 let previous_module = previous_stage.and_then(|evaluation| {
-                    evaluation.modules.iter().find(|module| module.module_id == resolved.module_id)
+                    evaluation
+                        .modules
+                        .iter()
+                        .find(|module| module.module_id == resolved.module_id)
                 });
                 solve_coupled_module(
                     self.grid,
@@ -279,7 +340,12 @@ impl FdmSpinTransportWorkflow {
             ));
         }
         self.accepted = Some(evaluation);
+        for (module_id, state) in std::mem::take(&mut self.transient_candidates) {
+            self.transient_states.insert(module_id, state);
+        }
+        self.transient_attempt_origin = None;
         self.attempt_checkpoint = None;
+        self.accepted_steps = self.accepted_steps.saturating_add(1);
         Ok(())
     }
 
@@ -290,10 +356,61 @@ impl FdmSpinTransportWorkflow {
             self.next_revision = next_revision;
             self.refresh_count = refresh_count;
         }
+        self.transient_attempt_origin = None;
+        self.transient_candidates.clear();
     }
 
     pub(crate) fn accepted(&self) -> Option<&FdmSpinTransportEvaluation> {
         self.accepted.as_ref()
+    }
+
+    pub(crate) fn accepted_steps(&self) -> u64 {
+        self.accepted_steps
+    }
+
+    pub(crate) fn rejected_steps(&self) -> u64 {
+        self.rejected_steps
+    }
+
+    pub(crate) fn set_step_counters(&mut self, accepted_steps: u64, rejected_steps: u64) {
+        self.accepted_steps = accepted_steps;
+        self.rejected_steps = rejected_steps;
+    }
+
+    pub(crate) fn normalized_transient_difference(
+        &self,
+        other: &Self,
+        atol: f64,
+        rtol: f64,
+    ) -> Result<f64, RunError> {
+        let left = self
+            .accepted
+            .as_ref()
+            .ok_or_else(|| run_error("full transient trial has no accepted state"))?;
+        let right = other
+            .accepted
+            .as_ref()
+            .ok_or_else(|| run_error("half-step transient trial has no accepted state"))?;
+        let mut sum = 0.0;
+        let mut count = 0usize;
+        for left_module in &left.modules {
+            let right_module = right
+                .modules
+                .iter()
+                .find(|module| module.module_id == left_module.module_id)
+                .ok_or_else(|| run_error("transient trial module identity mismatch"))?;
+            for (full, half) in left_module
+                .spin_potential_volts
+                .iter()
+                .flatten()
+                .zip(right_module.spin_potential_volts.iter().flatten())
+            {
+                let scale = atol + rtol * full.abs().max(half.abs());
+                sum += (((half - full) / 3.0) / scale).powi(2);
+                count += 1;
+            }
+        }
+        Ok((sum / count.max(1) as f64).sqrt())
     }
 }
 
@@ -485,14 +602,12 @@ fn solve_coupled_module(
             spin_potential_volts: snapshot.spin_potential_volts.clone(),
         });
     let config = CoupledChargeSpinSolverConfig {
-                relative_tolerance: descriptor.linear_solver.relative_tolerance,
-                absolute_tolerance: descriptor.linear_solver.absolute_tolerance,
-                max_linear_iterations: descriptor.linear_solver.max_iterations as usize,
-                gmres_restart: descriptor.nonlinear_solver.gmres_restart as usize,
-                max_picard_iterations: descriptor.nonlinear_solver.max_picard_iterations as usize,
-                relative_update_tolerance: descriptor
-                    .nonlinear_solver
-                    .relative_update_tolerance,
+        relative_tolerance: descriptor.linear_solver.relative_tolerance,
+        absolute_tolerance: descriptor.linear_solver.absolute_tolerance,
+        max_linear_iterations: descriptor.linear_solver.max_iterations as usize,
+        gmres_restart: descriptor.nonlinear_solver.gmres_restart as usize,
+        max_picard_iterations: descriptor.nonlinear_solver.max_picard_iterations as usize,
+        relative_update_tolerance: descriptor.nonlinear_solver.relative_update_tolerance,
     };
     let solution = match stage_error_budget {
         Some(budget) => {
@@ -518,8 +633,15 @@ fn solve_coupled_module(
         .iter()
         .map(|tensor| {
             [
-                tensor[0][0], tensor[0][1], tensor[0][2], tensor[1][0], tensor[1][1],
-                tensor[1][2], tensor[2][0], tensor[2][1], tensor[2][2],
+                tensor[0][0],
+                tensor[0][1],
+                tensor[0][2],
+                tensor[1][0],
+                tensor[1][1],
+                tensor[1][2],
+                tensor[2][0],
+                tensor[2][1],
+                tensor[2][2],
             ]
         })
         .collect();
@@ -570,12 +692,8 @@ fn solve_coupled_module(
             coupled_linear_iterations: Some(solution.telemetry.linear_iterations),
             preconditioner_applications: Some(solution.telemetry.preconditioner_applications),
             scaled_charge_residual: Some(solution.telemetry.scaled_charge_residual),
-            relative_charge_current_update: Some(
-                solution.telemetry.relative_charge_current_update,
-            ),
-            relative_spin_potential_update: Some(
-                solution.telemetry.relative_spin_potential_update,
-            ),
+            relative_charge_current_update: Some(solution.telemetry.relative_charge_current_update),
+            relative_spin_potential_update: Some(solution.telemetry.relative_spin_potential_update),
             transport_outer_error_ratio: solution.telemetry.transport_outer_error_ratio,
             charge_balance_relative: Some(solution.telemetry.charge_balance_relative),
             spin_balance_relative: Some(solution.telemetry.spin_balance_relative),
@@ -600,7 +718,9 @@ fn materialize_interfaces(
             let to_cell = interface.to_cell as usize;
             let law = match &interface.law {
                 ResolvedSpinInterfaceLawIR::Transparent => {
-                    return Err(run_error("transparent M2 interfaces must be rejected by the planner"));
+                    return Err(run_error(
+                        "transparent M2 interfaces must be rejected by the planner",
+                    ));
                 }
                 ResolvedSpinInterfaceLawIR::MixingConductance {
                     g_up_spm2,
@@ -687,6 +807,183 @@ fn solve_module(
     descriptor: &ResolvedFdmSpinTransportIR,
     magnetization: &[[f64; 3]],
 ) -> Result<FdmSpinTransportModuleSnapshot, RunError> {
+    let (charge_solution, current_density_apm2, spin_problem) =
+        materialize_one_way_problem(grid, cell_size, descriptor, magnetization)?;
+    solve_one_way_snapshot(
+        grid,
+        cell_size,
+        resolved,
+        descriptor,
+        charge_solution,
+        current_density_apm2,
+        spin_problem,
+        state_revision(magnetization),
+    )
+}
+
+fn solve_transient_module(
+    grid: GridShape,
+    cell_size: CellSize,
+    resolved: &fullmag_ir::ResolvedSpinTransportPlanIR,
+    descriptor: &ResolvedFdmTransientSpinTransportIR,
+    magnetization: &[[f64; 3]],
+    origin: &TransientSpinState,
+    stage_time_s: f64,
+) -> Result<(FdmSpinTransportModuleSnapshot, TransientSpinState), RunError> {
+    let steady = &descriptor.steady_operator;
+    let (charge_solution, current_density_apm2, spin_problem) =
+        materialize_one_way_problem(grid, cell_size, steady, magnetization)?;
+    let capacitance_formula_version = format!(
+        "per_cell:{}",
+        descriptor.capacitance_formula_versions.join("|")
+    );
+    let integrator = TransientSpinIntegrator::new(
+        &spin_problem,
+        TransientSpinMaterial {
+            spin_capacitance_as_per_v_m3: descriptor.spin_capacitance_as_per_v_m3.clone(),
+            capacitance_formula_version,
+        },
+        TransientSpinSolverConfig {
+            relative_tolerance: steady.spin_solver.linear.relative_tolerance,
+            absolute_linear_residual_a_per_m3: steady.spin_solver.linear.absolute_tolerance,
+            absolute_error_tolerance_v: steady.spin_solver.linear.absolute_tolerance,
+            max_iterations: steady.spin_solver.linear.max_iterations as usize,
+            restart: 40,
+        },
+    )
+    .map_err(engine_error("transient spin integrator materialization"))?;
+    let elapsed = stage_time_s - origin.time_s;
+    if elapsed < 0.0 || !elapsed.is_finite() {
+        return Err(run_error(
+            "transient spin stage time precedes the committed transaction state",
+        ));
+    }
+    let (candidate, iterations) = if elapsed == 0.0 {
+        (origin.clone(), 0)
+    } else {
+        let attempt = integrator
+            .try_fixed_step(origin, elapsed)
+            .map_err(engine_error("transient ARS stage solve"))?;
+        (
+            attempt
+                .candidate
+                .ok_or_else(|| run_error("fixed transient ARS stage returned no candidate"))?,
+            attempt.telemetry.linear_iterations,
+        )
+    };
+    let observation = spin_problem
+        .observe_transient_state(&candidate.spin_potential_v)
+        .map_err(engine_error("transient accepted-state observation"))?;
+    let tensors = observation
+        .cell_spin_current_tensor_apm2
+        .iter()
+        .map(|tensor| {
+            [
+                tensor[0][0],
+                tensor[0][1],
+                tensor[0][2],
+                tensor[1][0],
+                tensor[1][1],
+                tensor[1][2],
+                tensor[2][0],
+                tensor[2][1],
+                tensor[2][2],
+            ]
+        })
+        .collect();
+    let interface_fluxes = observation
+        .spin_current_density
+        .interface_observations
+        .iter()
+        .map(|observation| interface_snapshot(observation, &steady.interfaces))
+        .collect();
+    let oersted_field_apm = steady
+        .oersted_source_bound
+        .then(|| {
+            biot_savart_midpoint_field(
+                grid,
+                cell_size,
+                &steady.charge_active_cells,
+                &current_density_apm2,
+            )
+            .map_err(engine_error("transient midpoint Oersted solve"))
+        })
+        .transpose()?;
+    let residual_l2 = observation
+        .residual_a_per_m3
+        .iter()
+        .flatten()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt();
+    let balance_scale = observation.balance.normalization_current_a;
+    let spin_relative_balance_closure = if balance_scale == 0.0 {
+        observation
+            .balance
+            .closure_a
+            .iter()
+            .map(|value| value * value)
+            .sum::<f64>()
+            .sqrt()
+    } else {
+        observation
+            .balance
+            .closure_a
+            .iter()
+            .map(|value| value * value)
+            .sum::<f64>()
+            .sqrt()
+            / balance_scale
+    };
+    let snapshot = FdmSpinTransportModuleSnapshot {
+        module_id: resolved.module_id.clone(),
+        current_source_id: resolved.current_source_id.clone(),
+        potential_volts: charge_solution.potential_volts,
+        current_density_apm2,
+        spin_potential_volts: candidate.spin_potential_v.clone(),
+        spin_current_tensor_apm2: tensors,
+        interface_fluxes,
+        transport_torque_per_s: observation.transport_gilbert_torque_per_s,
+        oersted_field_apm,
+        telemetry: FdmSpinTransportTelemetry {
+            charge_iterations: charge_solution.iterations,
+            charge_residual_l2: charge_solution.residual_l2,
+            charge_net_boundary_current_a: charge_solution.balance.net_boundary_current_a,
+            charge_max_abs_divergence_a_per_m3: charge_solution.balance.max_abs_divergence_a_per_m3,
+            spin_iterations: iterations,
+            spin_initial_residual_l2: residual_l2,
+            spin_final_residual_l2: residual_l2,
+            spin_scaled_residual: residual_l2,
+            spin_relative_balance_closure,
+            convergence_reason: "transient_ars_stage_accepted".into(),
+            preconditioner: "none".into(),
+            nonlinear_iterations: None,
+            coupled_linear_iterations: None,
+            preconditioner_applications: None,
+            scaled_charge_residual: None,
+            relative_charge_current_update: None,
+            relative_spin_potential_update: None,
+            transport_outer_error_ratio: None,
+            charge_balance_relative: None,
+            spin_balance_relative: None,
+            warm_start_used: None,
+        },
+        constitutive_version: resolved.constitutive_version.clone(),
+        charge_operator_version: steady.charge_solver.operator_version.clone(),
+        spin_operator_version: steady.spin_solver.operator_version.clone(),
+        torque_formula_version: steady.torque_formula_version.clone(),
+        state_revision: candidate.state_revision,
+        operator_revision: 0,
+    };
+    Ok((snapshot, candidate))
+}
+
+fn materialize_one_way_problem(
+    grid: GridShape,
+    cell_size: CellSize,
+    descriptor: &ResolvedFdmSpinTransportIR,
+    magnetization: &[[f64; 3]],
+) -> Result<(ChargeSolution, Vec<[f64; 3]>, SpinDriftDiffusionProblem), RunError> {
     let charge_boundary = charge_boundary_conditions(&descriptor.charge_boundaries)?;
     let charge_problem = StructuredChargeProblem::new(
         grid,
@@ -798,6 +1095,19 @@ fn solve_module(
             descriptor.spin_solver.engine
         )));
     }
+    Ok((charge_solution, current_density_apm2, spin_problem))
+}
+
+fn solve_one_way_snapshot(
+    grid: GridShape,
+    cell_size: CellSize,
+    resolved: &fullmag_ir::ResolvedSpinTransportPlanIR,
+    descriptor: &ResolvedFdmSpinTransportIR,
+    charge_solution: ChargeSolution,
+    current_density_apm2: Vec<[f64; 3]>,
+    spin_problem: SpinDriftDiffusionProblem,
+    state_revision_value: u64,
+) -> Result<FdmSpinTransportModuleSnapshot, RunError> {
     let spin_solution = spin_problem
         .solve(SpinSolverConfig {
             relative_tolerance: descriptor.spin_solver.linear.relative_tolerance,
@@ -899,7 +1209,7 @@ fn solve_module(
         charge_operator_version: descriptor.charge_solver.operator_version.clone(),
         spin_operator_version: descriptor.spin_solver.operator_version.clone(),
         torque_formula_version: descriptor.torque_formula_version.clone(),
-        state_revision: state_revision(magnetization),
+        state_revision: state_revision_value,
         operator_revision: 0,
     })
 }
@@ -1250,7 +1560,9 @@ mod tests {
         let accepted = workflow
             .evaluate_stage(&plan.initial_magnetization, 0.0)
             .expect("initial reciprocal solve");
-        workflow.commit(accepted).expect("commit initial reciprocal state");
+        workflow
+            .commit(accepted)
+            .expect("commit initial reciprocal state");
 
         let predictor = workflow
             .evaluate_stage(&plan.initial_magnetization, 1e-12)
@@ -1272,7 +1584,10 @@ mod tests {
             )
             .expect("corrected reciprocal solve should satisfy its LTE budget");
         let module = &corrected.modules[0];
-        assert_eq!(module.constitutive_version, "transport_constitutive.reciprocal.fullmag.v1");
+        assert_eq!(
+            module.constitutive_version,
+            "transport_constitutive.reciprocal.fullmag.v1"
+        );
         assert!(module.telemetry.nonlinear_iterations.is_some());
         assert_eq!(module.telemetry.transport_outer_error_ratio, Some(0.0));
     }
@@ -1318,7 +1633,100 @@ mod tests {
     }
 
     #[test]
-    fn transient_descriptor_fails_closed_until_one_owner_coordinates_all_ars_states() {
+    fn reference_runner_executes_fixed_coupled_ars_and_publishes_only_accepted_transient_state() {
+        let mut plan = plan();
+        let resolved = &mut plan.spin_transport_plans[0];
+        let mut steady_operator = resolved.fdm_cpu_double.take().unwrap();
+        let count = steady_operator.spin_active_cells.len();
+        steady_operator.theta_sh.fill(0.2);
+        resolved.capabilities = vec!["transport.spin.transient_drift_diffusion".into()];
+        resolved.fdm_cpu_double_transient = Some(ResolvedFdmTransientSpinTransportIR {
+            descriptor_schema: "fullmag.fdm.transient_spin_transport_descriptor.v1".into(),
+            steady_operator,
+            spin_capacitance_as_per_v_m3: vec![2.0; count],
+            capacitance_formula_versions: vec!["dos_constant.fullmag.v1".into(); count],
+            transient_formula_version: "transient_spin_balance.fullmag.v1".into(),
+            integrator: CoupledSpinIntegratorIR::CoupledImexArk2,
+            integrator_version: "coupled_imex_ark2.v1".into(),
+        });
+        plan.integrator = None;
+        plan.fixed_timestep = Some(1.0e-3);
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.material = FdmMaterialIR {
+            name: "Py".into(),
+            saturation_magnetisation: 8.0e5,
+            exchange_stiffness: 13.0e-12,
+            damping: 0.02,
+            ..Default::default()
+        };
+        plan.enable_exchange = false;
+        plan.enable_demag = false;
+
+        let executed =
+            super::super::reference::execute_reference_fdm(&plan, 1.0e-3, &[], None, None)
+                .expect("fixed coupled ARS run");
+        assert_eq!(executed.result.status, crate::types::RunStatus::Completed);
+        let artifact = executed
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "transport/spin_transport_accepted.json")
+            .expect("accepted transient artifact");
+        let document: serde_json::Value = serde_json::from_slice(&artifact.bytes).unwrap();
+        assert_eq!(document["schema"], "fullmag.fdm.spin_transport.accepted.v1");
+        assert_eq!(document["integrator_version"], "coupled_imex_ark2.v1");
+        assert_eq!(
+            document["integrator_implementation_revision"],
+            "imex_ars_232_step_doubling.fullmag.v1"
+        );
+        let module = &document["evaluation"]["modules"][0];
+        assert_eq!(module["potential_volts"].as_array().unwrap().len(), count);
+        assert_eq!(
+            module["current_density_apm2"].as_array().unwrap().len(),
+            count
+        );
+        assert_eq!(
+            module["spin_potential_volts"].as_array().unwrap().len(),
+            count
+        );
+        assert_eq!(
+            module["spin_current_tensor_apm2"].as_array().unwrap().len(),
+            count
+        );
+        let interior_mu = module["spin_potential_volts"][1][0].as_f64().unwrap();
+        assert!(
+            interior_mu > 0.0 && interior_mu < 0.1,
+            "one short transient step must not publish the steady 1/3 V profile: {interior_mu}"
+        );
+        assert!(module["current_density_apm2"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|value| value.as_array().unwrap())
+            .any(|value| value.as_f64().unwrap().abs() > 0.0));
+        assert!(module["spin_current_tensor_apm2"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|value| value.as_array().unwrap())
+            .any(|value| value.as_f64().unwrap().abs() > 0.0));
+
+        let replay = super::super::reference::execute_reference_fdm(&plan, 1.0e-3, &[], None, None)
+            .expect("deterministic fixed coupled ARS replay");
+        let replay_artifact = replay
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "transport/spin_transport_accepted.json")
+            .expect("replayed accepted transient artifact");
+        assert_eq!(artifact.bytes, replay_artifact.bytes);
+        assert!(executed
+            .auxiliary_artifacts
+            .iter()
+            .chain(&replay.auxiliary_artifacts)
+            .all(|artifact| !artifact.relative_path.contains("rejected")));
+    }
+
+    #[test]
+    fn reference_runner_adaptive_coupled_ars_uses_full_vs_two_half_and_counts_rejection() {
         let mut plan = plan();
         let resolved = &mut plan.spin_transport_plans[0];
         let steady_operator = resolved.fdm_cpu_double.take().unwrap();
@@ -1334,13 +1742,46 @@ mod tests {
             integrator_version: "coupled_imex_ark2.v1".into(),
         });
         plan.integrator = None;
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+            atol: 1.0e-14,
+            rtol: 1.0e-14,
+            dt_initial: Some(1.0e-3),
+            dt_min: 1.0e-8,
+            dt_max: Some(1.0e-3),
+            safety: 0.8,
+            growth_limit: 2.0,
+            shrink_limit: 0.1,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        });
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.material = FdmMaterialIR {
+            name: "Py".into(),
+            saturation_magnetisation: 8.0e5,
+            exchange_stiffness: 13.0e-12,
+            damping: 0.02,
+            ..Default::default()
+        };
+        plan.enable_exchange = false;
+        plan.enable_demag = false;
 
-        let error = FdmSpinTransportWorkflow::from_plan(&plan)
-            .expect_err("partial spin-only runner wiring must fail closed");
-        assert!(error
-            .message
-            .contains("coupled m/charge/spin ARS transaction"));
-        assert!(error.message.contains("no fallback"));
+        let executed =
+            super::super::reference::execute_reference_fdm(&plan, 1.0e-3, &[], None, None)
+                .expect("adaptive coupled ARS run");
+        let artifact = executed
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "transport/spin_transport_accepted.json")
+            .unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&artifact.bytes).unwrap();
+        assert_eq!(document["timestep_mode"], "adaptive");
+        assert!(document["accepted_steps"].as_u64().unwrap() >= 1);
+        assert!(
+            document["rejected_steps"].as_u64().unwrap() >= 1,
+            "strict LTE tolerance must exercise rollback before acceptance"
+        );
+        assert!((executed.result.steps.last().unwrap().time - 1.0e-3).abs() < 1.0e-12);
     }
 
     #[test]
@@ -1416,8 +1857,7 @@ mod tests {
             "transport_constitutive.reciprocal.fullmag.v1"
         );
         assert_eq!(
-            document["evaluation"]["modules"][0]["telemetry"]
-                ["transport_outer_error_ratio"],
+            document["evaluation"]["modules"][0]["telemetry"]["transport_outer_error_ratio"],
             0.0
         );
     }

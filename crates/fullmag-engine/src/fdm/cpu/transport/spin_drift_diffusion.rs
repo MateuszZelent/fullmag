@@ -182,6 +182,15 @@ pub struct SpinSolution {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct TransientSpinObservation {
+    pub spin_current_density: OrientedSpinFaceFluxes,
+    pub cell_spin_current_tensor_apm2: Vec<[[f64; 3]; 3]>,
+    pub transport_gilbert_torque_per_s: Vec<Vector3>,
+    pub residual_a_per_m3: Vec<Vector3>,
+    pub balance: SpinBalanceDiagnostics,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpinSolverTelemetry {
     pub convergence_reason: &'static str,
     pub operator_version: &'static str,
@@ -234,6 +243,30 @@ pub struct SpinDriftDiffusionProblem {
 }
 
 impl SpinDriftDiffusionProblem {
+    pub fn observe_transient_state(
+        &self,
+        spin_potential_volts: &[Vector3],
+    ) -> Result<TransientSpinObservation> {
+        let spin_current_density = self.face_fluxes(spin_potential_volts)?;
+        let cell_spin_current_tensor_apm2 =
+            self.cell_centered_spin_current_tensor(&spin_current_density)?;
+        let reaction_channels = self.reaction_channels(spin_potential_volts)?;
+        let residual_a_per_m3 = self.steady_residual(spin_potential_volts)?;
+        let balance = self.balance_from_fields(
+            &spin_current_density,
+            &reaction_channels,
+            &residual_a_per_m3,
+        )?;
+        let transport_gilbert_torque_per_s =
+            self.transport_gilbert_torque(&reaction_channels, &spin_current_density)?;
+        Ok(TransientSpinObservation {
+            spin_current_density,
+            cell_spin_current_tensor_apm2,
+            transport_gilbert_torque_per_s,
+            residual_a_per_m3,
+            balance,
+        })
+    }
     pub fn new(
         charge: StructuredChargeProblem,
         charge_potential_volts: Vec<f64>,

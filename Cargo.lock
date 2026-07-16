@@ -1210,6 +1210,8 @@ dependencies = [
  "fullmag-ir",
  "rayon",
  "rustfft",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
