@@ -583,6 +583,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
                 inserted_default_boundaries: inserted_fem_default_boundaries(charge, module),
                 fdm_cpu_double: None,
                 fdm_cpu_double_reciprocal: None,
+                fdm_cpu_double_transient: None,
                 fem_cpu_double: Some(descriptor),
             }),
             Err(mut reasons) => errors.append(&mut reasons),
