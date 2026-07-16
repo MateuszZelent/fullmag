@@ -2,6 +2,128 @@ use fullmag_ir::*;
 use std::collections::{BTreeMap, HashMap};
 
 #[test]
+fn sampling_policy_round_trips_legacy_explicit_and_auto_sinc() {
+    let legacy: TableAutosaveIR = serde_json::from_value(serde_json::json!({
+        "kind": "table_autosave",
+        "table_id": "default",
+        "sample_period_s": 2e-12,
+        "quantities": ["t", "mx"]
+    }))
+    .unwrap();
+    assert_eq!(legacy.explicit_sample_period_s(), Some(2e-12));
+    assert_eq!(
+        serde_json::to_value(&legacy).unwrap()["sample_period_s"],
+        serde_json::json!(2e-12)
+    );
+
+    let automatic: TableAutosaveIR = serde_json::from_value(serde_json::json!({
+        "kind": "table_autosave",
+        "table_id": "default",
+        "sample_period_policy": {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3
+        },
+        "quantities": ["t", "mx"]
+    }))
+    .unwrap();
+    assert!(automatic.requests_auto_sinc_cutoff());
+    assert_eq!(
+        serde_json::to_value(automatic).unwrap()["sample_period_policy"]["kind"],
+        "auto_sinc_cutoff"
+    );
+}
+
+#[test]
+fn sampling_policy_round_trips_automatic_field_and_scalar_outputs() {
+    for (kind, expected_name) in [("field_auto", "m"), ("scalar_auto", "mx")] {
+        let output: OutputIR = serde_json::from_value(serde_json::json!({
+            "kind": kind,
+            "name": expected_name,
+            "sample_period_policy": {
+                "kind": "auto_sinc_cutoff",
+                "nyquist_guard_factor": 1.3
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(output.periodic_name(), Some(expected_name));
+        assert!(output.requests_auto_sinc_cutoff());
+        match kind {
+            "field_auto" => assert!(matches!(output, OutputIR::FieldAuto { .. })),
+            "scalar_auto" => assert!(matches!(output, OutputIR::ScalarAuto { .. })),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn sampling_policy_validation_accepts_unresolved_and_resolved_auto_intent() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let table = TableAutosaveIR {
+        kind: "table_autosave".into(),
+        table_id: "default".into(),
+        sample_period_s: None,
+        sample_period_policy: Some(SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
+        }),
+        quantities: vec!["t".into(), "mx".into()],
+    };
+    ir.study.sampling_mut().table_autosave = Some(table);
+    ir.validate()
+        .expect("unresolved automatic sampling is valid authoring intent");
+
+    let table = ir.study.sampling_mut().table_autosave.as_mut().unwrap();
+    table.set_resolved_sample_period_s(2e-12);
+    assert_eq!(table.sample_period_s, Some(2e-12));
+    assert_eq!(table.explicit_sample_period_s(), None);
+    ir.validate()
+        .expect("resolved automatic sampling remains valid automatic intent");
+}
+
+#[test]
+fn sampling_policy_validation_rejects_missing_mode_and_noncanonical_values() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study.sampling_mut().table_autosave = Some(TableAutosaveIR {
+        kind: "table_autosave".into(),
+        table_id: "default".into(),
+        sample_period_s: None,
+        sample_period_policy: None,
+        quantities: vec!["t".into()],
+    });
+    let errors = ir
+        .validate()
+        .expect_err("table autosave must request an explicit or automatic mode");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("requires sample_period_s")));
+
+    ir.study.sampling_mut().table_autosave = None;
+    ir.study.sampling_mut().outputs = vec![OutputIR::FieldAuto {
+        name: "m".into(),
+        sample_period_policy: SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor: 1.2,
+        },
+    }];
+    let errors = ir
+        .validate()
+        .expect_err("automatic sampling must use the canonical guard factor");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("nyquist_guard_factor must be exactly 1.3")));
+
+    ir.study.sampling_mut().outputs = vec![OutputIR::Scalar {
+        name: "mx".into(),
+        every_seconds: f64::NAN,
+    }];
+    let errors = ir
+        .validate()
+        .expect_err("explicit sampling periods must be finite");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("finite positive every_seconds")));
+}
+
+#[test]
 fn execution_plans_carry_regional_field_drives_without_legacy_aliasing() {
     fn fdm_drives(plan: &FdmPlanIR) -> &[RegionalFieldDriveIR] {
         &plan.field_drives

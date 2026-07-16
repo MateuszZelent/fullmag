@@ -670,14 +670,53 @@ pub struct SamplingIR {
     pub table_autosave: Option<TableAutosaveIR>,
 }
 
+pub const AUTO_SINC_NYQUIST_GUARD_FACTOR: f64 = 1.3;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SamplingPeriodPolicyIR {
+    AutoSincCutoff {
+        #[serde(default = "default_auto_sinc_nyquist_guard_factor")]
+        nyquist_guard_factor: f64,
+    },
+}
+
+fn default_auto_sinc_nyquist_guard_factor() -> f64 {
+    AUTO_SINC_NYQUIST_GUARD_FACTOR
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TableAutosaveIR {
     #[serde(default = "default_table_autosave_kind")]
     pub kind: String,
     #[serde(default = "default_table_id")]
     pub table_id: String,
-    pub sample_period_s: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_period_s: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_period_policy: Option<SamplingPeriodPolicyIR>,
     pub quantities: Vec<String>,
+}
+
+impl TableAutosaveIR {
+    pub fn explicit_sample_period_s(&self) -> Option<f64> {
+        if self.sample_period_policy.is_none() {
+            self.sample_period_s
+        } else {
+            None
+        }
+    }
+
+    pub fn requests_auto_sinc_cutoff(&self) -> bool {
+        matches!(
+            self.sample_period_policy,
+            Some(SamplingPeriodPolicyIR::AutoSincCutoff { .. })
+        )
+    }
+
+    pub fn set_resolved_sample_period_s(&mut self, period_s: f64) {
+        self.sample_period_s = Some(period_s);
+    }
 }
 
 #[cfg(test)]
@@ -701,7 +740,8 @@ mod tests {
             .table_autosave
             .expect("sampling should preserve table autosave");
         assert_eq!(table.table_id, "default");
-        assert_eq!(table.sample_period_s, 2e-12);
+        assert_eq!(table.sample_period_s, Some(2e-12));
+        assert!(table.sample_period_policy.is_none());
         assert_eq!(table.quantities, ["step", "t", "mx", "e_total"]);
     }
 
@@ -1102,9 +1142,17 @@ pub enum OutputIR {
         name: String,
         every_seconds: f64,
     },
+    FieldAuto {
+        name: String,
+        sample_period_policy: SamplingPeriodPolicyIR,
+    },
     Scalar {
         name: String,
         every_seconds: f64,
+    },
+    ScalarAuto {
+        name: String,
+        sample_period_policy: SamplingPeriodPolicyIR,
     },
     Snapshot {
         field: String,
@@ -1151,6 +1199,31 @@ pub enum OutputIR {
         #[serde(skip_serializing_if = "Option::is_none")]
         component: Option<String>,
     },
+}
+
+impl OutputIR {
+    pub fn periodic_name(&self) -> Option<&str> {
+        match self {
+            Self::Field { name, .. }
+            | Self::FieldAuto { name, .. }
+            | Self::Scalar { name, .. }
+            | Self::ScalarAuto { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    pub fn requests_auto_sinc_cutoff(&self) -> bool {
+        matches!(
+            self,
+            Self::FieldAuto {
+                sample_period_policy: SamplingPeriodPolicyIR::AutoSincCutoff { .. },
+                ..
+            } | Self::ScalarAuto {
+                sample_period_policy: SamplingPeriodPolicyIR::AutoSincCutoff { .. },
+                ..
+            }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

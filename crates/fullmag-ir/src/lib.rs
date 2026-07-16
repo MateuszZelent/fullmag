@@ -35,6 +35,24 @@ pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.1.0";
 pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION, PREVIOUS_PUBLIC_IR_VERSION];
 const MU0_H_PER_M: f64 = 1.256_637_061_435_917_2e-6;
 
+fn validate_sampling_period_policy(
+    path: &str,
+    policy: &SamplingPeriodPolicyIR,
+    errors: &mut Vec<String>,
+) {
+    match policy {
+        SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor,
+        } => {
+            if *nyquist_guard_factor != AUTO_SINC_NYQUIST_GUARD_FACTOR {
+                errors.push(format!(
+                    "{path}.nyquist_guard_factor must be exactly {AUTO_SINC_NYQUIST_GUARD_FACTOR}"
+                ));
+            }
+        }
+    }
+}
+
 pub fn is_supported_ir_version_for_read(version: &str) -> bool {
     let normalized = version.trim();
     !normalized.is_empty() && SUPPORTED_READ_IR_VERSIONS.contains(&normalized)
@@ -539,12 +557,25 @@ impl ProblemIR {
                     if name.trim().is_empty() {
                         errors.push("field output name must not be empty".to_string());
                     }
-                    if *every_seconds <= 0.0 {
+                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
                         errors.push(format!(
-                            "field output '{}' must have positive every_seconds",
+                            "field output '{}' must have finite positive every_seconds",
                             name
                         ));
                     }
+                }
+                OutputIR::FieldAuto {
+                    name,
+                    sample_period_policy,
+                } => {
+                    if name.trim().is_empty() {
+                        errors.push("field_auto output name must not be empty".to_string());
+                    }
+                    validate_sampling_period_policy(
+                        "field_auto output",
+                        sample_period_policy,
+                        &mut errors,
+                    );
                 }
                 OutputIR::Scalar {
                     name,
@@ -553,12 +584,25 @@ impl ProblemIR {
                     if name.trim().is_empty() {
                         errors.push("scalar output name must not be empty".to_string());
                     }
-                    if *every_seconds <= 0.0 {
+                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
                         errors.push(format!(
-                            "scalar output '{}' must have positive every_seconds",
+                            "scalar output '{}' must have finite positive every_seconds",
                             name
                         ));
                     }
+                }
+                OutputIR::ScalarAuto {
+                    name,
+                    sample_period_policy,
+                } => {
+                    if name.trim().is_empty() {
+                        errors.push("scalar_auto output name must not be empty".to_string());
+                    }
+                    validate_sampling_period_policy(
+                        "scalar_auto output",
+                        sample_period_policy,
+                        &mut errors,
+                    );
                 }
                 OutputIR::Snapshot {
                     field,
@@ -576,9 +620,9 @@ impl ProblemIR {
                             component
                         ));
                     }
-                    if *every_seconds <= 0.0 {
+                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
                         errors.push(format!(
-                            "snapshot '{}' must have positive every_seconds",
+                            "snapshot '{}' must have finite positive every_seconds",
                             field
                         ));
                     }
@@ -615,9 +659,9 @@ impl ProblemIR {
                     if quantity_id.trim().is_empty() {
                         errors.push("save_quantity quantity_id must not be empty".to_string());
                     }
-                    if *every_seconds <= 0.0 {
+                    if !every_seconds.is_finite() || *every_seconds <= 0.0 {
                         errors.push(format!(
-                            "save_quantity '{}' must have positive every_seconds",
+                            "save_quantity '{}' must have finite positive every_seconds",
                             quantity_id
                         ));
                     }
@@ -631,8 +675,31 @@ impl ProblemIR {
             if table_autosave.table_id.trim().is_empty() {
                 errors.push("sampling.table_autosave.table_id must not be empty".to_string());
             }
-            if table_autosave.sample_period_s <= 0.0 {
-                errors.push("sampling.table_autosave.sample_period_s must be positive".to_string());
+            match (
+                table_autosave.sample_period_s,
+                table_autosave.sample_period_policy.as_ref(),
+            ) {
+                (None, None) => errors.push(
+                    "sampling.table_autosave requires sample_period_s or sample_period_policy"
+                        .to_string(),
+                ),
+                (sample_period_s, policy) => {
+                    if let Some(sample_period_s) = sample_period_s {
+                        if !sample_period_s.is_finite() || sample_period_s <= 0.0 {
+                            errors.push(
+                                "sampling.table_autosave.sample_period_s must be finite and positive"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    if let Some(policy) = policy {
+                        validate_sampling_period_policy(
+                            "sampling.table_autosave.sample_period_policy",
+                            policy,
+                            &mut errors,
+                        );
+                    }
+                }
             }
             if table_autosave.quantities.is_empty() {
                 errors.push("sampling.table_autosave.quantities must not be empty".to_string());
@@ -838,7 +905,9 @@ impl ProblemIR {
                     if matches!(
                         output,
                         OutputIR::Field { .. }
+                            | OutputIR::FieldAuto { .. }
                             | OutputIR::Scalar { .. }
+                            | OutputIR::ScalarAuto { .. }
                             | OutputIR::Snapshot { .. }
                     ) {
                         errors.push(
@@ -982,7 +1051,9 @@ impl ProblemIR {
                     if matches!(
                         output,
                         OutputIR::Field { .. }
+                            | OutputIR::FieldAuto { .. }
                             | OutputIR::Scalar { .. }
+                            | OutputIR::ScalarAuto { .. }
                             | OutputIR::Snapshot { .. }
                     ) {
                         errors.push(
