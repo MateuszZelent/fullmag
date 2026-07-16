@@ -49,7 +49,9 @@ pub(crate) fn build_quantities(
             let interactive_preview = spec.interactive_preview
                 && (dynamic_supported.is_empty() || dynamic_available(spec.id.as_str()));
             let available = match spec.shape {
-                QuantityShape::VectorField | QuantityShape::SpatialScalar => {
+                QuantityShape::VectorField
+                | QuantityShape::TensorField
+                | QuantityShape::SpatialScalar => {
                     dynamic_available(spec.id.as_str())
                         || latest_fields.get(spec.id.as_str()).is_some()
                         || preview_cache.get(spec.id.as_str()).is_some()

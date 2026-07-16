@@ -4,8 +4,8 @@ use fullmag_ir::{
     FemEigenDispersionValidationIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
     FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
     FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
-    MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, SeedPolicy, ThermalSeedConfig,
-    TimeDependenceIR, IR_VERSION,
+    MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, TimeDependenceIR, IR_VERSION,
+    SeedPolicy, ThermalSeedConfig,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -937,7 +937,8 @@ fn materialize_fem_spin_torque_target_masks(
         }
         element_mask[start..end].fill(true);
     }
-    if !node_mask.iter().any(|selected| *selected) || !element_mask.iter().any(|selected| *selected)
+    if !node_mask.iter().any(|selected| *selected)
+        || !element_mask.iter().any(|selected| *selected)
     {
         return Err(PlanError {
             reasons: vec![format!(
@@ -953,13 +954,7 @@ fn materialize_fem_spin_torque_target_masks(
 mod spin_torque_target_tests {
     use super::*;
 
-    fn segment(
-        object_id: &str,
-        node_start: u32,
-        node_count: u32,
-        element_start: u32,
-        element_count: u32,
-    ) -> fullmag_ir::FemObjectSegmentIR {
+    fn segment(object_id: &str, node_start: u32, node_count: u32, element_start: u32, element_count: u32) -> fullmag_ir::FemObjectSegmentIR {
         fullmag_ir::FemObjectSegmentIR {
             object_id: object_id.to_string(),
             geometry_id: None,
@@ -980,14 +975,16 @@ mod spin_torque_target_tests {
         };
         let segments = vec![segment("fixed", 0, 4, 0, 1), segment("free", 4, 4, 1, 1)];
 
-        let (nodes, elements) =
-            materialize_fem_spin_torque_target_masks(&target, 8, 2, &segments, &[])
-                .expect("resolved FEM object target");
+        let (nodes, elements) = materialize_fem_spin_torque_target_masks(
+            &target,
+            8,
+            2,
+            &segments,
+            &[],
+        )
+        .expect("resolved FEM object target");
 
-        assert_eq!(
-            nodes,
-            vec![false, false, false, false, true, true, true, true]
-        );
+        assert_eq!(nodes, vec![false, false, false, false, true, true, true, true]);
         assert_eq!(elements, vec![false, true]);
     }
 
@@ -1414,8 +1411,10 @@ fn build_region_material_fields(
     let mut dind_values = vec![base_material.interfacial_dmi.unwrap_or(0.0); node_count];
     let mut dbulk_values = vec![base_material.bulk_dmi.unwrap_or(0.0); node_count];
 
-    let sharp_conformal_aex_regions =
-        sharp_conformal_parameter_regions(problem, fullmag_ir::MaterialParameterNameIR::Aex)?;
+    let sharp_conformal_aex_regions = sharp_conformal_parameter_regions(
+        problem,
+        fullmag_ir::MaterialParameterNameIR::Aex,
+    )?;
 
     for segment in object_segments {
         if segment.object_id == AIR_OBJECT_SEGMENT_ID {
@@ -1527,11 +1526,7 @@ fn sharp_conformal_parameter_regions(
     parameter: fullmag_ir::MaterialParameterNameIR,
 ) -> Result<BTreeSet<String>, PlanError> {
     let mut region_ids = BTreeSet::new();
-    for region in problem
-        .object_regions
-        .iter()
-        .filter(|region| region.enabled)
-    {
+    for region in problem.object_regions.iter().filter(|region| region.enabled) {
         if region.realization_policy != fullmag_ir::RegionRealizationPolicyIR::Project
             && crate::validate::region_is_conformal(problem, region)
             && sharp_constant_region_parameter(problem, region, parameter)?.is_some()
@@ -2072,10 +2067,7 @@ pub(crate) fn plan_fem(
                 }
                 if let Some(problem_temperature) = thermal_temperature {
                     if (problem_temperature - *temperature).abs() > 1.0e-6 {
-                        errors.push(
-                            "ThermalNoise temperature disagrees with Problem temperature"
-                                .to_string(),
-                        );
+                        errors.push("ThermalNoise temperature disagrees with Problem temperature".to_string());
                     }
                 }
                 thermal_temperature = Some(*temperature);
@@ -2083,11 +2075,7 @@ pub(crate) fn plan_fem(
                     errors.push("ThermalNoise seed must be positive; use system entropy for an unspecified seed".to_string());
                 }
                 thermal_seed_config = Some(ThermalSeedConfig {
-                    policy: if seed.is_some() {
-                        SeedPolicy::Fixed
-                    } else {
-                        SeedPolicy::SystemEntropy
-                    },
+                    policy: if seed.is_some() { SeedPolicy::Fixed } else { SeedPolicy::SystemEntropy },
                     seed: *seed,
                 });
             }
@@ -2185,10 +2173,7 @@ pub(crate) fn plan_fem(
         bulk_dmi.is_some() || has_material_bulk_dmi,
         true,
         has_magnetoelastic,
-        problem
-            .energy_terms
-            .iter()
-            .any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
+        problem.energy_terms.iter().any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
         has_mqs_antenna_field_source(problem) || has_prescribed_zeeman_mask_source(problem),
         &mut errors,
     );
@@ -2409,13 +2394,11 @@ pub(crate) fn plan_fem(
             });
         }
         periodic_mesh_certificate_v6 = Some(mesh.periodic_mesh_certificate_v6().map_err(
-            |certificate_errors| {
-                PlanError {
-                    reasons: certificate_errors
-                        .into_iter()
-                        .map(|reason| format!("FEM periodic mesh certificate v6: {reason}"))
-                        .collect(),
-                }
+            |certificate_errors| PlanError {
+                reasons: certificate_errors
+                    .into_iter()
+                    .map(|reason| format!("FEM periodic mesh certificate v6: {reason}"))
+                    .collect(),
             },
         )?);
         // Demag PBC with open boundary: allowed (P^T A P reduction via Rust reference path).
@@ -2479,9 +2462,11 @@ pub(crate) fn plan_fem(
         &object_segments,
         &magnet_materials,
     )?;
-    if let Some(reason) =
-        exclusive_coefficient_realization_error(&material, &ms_element_field, &a_element_field)
-    {
+    if let Some(reason) = exclusive_coefficient_realization_error(
+        &material,
+        &ms_element_field,
+        &a_element_field,
+    ) {
         return Err(PlanError {
             reasons: vec![reason],
         });

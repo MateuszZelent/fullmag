@@ -69,14 +69,16 @@ use crate::schedules::{
 use crate::schedules::{collect_field_schedules, OutputSchedule};
 #[cfg(feature = "fem-gpu")]
 use crate::types::FemPoissonDemagProvenance;
+#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+use crate::types::FieldSnapshot;
 use crate::types::{
     AuxiliaryArtifact, ExecutedRun, LivePreviewRequest, LiveStepConsumer, ResolvedFallback,
     RunError, StepAction, StepUpdate,
 };
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::types::{ExecutionProvenance, StepStats};
-#[cfg(any(feature = "cuda", feature = "fem-gpu"))]
-use crate::types::{FieldSnapshot, RunResult, RunStatus};
+#[cfg(feature = "cuda")]
+use crate::types::{RunResult, RunStatus};
 #[cfg(feature = "fem-gpu")]
 use fullmag_engine::fem::FemBackendId;
 
@@ -2341,7 +2343,7 @@ pub(crate) fn execute_fem<'a>(
     }?;
     #[cfg(feature = "fem-gpu")]
     if let Some(bundle) = transport_bundle {
-        executed.auxiliary_artifacts.push(bundle.artifact);
+        executed.auxiliary_artifacts.extend(bundle.artifacts);
         executed
             .provenance
             .transport_modules

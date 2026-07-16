@@ -413,6 +413,8 @@ fn materialize_m2_descriptor(
 const FEM_CONSTITUTIVE_VERSION: &str = "transport_constitutive.one_way.fullmag.v1";
 const FEM_OPERATOR_VERSION: &str = "fem_charge_spin_conforming_h1_p1.transparent.v1";
 const FEM_RESIDUAL_VERSION: &str = "transport_balance_integrated_l2.v1";
+const FEM_CHARGE_OPERATOR_VERSION: &str = "fem_charge_conforming_h1_p1.transparent.v1";
+const FEM_CHARGE_RESIDUAL_VERSION: &str = "charge_balance_integrated_l2.v1";
 
 pub(crate) fn resolve_m1_fem_spin_transport(
     problem: &ProblemIR,
@@ -446,6 +448,9 @@ pub(crate) fn resolve_m1_fem_spin_transport(
             errors.push(format!(
                 "{prefix} requires requested and enclosing double precision"
             ));
+        }
+        if requested.execution_mode != fullmag_ir::ExecutionMode::Strict {
+            errors.push(format!("{prefix} requires execution_mode=strict"));
         }
         if module.mode != fullmag_ir::SpinTransportModeIR::Steady {
             errors.push(format!("{prefix} supports steady mode only"));
@@ -529,6 +534,18 @@ pub(crate) fn resolve_m1_fem_spin_transport(
                 "{prefix} currently requires charge absolute_tolerance=0"
             ));
         }
+        if charge.solver.operator_version != FEM_CHARGE_OPERATOR_VERSION
+            || charge.solver.physical_residual_version != FEM_CHARGE_RESIDUAL_VERSION
+        {
+            errors.push(format!(
+                "{prefix} requests an unsupported charge operator/residual version"
+            ));
+        }
+        if charge.solver.linear != module.solver.linear {
+            errors.push(format!(
+                "{prefix} v1 ABI requires identical charge and spin linear solver policies"
+            ));
+        }
         if initial_magnetization.len() != mesh.nodes.len() {
             errors.push(format!(
                 "{prefix} magnetization length does not match FEM nodes"
@@ -561,7 +578,6 @@ pub(crate) fn resolve_m1_fem_spin_transport(
                     "transport.spin.steady_drift_diffusion".into(),
                     "transport.spin.direct_she".into(),
                     "transport.coupling.one_way".into(),
-                    "transport.spin.fem_conforming_h1_p1".into(),
                 ],
                 inserted_default_boundaries: if module.boundaries.is_empty() {
                     vec!["all_unassigned_external_surfaces".into()]
@@ -691,27 +707,9 @@ fn materialize_fem_descriptor(
     const MU0_H_PER_M: f64 = 1.256_637_061_435_917_3e-6;
     Ok(ResolvedFemSpinTransportIR {
         descriptor_schema: "fullmag.fem.spin_transport_descriptor.v1".into(),
-        charge_definition: charge.clone(),
-        spin_domain: module.domain.clone(),
-        spin_materials: module.materials.clone(),
-        interfaces: module.interfaces.clone(),
-        spin_boundaries: module.boundaries.clone(),
         charge_conductivity_spm_per_element: conductivity,
         charge_gauge: charge.gauge,
         charge_solver: charge.solver.clone(),
-        resolved_linear_solver: fullmag_ir::LinearTransportSolverPolicyIR {
-            relative_tolerance: charge
-                .solver
-                .linear
-                .relative_tolerance
-                .min(module.solver.linear.relative_tolerance),
-            absolute_tolerance: 0.0,
-            max_iterations: charge
-                .solver
-                .linear
-                .max_iterations
-                .max(module.solver.linear.max_iterations),
-        },
         charge_dirichlet,
         spin_dirichlet,
         sigma_s_spm: reference.sigma_s_spm,
@@ -723,8 +721,14 @@ fn materialize_fem_descriptor(
         saturation_magnetization_apm,
         gamma_e_rad_per_s_t: gamma0_m_per_a_s / MU0_H_PER_M,
         spin_solver: module.solver.clone(),
+        resolved_charge_engine: "cg".into(),
+        resolved_spin_engine: "gmres".into(),
+        interface_law: "transparent".into(),
         interface_realization: "transparent_conforming_h1".into(),
         stage_coupling: "none".into(),
+        implementation_state: "reference_executable".into(),
+        validation_state: "contract_validated".into(),
+        validation_scope: "fem_cpu_double_conforming_h1_p1_transparent_m1".into(),
     })
 }
 
@@ -1932,6 +1936,7 @@ mod tests {
             },
         ];
         charge.solver.operator_version = "fem_charge_conforming_h1_p1.transparent.v1".into();
+        charge.solver.linear = problem.spin_transport_modules[0].solver.linear.clone();
         problem.spin_transport_modules[0]
             .requested_execution
             .discretization = BackendTarget::Fem;
@@ -2017,9 +2022,76 @@ mod tests {
         );
         assert_eq!(plans[0].resolved_discretization, BackendTarget::Fem);
         assert_eq!(plans[0].resolved_device, ExecutionDevice::Cpu);
-        assert!(plans[0]
-            .capabilities
-            .contains(&"transport.spin.fem_conforming_h1_p1".to_string()));
+        assert_eq!(
+            plans[0].capabilities,
+            [
+                "transport.charge.ohmic",
+                "transport.spin.steady_drift_diffusion",
+                "transport.spin.direct_she",
+                "transport.coupling.one_way",
+            ]
+        );
+        assert_eq!(descriptor.implementation_state, "reference_executable");
+        assert_eq!(descriptor.validation_state, "contract_validated");
+        assert_eq!(
+            descriptor.validation_scope,
+            "fem_cpu_double_conforming_h1_p1_transparent_m1"
+        );
+    }
+
+    #[test]
+    fn fem_v1_rejects_incompatible_charge_and_spin_linear_policies() {
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let mut problem = fem_problem();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge),
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            panic!("charge fixture");
+        };
+        charge.solver.linear.relative_tolerance = 1.0e-7;
+
+        let error = resolve_m1_fem_spin_transport(
+            &problem,
+            &mesh,
+            &segments,
+            &parts,
+            &[[0.0, 0.0, 1.0]; 4],
+            8.0e5,
+            2.211e5,
+        )
+        .expect_err("the v1 ABI has one linear policy and must not synthesize one");
+
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| { reason.contains("identical charge and spin linear solver policies") }));
+    }
+
+    #[test]
+    fn fem_v1_requires_strict_execution_mode() {
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let mut problem = fem_problem();
+        problem.spin_transport_modules[0]
+            .requested_execution
+            .execution_mode = ExecutionMode::Extended;
+
+        let error = resolve_m1_fem_spin_transport(
+            &problem,
+            &mesh,
+            &segments,
+            &parts,
+            &[[0.0, 0.0, 1.0]; 4],
+            8.0e5,
+            2.211e5,
+        )
+        .expect_err("FEM M1 v1 is strict-only");
+
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("execution_mode=strict")));
     }
 
     #[test]
@@ -2086,5 +2158,32 @@ mod tests {
         let mut transient = fem_problem();
         transient.spin_transport_modules[0].mode = SpinTransportModeIR::Transient;
         assert_rejected(transient, "steady mode only");
+
+        let mut normal_current = fem_problem();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge),
+            ..
+        } = &mut normal_current.current_modules[0]
+        else {
+            panic!("charge fixture");
+        };
+        charge
+            .boundaries
+            .push(ChargeBoundaryIR::NormalCurrentElectrode {
+                id: "current".into(),
+                surfaces: vec![],
+                outward_current_density_apm2: 1.0,
+            });
+        assert_rejected(normal_current, "normal-current electrodes");
+
+        let mut spin_flux = fem_problem();
+        spin_flux.spin_transport_modules[0]
+            .boundaries
+            .push(SpinBoundaryIR::SpecifiedSpinFlux {
+                id: "spin_flux".into(),
+                surfaces: vec![],
+                normal_spin_flux_apm2: [1.0, 0.0, 0.0],
+            });
+        assert_rejected(spin_flux, "specified spin flux");
     }
 }

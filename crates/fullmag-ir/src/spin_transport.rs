@@ -35,11 +35,23 @@ pub struct ChargeTransportMaterialAssignmentIR {
 pub struct ChargeTransportMaterialIR {
     #[serde(rename = "sigma_Spm")]
     pub sigma_spm: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sigma_parallel_Spm")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sigma_parallel_Spm"
+    )]
     pub sigma_parallel_spm: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sigma_perpendicular_Spm")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sigma_perpendicular_Spm"
+    )]
     pub sigma_perpendicular_spm: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sigma_AHE_Spm")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sigma_AHE_Spm"
+    )]
     pub sigma_ahe_spm: Option<f64>,
 }
 
@@ -283,15 +295,9 @@ pub struct ResolvedSpinTransportPlanIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFemSpinTransportIR {
     pub descriptor_schema: String,
-    pub charge_definition: ChargeTransportDefinitionIR,
-    pub spin_domain: Vec<RegionRefIR>,
-    pub spin_materials: Vec<SpinTransportMaterialAssignmentIR>,
-    pub interfaces: Vec<SpinInterfaceIR>,
-    pub spin_boundaries: Vec<SpinBoundaryIR>,
     pub charge_conductivity_spm_per_element: Vec<f64>,
     pub charge_gauge: ChargePotentialGaugeIR,
     pub charge_solver: ChargeSolverPolicyIR,
-    pub resolved_linear_solver: LinearTransportSolverPolicyIR,
     pub charge_dirichlet: Vec<(u32, f64)>,
     pub spin_dirichlet: Vec<(u32, [f64; 3])>,
     #[serde(rename = "sigma_s_Spm")]
@@ -306,8 +312,14 @@ pub struct ResolvedFemSpinTransportIR {
     pub saturation_magnetization_apm: f64,
     pub gamma_e_rad_per_s_t: f64,
     pub spin_solver: SpinSolverPolicyIR,
+    pub resolved_charge_engine: String,
+    pub resolved_spin_engine: String,
+    pub interface_law: String,
     pub interface_realization: String,
     pub stage_coupling: String,
+    pub implementation_state: String,
+    pub validation_state: String,
+    pub validation_scope: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]

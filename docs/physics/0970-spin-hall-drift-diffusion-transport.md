@@ -473,6 +473,26 @@ binary data plane. Dedicated Explorer/Inspector nodes author and inspect model,
 units, orientation, qualification, residual, and freshness. UI/Python export
 must satisfy normalized four-path round-trip equality.
 
+The executable FEM M1 v1 slice is deliberately narrower than the general
+model: CPU, double precision, `execution_mode=strict`, conforming H1/P1,
+transparent interfaces, and no LLG/Oersted stage coupling. Its C ABI has one
+linear tolerance/iteration policy shared by the charge CG and spin GMRES
+solves. Planning therefore requires the authored charge and spin linear
+policies to be exactly equal; it must never synthesize a hidden policy with
+minimum tolerances or maximum iteration counts. The resolved descriptor keeps
+the distinct `cg` and `gmres` engine identities and records
+`reference_executable` implementation state plus the exact contract-validation
+scope. Mixing/SML, specified spin flux, periodic spin boundaries, and normal
+current electrodes fail before native execution.
+
+Every successful FEM M1 solve publishes revisioned canonical field records for
+`V_electric` (`V`, scalar), `J_charge` (`A/m^2`, `xyz`), `spin_potential`
+(`V`, `xyz`), `spin_current_tensor` (`A/m^2`, nine components in
+`row_major_Q_ia` order), and `torque_stt` (`1/s`, `xyz`). These are node-located
+and scoped to the named transport module's full resolved solve domain. The
+summary transport artifact is supplementary and is not a substitute for these
+quantity records.
+
 ## 5. Validation strategy
 
 ### 5.1 Analytical and algebraic checks

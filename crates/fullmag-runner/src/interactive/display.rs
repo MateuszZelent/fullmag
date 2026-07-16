@@ -57,6 +57,8 @@ pub enum DisplayKind {
     VectorField,
     /// Spatially-resolved scalar (energy density, component magnitude)
     SpatialScalar,
+    /// Spatially-resolved tensor. The legacy live-preview transport cannot carry this shape.
+    TensorField,
     /// Single global scalar (E_total, E_ex, E_demag, E_ext)
     GlobalScalar,
 }
@@ -138,6 +140,7 @@ impl DisplaySelection {
         match quantity_spec(quantity).map(|spec| spec.shape) {
             Some(QuantityKind::GlobalScalar) => DisplayKind::GlobalScalar,
             Some(QuantityKind::SpatialScalar) => DisplayKind::SpatialScalar,
+            Some(QuantityKind::TensorField) => DisplayKind::TensorField,
             Some(QuantityKind::VectorField) | None => DisplayKind::VectorField,
         }
     }
@@ -197,7 +200,7 @@ impl DisplaySelection {
         self.kind = Self::kind_for_quantity(&self.quantity);
         match self.kind {
             DisplayKind::VectorField => {}
-            DisplayKind::SpatialScalar | DisplayKind::GlobalScalar => {
+            DisplayKind::SpatialScalar | DisplayKind::TensorField | DisplayKind::GlobalScalar => {
                 self.view_mode = DisplayViewMode::TwoD;
                 self.field_component = DisplayFieldComponent::Magnitude;
             }
@@ -226,6 +229,9 @@ impl DisplayPayload {
         match kind {
             DisplayKind::VectorField => Self::VectorField(field),
             DisplayKind::SpatialScalar => Self::SpatialScalar(field),
+            DisplayKind::TensorField => {
+                unreachable!("tensor field displays are not supported by LivePreviewField")
+            }
             DisplayKind::GlobalScalar => {
                 unreachable!("global scalar displays do not carry LivePreviewField payloads")
             }

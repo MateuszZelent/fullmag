@@ -45,7 +45,7 @@ pub use transport::{
 pub use provider::{EmptyFieldAccess, NamedFieldAccess, QuantityEvalContext, QuantityProvider};
 pub use registry::{
     register_standard_providers, GlobalScalarProvider, QuantityRegistry,
-    SpatialScalarFieldProvider, VectorFieldProvider,
+    SpatialScalarFieldProvider, TensorFieldProvider, VectorFieldProvider,
 };
 
 /// Shape / kind of a quantity (determines renderer and transport).
@@ -53,6 +53,7 @@ pub use registry::{
 #[serde(rename_all = "snake_case")]
 pub enum QuantityShape {
     VectorField,
+    TensorField,
     SpatialScalar,
     GlobalScalar,
 }
@@ -61,6 +62,7 @@ impl QuantityShape {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::VectorField => "vector_field",
+            Self::TensorField => "tensor_field",
             Self::SpatialScalar => "spatial_scalar",
             Self::GlobalScalar => "global_scalar",
         }
@@ -81,6 +83,23 @@ pub enum QuantityComponent {
     Y,
     Z,
     Magnitude,
+}
+
+#[cfg(test)]
+#[test]
+fn steady_transport_outputs_have_canonical_quantity_metadata() {
+    for (id, n_comp) in [
+        ("V_electric", 1),
+        ("J_charge", 3),
+        ("spin_potential", 3),
+        ("spin_current_tensor", 9),
+        ("torque_stt", 3),
+    ] {
+        let spec = quantity_spec(id).expect("transport quantity should be catalogued");
+        assert_eq!(spec.n_comp, n_comp);
+        assert_eq!(spec.location, QuantityLocation::Node);
+        assert!(spec.supports_export);
+    }
 }
 
 impl QuantityComponent {

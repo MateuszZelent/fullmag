@@ -1941,11 +1941,21 @@ pub struct TransportExecutionProvenance {
     pub resolved_discretization: String,
     pub resolved_device: String,
     pub resolved_precision: String,
+    pub resolved_execution_mode: String,
+    pub runtime_id: String,
+    pub engine_id: String,
+    pub charge_solver_engine: String,
+    pub spin_solver_engine: String,
     pub constitutive_version: String,
     pub operator_version: String,
     pub physical_residual_version: String,
     pub interface_realization: String,
     pub stage_coupling: String,
+    pub implementation_state: String,
+    pub validation_state: String,
+    pub validation_scope: String,
+    pub fallback: String,
+    pub degradation: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

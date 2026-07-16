@@ -103,6 +103,14 @@ impl InteractiveRuntime {
                 let field = self.backend.snapshot_preview(&request)?;
                 DisplayPayload::from_live_preview_field(selection.kind, field)
             }
+            DisplayKind::TensorField => {
+                return Err(RunError {
+                    message: format!(
+                        "tensor field display for '{}' is not supported by the legacy live-preview transport",
+                        selection.quantity
+                    ),
+                });
+            }
             DisplayKind::GlobalScalar => {
                 let stats = self.backend.snapshot_step_stats()?;
                 DisplayPayload::from_global_scalar(&selection.quantity, &stats).ok_or_else(

@@ -4,7 +4,7 @@ use crate::descriptor::{NormalizationHint, QuantityDomain, QuantityLocation, Qua
 use crate::id::{normalize_quantity_id, QuantityId};
 use crate::{QuantityComponent, QuantityShape};
 
-const CATALOG: [QuantitySpec; 45] = [
+const CATALOG: [QuantitySpec; 49] = [
     QuantitySpec {
         id: QuantityId::M,
         label: "Magnetization",
@@ -910,6 +910,90 @@ const CATALOG: [QuantitySpec; 45] = [
         supports_export: true,
     },
     QuantitySpec {
+        id: QuantityId::VElectric,
+        label: "Electric Potential",
+        description: "Charge-transport electric scalar potential",
+        shape: QuantityShape::SpatialScalar,
+        unit: "V",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: Some("V"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 1,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::JCharge,
+        label: "Charge Current Density",
+        description: "Charge-current density from the transport solve",
+        shape: QuantityShape::VectorField,
+        unit: "A/m^2",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: Some("J_c"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::SpinPotential,
+        label: "Spin Potential",
+        description: "Spin-accumulation potential from the transport solve",
+        shape: QuantityShape::VectorField,
+        unit: "V",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: Some("mu_s"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 3,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
+        id: QuantityId::SpinCurrentTensor,
+        label: "Spin Current Tensor",
+        description: "Spin-current tensor in row-major Q_ia order",
+        shape: QuantityShape::TensorField,
+        unit: "A/m^2",
+        interactive_preview: false,
+        cached_preview: false,
+        quick_access_label: Some("Q_ia"),
+        scalar_metric_key: None,
+        ui_exposed: true,
+        n_comp: 9,
+        location: QuantityLocation::Node,
+        domain: QuantityDomain::FullDomain,
+        normalization_hint: NormalizationHint::MaxAbs,
+        default_component: QuantityComponent::Magnitude,
+        supports_preview_2d: false,
+        supports_preview_3d: false,
+        supports_history: false,
+        supports_export: true,
+    },
+    QuantitySpec {
         id: QuantityId::TorqueStt,
         label: "Spin-Transfer Torque",
         description: "Adiabatic / field-like spin-transfer torque",
@@ -1019,6 +1103,33 @@ pub fn quantity_unit(id: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn steady_transport_outputs_have_canonical_quantity_metadata() {
+        let expected = [
+            ("V_electric", QuantityShape::SpatialScalar, "V", 1),
+            ("J_charge", QuantityShape::VectorField, "A/m^2", 3),
+            ("spin_potential", QuantityShape::VectorField, "V", 3),
+            (
+                "spin_current_tensor",
+                QuantityShape::TensorField,
+                "A/m^2",
+                9,
+            ),
+            ("torque_stt", QuantityShape::VectorField, "1/s", 3),
+        ];
+
+        for (id, shape, unit, n_comp) in expected {
+            let spec = quantity_spec(id).expect("transport quantity should be catalogued");
+            assert_eq!(normalize_quantity_id(id).unwrap().as_str(), id);
+            assert_eq!(spec.shape, shape);
+            assert_eq!(spec.unit, unit);
+            assert_eq!(spec.n_comp, n_comp);
+            assert_eq!(spec.location, QuantityLocation::Node);
+            assert_eq!(spec.domain, QuantityDomain::FullDomain);
+            assert!(spec.supports_export);
+        }
+    }
 
     #[test]
     fn mechanical_magnetoelastic_quantities_are_canonical_but_not_previewed_yet() {

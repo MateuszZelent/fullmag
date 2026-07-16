@@ -182,6 +182,10 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         | QuantityId::MatDind
         | QuantityId::MatDbulk
         | QuantityId::DmDt
+        | QuantityId::VElectric
+        | QuantityId::JCharge
+        | QuantityId::SpinPotential
+        | QuantityId::SpinCurrentTensor
         | QuantityId::TorqueStt
         | QuantityId::TorqueSot => false,
     }
@@ -208,6 +212,11 @@ fn fem_quantity_is_active(engine: FemEngine, plan: &FemPlanIR, id: QuantityId) -
                 | QuantityId::EdenAni
                 | QuantityId::EdenDmi
                 | QuantityId::EdenTotal
+                | QuantityId::VElectric
+                | QuantityId::JCharge
+                | QuantityId::SpinPotential
+                | QuantityId::SpinCurrentTensor
+                | QuantityId::TorqueStt
         ),
         FemEngine::NativeGpu => matches!(
             id,
@@ -271,6 +280,11 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
                 || has_values(&plan.dbulk_field)
         }
         QuantityId::EdenTotal => true,
+        QuantityId::VElectric
+        | QuantityId::JCharge
+        | QuantityId::SpinPotential
+        | QuantityId::SpinCurrentTensor
+        | QuantityId::TorqueStt => !plan.spin_transport_plans.is_empty(),
         QuantityId::EEx
         | QuantityId::U
         | QuantityId::Eps
@@ -293,7 +307,6 @@ fn fem_plan_enables_quantity(plan: &FemPlanIR, id: QuantityId) -> bool {
         | QuantityId::MatDind
         | QuantityId::MatDbulk
         | QuantityId::DmDt
-        | QuantityId::TorqueStt
         | QuantityId::TorqueSot => false,
     }
 }

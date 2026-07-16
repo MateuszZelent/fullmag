@@ -62,7 +62,7 @@ fn is_supported_field_quantity(name: &str) -> bool {
     fullmag_quantities::quantity_spec(name).is_some_and(|spec| {
         matches!(
             spec.shape,
-            QuantityShape::VectorField | QuantityShape::SpatialScalar
+            QuantityShape::VectorField | QuantityShape::TensorField | QuantityShape::SpatialScalar
         )
     })
 }

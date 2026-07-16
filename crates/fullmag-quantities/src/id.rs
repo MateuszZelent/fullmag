@@ -66,6 +66,14 @@ pub enum QuantityId {
     MatDbulk,
     /// Magnetization rate of change (spatial vector field).
     DmDt,
+    /// Electric scalar potential from charge transport.
+    VElectric,
+    /// Charge-current density.
+    JCharge,
+    /// Spin-accumulation potential.
+    SpinPotential,
+    /// Spin-current tensor in row-major Q_ia order.
+    SpinCurrentTensor,
     /// Spin-transfer torque — adiabatic / field-like (spatial vector field).
     TorqueStt,
     /// Spin-orbit torque — damping-like (spatial vector field).
@@ -119,6 +127,10 @@ impl QuantityId {
             Self::MatDind => "mat_dind",
             Self::MatDbulk => "mat_dbulk",
             Self::DmDt => "dm_dt",
+            Self::VElectric => "V_electric",
+            Self::JCharge => "J_charge",
+            Self::SpinPotential => "spin_potential",
+            Self::SpinCurrentTensor => "spin_current_tensor",
             Self::TorqueStt => "torque_stt",
             Self::TorqueSot => "torque_sot",
         }
@@ -170,6 +182,10 @@ impl QuantityId {
         Self::MatDind,
         Self::MatDbulk,
         Self::DmDt,
+        Self::VElectric,
+        Self::JCharge,
+        Self::SpinPotential,
+        Self::SpinCurrentTensor,
         Self::TorqueStt,
         Self::TorqueSot,
     ];
@@ -245,6 +261,10 @@ pub fn normalize_quantity_id(requested: &str) -> Result<QuantityId, QuantityIdEr
         "mat_dind" | "material_dind" => Ok(QuantityId::MatDind),
         "mat_dbulk" | "material_dbulk" => Ok(QuantityId::MatDbulk),
         "dm_dt" => Ok(QuantityId::DmDt),
+        "V_electric" | "v_electric" => Ok(QuantityId::VElectric),
+        "J_charge" | "j_charge" => Ok(QuantityId::JCharge),
+        "spin_potential" => Ok(QuantityId::SpinPotential),
+        "spin_current_tensor" => Ok(QuantityId::SpinCurrentTensor),
         "torque_stt" => Ok(QuantityId::TorqueStt),
         "torque_sot" => Ok(QuantityId::TorqueSot),
         other => Err(QuantityIdError {
