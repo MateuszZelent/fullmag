@@ -11645,17 +11645,6 @@ async fn material_field_data_resource_reads_file_backed_realized_asset() {
     scene.objects[0].material_parameter_fields.push(field);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.session.artifact_dir = artifact_dir.display().to_string();
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
-            "V_electric": {"values": [900.0, 901.0]},
-            "J_charge": {"values": [900.0, 901.0, 902.0, 903.0, 904.0, 905.0]},
-            "spin_current_tensor": {"values": [900.0, 901.0, 902.0, 903.0, 904.0, 905.0, 906.0, 907.0, 908.0, 909.0, 910.0, 911.0, 912.0, 913.0, 914.0, 915.0, 916.0, 917.0]},
-        }))
-        .expect("stale in-memory transport fields");
-        for quantity in ["V_electric", "J_charge", "spin_current_tensor"] {
-            snapshot
-                .field_quantity_revisions
-                .insert(quantity.to_string(), 900);
-        }
         snapshot.scene_document = Some(scene);
         crate::session::apply_current_live_metadata(
             snapshot,
@@ -22939,6 +22928,17 @@ async fn assert_v2_field_data_plane_reads_canonical_transport_field_artifacts() 
     }
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.session.artifact_dir = artifact_dir.display().to_string();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "V_electric": {"values": [900.0, 901.0]},
+            "J_charge": {"values": [900.0, 901.0, 902.0, 903.0, 904.0, 905.0]},
+            "spin_current_tensor": {"values": [900.0, 901.0, 902.0, 903.0, 904.0, 905.0, 906.0, 907.0, 908.0, 909.0, 910.0, 911.0, 912.0, 913.0, 914.0, 915.0, 916.0, 917.0]},
+        }))
+        .expect("stale in-memory transport fields");
+        for quantity in ["V_electric", "J_charge", "spin_current_tensor"] {
+            snapshot
+                .field_quantity_revisions
+                .insert(quantity.to_string(), 900);
+        }
     }
     let app = build_v2_router().with_state(state);
 

@@ -156,6 +156,15 @@ Spin BCs are `SpinInsulating` (`n_iQ_ia=0`), `SpinSink` (`mu_s=0`),
 `SpinInsulating` is permitted only when no spin contact is authored and must be
 visible in the UI and provenance. Conflicting BCs fail closed.
 
+The FEM v1 ABI applies BCs by MFEM boundary attribute, but authoring selectors
+identify external faces. Before lowering, the planner must retain those face
+identities and prove that every face carrying one attribute belongs to the same
+charge assignment and, independently, to the same spin assignment. Selecting
+only part of a shared attribute is not representable and fails closed; multiple
+faces of that attribute are legal when one assignment explicitly owns all of
+them. Natural all-external defaults satisfy this proof and remain explicit in
+provenance.
+
 ### 2.5 Transparent and resistive spin interfaces
 
 For a transparent interface with one fixed normal:

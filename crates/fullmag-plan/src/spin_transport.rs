@@ -680,6 +680,8 @@ fn materialize_fem_descriptor(
         return Err(vec!["FEM conforming-H1 M1 currently requires one uniform spin material across the complete solve domain".into()]);
     }
 
+    validate_charge_face_exact_boundary_ownership(charge, mesh, mesh_parts)?;
+    validate_spin_face_exact_boundary_ownership(module, mesh, mesh_parts)?;
     let charge_dirichlet = resolve_charge_dirichlet(charge, mesh, mesh_parts)?;
     let spin_dirichlet = resolve_spin_dirichlet(module, mesh, mesh_parts)?;
     let charge_insulating_boundaries =
@@ -908,6 +910,134 @@ fn surface_markers(
     Ok(markers.into_iter().collect())
 }
 
+fn validate_charge_face_exact_boundary_ownership(
+    charge: &fullmag_ir::ChargeTransportDefinitionIR,
+    mesh: &MeshIR,
+    mesh_parts: &[FemMeshPartIR],
+) -> Result<(), Vec<String>> {
+    let assignments = charge
+        .boundaries
+        .iter()
+        .map(|boundary| {
+            let kind = match boundary {
+                ChargeBoundaryIR::VoltageElectrode { .. } => "voltage",
+                ChargeBoundaryIR::NormalCurrentElectrode { .. } => "normal_current",
+                ChargeBoundaryIR::Insulating { .. } => "insulating",
+            };
+            (
+                format!("{kind}:{}", boundary.id()),
+                boundary.surfaces().iter().collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    validate_face_exact_boundary_ownership("charge", mesh, mesh_parts, &assignments)
+}
+
+fn validate_spin_face_exact_boundary_ownership(
+    module: &fullmag_ir::SpinTransportModuleIR,
+    mesh: &MeshIR,
+    mesh_parts: &[FemMeshPartIR],
+) -> Result<(), Vec<String>> {
+    let assignments = module
+        .boundaries
+        .iter()
+        .map(|boundary| match boundary {
+            SpinBoundaryIR::SpinSink { id, surfaces } => (
+                format!("spin_sink:{id}"),
+                surfaces.iter().collect::<Vec<_>>(),
+            ),
+            SpinBoundaryIR::SpecifiedSpinPotential { id, surfaces, .. } => (
+                format!("specified_spin_potential:{id}"),
+                surfaces.iter().collect::<Vec<_>>(),
+            ),
+            SpinBoundaryIR::SpinInsulating { id, surfaces } => (
+                format!("spin_insulating:{id}"),
+                surfaces.iter().collect::<Vec<_>>(),
+            ),
+            SpinBoundaryIR::SpecifiedSpinFlux { id, surfaces, .. } => (
+                format!("specified_spin_flux:{id}"),
+                surfaces.iter().collect::<Vec<_>>(),
+            ),
+            SpinBoundaryIR::PeriodicSpin {
+                id,
+                minus_surface,
+                plus_surface,
+                ..
+            } => (
+                format!("periodic_spin:{id}"),
+                vec![minus_surface, plus_surface],
+            ),
+        })
+        .collect::<Vec<_>>();
+    validate_face_exact_boundary_ownership("spin", mesh, mesh_parts, &assignments)
+}
+
+fn validate_face_exact_boundary_ownership(
+    family: &str,
+    mesh: &MeshIR,
+    mesh_parts: &[FemMeshPartIR],
+    assignments: &[(String, Vec<&fullmag_ir::SurfaceRefIR>)],
+) -> Result<(), Vec<String>> {
+    external_fem_boundary_markers(mesh)?;
+    if assignments.is_empty() {
+        return Ok(());
+    }
+
+    let mut face_owners = vec![None::<&str>; mesh.boundary_faces.len()];
+    for (owner, surfaces) in assignments {
+        let mut selected_faces = BTreeSet::new();
+        for surface in surfaces {
+            let resolved = resolve_fem_surface_selector(
+                mesh,
+                mesh_parts,
+                &surface.object_id,
+                &surface.surface_id,
+                None,
+            )
+            .map_err(|reason| vec![reason])?;
+            if resolved.boundary_face_indices.is_empty() {
+                return Err(vec![format!(
+                    "FEM {family} face-exact assignment '{owner}' has no external boundary-face indices"
+                )]);
+            }
+            selected_faces.extend(resolved.boundary_face_indices);
+        }
+        for face_index in selected_faces {
+            let slot = face_owners.get_mut(face_index as usize).ok_or_else(|| {
+                vec![format!(
+                    "FEM {family} face-exact assignment '{owner}' references external face {face_index} outside the mesh"
+                )]
+            })?;
+            if let Some(existing) = slot {
+                if *existing != owner {
+                    return Err(vec![format!(
+                        "conflicting FEM {family} face-exact assignments '{existing}' and '{owner}' on external face {face_index}"
+                    )]);
+                }
+            } else {
+                *slot = Some(owner);
+            }
+        }
+    }
+
+    let mut marker_owners = BTreeMap::<u32, &str>::new();
+    for (face_index, marker) in mesh.boundary_markers.iter().copied().enumerate() {
+        let Some(owner) = face_owners[face_index] else {
+            return Err(vec![format!(
+                "FEM {family} face-exact ownership is incomplete: external face {face_index} with boundary attribute {marker} is unassigned"
+            )]);
+        };
+        if let Some(existing) = marker_owners.insert(marker, owner) {
+            if existing != owner {
+                return Err(vec![format!(
+                    "FEM {family} boundary attribute {marker} spans faces owned by different face-exact assignments '{existing}' and '{owner}'"
+                )]);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn insert_scalar_bc(
     map: &mut BTreeMap<u32, f64>,
     marker: u32,
@@ -949,10 +1079,12 @@ fn resolve_charge_dirichlet(
                 potential_v,
                 ..
             } => {
+                let mut markers = BTreeSet::new();
                 for surface in surfaces {
-                    for marker in surface_markers(surface, mesh, mesh_parts)? {
-                        insert_scalar_bc(&mut values, marker, *potential_v, "voltage")?;
-                    }
+                    markers.extend(surface_markers(surface, mesh, mesh_parts)?);
+                }
+                for marker in markers {
+                    insert_scalar_bc(&mut values, marker, *potential_v, "voltage")?;
                 }
             }
             ChargeBoundaryIR::Insulating { surfaces, .. } => {
@@ -1010,10 +1142,12 @@ fn resolve_spin_dirichlet(
     for boundary in &module.boundaries {
         match boundary {
             fullmag_ir::SpinBoundaryIR::SpinSink { surfaces, .. } => {
+                let mut markers = BTreeSet::new();
                 for surface in surfaces {
-                    for marker in surface_markers(surface, mesh, mesh_parts)? {
-                        insert_vector_bc(&mut values, marker, [0.0; 3], "spin potential")?;
-                    }
+                    markers.extend(surface_markers(surface, mesh, mesh_parts)?);
+                }
+                for marker in markers {
+                    insert_vector_bc(&mut values, marker, [0.0; 3], "spin potential")?;
                 }
             }
             fullmag_ir::SpinBoundaryIR::SpecifiedSpinPotential {
@@ -1021,10 +1155,12 @@ fn resolve_spin_dirichlet(
                 spin_potential_v,
                 ..
             } => {
+                let mut markers = BTreeSet::new();
                 for surface in surfaces {
-                    for marker in surface_markers(surface, mesh, mesh_parts)? {
-                        insert_vector_bc(&mut values, marker, *spin_potential_v, "spin potential")?;
-                    }
+                    markers.extend(surface_markers(surface, mesh, mesh_parts)?);
+                }
+                for marker in markers {
+                    insert_vector_bc(&mut values, marker, *spin_potential_v, "spin potential")?;
                 }
             }
             fullmag_ir::SpinBoundaryIR::SpinInsulating { surfaces, .. } => {
@@ -2175,8 +2311,8 @@ mod tests {
             ],
             elements: vec![[0, 1, 2, 3]],
             element_markers: vec![7],
-            boundary_faces: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
-            boundary_markers: vec![11, 12, 13, 13],
+            boundary_faces: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2]],
+            boundary_markers: vec![11, 12, 13],
             periodic_boundary_pairs: vec![],
             periodic_node_pairs: vec![],
             per_domain_quality: Default::default(),
@@ -2297,7 +2433,7 @@ mod tests {
         assert!(error
             .reasons
             .iter()
-            .any(|reason| reason.contains("do not cover")));
+            .any(|reason| reason.contains("face-exact ownership is incomplete")));
 
         let mut charge_conflict = fem_problem();
         let CurrentModuleIR::CurrentTransport {
@@ -2373,6 +2509,102 @@ mod tests {
                 .boundary_attributes,
             [11, 12, 13]
         );
+    }
+
+    #[test]
+    fn fem_boundary_marker_lowering_requires_face_exact_assignment_ownership() {
+        let (mut mesh, segments, parts) = fem_mesh_fixture();
+        mesh.boundary_markers = vec![11, 11, 13];
+        let resolve = |problem: &ProblemIR| {
+            resolve_m1_fem_spin_transport(
+                problem,
+                &mesh,
+                &segments,
+                &parts,
+                &[[0.0, 0.0, 1.0]; 4],
+                8.0e5,
+                2.211e5,
+            )
+        };
+
+        let mut partial_charge = fem_problem();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge),
+            ..
+        } = &mut partial_charge.current_modules[0]
+        else {
+            panic!("charge fixture");
+        };
+        charge.boundaries.remove(1);
+        let error = resolve(&partial_charge)
+            .expect_err("one selected face must not silently expand to its shared marker");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("face-exact")));
+
+        let mut legal_charge = fem_problem();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge),
+            ..
+        } = &mut legal_charge.current_modules[0]
+        else {
+            panic!("charge fixture");
+        };
+        let back = charge.boundaries.remove(1).surfaces()[0].clone();
+        let ChargeBoundaryIR::VoltageElectrode { surfaces, .. } = &mut charge.boundaries[0] else {
+            panic!("voltage fixture");
+        };
+        surfaces.push(back);
+        resolve(&legal_charge).expect("one assignment may own every face of a shared marker");
+
+        let mut partial_spin = fem_problem();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge),
+            ..
+        } = &mut partial_spin.current_modules[0]
+        else {
+            panic!("charge fixture");
+        };
+        charge.boundaries.clear();
+        charge.gauge = ChargePotentialGaugeIR::ZeroMean;
+        partial_spin.spin_transport_modules[0].boundaries = vec![
+            SpinBoundaryIR::SpinSink {
+                id: "sink".into(),
+                surfaces: vec![SurfaceRefIR {
+                    object_id: "strip".into(),
+                    surface_id: "bottom".into(),
+                    orientation: [0.0, 0.0, -1.0],
+                }],
+            },
+            SpinBoundaryIR::SpinInsulating {
+                id: "insulating".into(),
+                surfaces: vec![SurfaceRefIR {
+                    object_id: "strip".into(),
+                    surface_id: "left".into(),
+                    orientation: [-1.0, 0.0, 0.0],
+                }],
+            },
+        ];
+        let error = resolve(&partial_spin)
+            .expect_err("spin selector must not silently expand to an unselected shared face");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("face-exact")));
+
+        let back = SurfaceRefIR {
+            object_id: "strip".into(),
+            surface_id: "back".into(),
+            orientation: [0.0, -1.0, 0.0],
+        };
+        let SpinBoundaryIR::SpinSink { surfaces, .. } =
+            &mut partial_spin.spin_transport_modules[0].boundaries[0]
+        else {
+            panic!("spin sink fixture");
+        };
+        surfaces.push(back);
+        resolve(&partial_spin).expect("one spin assignment may own every face of a shared marker");
     }
 
     #[test]
@@ -2517,7 +2749,23 @@ mod tests {
             .boundaries
             .push(SpinBoundaryIR::SpecifiedSpinFlux {
                 id: "spin_flux".into(),
-                surfaces: vec![],
+                surfaces: vec![
+                    SurfaceRefIR {
+                        object_id: "strip".into(),
+                        surface_id: "bottom".into(),
+                        orientation: [0.0, 0.0, -1.0],
+                    },
+                    SurfaceRefIR {
+                        object_id: "strip".into(),
+                        surface_id: "back".into(),
+                        orientation: [0.0, -1.0, 0.0],
+                    },
+                    SurfaceRefIR {
+                        object_id: "strip".into(),
+                        surface_id: "left".into(),
+                        orientation: [-1.0, 0.0, 0.0],
+                    },
+                ],
                 normal_spin_flux_apm2: [1.0, 0.0, 0.0],
             });
         assert_rejected(spin_flux, "specified spin flux");
