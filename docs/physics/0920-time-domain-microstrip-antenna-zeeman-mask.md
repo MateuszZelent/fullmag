@@ -641,6 +641,73 @@ For `T=2 ns` and `Delta t_s=0.5 ps`, `N=4000`, `Delta f=0.5 GHz`, and
 field snapshot cadence are distinct quantities and must be displayed
 separately.
 
+### Automatic response sampling from a sinc cutoff
+
+For the active sinc-drive set `D_sinc(run)`,
+
+\[
+f_{c,max}=\max_{d\in D_{sinc}(run)} f_{c,d},\qquad
+f_{N,target}=1.3 f_{c,max},\qquad
+\Delta t_{sample}=\frac{1}{2f_{N,target}}.
+\]
+
+All frequencies are in Hz and `Delta t_sample` is in seconds. The fixed factor
+1.3 supplies a 30% Nyquist guard. For `f_c,max=5 GHz`, `f_N,target=6.5 GHz`,
+`f_sample=13 GHz`, and `Delta t_sample=76.923076923 ps`.
+
+The exact lowercase Python token `"auto"` selects this policy for
+`tableautosave()` or for an `autosave(..., every=...)` cadence. It is symbolic
+requested intent: Python and UI authoring, canonical script export, and reload
+must preserve `"auto"` rather than replacing it with a resolved float. Other
+strings and boolean values are invalid. Numeric periods retain their current
+explicit behavior and take precedence over automatic resolution for that
+instruction.
+
+ProblemIR and scene/study authoring payloads represent the requested cadence as
+a tagged policy:
+
+```text
+explicit { period_s }
+auto_sinc_cutoff { nyquist_guard_factor: 1.3 }
+```
+
+Legacy payloads containing only `sample_period_s` deserialize as `explicit`.
+Unknown future policy kinds fail closed and remain preserved losslessly as
+read-only authoring payloads. The resolved numerical period is plan/provenance
+state and must never overwrite the requested ProblemIR policy.
+
+Resolution is per `Run`, from ordered workflow state immediately before that
+run. `D_sinc(run)` contains only sinc drives that were already added, remain
+enabled, apply to the target run under their activation policy, and have a
+finite positive `cutoff_hz`. A persistent automatic instruction may therefore
+resolve to different periods for later runs as the active drive set changes.
+For one run, automatic table autosave and automatic field autosave use the same
+active-drive rule and resolve to the same period; numeric autosave cadences
+remain independent.
+
+One backend-neutral planner resolver serves FDM and FEM, on CPU and GPU, after
+ordered actions and drive activation are resolved and before output events are
+scheduled. Backends consume only the resolved positive `sample_period_s` and
+must not reimplement the cutoff or guard formula. The runtime scheduler may
+shorten integration steps to land exactly on sampling events. A fixed-step
+backend that cannot land on that clock rejects the plan instead of shifting
+output times.
+
+Run/stage provenance and sampling artifacts record the requested policy,
+resolved `sample_period_s`, source drive identifiers, maximum source
+`cutoff_hz`, guard factor, target Nyquist frequency, sampling frequency, and
+target run/stage identifier. This requested-versus-resolved split is identical
+for FDM and FEM and is retained across Python/UI round-trip.
+
+Automatic resolution fails closed during workflow validation/planning when no
+applicable active sinc drive exists, an applicable cutoff is non-finite or
+non-positive, or an automatic policy reaches backend dispatch unresolved. The
+diagnostic names the automatic instruction and target run. Resolution must not
+guess from solver `dt`, run duration, sinusoidal frequency, or a UI preview
+clock. If the selected backend cannot land on the resolved events, it also
+fails closed. Exceeding a bounded preview or analysis sample limit disables or
+decimates only that preview and does not invalidate the physical runtime clock.
+
 The source preview FFT uses the authored waveform evaluated on this planned
 clock. The response FFT uses actual artifact timestamps. Before an FFT, the
 runtime/UI verifies finite strictly increasing samples and uniform spacing
@@ -872,7 +939,8 @@ a read-only summary of the configuration active at its position. The antenna
 inspector resolves the last active `t_sampling` stage before the target Run and
 must show, before execution,
 response `N`, duration, `Delta f`, Nyquist, sinc cutoff, the maximum legal
-`t_sampling = 1/(2 f_c)`, and an explicit pass/fail Nyquist verdict. After
+`t_sampling = 1/(2 f_c)`, the guarded automatic period
+`t_sampling = 1/(2 * 1.3 * f_c)`, and an explicit pass/fail Nyquist verdict. After
 execution the analysis view shows actual drive and magnetization traces,
 source/response spectra, and peak table from the versioned resource
 `/v2/sessions/current/analysis/spin-wave/gamma.v1`.
