@@ -291,6 +291,18 @@ describe("transport authoring drafts", () => {
     );
   });
 
+  it("round-trips an exact current identity through the spin source binding", () => {
+    const currentDraft = currentTransportDraft();
+    currentDraft.name = " charge ";
+    const current = buildCurrentTransport(currentDraft);
+    const spinDraft = spinTransportDraft();
+    spinDraft.currentSourceId = "name" in current && typeof current.name === "string" ? current.name : "";
+    const spin = buildSpinTransport(spinDraft);
+
+    expect(current.name).toBe(" charge ");
+    expect(spin.current_source_id).toBe(current.name);
+  });
+
   it("resolves a stable spin transport id before a stale list index", () => {
     const first = { id: "first", schema_version: "spin_transport.v1" };
     const selected = { id: "selected", schema_version: "spin_transport.v1" };

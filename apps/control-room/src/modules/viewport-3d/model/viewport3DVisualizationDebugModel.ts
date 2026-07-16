@@ -1,7 +1,6 @@
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import {
   buildVisualizationDebugHealth,
-  visualizationDebugRangesEqual,
   type VisualizationDebugHealthEvidence,
 } from "@/kernel/visualization/buildVisualizationDebugHealth";
 import type {

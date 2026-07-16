@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import {
   connectCdpSocket,
+  removeProfileDirectory,
   runTransportAuthoringSmoke,
   startChromium,
 } from "./smoke-transport-authoring-ui-runtime.mjs";
@@ -70,6 +71,27 @@ test("connectCdpSocket closes a partial socket after connection error", async ()
 
   await assert.rejects(connecting, /failed to connect/);
   assert.equal(socket.closeCalls, 1);
+});
+
+test("removeProfileDirectory retries a transient non-empty Chromium profile", async () => {
+  const delays = [];
+  let attempts = 0;
+
+  await removeProfileDirectory("/tmp/profile", {
+    remove: () => {
+      attempts += 1;
+      if (attempts < 3) {
+        const error = new Error("profile still busy");
+        error.code = "ENOTEMPTY";
+        throw error;
+      }
+    },
+    retryDelayMs: 5,
+    wait: async (delayMs) => delays.push(delayMs),
+  });
+
+  assert.equal(attempts, 3);
+  assert.deepEqual(delays, [5, 10]);
 });
 
 test("connected CDP rejects pending requests and cleanup continues from CLOSED", async () => {

@@ -1,15 +1,22 @@
 "use client";
 
-import { useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 
-import type { SceneCurrentTransport, SceneSpinTransport } from "@/kernel/api/apiTypes";
+import type {
+  SceneCurrentTransport,
+  SceneSpinTransport,
+  TransportAuthoringCapabilityMap,
+  TransportValidationRequest,
+  TransportValidationResponse,
+} from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import {
-  CURRENT_TRANSPORTS_RESOURCE_KEY,
-  SPIN_TRANSPORTS_RESOURCE_KEY,
+  invalidateSpinAuthoringResources,
+  transportMutationResourceKeys,
   useCurrentTransportsResource,
   useSpinTransportsResource,
 } from "@/kernel/resources/spinAuthoringResources";
+import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { Button } from "@/shared/ui/Button";
 
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
@@ -33,6 +40,29 @@ import {
 
 type Family = "current_transport" | "spin_transport";
 type Draft = CurrentTransportDraft | SpinTransportDraft;
+
+const TRANSPORT_VALIDATION_VERSION = "transport-authoring-validation.v1";
+
+function requestedCapability(
+  family: Family,
+  draft: Draft,
+  capabilities: TransportAuthoringCapabilityMap | null,
+) {
+  if (!capabilities) return null;
+  if (family === "current_transport") {
+    return (draft as CurrentTransportDraft).coupling === "bidirectional"
+      ? capabilities.m2_reciprocal
+      : capabilities.m1_one_way_steady;
+  }
+  const spin = draft as SpinTransportDraft;
+  if (spin.mode === "transient") return capabilities.m3_transient;
+  if (spin.executionDevice === "gpu") return capabilities.gpu;
+  if (spin.executionPrecision === "single") return capabilities.single_precision;
+  if (spin.executionDiscretization === "hybrid" || spin.executionMode === "hybrid") {
+    return capabilities.hybrid;
+  }
+  return capabilities.m1_one_way_steady;
+}
 
 export function TransportAuthoringInspector({
   family,
@@ -74,6 +104,70 @@ export function TransportAuthoringInspector({
   const draft = draftState.key === draftKey ? draftState.draft : baseDraft;
   const [feedback, setFeedback] = useState<{ kind: "error" | "success"; message: string } | null>(null);
   const [pending, setPending] = useState(false);
+  const validationKey = `${draftKey}:${active.data?.scene_revision ?? "none"}`;
+  const [validationState, setValidationState] = useState<{ error: string | null; key: string; response: TransportValidationResponse | null }>({ error: null, key: "", response: null });
+  const validation = validationState.key === validationKey ? validationState.response : null;
+  const validationError = validationState.key === validationKey ? validationState.error : null;
+  const capabilities = useSessionStatusSelector(
+    (status) => status.data?.capabilities.transport_authoring ?? null,
+    { enabled: true },
+  );
+  const capability = requestedCapability(family, draft, capabilities);
+
+  function validationRequest(): TransportValidationRequest {
+    if (active.data?.scene_revision === undefined) {
+      throw new Error("Scene revision is unavailable.");
+    }
+    const operation = selectedId ? "replace" as const : "create" as const;
+    return family === "current_transport"
+      ? {
+          base_revision: active.data.scene_revision,
+          candidate: {
+            kind: "current_transport",
+            operation,
+            path_id: selectedId,
+            resource: buildCurrentTransport(draft as CurrentTransportDraft),
+          },
+          validation_version: TRANSPORT_VALIDATION_VERSION,
+        }
+      : {
+          base_revision: active.data.scene_revision,
+          candidate: {
+            kind: "spin_transport",
+            operation,
+            path_id: selectedId,
+            resource: buildSpinTransport(draft as SpinTransportDraft),
+          },
+          validation_version: TRANSPORT_VALIDATION_VERSION,
+        };
+  }
+
+  useEffect(() => {
+    if (!known || active.data?.scene_revision === undefined) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      try {
+        const request = validationRequest();
+        void api.model.validateTransport(request, { signal: controller.signal })
+          .then((response) => {
+            setValidationState({ error: null, key: validationKey, response });
+          })
+          .catch((error: unknown) => {
+            if (!controller.signal.aborted) {
+              setValidationState({ error: error instanceof Error ? error.message : String(error), key: validationKey, response: null });
+            }
+          });
+      } catch (error) {
+        setValidationState({ error: error instanceof Error ? error.message : String(error), key: validationKey, response: null });
+      }
+    }, 180);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  // The serialized draft deliberately makes every semantic edit trigger clone-only validation.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active.data?.scene_revision, api, draft, family, known, selectedId, validationKey]);
 
   const patch = (value: Partial<Draft>) => setDraftState({
     draft: { ...draft, ...value } as Draft,
@@ -85,21 +179,29 @@ export function TransportAuthoringInspector({
     setPending(true);
     setFeedback(null);
     try {
+      if (!capability?.authoring_allowed) {
+        throw new Error(capability?.reason ?? "Transport authoring capability is unavailable.");
+      }
+      const checked = await api.model.validateTransport(validationRequest());
+      setValidationState({ error: null, key: validationKey, response: checked });
+      if (!checked.semantic.valid || !checked.execution.authoring_allowed) {
+        throw new Error(
+          checked.semantic.issues[0]?.message ?? checked.execution.reason ?? "Transport candidate is not authoring-ready.",
+        );
+      }
+      let commit: { scene_revision: number };
       if (family === "current_transport") {
         const resource = buildCurrentTransport(draft as CurrentTransportDraft);
         const request = { base_revision: active.data.scene_revision, resource };
-        if (selectedId) await api.model.replaceCurrentTransport(selectedId, request);
-        else await api.model.createCurrentTransport(request);
+        if (selectedId) commit = await api.model.replaceCurrentTransport(selectedId, request);
+        else commit = await api.model.createCurrentTransport(request);
       } else {
         const resource = buildSpinTransport(draft as SpinTransportDraft);
         const request = { base_revision: active.data.scene_revision, resource };
-        if (selectedId) await api.model.replaceSpinTransport(selectedId, request);
-        else await api.model.createSpinTransport(request);
+        if (selectedId) commit = await api.model.replaceSpinTransport(selectedId, request);
+        else commit = await api.model.createSpinTransport(request);
       }
-      resources.invalidate(
-        family === "current_transport" ? CURRENT_TRANSPORTS_RESOURCE_KEY : SPIN_TRANSPORTS_RESOURCE_KEY,
-        Date.now(),
-      );
+      invalidateSpinAuthoringResources(resources, commit, transportMutationResourceKeys(family));
       setFeedback({ kind: "success", message: "Transport resource committed." });
     } catch (error) {
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
@@ -112,13 +214,14 @@ export function TransportAuthoringInspector({
     if (!selectedId || active.data?.scene_revision === undefined) return;
     setPending(true);
     try {
+      if (!capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true) {
+        throw new Error(capability?.reason ?? validation?.execution.reason ?? "Latest clone-only validation does not permit mutation.");
+      }
       const request = { base_revision: active.data.scene_revision };
-      if (family === "current_transport") await api.model.deleteCurrentTransport(selectedId, request);
-      else await api.model.deleteSpinTransport(selectedId, request);
-      resources.invalidate(
-        family === "current_transport" ? CURRENT_TRANSPORTS_RESOURCE_KEY : SPIN_TRANSPORTS_RESOURCE_KEY,
-        Date.now(),
-      );
+      const commit = family === "current_transport"
+        ? await api.model.deleteCurrentTransport(selectedId, request)
+        : await api.model.deleteSpinTransport(selectedId, request);
+      invalidateSpinAuthoringResources(resources, commit, transportMutationResourceKeys(family));
       setLocalSelectionKey("");
       setFeedback({ kind: "success", message: "Transport resource deleted." });
     } catch (error) {
@@ -147,15 +250,22 @@ export function TransportAuthoringInspector({
             <FormField label="Opaque payload" type="textarea" rows={20} readOnly value={readonlyTransportPayload(selected)} />
           </>
         ) : family === "current_transport" ? (
-          <CurrentFields draft={draft as CurrentTransportDraft} patch={patch} />
+          <CurrentFields draft={draft as CurrentTransportDraft} identityReadOnly={Boolean(selected)} patch={patch} />
         ) : (
-          <SpinFields draft={draft as SpinTransportDraft} patch={patch} />
+          <SpinFields draft={draft as SpinTransportDraft} identityReadOnly={Boolean(selected)} patch={patch} />
         )}
         {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
-        {known ? <Button disabled={pending || active.status !== "ready"} onClick={() => void save()}>
+        {known ? <div className="fm-help-text" data-testid="transport-capability">
+          <div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div>
+          <div>Requested lane: {validation?.execution.requested_lane ? JSON.stringify(validation.execution.requested_lane) : "semantic authoring"}</div>
+          <div>Resolved lane: {validation?.execution.resolved_lane ? JSON.stringify(validation.execution.resolved_lane) : "not resolved"}</div>
+          <div>{validationError ?? validation?.execution.reason ?? capability?.reason ?? "Capability status unavailable."}</div>
+          {validation?.semantic.issues.map((issue) => <div key={`${issue.code}:${issue.path}`}>{issue.path}: {issue.message}</div>)}
+        </div> : null}
+        {known ? <Button disabled={pending || active.status !== "ready" || !capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true} onClick={() => void save()}>
           {pending ? "Committing…" : selected ? "Replace" : "Create"}
         </Button> : null}
-        {selected && known ? <Button disabled={pending} variant="danger" onClick={() => void remove()}>Delete</Button> : null}
+        {selected && known ? <Button disabled={pending || !capability?.authoring_allowed || validation?.semantic.valid !== true || validation.execution.authoring_allowed !== true} variant="danger" onClick={() => void remove()}>Delete</Button> : null}
       </InspectorSection>
     </div>
   );
@@ -181,10 +291,10 @@ export function CurrentTransportInspectorPanel({ selection }: InspectorPanelProp
   return <TransportAuthoringInspector family="current_transport" resourceId={resourceId} resourceIndex={resourceIndex} />;
 }
 
-function CurrentFields({ draft, patch }: { draft: CurrentTransportDraft; patch: (value: Partial<Draft>) => void }) {
+function CurrentFields({ draft, identityReadOnly, patch }: { draft: CurrentTransportDraft; identityReadOnly: boolean; patch: (value: Partial<Draft>) => void }) {
   const field = (key: keyof CurrentTransportDraft) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => patch({ [key]: event.target.value });
   return <>
-    <FormField label="Name" value={draft.name} onChange={field("name")} />
+    <FormField label="Name" readOnly={identityReadOnly} value={draft.name} onChange={field("name")} />
     <FormField label="Model" type="select" value={draft.model} onChange={field("model")}><option value="prescribed_density">Prescribed density</option><option value="ohmic_poisson">Ohmic Poisson</option></FormField>
     <FormField label="Coupling" type="select" value={draft.coupling} onChange={field("coupling")}><option value="one_way">One way</option><option value="bidirectional">Bidirectional</option></FormField>
     {draft.model === "prescribed_density" ? <FormField label="Current density vector" unit="A/m²" type="textarea" value={draft.currentDensity} onChange={field("currentDensity")} /> : <>
@@ -199,10 +309,10 @@ function CurrentFields({ draft, patch }: { draft: CurrentTransportDraft; patch: 
   </>;
 }
 
-function SpinFields({ draft, patch }: { draft: SpinTransportDraft; patch: (value: Partial<Draft>) => void }) {
+function SpinFields({ draft, identityReadOnly, patch }: { draft: SpinTransportDraft; identityReadOnly: boolean; patch: (value: Partial<Draft>) => void }) {
   const field = (key: keyof SpinTransportDraft) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => patch({ [key]: event.target.value });
   return <>
-    <FormField label="Id" value={draft.id} onChange={field("id")} />
+    <FormField label="Id" readOnly={identityReadOnly} value={draft.id} onChange={field("id")} />
     <FormField label="Schema version" value={draft.schemaVersion} onChange={field("schemaVersion")} />
     <FormField label="Current source id" value={draft.currentSourceId} onChange={field("currentSourceId")} />
     <FormField label="Mode" type="select" value={draft.mode} onChange={field("mode")}><option value="steady">Steady</option><option value="transient">Transient</option></FormField>

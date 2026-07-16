@@ -108,6 +108,8 @@ import {
   CurrentTransportInspectorPanel,
   SpinTransportInspectorPanel,
 } from "./panels/TransportAuthoringInspector";
+import { OerstedFieldInspectorPanel, SpinTorqueInspectorPanel } from "./panels/SpinAuthoringInspector";
+import { SpinInterfaceInspectorPanel } from "./panels/SpinInterfaceInspector";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
@@ -542,6 +544,24 @@ const PANELS: InspectorPanelContribution[] = [
     title: "Spin Transport",
     selectionKinds: ["physics.spin-transports", "physics.spin-transport"],
     component: SpinTransportInspectorPanel,
+  },
+  {
+    id: "physics-spin-interface",
+    title: "Spin Interface",
+    selectionKinds: ["physics.spin-interfaces", "physics.spin-interface"],
+    component: SpinInterfaceInspectorPanel,
+  },
+  {
+    id: "physics-spin-torque",
+    title: "Spin Torque",
+    selectionKinds: ["physics.spin-torques", "physics.spin-torque"],
+    component: SpinTorqueInspectorPanel,
+  },
+  {
+    id: "physics-oersted-field",
+    title: "Oersted Field",
+    selectionKinds: ["physics.oersted-fields", "physics.oersted-field"],
+    component: OerstedFieldInspectorPanel,
   },
   {
     id: "object-material",

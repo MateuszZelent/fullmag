@@ -2055,6 +2055,30 @@ async fn status_returns_200_with_live_session() {
     assert_eq!(json["resources"]["stages_revision"], 0);
     assert!(json["resources"]["scene_revision"].is_null());
     assert!(json["capabilities"].is_object());
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["contract_version"],
+        "transport-authoring-capabilities.v1"
+    );
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["m1_one_way_steady"]["authoring_allowed"],
+        true
+    );
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["m2_reciprocal"]["status"],
+        "unsupported"
+    );
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["m3_transient"]["status"],
+        "unsupported"
+    );
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["gpu"]["authoring_allowed"],
+        false
+    );
+    assert_eq!(
+        json["capabilities"]["transport_authoring"]["single_precision"]["authoring_allowed"],
+        false
+    );
     assert!(json["energies"].is_object());
     assert!(json["metrics"].is_object());
 }
@@ -2313,6 +2337,10 @@ async fn status_uses_fdm_artifact_layout_revision_before_first_live_step() {
     assert_eq!(
         json["resources"]["topology_revision"],
         json["domain"]["generation_id"]
+            .as_str()
+            .expect("domain generation id must use the decimal-string contract")
+            .parse::<u64>()
+            .expect("domain generation id must contain a u64")
     );
 }
 
@@ -2587,7 +2615,7 @@ async fn domain_slice_mesh_overlay_returns_json_for_fem() {
     assert_eq!(json["u_axis"], "x");
     assert_eq!(json["v_axis"], "y");
     assert_eq!(json["normal_axis"], "z");
-    assert_eq!(json["domain_generation_id"], 42);
+    assert_eq!(json["domain_generation_id"], "42");
     assert_eq!(json["topology_revision"], 31);
     assert_eq!(json["etag"], etag);
     assert_eq!(json["truncated"], false);
@@ -26173,6 +26201,7 @@ async fn spin_authoring_current_transport_crud_is_revision_safe() {
     let committed = body_json(response).await;
     assert_eq!(committed["resource"]["name"], "transport");
     let committed_revision = committed["committed_scene"]["revision"].as_u64().unwrap();
+    assert_eq!(committed["scene_revision"], committed_revision);
 
     let list = app
         .clone()
@@ -26219,6 +26248,51 @@ async fn spin_authoring_current_transport_crud_is_revision_safe() {
         scene.current_transports[0].known().unwrap().current_density,
         Some([1.0e11, 0.0, 0.0])
     );
+}
+
+#[tokio::test]
+async fn deleting_referenced_current_transport_is_unprocessable_and_revision_safe() {
+    let state = test_app_state_with_live_session().await;
+    let initial_revision;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport", "name": "charge", "model": "prescribed_density",
+            "current_density": [1.0e11, 0.0, 0.0], "solve_region": "body"
+        }]))
+        .unwrap();
+        scene.spin_transports = serde_json::from_value(serde_json::json!([{
+            "schema_version": "spin_transport.v1", "id": "spin", "current_source_id": "charge",
+            "mode": "steady", "domain": [], "materials": [],
+            "solver": {"engine":"gmres","linear":{"relative_tolerance":1.0e-8,"absolute_tolerance":0.0,"max_iterations":10},"physical_residual_version":"transport_balance_integrated_l2.v1","operator_version":"fv_spin_upwind_v1","default_external_boundary":"spin_insulating"},
+            "requested_execution":{"discretization":"fdm","device":"cpu","precision":"double","execution_mode":"strict"},
+            "constitutive_version":"transport_constitutive.one_way.fullmag.v1"
+        }])).unwrap();
+        initial_revision = scene.revision;
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    } else {
+        panic!("live state missing");
+    }
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri("/v2/sessions/current/model/current-transports/charge")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"base_revision": initial_revision}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let stored = state.current_live_state.read().await;
+    let scene = stored.as_ref().unwrap().scene_document.as_ref().unwrap();
+    assert_eq!(scene.revision, initial_revision);
+    assert_eq!(scene.current_transports.len(), 1);
 }
 
 #[tokio::test]
@@ -26382,9 +26456,12 @@ async fn spin_torque_and_oersted_resources_commit_through_the_same_scene_graph()
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK, "failed POST {uri}");
-        revision = body_json(response).await["committed_scene"]["revision"]
-            .as_u64()
-            .unwrap();
+        let committed = body_json(response).await;
+        revision = committed["committed_scene"]["revision"].as_u64().unwrap();
+        assert_eq!(
+            committed["scene_revision"], revision,
+            "missing top-level revision for {uri}"
+        );
     }
 
     let scene = app
@@ -26404,6 +26481,45 @@ async fn spin_torque_and_oersted_resources_commit_through_the_same_scene_graph()
     assert_eq!(scene["spin_transports"][0]["id"], "spin-transport");
     assert_eq!(scene["spin_torques"][0]["id"], "zhang-li");
     assert_eq!(scene["oersted_fields"][0]["id"], "oersted");
+}
+
+#[tokio::test]
+async fn direct_transport_crud_fails_closed_when_candidate_capability_is_unsupported() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let revision = sample_scene_document().revision;
+    let response = build_v2_router()
+        .with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/current-transports")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": revision,
+                        "resource": {
+                            "kind": "current_transport",
+                            "name": "reciprocal",
+                            "model": "prescribed_density",
+                            "coupling": "bidirectional",
+                            "current_density": [1.0, 0.0, 0.0]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let stored = state.current_live_state.read().await;
+    let scene = stored.as_ref().unwrap().scene_document.as_ref().unwrap();
+    assert_eq!(scene.revision, revision);
+    assert!(scene.current_transports.is_empty());
 }
 
 #[tokio::test]
@@ -26554,6 +26670,8 @@ fn openapi_exposes_typed_spin_authoring_resources() {
     for path in [
         "/v2/sessions/current/model/current-transports",
         "/v2/sessions/current/model/spin-transports",
+        "/v2/sessions/current/model/spin-interfaces",
+        "/v2/sessions/current/model/transport-validation",
         "/v2/sessions/current/model/spin-torques",
         "/v2/sessions/current/model/oersted-fields",
     ] {
@@ -26564,6 +26682,9 @@ fn openapi_exposes_typed_spin_authoring_resources() {
         "SceneChargeBoundary",
         "SceneChargeSolverPolicy",
         "SceneSpinTransport",
+        "SpinInterfaceListResource",
+        "TransportValidationRequest",
+        "TransportValidationResponse",
         "KnownSceneSpinTransport",
         "SceneSpinTorque",
         "SceneOerstedField",
@@ -26574,6 +26695,250 @@ fn openapi_exposes_typed_spin_authoring_resources() {
             "missing OpenAPI schema {schema}"
         );
     }
+}
+
+#[tokio::test]
+async fn transport_validation_is_clone_only_and_separates_semantics_from_capability() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.session.script_path.clear();
+    }
+    let revision = sample_scene_document().revision;
+    let app = build_v2_router().with_state(state.clone());
+    let valid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/transport-validation")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "validation_version": "transport-authoring-validation.v1",
+                        "base_revision": revision,
+                        "candidate": {
+                            "kind": "current_transport",
+                            "operation": "create",
+                            "resource": {
+                                "kind": "current_transport",
+                                "name": " charge ",
+                                "model": "prescribed_density",
+                                "current_density": [1.0e11, 0.0, 0.0],
+                                "solve_region": "body"
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(valid.status(), StatusCode::OK);
+    let valid = body_json(valid).await;
+    assert_eq!(valid["semantic"]["valid"], true);
+    assert_eq!(valid["execution"]["status"], "semantic_only");
+    assert_eq!(valid["execution"]["authoring_allowed"], true);
+    assert_eq!(
+        valid["execution"]["requested_lane"],
+        serde_json::Value::Null
+    );
+    assert_eq!(valid["execution"]["resolved_lane"], serde_json::Value::Null);
+
+    let stored = state.current_live_state.read().await;
+    let scene = stored.as_ref().unwrap().scene_document.as_ref().unwrap();
+    assert_eq!(scene.revision, revision);
+    assert!(scene.current_transports.is_empty());
+    drop(stored);
+
+    let unsupported = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/transport-validation")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "validation_version": "transport-authoring-validation.v1",
+                        "base_revision": revision,
+                        "candidate": {
+                            "kind": "current_transport",
+                            "operation": "create",
+                            "resource": {
+                                "kind": "current_transport",
+                                "name": "reciprocal",
+                                "model": "prescribed_density",
+                                "coupling": "bidirectional",
+                                "current_density": [1.0e11, 0.0, 0.0]
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unsupported.status(), StatusCode::OK);
+    let unsupported = body_json(unsupported).await;
+    assert_eq!(unsupported["semantic"]["valid"], true);
+    assert_eq!(unsupported["execution"]["status"], "unsupported");
+    assert_eq!(unsupported["execution"]["authoring_allowed"], false);
+    assert!(unsupported["execution"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("M2"));
+
+    let unknown = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/transport-validation")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "validation_version": "transport-authoring-validation.v1",
+                        "base_revision": revision,
+                        "candidate": {
+                            "kind": "spin_torque",
+                            "operation": "create",
+                            "resource": {"kind": "vendor_torque.v9", "id": "opaque", "keep": true}
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), StatusCode::OK);
+    let unknown = body_json(unknown).await;
+    assert_eq!(unknown["execution"]["status"], "unsupported");
+    assert_eq!(unknown["execution"]["authoring_allowed"], false);
+
+    let invalid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/transport-validation")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "validation_version": "transport-authoring-validation.v1",
+                        "base_revision": revision,
+                        "candidate": {
+                            "kind": "current_transport",
+                            "operation": "create",
+                            "resource": {
+                                "kind": "current_transport",
+                                "name": "invalid",
+                                "model": "ohmic_poisson",
+                                "domain": [],
+                                "materials": [],
+                                "boundaries": []
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::OK);
+    let invalid = body_json(invalid).await;
+    assert_eq!(invalid["semantic"]["valid"], false);
+    assert_eq!(invalid["execution"]["authoring_allowed"], false);
+    assert!(invalid["semantic"]["issues"][0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("requires non-empty domain"));
+
+    let stale = app
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v2/sessions/current/model/transport-validation")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "validation_version": "transport-authoring-validation.v1",
+                        "base_revision": revision - 1,
+                        "candidate": {
+                            "kind": "current_transport",
+                            "operation": "create",
+                            "resource": {
+                                "kind": "current_transport",
+                                "name": "stale",
+                                "model": "prescribed_density",
+                                "current_density": [1.0, 0.0, 0.0]
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn spin_interface_projection_preserves_owner_and_unknown_payloads() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.spin_transports = serde_json::from_value(serde_json::json!([{
+            "schema_version": "spin_transport.v1",
+            "id": "spin",
+            "current_source_id": "charge",
+            "mode": "steady",
+            "domain": [],
+            "materials": [],
+            "interfaces": [
+                {
+                    "id": "nf",
+                    "kind": "transparent",
+                    "side_a": {"object_id": "body"},
+                    "side_b": {"object_id": "body"},
+                    "normal_a_to_b": [1.0, 0.0, 0.0]
+                },
+                {"id": "future", "kind": "vendor.interface.v2", "opaque": {"keep": true}}
+            ],
+            "solver": {
+                "engine": "gmres",
+                "linear": {"relative_tolerance": 1.0e-8, "absolute_tolerance": 0.0, "max_iterations": 10},
+                "physical_residual_version": "transport_balance_integrated_l2.v1",
+                "operator_version": "fv_spin_upwind_v1",
+                "default_external_boundary": "spin_insulating"
+            },
+            "requested_execution": {"discretization": "fdm", "device": "cpu", "precision": "double", "execution_mode": "strict"},
+            "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
+        }])).unwrap();
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/sessions/current/model/spin-interfaces")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["items"][0]["owner_spin_transport_id"], "spin");
+    assert_eq!(body["items"][0]["interface"]["id"], "nf");
+    assert_eq!(body["items"][1]["interface"]["opaque"]["keep"], true);
 }
 
 #[test]

@@ -189,6 +189,28 @@ export type SelectionRef =
       type: "spin-transport";
     }
   | {
+      kind: "physics.spin-interfaces" | "physics.spin-interface";
+      nodeId: string;
+      spinInterfaceId?: string;
+      spinInterfaceIndex?: number;
+      spinInterfaceOwnerId?: string;
+      type: "spin-interface";
+    }
+  | {
+      kind: "physics.spin-torques" | "physics.spin-torque";
+      nodeId: string;
+      spinTorqueId?: string;
+      spinTorqueIndex?: number;
+      type: "spin-torque";
+    }
+  | {
+      kind: "physics.oersted-fields" | "physics.oersted-field";
+      nodeId: string;
+      oerstedFieldId?: string;
+      oerstedFieldIndex?: number;
+      type: "oersted-field";
+    }
+  | {
       chartId: string;
       kind: "analysis.chart";
       nodeId: string;
@@ -454,6 +476,31 @@ export function selectionRefEquals(
         left.nodeId === right.nodeId &&
         left.currentTransportId === right.currentTransportId &&
         left.currentTransportIndex === right.currentTransportIndex
+      );
+    case "spin-interface":
+      return (
+        right.type === "spin-interface" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.spinInterfaceId === right.spinInterfaceId &&
+        left.spinInterfaceIndex === right.spinInterfaceIndex &&
+        left.spinInterfaceOwnerId === right.spinInterfaceOwnerId
+      );
+    case "spin-torque":
+      return (
+        right.type === "spin-torque" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.spinTorqueId === right.spinTorqueId &&
+        left.spinTorqueIndex === right.spinTorqueIndex
+      );
+    case "oersted-field":
+      return (
+        right.type === "oersted-field" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.oerstedFieldId === right.oerstedFieldId &&
+        left.oerstedFieldIndex === right.oerstedFieldIndex
       );
     case "analysis-chart":
       return (

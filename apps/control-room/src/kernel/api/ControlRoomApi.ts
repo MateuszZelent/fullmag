@@ -91,6 +91,8 @@ import {
   MODEL_CURRENT_TRANSPORTS_PATH,
   MODEL_SPIN_TRANSPORT_PATH,
   MODEL_SPIN_TRANSPORTS_PATH,
+  MODEL_SPIN_INTERFACES_PATH,
+  MODEL_TRANSPORT_VALIDATION_PATH,
   MODEL_MAGNETIZATION_ASSET_PATH,
   MODEL_MATERIAL_FIELDS_PATH,
   MODEL_MATERIAL_PATH,
@@ -291,6 +293,9 @@ import type {
   SpinTransportListResource,
   SpinTransportMutationRequest,
   SpinTransportCommitResource,
+  SpinInterfaceListResource,
+  TransportValidationRequest,
+  TransportValidationResponse,
   SpinTorqueListResource,
   SpinTorqueMutationRequest,
   SpinTorqueCommitResource,
@@ -1202,6 +1207,10 @@ export class ControlRoomApi {
       this.patchJson<SpinTransportCommitResource, SpinTransportMutationRequest>(MODEL_SPIN_TRANSPORT_PATH, request, options, { path: { id } }),
     deleteSpinTransport: (id: string, request: SpinAuthoringDeleteRequest, options?: RequestOptions) =>
       this.deleteJsonWithBody<SpinTransportCommitResource, SpinAuthoringDeleteRequest>(MODEL_SPIN_TRANSPORT_PATH, request, options, { path: { id } }),
+    spinInterfaces: (options?: RequestOptions) =>
+      this.requestJson<SpinInterfaceListResource>(MODEL_SPIN_INTERFACES_PATH, options),
+    validateTransport: (request: TransportValidationRequest, options?: RequestOptions) =>
+      this.postJson<TransportValidationResponse, TransportValidationRequest>(MODEL_TRANSPORT_VALIDATION_PATH, request, options),
     spinTorques: (options?: RequestOptions) =>
       this.requestJson<SpinTorqueListResource>(MODEL_SPIN_TORQUES_PATH, options),
     spinTorque: (id: string, options?: RequestOptions) =>

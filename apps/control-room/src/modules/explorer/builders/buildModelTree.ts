@@ -1038,6 +1038,59 @@ function currentTransportNodes(transports: NonNullable<ModelTreeSnapshot["curren
   };
 }
 
+function spinInterfaceNodes(interfaces: NonNullable<ModelTreeSnapshot["spinInterfaces"]>): ExplorerNode {
+  return {
+    id: "model:physics:spin-interfaces",
+    kind: "physics.spin-interfaces",
+    label: "Spin Interfaces",
+    parentId: "model:session",
+    badge: `${interfaces.length}`,
+    icon: "activity",
+    status: "ready",
+    children: interfaces.map((item) => ({
+      id: `model:physics:spin-interfaces:${encodeURIComponent(item.ownerId)}:position:${item.index}`,
+      kind: "physics.spin-interface" as const,
+      label: item.id ?? `Unknown interface ${item.index + 1}`,
+      parentId: "model:physics:spin-interfaces",
+      badge: `${item.ownerId} · ${item.known ? "typed" : "read-only"}`,
+      icon: "activity" as const,
+      spinInterfaceId: item.id ?? undefined,
+      spinInterfaceIndex: item.index,
+      spinInterfaceOwnerId: item.ownerId,
+      status: item.known ? "ready" as const : "unsupported" as const,
+    })),
+  };
+}
+
+function authoredSourceNodes(
+  family: "spin-torques" | "oersted-fields",
+  items: NonNullable<ModelTreeSnapshot["spinTorques"]>,
+): ExplorerNode {
+  const torque = family === "spin-torques";
+  const root = `model:physics:${family}`;
+  return {
+    id: root,
+    kind: torque ? "physics.spin-torques" : "physics.oersted-fields",
+    label: torque ? "Spin Torques" : "Oersted Fields",
+    parentId: "model:session",
+    badge: `${items.length}`,
+    icon: "activity",
+    status: "ready",
+    children: items.map((item) => ({
+      id: `${root}:position:${item.index}`,
+      kind: torque ? "physics.spin-torque" as const : "physics.oersted-field" as const,
+      label: item.id ?? `Unknown ${torque ? "spin torque" : "Oersted field"} ${item.index + 1}`,
+      parentId: root,
+      badge: item.supported ? item.kind ?? "typed" : "read-only",
+      icon: "activity" as const,
+      ...(torque
+        ? { spinTorqueId: item.id ?? undefined, spinTorqueIndex: item.index }
+        : { oerstedFieldId: item.id ?? undefined, oerstedFieldIndex: item.index }),
+      status: item.supported ? "ready" as const : "unsupported" as const,
+    })),
+  };
+}
+
 function couplingStatus(coupling: ModelTreeCouplingSnapshot): ExplorerNodeStatus {
   if (!coupling.enabled) return "degraded";
   if (coupling.realizationStatus?.includes("requires")) return "unsupported";
@@ -1203,6 +1256,9 @@ export function buildModelTree(
   }
   sessionChildren.push(currentTransportNodes(snapshot?.currentTransports ?? []));
   sessionChildren.push(spinTransportNodes(snapshot?.spinTransports ?? []));
+  sessionChildren.push(spinInterfaceNodes(snapshot?.spinInterfaces ?? []));
+  sessionChildren.push(authoredSourceNodes("spin-torques", snapshot?.spinTorques ?? []));
+  sessionChildren.push(authoredSourceNodes("oersted-fields", snapshot?.oerstedFields ?? []));
 
   sessionChildren.push(
     meshPolicyNodes(snapshot?.mesh ?? null),

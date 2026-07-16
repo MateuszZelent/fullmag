@@ -8,6 +8,7 @@ import {
   resetExplorerStoreForTests,
   setExplorerActiveTab,
   setExplorerFilterText,
+  shouldAutoRevealModelTab,
   toggleExplorerNode,
 } from "./explorerStore";
 
@@ -56,5 +57,10 @@ describe("explorerStore", () => {
     expect(state.expandedIds.model.has("model:session")).toBe(true);
     expect(state.expandedIds.model.has("model:mesh")).toBe(true);
     expect(state.expandedIds.model.has("model:mesh:unassigned")).toBe(true);
+  });
+
+  it("does not force the Model tab when the user changes tabs without changing selection", () => {
+    expect(shouldAutoRevealModelTab("model:physics", "model:physics", "results")).toBe(false);
+    expect(shouldAutoRevealModelTab("results:field:m", "model:physics", "results")).toBe(true);
   });
 });

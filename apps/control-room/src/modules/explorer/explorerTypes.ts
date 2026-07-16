@@ -75,6 +75,12 @@ type ExplorerNodeKind =
   | "physics.current-transport"
   | "physics.spin-transports"
   | "physics.spin-transport"
+  | "physics.spin-interfaces"
+  | "physics.spin-interface"
+  | "physics.spin-torques"
+  | "physics.spin-torque"
+  | "physics.oersted-fields"
+  | "physics.oersted-field"
   | "study.root"
   | "study.execution"
   | "study.recovery"
@@ -279,6 +285,13 @@ export interface ExplorerNode {
   currentTransportIndex?: number;
   spinTransportId?: string;
   spinTransportIndex?: number;
+  spinInterfaceId?: string;
+  spinInterfaceIndex?: number;
+  spinInterfaceOwnerId?: string;
+  spinTorqueId?: string;
+  spinTorqueIndex?: number;
+  oerstedFieldId?: string;
+  oerstedFieldIndex?: number;
   regionId?: string;
   resourceRef?: string;
   sampleIndex?: number;
@@ -389,6 +402,9 @@ export interface ModelTreeSnapshot {
   study?: ModelTreeStudySnapshot | null;
   currentTransports?: readonly ModelTreeCurrentTransportSnapshot[];
   spinTransports?: readonly ModelTreeSpinTransportSnapshot[];
+  spinInterfaces?: readonly ModelTreeSpinInterfaceSnapshot[];
+  spinTorques?: readonly ModelTreeAuthoredSourceSnapshot[];
+  oerstedFields?: readonly ModelTreeAuthoredSourceSnapshot[];
 }
 
 export interface ModelTreeCurrentTransportSnapshot {
@@ -405,6 +421,20 @@ export interface ModelTreeSpinTransportSnapshot {
   index: number;
   label: string;
   mode: string | null;
+  supported: boolean;
+}
+
+export interface ModelTreeSpinInterfaceSnapshot {
+  id: string | null;
+  index: number;
+  known: boolean;
+  ownerId: string;
+}
+
+export interface ModelTreeAuthoredSourceSnapshot {
+  id: string | null;
+  index: number;
+  kind: string | null;
   supported: boolean;
 }
 

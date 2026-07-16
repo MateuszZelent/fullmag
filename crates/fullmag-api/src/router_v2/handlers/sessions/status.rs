@@ -199,6 +199,12 @@ pub(crate) fn build_live_status(
         region_initial_state_revision: snapshot.region_realization_revisions.initial_state,
     };
 
+    let blocked_transport_capability =
+        |reason: &str| crate::schemas::status::TransportAuthoringCapability {
+            status: "unsupported".into(),
+            authoring_allowed: false,
+            reason: reason.into(),
+        };
     let capabilities = CapabilityMap {
         structured_grid: !is_fem,
         explicit_topology: is_fem,
@@ -211,6 +217,19 @@ pub(crate) fn build_live_status(
         preview_2d: true,
         preview_3d: true,
         algorithms_available: relaxation_algorithms_available(),
+        transport_authoring: Some(crate::schemas::status::TransportAuthoringCapabilityMap {
+            contract_version: "transport-authoring-capabilities.v1".into(),
+            m1_one_way_steady: crate::schemas::status::TransportAuthoringCapability {
+                status: "semantic_only".into(),
+                authoring_allowed: true,
+                reason: "M1 steady one-way authoring is available; execution qualification remains workload-scoped.".into(),
+            },
+            m2_reciprocal: blocked_transport_capability("Reciprocal transport remains an M2 authoring capability."),
+            m3_transient: blocked_transport_capability("Transient transport remains an M3 authoring capability."),
+            gpu: blocked_transport_capability("Transport GPU authoring is unavailable until lane qualification is published."),
+            single_precision: blocked_transport_capability("Transport single precision is unavailable until precision qualification is published."),
+            hybrid: blocked_transport_capability("Transport hybrid execution is not supported by the v1 authoring contract."),
+        }),
     };
 
     let energies = EnergySummary {

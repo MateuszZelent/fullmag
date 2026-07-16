@@ -278,15 +278,15 @@ function VisualizationDebugFieldMetaObserver({
     () => registry.retain(query.metaQueryKey),
     [query.metaQueryKey, registry],
   );
-  const resource = useFieldMetaResource(
+  const { data, status } = useFieldMetaResource(
     visualizationDebugFieldMetaHookInput(query),
   );
   useEffect(() => {
     registry.set(
       query.metaQueryKey,
-      resolveVisualizationDebugFieldMetaRegistryValue(resource),
+      resolveVisualizationDebugFieldMetaRegistryValue({ data, status }),
     );
-  }, [query.metaQueryKey, registry, resource.data, resource.status]);
+  }, [data, query.metaQueryKey, registry, status]);
   return null;
 }
 

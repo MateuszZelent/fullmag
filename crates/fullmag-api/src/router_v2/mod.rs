@@ -87,6 +87,14 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .delete(handlers::model::delete_spin_transport),
         )
         .route(
+            "/v2/sessions/current/model/spin-interfaces",
+            get(handlers::model::get_spin_interfaces),
+        )
+        .route(
+            "/v2/sessions/current/model/transport-validation",
+            post(handlers::model::validate_transport_candidate),
+        )
+        .route(
             "/v2/sessions/current/model/spin-torques",
             get(handlers::model::get_spin_torques)
                 .post(handlers::model::create_spin_torque),

@@ -45,6 +45,13 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    pub fn unprocessable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: message.into(),
+        }
+    }
 }
 
 impl From<std::io::Error> for ApiError {

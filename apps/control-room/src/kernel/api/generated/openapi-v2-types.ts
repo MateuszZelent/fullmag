@@ -2308,6 +2308,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/model/spin-interfaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_spin_interfaces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/model/spin-torques": {
         parameters: {
             query?: never;
@@ -2414,6 +2430,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["model_post_sessions_current_model_transactions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/transport-validation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["model_post_sessions_current_model_transport_validation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3238,6 +3270,7 @@ export interface components {
             preview_3d: boolean;
             scalar_history: boolean;
             structured_grid: boolean;
+            transport_authoring?: null | components["schemas"]["TransportAuthoringCapabilityMap"];
         };
         CheckpointCreateRequest: {
             profile?: components["schemas"]["SaveProfile"];
@@ -3562,6 +3595,8 @@ export interface components {
         CurrentTransportCommitResource: {
             committed_scene: components["schemas"]["SceneResource"];
             resource: components["schemas"]["SceneCurrentTransport"];
+            /** Format: int64 */
+            scene_revision: number;
         };
         /** @enum {string} */
         CurrentTransportKind: "current_transport";
@@ -6041,6 +6076,8 @@ export interface components {
         OerstedFieldCommitResource: {
             committed_scene: components["schemas"]["SceneResource"];
             resource: components["schemas"]["SceneOerstedField"];
+            /** Format: int64 */
+            scene_revision: number;
         };
         OerstedFieldListResource: {
             items: components["schemas"]["SceneOerstedField"][];
@@ -7513,9 +7550,22 @@ export interface components {
             /** Format: int64 */
             base_revision: number;
         };
+        SpinInterfaceListResource: {
+            items: components["schemas"]["SpinInterfaceProjectionItem"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        SpinInterfaceProjectionItem: {
+            interface: unknown;
+            interface_id?: string | null;
+            known: boolean;
+            owner_spin_transport_id: string;
+        };
         SpinTorqueCommitResource: {
             committed_scene: components["schemas"]["SceneResource"];
             resource: components["schemas"]["SceneSpinTorque"];
+            /** Format: int64 */
+            scene_revision: number;
         };
         SpinTorqueListResource: {
             items: components["schemas"]["SceneSpinTorque"][];
@@ -7530,6 +7580,8 @@ export interface components {
         SpinTransportCommitResource: {
             committed_scene: components["schemas"]["SceneResource"];
             resource: components["schemas"]["SceneSpinTransport"];
+            /** Format: int64 */
+            scene_revision: number;
         };
         SpinTransportListResource: {
             items: components["schemas"]["SceneSpinTransport"][];
@@ -7954,6 +8006,90 @@ export interface components {
             code: string;
             message: string;
             severity: string;
+        };
+        TransportAuthoringCapability: {
+            authoring_allowed: boolean;
+            reason: string;
+            status: string;
+        };
+        TransportAuthoringCapabilityMap: {
+            contract_version: string;
+            gpu: components["schemas"]["TransportAuthoringCapability"];
+            hybrid: components["schemas"]["TransportAuthoringCapability"];
+            m1_one_way_steady: components["schemas"]["TransportAuthoringCapability"];
+            m2_reciprocal: components["schemas"]["TransportAuthoringCapability"];
+            m3_transient: components["schemas"]["TransportAuthoringCapability"];
+            single_precision: components["schemas"]["TransportAuthoringCapability"];
+        };
+        /** @enum {string} */
+        TransportAuthoringOperation: "create" | "replace";
+        TransportExecutionCapability: {
+            authoring_allowed: boolean;
+            qualification: string;
+            reason?: string | null;
+            requested_lane?: null | components["schemas"]["TransportExecutionLane"];
+            resolved_lane?: null | components["schemas"]["TransportExecutionLane"];
+            status: string;
+        };
+        TransportExecutionLane: {
+            device: string;
+            discretization: string;
+            execution_mode: string;
+            precision: string;
+        };
+        TransportSemanticValidation: {
+            issues: components["schemas"]["TransportValidationIssue"][];
+            valid: boolean;
+        };
+        TransportValidationCandidate: {
+            /** @enum {string} */
+            kind: "current_transport";
+            operation: components["schemas"]["TransportAuthoringOperation"];
+            path_id?: string | null;
+            resource: components["schemas"]["SceneCurrentTransport"];
+        } | {
+            /** @enum {string} */
+            kind: "spin_transport";
+            operation: components["schemas"]["TransportAuthoringOperation"];
+            path_id?: string | null;
+            resource: components["schemas"]["SceneSpinTransport"];
+        } | {
+            interface_id?: string | null;
+            /** @enum {string} */
+            kind: "spin_interface";
+            operation: components["schemas"]["TransportAuthoringOperation"];
+            owner_spin_transport_id: string;
+            resource: unknown;
+        } | {
+            /** @enum {string} */
+            kind: "spin_torque";
+            operation: components["schemas"]["TransportAuthoringOperation"];
+            path_id?: string | null;
+            resource: components["schemas"]["SceneSpinTorque"];
+        } | {
+            /** @enum {string} */
+            kind: "oersted_field";
+            operation: components["schemas"]["TransportAuthoringOperation"];
+            path_id?: string | null;
+            resource: components["schemas"]["SceneOerstedField"];
+        };
+        TransportValidationIssue: {
+            code: string;
+            message: string;
+            path: string;
+        };
+        TransportValidationRequest: {
+            /** Format: int64 */
+            base_revision: number;
+            candidate: components["schemas"]["TransportValidationCandidate"];
+            validation_version: string;
+        };
+        TransportValidationResponse: {
+            execution: components["schemas"]["TransportExecutionCapability"];
+            /** Format: int64 */
+            scene_revision: number;
+            semantic: components["schemas"]["TransportSemanticValidation"];
+            validation_version: string;
         };
         TrimAxisVisualizationAxes: {
             x: components["schemas"]["TrimAxisVisualizationState"];
@@ -14265,6 +14401,25 @@ export interface operations {
             };
         };
     };
+    model_get_sessions_current_model_spin_interfaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpinInterfaceListResource"];
+                };
+            };
+        };
+    };
     model_get_sessions_current_model_spin_torques: {
         parameters: {
             query?: never;
@@ -14659,6 +14814,35 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_post_sessions_current_model_transport_validation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransportValidationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TransportValidationResponse"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -614,7 +614,7 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     const mismatching = snapshot([carrier({ rangeDiagnostics, rangeDiagnosticsComponent: "x", scannedStats: null })]);
     expect(matching.carriers[0]?.statistics).toContainEqual(expect.objectContaining({ source: "render-derived" }));
     expect(mismatching.carriers[0]?.statistics).toEqual([]);
-    expect(mismatching.carriers[0]?.scanState).toBe("idle");
+    expect(mismatching.carriers[0]?.scanState).toBe("complete");
   });
 
   it("bounds carrier collections and diagnostic text below the controller limit", () => {

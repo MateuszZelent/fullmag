@@ -165,6 +165,20 @@ pub struct SpinTransportListResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SpinInterfaceProjectionItem {
+    pub owner_spin_transport_id: String,
+    pub interface_id: Option<String>,
+    pub known: bool,
+    pub interface: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SpinInterfaceListResource {
+    pub scene_revision: u64,
+    pub items: Vec<SpinInterfaceProjectionItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SpinTorqueListResource {
     pub scene_revision: u64,
     pub items: Vec<fullmag_authoring::SceneSpinTorque>,
@@ -205,26 +219,119 @@ pub struct SpinAuthoringDeleteRequest {
     pub base_revision: u64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportAuthoringOperation {
+    Create,
+    Replace,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TransportValidationCandidate {
+    CurrentTransport {
+        operation: TransportAuthoringOperation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path_id: Option<String>,
+        resource: fullmag_authoring::SceneCurrentTransport,
+    },
+    SpinTransport {
+        operation: TransportAuthoringOperation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path_id: Option<String>,
+        resource: fullmag_authoring::SceneSpinTransport,
+    },
+    SpinInterface {
+        operation: TransportAuthoringOperation,
+        owner_spin_transport_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interface_id: Option<String>,
+        resource: Value,
+    },
+    SpinTorque {
+        operation: TransportAuthoringOperation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path_id: Option<String>,
+        resource: fullmag_authoring::SceneSpinTorque,
+    },
+    OerstedField {
+        operation: TransportAuthoringOperation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path_id: Option<String>,
+        resource: fullmag_authoring::SceneOerstedField,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TransportValidationRequest {
+    pub validation_version: String,
+    pub base_revision: u64,
+    pub candidate: TransportValidationCandidate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TransportValidationIssue {
+    pub code: String,
+    pub path: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TransportSemanticValidation {
+    pub valid: bool,
+    pub issues: Vec<TransportValidationIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TransportExecutionLane {
+    pub discretization: String,
+    pub device: String,
+    pub precision: String,
+    pub execution_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TransportExecutionCapability {
+    pub status: String,
+    pub qualification: String,
+    pub authoring_allowed: bool,
+    pub reason: Option<String>,
+    pub requested_lane: Option<TransportExecutionLane>,
+    pub resolved_lane: Option<TransportExecutionLane>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TransportValidationResponse {
+    pub validation_version: String,
+    pub scene_revision: u64,
+    pub semantic: TransportSemanticValidation,
+    pub execution: TransportExecutionCapability,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CurrentTransportCommitResource {
+    pub scene_revision: u64,
     pub resource: fullmag_authoring::SceneCurrentTransport,
     pub committed_scene: SceneResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SpinTransportCommitResource {
+    pub scene_revision: u64,
     pub resource: fullmag_authoring::SceneSpinTransport,
     pub committed_scene: SceneResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SpinTorqueCommitResource {
+    pub scene_revision: u64,
     pub resource: fullmag_authoring::SceneSpinTorque,
     pub committed_scene: SceneResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct OerstedFieldCommitResource {
+    pub scene_revision: u64,
     pub resource: fullmag_authoring::SceneOerstedField,
     pub committed_scene: SceneResource,
 }

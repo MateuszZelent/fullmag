@@ -28,9 +28,9 @@ describe("physics interaction catalog", () => {
       "interfacial_dmi",
       "uniaxial_anisotropy",
     ]);
-    expect(findInteractionSpec("bulk_dmi")?.availability).toBe("deferred");
-    expect(findInteractionSpec("current_transport")?.availability).toBe("deferred");
-    expect(findInteractionSpec("spin_torque")?.availability).toBe("deferred");
+    expect(findInteractionSpec("bulk_dmi")?.availability).toBe("study");
+    expect(findInteractionSpec("current_transport")?.availability).toBe("study");
+    expect(findInteractionSpec("spin_torque")?.availability).toBe("study");
   });
 
   it("keeps exchange and demag as global effective-field switches", () => {
@@ -177,7 +177,7 @@ describe("physics interaction catalog", () => {
     const oersted = findInteractionSpec("oersted_field");
 
     expect(oersted).toMatchObject({
-      availability: "deferred",
+      availability: "study",
       id: "oersted_field",
       scope: "global_or_region",
     });
@@ -194,12 +194,12 @@ describe("physics interaction catalog", () => {
     });
   });
 
-  it("documents electric current and STT backend families as source-bound deferred authoring", () => {
+  it("documents electric current and STT backend families as source-bound authoring", () => {
     const current = findInteractionSpec("current_transport");
     const stt = findInteractionSpec("spin_torque");
 
     expect(current).toMatchObject({
-      availability: "deferred",
+      availability: "study",
       id: "current_transport",
       scope: "global_or_region",
     });
@@ -210,7 +210,7 @@ describe("physics interaction catalog", () => {
       ],
     });
     expect(stt).toMatchObject({
-      availability: "deferred",
+      availability: "study",
       id: "spin_torque",
       scope: "object_or_region",
     });

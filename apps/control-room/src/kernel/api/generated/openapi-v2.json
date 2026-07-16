@@ -965,6 +965,16 @@
           },
           "structured_grid": {
             "type": "boolean"
+          },
+          "transport_authoring": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TransportAuthoringCapabilityMap"
+              }
+            ]
           }
         },
         "required": [
@@ -2363,9 +2373,15 @@
           },
           "resource": {
             "$ref": "#/components/schemas/SceneCurrentTransport"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
+          "scene_revision",
           "resource",
           "committed_scene"
         ],
@@ -12008,9 +12024,15 @@
           },
           "resource": {
             "$ref": "#/components/schemas/SceneOerstedField"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
+          "scene_revision",
           "resource",
           "committed_scene"
         ],
@@ -17812,6 +17834,49 @@
         ],
         "type": "object"
       },
+      "SpinInterfaceListResource": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SpinInterfaceProjectionItem"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "items"
+        ],
+        "type": "object"
+      },
+      "SpinInterfaceProjectionItem": {
+        "properties": {
+          "interface": {},
+          "interface_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "known": {
+            "type": "boolean"
+          },
+          "owner_spin_transport_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "owner_spin_transport_id",
+          "known",
+          "interface"
+        ],
+        "type": "object"
+      },
       "SpinTorqueCommitResource": {
         "properties": {
           "committed_scene": {
@@ -17819,9 +17884,15 @@
           },
           "resource": {
             "$ref": "#/components/schemas/SceneSpinTorque"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
+          "scene_revision",
           "resource",
           "committed_scene"
         ],
@@ -17871,9 +17942,15 @@
           },
           "resource": {
             "$ref": "#/components/schemas/SceneSpinTransport"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
+          "scene_revision",
           "resource",
           "committed_scene"
         ],
@@ -19668,6 +19745,364 @@
           "code",
           "severity",
           "message"
+        ],
+        "type": "object"
+      },
+      "TransportAuthoringCapability": {
+        "properties": {
+          "authoring_allowed": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "authoring_allowed",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "TransportAuthoringCapabilityMap": {
+        "properties": {
+          "contract_version": {
+            "type": "string"
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/TransportAuthoringCapability"
+          },
+          "hybrid": {
+            "$ref": "#/components/schemas/TransportAuthoringCapability"
+          },
+          "m1_one_way_steady": {
+            "$ref": "#/components/schemas/TransportAuthoringCapability"
+          },
+          "m2_reciprocal": {
+            "$ref": "#/components/schemas/TransportAuthoringCapability"
+          },
+          "m3_transient": {
+            "$ref": "#/components/schemas/TransportAuthoringCapability"
+          },
+          "single_precision": {
+            "$ref": "#/components/schemas/TransportAuthoringCapability"
+          }
+        },
+        "required": [
+          "contract_version",
+          "m1_one_way_steady",
+          "m2_reciprocal",
+          "m3_transient",
+          "gpu",
+          "single_precision",
+          "hybrid"
+        ],
+        "type": "object"
+      },
+      "TransportAuthoringOperation": {
+        "enum": [
+          "create",
+          "replace"
+        ],
+        "type": "string"
+      },
+      "TransportExecutionCapability": {
+        "properties": {
+          "authoring_allowed": {
+            "type": "boolean"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_lane": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TransportExecutionLane"
+              }
+            ]
+          },
+          "resolved_lane": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TransportExecutionLane"
+              }
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "qualification",
+          "authoring_allowed"
+        ],
+        "type": "object"
+      },
+      "TransportExecutionLane": {
+        "properties": {
+          "device": {
+            "type": "string"
+          },
+          "discretization": {
+            "type": "string"
+          },
+          "execution_mode": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "discretization",
+          "device",
+          "precision",
+          "execution_mode"
+        ],
+        "type": "object"
+      },
+      "TransportSemanticValidation": {
+        "properties": {
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/TransportValidationIssue"
+            },
+            "type": "array"
+          },
+          "valid": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "valid",
+          "issues"
+        ],
+        "type": "object"
+      },
+      "TransportValidationCandidate": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "current_transport"
+                ],
+                "type": "string"
+              },
+              "operation": {
+                "$ref": "#/components/schemas/TransportAuthoringOperation"
+              },
+              "path_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resource": {
+                "$ref": "#/components/schemas/SceneCurrentTransport"
+              }
+            },
+            "required": [
+              "operation",
+              "resource",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "spin_transport"
+                ],
+                "type": "string"
+              },
+              "operation": {
+                "$ref": "#/components/schemas/TransportAuthoringOperation"
+              },
+              "path_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resource": {
+                "$ref": "#/components/schemas/SceneSpinTransport"
+              }
+            },
+            "required": [
+              "operation",
+              "resource",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "interface_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "spin_interface"
+                ],
+                "type": "string"
+              },
+              "operation": {
+                "$ref": "#/components/schemas/TransportAuthoringOperation"
+              },
+              "owner_spin_transport_id": {
+                "type": "string"
+              },
+              "resource": {}
+            },
+            "required": [
+              "operation",
+              "owner_spin_transport_id",
+              "resource",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "spin_torque"
+                ],
+                "type": "string"
+              },
+              "operation": {
+                "$ref": "#/components/schemas/TransportAuthoringOperation"
+              },
+              "path_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resource": {
+                "$ref": "#/components/schemas/SceneSpinTorque"
+              }
+            },
+            "required": [
+              "operation",
+              "resource",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "oersted_field"
+                ],
+                "type": "string"
+              },
+              "operation": {
+                "$ref": "#/components/schemas/TransportAuthoringOperation"
+              },
+              "path_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resource": {
+                "$ref": "#/components/schemas/SceneOerstedField"
+              }
+            },
+            "required": [
+              "operation",
+              "resource",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "TransportValidationIssue": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "path",
+          "message"
+        ],
+        "type": "object"
+      },
+      "TransportValidationRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/TransportValidationCandidate"
+          },
+          "validation_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validation_version",
+          "base_revision",
+          "candidate"
+        ],
+        "type": "object"
+      },
+      "TransportValidationResponse": {
+        "properties": {
+          "execution": {
+            "$ref": "#/components/schemas/TransportExecutionCapability"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "semantic": {
+            "$ref": "#/components/schemas/TransportSemanticValidation"
+          },
+          "validation_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validation_version",
+          "scene_revision",
+          "semantic",
+          "execution"
         ],
         "type": "object"
       },
@@ -29127,6 +29562,26 @@
         ]
       }
     },
+    "/v2/sessions/current/model/spin-interfaces": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_spin_interfaces",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpinInterfaceListResource"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
     "/v2/sessions/current/model/spin-torques": {
       "get": {
         "operationId": "model_get_sessions_current_model_spin_torques",
@@ -29575,6 +30030,39 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/transport-validation": {
+      "post": {
+        "operationId": "model_post_sessions_current_model_transport_validation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransportValidationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportValidationResponse"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
           }
         },
         "tags": [

@@ -1,3 +1,5 @@
+import { rmSync } from "node:fs";
+
 const WEB_SOCKET_OPEN = 1;
 const WEB_SOCKET_CLOSING = 2;
 const WEB_SOCKET_CLOSED = 3;
@@ -150,6 +152,31 @@ export async function runTransportAuthoringSmoke(deps) {
   return result;
 }
 
+export async function removeProfileDirectory(userDataDir, options = {}) {
+  const maxAttempts = options.maxAttempts ?? 8;
+  const remove = options.remove ?? ((path) => rmSync(path, {
+    force: true,
+    recursive: true,
+  }));
+  const retryDelayMs = options.retryDelayMs ?? 50;
+  const wait = options.wait ?? ((delayMs) => new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  }));
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      remove(userDataDir);
+      return;
+    } catch (error) {
+      const retryable = error?.code === "EBUSY"
+        || error?.code === "ENOTEMPTY"
+        || error?.code === "EPERM";
+      if (!retryable || attempt === maxAttempts) throw error;
+      await wait(retryDelayMs * attempt);
+    }
+  }
+}
+
 export async function startChromium(deps) {
   const userDataDir = deps.createProfile();
   let child = null;
@@ -160,7 +187,7 @@ export async function startChromium(deps) {
     return { process: child, userDataDir, wsUrl };
   } catch (error) {
     if (child) await deps.stopChromium(child).catch(() => undefined);
-    deps.removeProfile(userDataDir);
+    await deps.removeProfile(userDataDir);
     throw error;
   }
 }

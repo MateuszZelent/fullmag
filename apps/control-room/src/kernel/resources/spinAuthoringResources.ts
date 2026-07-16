@@ -7,19 +7,42 @@ import type {
   OerstedFieldListResource,
   ResourceRevision,
   SpinTorqueListResource,
+  SpinInterfaceListResource,
   SpinTransportListResource,
 } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
+
+import type { ResourceInvalidationController } from "./ResourceInvalidationController";
+import type { ResourceKey } from "./resourceTypes";
 
 import { useResource } from "./useResource";
 
 export const CURRENT_TRANSPORTS_RESOURCE_KEY = "model.current-transports";
 export const SPIN_TORQUES_RESOURCE_KEY = "model.spin-torques";
 export const SPIN_TRANSPORTS_RESOURCE_KEY = "model.spin-transports";
+export const SPIN_INTERFACES_RESOURCE_KEY = "model.spin-interfaces";
 export const OERSTED_FIELDS_RESOURCE_KEY = "model.oersted-fields";
+
+export function transportMutationResourceKeys(
+  family: "current_transport" | "spin_transport",
+): readonly ResourceKey[] {
+  return family === "current_transport"
+    ? [CURRENT_TRANSPORTS_RESOURCE_KEY]
+    : [SPIN_TRANSPORTS_RESOURCE_KEY, SPIN_INTERFACES_RESOURCE_KEY];
+}
 
 interface ResourceHookOptions {
   enabled?: boolean;
+}
+
+export function invalidateSpinAuthoringResources(
+  resources: Pick<ResourceInvalidationController, "invalidate">,
+  commit: { scene_revision: number },
+  resourceKeys: readonly ResourceKey[],
+): void {
+  for (const resourceKey of resourceKeys) {
+    resources.invalidate(resourceKey, commit.scene_revision);
+  }
 }
 
 function sceneRevision(resource: { scene_revision: number } | null | undefined): ResourceRevision | null {
@@ -65,6 +88,20 @@ export function useSpinTransportsResource(options: ResourceHookOptions = {}) {
     load,
     resolveRevision: sceneRevision,
     resourceKey: SPIN_TRANSPORTS_RESOURCE_KEY,
+  });
+}
+
+export function useSpinInterfacesResource(options: ResourceHookOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.model.spinInterfaces({ signal }),
+    [api],
+  );
+  return useResource<SpinInterfaceListResource>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: sceneRevision,
+    resourceKey: SPIN_INTERFACES_RESOURCE_KEY,
   });
 }
 

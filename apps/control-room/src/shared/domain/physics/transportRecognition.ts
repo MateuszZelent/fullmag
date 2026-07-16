@@ -33,8 +33,8 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function isNumberArray(value: unknown): value is number[] {
-  return Array.isArray(value) && value.every(isFiniteNumber);
+function isVec3(value: unknown): value is [number, number, number] {
+  return Array.isArray(value) && value.length === 3 && value.every(isFiniteNumber);
 }
 
 function isArrayOf(value: unknown, predicate: (item: unknown) => boolean): boolean {
@@ -52,7 +52,7 @@ function isSurfaceRef(value: unknown): boolean {
   return isObject(value)
     && hasOnlyKeys(value, ["object_id", "orientation", "surface_id"])
     && typeof value.object_id === "string"
-    && isNumberArray(value.orientation)
+    && isVec3(value.orientation)
     && typeof value.surface_id === "string";
 }
 
@@ -165,7 +165,7 @@ function isSpinInterface(value: unknown): boolean {
   if (!isObject(value) || typeof value.id !== "string") return false;
   if (value.kind === "transparent") {
     return hasOnlyKeys(value, ["id", "kind", "normal_a_to_b", "side_a", "side_b"])
-      && isNumberArray(value.normal_a_to_b)
+      && isVec3(value.normal_a_to_b)
       && isRegionRef(value.side_a)
       && isRegionRef(value.side_b);
   }
@@ -193,7 +193,7 @@ function isSpinInterface(value: unknown): boolean {
     && isFiniteNumber(value.g_sml_Spm2)
     && isFiniteNumber(value.g_up_Spm2)
     && isRegionRef(value.normal_side)
-    && isNumberArray(value.normal_to_ferromagnet);
+    && isVec3(value.normal_to_ferromagnet);
 }
 
 function isSpinBoundary(value: unknown): boolean {
@@ -204,19 +204,19 @@ function isSpinBoundary(value: unknown): boolean {
   }
   if (value.kind === "specified_spin_potential") {
     return hasOnlyKeys(value, ["id", "kind", "spin_potential_V", "surfaces"])
-      && isNumberArray(value.spin_potential_V)
+      && isVec3(value.spin_potential_V)
       && isArrayOf(value.surfaces, isSurfaceRef);
   }
   if (value.kind === "specified_spin_flux") {
     return hasOnlyKeys(value, ["id", "kind", "normal_spin_flux_Apm2", "surfaces"])
-      && isNumberArray(value.normal_spin_flux_Apm2)
+      && isVec3(value.normal_spin_flux_Apm2)
       && isArrayOf(value.surfaces, isSurfaceRef);
   }
   return value.kind === "periodic_spin"
     && hasOnlyKeys(value, ["id", "kind", "minus_surface", "plus_surface", "translation_m"])
     && isSurfaceRef(value.minus_surface)
     && isSurfaceRef(value.plus_surface)
-    && isNumberArray(value.translation_m);
+    && isVec3(value.translation_m);
 }
 
 function isRequestedExecution(value: unknown): boolean {
@@ -251,7 +251,7 @@ export function isKnownCurrentTransport(value: SceneCurrentTransport): value is 
       || value.conductivity_s_per_m === null
       || isFiniteNumber(value.conductivity_s_per_m))
     && (value.coupling === undefined || value.coupling === "one_way" || value.coupling === "bidirectional")
-    && (value.current_density === undefined || value.current_density === null || isNumberArray(value.current_density))
+    && (value.current_density === undefined || value.current_density === null || isVec3(value.current_density))
     && (value.domain === undefined || isArrayOf(value.domain, isRegionRef))
     && (value.gauge === undefined
       || value.gauge === null

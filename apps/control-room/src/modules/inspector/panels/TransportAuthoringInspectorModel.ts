@@ -205,6 +205,7 @@ export function buildCurrentTransport(draft: CurrentTransportDraft): SceneCurren
 
 export function buildSpinTransport(draft: SpinTransportDraft): SceneSpinTransport {
   if (!draft.id.trim()) throw new Error("Spin transport id is required.");
+  if (!draft.currentSourceId.trim()) throw new Error("Current source id is required.");
   const materials = json<SpinMaterialAssignmentDraftValue[]>(draft.materials, "Spin materials");
   if (!Array.isArray(materials)) throw new Error("Spin materials must be a JSON array.");
   materials.forEach(({ material }, index) => {
@@ -228,7 +229,7 @@ export function buildSpinTransport(draft: SpinTransportDraft): SceneSpinTranspor
   return {
     boundaries: json(draft.boundaries, "Spin boundaries"),
     constitutive_version: draft.constitutiveVersion.trim(),
-    current_source_id: draft.currentSourceId.trim(),
+    current_source_id: draft.currentSourceId,
     domain: json(draft.domain, "Spin domain"),
     id: draft.id,
     interfaces: json(draft.interfaces, "Spin interfaces"),

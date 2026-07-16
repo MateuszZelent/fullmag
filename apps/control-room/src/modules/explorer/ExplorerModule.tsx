@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Search } from "lucide-react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
@@ -37,6 +37,9 @@ import {
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import {
   useCurrentTransportsResource,
+  useOerstedFieldsResource,
+  useSpinInterfacesResource,
+  useSpinTorquesResource,
   useSpinTransportsResource,
 } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
@@ -84,6 +87,7 @@ import {
   revealExplorerNode,
   setExplorerActiveTab,
   setExplorerFilterText,
+  shouldAutoRevealModelTab,
   useExplorerStoreSelector,
 } from "./explorerStore";
 import type { ModelTreeMeshSnapshot } from "./explorerTypes";
@@ -183,6 +187,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   );
   const objectExtensionActivation = useObjectExtensionActivationSnapshot();
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
+  const previousSelectedNodeId = useRef<string | null>(null);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
     { isEqual: explorerCrossSectionsEqual },
@@ -230,6 +235,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const modelCouplings = useModelCouplingsResource({ enabled: modelTabActive });
   const spinTransports = useSpinTransportsResource({ enabled: modelTabActive });
   const currentTransports = useCurrentTransportsResource({ enabled: modelTabActive });
+  const spinInterfaces = useSpinInterfacesResource({ enabled: modelTabActive });
+  const spinTorques = useSpinTorquesResource({ enabled: modelTabActive });
+  const oerstedFields = useOerstedFieldsResource({ enabled: modelTabActive });
   const meshSummary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatusData),
   });
@@ -304,6 +312,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           regions: modelRegions.data,
           regionMemberships: regionMemberships.data,
           currentTransports: currentTransports.data,
+          spinInterfaces: spinInterfaces.data,
+          spinTorques: spinTorques.data,
+          oerstedFields: oerstedFields.data,
           spinTransports: spinTransports.data,
         }),
         stageExecution.data,
@@ -402,6 +413,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelMaterialFields.data,
     modelRegions.data,
     currentTransports.data,
+    spinInterfaces.data,
+    spinTorques.data,
+    oerstedFields.data,
     spinTransports.data,
     regionMemberships.data,
     stageExecution.data,
@@ -421,8 +435,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   ]);
 
   useEffect(() => {
-    if (!selectedNodeId?.startsWith("model:") || activeTab === "model") return;
-    setExplorerActiveTab("model");
+    const previous = previousSelectedNodeId.current;
+    previousSelectedNodeId.current = selectedNodeId;
+    if (shouldAutoRevealModelTab(previous, selectedNodeId, activeTab)) {
+      setExplorerActiveTab("model");
+    }
   }, [activeTab, selectedNodeId]);
 
   useEffect(() => {

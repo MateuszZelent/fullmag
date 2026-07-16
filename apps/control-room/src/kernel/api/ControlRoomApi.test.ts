@@ -4251,7 +4251,7 @@ describe("ControlRoomApi", () => {
       resource: {
         boundaries: [],
         constitutive_version: "transport_constitutive.one_way.fullmag.v1",
-        current_source_id: "charge",
+        current_source_id: " charge ",
         domain: [],
         id: "spin path/1",
         interfaces: [],
@@ -4372,6 +4372,52 @@ describe("ControlRoomApi", () => {
         body: spinRequest,
         method: "PATCH",
         url: "http://127.0.0.1:8765/v2/sessions/current/model/spin-transports/%20spin%20",
+      },
+    ]);
+  });
+
+  it("routes spin-interface projection and clone-only transport validation through model resources", async () => {
+    const requests: Array<{ body: unknown; method: string; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestJsonBody(init.body) : null,
+          method: init?.method ?? "GET",
+          url: String(url),
+        });
+        return jsonResponse({ items: [], scene_revision: 7 });
+      },
+    });
+    const validation = {
+      base_revision: 7,
+      candidate: {
+        kind: "current_transport" as const,
+        operation: "create" as const,
+        resource: {
+          coupling: "one_way" as const,
+          current_density: [1, 0, 0],
+          kind: "current_transport" as const,
+          model: "prescribed_density" as const,
+          name: "charge",
+        },
+      },
+      validation_version: "transport-authoring-validation.v1",
+    };
+
+    await api.model.spinInterfaces();
+    await api.model.validateTransport(validation);
+
+    expect(requests).toEqual([
+      {
+        body: null,
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/spin-interfaces",
+      },
+      {
+        body: validation,
+        method: "POST",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/transport-validation",
       },
     ]);
   });

@@ -4305,4 +4305,58 @@ describe("buildModelTree", () => {
       "model:physics:spin-transports:id:%20spin%20",
     ]);
   });
+
+  it("publishes five independent transport authoring surfaces with lossless unknown status", () => {
+    const nodes = flattenExplorerNodes(buildModelTree({
+      currentTransports: [],
+      spinTransports: [],
+      spinInterfaces: [{ id: null, index: 0, known: false, ownerId: "spin" }],
+      spinTorques: [{ id: "torque", index: 0, kind: "zhang_li", supported: true }],
+      oerstedFields: [{ id: null, index: 0, kind: "future_oersted", supported: false }],
+    }));
+
+    expect(nodes.filter((node) => [
+      "physics.current-transports",
+      "physics.spin-transports",
+      "physics.spin-interfaces",
+      "physics.spin-torques",
+      "physics.oersted-fields",
+    ].includes(node.kind)).map((node) => node.kind)).toEqual([
+      "physics.current-transports",
+      "physics.spin-transports",
+      "physics.spin-interfaces",
+      "physics.spin-torques",
+      "physics.oersted-fields",
+    ]);
+    expect(nodes.find((node) => node.kind === "physics.spin-interface")).toMatchObject({
+      spinInterfaceOwnerId: "spin",
+      status: "unsupported",
+    });
+    expect(nodes.find((node) => node.kind === "physics.oersted-field")).toMatchObject({ status: "unsupported" });
+  });
+
+  it("keeps malformed known-kind torque and Oersted records read-only", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      spinTorques: {
+        items: [{ id: "broken-torque", kind: "zhang_li" }],
+        scene_revision: 12,
+      },
+      oerstedFields: {
+        items: [{ current: 5, id: "broken-oersted", kind: "oersted_cylinder" }],
+        scene_revision: 12,
+      },
+    });
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(snapshot.spinTorques?.[0]?.supported).toBe(false);
+    expect(snapshot.oerstedFields?.[0]?.supported).toBe(false);
+    expect(nodes.find((node) => node.spinTorqueId === "broken-torque")).toMatchObject({
+      badge: "read-only",
+      status: "unsupported",
+    });
+    expect(nodes.find((node) => node.oerstedFieldId === "broken-oersted")).toMatchObject({
+      badge: "read-only",
+      status: "unsupported",
+    });
+  });
 });

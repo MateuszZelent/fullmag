@@ -112,6 +112,25 @@ vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
   }),
 }));
 
+vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionStatusSelector: (selector: (value: unknown) => unknown) => selector({
+    data: {
+      capabilities: {
+        transport_authoring: {
+          contract_version: "spin-transport-capabilities.v1",
+          m1_one_way_steady: { authoring_allowed: true, reason: "M1", status: "semantic_only" },
+          m2_reciprocal: { authoring_allowed: false, reason: "M2 unavailable", status: "unsupported" },
+          m3_transient: { authoring_allowed: false, reason: "M3 unavailable", status: "unsupported" },
+          gpu: { authoring_allowed: false, reason: "GPU unavailable", status: "unsupported" },
+          single_precision: { authoring_allowed: false, reason: "single unavailable", status: "unsupported" },
+          hybrid: { authoring_allowed: false, reason: "hybrid unavailable", status: "unsupported" },
+        },
+      },
+    },
+    status: "ready",
+  }),
+}));
+
 const kernel = {
   api: { model: {} },
   resources: { invalidate: vi.fn() },
