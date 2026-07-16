@@ -96,7 +96,16 @@ permittivity and quasistatic validity bounds.
 
 These terms are one constitutive block; iSHE is not a separately chosen sign.
 Contraction with `(E,G)` makes the `P` block symmetric and SHE/iSHE block
-antisymmetric. In the isotropic case dissipative positivity requires
+antisymmetric. Let `Sigma_mr^sym` be the symmetric AMR/PHE charge-conductivity
+tensor. Positivity of the complete coupled dissipative block requires
+
+```text
+lambda_min(Sigma_mr^sym) sigma_s - P^2 sigma^2 > 0.
+```
+
+For the parameterization above,
+`lambda_min(Sigma_mr^sym)=min(sigma_parallel,sigma_perp)`. In the isotropic
+case `sigma_parallel=sigma_perp=sigma`, this reduces to
 
 ```text
 sigma > 0,
@@ -295,7 +304,10 @@ exists. Subcycling requires a coupled error/order proof.
 
 ### 2.8 Assumptions and validity limits
 
-The model is local, diffusive, and electroquasistatic. It excludes ballistic
+The model is local, diffusive, and electroquasistatic. Its anisotropic
+reciprocal material must satisfy
+`min(sigma_parallel,sigma_perp) sigma_s-P^2 sigma^2>0`; checking only
+`sigma_s-P^2 sigma>0` is valid solely for the isotropic specialization. It excludes ballistic
 transport, first-principles tunnelling, full Maxwell displacement current,
 unresolved interfacial quantum chemistry, and implicit spin pumping. Planner
 warns or rejects when device dimensions approach the mean free path. NaN/Inf,

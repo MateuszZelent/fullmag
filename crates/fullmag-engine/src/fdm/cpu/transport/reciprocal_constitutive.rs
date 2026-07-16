@@ -63,6 +63,16 @@ impl ReciprocalConstitutiveMaterial {
                 "M2 reciprocal block requires sigma_spin-P^2*sigma > 0",
             ));
         }
+        let minimum_charge_eigenvalue = self
+            .sigma_parallel_s_per_m
+            .min(self.sigma_perpendicular_s_per_m);
+        let anisotropic_schur = minimum_charge_eigenvalue * self.sigma_spin_s_per_m
+            - self.polarization.powi(2) * self.sigma_s_per_m.powi(2);
+        if anisotropic_schur <= 0.0 {
+            return Err(EngineError::new(
+                "M2 anisotropic reciprocal block requires min(sigma_parallel,sigma_perpendicular)*sigma_spin-P^2*sigma^2 > 0",
+            ));
+        }
         Ok(())
     }
 
@@ -224,6 +234,34 @@ mod tests {
         model.sigma_spin_s_per_m = 1.0;
         model.polarization = 0.5;
         assert!(model.validate().is_err());
+    }
+
+    #[test]
+    fn m2_rejects_anisotropic_tensor_with_negative_coupled_dissipation() {
+        let mut model = material();
+        model.sigma_perpendicular_s_per_m = 1.0;
+        assert!(model.validate().is_err());
+    }
+
+    #[test]
+    fn m2_accepted_anisotropic_block_has_nonnegative_dissipation() {
+        let model = material();
+        let states = [
+            ([1.0, 0.0, 0.0], [[[-0.4, 0.0, 0.0], [0.0; 3], [0.0; 3]]]),
+            ([0.0, 1.0, 0.0], [[[0.0; 3], [-0.6, 0.0, 0.0], [0.0; 3]]]),
+            (
+                [0.3, -0.7, 0.2],
+                [[[0.1, -0.4, 0.2], [0.7, 0.2, -0.1], [-0.3, 0.5, 0.8]]],
+            ),
+        ];
+        for (electric, [spin_gradient]) in states {
+            let response = model
+                .evaluate(electric, spin_gradient, [0.0, 0.0, 1.0])
+                .unwrap();
+            let power = dot(response.charge_current_density_a_per_m2, electric)
+                + tensor_dot(response.spin_current_density_a_per_m2, spin_gradient);
+            assert!(power >= -1.0e-12, "negative production {power}");
+        }
     }
 
     fn dot_difference(total: [f64; 3], base: [f64; 3], rhs: [f64; 3]) -> f64 {

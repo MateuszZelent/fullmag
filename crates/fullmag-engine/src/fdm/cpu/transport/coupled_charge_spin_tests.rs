@@ -576,7 +576,7 @@ fn m2_picard_convergence_map_covers_reciprocal_and_hall_strengths() {
         (0.0, 0.0, 0.0),
         (0.3, 0.1, 0.2),
         (-0.6, -0.25, -0.5),
-        (0.75, 0.4, 0.8),
+        (0.6, 0.4, 0.8),
     ] {
         let mut fields = material(6);
         for material in &mut fields.reciprocal {
@@ -615,6 +615,15 @@ fn m2_picard_convergence_map_covers_reciprocal_and_hall_strengths() {
             .solve(CoupledChargeSpinSolverConfig::default(), None)
             .unwrap();
         assert!(solution.telemetry.picard_iterations >= 2);
+        assert_eq!(
+            solution.telemetry.nonlinear_history.len(),
+            solution.telemetry.picard_iterations
+        );
+        let last = solution.telemetry.nonlinear_history.last().unwrap();
+        assert!(last.scaled_charge_residual <= 1.0e-10);
+        assert!(last.scaled_spin_residual <= 1.0e-10);
+        assert!(last.relative_charge_current_update <= 1.0e-9);
+        assert!(last.relative_spin_potential_update <= 1.0e-9);
         assert!(solution.telemetry.scaled_charge_residual <= 1.0e-10);
         assert!(solution.telemetry.scaled_spin_residual <= 1.0e-10);
     }

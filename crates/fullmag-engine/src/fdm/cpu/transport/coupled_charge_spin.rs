@@ -108,6 +108,16 @@ impl CoupledChargeSpinWarmStart {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CoupledPicardIterationTelemetry {
+    pub iteration: usize,
+    pub linear_iterations: usize,
+    pub scaled_charge_residual: f64,
+    pub scaled_spin_residual: f64,
+    pub relative_charge_current_update: f64,
+    pub relative_spin_potential_update: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct CoupledChargeSpinTelemetry {
     pub convergence_reason: &'static str,
     pub operator_version: &'static str,
@@ -117,6 +127,7 @@ pub struct CoupledChargeSpinTelemetry {
     pub nonlinear_solver: &'static str,
     pub linear_iterations: usize,
     pub picard_iterations: usize,
+    pub nonlinear_history: Vec<CoupledPicardIterationTelemetry>,
     pub scaled_charge_residual: f64,
     pub scaled_spin_residual: f64,
     pub relative_charge_current_update: f64,
@@ -371,8 +382,10 @@ impl CoupledChargeSpinProblem {
         let mut relative_current_update = f64::INFINITY;
         let mut relative_spin_update = f64::INFINITY;
         let mut picard_iterations = 0;
+        let mut nonlinear_history = Vec::with_capacity(config.max_picard_iterations);
 
         for picard in 0..config.max_picard_iterations {
+            let linear_iterations_before = total_linear_iterations;
             let applied = self.apply_linear(&state, &affine)?;
             let residual: Vec<f64> = rhs.iter().zip(applied).map(|(b, ax)| b - ax).collect();
             let preconditioned_residual = preconditioner.apply(&residual);
@@ -405,6 +418,14 @@ impl CoupledChargeSpinProblem {
             let true_residual = self.residual_flat(&state)?;
             let (charge_scaled, spin_scaled) =
                 self.separate_scaled_residuals(&true_residual, &scales);
+            nonlinear_history.push(CoupledPicardIterationTelemetry {
+                iteration: picard + 1,
+                linear_iterations: total_linear_iterations - linear_iterations_before,
+                scaled_charge_residual: charge_scaled,
+                scaled_spin_residual: spin_scaled,
+                relative_charge_current_update: relative_current_update,
+                relative_spin_potential_update: relative_spin_update,
+            });
             if charge_scaled <= config.relative_tolerance.max(config.absolute_tolerance)
                 && spin_scaled <= config.relative_tolerance.max(config.absolute_tolerance)
                 && relative_current_update <= config.relative_update_tolerance
@@ -492,6 +513,7 @@ impl CoupledChargeSpinProblem {
                 nonlinear_solver: "picard_v1",
                 linear_iterations: total_linear_iterations,
                 picard_iterations,
+                nonlinear_history,
                 scaled_charge_residual,
                 scaled_spin_residual,
                 relative_charge_current_update: relative_current_update,
