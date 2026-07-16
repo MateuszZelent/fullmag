@@ -996,14 +996,43 @@ function spinTransportNodes(transports: NonNullable<ModelTreeSnapshot["spinTrans
     icon: "activity",
     status: "ready",
     children: transports.map((transport) => ({
-      id: `model:physics:spin-transports:${encodeURIComponent(transport.id)}`,
+      id: transport.id === null
+        ? `model:physics:spin-transports:position:${transport.index}`
+        : `model:physics:spin-transports:id:${encodeURIComponent(transport.id)}`,
       kind: "physics.spin-transport" as const,
-      label: transport.id,
+      label: transport.label,
       parentId: "model:physics:spin-transports",
       badge: transport.supported ? `${transport.mode ?? "typed"} · ${transport.currentSourceId ?? "no source"}` : "read-only",
       icon: "activity" as const,
-      spinTransportId: transport.id,
-      spinTransportIndex: transport.index,
+      ...(transport.id === null
+        ? { spinTransportIndex: transport.index }
+        : { spinTransportId: transport.id }),
+      status: transport.supported ? "ready" as const : "unsupported" as const,
+    })),
+  };
+}
+
+function currentTransportNodes(transports: NonNullable<ModelTreeSnapshot["currentTransports"]>): ExplorerNode {
+  return {
+    id: "model:physics:current-transports",
+    kind: "physics.current-transports",
+    label: "Current Transport",
+    parentId: "model:session",
+    badge: `${transports.length}`,
+    icon: "activity",
+    status: "ready",
+    children: transports.map((transport) => ({
+      id: transport.id === null
+        ? `model:physics:current-transports:position:${transport.index}`
+        : `model:physics:current-transports:id:${encodeURIComponent(transport.id)}`,
+      kind: "physics.current-transport" as const,
+      label: transport.label,
+      parentId: "model:physics:current-transports",
+      badge: transport.supported ? transport.model ?? "typed" : "read-only",
+      icon: "activity" as const,
+      ...(transport.id === null
+        ? { currentTransportIndex: transport.index }
+        : { currentTransportId: transport.id }),
       status: transport.supported ? "ready" as const : "unsupported" as const,
     })),
   };
@@ -1172,6 +1201,7 @@ export function buildModelTree(
   if (couplingBranch) {
     sessionChildren.push(couplingBranch);
   }
+  sessionChildren.push(currentTransportNodes(snapshot?.currentTransports ?? []));
   sessionChildren.push(spinTransportNodes(snapshot?.spinTransports ?? []));
 
   sessionChildren.push(

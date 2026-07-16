@@ -328,6 +328,16 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
+  if (node.kind === "physics.current-transports" || node.kind === "physics.current-transport") {
+    return {
+      kind: node.kind,
+      nodeId: node.id,
+      ...(node.currentTransportId ? { currentTransportId: node.currentTransportId } : {}),
+      ...(node.currentTransportIndex !== undefined ? { currentTransportIndex: node.currentTransportIndex } : {}),
+      type: "current-transport",
+    };
+  }
+
   return null;
 }
 

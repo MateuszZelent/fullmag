@@ -23,20 +23,16 @@ import {
   isKnownCurrentTransport,
   isKnownSpinTransport,
   readonlyTransportPayload,
+  resolveTransportRecord,
   spinTransportDraft,
+  transportIdentity,
+  transportSelectionKey,
   type CurrentTransportDraft,
   type SpinTransportDraft,
 } from "./TransportAuthoringInspectorModel";
 
 type Family = "current_transport" | "spin_transport";
 type Draft = CurrentTransportDraft | SpinTransportDraft;
-
-function identity(family: Family, resource: SceneCurrentTransport | SceneSpinTransport): string {
-  const value = family === "current_transport"
-    ? (resource as { name?: unknown }).name
-    : (resource as { id?: unknown }).id;
-  return typeof value === "string" ? value : "";
-}
 
 export function TransportAuthoringInspector({
   family,
@@ -55,11 +51,13 @@ export function TransportAuthoringInspector({
     () => (active.data?.items ?? []) as (SceneCurrentTransport | SceneSpinTransport)[],
     [active.data],
   );
-  const [localId, setLocalId] = useState("");
-  const selectedId = resourceId ?? localId;
-  const selected = resourceIndex === undefined || resourceIndex === null
-    ? items.find((item) => identity(family, item) === selectedId) ?? null
-    : items[resourceIndex] ?? null;
+  const [localSelectionKey, setLocalSelectionKey] = useState("");
+  const selected = resolveTransportRecord(family, items, {
+    resourceId,
+    resourceIndex,
+    selectionKey: localSelectionKey,
+  });
+  const selectedId = resourceId ?? (selected ? transportIdentity(family, selected) : null);
   const known = selected
     ? family === "current_transport"
       ? isKnownCurrentTransport(selected as SceneCurrentTransport)
@@ -68,7 +66,7 @@ export function TransportAuthoringInspector({
   const baseDraft = family === "current_transport"
     ? currentTransportDraft(selected && known ? selected as Parameters<typeof currentTransportDraft>[0] : null)
     : spinTransportDraft(selected && known ? selected as Parameters<typeof spinTransportDraft>[0] : null);
-  const draftKey = `${family}:${selectedId}:${JSON.stringify(baseDraft)}`;
+  const draftKey = `${family}:${resourceId ?? resourceIndex ?? localSelectionKey}:${JSON.stringify(baseDraft)}`;
   const [draftState, setDraftState] = useState<{ draft: Draft; key: string }>({
     draft: baseDraft,
     key: draftKey,
@@ -121,7 +119,7 @@ export function TransportAuthoringInspector({
         family === "current_transport" ? CURRENT_TRANSPORTS_RESOURCE_KEY : SPIN_TRANSPORTS_RESOURCE_KEY,
         Date.now(),
       );
-      setLocalId("");
+      setLocalSelectionKey("");
       setFeedback({ kind: "success", message: "Transport resource deleted." });
     } catch (error) {
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : String(error) });
@@ -133,12 +131,16 @@ export function TransportAuthoringInspector({
   return (
     <div className="fm-inspector-panel">
       <InspectorSection title={family === "current_transport" ? "Charge transport" : "Spin transport"}>
-        {!resourceId ? (
-          <FormField label="Resource" type="select" value={selectedId} onChange={(event) => setLocalId(event.target.value)}>
+        {resourceId === undefined || resourceId === null ? resourceIndex === undefined || resourceIndex === null ? (
+          <FormField label="Resource" type="select" value={localSelectionKey} onChange={(event) => setLocalSelectionKey(event.target.value)}>
             <option value="">New resource</option>
-            {items.map((item) => { const id = identity(family, item); return <option key={id} value={id}>{id}</option>; })}
+            {items.map((item, index) => {
+              const key = transportSelectionKey(family, item, index);
+              const label = transportIdentity(family, item) ?? `Unknown ${family === "current_transport" ? "current" : "spin"} transport ${index + 1}`;
+              return <option key={key} value={key}>{label}</option>;
+            })}
           </FormField>
-        ) : null}
+        ) : null : null}
         {!known && selected ? (
           <>
             <FeedbackBanner kind="warning" message="Unknown transport variant is preserved losslessly and is read-only." />
@@ -167,6 +169,16 @@ export function SpinTransportInspectorPanel({ selection }: InspectorPanelProps) 
     ? selection.ref.spinTransportIndex
     : null;
   return <TransportAuthoringInspector family="spin_transport" resourceId={resourceId} resourceIndex={resourceIndex} />;
+}
+
+export function CurrentTransportInspectorPanel({ selection }: InspectorPanelProps) {
+  const resourceId = selection.ref?.type === "current-transport"
+    ? selection.ref.currentTransportId
+    : null;
+  const resourceIndex = selection.ref?.type === "current-transport"
+    ? selection.ref.currentTransportIndex
+    : null;
+  return <TransportAuthoringInspector family="current_transport" resourceId={resourceId} resourceIndex={resourceIndex} />;
 }
 
 function CurrentFields({ draft, patch }: { draft: CurrentTransportDraft; patch: (value: Partial<Draft>) => void }) {

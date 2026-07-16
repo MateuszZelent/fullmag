@@ -175,6 +175,13 @@ export type SelectionRef =
       type: "physics-coupling";
     }
   | {
+      currentTransportId?: string;
+      currentTransportIndex?: number;
+      kind: "physics.current-transports" | "physics.current-transport";
+      nodeId: string;
+      type: "current-transport";
+    }
+  | {
       kind: "physics.spin-transports" | "physics.spin-transport";
       nodeId: string;
       spinTransportId?: string;
@@ -437,8 +444,16 @@ export function selectionRefEquals(
         right.type === "spin-transport" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
-        left.spinTransportId === right.spinTransportId
-        && left.spinTransportIndex === right.spinTransportIndex
+        left.spinTransportId === right.spinTransportId &&
+        left.spinTransportIndex === right.spinTransportIndex
+      );
+    case "current-transport":
+      return (
+        right.type === "current-transport" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.currentTransportId === right.currentTransportId &&
+        left.currentTransportIndex === right.currentTransportIndex
       );
     case "analysis-chart":
       return (

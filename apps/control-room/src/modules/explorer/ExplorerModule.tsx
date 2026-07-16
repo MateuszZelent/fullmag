@@ -35,7 +35,10 @@ import {
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
-import { useSpinTransportsResource } from "@/kernel/resources/spinAuthoringResources";
+import {
+  useCurrentTransportsResource,
+  useSpinTransportsResource,
+} from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
@@ -226,6 +229,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
   const modelCouplings = useModelCouplingsResource({ enabled: modelTabActive });
   const spinTransports = useSpinTransportsResource({ enabled: modelTabActive });
+  const currentTransports = useCurrentTransportsResource({ enabled: modelTabActive });
   const meshSummary = useMeshSummaryResource({
     enabled: shouldLoadRuntimeMeshSummary(modelTabActive, sessionStatusData),
   });
@@ -299,6 +303,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           materialFields: modelMaterialFields.data,
           regions: modelRegions.data,
           regionMemberships: regionMemberships.data,
+          currentTransports: currentTransports.data,
           spinTransports: spinTransports.data,
         }),
         stageExecution.data,
@@ -396,6 +401,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelCouplings.data,
     modelMaterialFields.data,
     modelRegions.data,
+    currentTransports.data,
     spinTransports.data,
     regionMemberships.data,
     stageExecution.data,

@@ -7,7 +7,9 @@ import {
   isKnownCurrentTransport,
   isKnownSpinTransport,
   readonlyTransportPayload,
+  resolveTransportRecord,
   spinTransportDraft,
+  transportSelectionKey,
 } from "./TransportAuthoringInspectorModel";
 
 describe("transport authoring drafts", () => {
@@ -94,5 +96,32 @@ describe("transport authoring drafts", () => {
     expect(isKnownCurrentTransport(unknown)).toBe(false);
     expect(isKnownSpinTransport(unknown)).toBe(false);
     expect(JSON.parse(readonlyTransportPayload(unknown))).toEqual(unknown);
+  });
+
+  it("resolves a stable spin transport id before a stale list index", () => {
+    const first = { id: "first", schema_version: "spin_transport.v1" };
+    const selected = { id: "selected", schema_version: "spin_transport.v1" };
+
+    expect(resolveTransportRecord("spin_transport", [first, selected], {
+      resourceId: "selected",
+      resourceIndex: 0,
+    })).toBe(selected);
+  });
+
+  it("uses a positional identity only for genuinely id-less unknown records", () => {
+    const first = { future_kind: "charge.v9", opaque: { value: 1 } };
+    const second = { future_kind: "charge.v10", opaque: { value: 2 } };
+
+    expect(transportSelectionKey("current_transport", first, 0)).toBe("position:0");
+    expect(transportSelectionKey("current_transport", second, 1)).toBe("position:1");
+    expect(resolveTransportRecord("current_transport", [first, second], {
+      selectionKey: "position:1",
+    })).toBe(second);
+    expect(resolveTransportRecord("current_transport", [first, second], {
+      resourceIndex: 0,
+    })).toBe(first);
+    expect(resolveTransportRecord("current_transport", [{ name: "stable" }, second], {
+      resourceIndex: 0,
+    })).toBeNull();
   });
 });

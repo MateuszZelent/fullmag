@@ -47,6 +47,55 @@ export interface SpinTransportDraft {
   solverRelativeTolerance: string;
 }
 
+export type TransportFamily = "current_transport" | "spin_transport";
+
+export function transportIdentity(
+  family: TransportFamily,
+  resource: SceneCurrentTransport | SceneSpinTransport,
+): string | null {
+  const value = family === "current_transport"
+    ? (resource as { name?: unknown }).name
+    : (resource as { id?: unknown }).id;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export function transportSelectionKey(
+  family: TransportFamily,
+  resource: SceneCurrentTransport | SceneSpinTransport,
+  index: number,
+): string {
+  const id = transportIdentity(family, resource);
+  return id === null ? `position:${index}` : `id:${id}`;
+}
+
+export function resolveTransportRecord<T extends SceneCurrentTransport | SceneSpinTransport>(
+  family: TransportFamily,
+  items: readonly T[],
+  address: {
+    resourceId?: string | null;
+    resourceIndex?: number | null;
+    selectionKey?: string | null;
+  },
+): T | null {
+  if (address.resourceId !== undefined && address.resourceId !== null) {
+    return items.find((item) => transportIdentity(family, item) === address.resourceId) ?? null;
+  }
+
+  if (address.selectionKey?.startsWith("id:")) {
+    const id = address.selectionKey.slice(3);
+    return items.find((item) => transportIdentity(family, item) === id) ?? null;
+  }
+
+  const positionalIndex = address.selectionKey?.startsWith("position:")
+    ? Number.parseInt(address.selectionKey.slice("position:".length), 10)
+    : address.resourceIndex;
+  if (positionalIndex === undefined || positionalIndex === null || !Number.isInteger(positionalIndex)) {
+    return null;
+  }
+  const candidate = items[positionalIndex] ?? null;
+  return candidate && transportIdentity(family, candidate) === null ? candidate : null;
+}
+
 interface SpinMaterialAssignmentDraftValue {
   material?: {
     capacitance_formula_version?: unknown;

@@ -1,5 +1,6 @@
 import type {
   CouplingListResource,
+  CurrentTransportListResource,
   HysteresisExecutionTreeResource,
   MaterialParameterFieldListResource,
   MeshRegionMembershipResource,
@@ -41,6 +42,7 @@ type SceneMaterialParameterAssignment = NonNullable<
 
 interface ModelTreeResourceInputs {
   couplings?: CouplingListResource | null;
+  currentTransports?: CurrentTransportListResource | null;
   materialFields?: MaterialParameterFieldListResource | null;
   regions?: RegionListResource | null;
   regionMemberships?: readonly MeshRegionMembershipResource[] | null;
@@ -91,10 +93,21 @@ export function modelTreeSnapshotFromScene(
         }, [])
       : [],
     physicsInteractions: scenePhysicsInteractions(scene?.objects),
+    currentTransports: (resources.currentTransports?.items ?? []).map((item, index) => {
+      const id = "name" in item && typeof item.name === "string" ? item.name : null;
+      return {
+        id,
+        index,
+        label: id ?? `Unknown current transport ${index + 1}`,
+        model: "model" in item && typeof item.model === "string" ? item.model : null,
+        supported: "kind" in item && item.kind === "current_transport" && "model" in item,
+      };
+    }),
     spinTransports: (resources.spinTransports?.items ?? []).map((item, index) => ({
       currentSourceId: "current_source_id" in item && typeof item.current_source_id === "string" ? item.current_source_id : null,
-      id: "id" in item && typeof item.id === "string" ? item.id : `unknown-spin-transport-${index + 1}`,
+      id: "id" in item && typeof item.id === "string" ? item.id : null,
       index,
+      label: "id" in item && typeof item.id === "string" ? item.id : `Unknown spin transport ${index + 1}`,
       mode: "mode" in item && typeof item.mode === "string" ? item.mode : null,
       supported: "schema_version" in item && "requested_execution" in item,
     })),

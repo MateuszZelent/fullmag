@@ -1031,4 +1031,40 @@ describe("selectExplorerNode", () => {
       type: "spin-transport",
     });
   });
+
+  it("selects a current transport record with stable identity", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      currentTransportId: "charge",
+      id: "model:physics:current-transports:id:charge",
+      kind: "physics.current-transport",
+      label: "charge",
+      parentId: "model:physics:current-transports",
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      currentTransportId: "charge",
+      kind: "physics.current-transport",
+      nodeId: "model:physics:current-transports:id:charge",
+      type: "current-transport",
+    });
+  });
+
+  it("keeps separate id-less current transport records positionally selectable", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      currentTransportIndex: 1,
+      id: "model:physics:current-transports:position:1",
+      kind: "physics.current-transport",
+      label: "Unknown current transport 2",
+      parentId: "model:physics:current-transports",
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      currentTransportIndex: 1,
+      kind: "physics.current-transport",
+      nodeId: "model:physics:current-transports:position:1",
+      type: "current-transport",
+    });
+  });
 });

@@ -104,7 +104,10 @@ import {
 } from "./panels/ObjectRegionsPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
-import { SpinTransportInspectorPanel } from "./panels/TransportAuthoringInspector";
+import {
+  CurrentTransportInspectorPanel,
+  SpinTransportInspectorPanel,
+} from "./panels/TransportAuthoringInspector";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
@@ -527,6 +530,12 @@ const PANELS: InspectorPanelContribution[] = [
     title: "Coupling",
     selectionKinds: ["physics.coupling"],
     component: CouplingInspectorPanel,
+  },
+  {
+    id: "physics-current-transport",
+    title: "Current Transport",
+    selectionKinds: ["physics.current-transports", "physics.current-transport"],
+    component: CurrentTransportInspectorPanel,
   },
   {
     id: "physics-spin-transport",

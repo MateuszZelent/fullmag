@@ -4088,14 +4088,14 @@ describe("buildModelTree", () => {
   it("builds semantic typed and read-only spin transport nodes", () => {
     const nodes = flattenExplorerNodes(buildModelTree({
       spinTransports: [
-        { currentSourceId: "charge", id: "spin", index: 0, mode: "steady", supported: true },
-        { currentSourceId: null, id: "future", index: 1, mode: null, supported: false },
+        { currentSourceId: "charge", id: "spin", index: 0, label: "spin", mode: "steady", supported: true },
+        { currentSourceId: null, id: "future", index: 1, label: "future", mode: null, supported: false },
       ],
     }));
     expect(nodes.find((node) => node.kind === "physics.spin-transports")).toMatchObject({ badge: "2" });
     expect(nodes.find((node) => node.spinTransportId === "spin")).toMatchObject({ badge: "steady · charge", status: "ready" });
     expect(nodes.find((node) => node.spinTransportId === "future")).toMatchObject({ badge: "read-only", status: "unsupported" });
-    expect(nodes.find((node) => node.spinTransportId === "future")?.spinTransportIndex).toBe(1);
+    expect(nodes.find((node) => node.spinTransportId === "future")).not.toHaveProperty("spinTransportIndex");
   });
 
   it("keeps id-less unknown spin records addressable by their lossless list position", () => {
@@ -4108,10 +4108,40 @@ describe("buildModelTree", () => {
 
     expect(snapshot.spinTransports).toEqual([{
       currentSourceId: null,
-      id: "unknown-spin-transport-1",
+      id: null,
       index: 0,
+      label: "Unknown spin transport 1",
       mode: null,
       supported: false,
     }]);
+  });
+
+  it("builds parallel current transport collection and record nodes", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      currentTransports: {
+        items: [
+          { kind: "current_transport", model: "prescribed_density", name: "charge", current_density: [1, 0, 0] },
+          { future_kind: "charge.v9", opaque: { value: 1 } },
+          { future_kind: "charge.v10", opaque: { value: 2 } },
+        ],
+        scene_revision: 8,
+      },
+    });
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(nodes.find((node) => node.kind === "physics.current-transports")).toMatchObject({ badge: "3" });
+    expect(nodes.find((node) => node.currentTransportId === "charge")).toMatchObject({
+      badge: "prescribed_density",
+      status: "ready",
+    });
+    expect(nodes.find((node) => node.currentTransportId === "charge")).not.toHaveProperty("currentTransportIndex");
+    const unknowns = nodes.filter((node) => node.kind === "physics.current-transport" && node.status === "unsupported");
+    expect(unknowns).toHaveLength(2);
+    expect(unknowns.map((node) => node.id)).toEqual([
+      "model:physics:current-transports:position:1",
+      "model:physics:current-transports:position:2",
+    ]);
+    expect(unknowns.map((node) => node.currentTransportIndex)).toEqual([1, 2]);
+    expect(new Set(unknowns.map((node) => node.id)).size).toBe(2);
   });
 });
