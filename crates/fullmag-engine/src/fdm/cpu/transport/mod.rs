@@ -1,4 +1,5 @@
 mod charge;
+mod coupled_charge_spin;
 mod oersted;
 mod reciprocal_constitutive;
 mod spin_drift_diffusion;
@@ -7,6 +8,11 @@ mod transient_spin;
 pub use charge::{
     ChargeBalanceDiagnostics, ChargeBoundaryCondition, ChargeBoundaryConditions, ChargeSolution,
     ChargeSolverConfig, OrientedFaceFluxes, PotentialGauge, StructuredChargeProblem,
+};
+pub use coupled_charge_spin::{
+    CoupledChargeSpinBoundaryConditions, CoupledChargeSpinMaterialFields, CoupledChargeSpinProblem,
+    CoupledChargeSpinSolution, CoupledChargeSpinSolverConfig, CoupledChargeSpinTelemetry,
+    CoupledChargeSpinWarmStart,
 };
 pub use oersted::biot_savart_midpoint_field;
 pub use reciprocal_constitutive::{ReciprocalConstitutiveMaterial, ReciprocalConstitutiveResponse};
@@ -23,5 +29,7 @@ pub use transient_spin::{
     TransientStepAttempt, TransientStepTelemetry,
 };
 
+#[cfg(test)]
+mod coupled_charge_spin_tests;
 #[cfg(test)]
 mod spin_drift_diffusion_tests;
