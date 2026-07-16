@@ -5,6 +5,136 @@ use crate::geometry::{
 };
 use std::collections::BTreeMap;
 
+fn auto_sampling_problem(cutoffs_hz: &[f64], active_stage_id: Option<&str>) -> ProblemIR {
+    let mut problem = ProblemIR::bootstrap_example();
+    if let Some(stage_id) = active_stage_id {
+        problem.problem_meta.runtime_metadata.insert(
+            "active_stage_id".into(),
+            serde_json::json!(stage_id),
+        );
+    }
+    problem.study.sampling_mut().table_autosave = Some(TableAutosaveIR {
+        kind: "table_autosave".into(),
+        table_id: "default".into(),
+        sample_period_s: None,
+        sample_period_policy: Some(SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
+        }),
+        resolved_sample_period_s: None,
+        quantities: vec!["t".into(), "my".into()],
+    });
+    problem.study.sampling_mut().outputs = vec![
+        OutputIR::FieldAuto {
+            name: "m".into(),
+            sample_period_policy: SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            },
+        },
+        OutputIR::ScalarAuto {
+            name: "E_total".into(),
+            sample_period_policy: SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            },
+        },
+    ];
+    problem.field_drives = cutoffs_hz
+        .iter()
+        .enumerate()
+        .map(|(index, cutoff_hz)| RegionalFieldDriveIR {
+            id: format!("drive-{}", index + 1),
+            name: format!("Drive {}", index + 1),
+            kind: FieldDriveKindIR::Regional,
+            enabled: true,
+            target: FieldTargetIR::Global {},
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: FieldSpatialProfileIR::Uniform {},
+            waveform: TimeDependenceIR::SincPulse {
+                cutoff_hz: *cutoff_hz,
+                t0: 50.0e-12,
+                amplitude: 1.0,
+            },
+            time_origin: FieldTimeOriginIR::StageLocal,
+            activation: DriveActivationIR::StageIds {
+                stage_ids: vec!["excite".into()],
+            },
+            migration: None,
+        })
+        .collect();
+    problem
+}
+
+#[test]
+fn auto_sampling_uses_maximum_active_sinc_cutoff_with_guard() {
+    let mut problem = auto_sampling_problem(&[3.0e9, 5.0e9], Some("excite"));
+    let resolution = resolve_auto_sampling_for_stage(&mut problem)
+        .expect("automatic sampling should resolve")
+        .expect("automatic policy should produce provenance");
+
+    assert_eq!(resolution.maximum_cutoff_hz, 5.0e9);
+    assert_eq!(resolution.target_nyquist_hz, 6.5e9);
+    assert_eq!(resolution.sampling_frequency_hz, 13.0e9);
+    assert!((resolution.sample_period_s - 1.0 / 13.0e9).abs() < 1e-24);
+    assert_eq!(resolution.source_drive_ids, ["drive-1", "drive-2"]);
+    assert_eq!(resolution.target_stage_id, "excite");
+
+    let sampling = problem.study.sampling();
+    assert_eq!(
+        sampling.table_autosave.as_ref().and_then(|table| table.resolved_sample_period_s),
+        Some(1.0 / 13.0e9)
+    );
+    assert!(matches!(
+        sampling.outputs.as_slice(),
+        [OutputIR::Field { every_seconds: field_period, .. }, OutputIR::Scalar { every_seconds: scalar_period, .. }]
+            if *field_period == 1.0 / 13.0e9 && *scalar_period == 1.0 / 13.0e9
+    ));
+    assert_eq!(
+        problem.problem_meta.runtime_metadata["sampling_resolution"],
+        serde_json::to_value(&resolution).expect("resolution must serialize")
+    );
+}
+
+#[test]
+fn auto_sampling_filters_disabled_inactive_and_non_sinc_drives() {
+    let mut problem = auto_sampling_problem(&[3.0e9, 5.0e9], Some("excite"));
+    problem.field_drives[0].enabled = false;
+    problem.field_drives[1].activation = DriveActivationIR::StageIds {
+        stage_ids: vec!["other".into()],
+    };
+    let mut constant = problem.field_drives[0].clone();
+    constant.id = "constant".into();
+    constant.enabled = true;
+    constant.activation = DriveActivationIR::StageIds {
+        stage_ids: vec!["excite".into()],
+    };
+    constant.waveform = TimeDependenceIR::Constant;
+    problem.field_drives.push(constant);
+
+    let error = resolve_auto_sampling_for_stage(&mut problem)
+        .expect_err("automatic sampling must fail without an applicable active sinc drive");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("active sinc") && reason.contains("excite")
+    }));
+}
+
+#[test]
+fn auto_sampling_rejects_standalone_time_evolution_without_stage_context() {
+    let mut problem = auto_sampling_problem(&[5.0e9], None);
+    let error = resolve_auto_sampling_for_stage(&mut problem)
+        .expect_err("standalone automatic sampling must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("active_stage_id") && reason.contains("automatic sampling")
+    }));
+}
+
+#[test]
+fn explicit_sampling_does_not_require_a_stage_or_drive() {
+    let mut problem = ProblemIR::bootstrap_example();
+    let before = problem.clone();
+    assert_eq!(resolve_auto_sampling_for_stage(&mut problem).unwrap(), None);
+    assert_eq!(problem, before);
+}
+
 #[test]
 fn fem_top_surface_selector_resolves_bbox_faces() {
     let mesh = MeshIR {

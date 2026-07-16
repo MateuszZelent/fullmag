@@ -25,6 +25,7 @@ mod oersted;
 pub mod quantities;
 mod region_conflict;
 mod regional_field_drive;
+mod sampling;
 mod spin_torque;
 mod surface_selectors;
 mod util;
@@ -42,6 +43,7 @@ pub use quantities::{
     default_capability_matrix, validate_quantity_requests, BackendFamily, CapabilityMatrix,
     QuantityCapability,
 };
+pub use sampling::{resolve_auto_sampling_for_stage, SamplingResolutionIR};
 pub use surface_selectors::{resolve_fem_surface_selector, ResolvedFemSurfaceSelector};
 pub use util::generate_random_unit_vectors;
 
@@ -53,6 +55,18 @@ pub use util::generate_random_unit_vectors;
 /// - executable multilayer FDM for stacked multi-body cases,
 /// - executable FEM / FEM eigen with precomputed mesh assets.
 pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
+    if sampling::has_unresolved_auto_sampling(problem) {
+        let context = if util::active_stage_id(problem).is_none() {
+            "runtime_metadata.active_stage_id and an enabled active sinc drive"
+        } else {
+            "per-stage automatic sampling resolution"
+        };
+        return Err(PlanError {
+            reasons: vec![format!(
+                "automatic sampling is unresolved; {context} are required before backend planning"
+            )],
+        });
+    }
     if let Err(validation_errors) = problem.validate() {
         return Err(PlanError {
             reasons: validation_errors,

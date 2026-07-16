@@ -582,11 +582,13 @@ pub(crate) fn materialize_script_stages(
         } else {
             resolve_script_until_seconds(&ir, default_until_seconds)?
         };
-        return Ok(vec![ResolvedScriptStage::solver(
+        let mut stage = ResolvedScriptStage::solver(
             ir,
             until_seconds,
             entrypoint_kind,
-        )]);
+        );
+        resolve_stage_auto_sampling(&mut stage)?;
+        return Ok(vec![stage]);
     }
 
     let mut materialized = Vec::with_capacity(stages.len());
@@ -612,14 +614,26 @@ pub(crate) fn materialize_script_stages(
         } else {
             let until_seconds =
                 resolve_script_until_seconds(&stage.ir, stage.default_until_seconds)?;
-            materialized.push(ResolvedScriptStage::solver(
+            let mut resolved = ResolvedScriptStage::solver(
                 stage.ir,
                 until_seconds,
                 stage.entrypoint_kind,
-            ));
+            );
+            resolve_stage_auto_sampling(&mut resolved)?;
+            materialized.push(resolved);
         }
     }
     Ok(annotate_stage_transitions(materialized))
+}
+
+fn resolve_stage_auto_sampling(stage: &mut ResolvedScriptStage) -> Result<()> {
+    if stage.action.is_none()
+        && matches!(stage.ir.study, fullmag_ir::StudyIR::TimeEvolution { .. })
+    {
+        fullmag_plan::resolve_auto_sampling_for_stage(&mut stage.ir)
+            .map_err(|error| anyhow::anyhow!(error.to_string().trim().to_owned()))?;
+    }
+    Ok(())
 }
 
 fn annotate_stage_transitions(mut stages: Vec<ResolvedScriptStage>) -> Vec<ResolvedScriptStage> {
@@ -954,10 +968,12 @@ fn walk_study_pipeline_nodes(
                         "active_stage_id".to_string(),
                         Value::String(id.clone()),
                     );
+                    resolve_stage_auto_sampling(&mut stage)?;
                     out.push(stage);
                 }
             }
             StudyPipelineNode::Macro {
+                id,
                 enabled,
                 macro_kind,
                 label,
@@ -967,17 +983,21 @@ fn walk_study_pipeline_nodes(
                 if !enabled {
                     continue;
                 }
-                out.extend(
-                    materialize_pipeline_macro(
-                        current_ir,
-                        macro_kind,
-                        config,
-                        default_until_seconds,
-                    )
-                    .with_context(|| {
-                        format!("failed to materialize study pipeline node '{label}'")
-                    })?,
-                );
+                let mut stages = materialize_pipeline_macro(
+                    current_ir,
+                    macro_kind,
+                    config,
+                    default_until_seconds,
+                )
+                .with_context(|| format!("failed to materialize study pipeline node '{label}'"))?;
+                for stage in &mut stages {
+                    stage.ir.problem_meta.runtime_metadata.insert(
+                        "active_stage_id".to_string(),
+                        Value::String(id.clone()),
+                    );
+                    resolve_stage_auto_sampling(stage)?;
+                }
+                out.extend(stages);
             }
             StudyPipelineNode::Group {
                 enabled, children, ..
@@ -1066,8 +1086,11 @@ fn materialize_pipeline_table_autosave(
             .context("enabled table_autosave stage requires payload.table_autosave")?;
         let table: TableAutosaveIR = serde_json::from_value(value)
             .context("table_autosave stage payload.table_autosave is invalid")?;
-        if !table.sample_period_s.is_finite() || table.sample_period_s <= 0.0 {
-            bail!("table_autosave sample_period_s must be positive and finite");
+        let explicit_is_valid = table
+            .sample_period_s
+            .is_some_and(|period| period.is_finite() && period > 0.0);
+        if !explicit_is_valid && !table.requests_auto_sinc_cutoff() {
+            bail!("table_autosave requires a positive finite sample_period_s or the auto_sinc_cutoff policy");
         }
         if table.quantities.is_empty() {
             bail!("table_autosave quantities must not be empty");
@@ -1172,7 +1195,10 @@ fn materialize_pipeline_fft_response(
 
 fn time_output_name(output: &OutputIR) -> Option<&str> {
     match output {
-        OutputIR::Field { name, .. } | OutputIR::Scalar { name, .. } => Some(name),
+        OutputIR::Field { name, .. }
+        | OutputIR::FieldAuto { name, .. }
+        | OutputIR::Scalar { name, .. }
+        | OutputIR::ScalarAuto { name, .. } => Some(name),
         OutputIR::Snapshot { field, .. } => Some(field),
         _ => None,
     }
@@ -1273,7 +1299,9 @@ fn time_domain_sampling_from(base: &fullmag_ir::SamplingIR) -> fullmag_ir::Sampl
             matches!(
                 output,
                 fullmag_ir::OutputIR::Field { .. }
+                    | fullmag_ir::OutputIR::FieldAuto { .. }
                     | fullmag_ir::OutputIR::Scalar { .. }
+                    | fullmag_ir::OutputIR::ScalarAuto { .. }
                     | fullmag_ir::OutputIR::Snapshot { .. }
             )
         })
@@ -5129,7 +5157,10 @@ mod tests {
         ));
         let sampled = stages[4].ir.study.sampling();
         assert_eq!(
-            sampled.table_autosave.as_ref().map(|table| table.sample_period_s),
+            sampled
+                .table_autosave
+                .as_ref()
+                .and_then(|table| table.sample_period_s),
             Some(5e-13)
         );
         assert_eq!(sampled.outputs.len(), 1);
@@ -5152,6 +5183,158 @@ mod tests {
                 .as_ref()
                 .is_some_and(|transition| transition.kind == StageTransitionKind::ContinueInPlace)
         }));
+    }
+
+    #[test]
+    fn materialize_pipeline_resolves_auto_sampling_independently_for_each_run() {
+        let drive = |id: &str, cutoff_hz: f64, stage_id: &str| json!({
+            "kind": "add_field_drive",
+            "drive": {
+                "id": id,
+                "name": id,
+                "kind": "regional",
+                "enabled": true,
+                "target": {"kind": "global"},
+                "amplitude_B_T": 0.001,
+                "direction": [0.0, 1.0, 0.0],
+                "spatial_profile": {"kind": "uniform"},
+                "waveform": {
+                    "kind": "sinc_pulse",
+                    "cutoff_hz": cutoff_hz,
+                    "t0": 5e-11,
+                    "amplitude": 1.0
+                },
+                "time_origin": "stage_local",
+                "activation": {"kind": "stage_ids", "stage_ids": [stage_id]}
+            }
+        });
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(2e-9),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node("add-3", "add_field_drive", drive("drive-3", 3e9, "run-3")),
+                    primitive_node("add-5", "add_field_drive", drive("drive-5", 5e9, "run-5")),
+                    primitive_node("table-auto", "table_autosave", json!({
+                        "kind": "table_autosave",
+                        "enabled": true,
+                        "table_autosave": {
+                            "kind": "table_autosave",
+                            "table_id": "default",
+                            "sample_period_policy": {
+                                "kind": "auto_sinc_cutoff",
+                                "nyquist_guard_factor": 1.3
+                            },
+                            "quantities": ["t", "my"]
+                        }
+                    })),
+                    primitive_node("m-auto", "autosave", json!({
+                        "kind": "autosave",
+                        "enabled": true,
+                        "quantity": "m",
+                        "output": {
+                            "kind": "field_auto",
+                            "name": "m",
+                            "sample_period_policy": {
+                                "kind": "auto_sinc_cutoff",
+                                "nyquist_guard_factor": 1.3
+                            }
+                        }
+                    })),
+                    primitive_node("run-3", "run", json!({"until_seconds": 1e-9})),
+                    primitive_node("run-5", "run", json!({"until_seconds": 1e-9})),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config)
+            .expect("pipeline should resolve auto sampling");
+        let run_3 = &stages[4].ir;
+        let run_5 = &stages[5].ir;
+        run_3.validate().expect("first resolved Run must be valid");
+        run_5.validate().expect("second resolved Run must be valid");
+        assert_eq!(
+            run_3.problem_meta.runtime_metadata["sampling_resolution"]["sample_period_s"],
+            json!(1.0 / (2.0 * 1.3 * 3e9))
+        );
+        assert_eq!(
+            run_5.problem_meta.runtime_metadata["sampling_resolution"]["sample_period_s"],
+            json!(1.0 / (2.0 * 1.3 * 5e9))
+        );
+        assert!(matches!(
+            run_3.study.sampling().outputs.as_slice(),
+            [fullmag_ir::OutputIR::Field { .. }]
+        ));
+        assert!(matches!(
+            run_5.study.sampling().outputs.as_slice(),
+            [fullmag_ir::OutputIR::Field { .. }]
+        ));
+    }
+
+    #[test]
+    fn materialize_flat_stage_resolves_auto_sampling_from_its_active_stage_id() {
+        let mut ir = sample_problem_ir();
+        ir.problem_meta
+            .runtime_metadata
+            .insert("active_stage_id".into(), json!("excite"));
+        ir.study.sampling_mut().outputs = vec![fullmag_ir::OutputIR::ScalarAuto {
+            name: "my".into(),
+            sample_period_policy: fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: 1.3,
+            },
+        }];
+        ir.field_drives.push(
+            serde_json::from_value(json!({
+                "id": "pulse", "name": "Pulse", "kind": "regional", "enabled": true,
+                "target": {"kind": "global"}, "amplitude_B_T": 0.001,
+                "direction": [0.0, 1.0, 0.0], "spatial_profile": {"kind": "uniform"},
+                "waveform": {"kind": "sinc_pulse", "cutoff_hz": 5e9, "t0": 5e-11},
+                "time_origin": "stage_local",
+                "activation": {"kind": "stage_ids", "stage_ids": ["excite"]}
+            }))
+            .expect("drive"),
+        );
+        let stages = materialize_script_stages(ScriptExecutionConfig {
+            ir: ir.clone(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1e-9),
+            study_pipeline: None,
+            stages: vec![ScriptExecutionStage {
+                ir,
+                default_until_seconds: Some(1e-9),
+                entrypoint_kind: "flat_run".into(),
+                action: None,
+            }],
+        })
+        .expect("flat stage should resolve auto sampling");
+        assert!(matches!(
+            stages[0].ir.study.sampling().outputs.as_slice(),
+            [fullmag_ir::OutputIR::Scalar { every_seconds, .. }]
+                if *every_seconds == 1.0 / 13e9
+        ));
+    }
+
+    #[test]
+    fn standalone_auto_sampling_reports_missing_stage_context() {
+        let mut ir = sample_problem_ir();
+        ir.study.sampling_mut().outputs = vec![fullmag_ir::OutputIR::FieldAuto {
+            name: "m".into(),
+            sample_period_policy: fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: 1.3,
+            },
+        }];
+        let error = materialize_script_stages(ScriptExecutionConfig {
+            ir,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1e-9),
+            study_pipeline: None,
+            stages: vec![],
+        })
+        .expect_err("standalone auto sampling must fail closed");
+        assert!(error.to_string().contains("active_stage_id"));
     }
 
     #[test]
