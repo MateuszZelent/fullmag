@@ -1,11 +1,42 @@
 use super::{
-    ChargeBoundaryConditions, OrientedSpinInterface, ReciprocalConstitutiveMaterial,
-    SpinBoundaryCondition, SpinBoundaryConditions, SpinInterfaceFluxObservation, SpinInterfaceLaw,
-    SpinReactionLengths, StructuredSpinFace,
+    ChargeBoundaryConditions, OrientedSpinInterface, ReactionChannels,
+    ReciprocalConstitutiveMaterial, SpinBoundaryCondition, SpinBoundaryConditions,
+    SpinInterfaceFluxObservation, SpinInterfaceLaw, SpinReactionLengths, SpinTorqueTargets,
+    StructuredSpinFace,
 };
 use crate::fdm::shared::types::{CellSize, EngineError, GridShape, Result};
+use std::cell::Cell;
 
 type Vector3 = [f64; 3];
+type Matrix3 = [[f64; 3]; 3];
+
+#[derive(Debug, Clone, PartialEq)]
+struct LocalInverseBlock {
+    inverse_charge: f64,
+    inverse_spin: Matrix3,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct BlockDiagonalPreconditioner {
+    blocks: Vec<LocalInverseBlock>,
+}
+
+impl BlockDiagonalPreconditioner {
+    fn apply(&self, values: &[f64]) -> Vec<f64> {
+        let mut result = vec![0.0; values.len()];
+        for (cell, block) in self.blocks.iter().enumerate() {
+            result[4 * cell] = block.inverse_charge * values[4 * cell];
+            let spin = [
+                values[4 * cell + 1],
+                values[4 * cell + 2],
+                values[4 * cell + 3],
+            ];
+            let solved = matrix_vector(block.inverse_spin, spin);
+            result[4 * cell + 1..4 * cell + 4].copy_from_slice(&solved);
+        }
+        result
+    }
+}
 
 /// Cell-centred material fields for the reciprocal M2 block.
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +60,14 @@ pub struct CoupledChargeSpinSolverConfig {
     pub gmres_restart: usize,
     pub max_picard_iterations: usize,
     pub relative_update_tolerance: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoupledTransportOuterErrorBudget {
+    pub dt_s: f64,
+    pub embedded_lte_m: f64,
+    pub eta_transport: f64,
+    pub previous_transport_torque_per_s: Vec<Vector3>,
 }
 
 impl Default for CoupledChargeSpinSolverConfig {
@@ -74,6 +113,7 @@ pub struct CoupledChargeSpinTelemetry {
     pub operator_version: &'static str,
     pub linear_solver: &'static str,
     pub preconditioner: &'static str,
+    pub preconditioner_applications: usize,
     pub nonlinear_solver: &'static str,
     pub linear_iterations: usize,
     pub picard_iterations: usize,
@@ -84,6 +124,8 @@ pub struct CoupledChargeSpinTelemetry {
     pub charge_balance_relative: f64,
     pub spin_balance_relative: f64,
     pub warm_start_used: bool,
+    pub transport_torque_delta_l2_per_s: Option<f64>,
+    pub transport_outer_error_ratio: Option<f64>,
     pub state_revision: u64,
     pub operator_revision: u64,
 }
@@ -95,6 +137,8 @@ pub struct CoupledChargeSpinSolution {
     pub cell_charge_current_density_a_per_m2: Vec<Vector3>,
     pub cell_spin_current_density_a_per_m2: Vec<[[f64; 3]; 3]>,
     pub interface_observations: Vec<SpinInterfaceFluxObservation>,
+    pub reaction_channels: ReactionChannels,
+    pub transport_gilbert_torque_per_s: Vec<Vector3>,
     pub telemetry: CoupledChargeSpinTelemetry,
 }
 
@@ -107,6 +151,7 @@ pub struct CoupledChargeSpinProblem {
     boundary: CoupledChargeSpinBoundaryConditions,
     region_ids: Vec<u32>,
     interfaces: Vec<OrientedSpinInterface>,
+    torque_targets: Option<SpinTorqueTargets>,
     state_revision: u64,
     operator_revision: u64,
 }
@@ -188,6 +233,7 @@ impl CoupledChargeSpinProblem {
             boundary,
             region_ids: vec![0; count],
             interfaces: Vec::new(),
+            torque_targets: None,
             state_revision: 0,
             operator_revision: 0,
         })
@@ -197,6 +243,32 @@ impl CoupledChargeSpinProblem {
         self.state_revision = state_revision;
         self.operator_revision = operator_revision;
         self
+    }
+
+    pub fn with_torque_targets(mut self, targets: SpinTorqueTargets) -> Result<Self> {
+        let count = self.grid.cell_count();
+        if targets.target_cells.len() != count
+            || targets.saturation_magnetization_a_per_m.len() != count
+            || !targets.gamma_e_rad_per_s_t.is_finite()
+            || targets.gamma_e_rad_per_s_t <= 0.0
+        {
+            return Err(EngineError::new(
+                "M2 torque targets, Ms, and gamma_e must match the grid and be physical",
+            ));
+        }
+        for cell in 0..count {
+            if targets.target_cells[cell]
+                && (!self.active_cells[cell]
+                    || !targets.saturation_magnetization_a_per_m[cell].is_finite()
+                    || targets.saturation_magnetization_a_per_m[cell] <= 0.0)
+            {
+                return Err(EngineError::new(
+                    "M2 torque targets require active cells with finite positive Ms",
+                ));
+            }
+        }
+        self.torque_targets = Some(targets);
+        Ok(self)
     }
 
     pub fn with_interfaces(
@@ -239,7 +311,26 @@ impl CoupledChargeSpinProblem {
         config: CoupledChargeSpinSolverConfig,
         warm_start: Option<&CoupledChargeSpinWarmStart>,
     ) -> Result<CoupledChargeSpinSolution> {
+        self.solve_internal(config, warm_start, None)
+    }
+
+    pub fn solve_with_outer_error_budget(
+        &self,
+        config: CoupledChargeSpinSolverConfig,
+        warm_start: Option<&CoupledChargeSpinWarmStart>,
+        outer_error_budget: &CoupledTransportOuterErrorBudget,
+    ) -> Result<CoupledChargeSpinSolution> {
+        self.solve_internal(config, warm_start, Some(outer_error_budget))
+    }
+
+    fn solve_internal(
+        &self,
+        config: CoupledChargeSpinSolverConfig,
+        warm_start: Option<&CoupledChargeSpinWarmStart>,
+        outer_error_budget: Option<&CoupledTransportOuterErrorBudget>,
+    ) -> Result<CoupledChargeSpinSolution> {
         validate_config(config)?;
+        self.validate_outer_error_budget(outer_error_budget)?;
         self.validate_cross_region_faces()?;
         let count = self.grid.cell_count();
         let warm_start_used = warm_start.is_some_and(|warm| {
@@ -266,8 +357,11 @@ impl CoupledChargeSpinProblem {
         let affine = self.residual_flat(&vec![0.0; 4 * count])?;
         let rhs: Vec<f64> = affine.iter().map(|value| -value).collect();
         let scales = self.block_scales();
-        let scaled_rhs = scale_blocks(&rhs, &scales, &self.active_cells);
-        let rhs_norm = norm(&scaled_rhs).max(1.0);
+        let preconditioner = self.block_preconditioner()?;
+        let preconditioner_applications = Cell::new(0usize);
+        let preconditioned_rhs = preconditioner.apply(&rhs);
+        preconditioner_applications.set(preconditioner_applications.get() + 1);
+        let rhs_norm = norm(&preconditioned_rhs).max(1.0);
         let linear_tolerance = config
             .absolute_tolerance
             .max(config.relative_tolerance * rhs_norm);
@@ -281,22 +375,21 @@ impl CoupledChargeSpinProblem {
         for picard in 0..config.max_picard_iterations {
             let applied = self.apply_linear(&state, &affine)?;
             let residual: Vec<f64> = rhs.iter().zip(applied).map(|(b, ax)| b - ax).collect();
-            let scaled_residual = scale_blocks(&residual, &scales, &self.active_cells);
+            let preconditioned_residual = preconditioner.apply(&residual);
+            preconditioner_applications.set(preconditioner_applications.get() + 1);
             let previous = state.clone();
-            if norm(&scaled_residual) > linear_tolerance {
-                let (correction_scaled, iterations) = restarted_gmres(
-                    &scaled_residual,
+            if norm(&preconditioned_residual) > linear_tolerance {
+                let (correction, iterations) = restarted_gmres(
+                    &preconditioned_residual,
                     config.gmres_restart,
                     config.max_linear_iterations,
                     linear_tolerance,
-                    |direction_scaled| {
-                        let direction =
-                            unscale_blocks(direction_scaled, &scales, &self.active_cells);
+                    |direction| {
                         let applied = self.apply_linear(&direction, &affine)?;
-                        Ok(scale_blocks(&applied, &scales, &self.active_cells))
+                        preconditioner_applications.set(preconditioner_applications.get() + 1);
+                        Ok(preconditioner.apply(&applied))
                     },
                 )?;
-                let correction = unscale_blocks(&correction_scaled, &scales, &self.active_cells);
                 for (value, delta) in state.iter_mut().zip(correction) {
                     *value += delta;
                 }
@@ -314,9 +407,8 @@ impl CoupledChargeSpinProblem {
                 self.separate_scaled_residuals(&true_residual, &scales);
             if charge_scaled <= config.relative_tolerance.max(config.absolute_tolerance)
                 && spin_scaled <= config.relative_tolerance.max(config.absolute_tolerance)
-                && (picard == 0
-                    || (relative_current_update <= config.relative_update_tolerance
-                        && relative_spin_update <= config.relative_update_tolerance))
+                && relative_current_update <= config.relative_update_tolerance
+                && relative_spin_update <= config.relative_update_tolerance
             {
                 break;
             }
@@ -338,19 +430,65 @@ impl CoupledChargeSpinProblem {
         }
         let (potential, spin_potential) = unpack(&state);
         let (charge_current, spin_current) = self.cell_currents(&state)?;
-        let (charge_balance_relative, spin_balance_relative) = self.balance_metrics(&residual);
         let interface_observations = self.interface_observations(&potential, &spin_potential)?;
+        let reaction_channels = self.reaction_channels(&spin_potential);
+        let (charge_balance_relative, spin_balance_relative) = self.balance_metrics(
+            &potential,
+            &spin_potential,
+            &reaction_channels,
+            &interface_observations,
+        )?;
+        if charge_balance_relative > config.relative_tolerance
+            || spin_balance_relative > 10.0 * config.relative_tolerance
+        {
+            return Err(EngineError::new(format!(
+                "M2 physical balance gate rejected without committing state: charge={charge_balance_relative:.6e}, spin={spin_balance_relative:.6e}"
+            )));
+        }
+        let transport_gilbert_torque_per_s =
+            self.transport_gilbert_torque(&reaction_channels, &interface_observations)?;
+        let (transport_torque_delta_l2_per_s, transport_outer_error_ratio) = if let Some(budget) =
+            outer_error_budget
+        {
+            let delta = self.transport_torque_delta_l2(
+                &transport_gilbert_torque_per_s,
+                &budget.previous_transport_torque_per_s,
+            );
+            let allowed = budget.eta_transport * budget.embedded_lte_m;
+            let induced = budget.dt_s * delta;
+            let ratio = if allowed == 0.0 {
+                if induced == 0.0 {
+                    0.0
+                } else {
+                    f64::INFINITY
+                }
+            } else {
+                induced / allowed
+            };
+            if !ratio.is_finite() || ratio > 1.0 {
+                return Err(EngineError::new(format!(
+                        "M2 transport solve rejected by outer LTE gate without committing state: dt*dT={induced:.6e}, eta*LTE={allowed:.6e}"
+                    )));
+            }
+            (Some(delta), Some(ratio))
+        } else {
+            (None, None)
+        };
         Ok(CoupledChargeSpinSolution {
             potential_volts: potential,
             spin_potential_volts: spin_potential,
             cell_charge_current_density_a_per_m2: charge_current,
             cell_spin_current_density_a_per_m2: spin_current,
             interface_observations,
+            reaction_channels,
+            transport_gilbert_torque_per_s,
             telemetry: CoupledChargeSpinTelemetry {
-                convergence_reason: "converged_true_block_residual_and_picard_update",
+                convergence_reason:
+                    "converged_true_block_residual_picard_update_and_physical_balance",
                 operator_version: "fdm_charge_spin_block_gmres_v1",
                 linear_solver: "restarted_gmres",
-                preconditioner: "cell_block_diagonal_v1",
+                preconditioner: "charge_scalar_spin_3x3_block_jacobi_v1",
+                preconditioner_applications: preconditioner_applications.get(),
                 nonlinear_solver: "picard_v1",
                 linear_iterations: total_linear_iterations,
                 picard_iterations,
@@ -361,6 +499,8 @@ impl CoupledChargeSpinProblem {
                 charge_balance_relative,
                 spin_balance_relative,
                 warm_start_used,
+                transport_torque_delta_l2_per_s,
+                transport_outer_error_ratio,
                 state_revision: self.state_revision,
                 operator_revision: self.operator_revision,
             },
@@ -522,12 +662,12 @@ impl CoupledChargeSpinProblem {
             }
             (None, Some(cell)) if self.active_cells[cell] => {
                 let (charge_flux, spin_flux) =
-                    self.boundary_flux(axis, false, cell, potential, spin);
+                    self.boundary_flux(axis, false, cell, potential, spin)?;
                 add_boundary_residual(residual, cell, charge_flux, spin_flux, spacing, -1.0);
             }
             (Some(cell), None) if self.active_cells[cell] => {
                 let (charge_flux, spin_flux) =
-                    self.boundary_flux(axis, true, cell, potential, spin);
+                    self.boundary_flux(axis, true, cell, potential, spin)?;
                 add_boundary_residual(residual, cell, charge_flux, spin_flux, spacing, 1.0);
             }
             _ => {}
@@ -542,27 +682,49 @@ impl CoupledChargeSpinProblem {
         cell: usize,
         potential: &[f64],
         spin: &[Vector3],
-    ) -> (f64, Vector3) {
-        let charge = if let Some(value) = charge_boundary(self.boundary.charge, axis, positive) {
-            let electric_normal = if positive {
-                -(value - potential[cell]) / (0.5 * self.spacing(axis))
+    ) -> Result<(f64, Vector3)> {
+        let gradients = self.cell_gradients(potential, spin);
+        let mut electric_field = gradients[cell].0;
+        let charge_is_dirichlet =
+            if let Some(value) = charge_boundary(self.boundary.charge, axis, positive) {
+                let electric_normal = if positive {
+                    -(value - potential[cell]) / (0.5 * self.spacing(axis))
+                } else {
+                    -(potential[cell] - value) / (0.5 * self.spacing(axis))
+                };
+                electric_field[axis] = electric_normal;
+                true
             } else {
-                -(potential[cell] - value) / (0.5 * self.spacing(axis))
+                false
             };
-            let mut e = self.cell_gradients(potential, spin)[cell].0;
-            e[axis] = electric_normal;
-            self.materials.reciprocal[cell]
-                .evaluate(
-                    e,
-                    self.cell_gradients(potential, spin)[cell].1,
-                    self.materials.magnetization[cell],
-                )
-                .unwrap()
-                .charge_current_density_a_per_m2[axis]
+        let condition = spin_boundary(self.boundary.spin, axis, positive);
+        let mut spin_gradient = gradients[cell].1;
+        if let SpinBoundaryCondition::SpinSink | SpinBoundaryCondition::SpecifiedPotential(_) =
+            condition
+        {
+            let target = match condition {
+                SpinBoundaryCondition::SpecifiedPotential(value) => value,
+                _ => [0.0; 3],
+            };
+            for component in 0..3 {
+                let derivative = if positive {
+                    (target[component] - spin[cell][component]) / (0.5 * self.spacing(axis))
+                } else {
+                    (spin[cell][component] - target[component]) / (0.5 * self.spacing(axis))
+                };
+                spin_gradient[axis][component] = -0.5 * derivative;
+            }
+        }
+        let response = self.materials.reciprocal[cell].evaluate(
+            electric_field,
+            spin_gradient,
+            self.materials.magnetization[cell],
+        )?;
+        let charge = if charge_is_dirichlet {
+            response.charge_current_density_a_per_m2[axis]
         } else {
             0.0
         };
-        let condition = spin_boundary(self.boundary.spin, axis, positive);
         let spin_flux = match condition {
             SpinBoundaryCondition::SpinInsulating => [0.0; 3],
             SpinBoundaryCondition::SpecifiedFlux(outward) => {
@@ -573,28 +735,24 @@ impl CoupledChargeSpinProblem {
                 }
             }
             SpinBoundaryCondition::SpinSink | SpinBoundaryCondition::SpecifiedPotential(_) => {
-                let target = match condition {
-                    SpinBoundaryCondition::SpecifiedPotential(value) => value,
-                    _ => [0.0; 3],
-                };
-                let mut g = self.cell_gradients(potential, spin)[cell].1;
-                for component in 0..3 {
-                    let derivative = if positive {
-                        (target[component] - spin[cell][component]) / (0.5 * self.spacing(axis))
-                    } else {
-                        (spin[cell][component] - target[component]) / (0.5 * self.spacing(axis))
-                    };
-                    g[axis][component] = -0.5 * derivative;
-                }
-                let e = self.cell_gradients(potential, spin)[cell].0;
-                self.materials.reciprocal[cell]
-                    .evaluate(e, g, self.materials.magnetization[cell])
-                    .unwrap()
-                    .spin_current_density_a_per_m2[axis]
+                response.spin_current_density_a_per_m2[axis]
             }
             SpinBoundaryCondition::PeriodicSpin => unreachable!(),
         };
-        (charge, spin_flux)
+        Ok((charge, spin_flux))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn boundary_flux_for_test(
+        &self,
+        axis: usize,
+        positive: bool,
+        cell: usize,
+        potential: &[f64],
+        spin: &[Vector3],
+    ) -> (f64, Vector3) {
+        self.boundary_flux(axis, positive, cell, potential, spin)
+            .expect("validated test boundary flux")
     }
 
     fn accumulate_interface(
@@ -716,6 +874,176 @@ impl CoupledChargeSpinProblem {
         Ok((charge, spin_current))
     }
 
+    fn reaction_channels(&self, spin: &[Vector3]) -> ReactionChannels {
+        let count = self.grid.cell_count();
+        let mut spin_flip = vec![[0.0; 3]; count];
+        let mut exchange = vec![[0.0; 3]; count];
+        let mut dephasing = vec![[0.0; 3]; count];
+        for cell in 0..count {
+            if !self.active_cells[cell] {
+                continue;
+            }
+            let sigma = self.materials.reciprocal[cell].sigma_spin_s_per_m;
+            let m = self.materials.magnetization[cell];
+            let lengths = self.materials.reactions[cell];
+            if let Some(lambda) = lengths.spin_flip_m {
+                spin_flip[cell] = scale(spin[cell], sigma / (2.0 * lambda * lambda));
+            }
+            if let Some(lambda) = lengths.exchange_m {
+                exchange[cell] = scale(cross(spin[cell], m), sigma / (2.0 * lambda * lambda));
+            }
+            if let Some(lambda) = lengths.dephasing_m {
+                dephasing[cell] = scale(
+                    cross(m, cross(spin[cell], m)),
+                    sigma / (2.0 * lambda * lambda),
+                );
+            }
+        }
+        let magnetic_torque_sink = exchange
+            .iter()
+            .zip(&dephasing)
+            .map(|(exchange, dephasing)| add(*exchange, *dephasing))
+            .collect();
+        ReactionChannels {
+            spin_flip,
+            exchange,
+            dephasing,
+            magnetic_torque_sink,
+        }
+    }
+
+    fn transport_gilbert_torque(
+        &self,
+        reactions: &ReactionChannels,
+        interfaces: &[SpinInterfaceFluxObservation],
+    ) -> Result<Vec<Vector3>> {
+        const HBAR_J_S: f64 = 1.054_571_817e-34;
+        const ELEMENTARY_CHARGE_C: f64 = 1.602_176_634e-19;
+        let has_magnetic_sink = reactions
+            .magnetic_torque_sink
+            .iter()
+            .any(|sink| sink.iter().any(|value| *value != 0.0))
+            || interfaces.iter().any(|observation| {
+                observation
+                    .absorbed_transverse_a_per_m2
+                    .iter()
+                    .any(|value| *value != 0.0)
+            });
+        if has_magnetic_sink && self.torque_targets.is_none() {
+            return Err(EngineError::new(
+                "M2 magnetic spin sinks require explicit torque targets, Ms, and gamma_e",
+            ));
+        }
+        let mut torque = vec![[0.0; 3]; self.grid.cell_count()];
+        let Some(targets) = &self.torque_targets else {
+            return Ok(torque);
+        };
+        for cell in 0..self.grid.cell_count() {
+            if !targets.target_cells[cell] {
+                if reactions.magnetic_torque_sink[cell]
+                    .iter()
+                    .any(|value| *value != 0.0)
+                {
+                    return Err(EngineError::new(
+                        "M2 magnetic reaction is active outside the authored torque target",
+                    ));
+                }
+                continue;
+            }
+            let factor = -targets.gamma_e_rad_per_s_t
+                / targets.saturation_magnetization_a_per_m[cell]
+                * (HBAR_J_S / (2.0 * ELEMENTARY_CHARGE_C));
+            torque[cell] = scale(reactions.magnetic_torque_sink[cell], factor);
+        }
+        for observation in interfaces {
+            if observation
+                .absorbed_transverse_a_per_m2
+                .iter()
+                .all(|value| *value == 0.0)
+            {
+                continue;
+            }
+            let descriptor = self
+                .interfaces
+                .iter()
+                .find(|interface| interface.face == observation.face)
+                .ok_or_else(|| EngineError::new("missing M2 interface torque descriptor"))?;
+            let target = descriptor.to_cell;
+            if !targets.target_cells[target] {
+                return Err(EngineError::new(
+                    "M2 absorbed interface flux requires the F-side torque target",
+                ));
+            }
+            let factor = -targets.gamma_e_rad_per_s_t
+                / targets.saturation_magnetization_a_per_m[target]
+                * (HBAR_J_S / (2.0 * ELEMENTARY_CHARGE_C));
+            let sink_density = scale(
+                observation.absorbed_transverse_a_per_m2,
+                1.0 / self.spacing(observation.face.axis),
+            );
+            torque[target] = add(torque[target], scale(sink_density, factor));
+        }
+        Ok(torque)
+    }
+
+    fn validate_outer_error_budget(
+        &self,
+        budget: Option<&CoupledTransportOuterErrorBudget>,
+    ) -> Result<()> {
+        let Some(budget) = budget else {
+            return Ok(());
+        };
+        if !budget.dt_s.is_finite()
+            || budget.dt_s <= 0.0
+            || !budget.embedded_lte_m.is_finite()
+            || budget.embedded_lte_m < 0.0
+            || !budget.eta_transport.is_finite()
+            || budget.eta_transport <= 0.0
+            || budget.previous_transport_torque_per_s.len() != self.grid.cell_count()
+            || budget
+                .previous_transport_torque_per_s
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+        {
+            return Err(EngineError::new(
+                "invalid M2 outer LTE transport budget or previous torque field",
+            ));
+        }
+        if self.torque_targets.is_none() {
+            return Err(EngineError::new(
+                "M2 outer LTE transport gate requires explicit torque targets",
+            ));
+        }
+        Ok(())
+    }
+
+    fn transport_torque_delta_l2(&self, current: &[Vector3], previous: &[Vector3]) -> f64 {
+        let targets = self
+            .torque_targets
+            .as_ref()
+            .expect("outer error budget validation requires targets");
+        let mut weighted_norm_squared = 0.0;
+        let mut weight = 0.0;
+        let cell_volume = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
+        for cell in 0..self.grid.cell_count() {
+            if targets.target_cells[cell] {
+                weighted_norm_squared += cell_volume
+                    * (0..3)
+                        .map(|component| {
+                            (current[cell][component] - previous[cell][component]).powi(2)
+                        })
+                        .sum::<f64>();
+                weight += cell_volume;
+            }
+        }
+        if weight == 0.0 {
+            0.0
+        } else {
+            (weighted_norm_squared / weight).sqrt()
+        }
+    }
+
     fn block_scales(&self) -> Vec<[f64; 4]> {
         let mut scales = Vec::with_capacity(self.grid.cell_count());
         let h2 = self
@@ -740,6 +1068,57 @@ impl CoupledChargeSpinProblem {
         scales
     }
 
+    fn block_preconditioner(&self) -> Result<BlockDiagonalPreconditioner> {
+        let inverse_h2 = 1.0 / self.cell_size.dx.powi(2)
+            + 1.0 / self.cell_size.dy.powi(2)
+            + 1.0 / self.cell_size.dz.powi(2);
+        let mut blocks = Vec::with_capacity(self.grid.cell_count());
+        for cell in 0..self.grid.cell_count() {
+            if !self.active_cells[cell] {
+                blocks.push(LocalInverseBlock {
+                    inverse_charge: 1.0,
+                    inverse_spin: identity3(),
+                });
+                continue;
+            }
+            let material = self.materials.reciprocal[cell];
+            let charge_diagonal = material
+                .sigma_parallel_s_per_m
+                .max(material.sigma_perpendicular_s_per_m)
+                * inverse_h2;
+            let diffusion_diagonal = 0.5 * material.sigma_spin_s_per_m * inverse_h2;
+            let mut spin = scale_matrix(identity3(), diffusion_diagonal);
+            let lengths = self.materials.reactions[cell];
+            if let Some(lambda) = lengths.spin_flip_m {
+                add_scaled_matrix(
+                    &mut spin,
+                    identity3(),
+                    material.sigma_spin_s_per_m / (2.0 * lambda * lambda),
+                );
+            }
+            if let Some(lambda) = lengths.exchange_m {
+                add_scaled_matrix(
+                    &mut spin,
+                    cross_right_matrix(self.materials.magnetization[cell]),
+                    material.sigma_spin_s_per_m / (2.0 * lambda * lambda),
+                );
+            }
+            if let Some(lambda) = lengths.dephasing_m {
+                add_scaled_matrix(
+                    &mut spin,
+                    transverse_projector(self.materials.magnetization[cell]),
+                    material.sigma_spin_s_per_m / (2.0 * lambda * lambda),
+                );
+            }
+            blocks.push(LocalInverseBlock {
+                inverse_charge: 1.0 / charge_diagonal.max(1.0e-300),
+                inverse_spin: inverse3(spin)
+                    .ok_or_else(|| EngineError::new("M2 spin block preconditioner is singular"))?,
+            });
+        }
+        Ok(BlockDiagonalPreconditioner { blocks })
+    }
+
     fn separate_scaled_residuals(&self, residual: &[f64], scales: &[[f64; 4]]) -> (f64, f64) {
         let mut charge = 0.0;
         let mut spin = 0.0;
@@ -755,23 +1134,71 @@ impl CoupledChargeSpinProblem {
         (charge.sqrt(), spin.sqrt())
     }
 
-    fn balance_metrics(&self, residual: &[f64]) -> (f64, f64) {
-        let mut charge_sum: f64 = 0.0;
-        let mut charge_l1: f64 = 0.0;
-        let mut spin_sum = [0.0; 3];
-        let mut spin_l1: f64 = 0.0;
+    fn balance_metrics(
+        &self,
+        potential: &[f64],
+        spin: &[Vector3],
+        reactions: &ReactionChannels,
+        interfaces: &[SpinInterfaceFluxObservation],
+    ) -> Result<(f64, f64)> {
+        let mut charge_closure_a: f64 = 0.0;
+        let mut charge_scale_a: f64 = 0.0;
+        let mut spin_closure_a = [0.0; 3];
+        let mut spin_scale_a: f64 = 0.0;
         for cell in 0..self.grid.cell_count() {
-            charge_sum += residual[4 * cell];
-            charge_l1 += residual[4 * cell].abs();
-            for a in 0..3 {
-                spin_sum[a] += residual[4 * cell + 1 + a];
-                spin_l1 += residual[4 * cell + 1 + a].abs();
+            if !self.active_cells[cell] {
+                continue;
+            }
+            let coordinate = coordinates(self.grid, cell);
+            for axis in 0..3 {
+                let extent = [self.grid.nx, self.grid.ny, self.grid.nz][axis];
+                for (positive, on_boundary) in [
+                    (false, coordinate[axis] == 0),
+                    (true, coordinate[axis] + 1 == extent),
+                ] {
+                    if !on_boundary {
+                        continue;
+                    }
+                    let (charge, spin_flux) =
+                        self.boundary_flux(axis, positive, cell, potential, spin)?;
+                    let outward_sign = if positive { 1.0 } else { -1.0 };
+                    let area = self.face_area(axis);
+                    let outward_charge = outward_sign * charge * area;
+                    charge_closure_a += outward_charge;
+                    charge_scale_a += outward_charge.abs();
+                    let outward_spin = scale(spin_flux, outward_sign * area);
+                    spin_closure_a = add(spin_closure_a, outward_spin);
+                    spin_scale_a += norm3(outward_spin);
+                }
             }
         }
-        (
-            charge_sum.abs() / charge_l1.max(1.0),
-            norm3(spin_sum) / spin_l1.max(1.0),
-        )
+        let volume = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
+        for cell in 0..self.grid.cell_count() {
+            if !self.active_cells[cell] {
+                continue;
+            }
+            let sink = add(
+                reactions.spin_flip[cell],
+                reactions.magnetic_torque_sink[cell],
+            );
+            let sink_current = scale(sink, volume);
+            spin_closure_a = add(spin_closure_a, sink_current);
+            spin_scale_a += norm3(sink_current);
+        }
+        for observation in interfaces {
+            let interface_sink = add(
+                observation.absorbed_transverse_a_per_m2,
+                observation.spin_memory_loss_a_per_m2,
+            );
+            let sink_current = scale(interface_sink, self.face_area(observation.face.axis));
+            spin_closure_a = add(spin_closure_a, sink_current);
+            spin_scale_a += norm3(sink_current);
+        }
+        let reference_current_a = self.balance_reference_current_a();
+        Ok((
+            charge_closure_a.abs() / charge_scale_a.max(reference_current_a),
+            norm3(spin_closure_a) / spin_scale_a.max(reference_current_a),
+        ))
     }
 
     fn interface_observations(
@@ -798,10 +1225,20 @@ impl CoupledChargeSpinProblem {
                     let mut next = c;
                     next[axis] += 1;
                     let neighbor = self.grid.index(next[0], next[1], next[2]);
-                    if self.active_cells[cell]
-                        && self.active_cells[neighbor]
-                        && self.region_ids[cell] != self.region_ids[neighbor]
-                    {
+                    if self.active_cells[cell] && self.active_cells[neighbor] {
+                        if self.region_ids[cell] == self.region_ids[neighbor]
+                            && (self.materials.reciprocal[cell]
+                                != self.materials.reciprocal[neighbor]
+                                || self.materials.reactions[cell]
+                                    != self.materials.reactions[neighbor])
+                        {
+                            return Err(EngineError::new(
+                                "M2 material jump requires distinct region IDs and one explicit oriented interface law",
+                            ));
+                        }
+                        if self.region_ids[cell] == self.region_ids[neighbor] {
+                            continue;
+                        }
                         let face = StructuredSpinFace {
                             axis,
                             negative_cell: cell,
@@ -821,6 +1258,66 @@ impl CoupledChargeSpinProblem {
 
     fn spacing(&self, axis: usize) -> f64 {
         [self.cell_size.dx, self.cell_size.dy, self.cell_size.dz][axis]
+    }
+
+    fn face_area(&self, axis: usize) -> f64 {
+        match axis {
+            0 => self.cell_size.dy * self.cell_size.dz,
+            1 => self.cell_size.dx * self.cell_size.dz,
+            2 => self.cell_size.dx * self.cell_size.dy,
+            _ => unreachable!(),
+        }
+    }
+
+    fn balance_reference_current_a(&self) -> f64 {
+        let voltage_scale = [
+            self.boundary.charge.x_min,
+            self.boundary.charge.x_max,
+            self.boundary.charge.y_min,
+            self.boundary.charge.y_max,
+            self.boundary.charge.z_min,
+            self.boundary.charge.z_max,
+        ]
+        .into_iter()
+        .flatten()
+        .map(f64::abs)
+        .fold(0.0, f64::max);
+        let spin_voltage_scale = [
+            self.boundary.spin.x_min,
+            self.boundary.spin.x_max,
+            self.boundary.spin.y_min,
+            self.boundary.spin.y_max,
+            self.boundary.spin.z_min,
+            self.boundary.spin.z_max,
+        ]
+        .into_iter()
+        .filter_map(|condition| match condition {
+            SpinBoundaryCondition::SpecifiedPotential(value) => Some(norm3(value)),
+            SpinBoundaryCondition::SpinSink => Some(0.0),
+            _ => None,
+        })
+        .fold(0.0, f64::max);
+        let conductivity = self
+            .materials
+            .reciprocal
+            .iter()
+            .zip(&self.active_cells)
+            .filter(|(_, active)| **active)
+            .map(|(material, _)| {
+                material
+                    .sigma_parallel_s_per_m
+                    .max(material.sigma_perpendicular_s_per_m)
+                    .max(material.sigma_spin_s_per_m)
+            })
+            .fold(0.0, f64::max);
+        let conductance_length = [
+            self.face_area(0) / self.spacing(0),
+            self.face_area(1) / self.spacing(1),
+            self.face_area(2) / self.spacing(2),
+        ]
+        .into_iter()
+        .fold(0.0, f64::max);
+        conductivity * voltage_scale.max(spin_voltage_scale) * conductance_length.max(1.0e-30)
     }
 }
 
@@ -1110,27 +1607,74 @@ fn zero_inactive(state: &mut [f64], active: &[bool]) {
         }
     }
 }
-fn scale_blocks(values: &[f64], scales: &[[f64; 4]], active: &[bool]) -> Vec<f64> {
-    let mut out = vec![0.0; values.len()];
-    for i in 0..active.len() {
-        if active[i] {
-            for c in 0..4 {
-                out[4 * i + c] = values[4 * i + c] / scales[i][c];
-            }
-        }
-    }
-    out
+fn identity3() -> Matrix3 {
+    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
 }
-fn unscale_blocks(values: &[f64], scales: &[[f64; 4]], active: &[bool]) -> Vec<f64> {
-    let mut out = vec![0.0; values.len()];
-    for i in 0..active.len() {
-        if active[i] {
-            for c in 0..4 {
-                out[4 * i + c] = values[4 * i + c] * scales[i][c];
-            }
+
+fn scale_matrix(mut matrix: Matrix3, factor: f64) -> Matrix3 {
+    for row in &mut matrix {
+        for value in row {
+            *value *= factor;
         }
     }
-    out
+    matrix
+}
+
+fn add_scaled_matrix(target: &mut Matrix3, source: Matrix3, factor: f64) {
+    for row in 0..3 {
+        for column in 0..3 {
+            target[row][column] += factor * source[row][column];
+        }
+    }
+}
+
+fn cross_right_matrix(m: Vector3) -> Matrix3 {
+    [[0.0, m[2], -m[1]], [-m[2], 0.0, m[0]], [m[1], -m[0], 0.0]]
+}
+
+fn transverse_projector(m: Vector3) -> Matrix3 {
+    let mut result = identity3();
+    for row in 0..3 {
+        for column in 0..3 {
+            result[row][column] -= m[row] * m[column];
+        }
+    }
+    result
+}
+
+fn matrix_vector(matrix: Matrix3, vector: Vector3) -> Vector3 {
+    [
+        dot(matrix[0], vector),
+        dot(matrix[1], vector),
+        dot(matrix[2], vector),
+    ]
+}
+
+fn inverse3(matrix: Matrix3) -> Option<Matrix3> {
+    let determinant = matrix[0][0] * (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1])
+        - matrix[0][1] * (matrix[1][0] * matrix[2][2] - matrix[1][2] * matrix[2][0])
+        + matrix[0][2] * (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]);
+    if !determinant.is_finite() || determinant.abs() <= 1.0e-300 {
+        return None;
+    }
+    let inverse_determinant = 1.0 / determinant;
+    Some([
+        [
+            (matrix[1][1] * matrix[2][2] - matrix[1][2] * matrix[2][1]) * inverse_determinant,
+            (matrix[0][2] * matrix[2][1] - matrix[0][1] * matrix[2][2]) * inverse_determinant,
+            (matrix[0][1] * matrix[1][2] - matrix[0][2] * matrix[1][1]) * inverse_determinant,
+        ],
+        [
+            (matrix[1][2] * matrix[2][0] - matrix[1][0] * matrix[2][2]) * inverse_determinant,
+            (matrix[0][0] * matrix[2][2] - matrix[0][2] * matrix[2][0]) * inverse_determinant,
+            (matrix[0][2] * matrix[1][0] - matrix[0][0] * matrix[1][2]) * inverse_determinant,
+        ],
+        [
+            (matrix[1][0] * matrix[2][1] - matrix[1][1] * matrix[2][0]) * inverse_determinant,
+            (matrix[0][1] * matrix[2][0] - matrix[0][0] * matrix[2][1]) * inverse_determinant,
+            (matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0]) * inverse_determinant,
+        ],
+    ])
 }
 fn relative_vector_update(new: &[Vector3], old: &[Vector3]) -> f64 {
     let d = new

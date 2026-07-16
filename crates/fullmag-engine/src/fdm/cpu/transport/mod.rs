@@ -12,7 +12,7 @@ pub use charge::{
 pub use coupled_charge_spin::{
     CoupledChargeSpinBoundaryConditions, CoupledChargeSpinMaterialFields, CoupledChargeSpinProblem,
     CoupledChargeSpinSolution, CoupledChargeSpinSolverConfig, CoupledChargeSpinTelemetry,
-    CoupledChargeSpinWarmStart,
+    CoupledChargeSpinWarmStart, CoupledTransportOuterErrorBudget,
 };
 pub use oersted::biot_savart_midpoint_field;
 pub use reciprocal_constitutive::{ReciprocalConstitutiveMaterial, ReciprocalConstitutiveResponse};
