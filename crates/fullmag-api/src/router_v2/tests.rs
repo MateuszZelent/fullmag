@@ -16849,11 +16849,8 @@ async fn session_import_commit_round_trips_exported_session() {
     let _ = fs::remove_dir_all(&repo_root);
 }
 
-#[tokio::test]
-async fn session_checkpoint_create_captures_live_magnetization() {
-    let (app, state, repo_root) = test_router_with_session_store_state().await;
-    set_running_stage_execution(&state, 0).await;
-    let coupled_checkpoint = serde_json::json!({
+fn complete_coupled_m3_checkpoint() -> serde_json::Value {
+    serde_json::json!({
         "schema": "fullmag.fdm.coupled_m3_checkpoint.v1",
         "problem_ir_abi": "fullmag.problem_ir.v1",
         "scalar_layout": "f64",
@@ -16864,7 +16861,7 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         "integrator_implementation_revision": "imex_ars_232_step_doubling.fullmag.v1",
         "identity": {
             "requested_discretization": "fdm",
-            "requested_device": "cpu",
+            "requested_device": "auto",
             "requested_precision": "double",
             "requested_execution_mode": "strict",
             "resolved_discretization": "fdm",
@@ -16885,14 +16882,60 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         },
         "magnetization": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
         "previous_magnetization": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-        "transient_states": {},
-        "accepted": {},
-        "charge_nonlinear_history": {},
-        "telemetry_cursor": 9,
+        "time_s": 2.5e-9,
+        "previous_dt_s": 1.0e-13,
+        "accepted": {
+            "revision": 1,
+            "evaluated_time_s": 2.5e-9,
+            "refresh_count": 4,
+            "modules": [{
+                "module_id": "spin",
+                "current_source_id": "charge",
+                "potential_volts": [0.0, 0.1],
+                "current_density_apm2": [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                "spin_potential_volts": [[0.01, 0.0, 0.0], [0.02, 0.0, 0.0]],
+                "spin_current_tensor_apm2": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+                "interface_fluxes": [],
+                "transport_torque_per_s": [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+                "oersted_field_apm": [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+                "telemetry": {},
+                "constitutive_version": "transport_constitutive.one_way.fullmag.v1",
+                "charge_operator_version": "fv_charge_face_flux.v1",
+                "spin_operator_version": "fv_spin_upwind_v1",
+                "torque_formula_version": "drift_diffusion_absorbed_flux.v1",
+                "state_revision": 1,
+                "operator_revision": 0
+            }],
+            "combined_transport_torque_per_s": [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            "combined_oersted_field_apm": [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]
+        },
+        "transient_states": {
+            "spin": {
+                "spin_potential_v": [[0.01, 0.0, 0.0], [0.02, 0.0, 0.0]],
+                "previous_spin_potential_v": [[0.005, 0.0, 0.0], [0.01, 0.0, 0.0]],
+                "time_s": 2.5e-9,
+                "previous_dt_s": 1.0e-13,
+                "state_revision": 1
+            }
+        },
+        "next_revision": 2,
+        "refresh_count": 4,
+        "accepted_steps": 42,
+        "rejected_steps": 0,
+        "error_controller": {"next_dt_s": 1.0e-13, "last_normalized_error": 0.0},
+        "charge_nonlinear_history": {"spin": []},
+        "telemetry_cursor": 42,
         "thermal_rng_algorithm": "counter_hash_box_muller.fullmag.v1",
         "thermal_seed": 17,
         "thermal_counter": 42
-    });
+    })
+}
+
+#[tokio::test]
+async fn session_checkpoint_create_captures_live_magnetization() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    set_running_stage_execution(&state, 0).await;
+    let coupled_checkpoint = complete_coupled_m3_checkpoint();
     state
         .current_live_state
         .write()
@@ -16981,13 +17024,15 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     let detail = body_json(detail_response).await;
     assert_eq!(detail["checkpoint_id"], "cp-000042");
     assert_eq!(detail["vector_count"], 2);
+    let mut active_after_capture = coupled_checkpoint.clone();
+    active_after_capture["magnetization"][0] = serde_json::json!([0.0, 0.0, 1.0]);
     state
         .current_live_state
         .write()
         .await
         .as_mut()
         .unwrap()
-        .coupled_checkpoint = Some(serde_json::json!({"schema": "mutated-after-capture"}));
+        .coupled_checkpoint = Some(active_after_capture);
 
     let restore_response = app
         .clone()
@@ -17128,6 +17173,191 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
     assert!(body
         .to_string()
         .contains("legacy magnetization-only checkpoint"));
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_without_mutation() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let expected = complete_coupled_m3_checkpoint();
+    let mut invalid = Vec::<(&str, serde_json::Value)>::new();
+
+    for (field, value) in [
+        ("requested_discretization", serde_json::json!("fem")),
+        ("requested_device", serde_json::json!("gpu")),
+        ("requested_precision", serde_json::json!("single")),
+        ("requested_execution_mode", serde_json::json!("extended")),
+        ("resolved_discretization", serde_json::json!("fem")),
+        ("resolved_device", serde_json::json!("gpu")),
+        ("resolved_precision", serde_json::json!("single")),
+        ("resolved_execution_mode", serde_json::json!("extended")),
+        ("charge_cache_identity", serde_json::json!("charge-cache:other")),
+        ("spin_cache_identity", serde_json::json!("spin-cache:other")),
+        ("oersted_cache_identity", serde_json::json!("oersted-cache:other")),
+        ("source_identity", serde_json::json!("source:other")),
+    ] {
+        let mut candidate = expected.clone();
+        candidate["identity"][field] = value;
+        invalid.push((field, candidate));
+    }
+    for field in [
+        "scene_revision",
+        "plan_revision",
+        "mesh_revision",
+        "material_revision",
+        "current_operator_revision",
+        "spin_operator_revision",
+        "oersted_operator_revision",
+    ] {
+        let mut candidate = expected.clone();
+        candidate["identity"][field] = serde_json::json!(99);
+        invalid.push((field, candidate));
+    }
+    for (label, path) in [
+        ("magnetization", vec!["magnetization"]),
+        ("previous_magnetization", vec!["previous_magnetization"]),
+        (
+            "accepted potential",
+            vec!["accepted", "modules", "0", "potential_volts"],
+        ),
+        (
+            "accepted current",
+            vec!["accepted", "modules", "0", "current_density_apm2"],
+        ),
+        (
+            "accepted spin potential",
+            vec!["accepted", "modules", "0", "spin_potential_volts"],
+        ),
+        (
+            "accepted spin tensor",
+            vec!["accepted", "modules", "0", "spin_current_tensor_apm2"],
+        ),
+        (
+            "accepted torque",
+            vec!["accepted", "modules", "0", "transport_torque_per_s"],
+        ),
+        (
+            "accepted Oersted",
+            vec!["accepted", "modules", "0", "oersted_field_apm"],
+        ),
+        (
+            "combined torque",
+            vec!["accepted", "combined_transport_torque_per_s"],
+        ),
+        (
+            "combined Oersted",
+            vec!["accepted", "combined_oersted_field_apm"],
+        ),
+        (
+            "transient spin potential",
+            vec!["transient_states", "spin", "spin_potential_v"],
+        ),
+        (
+            "transient previous spin potential",
+            vec!["transient_states", "spin", "previous_spin_potential_v"],
+        ),
+    ] {
+        let mut candidate = expected.clone();
+        let mut target = &mut candidate;
+        for segment in &path[..path.len() - 1] {
+            target = if let Ok(index) = segment.parse::<usize>() {
+                &mut target[index]
+            } else {
+                &mut target[*segment]
+            };
+        }
+        target[path[path.len() - 1]] = serde_json::json!([]);
+        invalid.push((label, candidate));
+    }
+    for (label, mutate) in [
+        ("transient module keys", "transient_states"),
+        ("history module keys", "charge_nonlinear_history"),
+    ] {
+        let mut candidate = expected.clone();
+        candidate[mutate] = serde_json::json!({"other": []});
+        invalid.push((label, candidate));
+    }
+    let mut missing_accepted_module = expected.clone();
+    missing_accepted_module["accepted"]["modules"] = serde_json::json!([]);
+    invalid.push(("accepted module keys", missing_accepted_module));
+    let mut inconsistent_time = expected.clone();
+    inconsistent_time["time_s"] = serde_json::json!(3.0e-9);
+    invalid.push(("checkpoint time", inconsistent_time));
+    let mut inconsistent_magnetization = expected.clone();
+    inconsistent_magnetization["magnetization"][0] = serde_json::json!([0.0, 0.0, 1.0]);
+    invalid.push(("common-state magnetization", inconsistent_magnetization));
+
+    for (label, candidate) in invalid {
+        let (before_m, before_step, before_time, before_version) = {
+            let mut guard = state.current_live_state.write().await;
+            let snapshot = guard.as_mut().unwrap();
+            snapshot.coupled_checkpoint = Some(candidate);
+            let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
+            (
+                latest.magnetization.clone(),
+                latest.step,
+                latest.time,
+                snapshot.state_version,
+            )
+        };
+        let create = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v2/sessions/current/persistence/checkpoints")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::json!({"profile": "resume"}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        if create.status() == StatusCode::BAD_REQUEST {
+            let mut guard = state.current_live_state.write().await;
+            let snapshot = guard.as_mut().unwrap();
+            let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
+            assert_eq!(latest.magnetization, before_m, "capture {label}");
+            assert_eq!(latest.step, before_step, "capture {label}");
+            assert_eq!(latest.time, before_time, "capture {label}");
+            assert_eq!(snapshot.state_version, before_version, "capture {label}");
+            snapshot.coupled_checkpoint = Some(expected.clone());
+            continue;
+        }
+        assert_eq!(create.status(), StatusCode::OK, "capture {label}");
+        let checkpoint_id = body_json(create).await["checkpoint"]["checkpoint_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        {
+            let mut guard = state.current_live_state.write().await;
+            let snapshot = guard.as_mut().unwrap();
+            snapshot.coupled_checkpoint = Some(expected.clone());
+        }
+        let restore = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v2/sessions/current/persistence/checkpoints/{checkpoint_id}/restore"
+                    ))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::json!({}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(restore.status(), StatusCode::BAD_REQUEST, "restore {label}");
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().unwrap();
+        let latest = &snapshot.live_state.as_ref().unwrap().latest_step;
+        assert_eq!(snapshot.coupled_checkpoint.as_ref(), Some(&expected), "{label}");
+        assert_eq!(latest.magnetization, before_m, "{label}");
+        assert_eq!(latest.step, before_step, "{label}");
+        assert_eq!(latest.time, before_time, "{label}");
+        assert_eq!(snapshot.state_version, before_version, "{label}");
+    }
     let _ = fs::remove_dir_all(&repo_root);
 }
 

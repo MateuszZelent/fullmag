@@ -163,6 +163,7 @@ verify-fdm-transient-spin-m3-reference:
     cargo test -p fullmag-runner --lib public_reference_resume_matches_uninterrupted_runner_artifact --no-fail-fast
     cargo test -p fullmag-api session_checkpoint_create_captures_live_magnetization --no-fail-fast
     cargo test -p fullmag-api legacy_checkpoint_fails_closed_for_active_coupled_m3_session --no-fail-fast
+    cargo test -p fullmag-api coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_without_mutation --no-fail-fast
     cargo test -p fullmag-plan --lib resolves_transient_fdm_cpu_double_with_physical_capacitance_and_versions --no-fail-fast
     cargo test -p fullmag-plan --lib transient_reference_execution_rejects_non_strict_mode --no-fail-fast
     cargo test -p fullmag-runner --lib coupled_checkpoint_rejects_each_public_identity_mismatch --no-fail-fast

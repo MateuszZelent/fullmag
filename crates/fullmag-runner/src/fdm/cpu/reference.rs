@@ -1163,7 +1163,28 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 }
             }
 
-            let dt_step = dt.min(until_seconds - state.time_seconds);
+            let remaining = until_seconds - state.time_seconds;
+            let transient_coupling = spin_transport
+                .as_ref()
+                .is_some_and(FdmSpinTransportWorkflow::has_transient);
+            let canonical_fixed_target = transient_coupling
+                .then_some(())
+                .and(plan.fixed_timestep)
+                .and_then(|fixed_dt| {
+                    spin_transport.as_ref().map(|workflow| {
+                        (workflow.accepted_steps().saturating_add(1) as f64) * fixed_dt
+                    })
+                });
+            let endpoint_roundoff = 32.0
+                * f64::EPSILON
+                * until_seconds
+                    .abs()
+                    .max(dt.abs())
+                    .max(f64::MIN_POSITIVE);
+            let dt_step = canonical_fixed_target
+                .filter(|target| *target <= until_seconds + endpoint_roundoff)
+                .and(plan.fixed_timestep)
+                .unwrap_or_else(|| dt.min(remaining));
             if crate::antenna_fields::has_time_varying_antenna_zeeman_masks(
                 &plan.antenna_zeeman_masks,
             ) {
@@ -1172,7 +1193,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             }
             let wall_start = Instant::now();
             let previous_magnetization = state.magnetization().to_vec();
-            let report = if let Some(workflow) = spin_transport.as_mut() {
+            let mut report = if let Some(workflow) = spin_transport.as_mut() {
                 let transient = workflow.has_transient();
                 if transient {
                     if let Some(adaptive) = plan.adaptive_timestep.as_ref() {
@@ -1328,6 +1349,17 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     message: format!("Step {}: {}", step_count, e),
                 })?
             };
+            if let (Some(target), Some(workflow)) =
+                (canonical_fixed_target, spin_transport.as_mut())
+            {
+                let canonical_dt = plan.fixed_timestep.ok_or_else(|| RunError {
+                    message: "canonical coupled fixed-step target requires fixed_timestep".into(),
+                })?;
+                state.time_seconds = target;
+                workflow.canonicalize_fixed_step_time(target, canonical_dt)?;
+                report.time_seconds = target;
+                report.dt_used = canonical_dt;
+            }
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             step_count += 1;
             last_solver_dt = report.dt_used;

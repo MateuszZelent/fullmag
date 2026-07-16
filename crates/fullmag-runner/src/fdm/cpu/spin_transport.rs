@@ -533,6 +533,35 @@ impl FdmSpinTransportWorkflow {
         };
     }
 
+    pub(crate) fn canonicalize_fixed_step_time(
+        &mut self,
+        time_s: f64,
+        previous_dt_s: f64,
+    ) -> Result<(), RunError> {
+        if !time_s.is_finite()
+            || time_s < 0.0
+            || !previous_dt_s.is_finite()
+            || previous_dt_s <= 0.0
+            || self.attempt_checkpoint.is_some()
+            || self.transient_attempt_origin.is_some()
+            || !self.transient_candidates.is_empty()
+        {
+            return Err(run_error(
+                "cannot canonicalize an invalid or uncommitted coupled fixed-step state",
+            ));
+        }
+        let accepted = self
+            .accepted
+            .as_mut()
+            .ok_or_else(|| run_error("cannot canonicalize missing accepted transport state"))?;
+        accepted.evaluated_time_s = time_s;
+        for state in self.transient_states.values_mut() {
+            state.time_s = time_s;
+            state.previous_dt_s = Some(previous_dt_s);
+        }
+        Ok(())
+    }
+
     pub(crate) fn coupled_checkpoint(
         &self,
         magnetization: &[[f64; 3]],

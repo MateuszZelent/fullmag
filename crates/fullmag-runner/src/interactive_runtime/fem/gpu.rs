@@ -151,7 +151,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh: (current_local_stats.step == 0).then_some(self.mesh.clone()),
@@ -229,7 +229,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),
@@ -376,7 +376,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh: (current_local_stats.step == 0).then_some(self.mesh.clone()),
@@ -435,7 +435,7 @@ impl GpuInteractiveFemPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid: [0, 0, 0],
                 fem_mesh: (local_stats.step <= 1).then_some(self.mesh.clone()),

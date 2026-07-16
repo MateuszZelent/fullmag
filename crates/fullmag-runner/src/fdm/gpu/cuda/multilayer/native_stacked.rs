@@ -334,7 +334,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
             )?;
             if let Some((_, on_step)) = live.as_mut() {
                 let action = on_step(StepUpdate {
-            coupled_checkpoint: None,
+                    coupled_checkpoint: None,
                     stats: stats.clone(),
                     grid: native.global_grid,
                     fem_mesh: None,
@@ -356,7 +356,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
             }
         } else if let Some((_, on_step)) = live.as_mut() {
             let action = on_step(StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats: stats.clone(),
                 grid: native.global_grid,
                 fem_mesh: None,

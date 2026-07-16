@@ -215,13 +215,9 @@ fn main() -> Result<()> {
                 &execution_plan.output_plan.outputs,
             )
             .map_err(|error| anyhow!(error.message))?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "evidence": evidence,
-                    "resumed_from": checkpoint.display().to_string(),
-                }))?
-            );
+            let evidence = serde_json::to_string_pretty(&evidence)?;
+            let resumed_from = serde_json::to_string(&checkpoint.display().to_string())?;
+            println!("{{\n  \"evidence\": {evidence},\n  \"resumed_from\": {resumed_from}\n}}");
         }
         Command::ResolveRuntimeInvocation { shell, raw_args } => {
             let resolution = resolve_runtime_invocation(raw_args)?;

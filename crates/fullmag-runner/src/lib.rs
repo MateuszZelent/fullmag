@@ -2609,12 +2609,22 @@ pub fn resume_reference_fdm_from_coupled_checkpoint(
 
 /// Resume the CPU-double coupled M3 reference runtime and return the public
 /// qualification evidence emitted by the accepted backend execution.
+#[derive(serde::Serialize)]
+pub struct CoupledM3ResumeEvidence {
+    status: RunStatus,
+    total_steps: usize,
+    final_time: Option<f64>,
+    final_magnetization: Vec<[f64; 3]>,
+    accepted_transport: Box<serde_json::value::RawValue>,
+    coupled_checkpoint: Box<serde_json::value::RawValue>,
+}
+
 pub fn resume_reference_fdm_from_coupled_checkpoint_evidence(
     plan: &FdmPlanIR,
     checkpoint: serde_json::Value,
     until_seconds: f64,
     outputs: &[OutputIR],
-) -> Result<serde_json::Value, RunError> {
+) -> Result<CoupledM3ResumeEvidence, RunError> {
     let executed = cpu_reference::execute_reference_fdm_with_coupled_checkpoint(
         plan,
         until_seconds,
@@ -2623,7 +2633,7 @@ pub fn resume_reference_fdm_from_coupled_checkpoint_evidence(
         None,
         Some(checkpoint),
     )?;
-    let artifact = |path: &str| -> Result<serde_json::Value, RunError> {
+    let artifact = |path: &str| -> Result<Box<serde_json::value::RawValue>, RunError> {
         let bytes = &executed
             .auxiliary_artifacts
             .iter()
@@ -2632,18 +2642,21 @@ pub fn resume_reference_fdm_from_coupled_checkpoint_evidence(
                 message: format!("resumed coupled M3 execution did not emit {path}"),
             })?
             .bytes;
-        serde_json::from_slice(bytes).map_err(|error| RunError {
-            message: format!("parsing resumed coupled M3 artifact {path}: {error}"),
+        let raw = String::from_utf8(bytes.clone()).map_err(|error| RunError {
+            message: format!("reading resumed coupled M3 artifact {path}: {error}"),
+        })?;
+        serde_json::value::RawValue::from_string(raw).map_err(|error| RunError {
+            message: format!("validating resumed coupled M3 artifact {path}: {error}"),
         })
     };
-    Ok(serde_json::json!({
-        "status": executed.result.status,
-        "total_steps": executed.result.steps.len(),
-        "final_time": executed.result.steps.last().map(|step| step.time),
-        "final_magnetization": executed.result.final_magnetization,
-        "accepted_transport": artifact("transport/spin_transport_accepted.json")?,
-        "coupled_checkpoint": artifact("transport/coupled_checkpoint.json")?,
-    }))
+    Ok(CoupledM3ResumeEvidence {
+        status: executed.result.status,
+        total_steps: executed.result.steps.len(),
+        final_time: executed.result.steps.last().map(|step| step.time),
+        final_magnetization: executed.result.final_magnetization,
+        accepted_transport: artifact("transport/spin_transport_accepted.json")?,
+        coupled_checkpoint: artifact("transport/coupled_checkpoint.json")?,
+    })
 }
 
 pub fn run_reference_multilayer_fdm(

@@ -657,7 +657,7 @@ fn execute_reference_fem_impl(
                     None
                 };
                 let action = (live.on_step)(StepUpdate {
-            coupled_checkpoint: None,
+                    coupled_checkpoint: None,
                     stats: current_stats.clone(),
                     grid: live.grid,
                     fem_mesh: (current_stats.step == 0)
@@ -804,7 +804,7 @@ fn execute_reference_fem_impl(
                     apply_average_m_to_step_stats(&mut update_stats, state.magnetization());
                 }
                 let action = (live.on_step)(StepUpdate {
-            coupled_checkpoint: None,
+                    coupled_checkpoint: None,
                     stats: update_stats,
                     grid: live.grid,
                     fem_mesh: if step_count <= 1 {
@@ -880,7 +880,7 @@ fn execute_reference_fem_impl(
                 apply_average_m_to_step_stats(&mut update_stats, state.magnetization());
             }
             let action = (live.on_step)(StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats: update_stats,
                 grid: live.grid,
                 fem_mesh: if step_count <= 1 {

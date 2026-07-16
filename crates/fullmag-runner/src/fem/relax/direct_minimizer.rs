@@ -116,7 +116,7 @@ pub(crate) fn execute_direct_minimizer(
                         .saturating_add(live_preview_wall_time_ns)
                         .saturating_add(field_copy_wall_time_ns);
                     let action = (live.on_step)(StepUpdate {
-            coupled_checkpoint: None,
+                        coupled_checkpoint: None,
                         stats: live_stats,
                         grid: live.grid,
                         fem_mesh: Some(FemMeshPayload::from(plan)),
@@ -237,7 +237,7 @@ pub(crate) fn execute_direct_minimizer(
                 .saturating_add(live_preview_wall_time_ns)
                 .saturating_add(live_stats.field_copy_wall_time_ns);
             let action = (live.on_step)(StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats: live_stats,
                 grid: live.grid,
                 fem_mesh: Some(FemMeshPayload::from(plan)),

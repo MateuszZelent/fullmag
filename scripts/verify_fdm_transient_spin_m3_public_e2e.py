@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import subprocess
 import tempfile
 from pathlib import Path
@@ -109,21 +108,24 @@ def load(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def assert_close(actual: object, expected: object, path: str = "root") -> None:
-    if isinstance(actual, bool) or isinstance(expected, bool):
-        assert actual == expected, f"{path}: {actual!r} != {expected!r}"
-    elif isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
-        assert math.isclose(float(actual), float(expected), rel_tol=1.0e-12, abs_tol=1.0e-18), (
-            f"{path}: {actual!r} != {expected!r}"
-        )
-    elif isinstance(actual, list) and isinstance(expected, list):
+def canonical_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+
+
+def assert_exact(actual: object, expected: object, path: str = "root") -> None:
+    assert type(actual) is type(expected), (
+        f"{path}: type {type(actual).__name__} != {type(expected).__name__}"
+    )
+    if isinstance(actual, list):
         assert len(actual) == len(expected), f"{path}: list length mismatch"
         for index, (actual_item, expected_item) in enumerate(zip(actual, expected)):
-            assert_close(actual_item, expected_item, f"{path}[{index}]")
-    elif isinstance(actual, dict) and isinstance(expected, dict):
+            assert_exact(actual_item, expected_item, f"{path}[{index}]")
+    elif isinstance(actual, dict):
         assert actual.keys() == expected.keys(), f"{path}: object keys mismatch"
         for key in actual:
-            assert_close(actual[key], expected[key], f"{path}.{key}")
+            assert_exact(actual[key], expected[key], f"{path}.{key}")
     else:
         assert actual == expected, f"{path}: {actual!r} != {expected!r}"
 
@@ -137,6 +139,7 @@ def main() -> None:
         root = Path(raw)
         problem_path = root / "problem.json"
         split_dir = root / "split"
+        repeated_split_dir = root / "split-repeated"
         uninterrupted_dir = root / "uninterrupted"
         problem_path.write_text(
             json.dumps(canonical_problem_ir(), indent=2), encoding="utf-8"
@@ -163,7 +166,23 @@ def main() -> None:
                 str(uninterrupted_dir),
             ]
         )
+        run(
+            [
+                binary,
+                "run-json",
+                str(problem_path),
+                "--until",
+                "2e-13",
+                "--output-dir",
+                str(repeated_split_dir),
+            ]
+        )
         split_checkpoint_path = split_dir / "transport/coupled_checkpoint.json"
+        assert_exact(
+            load(split_checkpoint_path),
+            load(repeated_split_dir / "transport/coupled_checkpoint.json"),
+            "repeated_split_checkpoint",
+        )
         resumed = run(
             [
                 binary,
@@ -182,15 +201,26 @@ def main() -> None:
             uninterrupted_dir / "transport/spin_transport_accepted.json"
         )
         assert resumed["status"] == "completed"
-        assert_close(
+        assert_exact(
             resumed["final_magnetization"],
             uninterrupted_checkpoint["magnetization"],
             "final_magnetization",
         )
-        assert_close(
+        assert_exact(
             resumed["accepted_transport"],
             uninterrupted_accepted,
             "accepted_transport",
+        )
+        assert_exact(
+            resumed["coupled_checkpoint"],
+            uninterrupted_checkpoint,
+            "coupled_checkpoint",
+        )
+        assert canonical_json_bytes(resumed["accepted_transport"]) == canonical_json_bytes(
+            uninterrupted_accepted
+        )
+        assert canonical_json_bytes(resumed["coupled_checkpoint"]) == canonical_json_bytes(
+            uninterrupted_checkpoint
         )
         resumed_rng = resumed["coupled_checkpoint"]
         assert (

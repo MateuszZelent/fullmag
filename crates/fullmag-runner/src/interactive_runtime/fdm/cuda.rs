@@ -200,7 +200,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid,
                 fem_mesh: None,
@@ -286,7 +286,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid,
                 fem_mesh: None,
@@ -485,7 +485,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 None
             };
             let action = on_step(StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats: current_local_stats.clone(),
                 grid,
                 fem_mesh: None,
@@ -572,7 +572,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 || local_stats.step % field_every_n.max(1) == 0
                 || (preview_due && display_is_global_scalar(&display_state));
             let action = on_step(StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats: local_stats.clone(),
                 grid,
                 fem_mesh: None,

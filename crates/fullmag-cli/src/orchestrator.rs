@@ -7037,7 +7037,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             for (index, stats) in stage_result.steps.iter().enumerate() {
                 let is_final_step = index + 1 == stage_result.steps.len();
                 let update = fullmag_runner::StepUpdate {
-            coupled_checkpoint: None,
+                    coupled_checkpoint: None,
                     stats: offset_step_stats(std::slice::from_ref(stats), step_offset, time_offset)
                         .into_iter()
                         .next()
@@ -8572,7 +8572,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 let mut live_cadence = LiveProgressCadence::default();
                 for stats in &stage_result.steps {
                     let update = fullmag_runner::StepUpdate {
-            coupled_checkpoint: None,
+                        coupled_checkpoint: None,
                         stats: offset_step_stats(
                             std::slice::from_ref(stats),
                             step_offset,
