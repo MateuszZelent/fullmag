@@ -736,6 +736,183 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
     state
 }
 
+#[cfg(feature = "fem-gpu")]
+fn public_m1_fem_run_fixture() -> (
+    fullmag_ir::ProblemIR,
+    fullmag_ir::ExecutionPlanIR,
+    fullmag_runner::FemMeshPayload,
+) {
+    use fullmag_ir::*;
+
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.backend_policy.requested_backend = BackendTarget::Fem;
+    problem.geometry_assets = Some(GeometryAssetsIR {
+        fdm_grid_assets: vec![],
+        fem_mesh_assets: vec![],
+        fem_domain_mesh_asset: Some(FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(MeshIR {
+                mesh_name: "transport_tet".into(),
+                nodes: vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                elements: vec![[0, 1, 2, 3]],
+                element_markers: vec![1],
+                boundary_faces: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
+                boundary_markers: vec![1, 1, 1, 1],
+                periodic_boundary_pairs: vec![],
+                periodic_node_pairs: vec![],
+                per_domain_quality: HashMap::new(),
+            }),
+            region_markers: vec![FemDomainRegionMarkerIR {
+                geometry_name: "strip".into(),
+                marker: 1,
+            }],
+            object_region_markers: vec![],
+            build_report: None,
+        }),
+    });
+    let mut plan = fullmag_plan::plan(&problem).expect("public FEM M1 fixture should plan");
+    let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
+        panic!("expected FEM plan")
+    };
+
+    let region = RegionRefIR {
+        object_id: "strip".into(),
+        region_id: None,
+    };
+    let charge_solver = ChargeSolverPolicyIR {
+        engine: "cg".into(),
+        linear: LinearTransportSolverPolicyIR {
+            relative_tolerance: 1.0e-10,
+            absolute_tolerance: 0.0,
+            max_iterations: 500,
+        },
+        physical_residual_version: "charge_balance_integrated_l2.v1".into(),
+        operator_version: "fem_charge_conforming_h1_p1.transparent.v1".into(),
+    };
+    let spin_solver = SpinSolverPolicyIR {
+        engine: "gmres".into(),
+        linear: charge_solver.linear.clone(),
+        physical_residual_version: "transport_balance_integrated_l2.v1".into(),
+        operator_version: "fem_charge_spin_conforming_h1_p1.transparent.v1".into(),
+        default_external_boundary: "spin_insulating".into(),
+        reciprocal_nonlinear: None,
+    };
+    let charge_definition = ChargeTransportDefinitionIR {
+        domain: vec![region.clone()],
+        materials: vec![ChargeTransportMaterialAssignmentIR {
+            region: region.clone(),
+            material: ChargeTransportMaterialIR {
+                sigma_spm: 4.0,
+                sigma_parallel_spm: None,
+                sigma_perpendicular_spm: None,
+                sigma_ahe_spm: None,
+            },
+        }],
+        boundaries: vec![],
+        gauge: ChargePotentialGaugeIR::DirichletReference,
+        solver: charge_solver.clone(),
+    };
+    let resolved = ResolvedSpinTransportPlanIR {
+        module_id: "spin".into(),
+        current_source_id: "charge".into(),
+        resolved_coupling: TransportCouplingIR::OneWay,
+        requested_execution: RequestedTransportExecutionIR {
+            discretization: BackendTarget::Auto,
+            device: ExecutionDevice::Auto,
+            precision: ExecutionPrecision::Double,
+            execution_mode: ExecutionMode::Strict,
+        },
+        resolved_discretization: BackendTarget::Fem,
+        resolved_device: ExecutionDevice::Cpu,
+        resolved_precision: ExecutionPrecision::Double,
+        constitutive_version: "transport_constitutive.one_way.fullmag.v1".into(),
+        operator_version: "fem_charge_spin_conforming_h1_p1.transparent.v1".into(),
+        physical_residual_version: "transport_balance_integrated_l2.v1".into(),
+        capabilities: vec![
+            "transport.charge.ohmic".into(),
+            "transport.spin.steady_drift_diffusion".into(),
+            "transport.spin.direct_she".into(),
+            "transport.coupling.one_way".into(),
+        ],
+        inserted_default_boundaries: vec!["all_unassigned_external_surfaces".into()],
+        fdm_cpu_double: None,
+        fdm_cpu_double_reciprocal: None,
+        fem_cpu_double: Some(ResolvedFemSpinTransportIR {
+            descriptor_schema: "fullmag.fem.spin_transport_descriptor.v1".into(),
+            charge_definition: charge_definition.clone(),
+            charge_domain: ResolvedFemTransportDomainIR {
+                regions: vec![region.clone()],
+                element_mask: vec![true],
+            },
+            spin_domain: ResolvedFemTransportDomainIR {
+                regions: vec![region],
+                element_mask: vec![true],
+            },
+            charge_insulating_boundaries: vec![],
+            spin_insulating_boundaries: vec![ResolvedFemBoundaryMarkerSetIR {
+                id: "default:spin_insulating".into(),
+                boundary_attributes: vec![1],
+            }],
+            interfaces: vec![],
+            torque_target: None,
+            charge_conductivity_spm_per_element: vec![4.0],
+            charge_gauge: ChargePotentialGaugeIR::DirichletReference,
+            charge_solver,
+            charge_dirichlet: vec![(1, 1.0)],
+            spin_dirichlet: vec![],
+            sigma_s_spm: 5.0,
+            polarization_p: 0.2,
+            theta_sh: 0.1,
+            lambda_sf_m: 0.5,
+            lambda_j_m: Some(0.4),
+            lambda_phi_m: Some(0.6),
+            saturation_magnetization_apm: 8.0e5,
+            gamma_e_rad_per_s_t: 1.760_859_630_23e11,
+            spin_solver,
+            resolved_charge_engine: "cg".into(),
+            resolved_spin_engine: "gmres".into(),
+            interface_law: "transparent".into(),
+            interface_realization: "transparent_conforming_h1".into(),
+            stage_coupling: "none".into(),
+            capability_status: "reference_executable".into(),
+            implementation_state: "executable".into(),
+            validation_state: "algebra_validated".into(),
+            validation_scope: "fem_cpu_double_conforming_h1_p1_transparent_m1".into(),
+        }),
+    };
+    fem.current_modules = vec![CurrentModuleIR::CurrentTransport {
+        name: "charge".into(),
+        model: CurrentTransportModelIR::OhmicPoisson,
+        current_density: None,
+        solve_region: None,
+        conductivity_s_per_m: None,
+        coupling: TransportCouplingIR::OneWay,
+        definition: Some(charge_definition),
+    }];
+    fem.spin_transport_plans = vec![resolved];
+    plan.output_plan.outputs = vec![
+        OutputIR::Field {
+            name: "V_electric".into(),
+            every_seconds: 1.0,
+        },
+        OutputIR::Field {
+            name: "J_charge".into(),
+            every_seconds: 1.0,
+        },
+        OutputIR::Field {
+            name: "spin_current_tensor".into(),
+            every_seconds: 1.0,
+        },
+    ];
+    let mesh = FemMeshPayload::from(&*fem);
+    (problem, plan, mesh)
+}
+
 async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.stage_execution = Some(StageExecutionState {
@@ -22740,41 +22917,58 @@ async fn v2_material_scalar_quantity_is_available_as_field_vector() {
 }
 
 #[tokio::test]
-async fn v2_field_data_plane_reads_transport_scalar_vector_and_tensor_snapshots() {
-    let state = test_app_state_with_live_session().await;
-    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
-            "V_electric": {
-                "component_count": 1,
-                "values": [1.0, 0.0]
-            },
-            "J_charge": {
-                "component_count": 3,
-                "values": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-            },
-            "spin_current_tensor": {
-                "component_count": 9,
-                "component_order": "row_major_Q_ia",
-                "values": [
-                    1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0,
-                    10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0
-                ]
-            }
-        }))
-        .expect("transport latest-fields fixture");
-    }
-    let app = build_v2_router().with_state(state);
+async fn v2_field_data_plane_reads_canonical_transport_field_artifacts() {
+    assert_v2_field_data_plane_reads_canonical_transport_field_artifacts().await;
+}
 
-    for (quantity, components, expected) in [
-        ("V_electric", 1usize, vec![1.0, 0.0]),
-        ("J_charge", 3, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+#[tokio::test]
+async fn v2_field_data_plane_reads_transport_scalar_vector_and_tensor_snapshots() {
+    assert_v2_field_data_plane_reads_canonical_transport_field_artifacts().await;
+}
+
+async fn assert_v2_field_data_plane_reads_canonical_transport_field_artifacts() {
+    let state = test_app_state_with_live_session().await;
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "fullmag-api-transport-fields-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    let fixtures = [
+        ("V_electric", 1usize, 41u64, vec![1.0, 0.0]),
+        ("J_charge", 3, 42, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
         (
             "spin_current_tensor",
             9,
+            43,
             (1..=18).map(f64::from).collect::<Vec<_>>(),
         ),
-    ] {
+    ];
+    for (quantity, components, revision, values) in &fixtures {
+        let quantity_dir = artifact_dir.join("fields").join(quantity);
+        fs::create_dir_all(&quantity_dir).expect("transport field artifact directory");
+        fs::write(
+            quantity_dir.join("step_000000.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "observable": quantity,
+                "component_count": components,
+                "revision": revision,
+                "values": values,
+            }))
+            .expect("transport field artifact JSON"),
+        )
+        .expect("write transport field artifact");
+    }
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+    }
+    let app = build_v2_router().with_state(state);
+
+    for (quantity, components, revision, expected) in fixtures {
         let expected_components = components.to_string();
+        let expected_revision = revision.to_string();
         let response = app
             .clone()
             .oneshot(
@@ -22796,15 +22990,114 @@ async fn v2_field_data_plane_reads_transport_scalar_vector_and_tensor_snapshots(
             Some(expected_components.as_str()),
             "{quantity}"
         );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-field-revision")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_revision.as_str()),
+            "{quantity}"
+        );
         let bytes = body_bytes(response).await;
         assert_eq!(&bytes[..4], b"FMVP", "{quantity}");
         assert_eq!(bytes.len(), 48 + expected.len() * 8, "{quantity}");
-        let decoded = bytes[48..]
-            .chunks_exact(8)
-            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
-            .collect::<Vec<_>>();
+        let decoded = decode_fmvp_payload_f64(&bytes);
         assert_eq!(decoded, expected, "{quantity}");
     }
+    fs::remove_dir_all(artifact_dir).expect("remove transport field artifacts");
+}
+
+#[cfg(feature = "fem-gpu")]
+#[tokio::test]
+async fn public_fem_m1_run_is_decoded_by_v2_with_artifact_revisions() {
+    let (problem, plan, fem_mesh) = public_m1_fem_run_fixture();
+    let artifact_dir = std::env::temp_dir().join(format!(
+        "fullmag-api-public-m1-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    unsafe {
+        std::env::set_var("FULLMAG_FEM_EXECUTION", "cpu");
+    }
+    let result = fullmag_runner::run_planned_problem(&problem, &plan, 1.0e-13, &artifact_dir)
+        .expect("public FEM M1 run");
+    unsafe {
+        std::env::remove_var("FULLMAG_FEM_EXECUTION");
+    }
+    assert_eq!(result.status, fullmag_runner::RunStatus::Completed);
+
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.artifact_dir = artifact_dir.display().to_string();
+        snapshot.fem_mesh = Some(fem_mesh);
+    }
+    let app = build_v2_router().with_state(state);
+
+    for (quantity, components) in [
+        ("V_electric", 1usize),
+        ("J_charge", 3usize),
+        ("spin_current_tensor", 9usize),
+    ] {
+        let expected_components = components.to_string();
+        let artifact: serde_json::Value = serde_json::from_slice(
+            &fs::read(
+                artifact_dir
+                    .join("fields")
+                    .join(quantity)
+                    .join("step_000000.json"),
+            )
+            .unwrap_or_else(|error| panic!("missing {quantity} artifact: {error}")),
+        )
+        .expect("canonical transport field artifact");
+        let expected = artifact["values"]
+            .as_array()
+            .expect("transport artifact values")
+            .iter()
+            .map(|value| value.as_f64().expect("finite transport artifact value"))
+            .collect::<Vec<_>>();
+        let expected_revision = artifact["revision"]
+            .as_u64()
+            .expect("transport artifact revision")
+            .to_string();
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v2/sessions/current/data/fields/{quantity}/samples/vector?format=bin"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{quantity}");
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-n-comp")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_components.as_str()),
+            "{quantity}"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-field-revision")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_revision.as_str()),
+            "{quantity}"
+        );
+        let bytes = body_bytes(response).await;
+        assert_eq!(&bytes[..4], b"FMVP", "{quantity}");
+        let decoded = decode_fmvp_payload_f64(&bytes);
+        assert_eq!(decoded, expected, "{quantity}");
+    }
+    fs::remove_dir_all(artifact_dir).expect("remove public FEM M1 artifacts");
 }
 
 #[tokio::test]

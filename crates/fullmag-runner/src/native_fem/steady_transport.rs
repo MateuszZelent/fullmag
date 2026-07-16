@@ -213,6 +213,15 @@ fn preflight(request: &NativeFemSteadyTransportRequest) -> Result<(), RunError> 
             message: "PeriodicSpin is unsupported by the FEM conforming-H1 M1 runtime".to_string(),
         });
     }
+    if request.mesh.element_markers.len() != request.mesh.elements.len() {
+        return Err(RunError {
+            message: format!(
+                "FEM steady transport element marker count {} differs from element count {}",
+                request.mesh.element_markers.len(),
+                request.mesh.elements.len()
+            ),
+        });
+    }
     if request.mesh.elements.len() != request.charge_conductivity_spm_per_element.len() {
         return Err(RunError {
             message: "FEM steady transport requires one charge conductivity per tetrahedron"
@@ -632,6 +641,22 @@ mod tests {
                 validation_state: "algebra_validated".into(),
                 validation_scope: "fem_cpu_double_conforming_h1_p1_transparent_m1".into(),
             }),
+        }
+    }
+
+    #[test]
+    fn preflight_rejects_short_and_long_element_marker_vectors_before_ffi() {
+        for markers in [vec![], vec![1, 1]] {
+            let mut malformed = request();
+            malformed.mesh.element_markers = markers;
+
+            let error = preflight(&malformed)
+                .expect_err("element marker count mismatch must fail before FFI");
+            assert!(
+                error.message.contains("element marker count"),
+                "{}",
+                error.message
+            );
         }
     }
 

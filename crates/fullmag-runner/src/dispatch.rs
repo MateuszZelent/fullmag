@@ -363,127 +363,6 @@ fn markers_from_element_selector(
     }
 }
 
-fn assign_runtime_marker_range(
-    markers: &mut [Option<u32>],
-    start: usize,
-    count: usize,
-    marker: u32,
-    source: &str,
-) -> Result<usize, RunError> {
-    let end = start.checked_add(count).ok_or_else(|| RunError {
-        message: format!("invalid FEM mesh_parts range from {source}: element range overflows"),
-    })?;
-    if end > markers.len() {
-        return Err(RunError {
-            message: format!(
-                "invalid FEM mesh_parts range from {source}: element range {}..{} exceeds mesh element count {}",
-                start,
-                end,
-                markers.len()
-            ),
-        });
-    }
-
-    let mut newly_assigned = 0usize;
-    for (offset, slot) in markers[start..end].iter_mut().enumerate() {
-        match *slot {
-            Some(existing) if existing != marker => {
-                return Err(RunError {
-                    message: format!(
-                        "conflicting FEM runtime magnetic marker inference at element {}: {} vs {} from {}",
-                        start + offset,
-                        existing,
-                        marker,
-                        source
-                    ),
-                });
-            }
-            Some(_) => {}
-            None => {
-                *slot = Some(marker);
-                newly_assigned += 1;
-            }
-        }
-    }
-    Ok(newly_assigned)
-}
-
-fn inferred_runtime_markers_without_element_markers(
-    plan: &FemPlanIR,
-) -> Result<Option<Vec<u32>>, RunError> {
-    let element_count = plan.mesh.elements.len();
-    if element_count == 0 {
-        return Ok(Some(Vec::new()));
-    }
-
-    let mut inferred = vec![None; element_count];
-    let mut assigned = 0usize;
-
-    for segment in &plan.object_segments {
-        if segment.element_count == 0 {
-            continue;
-        }
-        let marker = if segment.object_id == "__air__" { 0 } else { 1 };
-        assigned += assign_runtime_marker_range(
-            &mut inferred,
-            segment.element_start as usize,
-            segment.element_count as usize,
-            marker,
-            &format!("object_segment '{}'", segment.object_id),
-        )?;
-    }
-
-    for part in &plan.mesh_parts {
-        let marker = match part.role {
-            fullmag_ir::FemMeshPartRole::MagneticObject => 1,
-            fullmag_ir::FemMeshPartRole::Air => 0,
-            _ => continue,
-        };
-        match &part.element_selector {
-            FemMeshPartSelector::ElementRange { start, count } => {
-                assigned += assign_runtime_marker_range(
-                    &mut inferred,
-                    *start as usize,
-                    *count as usize,
-                    marker,
-                    &format!("mesh_part '{}'", part.id),
-                )?;
-            }
-            FemMeshPartSelector::ElementMarkerSet { .. } => {
-                return Err(RunError {
-                    message: format!(
-                        "cannot infer FEM runtime magnetic markers for mesh_part '{}' from ElementMarkerSet because mesh.element_markers is empty",
-                        part.id
-                    ),
-                });
-            }
-            _ => {}
-        }
-    }
-
-    if assigned == 0 {
-        return Ok(None);
-    }
-
-    if let Some(unassigned) = inferred.iter().position(|marker| marker.is_none()) {
-        if plan.domain_mesh_mode == fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir {
-            return Err(RunError {
-                message: format!(
-                    "cannot infer complete FEM runtime magnetic markers: mesh_parts/object_segments leave element {} unclassified in shared-domain airbox mesh",
-                    unassigned
-                ),
-            });
-        }
-    }
-
-    Ok(Some(
-        inferred
-            .into_iter()
-            .map(|marker| marker.unwrap_or(1))
-            .collect(),
-    ))
-}
-
 fn magnetic_markers_from_mesh_parts(plan: &FemPlanIR) -> BTreeSet<u32> {
     if plan.mesh.element_markers.is_empty() {
         return BTreeSet::new();
@@ -503,8 +382,14 @@ fn magnetic_markers_from_mesh_parts(plan: &FemPlanIR) -> BTreeSet<u32> {
 
 fn normalized_runtime_element_markers(plan: &FemPlanIR) -> Result<Vec<u32>, RunError> {
     let markers = &plan.mesh.element_markers;
-    if markers.is_empty() {
-        return Ok(inferred_runtime_markers_without_element_markers(plan)?.unwrap_or_default());
+    if markers.len() != plan.mesh.elements.len() {
+        return Err(RunError {
+            message: format!(
+                "invalid FEM plan: element marker count {} differs from element count {}",
+                markers.len(),
+                plan.mesh.elements.len()
+            ),
+        });
     }
 
     let distinct_nonzero = markers
@@ -9975,6 +9860,22 @@ mod tests {
     }
 
     #[test]
+    fn normalized_runtime_markers_reject_short_and_long_marker_vectors() {
+        for markers in [vec![], vec![1, 1]] {
+            let mut plan = tiny_fem_plan();
+            plan.mesh.element_markers = markers;
+
+            let error = normalized_runtime_element_markers(&plan)
+                .expect_err("marker count mismatch must fail before runtime normalization");
+            assert!(
+                error.message.contains("element marker count"),
+                "{}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
     fn normalized_runtime_markers_fallback_to_object_segments_when_region_materials_missing() {
         let mut plan = tiny_fem_plan();
         plan.mesh.elements = vec![[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]];
@@ -10115,7 +10016,7 @@ mod tests {
     }
 
     #[test]
-    fn normalized_fem_plan_rebuilds_airbox_markers_from_mesh_parts() {
+    fn normalized_fem_plan_rejects_missing_airbox_markers() {
         let mut plan = tiny_fem_plan();
         plan.domain_mesh_mode = fullmag_ir::FemDomainMeshModeIR::SharedDomainMeshWithAir;
         plan.mesh.nodes.push([2.0, 0.0, 0.0]);
@@ -10172,10 +10073,13 @@ mod tests {
             [0.0, 0.0, 0.0],
         ];
 
-        let normalized =
-            normalized_fem_plan_for_runtime(&plan).expect("air-only zero node should be inactive");
-
-        assert_eq!(normalized.mesh.element_markers, vec![1, 0]);
+        let error = normalized_fem_plan_for_runtime(&plan)
+            .expect_err("shared-domain meshes must carry one marker per element");
+        assert!(
+            error.message.contains("element marker count"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
