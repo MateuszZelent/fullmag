@@ -482,6 +482,15 @@ fn normalized_fem_plan_for_runtime(plan: &FemPlanIR) -> Result<FemPlanIR, RunErr
 
 fn validate_runtime_initial_magnetization(plan: &FemPlanIR) -> Result<(), RunError> {
     let node_count = plan.mesh.nodes.len();
+    if plan.mesh.element_markers.len() != plan.mesh.elements.len() {
+        return Err(RunError {
+            message: format!(
+                "invalid FEM plan: element marker count {} does not match element count {}",
+                plan.mesh.element_markers.len(),
+                plan.mesh.elements.len()
+            ),
+        });
+    }
     if plan.initial_magnetization.len() != node_count {
         return Err(RunError {
             message: format!(
@@ -494,12 +503,7 @@ fn validate_runtime_initial_magnetization(plan: &FemPlanIR) -> Result<(), RunErr
 
     let mut active_nodes = vec![plan.mesh.element_markers.is_empty(); node_count];
     for (element_index, element) in plan.mesh.elements.iter().enumerate() {
-        let marker = plan
-            .mesh
-            .element_markers
-            .get(element_index)
-            .copied()
-            .unwrap_or(1);
+        let marker = plan.mesh.element_markers[element_index];
         if marker == 0 {
             continue;
         }
@@ -2147,6 +2151,7 @@ pub(crate) fn execute_fem<'a>(
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
+    reject_unsupported_steady_transport_component_outputs(&normalized_plan, outputs)?;
     #[cfg(feature = "fem-gpu")]
     let transport_artifact_writer = artifact_writer.clone();
     #[cfg(feature = "fem-gpu")]
@@ -2257,6 +2262,10 @@ pub(crate) fn execute_fem<'a>(
             next_revision = next_revision.saturating_add(1);
             snapshot.revision = next_revision;
         }
+        executed
+            .provenance
+            .transport_modules
+            .append(&mut bundle.provenance);
         if let Some(writer) = transport_artifact_writer {
             let mut recorder = ArtifactRecorder::streaming(executed.provenance.clone(), writer);
             for snapshot in bundle.field_snapshots {
@@ -2273,10 +2282,6 @@ pub(crate) fn execute_fem<'a>(
             executed.field_snapshots.extend(bundle.field_snapshots);
         }
         executed.auxiliary_artifacts.extend(bundle.artifacts);
-        executed
-            .provenance
-            .transport_modules
-            .extend(bundle.provenance);
     }
     Ok(executed)
 }
@@ -2290,9 +2295,42 @@ fn steady_transport_output(output: &OutputIR) -> bool {
         _ => return false,
     };
     matches!(
-        quantity.split_once('.').map_or(quantity, |(base, _)| base),
+        quantity,
         "V_electric" | "J_charge" | "spin_potential" | "spin_current_tensor" | "torque_stt"
     )
+}
+
+fn reject_unsupported_steady_transport_component_outputs(
+    plan: &FemPlanIR,
+    outputs: &[OutputIR],
+) -> Result<(), RunError> {
+    if plan.spin_transport_plans.is_empty() {
+        return Ok(());
+    }
+    for output in outputs {
+        let quantity = match output {
+            OutputIR::Field { name, .. } => name.as_str(),
+            OutputIR::Snapshot { field, .. } => field.as_str(),
+            OutputIR::SaveQuantity { quantity_id, .. } => quantity_id.as_str(),
+            _ => continue,
+        };
+        let Some((base, component)) = quantity.split_once('.') else {
+            continue;
+        };
+        if !component.is_empty()
+            && matches!(
+                base,
+                "V_electric" | "J_charge" | "spin_potential" | "spin_current_tensor" | "torque_stt"
+            )
+        {
+            return Err(RunError {
+                message: format!(
+                    "FEM steady spin transport component schedule '{quantity}' is unsupported; request the canonical base quantity '{base}'"
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn execute_fem_eigen(
@@ -6063,6 +6101,30 @@ mod tests {
             name: "m".into(),
             every_seconds: 1.0,
         }));
+        assert!(!steady_transport_output(&OutputIR::Field {
+            name: "J_charge.x".into(),
+            every_seconds: 1.0,
+        }));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn steady_transport_component_schedule_is_rejected_before_execution() {
+        let mut plan = tiny_fem_plan();
+        plan.spin_transport_plans = vec![crate::native_fem::test_resolved_steady_transport_plan()];
+        let outputs = vec![OutputIR::Field {
+            name: "J_charge.x".into(),
+            every_seconds: 1.0,
+        }];
+
+        let error = reject_unsupported_steady_transport_component_outputs(&plan, &outputs)
+            .expect_err("component schedules must fail closed");
+        assert!(error.message.contains("J_charge.x"), "{}", error.message);
+        assert!(
+            error.message.contains("canonical base quantity 'J_charge'"),
+            "{}",
+            error.message
+        );
     }
 
     #[cfg(feature = "fem-gpu")]
@@ -6099,6 +6161,7 @@ mod tests {
         let executed = execute_fem(FemEngine::CpuNative, &plan, 1.0e-13, &outputs, None, None)
             .expect("steady publisher should satisfy transport schedules");
         assert_eq!(executed.field_snapshot_count, 5);
+        assert_eq!(executed.provenance.transport_modules.len(), 1);
         assert_eq!(
             executed
                 .field_snapshots
@@ -9867,6 +9930,22 @@ mod tests {
 
             let error = normalized_runtime_element_markers(&plan)
                 .expect_err("marker count mismatch must fail before runtime normalization");
+            assert!(
+                error.message.contains("element marker count"),
+                "{}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn initial_magnetization_validation_rejects_marker_count_mismatch_without_defaulting() {
+        for markers in [vec![], vec![1, 1]] {
+            let mut plan = tiny_fem_plan();
+            plan.mesh.element_markers = markers;
+
+            let error = validate_runtime_initial_magnetization(&plan)
+                .expect_err("marker count mismatch must not be defaulted during validation");
             assert!(
                 error.message.contains("element marker count"),
                 "{}",

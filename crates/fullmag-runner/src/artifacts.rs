@@ -2852,6 +2852,27 @@ fn write_canonical_field_snapshot_file(
             format!("invalid canonical field snapshot '{}' shape or revision", snapshot.name),
         ));
     }
+    let values = if snapshot.component_count == 3 && snapshot.location == "sample" {
+        serde_json::json!(snapshot
+            .values
+            .chunks_exact(3)
+            .map(|value| [value[0], value[1], value[2]])
+            .collect::<Vec<_>>())
+    } else {
+        serde_json::json!(snapshot.values)
+    };
+    let mut field_provenance = serde_json::json!({
+        "problem_name": context.problem_name,
+        "ir_version": context.ir_version,
+        "source_hash": context.source_hash,
+        "execution_mode": context.execution_mode,
+        "execution_engine": provenance.execution_engine,
+        "precision": provenance.precision,
+    });
+    if !provenance.transport_modules.is_empty() {
+        field_provenance["transport_modules"] =
+            serde_json::json!(provenance.transport_modules);
+    }
     let field_json = serde_json::json!({
         "observable": snapshot.name,
         "unit": field_unit(&snapshot.name),
@@ -2864,15 +2885,8 @@ fn write_canonical_field_snapshot_file(
         "scope": snapshot.scope,
         "revision": snapshot.revision,
         "layout": context.layout,
-        "provenance": {
-            "problem_name": context.problem_name,
-            "ir_version": context.ir_version,
-            "source_hash": context.source_hash,
-            "execution_mode": context.execution_mode,
-            "execution_engine": provenance.execution_engine,
-            "precision": provenance.precision,
-        },
-        "values": snapshot.values,
+        "provenance": field_provenance,
+        "values": values,
     });
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
 }
@@ -2977,6 +2991,28 @@ fn write_layer_field_file(
     layer: &MultilayerFieldLayer,
     values: &[f64],
 ) -> std::io::Result<()> {
+    if values.len() % 3 != 0 {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "multilayer field snapshot values are not divisible by three",
+        ));
+    }
+    let nested_values = values
+        .chunks_exact(3)
+        .map(|value| [value[0], value[1], value[2]])
+        .collect::<Vec<_>>();
+    let mut field_provenance = serde_json::json!({
+        "problem_name": context.problem_name,
+        "ir_version": context.ir_version,
+        "source_hash": context.source_hash,
+        "execution_mode": context.execution_mode,
+        "execution_engine": provenance.execution_engine,
+        "precision": provenance.precision,
+    });
+    if !provenance.transport_modules.is_empty() {
+        field_provenance["transport_modules"] =
+            serde_json::json!(provenance.transport_modules);
+    }
     let field_json = serde_json::json!({
         "observable": observable,
         "unit": field_unit(observable),
@@ -2990,15 +3026,8 @@ fn write_layer_field_file(
         "revision": revision,
         "layer": layer.manifest_entry.clone(),
         "layout": context.layout.clone(),
-        "provenance": {
-            "problem_name": context.problem_name,
-            "ir_version": context.ir_version,
-            "source_hash": context.source_hash,
-            "execution_mode": context.execution_mode,
-            "execution_engine": provenance.execution_engine,
-            "precision": provenance.precision,
-        },
-        "values": values,
+        "provenance": field_provenance,
+        "values": nested_values,
     });
     fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
 }
@@ -3184,6 +3213,52 @@ mod tests {
         assert_eq!(field_unit("spin_potential"), "V");
         assert_eq!(field_unit("spin_current_tensor"), "A/m^2");
         assert_eq!(field_unit("torque_stt"), "1/s");
+    }
+
+    #[test]
+    fn legacy_sample_vector_artifact_keeps_nested_xyz_values() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-legacy-vector-artifact-{}-{unique}",
+            std::process::id()
+        ));
+        let context = FieldArtifactContext {
+            problem_name: "legacy-fdm".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: ExecutionMode::Strict,
+            layout: serde_json::json!({"backend": "fdm", "grid_cells": [2, 1, 1]}),
+        };
+        let snapshot = FieldSnapshot::new(
+            "m",
+            0,
+            0.0,
+            0.0,
+            3,
+            "xyz",
+            "sample",
+            "full",
+            1,
+            vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        )
+        .expect("valid vector snapshot");
+
+        write_field_snapshot_artifact(&root, &context, &ExecutionProvenance::default(), &snapshot)
+            .expect("write vector artifact");
+        let payload: serde_json::Value = serde_json::from_slice(
+            &fs::read(root.join("m/step_000000.json")).expect("read vector artifact"),
+        )
+        .expect("parse vector artifact");
+        assert_eq!(
+            payload["values"],
+            serde_json::json!([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        );
+        assert!(payload["provenance"].get("transport_modules").is_none());
+
+        fs::remove_dir_all(root).expect("remove vector artifact fixture");
     }
 
     fn test_execution_plan(active_mask: Option<Vec<bool>>) -> ExecutionPlanIR {

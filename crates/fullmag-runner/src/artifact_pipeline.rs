@@ -153,7 +153,6 @@ impl ArtifactJob {
             ArtifactJob::FieldSnapshot { snapshot, .. } => snapshot
                 .values
                 .len()
-                .saturating_mul(3)
                 .saturating_mul(std::mem::size_of::<f64>())
                 as u64,
             #[cfg(feature = "cuda")]
@@ -925,6 +924,31 @@ fn update_atomic_max(target: &AtomicU64, value: u64) {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn flat_field_snapshot_estimate_counts_each_stored_scalar_once() {
+        let job = ArtifactJob::FieldSnapshot {
+            snapshot: FieldSnapshot::new(
+                "spin_current_tensor",
+                0,
+                0.0,
+                0.0,
+                9,
+                "row_major_Q_ia",
+                "node",
+                "full",
+                1,
+                vec![0.0; 18],
+            )
+            .expect("valid flat tensor snapshot"),
+            provenance: ExecutionProvenance::default(),
+        };
+
+        assert_eq!(
+            job.estimated_bytes(),
+            18 * std::mem::size_of::<f64>() as u64
+        );
+    }
 
     #[test]
     fn recorder_streams_transport_scalar_vector_and_tensor_fields() {

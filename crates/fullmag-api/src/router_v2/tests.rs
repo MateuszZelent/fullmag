@@ -23062,17 +23062,17 @@ async fn public_fem_m1_run_is_decoded_by_v2_with_artifact_revisions() {
             .as_u64()
             .expect("transport artifact revision")
             .to_string();
+        assert!(
+            artifact["provenance"]["transport_modules"]
+                .as_array()
+                .is_some_and(|modules| !modules.is_empty()),
+            "streamed {quantity} artifact must retain transport provenance"
+        );
 
+        let uri = format!("/v2/sessions/current/data/fields/{quantity}/samples/vector?format=bin");
         let response = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/v2/sessions/current/data/fields/{quantity}/samples/vector?format=bin"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK, "{quantity}");
@@ -23092,10 +23092,50 @@ async fn public_fem_m1_run_is_decoded_by_v2_with_artifact_revisions() {
             Some(expected_revision.as_str()),
             "{quantity}"
         );
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| panic!("missing non-empty ETag for {quantity}"))
+            .to_string();
         let bytes = body_bytes(response).await;
         assert_eq!(&bytes[..4], b"FMVP", "{quantity}");
         let decoded = decode_fmvp_payload_f64(&bytes);
         assert_eq!(decoded, expected, "{quantity}");
+
+        let repeated = app
+            .clone()
+            .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(repeated.status(), StatusCode::OK, "{quantity}");
+        assert_eq!(
+            repeated
+                .headers()
+                .get("etag")
+                .and_then(|value| value.to_str().ok()),
+            Some(etag.as_str()),
+            "{quantity} ETag must be stable"
+        );
+
+        let not_modified = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&uri)
+                    .header("if-none-match", &etag)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            not_modified.status(),
+            StatusCode::NOT_MODIFIED,
+            "{quantity}"
+        );
+        assert!(body_bytes(not_modified).await.is_empty(), "{quantity}");
     }
     fs::remove_dir_all(artifact_dir).expect("remove public FEM M1 artifacts");
 }
