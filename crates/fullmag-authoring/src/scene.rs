@@ -1,9 +1,9 @@
 use crate::{
+    SceneCurrentTransport, SceneOerstedField, SceneSpinTorque, SceneSpinTransport,
     ScriptBuilderCurrentModuleState, ScriptBuilderExcitationAnalysisState,
     ScriptBuilderInitialState, ScriptBuilderMagneticInteractionEntry, ScriptBuilderMaterialState,
     ScriptBuilderMeshState, ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState,
     ScriptBuilderStageState, ScriptBuilderUniverseState, StudyPipelineDocument,
-    SceneCurrentTransport, SceneOerstedField, SceneSpinTorque,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -31,6 +31,8 @@ pub struct SceneDocument {
     pub current_modules: SceneCurrentModulesState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_transports: Vec<SceneCurrentTransport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_transports: Vec<SceneSpinTransport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spin_torques: Vec<SceneSpinTorque>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1147,6 +1149,33 @@ mod spin_authoring_tests {
                 "current_density": [1.25e11, -2.5e10, 3.75e9],
                 "solve_region": "layer"
             }],
+            "spin_transports": [{
+                "schema_version": "spin_transport.v1",
+                "id": "spin:0",
+                "current_source_id": "transport",
+                "mode": "steady",
+                "domain": [{"object_id": "layer"}],
+                "materials": [{
+                    "region": {"object_id": "layer"},
+                    "material": {
+                        "sigma_s_Spm": 5.0e6,
+                        "polarization_p": 0.4,
+                        "theta_sh": 0.12,
+                        "lambda_sf_m": 2.0e-9,
+                        "lambda_j_m": "disabled",
+                        "lambda_phi_m": 1.0e-9
+                    }
+                }],
+                "solver": {
+                    "engine": "gmres",
+                    "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 500},
+                    "physical_residual_version": "spin_balance.fullmag.v1",
+                    "operator_version": "fv_spin_upwind_v1",
+                    "default_external_boundary": "spin_insulating"
+                },
+                "requested_execution": {"discretization": "fdm", "device": "cpu", "precision": "double", "execution_mode": "strict"},
+                "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
+            }],
             "spin_torques": [{
                 "id": "zl:0",
                 "kind": "zhang_li",
@@ -1169,10 +1198,15 @@ mod spin_authoring_tests {
         });
         let scene: SceneDocument = serde_json::from_value(value.clone()).expect("typed scene");
         assert_eq!(scene.current_transports.len(), 1);
+        assert_eq!(scene.spin_transports.len(), 1);
         assert_eq!(scene.spin_torques.len(), 1);
         assert_eq!(scene.oersted_fields.len(), 1);
         let serialized = serde_json::to_value(scene).expect("serialize typed scene");
-        assert_eq!(serialized["current_transports"], value["current_transports"]);
+        assert_eq!(
+            serialized["current_transports"],
+            value["current_transports"]
+        );
+        assert_eq!(serialized["spin_transports"], value["spin_transports"]);
         assert_eq!(serialized["spin_torques"], value["spin_torques"]);
         assert_eq!(serialized["oersted_fields"], value["oersted_fields"]);
     }
@@ -1182,15 +1216,25 @@ mod spin_authoring_tests {
         let value = serde_json::json!({
             "version": "scene.v2",
             "current_transports": [{"kind": "future_transport", "name": "future-current", "nested": {"x": [1, true, null]}}],
+            "spin_transports": [{"id": "future-spin", "schema_version": "vendor.v9", "nested": {"tensor": [[1, 2], [3, 4]]}}],
             "spin_torques": [{"id": "future-torque", "kind": "future_torque", "vendor": {"alpha": 0.125}}],
             "oersted_fields": [{"id": "future-field", "kind": "future_oersted", "coefficients": [1, 2, 3]}]
         });
-        let scene: SceneDocument = serde_json::from_value(value.clone()).expect("opaque records must load");
+        let scene: SceneDocument =
+            serde_json::from_value(value.clone()).expect("opaque records must load");
         let serialized = serde_json::to_value(&scene).expect("opaque records must serialize");
-        assert_eq!(serialized["current_transports"], value["current_transports"]);
+        assert_eq!(
+            serialized["current_transports"],
+            value["current_transports"]
+        );
+        assert_eq!(serialized["spin_transports"], value["spin_transports"]);
         assert_eq!(serialized["spin_torques"], value["spin_torques"]);
         assert_eq!(serialized["oersted_fields"], value["oersted_fields"]);
-        let error = crate::validate_scene_document(&scene).expect_err("opaque records must remain non-executable");
-        assert!(error.to_string().contains("unsupported read-only variant"), "{error}");
+        let error = crate::validate_scene_document(&scene)
+            .expect_err("opaque records must remain non-executable");
+        assert!(
+            error.to_string().contains("unsupported read-only variant"),
+            "{error}"
+        );
     }
 }

@@ -76,6 +76,17 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
                 .delete(handlers::model::delete_current_transport),
         )
         .route(
+            "/v2/sessions/current/model/spin-transports",
+            get(handlers::model::get_spin_transports)
+                .post(handlers::model::create_spin_transport),
+        )
+        .route(
+            "/v2/sessions/current/model/spin-transports/:id",
+            get(handlers::model::get_spin_transport)
+                .patch(handlers::model::patch_spin_transport)
+                .delete(handlers::model::delete_spin_transport),
+        )
+        .route(
             "/v2/sessions/current/model/spin-torques",
             get(handlers::model::get_spin_torques)
                 .post(handlers::model::create_spin_torque),

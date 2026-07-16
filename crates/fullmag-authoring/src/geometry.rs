@@ -1443,6 +1443,7 @@ mod tests {
             universe: None,
             current_modules: SceneCurrentModulesState::default(),
             current_transports: Vec::new(),
+            spin_transports: Vec::new(),
             spin_torques: Vec::new(),
             oersted_fields: Vec::new(),
             study: SceneStudyState::default(),

@@ -136,6 +136,8 @@ pub struct SceneResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_transports: Vec<fullmag_authoring::SceneCurrentTransport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_transports: Vec<fullmag_authoring::SceneSpinTransport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spin_torques: Vec<fullmag_authoring::SceneSpinTorque>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub oersted_fields: Vec<fullmag_authoring::SceneOerstedField>,
@@ -157,6 +159,12 @@ pub struct CurrentTransportListResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SpinTransportListResource {
+    pub scene_revision: u64,
+    pub items: Vec<fullmag_authoring::SceneSpinTransport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SpinTorqueListResource {
     pub scene_revision: u64,
     pub items: Vec<fullmag_authoring::SceneSpinTorque>,
@@ -172,6 +180,12 @@ pub struct OerstedFieldListResource {
 pub struct CurrentTransportMutationRequest {
     pub base_revision: u64,
     pub resource: fullmag_authoring::SceneCurrentTransport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SpinTransportMutationRequest {
+    pub base_revision: u64,
+    pub resource: fullmag_authoring::SceneSpinTransport,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -194,6 +208,12 @@ pub struct SpinAuthoringDeleteRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CurrentTransportCommitResource {
     pub resource: fullmag_authoring::SceneCurrentTransport,
+    pub committed_scene: SceneResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SpinTransportCommitResource {
+    pub resource: fullmag_authoring::SceneSpinTransport,
     pub committed_scene: SceneResource,
 }
 

@@ -146,6 +146,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         mesh_interfaces: Vec::new(),
         current_modules: Vec::new(),
         current_transports: Vec::new(),
+        spin_transports: Vec::new(),
         spin_torques: Vec::new(),
         oersted_terms: Vec::new(),
         excitation_analysis: None,
@@ -3339,7 +3340,10 @@ async fn visualization_state_normalizes_legacy_airbox_overrides_with_canonical_p
     assert_eq!(overrides[0]["scope"], "airbox");
     assert_eq!(overrides[0]["scope_id"], "airbox");
     assert_eq!(overrides[0]["style"]["vector_budget"], 512);
-    assert_eq!(json["targets"]["airbox"]["settings"]["vectors_visible"], true);
+    assert_eq!(
+        json["targets"]["airbox"]["settings"]["vectors_visible"],
+        true
+    );
     assert_eq!(json["targets"]["airbox"]["settings"]["vector_budget"], 512);
 }
 
@@ -3371,7 +3375,10 @@ async fn visualization_state_migrates_a_legacy_synthetic_object_airbox_override(
     let json = body_json(response).await;
     assert_eq!(json["overrides"][0]["scope"], "airbox");
     assert_eq!(json["overrides"][0]["scope_id"], "airbox");
-    assert_eq!(json["targets"]["airbox"]["settings"]["vector_length_scale"], 1.5);
+    assert_eq!(
+        json["targets"]["airbox"]["settings"]["vector_length_scale"],
+        1.5
+    );
 }
 
 #[tokio::test]
@@ -7045,10 +7052,7 @@ async fn mesh_periodic_pairs_marks_unpaired_boundary_nodes_invalid() {
     assert_eq!(json["pairs"][0]["unpaired_destination_node_count"], 1);
     assert_eq!(json["pairs"][0]["unpaired_source_face_count"], 1);
     assert_eq!(json["pairs"][0]["unpaired_destination_face_count"], 1);
-    assert_eq!(
-        json["pairs"][0]["status"],
-        "unpaired_boundary_nodes"
-    );
+    assert_eq!(json["pairs"][0]["status"], "unpaired_boundary_nodes");
     assert_eq!(json["status"], "invalid");
     assert!(!json["status_reasons"].as_array().unwrap().is_empty());
 }
@@ -7118,7 +7122,10 @@ async fn mesh_periodic_pairs_marks_accepted_certificate_stale_after_scene_edit()
         .as_array()
         .unwrap()
         .iter()
-        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+        .any(|reason| reason
+            .as_str()
+            .unwrap_or_default()
+            .contains("source scene revision")));
 }
 
 #[tokio::test]
@@ -7200,7 +7207,10 @@ async fn mesh_periodic_pairs_marks_matching_topology_artifact_stale_after_scene_
         .as_array()
         .unwrap()
         .iter()
-        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+        .any(|reason| reason
+            .as_str()
+            .unwrap_or_default()
+            .contains("source scene revision")));
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }
@@ -7420,7 +7430,10 @@ async fn mesh_periodic_pairs_rejects_artifact_from_stale_scene_revision() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+        .any(|reason| reason
+            .as_str()
+            .unwrap_or_default()
+            .contains("source scene revision")));
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }
@@ -18053,7 +18066,10 @@ async fn fdm_region_membership_descriptor_and_scoped_binary_are_revisioned() {
         let error = body_json(first).await;
         panic!("FDM binary failed: {error}");
     }
-    assert_eq!(first.headers()["x-fullmag-grid-fingerprint"], grid_fingerprint);
+    assert_eq!(
+        first.headers()["x-fullmag-grid-fingerprint"],
+        grid_fingerprint
+    );
     assert_eq!(first.headers()["x-fullmag-region-membership-revision"], "7");
     let etag = first.headers()["etag"].to_str().unwrap().to_string();
     let scoped = body_bytes(first).await;
@@ -23411,14 +23427,24 @@ async fn v2_field_vector_object_scope_prefers_mesh_part_node_indices() {
 
     assert_eq!(response.status(), StatusCode::OK);
     for required_header in [
-        "x-fullmag-field-revision", "x-fullmag-domain-generation-id",
-        "x-fullmag-quantity-id", "x-fullmag-component", "x-fullmag-encoding",
-        "x-fullmag-point-count", "x-fullmag-value-count", "x-fullmag-n-comp",
-        "x-fullmag-scope-kind", "x-fullmag-scope-id",
-        "x-fullmag-mesh-topology-hash", "x-fullmag-field-indexing",
+        "x-fullmag-field-revision",
+        "x-fullmag-domain-generation-id",
+        "x-fullmag-quantity-id",
+        "x-fullmag-component",
+        "x-fullmag-encoding",
+        "x-fullmag-point-count",
+        "x-fullmag-value-count",
+        "x-fullmag-n-comp",
+        "x-fullmag-scope-kind",
+        "x-fullmag-scope-id",
+        "x-fullmag-mesh-topology-hash",
+        "x-fullmag-field-indexing",
         "x-fullmag-node-index-count",
     ] {
-        assert!(response.headers().get(required_header).is_some(), "missing {required_header}");
+        assert!(
+            response.headers().get(required_header).is_some(),
+            "missing {required_header}"
+        );
     }
     assert!(response.headers().get("x-fullmag-snapshot-id").is_none());
     assert_eq!(
@@ -23917,7 +23943,10 @@ async fn field_vector_component_etag_304() {
         .unwrap();
 
     assert_eq!(first.status(), StatusCode::OK);
-    assert_eq!(first.headers().get("x-fullmag-encoding").unwrap(), "FMVP;version=2");
+    assert_eq!(
+        first.headers().get("x-fullmag-encoding").unwrap(),
+        "FMVP;version=2"
+    );
     for optional_header in [
         "x-fullmag-mesh-topology-hash",
         "x-fullmag-field-indexing",
@@ -23959,24 +23988,52 @@ async fn field_vector_topology_change_invalidates_etag_without_field_revision_ch
                 [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0]
             ], "layout": { "grid_cells": [8, 1, 1] } }
-        })).unwrap();
+        }))
+        .unwrap();
     }
     let app = build_v2_router().with_state(state.clone());
     let uri = "/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=body";
-    let first = app.clone().oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap()).await.unwrap();
+    let first = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
     assert_eq!(first.status(), StatusCode::OK);
-    let etag = first.headers().get("etag").unwrap().to_str().unwrap().to_string();
-    let field_revision = first.headers().get("x-fullmag-field-revision").unwrap().clone();
+    let etag = first
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let field_revision = first
+        .headers()
+        .get("x-fullmag-field-revision")
+        .unwrap()
+        .clone();
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh.as_mut().unwrap().nodes[0][0] = 0.125;
     }
-    let second = app.oneshot(
-        Request::builder().uri(uri).header("if-none-match", &etag).body(Body::empty()).unwrap()
-    ).await.unwrap();
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(second.status(), StatusCode::OK);
-    assert_eq!(second.headers().get("x-fullmag-field-revision"), Some(&field_revision));
-    assert_ne!(second.headers().get("etag").unwrap().to_str().unwrap(), etag);
+    assert_eq!(
+        second.headers().get("x-fullmag-field-revision"),
+        Some(&field_revision)
+    );
+    assert_ne!(
+        second.headers().get("etag").unwrap().to_str().unwrap(),
+        etag
+    );
 }
 
 #[tokio::test]
@@ -24809,14 +24866,25 @@ fn openapi_contains_field_slice_contract() {
         .as_object()
         .expect("vector 200 response headers missing");
     for header_name in [
-        "x-fullmag-field-revision", "x-fullmag-domain-generation-id",
-        "x-fullmag-quantity-id", "x-fullmag-component", "x-fullmag-encoding",
-        "x-fullmag-point-count", "x-fullmag-value-count", "x-fullmag-n-comp",
-        "x-fullmag-scope-kind", "x-fullmag-scope-id", "x-fullmag-snapshot-id",
-        "x-fullmag-mesh-topology-hash", "x-fullmag-field-indexing",
+        "x-fullmag-field-revision",
+        "x-fullmag-domain-generation-id",
+        "x-fullmag-quantity-id",
+        "x-fullmag-component",
+        "x-fullmag-encoding",
+        "x-fullmag-point-count",
+        "x-fullmag-value-count",
+        "x-fullmag-n-comp",
+        "x-fullmag-scope-kind",
+        "x-fullmag-scope-id",
+        "x-fullmag-snapshot-id",
+        "x-fullmag-mesh-topology-hash",
+        "x-fullmag-field-indexing",
         "x-fullmag-node-index-count",
     ] {
-        assert!(response_headers.contains_key(header_name), "missing documented response header {header_name}");
+        assert!(
+            response_headers.contains_key(header_name),
+            "missing documented response header {header_name}"
+        );
     }
 
     let slice_meta_get = paths
@@ -25194,7 +25262,10 @@ async fn spin_authoring_current_transport_crud_is_revision_safe() {
     let stored = state.current_live_state.read().await;
     let scene = stored.as_ref().unwrap().scene_document.as_ref().unwrap();
     assert_eq!(scene.revision, committed_revision);
-    assert_eq!(scene.current_transports[0].known().unwrap().current_density, Some([1.0e11, 0.0, 0.0]));
+    assert_eq!(
+        scene.current_transports[0].known().unwrap().current_density,
+        Some([1.0e11, 0.0, 0.0])
+    );
 }
 
 #[tokio::test]
@@ -25215,6 +25286,45 @@ async fn spin_torque_and_oersted_resources_commit_through_the_same_scene_graph()
                 "name": "transport",
                 "model": "prescribed_density",
                 "current_density": [1.0e11, 0.0, 0.0]
+            }),
+        ),
+        (
+            "/v2/sessions/current/model/spin-transports",
+            serde_json::json!({
+                "schema_version": "spin_transport.v1",
+                "id": "spin-transport",
+                "current_source_id": "transport",
+                "mode": "steady",
+                "domain": [{ "object_id": "body" }],
+                "materials": [{
+                    "region": { "object_id": "body" },
+                    "material": {
+                        "sigma_s_Spm": 5.0e6,
+                        "polarization_p": 0.6,
+                        "theta_sh": 0.1,
+                        "lambda_sf_m": 2.0e-9,
+                        "lambda_j_m": 1.0e-9,
+                        "lambda_phi_m": "disabled"
+                    }
+                }],
+                "solver": {
+                    "engine": "gmres",
+                    "linear": {
+                        "relative_tolerance": 1.0e-8,
+                        "absolute_tolerance": 0.0,
+                        "max_iterations": 500
+                    },
+                    "physical_residual_version": "spin_residual.fullmag.v1",
+                    "operator_version": "spin_operator.fullmag.v1",
+                    "default_external_boundary": "spin_insulating"
+                },
+                "requested_execution": {
+                    "discretization": "auto",
+                    "device": "auto",
+                    "precision": "double",
+                    "execution_mode": "strict"
+                },
+                "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
             }),
         ),
         (
@@ -25272,8 +25382,81 @@ async fn spin_torque_and_oersted_resources_commit_through_the_same_scene_graph()
     let scene = body_json(scene).await;
     assert_eq!(scene["revision"], revision);
     assert_eq!(scene["current_transports"][0]["name"], "transport");
+    assert_eq!(scene["spin_transports"][0]["id"], "spin-transport");
     assert_eq!(scene["spin_torques"][0]["id"], "zhang-li");
     assert_eq!(scene["oersted_fields"][0]["id"], "oersted");
+}
+
+#[tokio::test]
+async fn spin_transport_api_returns_opaque_variants_losslessly_as_read_only() {
+    let state = test_app_state_with_live_session().await;
+    let opaque = serde_json::json!({
+        "id": "future-spin",
+        "schema_version": "vendor.spin.v9",
+        "nested": { "tensor": [[1, 2], [3, 4]] }
+    });
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let mut scene = sample_scene_document();
+        scene.spin_transports =
+            serde_json::from_value(serde_json::json!([opaque.clone()])).unwrap();
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/sessions/current/model/spin-transports")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await["items"][0], opaque);
+
+    let before = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .scene_document
+        .clone()
+        .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri("/v2/sessions/current/model/spin-transports/future-spin")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "base_revision": before.revision,
+                        "resource": opaque
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let after = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .scene_document
+        .clone()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(after).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
 }
 
 #[tokio::test]
@@ -25293,20 +25476,55 @@ async fn spin_authoring_api_returns_opaque_variants_losslessly_as_read_only() {
     let app = build_v2_router().with_state(state.clone());
     let response = app
         .clone()
-        .oneshot(Request::builder().method(Method::GET).uri("/v2/sessions/current/model/spin-torques").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v2/sessions/current/model/spin-torques")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(body_json(response).await["items"][0], opaque);
 
-    let before = state.current_live_state.read().await.as_ref().unwrap().scene_document.clone().unwrap();
+    let before = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .scene_document
+        .clone()
+        .unwrap();
     let response = app
-        .oneshot(Request::builder().method(Method::PATCH).uri("/v2/sessions/current/model/spin-torques/future-torque").header(header::CONTENT_TYPE, "application/json").body(Body::from(serde_json::json!({"base_revision": before.revision, "resource": opaque}).to_string())).unwrap())
+        .oneshot(
+            Request::builder()
+                .method(Method::PATCH)
+                .uri("/v2/sessions/current/model/spin-torques/future-torque")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"base_revision": before.revision, "resource": opaque})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let after = state.current_live_state.read().await.as_ref().unwrap().scene_document.clone().unwrap();
-    assert_eq!(serde_json::to_value(after).unwrap(), serde_json::to_value(before).unwrap());
+    let after = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .unwrap()
+        .scene_document
+        .clone()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(after).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
 }
 
 #[test]
@@ -25316,6 +25534,7 @@ fn openapi_exposes_typed_spin_authoring_resources() {
     let schemas = value["components"]["schemas"].as_object().unwrap();
     for path in [
         "/v2/sessions/current/model/current-transports",
+        "/v2/sessions/current/model/spin-transports",
         "/v2/sessions/current/model/spin-torques",
         "/v2/sessions/current/model/oersted-fields",
     ] {
@@ -25323,11 +25542,16 @@ fn openapi_exposes_typed_spin_authoring_resources() {
     }
     for schema in [
         "SceneCurrentTransport",
+        "SceneSpinTransport",
+        "KnownSceneSpinTransport",
         "SceneSpinTorque",
         "SceneOerstedField",
         "SpinAuthoringDeleteRequest",
     ] {
-        assert!(schemas.contains_key(schema), "missing OpenAPI schema {schema}");
+        assert!(
+            schemas.contains_key(schema),
+            "missing OpenAPI schema {schema}"
+        );
     }
 }
 

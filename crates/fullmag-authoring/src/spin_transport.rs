@@ -48,6 +48,206 @@ pub struct UnsupportedAuthoringRecord {
     pub payload: BTreeMap<String, serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneSpinTransportMode {
+    Steady,
+    Transient,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(untagged)]
+pub enum SceneReactionLength {
+    Enabled(f64),
+    Disabled(SceneDisabledReaction),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub enum SceneDisabledReaction {
+    #[serde(rename = "disabled")]
+    Disabled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneSpinTransportMaterial {
+    #[serde(rename = "sigma_s_Spm")]
+    pub sigma_s_spm: f64,
+    pub polarization_p: f64,
+    pub theta_sh: f64,
+    pub lambda_sf_m: f64,
+    pub lambda_j_m: SceneReactionLength,
+    pub lambda_phi_m: SceneReactionLength,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneSpinTransportMaterialAssignment {
+    pub region: SceneRegionRef,
+    pub material: SceneSpinTransportMaterial,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneSurfaceRef {
+    pub object_id: String,
+    pub surface_id: String,
+    pub orientation: [f64; 3],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneSpinInterface {
+    Transparent {
+        id: String,
+        side_a: SceneRegionRef,
+        side_b: SceneRegionRef,
+        normal_a_to_b: [f64; 3],
+    },
+    MixingConductance {
+        id: String,
+        normal_to_ferromagnet: [f64; 3],
+        normal_side: SceneRegionRef,
+        ferromagnet_side: SceneRegionRef,
+        #[serde(rename = "g_up_Spm2")]
+        g_up_spm2: f64,
+        #[serde(rename = "g_down_Spm2")]
+        g_down_spm2: f64,
+        #[serde(rename = "g_r_Spm2")]
+        g_r_spm2: f64,
+        #[serde(rename = "g_i_Spm2")]
+        g_i_spm2: f64,
+        #[serde(rename = "g_sml_Spm2")]
+        g_sml_spm2: f64,
+        absorption: String,
+        formula_version: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneSpinBoundary {
+    SpinInsulating {
+        id: String,
+        surfaces: Vec<SceneSurfaceRef>,
+    },
+    SpinSink {
+        id: String,
+        surfaces: Vec<SceneSurfaceRef>,
+    },
+    SpecifiedSpinPotential {
+        id: String,
+        surfaces: Vec<SceneSurfaceRef>,
+        #[serde(rename = "spin_potential_V")]
+        spin_potential_v: [f64; 3],
+    },
+    SpecifiedSpinFlux {
+        id: String,
+        surfaces: Vec<SceneSurfaceRef>,
+        #[serde(rename = "normal_spin_flux_Apm2")]
+        normal_spin_flux_apm2: [f64; 3],
+    },
+    PeriodicSpin {
+        id: String,
+        minus_surface: SceneSurfaceRef,
+        plus_surface: SceneSurfaceRef,
+        translation_m: [f64; 3],
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneLinearTransportSolverPolicy {
+    pub relative_tolerance: f64,
+    pub absolute_tolerance: f64,
+    pub max_iterations: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneSpinSolverPolicy {
+    pub engine: String,
+    pub linear: SceneLinearTransportSolverPolicy,
+    pub physical_residual_version: String,
+    pub operator_version: String,
+    pub default_external_boundary: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneTransportDiscretization {
+    Fdm,
+    Fem,
+    Auto,
+    Hybrid,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneTransportDevice {
+    Cpu,
+    Gpu,
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneTransportPrecision {
+    Single,
+    Double,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneTransportExecutionMode {
+    Strict,
+    Extended,
+    Hybrid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneRequestedTransportExecution {
+    pub discretization: SceneTransportDiscretization,
+    pub device: SceneTransportDevice,
+    pub precision: SceneTransportPrecision,
+    pub execution_mode: SceneTransportExecutionMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct KnownSceneSpinTransport {
+    pub schema_version: String,
+    pub id: String,
+    pub current_source_id: String,
+    pub mode: SceneSpinTransportMode,
+    pub domain: Vec<SceneRegionRef>,
+    pub materials: Vec<SceneSpinTransportMaterialAssignment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interfaces: Vec<SceneSpinInterface>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundaries: Vec<SceneSpinBoundary>,
+    pub solver: SceneSpinSolverPolicy,
+    pub requested_execution: SceneRequestedTransportExecution,
+    pub constitutive_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(untagged)]
+pub enum SceneSpinTransport {
+    Known(KnownSceneSpinTransport),
+    Unsupported(UnsupportedAuthoringRecord),
+}
+
+impl SceneSpinTransport {
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::Known(value) => Some(&value.id),
+            Self::Unsupported(value) => value.payload.get("id").and_then(|value| value.as_str()),
+        }
+    }
+
+    pub fn known(&self) -> Option<&KnownSceneSpinTransport> {
+        match self {
+            Self::Known(value) => Some(value),
+            Self::Unsupported(_) => None,
+        }
+    }
+}
+
 impl SceneCurrentTransport {
     pub fn name(&self) -> Option<&str> {
         match self {
@@ -57,11 +257,17 @@ impl SceneCurrentTransport {
     }
 
     pub fn known(&self) -> Option<&KnownSceneCurrentTransport> {
-        match self { Self::Known(value) => Some(value), Self::Unsupported(_) => None }
+        match self {
+            Self::Known(value) => Some(value),
+            Self::Unsupported(_) => None,
+        }
     }
 
     pub fn known_mut(&mut self) -> Option<&mut KnownSceneCurrentTransport> {
-        match self { Self::Known(value) => Some(value), Self::Unsupported(_) => None }
+        match self {
+            Self::Known(value) => Some(value),
+            Self::Unsupported(_) => None,
+        }
     }
 }
 
@@ -262,7 +468,11 @@ impl KnownSceneSpinTorque {
         match self {
             Self::Slonczewski { id, .. }
             | Self::ZhangLi { id, .. }
-            | Self::PrescribedSot { id, .. } if id.is_empty() => *id = fallback,
+            | Self::PrescribedSot { id, .. }
+                if id.is_empty() =>
+            {
+                *id = fallback
+            }
             _ => {}
         }
     }
@@ -279,12 +489,18 @@ impl SceneSpinTorque {
     pub fn id(&self) -> &str {
         match self {
             Self::Known(value) => value.id(),
-            Self::Unsupported(value) => value.payload.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+            Self::Unsupported(value) => value
+                .payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
         }
     }
 
     pub fn ensure_authoring_id(&mut self, fallback: String) {
-        if let Self::Known(value) = self { value.ensure_authoring_id(fallback); }
+        if let Self::Known(value) = self {
+            value.ensure_authoring_id(fallback);
+        }
     }
 }
 
@@ -366,11 +582,17 @@ impl SceneOerstedField {
     pub fn id(&self) -> &str {
         match self {
             Self::Known(value) => value.id(),
-            Self::Unsupported(value) => value.payload.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+            Self::Unsupported(value) => value
+                .payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
         }
     }
 
     pub fn ensure_authoring_id(&mut self, fallback: String) {
-        if let Self::Known(value) = self { value.ensure_authoring_id(fallback); }
+        if let Self::Known(value) = self {
+            value.ensure_authoring_id(fallback);
+        }
     }
 }

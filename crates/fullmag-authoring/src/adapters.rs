@@ -72,6 +72,7 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
             excitation_analysis: builder.excitation_analysis.clone(),
         },
         current_transports: builder.current_transports.clone(),
+        spin_transports: builder.spin_transports.clone(),
         spin_torques,
         oersted_fields,
         study: SceneStudyState {
@@ -228,6 +229,7 @@ pub fn scene_document_to_script_builder(
             .collect(),
         current_modules: normalized_scene.current_modules.modules.clone(),
         current_transports: normalized_scene.current_transports.clone(),
+        spin_transports: normalized_scene.spin_transports.clone(),
         spin_torques: normalized_scene.spin_torques.clone(),
         oersted_terms: normalized_scene.oersted_fields.clone(),
         excitation_analysis: normalized_scene.current_modules.excitation_analysis.clone(),
@@ -388,6 +390,9 @@ pub fn scene_document_to_script_builder_overrides(
         "current_transports": builder.current_transports.iter()
             .map(|transport| serde_json::to_value(transport).unwrap_or(Value::Null))
             .collect::<Vec<_>>(),
+        "spin_transports": builder.spin_transports.iter()
+            .map(|transport| serde_json::to_value(transport).unwrap_or(Value::Null))
+            .collect::<Vec<_>>(),
         "spin_torques": builder.spin_torques.iter()
             .map(spin_torque_override_value)
             .collect::<Vec<_>>(),
@@ -406,14 +411,16 @@ pub fn scene_document_to_script_builder_overrides(
 
 fn spin_torque_override_value(torque: &crate::SceneSpinTorque) -> Value {
     let mut value = serde_json::to_value(torque).unwrap_or(Value::Null);
-    let strip_id = matches!(torque, crate::SceneSpinTorque::Known(crate::KnownSceneSpinTorque::ZhangLi { .. }))
-        || matches!(
-            torque,
-            crate::SceneSpinTorque::Known(crate::KnownSceneSpinTorque::Slonczewski {
-                formula_version: crate::SlonczewskiFormulaVersion::LegacyFullmagV0,
-                ..
-            })
-        );
+    let strip_id = matches!(
+        torque,
+        crate::SceneSpinTorque::Known(crate::KnownSceneSpinTorque::ZhangLi { .. })
+    ) || matches!(
+        torque,
+        crate::SceneSpinTorque::Known(crate::KnownSceneSpinTorque::Slonczewski {
+            formula_version: crate::SlonczewskiFormulaVersion::LegacyFullmagV0,
+            ..
+        })
+    );
     if strip_id {
         if let Value::Object(entry) = &mut value {
             entry.remove("id");
@@ -2173,6 +2180,7 @@ mod tests {
                 },
             }],
             current_transports: Vec::new(),
+            spin_transports: Vec::new(),
             spin_torques: Vec::new(),
             oersted_terms: Vec::new(),
             excitation_analysis: Some(crate::ScriptBuilderExcitationAnalysisState {
@@ -2275,11 +2283,14 @@ mod tests {
     #[test]
     fn scene_document_validation_rejects_owner_rotation_and_scale_until_fdm_support_exists() {
         let mut scene = scene_document_from_script_builder(&sample_builder());
-        scene.objects[0].transform.rotation_quat = [0.0, 0.0, 0.7071067811865476, 0.7071067811865476];
+        scene.objects[0].transform.rotation_quat =
+            [0.0, 0.0, 0.7071067811865476, 0.7071067811865476];
         scene.objects[0].transform.scale = [2.0, 1.0, 1.0];
         let error = scene_document_to_script_builder(&scene)
             .expect_err("owner rotation/scale must not be silently dropped");
-        assert!(error.message.contains("owner_transform_rotation_scale_unsupported"));
+        assert!(error
+            .message
+            .contains("owner_transform_rotation_scale_unsupported"));
     }
 
     #[test]
@@ -2627,29 +2638,67 @@ mod tests {
         scene.current_transports = serde_json::from_value(serde_json::json!([{
             "kind": "current_transport", "name": "transport", "model": "prescribed_density",
             "current_density": [1.0e11, 0.0, 0.0], "solve_region": "body"
-        }])).unwrap();
+        }]))
+        .unwrap();
         scene.spin_torques = serde_json::from_value(serde_json::json!([{
             "id": "zl", "kind": "zhang_li", "current_source": "transport",
             "degree": 0.4, "beta": 0.02
-        }])).unwrap();
+        }]))
+        .unwrap();
+        let object_id = scene.objects[0].id.clone();
+        scene.spin_transports = serde_json::from_value(serde_json::json!([{
+            "schema_version": "spin_transport.v1",
+            "id": "spin",
+            "current_source_id": "transport",
+            "mode": "steady",
+            "domain": [{"object_id": object_id}],
+            "materials": [{
+                "region": {"object_id": object_id},
+                "material": {
+                    "sigma_s_Spm": 5.0e6,
+                    "polarization_p": 0.4,
+                    "theta_sh": 0.12,
+                    "lambda_sf_m": 2.0e-9,
+                    "lambda_j_m": "disabled",
+                    "lambda_phi_m": "disabled"
+                }
+            }],
+            "solver": {
+                "engine": "gmres",
+                "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 500},
+                "physical_residual_version": "spin_balance.fullmag.v1",
+                "operator_version": "fv_spin_upwind_v1",
+                "default_external_boundary": "spin_insulating"
+            },
+            "requested_execution": {"discretization": "fdm", "device": "cpu", "precision": "double", "execution_mode": "strict"},
+            "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
+        }]))
+        .unwrap();
         scene.oersted_fields = serde_json::from_value(serde_json::json!([{
             "id": "oe", "kind": "oersted_field", "source": "transport",
             "model": "from_current_solution"
-        }])).unwrap();
-        scene.current_transports[0].known_mut().unwrap().solve_region = Some(scene.objects[0].id.clone());
+        }]))
+        .unwrap();
+        scene.current_transports[0]
+            .known_mut()
+            .unwrap()
+            .solve_region = Some(scene.objects[0].id.clone());
 
         let builder = scene_document_to_script_builder(&scene).expect("typed projection");
         assert_eq!(builder.current_transports, scene.current_transports);
+        assert_eq!(builder.spin_transports, scene.spin_transports);
         assert_eq!(builder.spin_torques, scene.spin_torques);
         assert_eq!(builder.oersted_terms, scene.oersted_fields);
 
         let rebuilt = scene_document_from_script_builder(&builder);
         assert_eq!(rebuilt.current_transports, scene.current_transports);
+        assert_eq!(rebuilt.spin_transports, scene.spin_transports);
         assert_eq!(rebuilt.spin_torques, scene.spin_torques);
         assert_eq!(rebuilt.oersted_fields, scene.oersted_fields);
 
         let overrides = scene_document_to_script_builder_overrides(&scene).expect("overrides");
         assert_eq!(overrides["current_transports"][0]["name"], "transport");
+        assert_eq!(overrides["spin_transports"][0]["id"], "spin");
         assert_eq!(overrides["spin_torques"][0]["kind"], "zhang_li");
         assert!(overrides["spin_torques"][0].get("id").is_none());
         assert_eq!(overrides["oersted_terms"][0]["kind"], "oersted_field");
@@ -2662,11 +2711,13 @@ mod tests {
         builder.spin_torques = serde_json::from_value(serde_json::json!([{
             "kind": "zhang_li", "current_density": [1.0e11, 0.0, 0.0],
             "degree": 0.4, "beta": 0.02
-        }])).expect("builder torque without authoring id");
+        }]))
+        .expect("builder torque without authoring id");
         builder.oersted_terms = serde_json::from_value(serde_json::json!([{
             "kind": "oersted_cylinder", "current": 0.001, "radius": 1.0e-8,
             "center": [0.0, 0.0, 0.0], "axis": [0.0, 0.0, 1.0]
-        }])).expect("builder field without authoring id");
+        }]))
+        .expect("builder field without authoring id");
 
         let scene = scene_document_from_script_builder(&builder);
         assert_eq!(scene.spin_torques[0].id(), "spin-torque:0");

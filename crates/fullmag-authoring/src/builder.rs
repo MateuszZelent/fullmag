@@ -718,6 +718,8 @@ pub struct ScriptBuilderState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_transports: Vec<crate::SceneCurrentTransport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_transports: Vec<crate::SceneSpinTransport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spin_torques: Vec<crate::SceneSpinTorque>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub oersted_terms: Vec<crate::SceneOerstedField>,
