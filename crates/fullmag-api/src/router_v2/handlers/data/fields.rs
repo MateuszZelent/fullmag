@@ -14,7 +14,7 @@ use serde::Deserialize;
 use super::field_resolution::{
     extract_fdm_field, extract_fem_field, field_values_match_current_domain,
     flatten_json_field_values, json_field_grid, live_magnetization_available,
-    live_magnetization_values,
+    live_magnetization_values, strict_flat_json_field_values,
 };
 use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
@@ -106,7 +106,11 @@ fn canonical_transport_field_artifact(
         .get("revision")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    let values = flatten_json_field_values(&artifact);
+    let values = strict_flat_json_field_values(&artifact).ok_or_else(|| {
+        ApiError::internal(format!(
+            "canonical transport field artifact '{relative_path}' values must be one flat array of finite JSON numbers"
+        ))
+    })?;
     if artifact
         .get("observable")
         .and_then(serde_json::Value::as_str)
@@ -114,7 +118,6 @@ fn canonical_transport_field_artifact(
         || component_count != expected_components
         || component_count.is_none_or(|count| count == 0 || values.len() % count != 0)
         || revision == 0
-        || values.iter().any(|value| !value.is_finite())
     {
         return Err(ApiError::internal(format!(
             "canonical transport field artifact '{relative_path}' has invalid identity, shape, values, or revision"
@@ -751,7 +754,13 @@ pub async fn get_field_catalog(
         let n_comp = quantity_spec(qid)
             .map(|spec| spec.n_comp as usize)
             .unwrap_or(3);
-        let values = flatten_json_field_values(value);
+        let transport_artifact = canonical_transport_field_artifact(snapshot, qid)?;
+        let selected = transport_artifact.as_ref().unwrap_or(value);
+        let values = if transport_artifact.is_some() {
+            strict_flat_json_field_values(selected).unwrap_or_default()
+        } else {
+            flatten_json_field_values(selected)
+        };
         if !field_values_match_current_domain(snapshot, qid, n_comp, &values) {
             continue;
         }
@@ -759,7 +768,10 @@ pub async fn get_field_catalog(
             &mut quantities,
             qid,
             quantity_unit(qid),
-            field_quantity_revision(snapshot, qid),
+            transport_artifact
+                .as_ref()
+                .map(|artifact| canonical_transport_field_artifact_revision(Some(artifact)))
+                .unwrap_or_else(|| field_quantity_revision(snapshot, qid)),
             gen_id,
         );
     }
@@ -944,8 +956,8 @@ pub async fn get_field_meta(
             .or_else(preview_field_values)
             .or_else(latest_field_values)
     } else {
-        latest_field_values()
-            .or_else(transport_artifact_values)
+        transport_artifact_values()
+            .or_else(latest_field_values)
             .or_else(preview_field_values)
     };
 
@@ -984,8 +996,11 @@ pub async fn get_field_meta(
         components: n_comp,
         location,
         unit,
-        field_revision: field_quantity_revision(snapshot, quantity_id)
-            .max(transport_artifact_revision),
+        field_revision: if transport_artifact.is_some() {
+            transport_artifact_revision
+        } else {
+            field_quantity_revision(snapshot, quantity_id)
+        },
         domain_generation_id: gen_id,
         stats: projected_field_stats(&raw_values, n_comp as usize, &component)?,
     }))
@@ -1650,8 +1665,11 @@ pub async fn get_field_vector(
     let transport_artifact = canonical_transport_field_artifact(snapshot, quantity_id)?;
     let transport_artifact_revision =
         canonical_transport_field_artifact_revision(transport_artifact.as_ref());
-    let field_revision =
-        field_quantity_revision(snapshot, quantity_id).max(transport_artifact_revision);
+    let field_revision = if transport_artifact.is_some() {
+        transport_artifact_revision
+    } else {
+        field_quantity_revision(snapshot, quantity_id)
+    };
     let gen_id = domain_generation_id(snapshot);
     let requested_snapshot_id = query
         .snapshot_id
@@ -1722,8 +1740,8 @@ pub async fn get_field_vector(
             .or_else(preview_field_values)
             .or_else(latest_field_values)
     } else {
-        latest_field_values()
-            .or_else(transport_artifact_values)
+        transport_artifact_values()
+            .or_else(latest_field_values)
             .or_else(preview_field_values)
     };
     let has_field_source = snapshot.latest_fields.get(quantity_id).is_some()

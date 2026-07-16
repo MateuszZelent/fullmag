@@ -723,6 +723,10 @@ mod tests {
             provenance.validation_scope,
             "fem_cpu_double_conforming_h1_p1_transparent_m1"
         );
+        assert_eq!(
+            provenance.inserted_default_boundaries,
+            ["all_unassigned_external_surfaces"]
+        );
         assert!(provenance.fallback.is_none());
         assert!(provenance.degradation.is_none());
         assert_eq!(provenance.stage_coupling, "none");

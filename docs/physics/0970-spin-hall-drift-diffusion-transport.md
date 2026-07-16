@@ -146,6 +146,10 @@ Charge BCs are `VoltageElectrode`, `Ground`, `TotalCurrentElectrode`,
 `Insulating`, and explicit periodic potential drop. A reference potential or
 zero-mean constraint is mandatory. A total-current electrode has constant
 unknown electrode potential plus the prescribed integrated flux.
+When no charge boundary is authored, the FEM reference slice may insert natural
+zero normal charge flux on every external face only with a compatible zero-mean
+gauge; that inserted default is mandatory provenance. Once any charge boundary
+is authored, every external face must be covered exactly once.
 
 Spin BCs are `SpinInsulating` (`n_iQ_ia=0`), `SpinSink` (`mu_s=0`),
 `SpecifiedSpinPotential`, `SpecifiedSpinFlux`, and `PeriodicSpin`. Default
@@ -524,14 +528,14 @@ already-solved records and must not query the time-domain FEM preview ABI.
 | M2 Onsager oracle | reciprocal signs and nonnegative dissipation |
 | M3 decay | exponential and diffusion-eigenmode decay |
 
-### 5.2 Cross-backend and convergence checks
+### 5.2 Cross-backend and convergence qualification targets
 
-Each continuum workload uses at least three spatial resolutions and independent
-FDM/FEM mesh families. FDM CPU double and FEM CPU double converge to a common
-result; corresponding GPU double lanes pass vector/tensor parity before FP32.
-M3 additionally uses at least three time steps, observed order at least nominal
-minus `0.25`, and stiff-limit convergence to steady M1/M2. BORIS and published
-models are comparisons after explicit unit/sign conversion, not primary proof.
+The production qualification still requires each continuum workload at at least
+three spatial resolutions and independent FDM/FEM mesh families. Common-limit
+FDM/FEM convergence, GPU-double vector/tensor parity, M3 temporal order, and
+stiff-limit convergence to steady M1/M2 are not established by the current M1
+reference slice. BORIS and published models remain planned comparisons after
+explicit unit/sign conversion, not primary proof.
 
 ### 5.3 Regression and quantitative gates
 
@@ -580,11 +584,13 @@ The managed gate `just verify-fem-steady-transport-native-contract` executes a
 linear charge bar, an aligned two-material series-resistance interface, missing
 gauge rejection, the one-dimensional spin-diffusion `sinh` profile, direct-SHE
 sign and balance, torque projection, and fail-closed mixing-interface behavior.
-This evidence does **not** publish a public capability: total-current and
-periodic electrodes, specified spin flux, broken-H1 mortar mixing/SML,
-hypre/libCEED production preconditioners, GPU residency, stage coupling,
-ProblemIR/runner wiring, quantities, and cross-backend convergence remain
-unchecked work in sections 5 and 6.
+This evidence publishes only the named `reference_executable`, CPU-double,
+conforming-`H1 P1`, transparent-interface M1 slice through ProblemIR, planner,
+native runtime, canonical quantities, artifacts, and v2 reads. It is not a full
+production transport capability. Total-current and periodic electrodes,
+specified spin flux, `H(curl)`/broken-H1 mortar mixing or SML,
+hypre/libCEED production preconditioners, GPU residency, stage coupling, and
+FDM/FEM common-limit convergence remain unchecked work in sections 5 and 6.
 
 ## 8. References
 

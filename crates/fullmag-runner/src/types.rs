@@ -1956,6 +1956,8 @@ pub struct TransportExecutionProvenance {
     pub implementation_state: String,
     pub validation_state: String,
     pub validation_scope: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inserted_default_boundaries: Vec<String>,
     pub charge_domain: fullmag_ir::ResolvedFemTransportDomainIR,
     pub spin_domain: fullmag_ir::ResolvedFemTransportDomainIR,
     pub charge_insulating_boundaries: Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>,

@@ -575,6 +575,7 @@ pub(crate) fn validate_executable_outputs(
     enable_magnetoelastic: bool,
     enable_thermal: bool,
     enable_antenna_field: bool,
+    enable_spin_transport: bool,
     errors: &mut Vec<String>,
 ) {
     let allowed_fields = [
@@ -607,6 +608,13 @@ pub(crate) fn validate_executable_outputs(
         "E_mel",
     ];
     let mechanical_fields = ["u", "u_dot", "eps", "sigma"];
+    let transport_fields = [
+        "V_electric",
+        "J_charge",
+        "spin_potential",
+        "spin_current_tensor",
+        "torque_stt",
+    ];
     let mechanical_scalars = [
         "E_el",
         "E_kin_el",
@@ -624,6 +632,7 @@ pub(crate) fn validate_executable_outputs(
                     && !(enable_oersted && name == "H_oe")
                     && !(enable_antenna_field && name == "H_ant")
                     && !(allow_h_dmi_bulk && name == "H_dmi_bulk")
+                    && !(enable_spin_transport && transport_fields.contains(&name.as_str()))
                 {
                     errors.push(format!(
                         "field output '{}' is not executable in the current executable path; allowed fields are m, H_ex, H_demag, demag_phi, H_ext, H_oe, H_dmi, H_dmi_bulk, H_mel, and H_eff",

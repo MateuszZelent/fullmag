@@ -666,6 +666,7 @@ pub(crate) fn plan_fdm(
             .iter()
             .any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
+        !problem.spin_transport_modules.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double
@@ -1815,6 +1816,7 @@ pub(crate) fn plan_fdm_multilayer(
         false,
         false,
         false,
+        !problem.spin_transport_modules.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double

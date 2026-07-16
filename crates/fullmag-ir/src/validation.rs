@@ -505,6 +505,7 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
                                 index,
                                 definition,
                                 matches!(model, CurrentTransportModelIR::MagnetoresistivePoisson),
+                                problem.backend_policy.requested_backend,
                                 errors,
                             ),
                             None => errors.push(format!(
@@ -522,15 +523,13 @@ fn validate_charge_transport_definition(
     index: usize,
     definition: &crate::ChargeTransportDefinitionIR,
     reciprocal: bool,
+    requested_backend: crate::BackendTarget,
     errors: &mut Vec<String>,
 ) {
     let prefix = format!("current_modules[{index}] current_transport");
-    if definition.domain.is_empty()
-        || definition.materials.is_empty()
-        || definition.boundaries.is_empty()
-    {
+    if definition.domain.is_empty() || definition.materials.is_empty() {
         errors.push(format!(
-            "{prefix} complete charge contract requires non-empty domain, materials, and boundaries"
+            "{prefix} complete charge contract requires non-empty domain and materials"
         ));
     }
     for (material_index, assignment) in definition.materials.iter().enumerate() {
@@ -643,23 +642,27 @@ fn validate_charge_transport_definition(
         _ => {}
     }
     let solver = &definition.solver;
-    let (engine, operator, residual) = if reciprocal {
-        (
-            "block_gmres",
-            "fdm_coupled_charge_spin_fv_block_gmres.v1",
-            "transport_balance_integrated_l2.v1",
-        )
+    let supported_solver = if reciprocal {
+        solver.engine == "block_gmres"
+            && solver.operator_version == "fdm_coupled_charge_spin_fv_block_gmres.v1"
+            && solver.physical_residual_version == "transport_balance_integrated_l2.v1"
     } else {
-        (
-            "cg",
-            "fv_charge_harmonic_v1",
-            "charge_balance_integrated_l2.v1",
-        )
+        let supported_operator = match requested_backend {
+            crate::BackendTarget::Fdm => solver.operator_version == "fv_charge_harmonic_v1",
+            crate::BackendTarget::Fem => {
+                solver.operator_version == "fem_charge_conforming_h1_p1.transparent.v1"
+            }
+            crate::BackendTarget::Auto => matches!(
+                solver.operator_version.as_str(),
+                "fv_charge_harmonic_v1" | "fem_charge_conforming_h1_p1.transparent.v1"
+            ),
+            crate::BackendTarget::Hybrid => false,
+        };
+        matches!(solver.engine.as_str(), "auto" | "cg")
+            && supported_operator
+            && solver.physical_residual_version == "charge_balance_integrated_l2.v1"
     };
-    if solver.engine != engine
-        || solver.operator_version != operator
-        || solver.physical_residual_version != residual
-    {
+    if !supported_solver {
         errors.push(format!(
             "{prefix}.solver carries an unsupported charge engine/version for its transport model"
         ));
@@ -1439,12 +1442,23 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                 ));
             }
         }
-        let expected_operator = if reciprocal {
-            "fdm_coupled_charge_spin_fv_block_gmres.v1"
+        let supported_operator = if reciprocal {
+            module.solver.operator_version == "fdm_coupled_charge_spin_fv_block_gmres.v1"
         } else {
-            "fv_spin_upwind_v1"
+            match module.requested_execution.discretization {
+                crate::BackendTarget::Fdm => module.solver.operator_version == "fv_spin_upwind_v1",
+                crate::BackendTarget::Fem => {
+                    module.solver.operator_version
+                        == "fem_charge_spin_conforming_h1_p1.transparent.v1"
+                }
+                crate::BackendTarget::Auto => matches!(
+                    module.solver.operator_version.as_str(),
+                    "fv_spin_upwind_v1" | "fem_charge_spin_conforming_h1_p1.transparent.v1"
+                ),
+                crate::BackendTarget::Hybrid => false,
+            }
         };
-        if module.solver.operator_version != expected_operator
+        if !supported_operator
             || module.solver.physical_residual_version != "transport_balance_integrated_l2.v1"
         {
             errors.push(format!(

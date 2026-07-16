@@ -2175,6 +2175,7 @@ pub(crate) fn plan_fem(
         has_magnetoelastic,
         problem.energy_terms.iter().any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
         has_mqs_antenna_field_source(problem) || has_prescribed_zeeman_mask_source(problem),
+        !problem.spin_transport_modules.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double {

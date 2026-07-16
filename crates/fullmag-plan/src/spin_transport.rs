@@ -580,11 +580,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
                     "transport.spin.direct_she".into(),
                     "transport.coupling.one_way".into(),
                 ],
-                inserted_default_boundaries: if module.boundaries.is_empty() {
-                    vec!["all_unassigned_external_surfaces".into()]
-                } else {
-                    Vec::new()
-                },
+                inserted_default_boundaries: inserted_fem_default_boundaries(charge, module),
                 fdm_cpu_double: None,
                 fdm_cpu_double_reciprocal: None,
                 fem_cpu_double: Some(descriptor),
@@ -688,8 +684,33 @@ fn materialize_fem_descriptor(
     let spin_dirichlet = resolve_spin_dirichlet(module, mesh, mesh_parts)?;
     let charge_insulating_boundaries =
         resolve_charge_insulating_boundaries(charge, mesh, mesh_parts)?;
-    let spin_insulating_boundaries =
-        resolve_spin_insulating_boundaries(module, mesh, mesh_parts)?;
+    let spin_insulating_boundaries = resolve_spin_insulating_boundaries(module, mesh, mesh_parts)?;
+    validate_fem_boundary_partition(
+        "charge",
+        mesh,
+        charge_dirichlet
+            .iter()
+            .map(|(marker, _)| ("dirichlet", *marker))
+            .chain(charge_insulating_boundaries.iter().flat_map(|boundary| {
+                boundary
+                    .boundary_attributes
+                    .iter()
+                    .map(move |marker| (boundary.id.as_str(), *marker))
+            })),
+    )?;
+    validate_fem_boundary_partition(
+        "spin",
+        mesh,
+        spin_dirichlet
+            .iter()
+            .map(|(marker, _)| ("dirichlet", *marker))
+            .chain(spin_insulating_boundaries.iter().flat_map(|boundary| {
+                boundary
+                    .boundary_attributes
+                    .iter()
+                    .map(move |marker| (boundary.id.as_str(), *marker))
+            })),
+    )?;
     let interfaces = module
         .interfaces
         .iter()
@@ -893,12 +914,10 @@ fn insert_scalar_bc(
     value: f64,
     label: &str,
 ) -> Result<(), Vec<String>> {
-    if let Some(existing) = map.insert(marker, value) {
-        if existing != value {
-            return Err(vec![format!(
-                "conflicting {label} values on MFEM boundary attribute {marker}"
-            )]);
-        }
+    if map.insert(marker, value).is_some() {
+        return Err(vec![format!(
+            "conflicting {label} assignments on MFEM boundary attribute {marker}"
+        )]);
     }
     Ok(())
 }
@@ -909,12 +928,10 @@ fn insert_vector_bc(
     value: [f64; 3],
     label: &str,
 ) -> Result<(), Vec<String>> {
-    if let Some(existing) = map.insert(marker, value) {
-        if existing != value {
-            return Err(vec![format!(
-                "conflicting {label} values on MFEM boundary attribute {marker}"
-            )]);
-        }
+    if map.insert(marker, value).is_some() {
+        return Err(vec![format!(
+            "conflicting {label} assignments on MFEM boundary attribute {marker}"
+        )]);
     }
     Ok(())
 }
@@ -958,6 +975,12 @@ fn resolve_charge_insulating_boundaries(
     mesh: &MeshIR,
     mesh_parts: &[FemMeshPartIR],
 ) -> Result<Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>, Vec<String>> {
+    if charge.boundaries.is_empty() {
+        return Ok(vec![fullmag_ir::ResolvedFemBoundaryMarkerSetIR {
+            id: "default:charge_insulating".into(),
+            boundary_attributes: external_fem_boundary_markers(mesh)?.into_iter().collect(),
+        }]);
+    }
     charge
         .boundaries
         .iter()
@@ -1030,17 +1053,9 @@ fn resolve_spin_insulating_boundaries(
     mesh_parts: &[FemMeshPartIR],
 ) -> Result<Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>, Vec<String>> {
     if module.boundaries.is_empty() {
-        let boundary_attributes = mesh
-            .boundary_markers
-            .iter()
-            .copied()
-            .filter(|marker| *marker != 0)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
         return Ok(vec![fullmag_ir::ResolvedFemBoundaryMarkerSetIR {
             id: "default:spin_insulating".into(),
-            boundary_attributes,
+            boundary_attributes: external_fem_boundary_markers(mesh)?.into_iter().collect(),
         }]);
     }
     module
@@ -1061,6 +1076,70 @@ fn resolve_spin_insulating_boundaries(
             })
         })
         .collect()
+}
+
+fn inserted_fem_default_boundaries(
+    charge: &fullmag_ir::ChargeTransportDefinitionIR,
+    module: &fullmag_ir::SpinTransportModuleIR,
+) -> Vec<String> {
+    let mut defaults = Vec::new();
+    if charge.boundaries.is_empty() {
+        defaults.push("charge:all_external_surfaces=insulating".into());
+    }
+    if module.boundaries.is_empty() {
+        defaults.push("spin:all_external_surfaces=spin_insulating".into());
+    }
+    defaults
+}
+
+fn external_fem_boundary_markers(mesh: &MeshIR) -> Result<BTreeSet<u32>, Vec<String>> {
+    if mesh.boundary_markers.len() != mesh.boundary_faces.len() {
+        return Err(vec![format!(
+            "FEM boundary marker count {} does not match external boundary face count {}",
+            mesh.boundary_markers.len(),
+            mesh.boundary_faces.len()
+        )]);
+    }
+    let markers = mesh
+        .boundary_markers
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if markers.is_empty() || markers.contains(&0) {
+        return Err(vec![
+            "FEM external boundary faces require non-zero MFEM boundary attributes".into(),
+        ]);
+    }
+    Ok(markers)
+}
+
+fn validate_fem_boundary_partition<'a>(
+    family: &str,
+    mesh: &MeshIR,
+    assignments: impl Iterator<Item = (&'a str, u32)>,
+) -> Result<(), Vec<String>> {
+    let external = external_fem_boundary_markers(mesh)?;
+    let mut owners = BTreeMap::<u32, &str>::new();
+    for (owner, marker) in assignments {
+        if !external.contains(&marker) {
+            return Err(vec![format!(
+                "FEM {family} boundary '{owner}' references non-external boundary attribute {marker}"
+            )]);
+        }
+        if let Some(existing) = owners.insert(marker, owner) {
+            return Err(vec![format!(
+                "conflicting FEM {family} boundary assignments '{existing}' and '{owner}' on boundary attribute {marker}"
+            )]);
+        }
+    }
+    let covered = owners.keys().copied().collect::<BTreeSet<_>>();
+    let missing = external.difference(&covered).copied().collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(vec![format!(
+            "FEM {family} boundary assignments do not cover external boundary attributes {missing:?}"
+        )]);
+    }
+    Ok(())
 }
 
 fn materialize_fdm_descriptor(
@@ -2062,6 +2141,14 @@ mod tests {
                 }],
                 potential_v: 0.1,
             },
+            ChargeBoundaryIR::Insulating {
+                id: "natural-zero-flux".into(),
+                surfaces: vec![SurfaceRefIR {
+                    object_id: "strip".into(),
+                    surface_id: "left".into(),
+                    orientation: [-1.0, 0.0, 0.0],
+                }],
+            },
         ];
         charge.solver.operator_version = "fem_charge_conforming_h1_p1.transparent.v1".into();
         charge.solver.linear = problem.spin_transport_modules[0].solver.linear.clone();
@@ -2089,7 +2176,7 @@ mod tests {
             elements: vec![[0, 1, 2, 3]],
             element_markers: vec![7],
             boundary_faces: vec![[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]],
-            boundary_markers: vec![11, 12, 13, 14],
+            boundary_markers: vec![11, 12, 13, 13],
             periodic_boundary_pairs: vec![],
             periodic_node_pairs: vec![],
             per_domain_quality: Default::default(),
@@ -2146,10 +2233,13 @@ mod tests {
         assert_eq!(descriptor.charge_dirichlet, [(11, 0.0), (12, 0.1)]);
         assert_eq!(descriptor.charge_domain.element_mask, [true]);
         assert_eq!(descriptor.spin_domain.element_mask, [true]);
-        assert!(descriptor.charge_insulating_boundaries.is_empty());
+        assert_eq!(
+            descriptor.charge_insulating_boundaries[0].boundary_attributes,
+            [13]
+        );
         assert_eq!(
             descriptor.spin_insulating_boundaries[0].boundary_attributes,
-            [11, 12, 13, 14]
+            [11, 12, 13]
         );
         assert_eq!(
             plans[0].requested_execution.discretization,
@@ -2172,6 +2262,116 @@ mod tests {
         assert_eq!(
             descriptor.validation_scope,
             "fem_cpu_double_conforming_h1_p1_transparent_m1"
+        );
+        assert_eq!(
+            plans[0].inserted_default_boundaries,
+            ["spin:all_external_surfaces=spin_insulating"]
+        );
+    }
+
+    #[test]
+    fn fem_boundary_partitions_require_coverage_and_reject_conflicts() {
+        let (mesh, segments, parts) = fem_mesh_fixture();
+        let resolve = |problem: &ProblemIR| {
+            resolve_m1_fem_spin_transport(
+                problem,
+                &mesh,
+                &segments,
+                &parts,
+                &[[0.0, 0.0, 1.0]; 4],
+                8.0e5,
+                2.211e5,
+            )
+        };
+
+        let mut incomplete = fem_problem();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge),
+            ..
+        } = &mut incomplete.current_modules[0]
+        else {
+            panic!("charge fixture");
+        };
+        charge.boundaries.pop();
+        let error = resolve(&incomplete).expect_err("incomplete charge coverage must fail");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("do not cover")));
+
+        let mut charge_conflict = fem_problem();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge),
+            ..
+        } = &mut charge_conflict.current_modules[0]
+        else {
+            panic!("charge fixture");
+        };
+        charge.boundaries.push(ChargeBoundaryIR::Insulating {
+            id: "conflict".into(),
+            surfaces: vec![SurfaceRefIR {
+                object_id: "strip".into(),
+                surface_id: "bottom".into(),
+                orientation: [0.0, 0.0, -1.0],
+            }],
+        });
+        let error = resolve(&charge_conflict).expect_err("charge conflict must fail");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("conflicting FEM charge")));
+
+        let mut spin_conflict = fem_problem();
+        spin_conflict.spin_transport_modules[0].boundaries = vec![
+            SpinBoundaryIR::SpinSink {
+                id: "sink".into(),
+                surfaces: vec![SurfaceRefIR {
+                    object_id: "strip".into(),
+                    surface_id: "bottom".into(),
+                    orientation: [0.0, 0.0, -1.0],
+                }],
+            },
+            SpinBoundaryIR::SpinInsulating {
+                id: "insulating".into(),
+                surfaces: vec![SurfaceRefIR {
+                    object_id: "strip".into(),
+                    surface_id: "bottom".into(),
+                    orientation: [0.0, 0.0, -1.0],
+                }],
+            },
+        ];
+        let error = resolve(&spin_conflict).expect_err("spin conflict must fail");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("conflicting FEM spin")));
+
+        let mut defaults = fem_problem();
+        let CurrentModuleIR::CurrentTransport {
+            definition: Some(charge),
+            ..
+        } = &mut defaults.current_modules[0]
+        else {
+            panic!("charge fixture");
+        };
+        charge.boundaries.clear();
+        charge.gauge = ChargePotentialGaugeIR::ZeroMean;
+        let plans = resolve(&defaults).expect("natural defaults should be explicit and complete");
+        assert_eq!(
+            plans[0].inserted_default_boundaries,
+            [
+                "charge:all_external_surfaces=insulating",
+                "spin:all_external_surfaces=spin_insulating",
+            ]
+        );
+        assert_eq!(
+            plans[0]
+                .fem_cpu_double
+                .as_ref()
+                .unwrap()
+                .charge_insulating_boundaries[0]
+                .boundary_attributes,
+            [11, 12, 13]
         );
     }
 

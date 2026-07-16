@@ -2272,9 +2272,8 @@ pub(crate) fn execute_fem<'a>(
                 recorder.record_field_snapshot(snapshot)?;
             }
             let (_, recorded_count, _) = recorder.finish();
-            executed.field_snapshot_count = executed
-                .field_snapshot_count
-                .saturating_add(recorded_count);
+            executed.field_snapshot_count =
+                executed.field_snapshot_count.saturating_add(recorded_count);
         } else {
             executed.field_snapshot_count = executed
                 .field_snapshot_count
@@ -2308,24 +2307,42 @@ fn reject_unsupported_steady_transport_component_outputs(
         return Ok(());
     }
     for output in outputs {
-        let quantity = match output {
-            OutputIR::Field { name, .. } => name.as_str(),
-            OutputIR::Snapshot { field, .. } => field.as_str(),
-            OutputIR::SaveQuantity { quantity_id, .. } => quantity_id.as_str(),
+        let (quantity, unsupported_qualifier) = match output {
+            OutputIR::Field { name, .. } => (name.as_str(), None),
+            OutputIR::Snapshot {
+                field,
+                component,
+                layer,
+                ..
+            } => (
+                field.as_str(),
+                (component != "3D" || layer.is_some())
+                    .then_some("snapshot component/layer selector"),
+            ),
+            OutputIR::SaveQuantity {
+                quantity_id,
+                reduction,
+                component,
+                ..
+            } => (
+                quantity_id.as_str(),
+                (reduction.is_some() || component.is_some())
+                    .then_some("save-quantity reduction/component selector"),
+            ),
             _ => continue,
         };
-        let Some((base, component)) = quantity.split_once('.') else {
+        let base = quantity.split_once('.').map_or(quantity, |(base, _)| base);
+        if !matches!(
+            base,
+            "V_electric" | "J_charge" | "spin_potential" | "spin_current_tensor" | "torque_stt"
+        ) {
             continue;
-        };
-        if !component.is_empty()
-            && matches!(
-                base,
-                "V_electric" | "J_charge" | "spin_potential" | "spin_current_tensor" | "torque_stt"
-            )
-        {
+        }
+        if quantity != base || unsupported_qualifier.is_some() {
+            let qualifier = unsupported_qualifier.unwrap_or("dotted component selector");
             return Err(RunError {
                 message: format!(
-                    "FEM steady spin transport component schedule '{quantity}' is unsupported; request the canonical base quantity '{base}'"
+                    "FEM steady spin transport schedule '{quantity}' uses unsupported {qualifier}; request the unqualified canonical base quantity '{base}'"
                 ),
             });
         }
@@ -6112,19 +6129,43 @@ mod tests {
     fn steady_transport_component_schedule_is_rejected_before_execution() {
         let mut plan = tiny_fem_plan();
         plan.spin_transport_plans = vec![crate::native_fem::test_resolved_steady_transport_plan()];
-        let outputs = vec![OutputIR::Field {
-            name: "J_charge.x".into(),
-            every_seconds: 1.0,
-        }];
-
-        let error = reject_unsupported_steady_transport_component_outputs(&plan, &outputs)
-            .expect_err("component schedules must fail closed");
-        assert!(error.message.contains("J_charge.x"), "{}", error.message);
-        assert!(
-            error.message.contains("canonical base quantity 'J_charge'"),
-            "{}",
-            error.message
-        );
+        for output in [
+            OutputIR::Field {
+                name: "J_charge.x".into(),
+                every_seconds: 1.0,
+            },
+            OutputIR::Snapshot {
+                field: "J_charge".into(),
+                component: "x".into(),
+                every_seconds: 1.0,
+                layer: None,
+            },
+            OutputIR::Snapshot {
+                field: "J_charge".into(),
+                component: "3D".into(),
+                every_seconds: 1.0,
+                layer: Some("layer-0".into()),
+            },
+            OutputIR::SaveQuantity {
+                quantity_id: "J_charge".into(),
+                every_seconds: 1.0,
+                reduction: Some("average".into()),
+                component: None,
+            },
+            OutputIR::SaveQuantity {
+                quantity_id: "J_charge".into(),
+                every_seconds: 1.0,
+                reduction: None,
+                component: Some("x".into()),
+            },
+        ] {
+            let error = reject_unsupported_steady_transport_component_outputs(
+                &plan,
+                std::slice::from_ref(&output),
+            )
+            .expect_err("qualified transport schedules must fail closed");
+            assert!(error.message.contains("J_charge"), "{}", error.message);
+        }
     }
 
     #[cfg(feature = "fem-gpu")]

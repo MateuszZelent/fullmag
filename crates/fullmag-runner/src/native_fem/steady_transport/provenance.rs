@@ -38,6 +38,7 @@ pub(super) fn transport_provenance(
         implementation_state: descriptor.implementation_state.clone(),
         validation_state: descriptor.validation_state.clone(),
         validation_scope: descriptor.validation_scope.clone(),
+        inserted_default_boundaries: resolved.inserted_default_boundaries.clone(),
         charge_domain: descriptor.charge_domain.clone(),
         spin_domain: descriptor.spin_domain.clone(),
         charge_insulating_boundaries: descriptor.charge_insulating_boundaries.clone(),
