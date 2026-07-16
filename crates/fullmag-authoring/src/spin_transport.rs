@@ -22,6 +22,14 @@ pub enum CurrentTransportModel {
     OhmicPoisson,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneTransportCoupling {
+    #[default]
+    OneWay,
+    Bidirectional,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct KnownSceneCurrentTransport {
     pub kind: CurrentTransportKind,
@@ -33,6 +41,18 @@ pub struct KnownSceneCurrentTransport {
     pub solve_region: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conductivity_s_per_m: Option<f64>,
+    #[serde(default)]
+    pub coupling: SceneTransportCoupling,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub domain: Vec<SceneRegionRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<SceneChargeTransportMaterialAssignment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundaries: Vec<SceneChargeBoundary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gauge: Option<SceneChargePotentialGauge>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver: Option<SceneChargeSolverPolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
@@ -46,6 +66,54 @@ pub enum SceneCurrentTransport {
 pub struct UnsupportedAuthoringRecord {
     #[serde(flatten)]
     pub payload: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneChargeTransportMaterial {
+    #[serde(rename = "sigma_Spm")]
+    pub sigma_spm: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneChargeTransportMaterialAssignment {
+    pub region: SceneRegionRef,
+    pub material: SceneChargeTransportMaterial,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SceneChargeBoundary {
+    VoltageElectrode {
+        id: String,
+        surfaces: Vec<SceneSurfaceRef>,
+        #[serde(rename = "potential_V")]
+        potential_v: f64,
+    },
+    NormalCurrentElectrode {
+        id: String,
+        surfaces: Vec<SceneSurfaceRef>,
+        #[serde(rename = "outward_current_density_Apm2")]
+        outward_current_density_apm2: f64,
+    },
+    Insulating {
+        id: String,
+        surfaces: Vec<SceneSurfaceRef>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneChargePotentialGauge {
+    DirichletReference,
+    ZeroMean,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+pub struct SceneChargeSolverPolicy {
+    pub engine: String,
+    pub linear: SceneLinearTransportSolverPolicy,
+    pub physical_residual_version: String,
+    pub operator_version: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, ToSchema)]

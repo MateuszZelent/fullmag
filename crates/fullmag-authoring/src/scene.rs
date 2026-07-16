@@ -1146,6 +1146,7 @@ mod spin_authoring_tests {
                 "kind": "current_transport",
                 "name": "transport",
                 "model": "prescribed_density",
+                "coupling": "one_way",
                 "current_density": [1.25e11, -2.5e10, 3.75e9],
                 "solve_region": "layer"
             }],
@@ -1209,6 +1210,50 @@ mod spin_authoring_tests {
         assert_eq!(serialized["spin_transports"], value["spin_transports"]);
         assert_eq!(serialized["spin_torques"], value["spin_torques"]);
         assert_eq!(serialized["oersted_fields"], value["oersted_fields"]);
+    }
+
+    #[test]
+    fn scene_document_round_trips_complete_ohmic_charge_contract() {
+        let value = serde_json::json!({
+            "version": "scene.v2",
+            "current_transports": [{
+                "kind": "current_transport",
+                "name": "charge:0",
+                "model": "ohmic_poisson",
+                "coupling": "bidirectional",
+                "domain": [{"object_id": "layer"}],
+                "materials": [{
+                    "region": {"object_id": "layer"},
+                    "material": {"sigma_Spm": 5.0e6}
+                }],
+                "boundaries": [
+                    {
+                        "kind": "voltage_electrode",
+                        "id": "left",
+                        "surfaces": [{"object_id": "layer", "surface_id": "left", "orientation": [-1.0, 0.0, 0.0]}],
+                        "potential_V": 0.1
+                    },
+                    {
+                        "kind": "normal_current_electrode",
+                        "id": "right",
+                        "surfaces": [{"object_id": "layer", "surface_id": "right", "orientation": [1.0, 0.0, 0.0]}],
+                        "outward_current_density_Apm2": 2.0e10
+                    }
+                ],
+                "gauge": "dirichlet_reference",
+                "solver": {
+                    "engine": "cg",
+                    "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+                    "physical_residual_version": "charge_balance_integrated_l2.v1",
+                    "operator_version": "fv_charge_harmonic_v1"
+                }
+            }]
+        });
+        let scene: SceneDocument = serde_json::from_value(value.clone()).expect("typed scene");
+        assert_eq!(
+            serde_json::to_value(scene).unwrap()["current_transports"],
+            value["current_transports"]
+        );
     }
 
     #[test]

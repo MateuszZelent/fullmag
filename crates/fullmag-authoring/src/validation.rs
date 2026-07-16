@@ -1,9 +1,10 @@
 use crate::{
     CurrentTransportModel, KnownSceneCurrentTransport, KnownSceneOerstedField,
-    KnownSceneSpinTorque, PrescribedSotFormulaVersion, SceneDocument, SceneOerstedField,
-    SceneOerstedTimeDependence, ScenePrescribedSotDrive, SceneReactionLength, SceneRegionRef,
-    SceneSpinBoundary, SceneSpinInterface, SceneSpinTorque, SceneSpinTransport, SceneSurfaceRef,
-    SceneTimeEnvelope, SlonczewskiFormulaVersion, StudyPipelineDocument, StudyPipelineNode,
+    KnownSceneSpinTorque, PrescribedSotFormulaVersion, SceneChargeBoundary,
+    SceneChargePotentialGauge, SceneDocument, SceneOerstedField, SceneOerstedTimeDependence,
+    ScenePrescribedSotDrive, SceneReactionLength, SceneRegionRef, SceneSpinBoundary,
+    SceneSpinInterface, SceneSpinTorque, SceneSpinTransport, SceneSurfaceRef, SceneTimeEnvelope,
+    SlonczewskiFormulaVersion, StudyPipelineDocument, StudyPipelineNode,
 };
 use fullmag_ir::{
     CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, ExchangeCouplingModeIR,
@@ -514,6 +515,16 @@ fn validate_current_transport(
     }
     match transport.model {
         CurrentTransportModel::PrescribedDensity => {
+            if !transport.domain.is_empty()
+                || !transport.materials.is_empty()
+                || !transport.boundaries.is_empty()
+                || transport.gauge.is_some()
+                || transport.solver.is_some()
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "current_transports[{index}] prescribed_density must not define an ohmic charge solve"
+                )));
+            }
             let density = transport.current_density.ok_or_else(|| {
                 SceneDocumentValidationError::new(format!(
                     "current_transports[{index}] prescribed_density requires current_density"
@@ -530,7 +541,158 @@ fn validate_current_transport(
                 "current_transports[{index}] ohmic_poisson must not define current_density"
             )));
         }
-        CurrentTransportModel::OhmicPoisson => {}
+        CurrentTransportModel::OhmicPoisson => {
+            if transport.solve_region.is_some() || transport.conductivity_s_per_m.is_some() {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "current_transports[{index}] legacy ohmic_poisson solve_region/conductivity_s_per_m is ambiguous"
+                )));
+            }
+            validate_scene_charge_contract(index, transport, object_ids)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_scene_charge_contract(
+    index: usize,
+    transport: &KnownSceneCurrentTransport,
+    object_ids: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    let prefix = format!("current_transports[{index}]");
+    if transport.domain.is_empty()
+        || transport.materials.is_empty()
+        || transport.boundaries.is_empty()
+        || transport.gauge.is_none()
+        || transport.solver.is_none()
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix} ohmic_poisson requires non-empty domain, materials, boundaries, gauge, and solver"
+        )));
+    }
+    let mut domain = BTreeSet::new();
+    for (region_index, region) in transport.domain.iter().enumerate() {
+        validate_spin_region_ref(
+            region,
+            object_ids,
+            &format!("{prefix}.domain[{region_index}]"),
+        )?;
+        if !domain.insert((region.object_id.clone(), region.region_id.clone())) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.domain contains duplicate regions"
+            )));
+        }
+    }
+    let mut assigned = BTreeSet::new();
+    for (material_index, assignment) in transport.materials.iter().enumerate() {
+        validate_spin_region_ref(
+            &assignment.region,
+            object_ids,
+            &format!("{prefix}.materials[{material_index}].region"),
+        )?;
+        let key = (
+            assignment.region.object_id.clone(),
+            assignment.region.region_id.clone(),
+        );
+        if !domain.contains(&key) || !assigned.insert(key) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.materials must map every domain region exactly once"
+            )));
+        }
+        positive(
+            assignment.material.sigma_spm,
+            &format!("{prefix}.materials[{material_index}].material.sigma_Spm"),
+        )?;
+    }
+    if assigned != domain {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.materials must map every domain region exactly once"
+        )));
+    }
+
+    let mut boundary_ids = BTreeSet::new();
+    let mut surfaces = BTreeSet::new();
+    let mut voltage_count = 0usize;
+    for (boundary_index, boundary) in transport.boundaries.iter().enumerate() {
+        let (id, selected_surfaces) = match boundary {
+            SceneChargeBoundary::VoltageElectrode {
+                id,
+                surfaces,
+                potential_v,
+            } => {
+                voltage_count += 1;
+                finite(
+                    *potential_v,
+                    &format!("{prefix}.boundaries[{boundary_index}].potential_V"),
+                )?;
+                (id, surfaces)
+            }
+            SceneChargeBoundary::NormalCurrentElectrode {
+                id,
+                surfaces,
+                outward_current_density_apm2,
+            } => {
+                finite(
+                    *outward_current_density_apm2,
+                    &format!("{prefix}.boundaries[{boundary_index}].outward_current_density_Apm2"),
+                )?;
+                (id, surfaces)
+            }
+            SceneChargeBoundary::Insulating { id, surfaces } => (id, surfaces),
+        };
+        if id.trim().is_empty() || !boundary_ids.insert(id.as_str()) || selected_surfaces.is_empty()
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.boundaries[{boundary_index}] requires a unique non-empty id and surfaces"
+            )));
+        }
+        for (surface_index, surface) in selected_surfaces.iter().enumerate() {
+            validate_scene_surface_ref(
+                surface,
+                object_ids,
+                &format!("{prefix}.boundaries[{boundary_index}].surfaces[{surface_index}]"),
+            )?;
+            if !surfaces.insert((surface.object_id.as_str(), surface.surface_id.as_str())) {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{prefix} has conflicting charge boundary assignments for '{}:{}'",
+                    surface.object_id, surface.surface_id
+                )));
+            }
+        }
+    }
+    match transport.gauge {
+        Some(SceneChargePotentialGauge::DirichletReference) if voltage_count == 0 => {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.gauge=dirichlet_reference requires a voltage electrode"
+            )));
+        }
+        Some(SceneChargePotentialGauge::ZeroMean) if voltage_count != 0 => {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{prefix}.gauge=zero_mean conflicts with voltage electrodes"
+            )));
+        }
+        _ => {}
+    }
+    let solver = transport.solver.as_ref().expect("checked above");
+    if solver.engine != "cg"
+        || solver.operator_version != "fv_charge_harmonic_v1"
+        || solver.physical_residual_version != "charge_balance_integrated_l2.v1"
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.solver carries an unsupported charge engine/version"
+        )));
+    }
+    positive(
+        solver.linear.relative_tolerance,
+        &format!("{prefix}.solver.linear.relative_tolerance"),
+    )?;
+    nonnegative(
+        solver.linear.absolute_tolerance,
+        &format!("{prefix}.solver.linear.absolute_tolerance"),
+    )?;
+    if solver.linear.max_iterations == 0 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{prefix}.solver.linear.max_iterations must be positive"
+        )));
     }
     Ok(())
 }
@@ -1472,6 +1634,70 @@ mod tests {
         .unwrap();
 
         validate_scene_document(&scene).expect("complete graph must validate");
+    }
+
+    #[test]
+    fn scene_document_validation_accepts_complete_ohmic_charge_contract() {
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "ohmic_poisson",
+            "coupling": "one_way",
+            "domain": [{"object_id": "body"}],
+            "materials": [{
+                "region": {"object_id": "body"},
+                "material": {"sigma_Spm": 5.0e6}
+            }],
+            "boundaries": [{
+                "kind": "voltage_electrode",
+                "id": "left",
+                "surfaces": [{"object_id": "body", "surface_id": "left", "orientation": [-1.0, 0.0, 0.0]}],
+                "potential_V": 0.1
+            }],
+            "gauge": "dirichlet_reference",
+            "solver": {
+                "engine": "cg",
+                "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+                "physical_residual_version": "charge_balance_integrated_l2.v1",
+                "operator_version": "fv_charge_harmonic_v1"
+            }
+        }]))
+        .unwrap();
+
+        validate_scene_document(&scene).expect("complete ohmic charge contract must validate");
+    }
+
+    #[test]
+    fn scene_document_validation_rejects_conflicting_charge_gauge() {
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "ohmic_poisson",
+            "domain": [{"object_id": "body"}],
+            "materials": [{
+                "region": {"object_id": "body"},
+                "material": {"sigma_Spm": 5.0e6}
+            }],
+            "boundaries": [{
+                "kind": "voltage_electrode",
+                "id": "left",
+                "surfaces": [{"object_id": "body", "surface_id": "left", "orientation": [-1.0, 0.0, 0.0]}],
+                "potential_V": 0.1
+            }],
+            "gauge": "zero_mean",
+            "solver": {
+                "engine": "cg",
+                "linear": {"relative_tolerance": 1.0e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+                "physical_residual_version": "charge_balance_integrated_l2.v1",
+                "operator_version": "fv_charge_harmonic_v1"
+            }
+        }]))
+        .unwrap();
+
+        let error = validate_scene_document(&scene).expect_err("gauge conflict must fail");
+        assert!(error.message.contains("zero_mean conflicts"), "{error}");
     }
 
     #[test]
