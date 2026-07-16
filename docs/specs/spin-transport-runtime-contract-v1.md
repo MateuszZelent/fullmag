@@ -1137,6 +1137,48 @@ transport diagnostics, field samples, artifacts, and checkpoints. UI-only
 mutations MUST NOT advance them. `status.capabilities` remains the only active
 session UI gating source.
 
+### 11.1 Authoring validation and Control Room projections
+
+Transport authoring uses one versioned, non-mutating validation transaction:
+
+```text
+POST /v2/sessions/current/model/transport-validation
+```
+
+The request identifies the current, spin, interface, torque, or Oersted
+candidate operation and carries `base_revision`. The handler clones the current
+`SceneDocument`, applies the candidate to the clone, and invokes the canonical
+`validate_scene_document` path without committing or advancing any revision.
+The response separates semantic validity (`valid`, stable issue codes and
+paths) from execution capability (`status`, reason, requested lane, optional
+resolved lane, and qualification). React MUST NOT duplicate the SceneDocument
+or ProblemIR validator. Create and Replace remain disabled until the latest
+candidate response is semantically valid and its authoring capability permits
+the operation.
+
+`status.capabilities.transport_authoring` is a bounded typed summary and the
+only active-session gating source. It distinguishes M1 one-way steady
+authoring from reciprocal M2, transient M3, GPU, single-precision, and hybrid
+requests. A source-visible or semantic-only record may remain inspectable, but
+an unsupported authoring combination is read-only and carries its reason.
+Requested intent is always shown; a missing resolved lane is displayed as
+unresolved, never inferred from the requested lane.
+
+`GET /v2/sessions/current/model/spin-interfaces` is a typed, revisioned
+projection of interfaces nested in `spin_transports`. Each item includes its
+own interface payload and the owning spin-transport identity. Interface edits
+validate and PATCH the complete owner transport; the projection is not an
+independent store. Current Transport, Spin Transport, Spin Interfaces, Spin
+Torques, and Oersted Fields each have a dedicated Explorer identity and typed
+Inspector. Unknown records and unknown variants remain lossless and read-only.
+
+Browser proof is split deliberately. A deterministic contract CDP smoke runs
+the exact Control Room build and proves CRUD payloads, canonical export request,
+run-command request, result navigation, capability states, and cleanup against
+a stateful contract server; it does not claim that physics ran. A separate
+managed-runtime gate requires a real runtime, checks command completion and a
+published result, and fails nonzero when that runtime or evidence is absent.
+
 ## 12. Checkpoint and restart
 
 M0–M2 checkpoints store committed magnetization, simulation time/step, source
