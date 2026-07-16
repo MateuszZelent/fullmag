@@ -2,14 +2,18 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-07-15
+- Last updated: 2026-07-16
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula version: `current_transport.fullmag.v1`
 - Operator versions: `fdm_face_to_cell_current.v1`,
   `fdm_oersted_cell_integrated_open.v1`,
-  `fem_oersted_hcurl_h1_gauge.v1`
+  `fem_conservative_current_rt0_view.v1`,
+  `fem_oersted_direct_tetra_quadrature.v1`,
+  `fem_oersted_hcurl_h1_gauge.v1`,
+  `fem_oersted_hcurl_h1_zero_mean_natural.v1`
 - Realization versions: `oersted_fdm_fft_open.v1`,
+  `oersted_direct_biot_savart.v1`,
   `oersted_fem_vector_potential.v1`
 
 Executable engines such as `fdm_oersted_fft_open_v1` are distinct from those
@@ -269,7 +273,82 @@ rotation or reject it. `direct_biot_savart` is the small independent O(N^2)
 oracle with controlled near-field quadrature and realization
 `oersted_direct_biot_savart.v1`.
 
-### 3.2 FEM vector-potential contract
+### 3.2 FEM prerequisite: conservative `RT0/H(div)` current view (OE-T0)
+
+Both FEM Oersted realizations consume one immutable
+`ConservativeCurrentView`; neither may reconstruct `J_c` from nodal potential,
+conductivity, or a visualization field. The minimum v1 view is an oriented
+lowest-order Raviart--Thomas (`RT0`) field on the tetrahedral conductor/lead
+support:
+
+```text
+ConservativeCurrentView = {
+  operator_version: "fem_conservative_current_rt0_view.v1",
+  unit: "A/m^2",
+  component_convention: "signed_conventional_xyz",
+  fe_space: "RT0_Hdiv_3d",
+  mesh_revision, topology_revision, geometry_digest,
+  source_module_id, source_state_revision, source_field_digest,
+  closure_revision, closure_digest,
+  rt0_true_dof_count, rt0_true_dof_digest,
+  balance_certificate, evaluation_time_s, stage_identity
+}
+```
+
+The RT degrees of freedom are signed normal-flux moments with one global face
+orientation; the reconstructed physical field has unit `A/m^2`, while
+integrated face flux has unit `A`. Piola transformation, basis normalization
+and shared-face orientation are part of the operator version. `H(div)`
+conformity makes the normal trace single-valued;
+the elementwise divergence of the `RT0` field must satisfy the integrated
+charge-balance gate. Extending the field by zero from conductor to air is legal
+only where its normal trace is zero. Electrode fluxes must instead be joined by
+the declared physical return/lead closure before the view is complete. The
+view rejects a current with an unpaired terminal flux, a non-finite degree of
+freedom, a stale mesh/source revision, or a digest mismatch.
+
+The current transport workflow owns construction and publication of this
+view. For an `H1` potential solve, simply projecting `-sigma grad V` into a
+nodal vector space is not conservative and is visualization-only. OE-T0 must
+produce `RT0` through a conservative mixed reconstruction or flux-equilibrated
+projection whose element balance and electrode balance are independently
+certified. The Oersted owner receives a read-only view pinned to the exact
+accepted/stage source snapshot. Source revision, coefficient digest, closure
+digest, mesh revision, time and stage identity are mandatory cache keys.
+
+### 3.3 FEM direct tetrahedral Biot--Savart oracle (OE-F1)
+
+The independent CPU-double reference evaluates the volume integral directly
+from the conservative view:
+
+```text
+H_oe(x) = 1/(4 pi) sum_T integral_T
+  J_RT0,T(x') x (x-x') / |x-x'|^3 dV'.
+```
+
+`J_RT0,T` is affine on each physical tetrahedron. The integration uses the
+physical Jacobian and the signed Piola-mapped field; replacing it by a centroid
+sample is not this operator. For well-separated source/target pairs, an
+embedded pair of tetrahedral rules estimates error. Near pairs are recursively
+subdivided. If `x` lies in or on a source tetrahedron, that tetrahedron is
+split into positive-volume sub-tetrahedra having `x` as a vertex and a Duffy/
+Gauss--Jacobi rule integrates the integrable `1/r^2` singularity. No arbitrary
+self-distance cutoff or deleted self term is permitted. Degenerate
+sub-tetrahedra fail validation. Deterministic element order and compensated
+componentwise accumulation are required.
+
+The resolved operator is `fem_oersted_direct_tetra_quadrature.v1`; it uses the
+existing realization family `oersted_direct_biot_savart.v1` and CPU engine
+`fem_oersted_direct_tetra_cpu_v1`. Its fixed FP64 profile records quadrature
+orders, relative/absolute field tolerances, near-pair criterion, subdivision
+limit and an unconverged-pair count. It evaluates at the magnetic observation
+points and then uses the same versioned `L2` projection to the LLG nodal field
+space as OE-F2. The published `H_oe` is that exact projected field, not the
+unprojected quadrature samples. OE-F1 requires global circuit closure but no
+volumetric airbox. It is the small-problem oracle and validation reference, not
+the production asymptotic algorithm.
+
+### 3.4 FEM mixed vector-potential contract (OE-F2)
 
 Production FEM solves on conductor plus airbox with vacuum `mu0` everywhere:
 
@@ -280,18 +359,57 @@ B_oe=curl A,
 H_oe=mu0^-1 B_oe.
 ```
 
-The block form is
+The baseline truncation uses the relative exact-sequence pair
 
 ```text
-[ C  G^T ][A] = [J],
-[ G   0  ][p]   [0].
+A in H_0(curl;Omega),        n x A = 0 on boundary Omega,
+p_gauge in H^1_0(Omega),     p_gauge = 0 on boundary Omega.
 ```
 
-`A` uses de Rham-compatible Nedelec `H(curl)` and `p_gauge` uses `H1`, with
-zero-mean gauge and any extra harmonic constraints required by multiply
-connected domains. Baseline outer BC is `n x A=0`; it is a truncation, not an
-exact open boundary. Qualification requires at least three growing airboxes
-and extrapolated magnetic-domain error, plus a BC study.
+Because `grad H^1_0` is a subspace of `H_0(curl)`, the weak form is: find
+`(A,p)` in those spaces such that for every `(v,q)` in the same test spaces,
+
+```text
+(mu0^-1 curl A, curl v) + (grad p, v) = (J_c, v),
+(A, grad q) = 0.
+```
+
+With `C_ij=(mu0^-1 curl w_j,curl w_i)` and
+`B_ij=(grad phi_j,w_i)`, the block form is
+
+```text
+[ C  B ][A] = [f],
+[B^T 0 ][p]   [0].
+```
+
+For this baseline, `p` is in `H^1_0`; it is **not** a zero-mean scalar space.
+Dirichlet data removes the scalar constant already. Implementing the baseline
+with an unconstrained `H1` space plus pinning/zero mean changes the discrete
+exact sequence and is forbidden.
+
+A separate, explicitly selected boundary variant may use `A in H(curl)` and
+`p in H1/R` with `integral_Omega p dV=0`. Its second equation weakly imposes
+the corresponding divergence/normal condition, while the curl integration
+produces a natural outer boundary condition. It is
+`fem_oersted_hcurl_h1_zero_mean_natural.v1`, has different truncation physics,
+solver policy and validation, and may never be substituted for the baseline.
+
+Both variants require a topology certificate. The planner either supplies a
+versioned basis and constraints for the relevant harmonic fields or rejects a
+domain whose discrete de Rham cohomology is nontrivial. A scalar gauge alone
+does not remove harmonic null modes on a multiply connected airbox/conductor
+complex.
+
+The baseline outer condition `n x A=0` is only a finite-airbox truncation, not
+an exact open boundary. Qualification requires at least three geometrically
+similar growing airboxes, extrapolated error in the fixed magnetic observation
+domain, and comparison with OE-F1. The airbox must contain the entire closed
+current view and magnetic target; conductor/lead interfaces are internal, not
+artificial outer boundaries.
+
+The load is assembled directly from the pinned `RT0/H(div)` view. This is the
+compatible pairing `(J_RT0,v_ND)`; importing the nodal `J_charge` visualization
+buffer or independently evaluating `-sigma grad V` is forbidden.
 
 `H_oe` is projected by a consistent `L2` mass matrix to the same nodal field
 space used by the LLG RHS, and the observable publishes that exact projection.
@@ -309,7 +427,26 @@ This path resolves operator `fem_oersted_hcurl_h1_gauge.v1`, realization
 `fem_oersted_hcurl_h1_gauge_v1` /
 `fem_oersted_hcurl_h1_gauge_device_v1` respectively.
 
-### 3.3 Hybrid and coupling cadence
+### 3.5 SI, sign, energy and accepted work snapshot
+
+The two FEM realizations consume the same signed conventional `J_c [A/m^2]`
+and produce `H_oe [A/m]`; OE-F2 stores `A [T m]`, `curl A=B_oe [T]`, and
+`p [A/m]`. Reversing every RT0 face flux must reverse `A`, `B_oe`, `H_oe` and
+the Zeeman energy contribution exactly within the linear-solve/quadrature
+tolerance. No `mu0` multiplies Biot--Savart `H`; OE-F2 divides `curl A` by
+`mu0` once.
+
+For one-way current independent of `m`, both paths publish
+`-mu0 integral M_s m dot H_oe dV` as external Zeeman energy, without `1/2`.
+For `J_c(m)` they publish only
+`oersted_zeeman_work_snapshot`, excluded from conservative `E_total`. The
+snapshot identity is the immutable tuple
+`(accepted_or_stage_state, evaluation_time_s, source_state_revision,
+source_field_digest, closure_digest, mesh_revision, oersted_operator_version,
+projection_version)`. Field, energy/work, quantities and provenance must refer
+to the same tuple; a rejected stage cannot advance or publish it.
+
+### 3.6 Hybrid and coupling cadence
 
 No hybrid Oersted lane is validated here. Any future cross-discretization
 source projection must conserve total and local current, report projection
@@ -331,6 +468,14 @@ circuit closure, method, and refresh policy. Python validation rejects missing
 gauge, invalid source/closure, unsupported PBC, unsigned vector reduction,
 missing bandwidth, and ambiguous thickness/regions. Canonical script export
 preserves all envelope data, including complete piecewise-linear points.
+OE-T0 introduces no independently authored current object: the conservative
+view is a resolved product of the named current source. `direct_biot_savart`
+and `fem_vector_potential` remain explicit method choices. FEM vector-potential
+policy exposes the boundary/gauge variant; omission resolves only to the
+baseline `tangential_A_h1_0.v1`, never to the zero-mean variant. Direct tetra
+quadrature exposes a tagged deterministic FP64 policy rather than reusing
+Krylov fields. Python and UI script export must preserve every selected policy
+field and reject unavailable lanes before execution.
 
 ### 4.2 ProblemIR representation
 
@@ -340,6 +485,11 @@ electrodes/BC, closure, method/operator versions, validity assessment,
 refresh/coupling, energy semantics, mesh/source revisions, and requested lane.
 Legacy flat fields are accepted only by a versioned migrator that cannot drop
 parameters. Normalized four-path authoring round-trip is field-for-field equal.
+`ResolvedOerstedPlanIR` additionally pins the conservative-current-view
+operator, source/mesh/topology/closure revisions and digests, observation and
+projection spaces, boundary/gauge variant, quadrature profile or block-solver
+profile, and expected work-snapshot semantics. Raw RT0 degree arrays remain a
+runtime data-plane payload rather than JSON `ProblemIR`.
 
 ### 4.3 Planner and capability matrix
 
@@ -350,6 +500,9 @@ cadence. Planner verifies continuity, closure, regime, topology, PBC, method,
 lane/device/precision, cache identity, solver availability, and strict
 residency. Requested and resolved selections remain visible. Validation is
 scoped to named workload, geometry/BC, lane, precision, and frequency envelope.
+Until OE-T0, OE-F1 and OE-F2 gates are implemented, the canonical FEM direct
+tetra and vector-potential capabilities remain `semantic_only`. Existing
+cylinder or nodal midpoint execution cannot satisfy or promote them.
 
 ### 4.4 Runtime, quantities, provenance, API, and UI
 
@@ -359,6 +512,15 @@ coordinates stage evaluation without owning either physics. Existing IDs
 explicit semantics. Telemetry records residual/balance, refresh/cache counts,
 method/operator revision, airbox/kernel metadata, stage time, timings, and
 strict-GPU transfer counts.
+
+The current artifact gains a versioned RT0 data-plane member plus a compact
+JSON manifest containing its immutable view descriptor and balance
+certificate. Oersted artifacts record the consumed source digest (not merely
+its display-field revision), quadrature/linear-solve convergence, topology and
+airbox certificate, projection identity, and work-snapshot identity. A missing
+or mismatched manifest fails closed. No generic dispatcher, `Context`, or
+`mfem_bridge.cpp` owns these algorithms: they belong to current-transport and
+Oersted subsystems under `backends/fem`.
 
 Provenance records authored source and closure, formula/operator versions,
 current convention, envelope/bandwidth, validity metrics/override, requested
@@ -383,6 +545,9 @@ validation and export emits canonical Python.
 | arbitrary-axis cylinder | rotational covariance for z, x, and `(1,1,1)` |
 | separable envelope | exact amplitude/phase at every RK stage |
 | energy consistency | snapshot from exactly the RHS field, no `1/2` |
+| RT0 conservation | shared-face flux cancellation, element divergence and terminal/closure balance |
+| direct tetra singularity | inside/on-face/on-edge targets converge without cutoff |
+| exact-sequence gauge | manufactured `A`, gradient-nullspace and harmonic-topology reject/constraint |
 
 ### 5.2 Cross-method/backend checks
 
@@ -393,6 +558,9 @@ compared with direct quadrature and an airbox sequence. Independent FDM/FEM
 families converge to the same continuum solution. CPU double is the oracle for
 its GPU double lane; FP32 follows a separate error budget. NeuralMag supplies a
 comparative regular-grid cell-integrated pattern, not an MFEM oracle.
+MFEM Example 34 is a useful SubMesh/ND/RT transfer reference but explicitly
+warns that its demonstration current need not be divergence-free; therefore it
+cannot satisfy OE-T0 without the conservative reconstruction and range check.
 
 ### 5.3 Regression and quantitative gates
 
@@ -412,6 +580,9 @@ at least nominal minus `0.25` in the asymptotic range.
 - [ ] Conservative FDM charge and face-to-cell publication
 - [ ] FDM direct oracle and cell-integrated CPU/CUDA FFT
 - [ ] FEM direct oracle and `H(curl)` CPU/GPU vector potential
+- [ ] OE-T0 immutable conservative RT0 view with revision/digest certificate
+- [ ] OE-F1 cutoff-free direct tetrahedral CPU-double oracle
+- [ ] OE-F2 exact-sequence `H_0(curl) x H^1_0` baseline and topology gate
 - [ ] Stage-consistent coupling, FSAL, rollback, final refresh
 - [ ] Correct external/nonvariational energy semantics
 - [ ] Quantities, provenance, typed API, and UI inspectors
@@ -429,8 +600,13 @@ evidence that the approximation is accurate.
 
 ## 8. References
 
-1. T. Schrefl, `docs/papers/mic_intro.pdf` (local copy, 2016).
-2. *Manual for Micromagnetics Module*, `docs/comsol/Manual_for_Micromagnetics_Module.pdf` (local copy; workflow comparison only).
-3. NeuralMag Oersted implementation and tests under `external_solvers/neuralmag`, used as comparative cell-integrated FFT evidence.
-4. BORIS Oersted/transport sources under `external_solvers/BORIS/Boris`, used as comparative lifecycle evidence only.
+1. T. Schrefl, `docs/papers/mic_intro.pdf` (local copy, 2016), especially the magnetostatic Ampere/divergence and external-Zeeman conventions.
+2. *Manual for Micromagnetics Module*, `docs/comsol/Manual_for_Micromagnetics_Module.pdf` (local copy; current-density-to-magnetization workflow comparison only, not a numerical oracle).
+3. NeuralMag `external_solvers/neuralmag/neuralmag/common/convolution_setup.py`, `convolution_runtime.py`, and `field_terms/oersted_field.py`; comparative open-boundary regular-grid tensor, SI and energy evidence only.
+4. BORIS `external_solvers/BORIS/Boris/OerstedTFunc.cpp`, `OerstedKernel.cpp`, `Oersted.cpp`, and `Transport_Charge_Display.cpp`; comparative current/Oersted ownership and FFT lifecycle evidence only.
 5. J. R. Dormand and P. J. Prince, J. Comput. Appl. Math. 6 (1980), DOI: 10.1016/0771-050X(80)90013-3.
+6. MFEM, [Example 34 source](https://docs.mfem.org/html/ex34_8cpp_source.html), magnetostatic SubMesh transfer with its documented divergence-free-current limitation.
+7. MFEM, [Maxwell discretization notes](https://mfem.org/maxwell-notes/), de Rham-compatible `H(curl)`/`H(div)` spaces and weak curl operators.
+8. MFEM, [Tour of examples](https://mfem.org/tutorial/examples/), Examples 3, 4 and 24 for Nedelec, Raviart--Thomas and mixed exact-sequence operators.
+9. R. Hiptmair, [“Finite elements in computational electromagnetism”](https://doi.org/10.1017/S0962492902000041), *Acta Numerica* 11 (2002), 237--339; discrete differential forms, exact sequences and topology.
+10. [“Evaluation of Biot--Savart integrals on tetrahedral meshes”](https://arxiv.org/abs/0712.1695); comparative tetrahedral quadrature strategy, not a Fullmag acceptance oracle.
