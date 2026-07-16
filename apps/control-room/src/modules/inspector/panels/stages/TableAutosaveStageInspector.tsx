@@ -1,13 +1,13 @@
 "use client";
 
-import { resolveHalfOpenSamplingClock } from "@/shared/domain/physics/sincPulsePreview";
-
+import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorSection } from "../../primitives/InspectorSection";
 import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
 } from "./StageInspectorFrame";
+import { SamplingDiagnostics, engineering } from "./SamplingDiagnostics";
 import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
 
 export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
@@ -16,16 +16,17 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
     props.pipelineDrafts ?? [],
     props.draftIndex,
   );
-  const nextRun = (props.pipelineDrafts ?? [])
-    .slice(props.draftIndex + 1)
-    .find((candidate) => candidate.kind === "run") ?? null;
+  const pipelineDrafts = props.pipelineDrafts ?? [];
+  const nextRunIndex = pipelineDrafts.findIndex(
+    (candidate, index) => index > props.draftIndex && candidate.kind === "run",
+  );
+  const nextRun = nextRunIndex >= 0 ? pipelineDrafts[nextRunIndex] : null;
+  const effectiveState = nextRunIndex >= 0
+    ? resolveStudyWorkflowStateBefore(pipelineDrafts, nextRunIndex)
+    : null;
+  const effectiveSampling = effectiveState?.tableAutosave ?? null;
   const durationS = positiveNumber(nextRun?.untilSeconds);
-  const samplePeriodS = draft?.tableAutosave.enabled
-    ? positiveNumber(draft.tableAutosave.samplePeriodS)
-    : null;
-  const samplingClock = durationS && samplePeriodS
-    ? resolveHalfOpenSamplingClock(durationS, samplePeriodS)
-    : null;
+  const readOnly = draft?.tableAutosave.readOnly ?? false;
 
   return (
     <>
@@ -48,7 +49,7 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
           <span>Table autosave</span>
           <input
             checked={draft?.tableAutosave.enabled ?? false}
-            disabled={!draft}
+            disabled={!draft || readOnly}
             type="checkbox"
             onChange={(event) =>
               draft && props.onUpdateDraft({
@@ -61,10 +62,35 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
           />
         </label>
         <label className="fm-inspector-field">
+          <span>Sampling mode</span>
+          <select
+            className="fm-inspector-input"
+            disabled={!draft?.tableAutosave.enabled || readOnly}
+            value={draft?.tableAutosave.samplingMode ?? "explicit"}
+            onChange={(event) =>
+              draft && props.onUpdateDraft({
+                tableAutosave: {
+                  ...draft.tableAutosave,
+                  samplingMode: event.target.value as
+                    | "auto_sinc_cutoff"
+                    | "explicit",
+                },
+              })
+            }
+          >
+            <option value="explicit">Explicit period</option>
+            <option value="auto_sinc_cutoff">Automatic from sinc cutoff</option>
+          </select>
+        </label>
+        <label className="fm-inspector-field">
           <span>t_sampling (s)</span>
           <input
             className="fm-inspector-input"
-            disabled={!draft?.tableAutosave.enabled}
+            disabled={
+              !draft?.tableAutosave.enabled ||
+              readOnly ||
+              draft.tableAutosave.samplingMode === "auto_sinc_cutoff"
+            }
             min="0"
             type="number"
             value={draft?.tableAutosave.samplePeriodS ?? ""}
@@ -82,7 +108,7 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
           <span>Table quantities</span>
           <input
             className="fm-inspector-input"
-            disabled={!draft?.tableAutosave.enabled}
+            disabled={!draft?.tableAutosave.enabled || readOnly}
             value={draft?.tableAutosave.tableQuantities ?? ""}
             onChange={(event) =>
               draft && props.onUpdateDraft({
@@ -102,6 +128,12 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
               : "disable table sampling for all following Run stages until changed"
           }
         />
+        {readOnly ? (
+          <FeedbackBanner
+            kind="warning"
+            message="This imported table sampling policy is unsupported by the editor. Its payload is preserved losslessly and remains read-only."
+          />
+        ) : null}
       </InspectorSection>
 
       <InspectorSection
@@ -110,17 +142,11 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
         badge={nextRun?.stageId ?? "no following Run"}
       >
         <FieldRow label="Following Run" value={nextRun?.stageId ?? "none"} />
-        <div
-          className="fm-sinc-preview__metrics"
-          role="list"
-          aria-label="Table autosave FFT clock parameters"
-        >
-          <Metric label="t_sampling" value={samplePeriodS ? engineering(samplePeriodS, "s") : "disabled"} />
-          <Metric label="N" value={samplingClock ? String(samplingClock.sampleCount) : "not available"} />
-          <Metric label="duration" value={durationS ? engineering(durationS, "s") : "not available"} />
-          <Metric label="df" value={samplingClock ? engineering(samplingClock.frequencyResolutionHz, "Hz") : "not available"} />
-          <Metric label="Nyquist" value={samplingClock ? engineering(samplingClock.nyquistHz, "Hz") : "not available"} />
-        </div>
+        <FieldRow
+          label="Duration"
+          value={durationS ? engineering(durationS, "s") : "not available"}
+        />
+        <SamplingDiagnostics durationS={durationS} sampling={effectiveSampling} />
         <p className="fm-sinc-preview__message fm-sinc-preview__message--ready">
           FFT parameters use the half-open clock t_n = n t_sampling, t_n &lt; T, for the next Run. Runtime certification still uses the timestamps actually written.
         </p>
@@ -129,24 +155,7 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return <span role="listitem"><small>{label}</small><strong>{value}</strong></span>;
-}
-
 function positiveNumber(value: string | number | null | undefined): number | null {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function engineering(value: number, unit: string): string {
-  if (!Number.isFinite(value)) return "invalid";
-  const exponent = value === 0 ? 0 : Math.floor(Math.log10(Math.abs(value)) / 3) * 3;
-  const prefixes: Record<number, string> = {
-    [-15]: "f", [-12]: "p", [-9]: "n", [-6]: "µ", [-3]: "m",
-    0: "", 3: "k", 6: "M", 9: "G", 12: "T",
-  };
-  const prefix = prefixes[exponent];
-  return prefix === undefined
-    ? `${value.toExponential(3)} ${unit}`.trim()
-    : `${(value / 10 ** exponent).toPrecision(4)} ${prefix}${unit}`.trim();
 }

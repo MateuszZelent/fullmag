@@ -12,6 +12,7 @@ import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
 } from "./StageInspectorFrame";
+import { SamplingDiagnostics } from "./SamplingDiagnostics";
 import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
 
 export function RunStageInspector(props: StageInspectorFrameProps) {
@@ -139,7 +140,11 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
               ? workflow.outputs
                   .map(
                     (output) =>
-                      `${output.quantity} every ${engineering(output.everySeconds, "s")} (${output.sourceStageId})`,
+                      `${output.quantity} ${
+                        output.everySeconds
+                          ? `every ${engineering(output.everySeconds, "s")}`
+                          : "with unresolved cadence"
+                      } (${output.sourceStageId})`,
                   )
                   .join("; ")
               : "none — this Run advances without periodic field/scalar files"
@@ -164,6 +169,10 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
           <Metric label="df" value={samplingClock ? engineering(samplingClock.frequencyResolutionHz, "Hz") : "not available"} />
           <Metric label="Nyquist" value={samplingClock ? engineering(samplingClock.nyquistHz, "Hz") : "not available"} />
         </div>
+        <SamplingDiagnostics
+          durationS={durationS}
+          sampling={workflow.tableAutosave}
+        />
         {workflow.fftResponse && !workflow.tableAutosave ? (
           <FeedbackBanner
             kind="warning"

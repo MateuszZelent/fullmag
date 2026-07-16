@@ -135,6 +135,7 @@ export interface StudyAutosaveStageDraft {
   everySeconds: string;
   outputKind: "field" | "scalar";
   quantity: string;
+  samplingMode: "explicit" | "auto_sinc_cutoff";
   rawOutput?: JsonObject;
   readOnly?: boolean;
 }
@@ -151,7 +152,9 @@ export interface StudyFftResponseStageDraft {
 
 export interface StudyTableAutosaveStageDraft {
   enabled: boolean;
+  readOnly: boolean;
   samplePeriodS: string;
+  samplingMode: "explicit" | "auto_sinc_cutoff";
   tableQuantities: string;
   raw?: JsonObject;
 }
@@ -268,6 +271,7 @@ const DEFAULT_AUTOSAVE: StudyAutosaveStageDraft = {
   everySeconds: "2e-12",
   outputKind: "field",
   quantity: "m",
+  samplingMode: "explicit",
 };
 
 const DEFAULT_FFT_RESPONSE: StudyFftResponseStageDraft = {
@@ -280,7 +284,9 @@ const DEFAULT_FFT_RESPONSE: StudyFftResponseStageDraft = {
 
 const DEFAULT_TABLE_AUTOSAVE: StudyTableAutosaveStageDraft = {
   enabled: true,
+  readOnly: false,
   samplePeriodS: "5e-13",
+  samplingMode: "explicit",
   tableQuantities: "t, step, mx, my, mz, e_drive",
 };
 
@@ -681,6 +687,15 @@ export function createStudyStageDraft(
         action?.table_autosave ??
         payload?.table_autosave,
     );
+    const policy = asRecord(table?.sample_period_policy);
+    const knownAutoPolicy =
+      policy?.kind === "auto_sinc_cutoff" &&
+      (policy.nyquist_guard_factor === undefined ||
+        policy.nyquist_guard_factor === 1.3) &&
+      Object.keys(policy).every((key) =>
+        ["kind", "nyquist_guard_factor"].includes(key),
+      );
+    const unsupportedPolicy = policy !== null && !knownAutoPolicy;
     return cloneStudyStageDraft({
       ...DEFAULT_TABLE_AUTOSAVE_STAGE_DRAFT,
       stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
@@ -689,10 +704,14 @@ export function createStudyStageDraft(
           record?.enabled ?? action?.enabled ?? payload?.enabled,
           true,
         ),
+        readOnly: unsupportedPolicy,
         samplePeriodS: scalarText(
-          table?.sample_period_s ?? table?.every_seconds,
+          table?.sample_period_s ??
+            table?.resolved_sample_period_s ??
+            table?.every_seconds,
           DEFAULT_TABLE_AUTOSAVE.samplePeriodS,
         ),
+        samplingMode: knownAutoPolicy ? "auto_sinc_cutoff" : "explicit",
         tableQuantities: Array.isArray(table?.quantities)
           ? table.quantities.map(String).join(", ")
           : DEFAULT_TABLE_AUTOSAVE.tableQuantities,
@@ -703,7 +722,19 @@ export function createStudyStageDraft(
   if (kind === "autosave") {
     const output = asRecord(record?.output ?? action?.output ?? payload?.output);
     const outputKind = output?.kind;
-    const supportedOutput = outputKind === "field" || outputKind === "scalar";
+    const policy = asRecord(output?.sample_period_policy);
+    const knownAutoPolicy =
+      policy?.kind === "auto_sinc_cutoff" &&
+      (policy.nyquist_guard_factor === undefined ||
+        policy.nyquist_guard_factor === 1.3) &&
+      Object.keys(policy).every((key) =>
+        ["kind", "nyquist_guard_factor"].includes(key),
+      );
+    const explicitOutput = outputKind === "field" || outputKind === "scalar";
+    const automaticOutput =
+      (outputKind === "field_auto" || outputKind === "scalar_auto") &&
+      knownAutoPolicy;
+    const supportedOutput = explicitOutput || automaticOutput;
     const quantity = scalarText(
       record?.quantity ?? action?.quantity ?? payload?.quantity ?? output?.name,
       "",
@@ -721,15 +752,19 @@ export function createStudyStageDraft(
           output?.every_seconds,
           DEFAULT_AUTOSAVE.everySeconds,
         ),
-        outputKind: outputKind === "scalar" ? "scalar" : "field",
+        outputKind:
+          outputKind === "scalar" || outputKind === "scalar_auto"
+            ? "scalar"
+            : "field",
         quantity:
           !enabled && !quantity.trim()
             ? ""
             : quantity || DEFAULT_AUTOSAVE.quantity,
+        samplingMode: automaticOutput ? "auto_sinc_cutoff" : "explicit",
+        readOnly: Boolean(output && !supportedOutput),
         ...(output && !supportedOutput
           ? {
               rawOutput: structuredClone(output) as JsonObject,
-              readOnly: true,
             }
           : {}),
       },
@@ -1127,23 +1162,40 @@ export function studyStageDraftToSceneStage(
     };
   }
   if (draft.kind === "table_autosave") {
+    const rawTable = draft.tableAutosave.raw ?? {};
+    const preservedTable = { ...rawTable };
+    delete preservedTable.resolved_sample_period_s;
+    delete preservedTable.sample_period_policy;
+    delete preservedTable.sample_period_s;
     return {
       enabled: draft.tableAutosave.enabled,
       entrypoint_kind: "flat_table_autosave",
       kind: "table_autosave",
       stage_id: requiredText(draft.stageId, "table-autosave"),
-      table_autosave: draft.tableAutosave.enabled
-        ? {
-            ...(draft.tableAutosave.raw ?? {}),
+      table_autosave:
+        draft.tableAutosave.readOnly && draft.tableAutosave.raw
+          ? structuredClone(draft.tableAutosave.raw)
+          : draft.tableAutosave.enabled
+            ? {
+            ...preservedTable,
             kind: "table_autosave",
             quantities: commaSeparatedValues(draft.tableAutosave.tableQuantities),
-            sample_period_s: requiredNumber(
-              draft.tableAutosave.samplePeriodS,
-              "sample_period_s",
-            ),
+            ...(draft.tableAutosave.samplingMode === "auto_sinc_cutoff"
+              ? {
+                  sample_period_policy: {
+                    kind: "auto_sinc_cutoff",
+                    nyquist_guard_factor: 1.3,
+                  },
+                }
+              : {
+                  sample_period_s: requiredNumber(
+                    draft.tableAutosave.samplePeriodS,
+                    "sample_period_s",
+                  ),
+                }),
             table_id: "default",
           }
-        : null,
+            : null,
     };
   }
   if (draft.kind === "autosave") {
@@ -1153,7 +1205,16 @@ export function studyStageDraftToSceneStage(
     const output = draft.autosave.enabled
       ? draft.autosave.readOnly && draft.autosave.rawOutput
         ? structuredClone(draft.autosave.rawOutput)
-        : {
+        : draft.autosave.samplingMode === "auto_sinc_cutoff"
+          ? {
+            kind: `${draft.autosave.outputKind}_auto`,
+            name: requiredText(draft.autosave.quantity, "autosave quantity"),
+            sample_period_policy: {
+              kind: "auto_sinc_cutoff",
+              nyquist_guard_factor: 1.3,
+            },
+          }
+          : {
             every_seconds: requiredNumber(
               draft.autosave.everySeconds,
               "autosave cadence",
@@ -1454,18 +1515,29 @@ export function validateStudyStageDraft(
   }
   if (draft.kind === "table_autosave") {
     if (draft.tableAutosave.enabled) {
-      validatePositiveNumber(
-        issues,
-        draft.tableAutosave.samplePeriodS,
-        "Table autosave t_sampling",
-        true,
-      );
+      if (
+        !draft.tableAutosave.readOnly &&
+        draft.tableAutosave.samplingMode === "explicit"
+      ) {
+        validatePositiveNumber(
+          issues,
+          draft.tableAutosave.samplePeriodS,
+          "Table autosave t_sampling",
+          true,
+        );
+      }
       if (commaSeparatedValues(draft.tableAutosave.tableQuantities).length === 0) {
         issues.push({
           message: "Table autosave requires at least one quantity.",
           severity: "error",
         });
       }
+    }
+    if (draft.tableAutosave.readOnly) {
+      issues.push({
+        message: "Unsupported table sampling policy is preserved read-only.",
+        severity: "warning",
+      });
     }
     return issues;
   }
@@ -1476,7 +1548,11 @@ export function validateStudyStageDraft(
         severity: "error",
       });
     }
-    if (draft.autosave.enabled && !draft.autosave.readOnly) {
+    if (
+      draft.autosave.enabled &&
+      !draft.autosave.readOnly &&
+      draft.autosave.samplingMode === "explicit"
+    ) {
       validatePositiveNumber(
         issues,
         draft.autosave.everySeconds,

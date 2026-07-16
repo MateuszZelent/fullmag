@@ -139,6 +139,86 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
+  it("round-trips automatic sinc sampling for table and field outputs", () => {
+    const policy = {
+      kind: "auto_sinc_cutoff",
+      nyquist_guard_factor: 1.3,
+    };
+    const table = createStudyStageDraft({
+      enabled: true,
+      entrypoint_kind: "flat_table_autosave",
+      kind: "table_autosave",
+      stage_id: "table-auto",
+      table_autosave: {
+        kind: "table_autosave",
+        quantities: ["t", "my"],
+        sample_period_policy: policy,
+        table_id: "default",
+      },
+    }, 0);
+    const autosave = createStudyStageDraft({
+      enabled: true,
+      entrypoint_kind: "flat_autosave",
+      kind: "autosave",
+      output: {
+        kind: "field_auto",
+        name: "m",
+        sample_period_policy: policy,
+      },
+      quantity: "m",
+      stage_id: "autosave-auto",
+    }, 1);
+
+    expect(table.tableAutosave).toMatchObject({
+      readOnly: false,
+      samplingMode: "auto_sinc_cutoff",
+    });
+    expect(autosave.autosave).toMatchObject({
+      outputKind: "field",
+      readOnly: false,
+      samplingMode: "auto_sinc_cutoff",
+    });
+    expect(studyStageDraftToSceneStage(table)).toMatchObject({
+      table_autosave: {
+        sample_period_policy: policy,
+      },
+    });
+    expect(
+      (studyStageDraftToSceneStage(table).table_autosave as Record<string, unknown>)
+        .sample_period_s,
+    ).toBeUndefined();
+    expect(studyStageDraftToSceneStage(autosave)).toMatchObject({
+      output: {
+        kind: "field_auto",
+        name: "m",
+        sample_period_policy: policy,
+      },
+    });
+  });
+
+  it("preserves an unknown table sampling policy losslessly as read-only", () => {
+    const stage = {
+      enabled: false,
+      entrypoint_kind: "flat_table_autosave",
+      kind: "table_autosave",
+      stage_id: "table-future",
+      table_autosave: {
+        kind: "table_autosave",
+        quantities: ["t", "my"],
+        sample_period_policy: { kind: "adaptive_future", tolerance: 0.01 },
+        table_id: "future-table",
+      },
+    };
+    const draft = createStudyStageDraft(stage, 0);
+
+    expect(draft.tableAutosave).toMatchObject({
+      enabled: false,
+      readOnly: true,
+      samplingMode: "explicit",
+    });
+    expect(studyStageDraftToSceneStage(draft)).toEqual(stage);
+  });
+
   it("validates each configuration stage independently while allowing an unsampled Run", () => {
     expect(validateStudyStageDraft(createDefaultStudyStageDraft("run", 0))).toEqual([]);
 

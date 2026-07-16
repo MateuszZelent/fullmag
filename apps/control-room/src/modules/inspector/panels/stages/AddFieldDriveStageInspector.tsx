@@ -21,6 +21,7 @@ import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
 } from "./StageInspectorFrame";
+import { SamplingDiagnostics } from "./SamplingDiagnostics";
 import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
 
 export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
@@ -474,6 +475,10 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
                   }
                 />
                 <SincPulsePreview model={preview} solverDtS={solverDtS} />
+                <SamplingDiagnostics
+                  durationS={durationS}
+                  sampling={effectiveWorkflow?.tableAutosave ?? null}
+                />
               </>
             ) : null}
           </>

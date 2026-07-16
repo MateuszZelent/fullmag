@@ -91,7 +91,7 @@ describe("resolveStudyWorkflowStateBefore", () => {
       },
     };
 
-    expect(resolveStudyWorkflowStateBefore([m, hDrive, mOff], 3).outputs).toEqual([
+    expect(resolveStudyWorkflowStateBefore([m, hDrive, mOff], 3).outputs).toMatchObject([
       {
         everySeconds: 5e-13,
         outputKind: "field",
@@ -131,5 +131,92 @@ describe("resolveStudyWorkflowStateBefore", () => {
     expect(issues.map((issue) => issue.message)).toContain(
       "Active t_sampling violates Nyquist for antenna k0-sinc-antenna: 40000000000 Hz cutoff exceeds 25000000000 Hz Nyquist.",
     );
+  });
+
+  it("resolves automatic sampling from all sinc drives applicable to the Run", () => {
+    const first = createDefaultStudyStageDraft("add_field_drive", 0);
+    const secondBase = createDefaultStudyStageDraft("add_field_drive", 1);
+    const run = {
+      ...createDefaultStudyStageDraft("run", 3),
+      stageId: "excite",
+      untilSeconds: "2e-9",
+    };
+    const second = {
+      ...secondBase,
+      fieldDrive: {
+        ...secondBase.fieldDrive,
+        activation: { kind: "stage_ids" as const, stage_ids: [run.stageId] },
+        id: "high-cutoff",
+        waveform: {
+          amplitude: 1,
+          cutoff_hz: 5e9,
+          kind: "sinc_pulse" as const,
+          t0: 0,
+        },
+      },
+    };
+    const tableBase = createDefaultStudyStageDraft("table_autosave", 2);
+    const table = {
+      ...tableBase,
+      tableAutosave: {
+        ...tableBase.tableAutosave,
+        samplingMode: "auto_sinc_cutoff" as const,
+      },
+    };
+
+    const state = resolveStudyWorkflowStateBefore([first, second, table, run], 3);
+    expect(state.tableAutosave).toMatchObject({
+      autoSampling: {
+        maximumCutoffHz: 40e9,
+        nyquistGuardFactor: 1.3,
+        status: "ready",
+      },
+      samplePeriodS: 1 / (2 * 1.3 * 40e9),
+      samplingMode: "auto_sinc_cutoff",
+      sourceDriveIds: ["k0-sinc-antenna", "high-cutoff"],
+    });
+  });
+
+  it("fails closed when automatic sampling has no active sinc drive for the Run", () => {
+    const tableBase = createDefaultStudyStageDraft("table_autosave", 0);
+    const table = {
+      ...tableBase,
+      tableAutosave: {
+        ...tableBase.tableAutosave,
+        samplingMode: "auto_sinc_cutoff" as const,
+      },
+    };
+    const run = createDefaultStudyStageDraft("run", 1);
+
+    const state = resolveStudyWorkflowStateBefore([table, run], 1);
+    expect(state.tableAutosave).toMatchObject({
+      autoSampling: { status: "unresolved" },
+      samplePeriodS: null,
+    });
+    expect(validateStudyWorkflow([table, run])).toContainEqual({
+      index: 1,
+      message:
+        "Automatic sampling is unresolved: no active sinc drive with a finite positive cutoff applies to this Run.",
+      severity: "error",
+    });
+  });
+
+  it("blocks an automatic field output without an applicable sinc drive", () => {
+    const outputBase = createDefaultStudyStageDraft("autosave", 0);
+    const output = {
+      ...outputBase,
+      autosave: {
+        ...outputBase.autosave,
+        samplingMode: "auto_sinc_cutoff" as const,
+      },
+    };
+    const run = createDefaultStudyStageDraft("run", 1);
+
+    expect(validateStudyWorkflow([output, run])).toContainEqual({
+      index: 1,
+      message:
+        "Automatic sampling for output m is unresolved: no active sinc drive with a finite positive cutoff applies to this Run.",
+      severity: "error",
+    });
   });
 });

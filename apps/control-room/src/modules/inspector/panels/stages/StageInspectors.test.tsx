@@ -384,6 +384,134 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("100.0 fs");
   });
 
+  it("renders automatic sinc sampling controls and complete next-Run FFT diagnostics", () => {
+    const antenna = createDefaultStudyStageDraft("add_field_drive", 0);
+    const tableBase = createDefaultStudyStageDraft("table_autosave", 1);
+    const table = {
+      ...tableBase,
+      tableAutosave: {
+        ...tableBase.tableAutosave,
+        samplingMode: "auto_sinc_cutoff" as const,
+      },
+    };
+    const autosaveBase = createDefaultStudyStageDraft("autosave", 2);
+    const autosave = {
+      ...autosaveBase,
+      autosave: {
+        ...autosaveBase.autosave,
+        samplingMode: "auto_sinc_cutoff" as const,
+      },
+    };
+    const fft = createDefaultStudyStageDraft("fft_response", 3);
+    const run = {
+      ...createDefaultStudyStageDraft("run", 4),
+      stageId: "excite",
+      untilSeconds: "2e-9",
+    };
+    const pipeline = [antenna, table, autosave, fft, run];
+    const tableHtml = render(
+      <TableAutosaveStageInspector
+        {...props("table_autosave")}
+        draft={table}
+        draftIndex={1}
+        pipelineDrafts={pipeline}
+      />,
+    );
+
+    expect(tableHtml).toContain("Sampling mode");
+    expect(tableHtml).toContain("Automatic from sinc cutoff");
+    expect(tableHtml).toMatch(/t_sampling \(s\)[\s\S]*disabled=""/);
+    for (const label of [
+      "Source drives",
+      "Maximum sinc cutoff",
+      "Nyquist guard",
+      "Target Nyquist",
+      "Sampling frequency",
+      "t_sampling",
+      "N",
+      "df",
+      "Actual Nyquist",
+    ]) {
+      expect(tableHtml).toContain(label);
+    }
+    expect(tableHtml).toContain("40.00 GHz");
+    expect(tableHtml).toContain("1.3 × cutoff (+30%)");
+    expect(tableHtml).toContain("52.00 GHz");
+    expect(tableHtml).toContain("104.0 GHz");
+    expect(tableHtml).toContain("9.615 ps");
+    expect(tableHtml).toContain("208");
+    expect(tableHtml).toContain("500.0 MHz");
+
+    const autosaveHtml = render(
+      <AutosaveStageInspector
+        {...props("autosave")}
+        draft={autosave}
+        draftIndex={2}
+        pipelineDrafts={pipeline}
+      />,
+    );
+    expect(autosaveHtml).toContain("Automatic from sinc cutoff");
+    expect(autosaveHtml).toMatch(/Every \(s\)[\s\S]*disabled=""/);
+
+    const antennaHtml = render(
+      <AddFieldDriveStageInspector
+        {...props("add_field_drive")}
+        draft={antenna}
+        draftIndex={0}
+        pipelineDrafts={pipeline}
+      />,
+    );
+    expect(antennaHtml).toContain("Automatic sampling diagnostics");
+    expect(antennaHtml).toContain("104.0 GHz");
+
+    const fftHtml = render(
+      <FftResponseStageInspector
+        {...props("fft_response")}
+        draft={fft}
+        draftIndex={3}
+        pipelineDrafts={pipeline}
+      />,
+    );
+    expect(fftHtml).toContain("Automatic sampling diagnostics");
+    expect(fftHtml).toContain("500.0 MHz");
+
+    const runHtml = render(
+      <RunStageInspector
+        {...props("run")}
+        draft={run}
+        draftIndex={4}
+        pipelineDrafts={pipeline}
+      />,
+    );
+    expect(runHtml).toContain("Automatic sampling diagnostics");
+    expect(runHtml).toContain("Run Progress");
+  });
+
+  it("blocks automatic sampling without an applicable preceding sinc drive", () => {
+    const tableBase = createDefaultStudyStageDraft("table_autosave", 0);
+    const table = {
+      ...tableBase,
+      tableAutosave: {
+        ...tableBase.tableAutosave,
+        samplingMode: "auto_sinc_cutoff" as const,
+      },
+    };
+    const run = createDefaultStudyStageDraft("run", 1);
+    const html = render(
+      <TableAutosaveStageInspector
+        {...props("table_autosave")}
+        draft={table}
+        draftIndex={0}
+        pipelineDrafts={[table, run]}
+      />,
+    );
+
+    expect(html).toContain("Automatic sampling is unresolved");
+    expect(html).toContain(
+      "No active sinc drive with a finite positive cutoff applies to this Run.",
+    );
+  });
+
   it.each([
     [
       "eigenmodes",

@@ -7,6 +7,7 @@ import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
 } from "./StageInspectorFrame";
+import { SamplingDiagnostics } from "./SamplingDiagnostics";
 import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
 
 export function AutosaveStageInspector(props: StageInspectorFrameProps) {
@@ -16,6 +17,18 @@ export function AutosaveStageInspector(props: StageInspectorFrameProps) {
     props.draftIndex,
   );
   const disabled = !draft || draft.autosave.readOnly;
+  const pipelineDrafts = props.pipelineDrafts ?? [];
+  const nextRunIndex = pipelineDrafts.findIndex(
+    (candidate, index) => index > props.draftIndex && candidate.kind === "run",
+  );
+  const nextRun = nextRunIndex >= 0 ? pipelineDrafts[nextRunIndex] : null;
+  const effectiveState = nextRunIndex >= 0
+    ? resolveStudyWorkflowStateBefore(pipelineDrafts, nextRunIndex)
+    : null;
+  const effectiveOutput = effectiveState?.outputs.find(
+    (output) => output.quantity === draft?.autosave.quantity,
+  ) ?? null;
+  const durationS = positiveNumber(nextRun?.untilSeconds);
 
   return (
     <>
@@ -112,10 +125,33 @@ export function AutosaveStageInspector(props: StageInspectorFrameProps) {
               </select>
             </label>
             <label className="fm-inspector-field">
+              <span>Sampling mode</span>
+              <select
+                className="fm-inspector-input"
+                disabled={disabled}
+                value={draft.autosave.samplingMode}
+                onChange={(event) =>
+                  props.onUpdateDraft({
+                    autosave: {
+                      ...draft.autosave,
+                      samplingMode: event.target.value as
+                        | "auto_sinc_cutoff"
+                        | "explicit",
+                    },
+                  })
+                }
+              >
+                <option value="explicit">Explicit period</option>
+                <option value="auto_sinc_cutoff">Automatic from sinc cutoff</option>
+              </select>
+            </label>
+            <label className="fm-inspector-field">
               <span>Every (s)</span>
               <input
                 className="fm-inspector-input"
-                disabled={disabled}
+                disabled={
+                  disabled || draft.autosave.samplingMode === "auto_sinc_cutoff"
+                }
                 min="0"
                 type="number"
                 value={draft.autosave.everySeconds}
@@ -141,9 +177,17 @@ export function AutosaveStageInspector(props: StageInspectorFrameProps) {
             message="This imported output kind is unsupported by the editor. Its payload is preserved losslessly and remains read-only."
           />
         ) : null}
+        {draft?.autosave.enabled ? (
+          <SamplingDiagnostics durationS={durationS} sampling={effectiveOutput} />
+        ) : null}
       </InspectorSection>
     </>
   );
+}
+
+function positiveNumber(value: string | number | null | undefined): number | null {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function effectLabel(draft: StageInspectorFrameProps["draft"]): string {
