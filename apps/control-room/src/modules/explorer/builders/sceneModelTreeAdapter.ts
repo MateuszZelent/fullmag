@@ -10,6 +10,10 @@ import type {
   SpinTransportListResource,
 } from "@/kernel/api/apiTypes";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+import {
+  isKnownCurrentTransport,
+  isKnownSpinTransport,
+} from "@/shared/domain/physics/transportRecognition";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
 import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
 
@@ -100,7 +104,7 @@ export function modelTreeSnapshotFromScene(
         index,
         label: id ?? `Unknown current transport ${index + 1}`,
         model: "model" in item && typeof item.model === "string" ? item.model : null,
-        supported: "kind" in item && item.kind === "current_transport" && "model" in item,
+        supported: isKnownCurrentTransport(item),
       };
     }),
     spinTransports: (resources.spinTransports?.items ?? []).map((item, index) => ({
@@ -109,7 +113,7 @@ export function modelTreeSnapshotFromScene(
       index,
       label: "id" in item && typeof item.id === "string" ? item.id : `Unknown spin transport ${index + 1}`,
       mode: "mode" in item && typeof item.mode === "string" ? item.mode : null,
-      supported: "schema_version" in item && "requested_execution" in item,
+      supported: isKnownSpinTransport(item),
     })),
     study: sceneStudySnapshot(scene?.study),
     universe: sceneUniverseSnapshot(scene?.universe),

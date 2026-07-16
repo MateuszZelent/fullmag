@@ -45,6 +45,44 @@ const futureSpin = {
   },
 };
 
+const futureMixingSpin = {
+  boundaries: [],
+  constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+  current_source_id: "charge",
+  domain: [],
+  id: "future-mixing-spin",
+  interfaces: [{
+    absorption: "partial_absorption.v2",
+    ferromagnet_side: { object_id: "stack", region_id: "free" },
+    formula_version: "magnetoelectronic.fullmag.v2",
+    g_down_Spm2: 2,
+    g_i_Spm2: 3,
+    g_r_Spm2: 4,
+    g_sml_Spm2: 5,
+    g_up_Spm2: 6,
+    id: "nf",
+    kind: "mixing_conductance",
+    normal_side: { object_id: "stack", region_id: "normal" },
+    normal_to_ferromagnet: [1, 0, 0],
+  }],
+  materials: [],
+  mode: "steady",
+  requested_execution: {
+    device: "cpu",
+    discretization: "fdm",
+    execution_mode: "strict",
+    precision: "double",
+  },
+  schema_version: "spin_transport.v1",
+  solver: {
+    default_external_boundary: "spin_insulating",
+    engine: "gmres",
+    linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 },
+    operator_version: "fv_spin_upwind_v1",
+    physical_residual_version: "transport_balance_integrated_l2.v1",
+  },
+};
+
 const currentItems = [
   { future_kind: "charge.v9", opaque: { value: 1 } },
   { future_kind: "charge.v10", opaque: { value: 2 } },
@@ -64,6 +102,7 @@ vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
         { id: "moved", schema_version: "spin_transport.v1", current_source_id: "charge", mode: "steady", domain: [], materials: [], solver: { default_external_boundary: "spin_insulating", engine: "gmres", linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 }, operator_version: "fv_spin_upwind_v1", physical_residual_version: "transport_balance_integrated_l2.v1" }, requested_execution: { device: "cpu", discretization: "fdm", execution_mode: "strict", precision: "double" }, constitutive_version: "transport_constitutive.one_way.fullmag.v1" },
         { id: "other", schema_version: "spin_transport.v1", current_source_id: "charge", mode: "steady", domain: [], materials: [], solver: { default_external_boundary: "spin_insulating", engine: "gmres", linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 }, operator_version: "fv_spin_upwind_v1", physical_residual_version: "transport_balance_integrated_l2.v1" }, requested_execution: { device: "cpu", discretization: "fdm", execution_mode: "strict", precision: "double" }, constitutive_version: "transport_constitutive.one_way.fullmag.v1" },
         futureSpin,
+        futureMixingSpin,
       ],
       scene_revision: 7,
     },
@@ -170,5 +209,24 @@ describe("TransportAuthoringInspector", () => {
     expect(html).not.toContain(">Delete<");
     expect(html).not.toContain(">Schema version<");
     expect(html).not.toContain(">Current source id<");
+  });
+
+  it("renders future mixing versions losslessly without mutation actions", () => {
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <SpinTransportInspectorPanel selection={selection("physics.spin-transport", {
+          kind: "physics.spin-transport",
+          nodeId: "model:physics:spin-transports:future-mixing-spin",
+          spinTransportId: "future-mixing-spin",
+          type: "spin-transport",
+        })} />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain("Unknown transport variant is preserved losslessly and is read-only.");
+    expect(textareaContent(html)).toBe(expectedOpaqueTextareaContent(futureMixingSpin));
+    expect(html).not.toContain(">Replace<");
+    expect(html).not.toContain(">Delete<");
+    expect(html).not.toContain(">Interfaces<");
   });
 });

@@ -28,6 +28,7 @@
     "smoke:cross-section-workflow": "node scripts/smoke-cross-section-workflow.mjs",
     "smoke:airbox-field-routing": "node scripts/smoke-airbox-field-routing.mjs",
     "smoke:study-authoring-ui": "node scripts/smoke-study-authoring-ui.mjs",
+    "smoke:transport-authoring-ui": "node scripts/smoke-transport-authoring-ui-cdp.mjs",
     "smoke:study-runtime-control": "node scripts/smoke-study-runtime-control.mjs",
     "smoke:analysis-plots": "node scripts/smoke-analysis-plots.mjs",
     "screenshot:viewport-3d": "node scripts/screenshot-viewport-3d.mjs",

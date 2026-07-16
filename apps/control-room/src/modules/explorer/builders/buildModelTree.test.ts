@@ -4116,6 +4116,72 @@ describe("buildModelTree", () => {
     }]);
   });
 
+  it("uses the canonical transport classifier for future Explorer lookalikes", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      currentTransports: {
+        items: [{
+          future_key: { preserve: true },
+          kind: "current_transport",
+          model: "prescribed_density",
+          name: "future-current",
+        }],
+        scene_revision: 5,
+      },
+      spinTransports: {
+        items: [{
+          boundaries: [],
+          constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+          current_source_id: "charge",
+          domain: [],
+          id: "future-mixing",
+          interfaces: [{
+            absorption: "partial_absorption.v2",
+            ferromagnet_side: { object_id: "stack", region_id: "free" },
+            formula_version: "magnetoelectronic.fullmag.v2",
+            g_down_Spm2: 2,
+            g_i_Spm2: 3,
+            g_r_Spm2: 4,
+            g_sml_Spm2: 5,
+            g_up_Spm2: 6,
+            id: "nf",
+            kind: "mixing_conductance",
+            normal_side: { object_id: "stack", region_id: "normal" },
+            normal_to_ferromagnet: [1, 0, 0],
+          }],
+          materials: [],
+          mode: "steady",
+          requested_execution: {
+            device: "cpu",
+            discretization: "fdm",
+            execution_mode: "strict",
+            precision: "double",
+          },
+          schema_version: "spin_transport.v1",
+          solver: {
+            default_external_boundary: "spin_insulating",
+            engine: "gmres",
+            linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 },
+            operator_version: "fv_spin_upwind_v1",
+            physical_residual_version: "transport_balance_integrated_l2.v1",
+          },
+        }],
+        scene_revision: 5,
+      },
+    });
+
+    expect(snapshot.currentTransports?.[0]?.supported).toBe(false);
+    expect(snapshot.spinTransports?.[0]?.supported).toBe(false);
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot));
+    expect(nodes.find((node) => node.currentTransportId === "future-current")).toMatchObject({
+      badge: "read-only",
+      status: "unsupported",
+    });
+    expect(nodes.find((node) => node.spinTransportId === "future-mixing")).toMatchObject({
+      badge: "read-only",
+      status: "unsupported",
+    });
+  });
+
   it("builds parallel current transport collection and record nodes", () => {
     const snapshot = modelTreeSnapshotFromScene(null, {
       currentTransports: {

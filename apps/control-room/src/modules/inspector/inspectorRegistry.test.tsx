@@ -146,6 +146,12 @@ describe("inspectorRegistry", () => {
     expect(resolveInspectorPanel({ kind: "physics.current-transport" })?.id).toBe(
       "physics-current-transport",
     );
+    expect(resolveInspectorPanel({ kind: "physics.spin-transports" })?.id).toBe(
+      "physics-spin-transport",
+    );
+    expect(resolveInspectorPanel({ kind: "physics.spin-transport" })?.id).toBe(
+      "physics-spin-transport",
+    );
   });
 
   it("resolves object material selections to the material assignment panel", () => {
