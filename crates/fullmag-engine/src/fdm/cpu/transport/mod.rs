@@ -1,4 +1,5 @@
 mod charge;
+mod coupled_block_linear;
 mod coupled_charge_spin;
 mod oersted;
 mod reciprocal_constitutive;
