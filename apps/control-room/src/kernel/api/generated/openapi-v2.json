@@ -782,6 +782,77 @@
         ],
         "type": "object"
       },
+      "AutomaticOutputSamplingResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "field_auto"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "sample_period_policy": {
+                "$ref": "#/components/schemas/SamplingPeriodPolicyResource"
+              }
+            },
+            "required": [
+              "name",
+              "sample_period_policy",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "scalar_auto"
+                ],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "sample_period_policy": {
+                "$ref": "#/components/schemas/SamplingPeriodPolicyResource"
+              }
+            },
+            "required": [
+              "name",
+              "sample_period_policy",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AutomaticTableAutosaveResource": {
+        "additionalProperties": false,
+        "properties": {
+          "quantities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sample_period_policy": {
+            "$ref": "#/components/schemas/SamplingPeriodPolicyResource"
+          },
+          "table_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "table_id",
+          "quantities",
+          "sample_period_policy"
+        ],
+        "type": "object"
+      },
       "BasicLayerPatch": {
         "properties": {
           "opacity": {
@@ -13595,6 +13666,29 @@
             },
             "required": [
               "command_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SamplingPeriodPolicyResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "auto_sinc_cutoff"
+                ],
+                "type": "string"
+              },
+              "nyquist_guard_factor": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "nyquist_guard_factor",
               "kind"
             ],
             "type": "object"

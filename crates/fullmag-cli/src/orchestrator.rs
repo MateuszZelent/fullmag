@@ -1802,9 +1802,29 @@ fn refresh_materialized_stage_execution_plans(
                 continue;
             }
         }
-        *plan_slot = fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
+        *plan_slot = plan_materialized_stage_snapshot(stage)?;
     }
     Ok(())
+}
+
+fn plan_materialized_stage_snapshot(stage: &ResolvedScriptStage) -> Result<ExecutionPlanIR> {
+    let mut planning_ir = stage.ir.clone();
+    if stage.action.is_some() {
+        let sampling = planning_ir.study.sampling_mut();
+        if sampling.table_autosave.as_ref().is_some_and(|table| {
+            table.requests_auto_sinc_cutoff() && table.resolved_sample_period_s.is_none()
+        }) {
+            sampling.table_autosave = None;
+        }
+        sampling.outputs.retain(|output| {
+            !matches!(
+                output,
+                fullmag_ir::OutputIR::FieldAuto { .. }
+                    | fullmag_ir::OutputIR::ScalarAuto { .. }
+            )
+        });
+    }
+    fullmag_plan::plan(&planning_ir).map_err(|error| anyhow!(error.to_string()))
 }
 
 #[derive(Debug, Clone)]
@@ -5501,7 +5521,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     }
     let mut stage_execution_plans = stages
         .iter()
-        .map(|stage| fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string())))
+        .map(plan_materialized_stage_snapshot)
         .collect::<Result<Vec<_>>>()?;
 
     let mut current_plan_summary = stages[0]
@@ -9156,7 +9176,7 @@ mod tests {
         write_sampling_resolution_stage_record,
         live_step_ingest_preview_len, mesh_build_pipeline_status_json,
         mesh_source_scene_revision,
-        prepare_remesh_stage_transaction,
+        plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
         resolve_adaptive_convergence_metric,
         resolved_shared_domain_object_region_markers, scripted_stage_execution_state,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
@@ -9462,6 +9482,35 @@ mod tests {
             .contains("shared-domain remesh produced no fem_domain_mesh_asset"));
         assert_eq!(stages[0].ir, stages_before[0].ir);
         assert_eq!(plans, plans_before);
+    }
+
+    #[test]
+    fn synthetic_sampling_configuration_can_be_preplanned_before_run_resolution() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.study.sampling_mut().outputs = vec![fullmag_ir::OutputIR::FieldAuto {
+            name: "m".to_string(),
+            sample_period_policy: fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            },
+        }];
+        let stage = ResolvedScriptStage::synthetic(
+            problem,
+            "study_pipeline_autosave",
+            ResolvedScriptStageAction::Autosave {
+                enabled: true,
+                quantity: Some("m".to_string()),
+                output: None,
+            },
+        );
+
+        let plan = plan_materialized_stage_snapshot(&stage)
+            .expect("synthetic configuration must preplan without resolving Run-only sampling");
+
+        assert!(matches!(plan.backend_plan, BackendPlanIR::Fdm(_)));
+        assert!(matches!(
+            stage.ir.study.sampling().outputs.as_slice(),
+            [fullmag_ir::OutputIR::FieldAuto { .. }]
+        ));
     }
 
     use crate::args::ScriptCli;

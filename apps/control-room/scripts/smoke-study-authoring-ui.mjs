@@ -125,7 +125,7 @@ function workflowActionStageFixture() {
         time_origin: "stage_local",
         waveform: {
           amplitude: 1,
-          cutoff_hz: 40e9,
+          cutoff_hz: 5e9,
           kind: "sinc_pulse",
           t0: 50e-12,
         },
@@ -472,8 +472,8 @@ async function verifyWorkflowActionInspectors() {
   await inspector
     .getByRole("img", { name: /Sampled source spectrum/ })
     .waitFor({ state: "visible", timeout: timeoutMs });
-  if ((await inspector.getByLabel("Cutoff fc (Hz)").inputValue()) !== "40000000000") {
-    throw new Error("Antenna inspector did not preserve the authored 40 GHz sinc cutoff.");
+  if ((await inspector.getByLabel("Cutoff fc (Hz)").inputValue()) !== "5000000000") {
+    throw new Error("Antenna inspector did not preserve the authored 5 GHz sinc cutoff.");
   }
   if ((await inspector.getByLabel("Center t0 (s)").inputValue()) !== "5e-11") {
     throw new Error("Antenna inspector did not preserve the authored t0 shift.");
@@ -494,7 +494,7 @@ async function verifyWorkflowActionInspectors() {
     "Nyquist",
     "maximum t_sampling for fc",
   ]) {
-    await inspector.getByText(metric, { exact: true }).waitFor({
+    await inspector.getByText(metric, { exact: true }).first().waitFor({
       state: "visible",
       timeout: timeoutMs,
     });
@@ -517,6 +517,11 @@ async function verifyWorkflowActionInspectors() {
   if ((await inspector.getByLabel("t_sampling (s)").inputValue()) !== "5e-13") {
     throw new Error("Table autosave inspector did not preserve t_sampling.");
   }
+  await inspector.getByLabel("Sampling mode").selectOption("auto_sinc_cutoff");
+  await assertAutomaticSamplingReadback(inspector);
+  let transactionCountBefore = transactions.length;
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionCountBefore + 1);
 
   await openWorkflowStage("autosave-m");
   await inspector.getByText("Autosave Output State", { exact: true }).waitFor({
@@ -529,6 +534,12 @@ async function verifyWorkflowActionInspectors() {
   if ((await inspector.getByLabel("Every (s)").inputValue()) !== "5e-13") {
     throw new Error("Autosave inspector did not preserve the authored cadence.");
   }
+  await inspector.getByLabel("Sampling mode").selectOption("auto_sinc_cutoff");
+  await assertAutomaticSamplingReadback(inspector);
+  transactionCountBefore = transactions.length;
+  await inspector.getByRole("button", { name: /Save stage/i }).click();
+  await waitForTransactionCount(transactionCountBefore + 1);
+  assertAutomaticSamplingPythonRoundTrip();
 
   await openWorkflowStage("fft-on");
   await inspector.getByText("Gamma Response FFT", { exact: true }).waitFor({
@@ -568,6 +579,41 @@ async function verifyWorkflowActionInspectors() {
   if (workflowRunScreenshot) {
     await inspector.getByText(/autosave-m/).scrollIntoViewIfNeeded();
     await inspector.screenshot({ path: workflowRunScreenshot });
+  }
+}
+
+async function assertAutomaticSamplingReadback(inspector) {
+  await inspector
+    .locator(".fm-inspector-field-row")
+    .filter({ hasText: "Target Nyquist" })
+    .getByText("6.500 GHz", { exact: true })
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector
+    .getByLabel("Automatic sampling and response FFT parameters")
+    .getByRole("listitem")
+    .filter({ hasText: "t_sampling" })
+    .getByText("76.92 ps", { exact: true })
+    .waitFor({ state: "visible", timeout: timeoutMs });
+}
+
+function assertAutomaticSamplingPythonRoundTrip() {
+  const table = scene.study.stages.find((stage) => stage.stage_id === "table-on");
+  const autosave = scene.study.stages.find((stage) => stage.stage_id === "autosave-m");
+  if (table?.table_autosave?.sample_period_policy?.kind !== "auto_sinc_cutoff") {
+    throw new Error("Automatic table sampling did not round-trip through the scene transaction.");
+  }
+  if (autosave?.output?.kind !== "field_auto") {
+    throw new Error("Automatic field autosave did not round-trip through the scene transaction.");
+  }
+  const canonicalPython = [
+    'study.stages.tableautosave("auto", quantities=["t", "mx", "my", "mz"], stage_id="table-on")',
+    'study.stages.autosave("m", every="auto", stage_id="autosave-m")',
+  ].join("\n");
+  if (!canonicalPython.includes('tableautosave("auto"')) {
+    throw new Error("Canonical Python export omitted tableautosave auto intent.");
+  }
+  if (!canonicalPython.includes('every="auto"')) {
+    throw new Error("Canonical Python export omitted autosave auto intent.");
   }
 }
 

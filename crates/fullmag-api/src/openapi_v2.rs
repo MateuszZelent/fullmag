@@ -378,6 +378,9 @@ use utoipa::OpenApi;
         crate::schemas::authoring::AuthoringTransactionResponse,
         crate::schemas::authoring::StudyRuntimeResource,
         crate::schemas::authoring::StudyRuntimePatchRequest,
+        crate::schemas::authoring::SamplingPeriodPolicyResource,
+        crate::schemas::authoring::AutomaticOutputSamplingResource,
+        crate::schemas::authoring::AutomaticTableAutosaveResource,
         crate::schemas::authoring::NullableU32PatchValue,
         crate::schemas::authoring::NullableF64PatchValue,
         crate::schemas::authoring::NullableStringPatchValue,
@@ -714,6 +717,22 @@ mod tests {
                 "export"
             ])
         );
+    }
+
+    #[test]
+    fn openapi_declares_automatic_sampling_authoring_fragments() {
+        let document = openapi_json();
+        let schemas = &document["components"]["schemas"];
+
+        assert!(schemas["SamplingPeriodPolicyResource"]
+            .to_string()
+            .contains("auto_sinc_cutoff"));
+        assert!(schemas["AutomaticOutputSamplingResource"]
+            .to_string()
+            .contains("field_auto"));
+        assert!(schemas["AutomaticOutputSamplingResource"]
+            .to_string()
+            .contains("scalar_auto"));
     }
 
     #[test]

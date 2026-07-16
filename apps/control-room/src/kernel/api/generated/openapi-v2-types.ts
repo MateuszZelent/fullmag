@@ -3125,6 +3125,22 @@ export interface components {
             scene_revision: number;
             transaction_kind: string;
         };
+        AutomaticOutputSamplingResource: {
+            /** @enum {string} */
+            kind: "field_auto";
+            name: string;
+            sample_period_policy: components["schemas"]["SamplingPeriodPolicyResource"];
+        } | {
+            /** @enum {string} */
+            kind: "scalar_auto";
+            name: string;
+            sample_period_policy: components["schemas"]["SamplingPeriodPolicyResource"];
+        };
+        AutomaticTableAutosaveResource: {
+            quantities: string[];
+            sample_period_policy: components["schemas"]["SamplingPeriodPolicyResource"];
+            table_id: string;
+        };
         BasicLayerPatch: {
             /** Format: double */
             opacity?: number | null;
@@ -6373,6 +6389,12 @@ export interface components {
             command_id: string;
             /** @enum {string} */
             kind: "command_id";
+        };
+        SamplingPeriodPolicyResource: {
+            /** @enum {string} */
+            kind: "auto_sinc_cutoff";
+            /** Format: double */
+            nyquist_guard_factor: number;
         };
         /** @enum {string} */
         SamplingProfile: "quality" | "balanced" | "interactive" | "memory_saver" | "custom";

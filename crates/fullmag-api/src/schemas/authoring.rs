@@ -46,6 +46,33 @@ pub struct StudyRuntimePatchRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SamplingPeriodPolicyResource {
+    AutoSincCutoff { nyquist_guard_factor: f64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AutomaticOutputSamplingResource {
+    FieldAuto {
+        name: String,
+        sample_period_policy: SamplingPeriodPolicyResource,
+    },
+    ScalarAuto {
+        name: String,
+        sample_period_policy: SamplingPeriodPolicyResource,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AutomaticTableAutosaveResource {
+    pub table_id: String,
+    pub quantities: Vec<String>,
+    pub sample_period_policy: SamplingPeriodPolicyResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SceneMetadataResource {
     pub id: String,
     pub name: String,
