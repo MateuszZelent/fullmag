@@ -4210,4 +4210,59 @@ describe("buildModelTree", () => {
     expect(unknowns.map((node) => node.currentTransportIndex)).toEqual([1, 2]);
     expect(new Set(unknowns.map((node) => node.id)).size).toBe(2);
   });
+
+  it("routes blank transport identities positionally as unsupported", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      currentTransports: {
+        items: [{
+          current_density: [1, 0, 0],
+          kind: "current_transport",
+          model: "prescribed_density",
+          name: "   ",
+        }],
+        scene_revision: 9,
+      },
+      spinTransports: {
+        items: [{
+          boundaries: [],
+          constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+          current_source_id: "charge",
+          domain: [],
+          id: "",
+          interfaces: [],
+          materials: [],
+          mode: "steady",
+          requested_execution: {
+            device: "cpu",
+            discretization: "fdm",
+            execution_mode: "strict",
+            precision: "double",
+          },
+          schema_version: "spin_transport.v1",
+          solver: {
+            default_external_boundary: "spin_insulating",
+            engine: "gmres",
+            linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 },
+            operator_version: "fv_spin_upwind_v1",
+            physical_residual_version: "transport_balance_integrated_l2.v1",
+          },
+        }],
+        scene_revision: 9,
+      },
+    });
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot));
+
+    expect(nodes.find((node) => node.kind === "physics.current-transport")).toMatchObject({
+      badge: "read-only",
+      currentTransportIndex: 0,
+      id: "model:physics:current-transports:position:0",
+      status: "unsupported",
+    });
+    expect(nodes.find((node) => node.kind === "physics.spin-transport")).toMatchObject({
+      badge: "read-only",
+      id: "model:physics:spin-transports:position:0",
+      spinTransportIndex: 0,
+      status: "unsupported",
+    });
+  });
 });

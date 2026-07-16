@@ -13,6 +13,7 @@ import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes
 import {
   isKnownCurrentTransport,
   isKnownSpinTransport,
+  transportIdentity,
 } from "@/shared/domain/physics/transportRecognition";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
 import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
@@ -98,7 +99,7 @@ export function modelTreeSnapshotFromScene(
       : [],
     physicsInteractions: scenePhysicsInteractions(scene?.objects),
     currentTransports: (resources.currentTransports?.items ?? []).map((item, index) => {
-      const id = "name" in item && typeof item.name === "string" ? item.name : null;
+      const id = transportIdentity("current_transport", item);
       return {
         id,
         index,
@@ -107,14 +108,17 @@ export function modelTreeSnapshotFromScene(
         supported: isKnownCurrentTransport(item),
       };
     }),
-    spinTransports: (resources.spinTransports?.items ?? []).map((item, index) => ({
+    spinTransports: (resources.spinTransports?.items ?? []).map((item, index) => {
+      const id = transportIdentity("spin_transport", item);
+      return {
       currentSourceId: "current_source_id" in item && typeof item.current_source_id === "string" ? item.current_source_id : null,
-      id: "id" in item && typeof item.id === "string" ? item.id : null,
+      id,
       index,
-      label: "id" in item && typeof item.id === "string" ? item.id : `Unknown spin transport ${index + 1}`,
+      label: id ?? `Unknown spin transport ${index + 1}`,
       mode: "mode" in item && typeof item.mode === "string" ? item.mode : null,
       supported: isKnownSpinTransport(item),
-    })),
+      };
+    }),
     study: sceneStudySnapshot(scene?.study),
     universe: sceneUniverseSnapshot(scene?.universe),
   };

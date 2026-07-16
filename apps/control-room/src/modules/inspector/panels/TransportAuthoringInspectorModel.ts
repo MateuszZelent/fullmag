@@ -4,6 +4,10 @@ import type {
   SceneCurrentTransport,
   SceneSpinTransport,
 } from "@/kernel/api/apiTypes";
+import {
+  transportIdentity,
+  type TransportFamily,
+} from "@/shared/domain/physics/transportRecognition";
 
 export interface CurrentTransportDraft {
   boundaries: string;
@@ -45,18 +49,6 @@ export interface SpinTransportDraft {
   solverOperatorVersion: string;
   solverPhysicalResidualVersion: string;
   solverRelativeTolerance: string;
-}
-
-export type TransportFamily = "current_transport" | "spin_transport";
-
-export function transportIdentity(
-  family: TransportFamily,
-  resource: SceneCurrentTransport | SceneSpinTransport,
-): string | null {
-  const value = family === "current_transport"
-    ? (resource as { name?: unknown }).name
-    : (resource as { id?: unknown }).id;
-  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 export function transportSelectionKey(
@@ -112,6 +104,8 @@ export function readonlyTransportPayload(value: SceneCurrentTransport | SceneSpi
 export {
   isKnownCurrentTransport,
   isKnownSpinTransport,
+  transportIdentity,
+  type TransportFamily,
 } from "@/shared/domain/physics/transportRecognition";
 
 export function currentTransportDraft(value?: KnownSceneCurrentTransport | null): CurrentTransportDraft {

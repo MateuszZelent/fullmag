@@ -4,6 +4,11 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import {
+  runTransportAuthoringSmoke,
+  startChromium,
+} from "./smoke-transport-authoring-ui-runtime.mjs";
+
 const workspaceUrl =
   process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const timeoutMs = Number(
@@ -85,73 +90,69 @@ const spinTransports = [
   },
 ];
 
-const fixtureServer = await startFixtureServer();
-const browser = await startChromium();
-const cdp = await connectCdp(browser.wsUrl);
+let cdp = null;
 let sessionId = null;
 
-try {
-  const target = await cdp.send("Target.createTarget", { url: "about:blank" });
-  const attached = await cdp.send("Target.attachToTarget", {
-    flatten: true,
-    targetId: target.targetId,
-  });
-  sessionId = attached.sessionId;
-  cdp.on("Runtime.exceptionThrown", (event) => {
-    browserErrors.push(event.exceptionDetails?.text ?? "Runtime exception");
-  });
-  cdp.on("Log.entryAdded", (event) => {
-    if (event.entry?.level === "error") {
-      const text = event.entry.text ?? "";
-      if (!text.includes("WebSocket")) browserErrors.push(text);
+await runTransportAuthoringSmoke({
+  connectCdp,
+  removeProfile,
+  run: async ({ cdp: acquiredCdp, fixtureServer }) => {
+    cdp = acquiredCdp;
+    const target = await cdp.send("Target.createTarget", { url: "about:blank" });
+    const attached = await cdp.send("Target.attachToTarget", {
+      flatten: true,
+      targetId: target.targetId,
+    });
+    sessionId = attached.sessionId;
+    cdp.on("Runtime.exceptionThrown", (event) => {
+      browserErrors.push(event.exceptionDetails?.text ?? "Runtime exception");
+    });
+    cdp.on("Log.entryAdded", (event) => {
+      if (event.entry?.level === "error") {
+        const text = event.entry.text ?? "";
+        if (!text.includes("WebSocket")) browserErrors.push(text);
+      }
+    });
+    await cdp.send("Runtime.enable", {}, sessionId);
+    await cdp.send("Log.enable", {}, sessionId);
+    await cdp.send("Page.enable", {}, sessionId);
+    await cdp.send(
+      "Page.addScriptToEvaluateOnNewDocument",
+      {
+        source: `window.__FULLMAG_CONFIG__ = { ...(window.__FULLMAG_CONFIG__ || {}), allowMissingSessionSmoke: true, controlRoomApiBase: ${JSON.stringify(fixtureServer.baseUrl)}, disableRealtime: true };`,
+      },
+      sessionId,
+    );
+    await cdp.send("Page.navigate", { url: workspaceUrl }, sessionId);
+    await waitForVisible(".fm-explorer");
+    await clickTabByText("Model");
+
+    await verifyKnownRoute(
+      "model:physics:current-transports:id:known-current",
+      "Charge transport",
+      "Name",
+    );
+    await verifyKnownRoute(
+      "model:physics:spin-transports:id:known-spin",
+      "Spin transport",
+      "Current source id",
+    );
+    await verifyUnsupportedRoute(
+      "model:physics:current-transports:id:future-current",
+    );
+    await verifyUnsupportedRoute(
+      "model:physics:spin-transports:id:future-mixing",
+    );
+
+    if (browserErrors.length > 0) {
+      throw new Error(`Browser errors:\n${browserErrors.join("\n")}`);
     }
-  });
-  await cdp.send("Runtime.enable", {}, sessionId);
-  await cdp.send("Log.enable", {}, sessionId);
-  await cdp.send("Page.enable", {}, sessionId);
-  await cdp.send(
-    "Page.addScriptToEvaluateOnNewDocument",
-    {
-      source: `window.__FULLMAG_CONFIG__ = { ...(window.__FULLMAG_CONFIG__ || {}), allowMissingSessionSmoke: true, controlRoomApiBase: ${JSON.stringify(fixtureServer.baseUrl)}, disableRealtime: true };`,
-    },
-    sessionId,
-  );
-  await cdp.send("Page.navigate", { url: workspaceUrl }, sessionId);
-  await waitForVisible(".fm-explorer");
-  await clickTabByText("Model");
-
-  await verifyKnownRoute(
-    "model:physics:current-transports:id:known-current",
-    "Charge transport",
-    "Name",
-  );
-  await verifyKnownRoute(
-    "model:physics:spin-transports:id:known-spin",
-    "Spin transport",
-    "Current source id",
-  );
-  await verifyUnsupportedRoute(
-    "model:physics:current-transports:id:future-current",
-  );
-  await verifyUnsupportedRoute(
-    "model:physics:spin-transports:id:future-mixing",
-  );
-
-  if (browserErrors.length > 0) {
-    throw new Error(`Browser errors:\n${browserErrors.join("\n")}`);
-  }
-  console.log(`Transport authoring UI smoke passed at ${workspaceUrl}; driver=cdp.`);
-} finally {
-  await cdp.close().catch(() => undefined);
-  await stopChromium(browser.process);
-  await fixtureServer.close();
-  rmSync(browser.userDataDir, {
-    force: true,
-    maxRetries: 5,
-    recursive: true,
-    retryDelay: 100,
-  });
-}
+    console.log(`Transport authoring UI smoke passed at ${workspaceUrl}; driver=cdp.`);
+  },
+  startChromium: startChromiumForSmoke,
+  startFixtureServer,
+  stopChromium,
+});
 
 async function verifyKnownRoute(nodeId, title, fieldLabel) {
   await clickSelector(`[data-node-id="${nodeId}"]`);
@@ -254,22 +255,30 @@ function fixtureHeaders(extra = {}) {
   };
 }
 
-async function startChromium() {
-  const executable = findChromiumExecutable();
-  const userDataDir = mkdtempSync(join(tmpdir(), "fullmag-transport-smoke-"));
-  const child = spawn(executable, [
-    "--headless=new",
-    "--disable-dev-shm-usage",
-    "--enable-unsafe-swiftshader",
-    "--ignore-gpu-blocklist",
-    "--no-sandbox",
-    "--remote-debugging-port=0",
-    "--use-angle=swiftshader-webgl",
-    "--use-gl=angle",
-    `--user-data-dir=${userDataDir}`,
-    "about:blank",
-  ], { stdio: ["ignore", "ignore", "pipe"] });
-  const wsUrl = await new Promise((resolve, reject) => {
+async function startChromiumForSmoke() {
+  return startChromium({
+    createProfile: () => mkdtempSync(join(tmpdir(), "fullmag-transport-smoke-")),
+    findExecutable: findChromiumExecutable,
+    removeProfile,
+    spawnBrowser: (executable, userDataDir) => spawn(executable, [
+      "--headless=new",
+      "--disable-dev-shm-usage",
+      "--enable-unsafe-swiftshader",
+      "--ignore-gpu-blocklist",
+      "--no-sandbox",
+      "--remote-debugging-port=0",
+      "--use-angle=swiftshader-webgl",
+      "--use-gl=angle",
+      `--user-data-dir=${userDataDir}`,
+      "about:blank",
+    ], { stdio: ["ignore", "ignore", "pipe"] }),
+    stopChromium,
+    waitForDevTools,
+  });
+}
+
+async function waitForDevTools(child) {
+  return new Promise((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error("Timed out waiting for Chromium DevTools endpoint.")),
       timeoutMs,
@@ -286,7 +295,15 @@ async function startChromium() {
       }
     });
   });
-  return { process: child, userDataDir, wsUrl };
+}
+
+function removeProfile(userDataDir) {
+  rmSync(userDataDir, {
+    force: true,
+    maxRetries: 5,
+    recursive: true,
+    retryDelay: 100,
+  });
 }
 
 function findChromiumExecutable() {

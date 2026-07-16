@@ -213,6 +213,44 @@ describe("transport authoring drafts", () => {
     })).toBe(false);
   });
 
+  it("treats blank current names and spin ids as id-less unsupported records", () => {
+    const current = {
+      current_density: [1, 0, 0],
+      kind: "current_transport",
+      model: "prescribed_density",
+      name: "   ",
+    };
+    const spin = {
+      boundaries: [],
+      constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+      current_source_id: "charge",
+      domain: [],
+      id: "",
+      interfaces: [],
+      materials: [],
+      mode: "steady",
+      requested_execution: {
+        device: "cpu",
+        discretization: "fdm",
+        execution_mode: "strict",
+        precision: "double",
+      },
+      schema_version: "spin_transport.v1",
+      solver: {
+        default_external_boundary: "spin_insulating",
+        engine: "gmres",
+        linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 },
+        operator_version: "fv_spin_upwind_v1",
+        physical_residual_version: "transport_balance_integrated_l2.v1",
+      },
+    };
+
+    expect(isKnownCurrentTransport(current)).toBe(false);
+    expect(isKnownSpinTransport(spin)).toBe(false);
+    expect(transportSelectionKey("current_transport", current, 3)).toBe("position:3");
+    expect(transportSelectionKey("spin_transport", spin, 4)).toBe("position:4");
+  });
+
   it("resolves a stable spin transport id before a stale list index", () => {
     const first = { id: "first", schema_version: "spin_transport.v1" };
     const selected = { id: "selected", schema_version: "spin_transport.v1" };

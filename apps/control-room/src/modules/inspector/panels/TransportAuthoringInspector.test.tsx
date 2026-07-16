@@ -87,6 +87,7 @@ const currentItems = [
   { future_kind: "charge.v9", opaque: { value: 1 } },
   { future_kind: "charge.v10", opaque: { value: 2 } },
   futureCurrent,
+  { current_density: [1, 0, 0], kind: "current_transport", model: "prescribed_density", name: "   " },
 ];
 
 vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
@@ -103,6 +104,7 @@ vi.mock("@/kernel/resources/spinAuthoringResources", () => ({
         { id: "other", schema_version: "spin_transport.v1", current_source_id: "charge", mode: "steady", domain: [], materials: [], solver: { default_external_boundary: "spin_insulating", engine: "gmres", linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 }, operator_version: "fv_spin_upwind_v1", physical_residual_version: "transport_balance_integrated_l2.v1" }, requested_execution: { device: "cpu", discretization: "fdm", execution_mode: "strict", precision: "double" }, constitutive_version: "transport_constitutive.one_way.fullmag.v1" },
         futureSpin,
         futureMixingSpin,
+        { ...futureSpin, constitutive_version: "transport_constitutive.one_way.fullmag.v1", id: "", solver: { ...futureSpin.solver, operator_version: "fv_spin_upwind_v1", physical_residual_version: "transport_balance_integrated_l2.v1" } },
       ],
       scene_revision: 7,
     },
@@ -228,5 +230,39 @@ describe("TransportAuthoringInspector", () => {
     expect(html).not.toContain(">Replace<");
     expect(html).not.toContain(">Delete<");
     expect(html).not.toContain(">Interfaces<");
+  });
+
+  it("renders a blank-name current record positionally as read-only", () => {
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <CurrentTransportInspectorPanel selection={selection("physics.current-transport", {
+          currentTransportIndex: 3,
+          kind: "physics.current-transport",
+          nodeId: "model:physics:current-transports:position:3",
+          type: "current-transport",
+        })} />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain("Unknown transport variant is preserved losslessly and is read-only.");
+    expect(html).not.toContain(">Replace<");
+    expect(html).not.toContain(">Delete<");
+  });
+
+  it("renders a blank-id spin record positionally as read-only", () => {
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={kernel}>
+        <SpinTransportInspectorPanel selection={selection("physics.spin-transport", {
+          kind: "physics.spin-transport",
+          nodeId: "model:physics:spin-transports:position:4",
+          spinTransportIndex: 4,
+          type: "spin-transport",
+        })} />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain("Unknown transport variant is preserved losslessly and is read-only.");
+    expect(html).not.toContain(">Replace<");
+    expect(html).not.toContain(">Delete<");
   });
 });

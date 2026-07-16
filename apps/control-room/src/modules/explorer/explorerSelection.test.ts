@@ -1067,4 +1067,22 @@ describe("selectExplorerNode", () => {
       type: "current-transport",
     });
   });
+
+  it("keeps an id-less spin transport positionally selectable", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:physics:spin-transports:position:2",
+      kind: "physics.spin-transport",
+      label: "Unknown spin transport 3",
+      parentId: "model:physics:spin-transports",
+      spinTransportIndex: 2,
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      kind: "physics.spin-transport",
+      nodeId: "model:physics:spin-transports:position:2",
+      spinTransportIndex: 2,
+      type: "spin-transport",
+    });
+  });
 });

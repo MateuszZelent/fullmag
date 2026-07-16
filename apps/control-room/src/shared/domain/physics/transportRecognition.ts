@@ -7,6 +7,20 @@ import type {
 
 type JsonObject = Record<string, unknown>;
 
+export type TransportFamily = "current_transport" | "spin_transport";
+
+export function transportIdentity(
+  family: TransportFamily,
+  resource: SceneCurrentTransport | SceneSpinTransport,
+): string | null {
+  const value = family === "current_transport"
+    ? (resource as { name?: unknown }).name
+    : (resource as { id?: unknown }).id;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -232,7 +246,7 @@ export function isKnownCurrentTransport(value: SceneCurrentTransport): value is 
   ])) return false;
   return value.kind === "current_transport"
     && ["ohmic_poisson", "prescribed_density"].includes(value.model as string)
-    && typeof value.name === "string"
+    && transportIdentity("current_transport", value) !== null
     && (value.boundaries === undefined || isArrayOf(value.boundaries, isChargeBoundary))
     && (value.conductivity_s_per_m === undefined
       || value.conductivity_s_per_m === null
@@ -264,7 +278,7 @@ export function isKnownSpinTransport(value: SceneSpinTransport): value is KnownS
     "solver",
   ])) return false;
   return value.schema_version === "spin_transport.v1"
-    && typeof value.id === "string"
+    && transportIdentity("spin_transport", value) !== null
     && typeof value.current_source_id === "string"
     && (value.mode === "steady" || value.mode === "transient")
     && isArrayOf(value.domain, isRegionRef)
