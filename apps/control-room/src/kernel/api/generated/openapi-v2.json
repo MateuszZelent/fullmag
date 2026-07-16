@@ -29798,5 +29798,22 @@
       "description": "Runtime diagnostics, GPU telemetry, and engine logs",
       "name": "diagnostics"
     }
+  ],
+  "x-fullmag-study-primitive-stage-kinds": [
+    "relax",
+    "run",
+    "eigenmodes",
+    "frequency_response",
+    "hysteresis",
+    "change_device",
+    "add_field_drive",
+    "table_autosave",
+    "autosave",
+    "fft_response",
+    "set_field",
+    "set_current",
+    "save_state",
+    "load_state",
+    "export"
   ]
 }

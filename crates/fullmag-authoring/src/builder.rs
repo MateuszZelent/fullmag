@@ -290,6 +290,26 @@ pub enum StudyPrimitiveStageKind {
     Export,
 }
 
+impl StudyPrimitiveStageKind {
+    pub const ALL: &'static [Self] = &[
+        Self::Relax,
+        Self::Run,
+        Self::Eigenmodes,
+        Self::FrequencyResponse,
+        Self::Hysteresis,
+        Self::ChangeDevice,
+        Self::AddFieldDrive,
+        Self::TableAutosave,
+        Self::Autosave,
+        Self::FftResponse,
+        Self::SetField,
+        Self::SetCurrent,
+        Self::SaveState,
+        Self::LoadState,
+        Self::Export,
+    ];
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StudyMacroStageKind {

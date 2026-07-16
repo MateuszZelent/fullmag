@@ -163,10 +163,28 @@ mod control_room_guard_tests {
 
     #[test]
     fn api_reuse_rejects_health_only_or_stale_openapi_responses() {
-        let stale = "HTTP/1.1 200 OK\r\nx-api-contract-version: 1.0.0\r\n\r\n{\"paths\":{}}";
+        let stale = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "x-api-contract-version: 1.0.0\r\n\r\n",
+            "{\"paths\":{",
+            "\"/v2/sessions/current/model/scene\":{},",
+            "\"/v2/sessions/current/data/mesh-region-memberships\":{},",
+            "\"/v2/sessions/current/simulation/objects/{object_id}/metrics\":{}",
+            "},\"x-fullmag-study-primitive-stage-kinds\":",
+            "[\"relax\",\"run\",\"change_device\"]}",
+        );
         assert!(!api_openapi_response_is_compatible(stale));
 
-        let current = "HTTP/1.1 200 OK\r\nx-api-contract-version: 1.0.0\r\n\r\n{\"paths\":{\"/v2/sessions/current/model/scene\":{},\"/v2/sessions/current/data/mesh-region-memberships\":{},\"/v2/sessions/current/simulation/objects/{object_id}/metrics\":{}}}";
+        let current = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "x-api-contract-version: 1.0.0\r\n\r\n",
+            "{\"paths\":{",
+            "\"/v2/sessions/current/model/scene\":{},",
+            "\"/v2/sessions/current/data/mesh-region-memberships\":{},",
+            "\"/v2/sessions/current/simulation/objects/{object_id}/metrics\":{}",
+            "},\"x-fullmag-study-primitive-stage-kinds\":",
+            "[\"add_field_drive\",\"table_autosave\",\"autosave\",\"fft_response\"]}",
+        );
         assert!(api_openapi_response_is_compatible(current));
     }
 }
@@ -745,16 +763,43 @@ fn api_openapi_is_compatible(port: u16) -> bool {
 }
 
 fn api_openapi_response_is_compatible(response: &str) -> bool {
-    let headers = response
-        .split("\r\n\r\n")
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"))
-        && headers.contains("x-api-contract-version: 1.0.0")
-        && response.contains("/v2/sessions/current/model/scene")
-        && response.contains("/v2/sessions/current/data/mesh-region-memberships")
-        && response.contains("/v2/sessions/current/simulation/objects/{object_id}/metrics")
+    const REQUIRED_STAGE_KINDS: [&str; 4] = [
+        "add_field_drive",
+        "table_autosave",
+        "autosave",
+        "fft_response",
+    ];
+
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return false;
+    };
+    let headers = headers.to_ascii_lowercase();
+    if !(response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"))
+        || !headers.contains("x-api-contract-version: 1.0.0")
+    {
+        return false;
+    }
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    let Some(paths) = document.get("paths").and_then(serde_json::Value::as_object) else {
+        return false;
+    };
+    let Some(stage_kinds) = document
+        .get("x-fullmag-study-primitive-stage-kinds")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+
+    paths.contains_key("/v2/sessions/current/model/scene")
+        && paths.contains_key("/v2/sessions/current/data/mesh-region-memberships")
+        && paths.contains_key("/v2/sessions/current/simulation/objects/{object_id}/metrics")
+        && REQUIRED_STAGE_KINDS.iter().all(|required| {
+            stage_kinds
+                .iter()
+                .any(|kind| kind.as_str() == Some(required))
+        })
 }
 
 pub(crate) fn current_live_api_client() -> &'static reqwest::blocking::Client {

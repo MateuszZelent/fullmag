@@ -565,6 +565,9 @@ pub fn openapi_json() -> Value {
     let mut doc = serde_json::to_value(ApiDoc::openapi()).expect("OpenAPI v2 should serialize");
     add_platform_document_paths(&mut doc);
     add_session_collection_paths(&mut doc);
+    doc["x-fullmag-study-primitive-stage-kinds"] =
+        serde_json::to_value(fullmag_authoring::StudyPrimitiveStageKind::ALL)
+            .expect("study primitive stage catalog should serialize");
     normalize_operation_ids(&mut doc);
     doc
 }
@@ -686,6 +689,32 @@ fn sanitize_operation_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::openapi_json;
+
+    #[test]
+    fn openapi_declares_complete_study_primitive_stage_catalog() {
+        let document = openapi_json();
+
+        assert_eq!(
+            document["x-fullmag-study-primitive-stage-kinds"],
+            serde_json::json!([
+                "relax",
+                "run",
+                "eigenmodes",
+                "frequency_response",
+                "hysteresis",
+                "change_device",
+                "add_field_drive",
+                "table_autosave",
+                "autosave",
+                "fft_response",
+                "set_field",
+                "set_current",
+                "save_state",
+                "load_state",
+                "export"
+            ])
+        );
+    }
 
     #[test]
     fn openapi_topological_charge_v2_is_closed_and_versioned() {
