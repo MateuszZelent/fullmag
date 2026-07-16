@@ -1,4 +1,5 @@
 use super::*;
+use crate::fdm::cpu::transport::ChargeBoundaryCondition;
 use crate::fdm::shared::types::{CellSize, GridShape};
 
 fn norm3(value: [f64; 3]) -> f64 {

@@ -62,7 +62,9 @@ pub(crate) fn resolve_current_transports(
                 )),
             },
             CurrentModuleIR::CurrentTransport {
-                model: CurrentTransportModelIR::OhmicPoisson,
+                model:
+                    CurrentTransportModelIR::OhmicPoisson
+                    | CurrentTransportModelIR::MagnetoresistivePoisson,
                 ..
             } => {
                 if lane == CurrentTransportExecutableLane::Fem {

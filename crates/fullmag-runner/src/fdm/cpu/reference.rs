@@ -1065,15 +1065,22 @@ pub(crate) fn execute_reference_fdm(
             let wall_start = Instant::now();
             let report = if let Some(workflow) = spin_transport.as_mut() {
                 let mut candidate: Option<FdmSpinTransportEvaluation> = None;
-                let result = problem.heun_step_with_external_stage_terms(
+                workflow.begin_attempt()?;
+                let result = problem.heun_step_with_external_stage_terms_and_lte(
                     &mut state,
                     dt_step,
                     &mut fft_workspace,
                     &mut integrator_bufs,
                     EvaluationRequest::Full,
-                    |magnetization, time_s| {
+                    |magnetization, time_s, stage_error_budget| {
+                        let previous_stage = candidate.as_ref();
                         let evaluation = workflow
-                            .evaluate_stage(magnetization, time_s)
+                            .evaluate_stage_with_lte(
+                                magnetization,
+                                time_s,
+                                stage_error_budget,
+                                previous_stage,
+                            )
                             .map_err(|error| EngineError::new(error.message))?;
                         let terms = ExternalStageTerms {
                             additional_field_apm: evaluation

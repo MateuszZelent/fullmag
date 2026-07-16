@@ -1,15 +1,19 @@
 use fullmag_engine::fdm::cpu::transport::{
     biot_savart_midpoint_field, ChargeBoundaryCondition, ChargeBoundaryConditions,
-    ChargeSolverConfig, OrientedSpinInterface, PotentialGauge, SpinBoundaryCondition,
-    SpinBoundaryConditions, SpinDriftDiffusionProblem, SpinFluxOperator, SpinInterfaceLaw,
-    SpinMaterialFields, SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets,
+    ChargeSolverConfig, CoupledChargeSpinBoundaryConditions, CoupledChargeSpinMaterialFields,
+    CoupledChargeSpinProblem, CoupledChargeSpinSolverConfig, CoupledChargeSpinWarmStart,
+    CoupledTransportOuterErrorBudget,
+    OrientedSpinInterface, PotentialGauge, ReciprocalConstitutiveMaterial,
+    SpinBoundaryCondition, SpinBoundaryConditions, SpinDriftDiffusionProblem, SpinFluxOperator,
+    SpinInterfaceLaw, SpinMaterialFields, SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets,
     StructuredChargeProblem, StructuredSpinFace,
 };
+use fullmag_engine::fdm::TransportStageErrorBudget;
 use fullmag_engine::{CellSize, GridShape};
 use fullmag_ir::{
     ChargePotentialGaugeIR, FdmPlanIR, ResolvedChargeBoundaryConditionIR,
-    ResolvedFdmSpinTransportIR, ResolvedSpinBoundaryConditionIR, ResolvedSpinInterfaceLawIR,
-    StructuredBoundaryFaceIR,
+    ResolvedFdmCoupledSpinTransportIR, ResolvedFdmSpinTransportIR,
+    ResolvedSpinBoundaryConditionIR, ResolvedSpinInterfaceLawIR, StructuredBoundaryFaceIR,
 };
 use serde::Serialize;
 
@@ -28,6 +32,26 @@ pub(crate) struct FdmSpinTransportTelemetry {
     pub spin_relative_balance_closure: f64,
     pub convergence_reason: String,
     pub preconditioner: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonlinear_iterations: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coupled_linear_iterations: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preconditioner_applications: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scaled_charge_residual: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relative_charge_current_update: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relative_spin_potential_update: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport_outer_error_ratio: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub charge_balance_relative: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spin_balance_relative: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warm_start_used: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -58,6 +82,8 @@ pub(crate) struct FdmSpinTransportModuleSnapshot {
     pub charge_operator_version: String,
     pub spin_operator_version: String,
     pub torque_formula_version: Option<String>,
+    pub state_revision: u64,
+    pub operator_revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -78,6 +104,7 @@ pub(crate) struct FdmSpinTransportWorkflow {
     next_revision: u64,
     refresh_count: u64,
     accepted: Option<FdmSpinTransportEvaluation>,
+    attempt_checkpoint: Option<(u64, u64)>,
 }
 
 impl FdmSpinTransportWorkflow {
@@ -108,13 +135,23 @@ impl FdmSpinTransportWorkflow {
                     resolved.module_id
                 )));
             }
-            let descriptor = resolved.fdm_cpu_double.as_ref().ok_or_else(|| {
-                run_error(format!(
-                    "spin transport '{}' has no materialized FDM CPU-double descriptor",
+            match (
+                resolved.fdm_cpu_double.as_ref(),
+                resolved.fdm_cpu_double_reciprocal.as_ref(),
+            ) {
+                (Some(descriptor), None) => {
+                    validate_descriptor(descriptor, grid.cell_count(), &resolved.module_id)?
+                }
+                (None, Some(descriptor)) => validate_coupled_descriptor(
+                    descriptor,
+                    grid.cell_count(),
+                    &resolved.module_id,
+                )?,
+                _ => return Err(run_error(format!(
+                    "spin transport '{}' must carry exactly one FDM CPU-double descriptor",
                     resolved.module_id
-                ))
-            })?;
-            validate_descriptor(descriptor, grid.cell_count(), &resolved.module_id)?;
+                ))),
+            }
         }
         Ok(Some(Self {
             grid,
@@ -123,13 +160,33 @@ impl FdmSpinTransportWorkflow {
             next_revision: 1,
             refresh_count: 0,
             accepted: None,
+            attempt_checkpoint: None,
         }))
     }
 
+    pub(crate) fn begin_attempt(&mut self) -> Result<(), RunError> {
+        if self.attempt_checkpoint.is_some() {
+            return Err(run_error("spin transport step attempt is already active"));
+        }
+        self.attempt_checkpoint = Some((self.next_revision, self.refresh_count));
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(crate) fn evaluate_stage(
         &mut self,
         magnetization: &[[f64; 3]],
         stage_time_s: f64,
+    ) -> Result<FdmSpinTransportEvaluation, RunError> {
+        self.evaluate_stage_with_lte(magnetization, stage_time_s, None, None)
+    }
+
+    pub(crate) fn evaluate_stage_with_lte(
+        &mut self,
+        magnetization: &[[f64; 3]],
+        stage_time_s: f64,
+        stage_error_budget: Option<TransportStageErrorBudget>,
+        previous_stage: Option<&FdmSpinTransportEvaluation>,
     ) -> Result<FdmSpinTransportEvaluation, RunError> {
         if magnetization.len() != self.grid.cell_count()
             || magnetization
@@ -150,17 +207,30 @@ impl FdmSpinTransportWorkflow {
         let mut combined_torque = vec![[0.0; 3]; self.grid.cell_count()];
         let mut combined_oersted: Option<Vec<[f64; 3]>> = None;
         for resolved in &self.plans {
-            let descriptor = resolved
-                .fdm_cpu_double
-                .as_ref()
-                .expect("descriptor was validated during workflow construction");
-            let module = solve_module(
-                self.grid,
-                self.cell_size,
-                resolved,
-                descriptor,
-                magnetization,
-            )?;
+            let module = if let Some(descriptor) = resolved.fdm_cpu_double.as_ref() {
+                solve_module(self.grid, self.cell_size, resolved, descriptor, magnetization)?
+            } else {
+                let descriptor = resolved
+                    .fdm_cpu_double_reciprocal
+                    .as_ref()
+                    .expect("exactly one descriptor was validated during workflow construction");
+                let accepted = self.accepted.as_ref().and_then(|evaluation| {
+                    evaluation.modules.iter().find(|module| module.module_id == resolved.module_id)
+                });
+                let previous_module = previous_stage.and_then(|evaluation| {
+                    evaluation.modules.iter().find(|module| module.module_id == resolved.module_id)
+                });
+                solve_coupled_module(
+                    self.grid,
+                    self.cell_size,
+                    resolved,
+                    descriptor,
+                    magnetization,
+                    accepted,
+                    stage_error_budget,
+                    previous_module,
+                )?
+            };
             add_vector_field(&mut combined_torque, &module.transport_torque_per_s);
             if let Some(field) = &module.oersted_field_apm {
                 let aggregate =
@@ -201,12 +271,18 @@ impl FdmSpinTransportWorkflow {
             ));
         }
         self.accepted = Some(evaluation);
+        self.attempt_checkpoint = None;
         Ok(())
     }
 
     /// Discard uncommitted stage evaluations. Accepted state is immutable
     /// until a newer evaluation is explicitly committed.
-    pub(crate) fn rollback(&mut self) {}
+    pub(crate) fn rollback(&mut self) {
+        if let Some((next_revision, refresh_count)) = self.attempt_checkpoint.take() {
+            self.next_revision = next_revision;
+            self.refresh_count = refresh_count;
+        }
+    }
 
     pub(crate) fn accepted(&self) -> Option<&FdmSpinTransportEvaluation> {
         self.accepted.as_ref()
@@ -247,6 +323,315 @@ fn validate_descriptor(
         )));
     }
     Ok(())
+}
+
+fn validate_coupled_descriptor(
+    descriptor: &ResolvedFdmCoupledSpinTransportIR,
+    count: usize,
+    module_id: &str,
+) -> Result<(), RunError> {
+    if descriptor.descriptor_schema != "fullmag.fdm.coupled_spin_transport_descriptor.v1" {
+        return Err(run_error(format!(
+            "spin transport '{module_id}' uses incompatible coupled descriptor schema '{}'",
+            descriptor.descriptor_schema
+        )));
+    }
+    let lengths = [
+        descriptor.active_cells.len(),
+        descriptor.reciprocal_materials.len(),
+        descriptor.reactions.len(),
+        descriptor.region_ids.len(),
+        descriptor.torque_target_cells.len(),
+        descriptor.saturation_magnetization_apm.len(),
+    ];
+    if lengths.iter().any(|length| *length != count)
+        || descriptor.charge_boundaries.len() != 6
+        || descriptor.spin_boundaries.len() != 6
+    {
+        return Err(run_error(format!(
+            "spin transport '{module_id}' coupled descriptor does not match the FDM grid"
+        )));
+    }
+    if descriptor.constitutive_version != "transport_constitutive.reciprocal.fullmag.v1"
+        || descriptor.operator_version != "fdm_coupled_charge_spin_fv_block_gmres.v1"
+        || descriptor.physical_residual_version != "transport_balance_integrated_l2.v1"
+    {
+        return Err(run_error(format!(
+            "spin transport '{module_id}' coupled descriptor carries unsupported formula versions"
+        )));
+    }
+    Ok(())
+}
+
+fn solve_coupled_module(
+    grid: GridShape,
+    cell_size: CellSize,
+    resolved: &fullmag_ir::ResolvedSpinTransportPlanIR,
+    descriptor: &ResolvedFdmCoupledSpinTransportIR,
+    magnetization: &[[f64; 3]],
+    accepted: Option<&FdmSpinTransportModuleSnapshot>,
+    stage_error_budget: Option<TransportStageErrorBudget>,
+    previous_stage: Option<&FdmSpinTransportModuleSnapshot>,
+) -> Result<FdmSpinTransportModuleSnapshot, RunError> {
+    let state_revision = state_revision(magnetization);
+    let operator_revision = descriptor_revision(descriptor)?;
+    let materials = CoupledChargeSpinMaterialFields {
+        reciprocal: descriptor
+            .reciprocal_materials
+            .iter()
+            .map(|material| ReciprocalConstitutiveMaterial {
+                sigma_s_per_m: material.sigma_spm,
+                sigma_spin_s_per_m: material.sigma_spin_spm,
+                sigma_parallel_s_per_m: material.sigma_parallel_spm,
+                sigma_perpendicular_s_per_m: material.sigma_perpendicular_spm,
+                sigma_ahe_s_per_m: material.sigma_ahe_spm,
+                polarization: material.polarization_p,
+                spin_hall_angle: material.theta_sh,
+            })
+            .collect(),
+        magnetization: magnetization.to_vec(),
+        reactions: descriptor
+            .reactions
+            .iter()
+            .map(|reaction| SpinReactionLengths {
+                spin_flip_m: reaction.spin_flip_m,
+                exchange_m: reaction.exchange_m,
+                dephasing_m: reaction.dephasing_m,
+            })
+            .collect(),
+    };
+    let mut problem = CoupledChargeSpinProblem::new(
+        grid,
+        cell_size,
+        materials,
+        Some(descriptor.active_cells.clone()),
+        CoupledChargeSpinBoundaryConditions {
+            charge: charge_boundary_conditions(&descriptor.charge_boundaries)?,
+            spin: spin_boundary_conditions(&descriptor.spin_boundaries)?,
+        },
+    )
+    .map_err(engine_error("coupled charge-spin materialization"))?
+    .with_revisions(state_revision, operator_revision);
+    if descriptor.torque_target_cells.iter().any(|target| *target) {
+        problem = problem
+            .with_torque_targets(SpinTorqueTargets {
+                target_cells: descriptor.torque_target_cells.clone(),
+                saturation_magnetization_a_per_m: descriptor.saturation_magnetization_apm.clone(),
+                gamma_e_rad_per_s_t: descriptor.gamma_e_rad_per_s_t,
+            })
+            .map_err(engine_error("coupled charge-spin torque targets"))?;
+    }
+    if !descriptor.interfaces.is_empty() {
+        let interfaces = materialize_interfaces(&descriptor.interfaces, magnetization)?;
+        problem = problem
+            .with_interfaces(descriptor.region_ids.clone(), interfaces)
+            .map_err(engine_error("coupled charge-spin interfaces"))?;
+    }
+    let warm_start = accepted
+        .filter(|snapshot| {
+            snapshot.state_revision == state_revision
+                && snapshot.operator_revision == operator_revision
+        })
+        .map(|snapshot| CoupledChargeSpinWarmStart {
+            state_revision,
+            operator_revision,
+            potential_volts: snapshot.potential_volts.clone(),
+            spin_potential_volts: snapshot.spin_potential_volts.clone(),
+        });
+    let config = CoupledChargeSpinSolverConfig {
+                relative_tolerance: descriptor.linear_solver.relative_tolerance,
+                absolute_tolerance: descriptor.linear_solver.absolute_tolerance,
+                max_linear_iterations: descriptor.linear_solver.max_iterations as usize,
+                gmres_restart: descriptor.nonlinear_solver.gmres_restart as usize,
+                max_picard_iterations: descriptor.nonlinear_solver.max_picard_iterations as usize,
+                relative_update_tolerance: descriptor
+                    .nonlinear_solver
+                    .relative_update_tolerance,
+    };
+    let solution = match stage_error_budget {
+        Some(budget) => {
+            let previous = previous_stage.ok_or_else(|| {
+                run_error("corrected M2 stage requires the preceding transport-stage torque")
+            })?;
+            problem.solve_with_outer_error_budget(
+                config,
+                warm_start.as_ref(),
+                &CoupledTransportOuterErrorBudget {
+                    dt_s: budget.dt_s,
+                    embedded_lte_m: budget.embedded_lte_m,
+                    eta_transport: descriptor.nonlinear_solver.eta_transport,
+                    previous_transport_torque_per_s: previous.transport_torque_per_s.clone(),
+                },
+            )
+        }
+        None => problem.solve(config, warm_start.as_ref()),
+    }
+    .map_err(engine_error("coupled charge-spin solve"))?;
+    let tensors = solution
+        .cell_spin_current_density_a_per_m2
+        .iter()
+        .map(|tensor| {
+            [
+                tensor[0][0], tensor[0][1], tensor[0][2], tensor[1][0], tensor[1][1],
+                tensor[1][2], tensor[2][0], tensor[2][1], tensor[2][2],
+            ]
+        })
+        .collect();
+    let interface_fluxes = solution
+        .interface_observations
+        .iter()
+        .map(|observation| interface_snapshot(observation, &descriptor.interfaces))
+        .collect();
+    let oersted_field_apm = descriptor
+        .oersted_source_bound
+        .then(|| {
+            biot_savart_midpoint_field(
+                grid,
+                cell_size,
+                &descriptor.active_cells,
+                &solution.cell_charge_current_density_a_per_m2,
+            )
+            .map_err(engine_error("coupled midpoint Oersted solve"))
+        })
+        .transpose()?;
+    Ok(FdmSpinTransportModuleSnapshot {
+        module_id: resolved.module_id.clone(),
+        current_source_id: resolved.current_source_id.clone(),
+        potential_volts: solution.potential_volts,
+        current_density_apm2: solution.cell_charge_current_density_a_per_m2,
+        spin_potential_volts: solution.spin_potential_volts,
+        spin_current_tensor_apm2: tensors,
+        interface_fluxes,
+        transport_torque_per_s: solution.transport_gilbert_torque_per_s,
+        oersted_field_apm,
+        telemetry: FdmSpinTransportTelemetry {
+            charge_iterations: 0,
+            charge_residual_l2: solution.telemetry.scaled_charge_residual,
+            charge_net_boundary_current_a: 0.0,
+            charge_max_abs_divergence_a_per_m3: 0.0,
+            spin_iterations: solution.telemetry.linear_iterations,
+            spin_initial_residual_l2: solution
+                .telemetry
+                .nonlinear_history
+                .first()
+                .map_or(0.0, |iteration| iteration.scaled_spin_residual),
+            spin_final_residual_l2: solution.telemetry.scaled_spin_residual,
+            spin_scaled_residual: solution.telemetry.scaled_spin_residual,
+            spin_relative_balance_closure: solution.telemetry.spin_balance_relative,
+            convergence_reason: solution.telemetry.convergence_reason.to_string(),
+            preconditioner: solution.telemetry.preconditioner.to_string(),
+            nonlinear_iterations: Some(solution.telemetry.picard_iterations),
+            coupled_linear_iterations: Some(solution.telemetry.linear_iterations),
+            preconditioner_applications: Some(solution.telemetry.preconditioner_applications),
+            scaled_charge_residual: Some(solution.telemetry.scaled_charge_residual),
+            relative_charge_current_update: Some(
+                solution.telemetry.relative_charge_current_update,
+            ),
+            relative_spin_potential_update: Some(
+                solution.telemetry.relative_spin_potential_update,
+            ),
+            transport_outer_error_ratio: solution.telemetry.transport_outer_error_ratio,
+            charge_balance_relative: Some(solution.telemetry.charge_balance_relative),
+            spin_balance_relative: Some(solution.telemetry.spin_balance_relative),
+            warm_start_used: Some(solution.telemetry.warm_start_used),
+        },
+        constitutive_version: descriptor.constitutive_version.clone(),
+        charge_operator_version: descriptor.operator_version.clone(),
+        spin_operator_version: descriptor.operator_version.clone(),
+        torque_formula_version: descriptor.torque_formula_version.clone(),
+        state_revision,
+        operator_revision,
+    })
+}
+
+fn materialize_interfaces(
+    interfaces: &[fullmag_ir::ResolvedSpinInterfaceFaceIR],
+    magnetization: &[[f64; 3]],
+) -> Result<Vec<OrientedSpinInterface>, RunError> {
+    interfaces
+        .iter()
+        .map(|interface| {
+            let to_cell = interface.to_cell as usize;
+            let law = match &interface.law {
+                ResolvedSpinInterfaceLawIR::Transparent => {
+                    return Err(run_error("transparent M2 interfaces must be rejected by the planner"));
+                }
+                ResolvedSpinInterfaceLawIR::MixingConductance {
+                    g_up_spm2,
+                    g_down_spm2,
+                    g_r_spm2,
+                    g_i_spm2,
+                    g_sml_spm2,
+                    ..
+                } => SpinInterfaceLaw::MixingConductance {
+                    g_up_s_per_m2: *g_up_spm2,
+                    g_down_s_per_m2: *g_down_spm2,
+                    g_r_s_per_m2: *g_r_spm2,
+                    g_i_s_per_m2: *g_i_spm2,
+                    g_sml_s_per_m2: *g_sml_spm2,
+                    magnetization: *magnetization.get(to_cell).ok_or_else(|| {
+                        run_error("coupled interface target cell is outside the FDM grid")
+                    })?,
+                },
+            };
+            Ok(OrientedSpinInterface {
+                face: StructuredSpinFace {
+                    axis: interface.face.axis as usize,
+                    negative_cell: interface.face.negative_cell as usize,
+                    positive_cell: interface.face.positive_cell as usize,
+                },
+                from_cell: interface.from_cell as usize,
+                to_cell,
+                law,
+            })
+        })
+        .collect()
+}
+
+fn interface_snapshot(
+    observation: &fullmag_engine::fdm::cpu::transport::SpinInterfaceFluxObservation,
+    interfaces: &[fullmag_ir::ResolvedSpinInterfaceFaceIR],
+) -> FdmSpinInterfaceFluxSnapshot {
+    let source_id = interfaces
+        .iter()
+        .find(|interface| {
+            interface.face.axis as usize == observation.face.axis
+                && interface.face.negative_cell as usize == observation.face.negative_cell
+                && interface.face.positive_cell as usize == observation.face.positive_cell
+        })
+        .map(|interface| interface.source_id.clone())
+        .unwrap_or_else(|| "unresolved-interface".to_string());
+    FdmSpinInterfaceFluxSnapshot {
+        source_id,
+        incoming_longitudinal_apm2: observation.incoming_longitudinal_a_per_m2,
+        backflow_longitudinal_apm2: observation.backflow_longitudinal_a_per_m2,
+        absorbed_transverse_apm2: observation.absorbed_transverse_a_per_m2,
+        spin_memory_loss_apm2: observation.spin_memory_loss_a_per_m2,
+        from_side_outgoing_apm2: observation.from_side_outgoing_a_per_m2,
+        to_side_transmitted_apm2: observation.to_side_transmitted_a_per_m2,
+    }
+}
+
+fn descriptor_revision(descriptor: &ResolvedFdmCoupledSpinTransportIR) -> Result<u64, RunError> {
+    let bytes = serde_json::to_vec(descriptor)
+        .map_err(|error| run_error(format!("cannot fingerprint M2 descriptor: {error}")))?;
+    Ok(fnv1a(bytes.iter().copied()))
+}
+
+fn state_revision(magnetization: &[[f64; 3]]) -> u64 {
+    fn bytes(values: &[[f64; 3]]) -> impl Iterator<Item = u8> + '_ {
+        values
+            .iter()
+            .flatten()
+            .flat_map(|value| value.to_bits().to_le_bytes())
+    }
+    fnv1a(bytes(magnetization))
+}
+
+fn fnv1a(bytes: impl IntoIterator<Item = u8>) -> u64 {
+    bytes.into_iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
 }
 
 fn solve_module(
@@ -453,11 +838,23 @@ fn solve_module(
             spin_relative_balance_closure: spin_solution.telemetry.relative_balance_closure,
             convergence_reason: spin_solution.telemetry.convergence_reason.to_string(),
             preconditioner: spin_solution.telemetry.preconditioner.to_string(),
+            nonlinear_iterations: None,
+            coupled_linear_iterations: None,
+            preconditioner_applications: None,
+            scaled_charge_residual: None,
+            relative_charge_current_update: None,
+            relative_spin_potential_update: None,
+            transport_outer_error_ratio: None,
+            charge_balance_relative: None,
+            spin_balance_relative: None,
+            warm_start_used: None,
         },
         constitutive_version: resolved.constitutive_version.clone(),
         charge_operator_version: descriptor.charge_solver.operator_version.clone(),
         spin_operator_version: descriptor.spin_solver.operator_version.clone(),
         torque_formula_version: descriptor.torque_formula_version.clone(),
+        state_revision: state_revision(magnetization),
+        operator_revision: 0,
     })
 }
 
@@ -670,6 +1067,7 @@ mod tests {
                 physical_residual_version: "transport_balance_integrated_l2.v1".into(),
                 operator_version: "fv_spin_upwind_v1".into(),
                 default_external_boundary: "spin_insulating".into(),
+                reciprocal_nonlinear: None,
             },
             torque_formula_version: None,
             oersted_source_bound: false,
@@ -700,9 +1098,68 @@ mod tests {
                 capabilities: vec!["transport.spin.steady_drift_diffusion".into()],
                 inserted_default_boundaries: vec![],
                 fdm_cpu_double: Some(descriptor),
+                fdm_cpu_double_reciprocal: None,
             }],
             ..FdmPlanIR::default()
         }
+    }
+
+    fn reciprocal_plan() -> FdmPlanIR {
+        let mut plan = plan();
+        let resolved = &mut plan.spin_transport_plans[0];
+        let one_way = resolved
+            .fdm_cpu_double
+            .take()
+            .expect("one-way descriptor fixture");
+        let count = one_way.charge_active_cells.len();
+        resolved.resolved_coupling = TransportCouplingIR::Bidirectional;
+        resolved.constitutive_version = "transport_constitutive.reciprocal.fullmag.v1".into();
+        resolved.operator_version = "fdm_coupled_charge_spin_fv_block_gmres.v1".into();
+        resolved.capabilities = vec![
+            "transport.charge.magnetoresistive".into(),
+            "transport.spin.inverse_she".into(),
+            "transport.coupling.bidirectional".into(),
+        ];
+        resolved.fdm_cpu_double_reciprocal = Some(ResolvedFdmCoupledSpinTransportIR {
+            descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v1".into(),
+            active_cells: one_way.charge_active_cells,
+            reciprocal_materials: (0..count)
+                .map(|_| ResolvedReciprocalMaterialIR {
+                    sigma_spm: 2.0,
+                    sigma_spin_spm: 4.0,
+                    sigma_parallel_spm: 2.0,
+                    sigma_perpendicular_spm: 2.0,
+                    sigma_ahe_spm: 0.0,
+                    polarization_p: 0.0,
+                    theta_sh: 0.0,
+                })
+                .collect(),
+            reactions: one_way.reactions,
+            region_ids: one_way.region_ids,
+            charge_boundaries: one_way.charge_boundaries,
+            spin_boundaries: one_way.spin_boundaries,
+            interfaces: vec![],
+            torque_target_cells: vec![true; count],
+            saturation_magnetization_apm: one_way.saturation_magnetization_apm,
+            gamma_e_rad_per_s_t: one_way.gamma_e_rad_per_s_t,
+            linear_solver: LinearTransportSolverPolicyIR {
+                relative_tolerance: 1e-10,
+                absolute_tolerance: 1e-14,
+                max_iterations: 1000,
+            },
+            nonlinear_solver: ReciprocalNonlinearSolverPolicyIR {
+                gmres_restart: 40,
+                max_picard_iterations: 4,
+                relative_update_tolerance: 1e-9,
+                eta_transport: 0.25,
+            },
+            operator_version: "fdm_coupled_charge_spin_fv_block_gmres.v1".into(),
+            physical_residual_version: "transport_balance_integrated_l2.v1".into(),
+            constitutive_version: "transport_constitutive.reciprocal.fullmag.v1".into(),
+            torque_formula_version: Some("drift_diffusion_absorbed_flux.v1".into()),
+            oersted_source_bound: false,
+        });
+        plan
     }
 
     #[test]
@@ -734,6 +1191,82 @@ mod tests {
         workflow.commit(evaluation.clone()).expect("commit");
         assert_eq!(workflow.accepted().unwrap().revision, 1);
         workflow.rollback();
+        assert_eq!(workflow.accepted().unwrap().revision, 1);
+    }
+
+    #[test]
+    fn reciprocal_bar_uses_exact_revision_warm_start_and_corrected_stage_lte_gate() {
+        let plan = reciprocal_plan();
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("reciprocal workflow construction")
+            .expect("spin workflow");
+        let accepted = workflow
+            .evaluate_stage(&plan.initial_magnetization, 0.0)
+            .expect("initial reciprocal solve");
+        workflow.commit(accepted).expect("commit initial reciprocal state");
+
+        let predictor = workflow
+            .evaluate_stage(&plan.initial_magnetization, 1e-12)
+            .expect("predictor reciprocal solve");
+        assert_eq!(
+            predictor.modules[0].telemetry.warm_start_used,
+            Some(true),
+            "exact state/operator revision should reuse the accepted coupled state"
+        );
+        let corrected = workflow
+            .evaluate_stage_with_lte(
+                &plan.initial_magnetization,
+                1e-12,
+                Some(TransportStageErrorBudget {
+                    dt_s: 1e-12,
+                    embedded_lte_m: 1.0,
+                }),
+                Some(&predictor),
+            )
+            .expect("corrected reciprocal solve should satisfy its LTE budget");
+        let module = &corrected.modules[0];
+        assert_eq!(module.constitutive_version, "transport_constitutive.reciprocal.fullmag.v1");
+        assert!(module.telemetry.nonlinear_iterations.is_some());
+        assert_eq!(module.telemetry.transport_outer_error_ratio, Some(0.0));
+    }
+
+    #[test]
+    fn reciprocal_descriptor_fails_closed_when_paired_with_one_way_descriptor() {
+        let mut plan = reciprocal_plan();
+        // Explicitly materialize the illegal dual-descriptor shape from the
+        // canonical one-way fixture.
+        let one_way_plan = self::plan();
+        let one_way = one_way_plan.spin_transport_plans[0]
+            .fdm_cpu_double
+            .clone()
+            .expect("one-way descriptor fixture");
+        plan.spin_transport_plans[0].fdm_cpu_double = Some(one_way);
+        let error = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect_err("dual descriptors must fail closed");
+        assert!(error.message.contains("exactly one"));
+    }
+
+    #[test]
+    fn rejected_transport_attempt_restores_revision_and_refresh_counters() {
+        let plan = reciprocal_plan();
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect("workflow construction")
+            .expect("spin workflow");
+        let accepted = workflow
+            .evaluate_stage(&plan.initial_magnetization, 0.0)
+            .expect("accepted solve");
+        workflow.commit(accepted).expect("initial commit");
+        workflow.begin_attempt().expect("begin attempt");
+        let discarded = workflow
+            .evaluate_stage(&plan.initial_magnetization, 1e-12)
+            .expect("discarded stage");
+        assert_eq!(discarded.revision, 2);
+        workflow.rollback();
+        let retried = workflow
+            .evaluate_stage(&plan.initial_magnetization, 1e-12)
+            .expect("retried stage");
+        assert_eq!(retried.revision, 2);
+        assert_eq!(retried.refresh_count, 2);
         assert_eq!(workflow.accepted().unwrap().revision, 1);
     }
 
@@ -774,6 +1307,45 @@ mod tests {
                 .expect("spin-current tensor array")
                 .len(),
             4
+        );
+    }
+
+    #[test]
+    fn reference_runner_executes_reciprocal_m2_through_corrected_stage_lte_gate() {
+        let mut plan = reciprocal_plan();
+        plan.fixed_timestep = Some(1e-15);
+        plan.integrator = Some(IntegratorChoice::Heun);
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.material = FdmMaterialIR {
+            name: "Py".to_string(),
+            saturation_magnetisation: 8e5,
+            exchange_stiffness: 13e-12,
+            damping: 0.02,
+            ..Default::default()
+        };
+        plan.enable_exchange = false;
+        plan.enable_demag = false;
+
+        let executed =
+            super::super::reference::execute_reference_fdm(&plan, 1e-15, &[], None, None)
+                .expect("reciprocal coupled reference run");
+        assert_eq!(executed.result.status, crate::types::RunStatus::Completed);
+        let artifact = executed
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "transport/spin_transport_accepted.json")
+            .expect("accepted reciprocal transport artifact");
+        let document: serde_json::Value =
+            serde_json::from_slice(&artifact.bytes).expect("transport artifact JSON");
+        assert_eq!(document["evaluation"]["refresh_count"], 3);
+        assert_eq!(
+            document["evaluation"]["modules"][0]["constitutive_version"],
+            "transport_constitutive.reciprocal.fullmag.v1"
+        );
+        assert_eq!(
+            document["evaluation"]["modules"][0]["telemetry"]
+                ["transport_outer_error_ratio"],
+            0.0
         );
     }
 }

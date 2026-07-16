@@ -3,10 +3,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use fullmag_ir::{
     BackendTarget, ChargeBoundaryIR, ExecutionDevice, ExecutionPrecision, ProblemIR,
     ReactionLengthIR, RegionRefIR, ResolvedChargeBoundaryConditionIR, ResolvedChargeBoundaryFaceIR,
-    ResolvedFdmSpinTransportIR, ResolvedSpinBoundaryConditionIR, ResolvedSpinBoundaryFaceIR,
-    ResolvedSpinInterfaceFaceIR, ResolvedSpinInterfaceLawIR, ResolvedSpinReactionLengthsIR,
-    ResolvedSpinTransportPlanIR, SpinBoundaryIR, SpinInterfaceIR, SpinTorqueModuleIR,
-    StructuredBoundaryFaceIR, StructuredInternalFaceIR,
+    ResolvedFdmCoupledSpinTransportIR, ResolvedFdmSpinTransportIR, ResolvedReciprocalMaterialIR,
+    ResolvedSpinBoundaryConditionIR, ResolvedSpinBoundaryFaceIR, ResolvedSpinInterfaceFaceIR,
+    ResolvedSpinInterfaceLawIR, ResolvedSpinReactionLengthsIR, ResolvedSpinTransportPlanIR,
+    SpinBoundaryIR, SpinInterfaceIR, SpinTorqueModuleIR, StructuredBoundaryFaceIR,
+    StructuredInternalFaceIR,
 };
 #[cfg(test)]
 use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
@@ -25,7 +26,7 @@ pub(crate) struct FdmSpinTransportResolutionContext<'a> {
     pub gamma0_m_per_a_s: f64,
 }
 
-pub(crate) fn resolve_m1_spin_transport(
+pub(crate) fn resolve_steady_spin_transport(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
     context: &FdmSpinTransportResolutionContext<'_>,
@@ -33,23 +34,30 @@ pub(crate) fn resolve_m1_spin_transport(
     let mut plans = Vec::with_capacity(problem.spin_transport_modules.len());
     let mut errors = Vec::new();
     for module in &problem.spin_transport_modules {
+        if module.mode != fullmag_ir::SpinTransportModeIR::Steady {
+            errors.push(format!(
+                "spin transport '{}' transient mode is not executable through the steady M1/M2 resolver",
+                module.id
+            ));
+            continue;
+        }
         let requested = &module.requested_execution;
         if !matches!(
             requested.discretization,
             BackendTarget::Fdm | BackendTarget::Auto
         ) || resolved_backend != BackendTarget::Fdm
         {
-            errors.push(format!("spin transport '{}' is unsupported on FEM; M1 currently supports FDM CPU double only", module.id));
+            errors.push(format!("spin transport '{}' is unsupported on FEM; steady M1/M2 currently supports FDM CPU double only", module.id));
         }
         if !matches!(
             requested.device,
             ExecutionDevice::Cpu | ExecutionDevice::Auto
         ) {
-            errors.push(format!("spin transport '{}' requested GPU, but M1 GPU transport is unavailable and cannot fall back silently", module.id));
+            errors.push(format!("spin transport '{}' requested GPU, but steady M1/M2 GPU transport is unavailable and cannot fall back silently", module.id));
         }
         if requested.precision != ExecutionPrecision::Double {
             errors.push(format!(
-                "spin transport '{}' requested single precision, but M1 supports double only",
+                "spin transport '{}' requested single precision, but steady M1/M2 supports double only",
                 module.id
             ));
         }
@@ -81,9 +89,15 @@ pub(crate) fn resolve_m1_spin_transport(
             ));
             continue;
         };
-        if source_model != fullmag_ir::CurrentTransportModelIR::OhmicPoisson {
+        let reciprocal = coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
+        let expected_model = if reciprocal {
+            fullmag_ir::CurrentTransportModelIR::MagnetoresistivePoisson
+        } else {
+            fullmag_ir::CurrentTransportModelIR::OhmicPoisson
+        };
+        if source_model != expected_model {
             errors.push(format!(
-                "spin transport '{}' requires current_source_id '{}' to use ohmic_poisson",
+                "spin transport '{}' current_source_id '{}' model is inconsistent with its coupling",
                 module.id, module.current_source_id
             ));
             continue;
@@ -95,14 +109,26 @@ pub(crate) fn resolve_m1_spin_transport(
             ));
             continue;
         };
-        let fdm_cpu_double =
-            match materialize_fdm_descriptor(problem, module, charge_definition, context) {
-                Ok(descriptor) => Some(descriptor),
+        let descriptor = materialize_fdm_descriptor(problem, module, charge_definition, context);
+        let (fdm_cpu_double, fdm_cpu_double_reciprocal) = match descriptor {
+            Ok(descriptor) if reciprocal => match materialize_m2_descriptor(
+                module,
+                charge_definition,
+                context,
+                descriptor,
+            ) {
+                Ok(coupled) => (None, Some(coupled)),
                 Err(mut reasons) => {
                     errors.append(&mut reasons);
-                    None
+                    (None, None)
                 }
-            };
+            },
+            Ok(descriptor) => (Some(descriptor), None),
+            Err(mut reasons) => {
+                errors.append(&mut reasons);
+                (None, None)
+            }
+        };
         plans.push(ResolvedSpinTransportPlanIR {
             module_id: module.id.clone(),
             current_source_id: module.current_source_id.clone(),
@@ -114,12 +140,23 @@ pub(crate) fn resolve_m1_spin_transport(
             constitutive_version: module.constitutive_version.clone(),
             operator_version: module.solver.operator_version.clone(),
             physical_residual_version: module.solver.physical_residual_version.clone(),
-            capabilities: vec![
-                "transport.charge.ohmic".to_string(),
-                "transport.spin.steady_drift_diffusion".to_string(),
-                "transport.spin.direct_she".to_string(),
-                "transport.coupling.one_way".to_string(),
-            ],
+            capabilities: if reciprocal {
+                vec![
+                    "transport.charge.magnetoresistive".to_string(),
+                    "transport.spin.steady_drift_diffusion".to_string(),
+                    "transport.spin.direct_she".to_string(),
+                    "transport.spin.inverse_she".to_string(),
+                    "transport.spin.mixing_conductance".to_string(),
+                    "transport.coupling.bidirectional".to_string(),
+                ]
+            } else {
+                vec![
+                    "transport.charge.ohmic".to_string(),
+                    "transport.spin.steady_drift_diffusion".to_string(),
+                    "transport.spin.direct_she".to_string(),
+                    "transport.coupling.one_way".to_string(),
+                ]
+            },
             inserted_default_boundaries: if module.boundaries.is_empty()
                 && module.solver.default_external_boundary == "spin_insulating"
             {
@@ -128,6 +165,7 @@ pub(crate) fn resolve_m1_spin_transport(
                 Vec::new()
             },
             fdm_cpu_double,
+            fdm_cpu_double_reciprocal,
         });
     }
     if errors.is_empty() {
@@ -135,6 +173,110 @@ pub(crate) fn resolve_m1_spin_transport(
     } else {
         Err(PlanError { reasons: errors })
     }
+}
+
+fn materialize_m2_descriptor(
+    module: &fullmag_ir::SpinTransportModuleIR,
+    charge: &fullmag_ir::ChargeTransportDefinitionIR,
+    context: &FdmSpinTransportResolutionContext<'_>,
+    base: ResolvedFdmSpinTransportIR,
+) -> Result<ResolvedFdmCoupledSpinTransportIR, Vec<String>> {
+    if base.charge_active_cells != base.spin_active_cells {
+        return Err(vec![format!(
+            "spin transport '{}' M2 requires identical charge and spin domains",
+            module.id
+        )]);
+    }
+    if charge.gauge != fullmag_ir::ChargePotentialGaugeIR::DirichletReference {
+        return Err(vec![format!(
+            "spin transport '{}' M2 CPU v1 requires a Dirichlet voltage reference",
+            module.id
+        )]);
+    }
+    if base.spin_boundaries.iter().any(|boundary| matches!(
+        boundary.condition,
+        ResolvedSpinBoundaryConditionIR::PeriodicSpin
+    )) {
+        return Err(vec![format!(
+            "spin transport '{}' M2 CPU v1 does not support periodic spin boundaries",
+            module.id
+        )]);
+    }
+    if base.interfaces.iter().any(|interface| matches!(
+        interface.law,
+        ResolvedSpinInterfaceLawIR::Transparent
+    )) {
+        return Err(vec![format!(
+            "spin transport '{}' M2 CPU v1 requires explicit mixing-conductance laws at cross-material interfaces",
+            module.id
+        )]);
+    }
+    let nonlinear_solver = module.solver.reciprocal_nonlinear.clone().ok_or_else(|| {
+        vec![format!(
+            "spin transport '{}' M2 requires reciprocal_nonlinear solver policy",
+            module.id
+        )]
+    })?;
+    let count = base.charge_active_cells.len();
+    let mut sigma_parallel = vec![0.0; count];
+    let mut sigma_perpendicular = vec![0.0; count];
+    let mut sigma_ahe = vec![0.0; count];
+    let mut assigned = vec![false; count];
+    for assignment in &charge.materials {
+        let parallel = assignment.material.sigma_parallel_spm.ok_or_else(|| {
+            vec![format!("spin transport '{}' M2 charge material requires sigma_parallel_Spm", module.id)]
+        })?;
+        let perpendicular = assignment.material.sigma_perpendicular_spm.ok_or_else(|| {
+            vec![format!("spin transport '{}' M2 charge material requires sigma_perpendicular_Spm", module.id)]
+        })?;
+        let ahe = assignment.material.sigma_ahe_spm.ok_or_else(|| {
+            vec![format!("spin transport '{}' M2 charge material requires sigma_AHE_Spm", module.id)]
+        })?;
+        let mask = resolve_region_mask(&assignment.region, context, "M2 charge material")?;
+        for cell in 0..count {
+            if mask[cell] && base.charge_active_cells[cell] {
+                if assigned[cell] {
+                    return Err(vec![format!("M2 charge material assignments overlap at cell {cell}")]);
+                }
+                assigned[cell] = true;
+                sigma_parallel[cell] = parallel;
+                sigma_perpendicular[cell] = perpendicular;
+                sigma_ahe[cell] = ahe;
+            }
+        }
+    }
+    require_complete_assignment(&base.charge_active_cells, &assigned, "M2 charge material")?;
+    let reciprocal_materials = (0..count)
+        .map(|cell| ResolvedReciprocalMaterialIR {
+            sigma_spm: base.charge_conductivity_spm[cell],
+            sigma_spin_spm: base.spin_conductivity_spm[cell],
+            sigma_parallel_spm: sigma_parallel[cell],
+            sigma_perpendicular_spm: sigma_perpendicular[cell],
+            sigma_ahe_spm: sigma_ahe[cell],
+            polarization_p: base.polarization_p[cell],
+            theta_sh: base.theta_sh[cell],
+        })
+        .collect();
+    Ok(ResolvedFdmCoupledSpinTransportIR {
+        descriptor_schema: "fullmag.fdm.coupled_spin_transport_descriptor.v1".to_string(),
+        active_cells: base.charge_active_cells,
+        reciprocal_materials,
+        reactions: base.reactions,
+        region_ids: base.region_ids,
+        charge_boundaries: base.charge_boundaries,
+        spin_boundaries: base.spin_boundaries,
+        interfaces: base.interfaces,
+        torque_target_cells: base.torque_target_cells,
+        saturation_magnetization_apm: base.saturation_magnetization_apm,
+        gamma_e_rad_per_s_t: base.gamma_e_rad_per_s_t,
+        linear_solver: module.solver.linear.clone(),
+        nonlinear_solver,
+        operator_version: module.solver.operator_version.clone(),
+        physical_residual_version: module.solver.physical_residual_version.clone(),
+        constitutive_version: module.constitutive_version.clone(),
+        torque_formula_version: base.torque_formula_version,
+        oersted_source_bound: base.oersted_source_bound,
+    })
 }
 
 fn materialize_fdm_descriptor(
@@ -751,7 +893,12 @@ mod tests {
                 domain: vec![region.clone()],
                 materials: vec![ChargeTransportMaterialAssignmentIR {
                     region: region.clone(),
-                    material: ChargeTransportMaterialIR { sigma_spm: 4.0e6 },
+                    material: ChargeTransportMaterialIR {
+                        sigma_spm: 4.0e6,
+                        sigma_parallel_spm: None,
+                        sigma_perpendicular_spm: None,
+                        sigma_ahe_spm: None,
+                    },
                 }],
                 boundaries: charge_surfaces
                     .into_iter()
@@ -828,6 +975,7 @@ mod tests {
                 physical_residual_version: "transport_balance_integrated_l2.v1".into(),
                 operator_version: "fv_spin_upwind_v1".into(),
                 default_external_boundary: "spin_insulating".into(),
+                reciprocal_nonlinear: None,
             },
             requested_execution: RequestedTransportExecutionIR {
                 discretization: BackendTarget::Fdm,
@@ -844,6 +992,47 @@ mod tests {
             target: region,
             formula_version: "transport_torque_angular_momentum.fullmag.v1".into(),
         }];
+        problem
+    }
+
+    fn reciprocal_problem(device: ExecutionDevice) -> ProblemIR {
+        let mut problem = problem(device);
+        let CurrentModuleIR::CurrentTransport {
+            model,
+            coupling,
+            definition,
+            solve_region,
+            conductivity_s_per_m,
+            ..
+        } = &mut problem.current_modules[0]
+        else {
+            unreachable!()
+        };
+        *model = CurrentTransportModelIR::MagnetoresistivePoisson;
+        *coupling = TransportCouplingIR::Bidirectional;
+        *solve_region = None;
+        *conductivity_s_per_m = None;
+        let material = &mut definition
+            .as_mut()
+            .expect("charge definition")
+            .materials[0]
+            .material;
+        material.sigma_parallel_spm = Some(4.4e6);
+        material.sigma_perpendicular_spm = Some(4.0e6);
+        material.sigma_ahe_spm = Some(0.2e6);
+        let charge_solver = &mut definition.as_mut().unwrap().solver;
+        charge_solver.engine = "block_gmres".into();
+        charge_solver.operator_version = "fdm_coupled_charge_spin_fv_block_gmres.v1".into();
+        charge_solver.physical_residual_version = "transport_balance_integrated_l2.v1".into();
+        let spin = &mut problem.spin_transport_modules[0];
+        spin.constitutive_version = "transport_constitutive.reciprocal.fullmag.v1".into();
+        spin.solver.operator_version = "fdm_coupled_charge_spin_fv_block_gmres.v1".into();
+        spin.solver.reciprocal_nonlinear = Some(ReciprocalNonlinearSolverPolicyIR {
+            gmres_restart: 40,
+            max_picard_iterations: 4,
+            relative_update_tolerance: 1e-9,
+            eta_transport: 0.25,
+        });
         problem
     }
 
@@ -875,7 +1064,7 @@ mod tests {
         let region_ids = BTreeMap::new();
         let context = context(&owners, &region_mask, &magnetization, &ms, &region_ids);
         let plans =
-            resolve_m1_spin_transport(&problem(ExecutionDevice::Cpu), BackendTarget::Fdm, &context)
+            resolve_steady_spin_transport(&problem(ExecutionDevice::Cpu), BackendTarget::Fdm, &context)
                 .expect("M1 CPU plan");
         assert_eq!(plans[0].requested_execution.device, ExecutionDevice::Cpu);
         assert_eq!(plans[0].resolved_device, ExecutionDevice::Cpu);
@@ -894,6 +1083,60 @@ mod tests {
     }
 
     #[test]
+    fn resolves_bidirectional_m2_to_separate_reciprocal_descriptor() {
+        let owners = ["strip"];
+        let region_mask = [0];
+        let magnetization = [[0.0, 0.0, 1.0]];
+        let ms = [8.0e5];
+        let region_ids = BTreeMap::new();
+        let problem = reciprocal_problem(ExecutionDevice::Cpu);
+        problem
+            .validate()
+            .expect("authored M2 problem should satisfy canonical IR validation");
+        let plans = resolve_steady_spin_transport(
+            &problem,
+            BackendTarget::Fdm,
+            &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
+        )
+        .expect("M2 should resolve on FDM CPU double");
+
+        let plan = &plans[0];
+        assert_eq!(plan.resolved_coupling, TransportCouplingIR::Bidirectional);
+        assert!(plan.fdm_cpu_double.is_none());
+        let descriptor = plan
+            .fdm_cpu_double_reciprocal
+            .as_ref()
+            .expect("separate reciprocal descriptor");
+        assert_eq!(descriptor.reciprocal_materials[0].sigma_parallel_spm, 4.4e6);
+        assert_eq!(descriptor.reciprocal_materials[0].sigma_ahe_spm, 0.2e6);
+        assert!(plan.capabilities.iter().any(|capability| capability == "transport.spin.inverse_she"));
+    }
+
+    #[test]
+    fn rejects_m2_missing_anisotropic_charge_tensor_without_fallback() {
+        let owners = ["strip"];
+        let region_mask = [0];
+        let magnetization = [[0.0, 0.0, 1.0]];
+        let ms = [8.0e5];
+        let region_ids = BTreeMap::new();
+        let mut problem = reciprocal_problem(ExecutionDevice::Cpu);
+        let CurrentModuleIR::CurrentTransport { definition, .. } = &mut problem.current_modules[0]
+        else {
+            unreachable!()
+        };
+        definition.as_mut().unwrap().materials[0]
+            .material
+            .sigma_parallel_spm = None;
+        let error = resolve_steady_spin_transport(
+            &problem,
+            BackendTarget::Fdm,
+            &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
+        )
+        .expect_err("incomplete reciprocal material must fail closed");
+        assert!(error.reasons.iter().any(|reason| reason.contains("sigma_parallel")));
+    }
+
+    #[test]
     fn forced_gpu_fails_closed() {
         let owners = ["strip"];
         let region_mask = [0];
@@ -902,7 +1145,7 @@ mod tests {
         let region_ids = BTreeMap::new();
         let context = context(&owners, &region_mask, &magnetization, &ms, &region_ids);
         let error =
-            resolve_m1_spin_transport(&problem(ExecutionDevice::Gpu), BackendTarget::Fdm, &context)
+            resolve_steady_spin_transport(&problem(ExecutionDevice::Gpu), BackendTarget::Fdm, &context)
                 .expect_err("GPU must not silently fall back");
         assert!(error
             .reasons

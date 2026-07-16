@@ -970,6 +970,42 @@ mod tests {
     }
 
     #[test]
+    fn coupled_heun_exposes_embedded_lte_only_to_corrected_transport_stage() {
+        let problem = simple_problem(0.1, 1.0);
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+            .expect("state should build");
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+        let mut budgets = Vec::new();
+
+        problem
+            .heun_step_with_external_stage_terms_and_lte(
+                &mut state,
+                1e-3,
+                &mut ws,
+                &mut bufs,
+                EvaluationRequest::Full,
+                |_m, _time, budget| {
+                    budgets.push(budget);
+                    Ok(ExternalStageTerms {
+                        additional_field_apm: vec![[0.0, 0.0, 1.0]; 3],
+                        direct_torque_per_s: vec![[0.0; 3]; 3],
+                    })
+                },
+            )
+            .expect("coupled Heun step should succeed");
+
+        assert_eq!(budgets.len(), 3);
+        assert_eq!(budgets[0], None);
+        assert_eq!(budgets[1], None);
+        let corrected = budgets[2].expect("corrected stage must carry an LTE budget");
+        assert_eq!(corrected.dt_s, 1e-3);
+        assert!(corrected.embedded_lte_m.is_finite());
+        assert!(corrected.embedded_lte_m >= 0.0);
+    }
+
+    #[test]
     fn heun_soa_buffer_step_matches_aos_buffer_step_for_supported_terms() {
         let grid = GridShape::new(4, 1, 1).expect("valid grid");
         let problem = ExchangeLlgProblem::with_terms(

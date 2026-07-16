@@ -33,6 +33,36 @@ impl ExchangeLlgProblem {
     where
         F: FnMut(&[Vector3], f64) -> Result<ExternalStageTerms>,
     {
+        self.heun_step_with_external_stage_terms_and_lte(
+            state,
+            dt,
+            ws,
+            bufs,
+            evaluation,
+            |magnetization, time_s, _| external_terms(magnetization, time_s),
+        )
+    }
+
+    /// Transactional Heun step that exposes the Euler/Heun embedded magnetic
+    /// LTE only while evaluating the corrected candidate. This is the point
+    /// where a bidirectionally coupled transport solve can reject the whole
+    /// step without committing either transport or magnetization.
+    pub fn heun_step_with_external_stage_terms_and_lte<F>(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+        mut external_terms: F,
+    ) -> Result<StepReport>
+    where
+        F: FnMut(
+            &[Vector3],
+            f64,
+            Option<crate::fdm::TransportStageErrorBudget>,
+        ) -> Result<ExternalStageTerms>,
+    {
         self.ensure_state_matches_grid(state)?;
         if dt <= 0.0 || !dt.is_finite() {
             return Err(crate::EngineError::new("dt must be finite and positive"));
@@ -42,7 +72,7 @@ impl ExchangeLlgProblem {
         bufs.m0[..n].copy_from_slice(&state.magnetization);
 
         self.effective_field_into_ws_at_time(&bufs.m0[..n], ws, &mut bufs.h_eff[..n], t0);
-        let terms0 = external_terms(&bufs.m0[..n], t0)?;
+        let terms0 = external_terms(&bufs.m0[..n], t0, None)?;
         apply_external_stage_terms(
             &bufs.m0[..n],
             &mut bufs.h_eff[..n],
@@ -56,7 +86,7 @@ impl ExchangeLlgProblem {
         }
 
         self.effective_field_into_ws_at_time(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n], t0 + dt);
-        let terms1 = external_terms(&bufs.m_stage[..n], t0 + dt)?;
+        let terms1 = external_terms(&bufs.m_stage[..n], t0 + dt, None)?;
         apply_external_stage_terms(
             &bufs.m_stage[..n],
             &mut bufs.h_eff[..n],
@@ -83,7 +113,28 @@ impl ExchangeLlgProblem {
             evaluation,
             t0 + dt,
         );
-        let final_terms = external_terms(&bufs.delta[..n], t0 + dt)?;
+        let embedded_lte_m = bufs.delta[..n]
+            .iter()
+            .zip(&bufs.m_stage[..n])
+            .map(|(corrected, predictor)| {
+                let difference = [
+                    corrected[0] - predictor[0],
+                    corrected[1] - predictor[1],
+                    corrected[2] - predictor[2],
+                ];
+                let value = norm(difference);
+                value * value
+            })
+            .sum::<f64>();
+        let embedded_lte_m = (embedded_lte_m / n.max(1) as f64).sqrt();
+        let final_terms = external_terms(
+            &bufs.delta[..n],
+            t0 + dt,
+            Some(crate::fdm::TransportStageErrorBudget {
+                dt_s: dt,
+                embedded_lte_m,
+            }),
+        )?;
         let dynamic_field = final_terms.additional_field_apm.clone();
         apply_external_stage_terms(
             &bufs.delta[..n],

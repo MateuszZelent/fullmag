@@ -132,6 +132,7 @@ pub enum CurrentModuleIR {
 pub enum CurrentTransportModelIR {
     PrescribedDensity,
     OhmicPoisson,
+    MagnetoresistivePoisson,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -33,4 +33,5 @@ pub use shared::types::{
     neighbor_index, AdaptiveStepConfig, AxisBoundary, CellSize, EngineError, EvaluationRequest,
     ExternalStageTerms, FdmBoundaryPolicy, FdmDemagBoundary, GridShape, LlgConfig,
     MaterialParameters, ResolvedFdmPeriodicWorkspace, Result, TimeIntegrator,
+    TransportStageErrorBudget,
 };

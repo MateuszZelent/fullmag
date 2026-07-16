@@ -5067,6 +5067,8 @@ mod tests {
                 current_density: Some([0.0, 0.0, 5e10]),
                 solve_region: Some("pillar_region".to_string()),
                 conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                definition: None,
             });
         problem.regions = vec![fullmag_ir::RegionIR {
             name: "pillar_region".to_string(),
@@ -5179,6 +5181,8 @@ mod tests {
                 current_density: Some([0.0, 0.0, 5e10]),
                 solve_region: Some("pillar_region".to_string()),
                 conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                definition: None,
             });
         problem.regions = vec![fullmag_ir::RegionIR {
             name: "pillar_region".to_string(),

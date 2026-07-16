@@ -40,6 +40,15 @@ pub struct ExternalStageTerms {
     pub direct_torque_per_s: Vec<Vector3>,
 }
 
+/// Embedded magnetic-step error available only for the corrected candidate.
+/// Coupled transport uses it to bound transport-induced torque error before
+/// either subsystem commits state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransportStageErrorBudget {
+    pub dt_s: f64,
+    pub embedded_lte_m: f64,
+}
+
 // ── Grid & Cell ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -488,7 +488,8 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
                         )),
                         }
                     }
-                    CurrentTransportModelIR::OhmicPoisson => {
+                    CurrentTransportModelIR::OhmicPoisson
+                    | CurrentTransportModelIR::MagnetoresistivePoisson => {
                         if current_density.is_some() {
                             errors.push(format!(
                                 "current_modules[{index}] current_transport ohmic_poisson must not define current_density"
@@ -503,6 +504,7 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
                             Some(definition) => validate_charge_transport_definition(
                                 index,
                                 definition,
+                                matches!(model, CurrentTransportModelIR::MagnetoresistivePoisson),
                                 errors,
                             ),
                             None => errors.push(format!(
@@ -519,6 +521,7 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
 fn validate_charge_transport_definition(
     index: usize,
     definition: &crate::ChargeTransportDefinitionIR,
+    reciprocal: bool,
     errors: &mut Vec<String>,
 ) {
     let prefix = format!("current_modules[{index}] current_transport");
@@ -534,6 +537,28 @@ fn validate_charge_transport_definition(
         if !assignment.material.sigma_spm.is_finite() || assignment.material.sigma_spm <= 0.0 {
             errors.push(format!(
                 "{prefix}.materials[{material_index}].material.sigma_Spm must be finite and > 0"
+            ));
+        }
+        let tensor = [
+            assignment.material.sigma_parallel_spm,
+            assignment.material.sigma_perpendicular_spm,
+            assignment.material.sigma_ahe_spm,
+        ];
+        if reciprocal {
+            match tensor {
+                [Some(parallel), Some(perpendicular), Some(ahe)]
+                    if parallel.is_finite()
+                        && parallel > 0.0
+                        && perpendicular.is_finite()
+                        && perpendicular > 0.0
+                        && ahe.is_finite() => {}
+                _ => errors.push(format!(
+                    "{prefix}.materials[{material_index}] magnetoresistive_poisson requires finite sigma_parallel_Spm > 0, sigma_perpendicular_Spm > 0, and sigma_AHE_Spm"
+                )),
+            }
+        } else if tensor.iter().any(Option::is_some) {
+            errors.push(format!(
+                "{prefix}.materials[{material_index}] anisotropic conductivity is valid only for magnetoresistive_poisson"
             ));
         }
         if !definition.domain.contains(&assignment.region) {
@@ -618,12 +643,25 @@ fn validate_charge_transport_definition(
         _ => {}
     }
     let solver = &definition.solver;
-    if solver.engine != "cg"
-        || solver.operator_version != "fv_charge_harmonic_v1"
-        || solver.physical_residual_version != "charge_balance_integrated_l2.v1"
+    let (engine, operator, residual) = if reciprocal {
+        (
+            "block_gmres",
+            "fdm_coupled_charge_spin_fv_block_gmres.v1",
+            "transport_balance_integrated_l2.v1",
+        )
+    } else {
+        (
+            "cg",
+            "fv_charge_harmonic_v1",
+            "charge_balance_integrated_l2.v1",
+        )
+    };
+    if solver.engine != engine
+        || solver.operator_version != operator
+        || solver.physical_residual_version != residual
     {
         errors.push(format!(
-            "{prefix}.solver carries an unsupported M1 charge engine/version"
+            "{prefix}.solver carries an unsupported charge engine/version for its transport model"
         ));
     }
     if !solver.linear.relative_tolerance.is_finite()
@@ -1260,32 +1298,42 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             .find_map(|current| match current {
                 CurrentModuleIR::CurrentTransport {
                     name,
+                    model,
                     coupling,
                     definition,
                     ..
-                } if name == &module.current_source_id => Some((definition.as_ref(), *coupling)),
+                } if name == &module.current_source_id => {
+                    Some((definition.as_ref(), *model, *coupling))
+                }
                 _ => None,
             });
-        let Some((charge_definition, coupling)) = source else {
+        let Some((charge_definition, source_model, coupling)) = source else {
             errors.push(format!(
                 "{prefix}.current_source_id '{}' must reference a current_transport module",
                 module.current_source_id
             ));
             continue;
         };
-        if coupling != crate::TransportCouplingIR::OneWay {
-            errors.push(format!(
-                "{prefix} M1 requires current source coupling=one_way"
-            ));
+        let reciprocal = coupling == crate::TransportCouplingIR::Bidirectional;
+        let expected_model = if reciprocal {
+            crate::CurrentTransportModelIR::MagnetoresistivePoisson
+        } else {
+            crate::CurrentTransportModelIR::OhmicPoisson
+        };
+        let expected_constitutive = if reciprocal {
+            "transport_constitutive.reciprocal.fullmag.v1"
+        } else {
+            "transport_constitutive.one_way.fullmag.v1"
+        };
+        if source_model != expected_model {
+            errors.push(format!("{prefix} current source model is inconsistent with its coupling"));
         }
-        if module.constitutive_version != "transport_constitutive.one_way.fullmag.v1" {
-            errors.push(format!(
-                "{prefix}.constitutive_version is unsupported for M1"
-            ));
+        if module.constitutive_version != expected_constitutive {
+            errors.push(format!("{prefix}.constitutive_version is inconsistent with its coupling"));
         }
         if module.requested_execution.precision != crate::ExecutionPrecision::Double {
             errors.push(format!(
-                "{prefix} M1 initial lane supports precision=double only"
+                "{prefix} steady M1/M2 lane supports precision=double only"
             ));
         }
         for (material_index, assignment) in module.materials.iter().enumerate() {
@@ -1338,7 +1386,19 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                     .map(|charge| charge.material.sigma_spm)
             });
             if let Some(sigma) = sigma_ref {
-                if material.sigma_s_spm - material.polarization_p.powi(2) * sigma <= 0.0 {
+                let reciprocal_lambda_min = if reciprocal {
+                    charge_definition
+                        .and_then(|definition| definition.materials.iter().find(|charge| charge.region == assignment.region))
+                        .and_then(|charge| Some(charge.material.sigma_parallel_spm?.min(charge.material.sigma_perpendicular_spm?)))
+                } else {
+                    Some(sigma)
+                };
+                if reciprocal_lambda_min.is_none() {
+                    errors.push(format!("{prefix}.materials[{material_index}] M2 requires sigma_parallel_Spm and sigma_perpendicular_Spm"));
+                } else if reciprocal_lambda_min.unwrap() * material.sigma_s_spm
+                    - material.polarization_p.powi(2) * sigma.powi(2)
+                    <= 0.0
+                {
                     errors.push(format!("{prefix}.materials[{material_index}] requires sigma_s_Spm - polarization_p^2*sigma_ref > 0"));
                 }
             } else {
@@ -1347,12 +1407,32 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                 ));
             }
         }
-        if module.solver.operator_version != "fv_spin_upwind_v1"
+        let expected_operator = if reciprocal {
+            "fdm_coupled_charge_spin_fv_block_gmres.v1"
+        } else {
+            "fv_spin_upwind_v1"
+        };
+        if module.solver.operator_version != expected_operator
             || module.solver.physical_residual_version != "transport_balance_integrated_l2.v1"
         {
             errors.push(format!(
                 "{prefix}.solver carries unsupported operator/residual version"
             ));
+        }
+        if reciprocal {
+            match &module.solver.reciprocal_nonlinear {
+                Some(policy)
+                    if policy.gmres_restart > 0
+                        && policy.max_picard_iterations > 0
+                        && policy.relative_update_tolerance.is_finite()
+                        && policy.relative_update_tolerance > 0.0
+                        && policy.eta_transport.is_finite()
+                        && policy.eta_transport > 0.0
+                        && policy.eta_transport <= 1.0 => {}
+                _ => errors.push(format!("{prefix}.solver requires a valid reciprocal_nonlinear policy for M2")),
+            }
+        } else if module.solver.reciprocal_nonlinear.is_some() {
+            errors.push(format!("{prefix}.solver.reciprocal_nonlinear is valid only for M2"));
         }
         if module.solver.linear.relative_tolerance <= 0.0
             || module.solver.linear.absolute_tolerance < 0.0
