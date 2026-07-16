@@ -695,12 +695,14 @@ pub struct TableAutosaveIR {
     pub sample_period_s: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_period_policy: Option<SamplingPeriodPolicyIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_sample_period_s: Option<f64>,
     pub quantities: Vec<String>,
 }
 
 impl TableAutosaveIR {
     pub fn explicit_sample_period_s(&self) -> Option<f64> {
-        if self.sample_period_policy.is_none() {
+        if self.sample_period_policy.is_none() && self.resolved_sample_period_s.is_none() {
             self.sample_period_s
         } else {
             None
@@ -715,7 +717,7 @@ impl TableAutosaveIR {
     }
 
     pub fn set_resolved_sample_period_s(&mut self, period_s: f64) {
-        self.sample_period_s = Some(period_s);
+        self.resolved_sample_period_s = Some(period_s);
     }
 }
 
@@ -742,6 +744,7 @@ mod tests {
         assert_eq!(table.table_id, "default");
         assert_eq!(table.sample_period_s, Some(2e-12));
         assert!(table.sample_period_policy.is_none());
+        assert!(table.resolved_sample_period_s.is_none());
         assert_eq!(table.quantities, ["step", "t", "mx", "e_total"]);
     }
 

@@ -66,6 +66,7 @@ fn sampling_policy_validation_accepts_unresolved_and_resolved_auto_intent() {
         sample_period_policy: Some(SamplingPeriodPolicyIR::AutoSincCutoff {
             nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
         }),
+        resolved_sample_period_s: None,
         quantities: vec!["t".into(), "mx".into()],
     };
     ir.study.sampling_mut().table_autosave = Some(table);
@@ -74,10 +75,53 @@ fn sampling_policy_validation_accepts_unresolved_and_resolved_auto_intent() {
 
     let table = ir.study.sampling_mut().table_autosave.as_mut().unwrap();
     table.set_resolved_sample_period_s(2e-12);
-    assert_eq!(table.sample_period_s, Some(2e-12));
+    assert_eq!(table.sample_period_s, None);
+    assert_eq!(table.resolved_sample_period_s, Some(2e-12));
     assert_eq!(table.explicit_sample_period_s(), None);
     ir.validate()
         .expect("resolved automatic sampling remains valid automatic intent");
+}
+
+#[test]
+fn sampling_policy_rejects_unmarked_numeric_and_auto_authoring_state() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study.sampling_mut().table_autosave = Some(serde_json::from_value(serde_json::json!({
+        "kind": "table_autosave",
+        "table_id": "default",
+        "sample_period_s": 2e-12,
+        "sample_period_policy": {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3
+        },
+        "quantities": ["t", "mx"]
+    })).unwrap());
+    let errors = ir.validate().expect_err("authoring payload must not combine explicit and automatic cadence");
+    assert!(errors.iter().any(|error| error.contains("cadence state is ambiguous")));
+}
+
+#[test]
+fn sampling_policy_validation_rejects_invalid_explicit_table_periods() {
+    for period in [0.0, -1e-12, f64::NAN, f64::INFINITY] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.study.sampling_mut().table_autosave = Some(TableAutosaveIR {
+            kind: "table_autosave".into(),
+            table_id: "default".into(),
+            sample_period_s: Some(period),
+            sample_period_policy: None,
+            resolved_sample_period_s: None,
+            quantities: vec!["t".into()],
+        });
+        let errors = ir.validate().expect_err("explicit table cadence must be finite and positive");
+        assert!(errors.iter().any(|error| error.contains("sample_period_s must be finite and positive")));
+    }
+}
+
+#[test]
+fn sampling_policy_preserves_legacy_numeric_field_serialization() {
+    let output = OutputIR::Field { name: "m".into(), every_seconds: 2e-12 };
+    assert_eq!(serde_json::to_value(output).unwrap(), serde_json::json!({
+        "kind": "field", "name": "m", "every_seconds": 2e-12
+    }));
 }
 
 #[test]
@@ -88,6 +132,7 @@ fn sampling_policy_validation_rejects_missing_mode_and_noncanonical_values() {
         table_id: "default".into(),
         sample_period_s: None,
         sample_period_policy: None,
+        resolved_sample_period_s: None,
         quantities: vec!["t".into()],
     });
     let errors = ir

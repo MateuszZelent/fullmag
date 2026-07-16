@@ -54,7 +54,11 @@ impl TableAutosaveConfig {
         if ir.table_id.trim().is_empty() {
             return Err("table_autosave.table_id must not be empty".to_string());
         }
-        if ir.sample_period_s <= 0.0 {
+        let sample_period_s = ir
+            .explicit_sample_period_s()
+            .or(ir.resolved_sample_period_s)
+            .ok_or_else(|| "table_autosave sampling period is unresolved".to_string())?;
+        if !sample_period_s.is_finite() || sample_period_s <= 0.0 {
             return Err("table_autosave.sample_period_s must be positive".to_string());
         }
         let quantity_ids: Vec<&str> = if ir.quantities.is_empty() {
@@ -72,7 +76,7 @@ impl TableAutosaveConfig {
         }
         Ok(Self {
             table_id: ir.table_id.clone(),
-            sample_period_s: ir.sample_period_s,
+            sample_period_s,
             columns,
         })
     }
@@ -429,7 +433,9 @@ mod tests {
         TableAutosaveConfig::from_ir(&fullmag_ir::TableAutosaveIR {
             kind: "table_autosave".to_string(),
             table_id: DEFAULT_TABLE_ID.to_string(),
-            sample_period_s: period,
+            sample_period_s: Some(period),
+            sample_period_policy: None,
+            resolved_sample_period_s: None,
             quantities: DEFAULT_TABLE_COLUMNS
                 .iter()
                 .map(|value| value.to_string())
@@ -461,7 +467,9 @@ mod tests {
         let config = TableAutosaveConfig::from_ir(&fullmag_ir::TableAutosaveIR {
             kind: "table_autosave".to_string(),
             table_id: DEFAULT_TABLE_ID.to_string(),
-            sample_period_s: 1e-12,
+            sample_period_s: Some(1e-12),
+            sample_period_policy: None,
+            resolved_sample_period_s: None,
             quantities: vec!["e_drive".to_string()],
         })
         .expect("regional drive energy should be accepted");

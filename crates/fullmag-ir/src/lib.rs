@@ -678,28 +678,42 @@ impl ProblemIR {
             match (
                 table_autosave.sample_period_s,
                 table_autosave.sample_period_policy.as_ref(),
+                table_autosave.resolved_sample_period_s,
             ) {
-                (None, None) => errors.push(
+                (None, None, None) => errors.push(
                     "sampling.table_autosave requires sample_period_s or sample_period_policy"
                         .to_string(),
                 ),
-                (sample_period_s, policy) => {
-                    if let Some(sample_period_s) = sample_period_s {
-                        if !sample_period_s.is_finite() || sample_period_s <= 0.0 {
-                            errors.push(
-                                "sampling.table_autosave.sample_period_s must be finite and positive"
-                                    .to_string(),
-                            );
-                        }
-                    }
-                    if let Some(policy) = policy {
-                        validate_sampling_period_policy(
-                            "sampling.table_autosave.sample_period_policy",
-                            policy,
-                            &mut errors,
+                (Some(sample_period_s), None, None) => {
+                    if !sample_period_s.is_finite() || sample_period_s <= 0.0 {
+                        errors.push(
+                            "sampling.table_autosave.sample_period_s must be finite and positive"
+                                .to_string(),
                         );
                     }
                 }
+                (None, Some(policy), None) => validate_sampling_period_policy(
+                    "sampling.table_autosave.sample_period_policy",
+                    policy,
+                    &mut errors,
+                ),
+                (None, Some(policy), Some(resolved_sample_period_s)) => {
+                    if !resolved_sample_period_s.is_finite() || resolved_sample_period_s <= 0.0 {
+                        errors.push(
+                            "sampling.table_autosave.resolved_sample_period_s must be finite and positive"
+                                .to_string(),
+                        );
+                    }
+                    validate_sampling_period_policy(
+                        "sampling.table_autosave.sample_period_policy",
+                        policy,
+                        &mut errors,
+                    );
+                }
+                _ => errors.push(
+                    "sampling.table_autosave cadence state is ambiguous; use exactly one of explicit sample_period_s, unresolved sample_period_policy, or sample_period_policy with resolved_sample_period_s"
+                        .to_string(),
+                ),
             }
             if table_autosave.quantities.is_empty() {
                 errors.push("sampling.table_autosave.quantities must not be empty".to_string());

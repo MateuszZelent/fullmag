@@ -78,7 +78,9 @@ pub(crate) fn regional_field_drive_artifact(
 fn output_name(output: &OutputIR) -> String {
     match output {
         OutputIR::Scalar { name, .. }
+        | OutputIR::ScalarAuto { name, .. }
         | OutputIR::Field { name, .. }
+        | OutputIR::FieldAuto { name, .. }
         | OutputIR::DispersionCurve { name } => name.clone(),
         OutputIR::Snapshot { field, component, .. } => format!("{field}:{component}"),
         OutputIR::EigenSpectrum { quantity } => quantity.clone(),
