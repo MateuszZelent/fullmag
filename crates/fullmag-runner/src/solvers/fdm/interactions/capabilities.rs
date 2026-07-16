@@ -16,7 +16,10 @@ pub(crate) fn unsupported_cpu_fdm_terms(
     // Fields available in CPU FDM snapshots: m, H_ex, H_demag, H_ext, H_ani, H_dmi, H_eff.
     // H_ant is not exposed as a separate observable by the reference engine.
     if outputs.iter().any(|output| match output {
-        OutputIR::Field { name, .. } | OutputIR::Scalar { name, .. } => {
+        OutputIR::Field { name, .. }
+        | OutputIR::FieldResolvedAuto { name, .. }
+        | OutputIR::Scalar { name, .. }
+        | OutputIR::ScalarResolvedAuto { name, .. } => {
             matches!(
                 name.as_str(),
                 "H_mel" | "u" | "u_dot" | "eps" | "sigma" | "E_mel" | "E_el" | "E_kin_el"

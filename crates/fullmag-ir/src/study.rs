@@ -1149,6 +1149,11 @@ pub enum OutputIR {
         name: String,
         sample_period_policy: SamplingPeriodPolicyIR,
     },
+    FieldResolvedAuto {
+        name: String,
+        every_seconds: f64,
+        requested_policy: SamplingPeriodPolicyIR,
+    },
     Scalar {
         name: String,
         every_seconds: f64,
@@ -1156,6 +1161,11 @@ pub enum OutputIR {
     ScalarAuto {
         name: String,
         sample_period_policy: SamplingPeriodPolicyIR,
+    },
+    ScalarResolvedAuto {
+        name: String,
+        every_seconds: f64,
+        requested_policy: SamplingPeriodPolicyIR,
     },
     Snapshot {
         field: String,
@@ -1209,8 +1219,10 @@ impl OutputIR {
         match self {
             Self::Field { name, .. }
             | Self::FieldAuto { name, .. }
+            | Self::FieldResolvedAuto { name, .. }
             | Self::Scalar { name, .. }
-            | Self::ScalarAuto { name, .. } => Some(name),
+            | Self::ScalarAuto { name, .. }
+            | Self::ScalarResolvedAuto { name, .. } => Some(name),
             _ => None,
         }
     }
@@ -1226,6 +1238,14 @@ impl OutputIR {
                 ..
             }
         )
+    }
+
+    pub fn resolved_auto_period_s(&self) -> Option<f64> {
+        match self {
+            Self::FieldResolvedAuto { every_seconds, .. }
+            | Self::ScalarResolvedAuto { every_seconds, .. } => Some(*every_seconds),
+            _ => None,
+        }
     }
 }
 

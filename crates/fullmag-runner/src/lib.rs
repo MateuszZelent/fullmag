@@ -897,11 +897,14 @@ pub(crate) fn require_resolved_runtime_sampling(
         table_autosave::TableAutosaveConfig::from_ir(table)
             .map_err(|message| RunError { message })?;
     }
-    validate_sampling_resolution_provenance(problem)?;
+    validate_sampling_resolution_provenance(problem, plan)?;
     Ok(())
 }
 
-fn validate_sampling_resolution_provenance(problem: &ProblemIR) -> Result<(), RunError> {
+fn validate_sampling_resolution_provenance(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<(), RunError> {
     let table = problem.study.sampling().table_autosave.as_ref();
     let automatic_table_period = table.and_then(|table| {
         table
@@ -909,13 +912,35 @@ fn validate_sampling_resolution_provenance(problem: &ProblemIR) -> Result<(), Ru
             .then_some(table.resolved_sample_period_s)
             .flatten()
     });
+    let automatic_outputs: Vec<(f64, &fullmag_ir::SamplingPeriodPolicyIR)> = problem
+        .study
+        .sampling()
+        .outputs
+        .iter()
+        .chain(plan.output_plan.outputs.iter())
+        .filter_map(|output| match output {
+            OutputIR::FieldResolvedAuto {
+                every_seconds,
+                requested_policy,
+                ..
+            }
+            | OutputIR::ScalarResolvedAuto {
+                every_seconds,
+                requested_policy,
+                ..
+            } => Some((*every_seconds, requested_policy)),
+            _ => None,
+        })
+        .collect();
     let metadata = problem
         .problem_meta
         .runtime_metadata
         .get("sampling_resolution");
-    if automatic_table_period.is_some() && metadata.is_none() {
+    if (automatic_table_period.is_some() || !automatic_outputs.is_empty())
+        && metadata.is_none()
+    {
         return Err(RunError {
-            message: "resolved automatic table sampling requires runtime_metadata.sampling_resolution provenance".into(),
+            message: "resolved automatic table or output sampling requires runtime_metadata.sampling_resolution provenance".into(),
         });
     }
     let Some(metadata) = metadata else {
@@ -982,6 +1007,22 @@ fn validate_sampling_resolution_provenance(problem: &ProblemIR) -> Result<(), Ru
             message: "sampling_resolution.sample_period_s must match table_autosave.resolved_sample_period_s".into(),
         });
     }
+    if automatic_outputs
+        .iter()
+        .any(|(period, _)| *period != resolution.sample_period_s)
+    {
+        return Err(RunError {
+            message: "sampling_resolution.sample_period_s must match every resolved automatic output cadence".into(),
+        });
+    }
+    if automatic_outputs
+        .iter()
+        .any(|(_, policy)| *policy != &resolution.requested_policy)
+    {
+        return Err(RunError {
+            message: "resolved automatic output requested_policy must match sampling_resolution.requested_policy".into(),
+        });
+    }
     let active_stage_id = problem
         .problem_meta
         .runtime_metadata
@@ -993,14 +1034,51 @@ fn validate_sampling_resolution_provenance(problem: &ProblemIR) -> Result<(), Ru
             message: "sampling_resolution.target_stage_id must match runtime_metadata.active_stage_id".into(),
         });
     }
-    if resolution.source_drive_ids.is_empty()
-        || resolution
-            .source_drive_ids
-            .iter()
-            .any(|drive_id| drive_id.trim().is_empty())
-    {
+    let mut expected_source_drive_ids = Vec::new();
+    let mut expected_maximum_cutoff_hz: Option<f64> = None;
+    for drive in problem.field_drives.iter().filter(|drive| {
+        drive.enabled
+            && match &drive.activation {
+                fullmag_ir::DriveActivationIR::AllTimeEvolution {} => {
+                    matches!(problem.study, fullmag_ir::StudyIR::TimeEvolution { .. })
+                }
+                fullmag_ir::DriveActivationIR::StageIds { stage_ids } => stage_ids
+                    .iter()
+                    .any(|stage_id| stage_id == &resolution.target_stage_id),
+            }
+    }) {
+        let fullmag_ir::TimeDependenceIR::SincPulse { cutoff_hz, .. } = drive.waveform else {
+            continue;
+        };
+        if !cutoff_hz.is_finite() || cutoff_hz <= 0.0 {
+            return Err(RunError {
+                message: format!(
+                    "active sinc drive '{}' requires a finite positive cutoff_hz",
+                    drive.id
+                ),
+            });
+        }
+        expected_source_drive_ids.push(drive.id.clone());
+        expected_maximum_cutoff_hz = Some(
+            expected_maximum_cutoff_hz
+                .map(|maximum| maximum.max(cutoff_hz))
+                .unwrap_or(cutoff_hz),
+        );
+    }
+    let Some(expected_maximum_cutoff_hz) = expected_maximum_cutoff_hz else {
         return Err(RunError {
-            message: "sampling_resolution.source_drive_ids must contain nonempty drive IDs".into(),
+            message: "sampling_resolution requires at least one enabled active sinc source drive"
+                .into(),
+        });
+    };
+    if resolution.source_drive_ids != expected_source_drive_ids {
+        return Err(RunError {
+            message: "sampling_resolution.source_drive_ids must exactly match the enabled active sinc drives for target_stage_id".into(),
+        });
+    }
+    if resolution.maximum_cutoff_hz != expected_maximum_cutoff_hz {
+        return Err(RunError {
+            message: "sampling_resolution.maximum_cutoff_hz must equal the maximum cutoff of its enabled active sinc source drives".into(),
         });
     }
     Ok(())
@@ -2802,6 +2880,33 @@ mod tests {
             resolved_sample_period_s: Some(sample_period_s),
             quantities: vec!["t".into(), "my".into()],
         });
+        problem.study.sampling_mut().outputs = vec![OutputIR::FieldResolvedAuto {
+            name: "m".into(),
+            every_seconds: sample_period_s,
+            requested_policy: fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            },
+        }];
+        problem.field_drives = vec![fullmag_ir::RegionalFieldDriveIR {
+            id: "k0-sinc-antenna".into(),
+            name: "K0 sinc antenna".into(),
+            kind: fullmag_ir::FieldDriveKindIR::Regional,
+            enabled: true,
+            target: fullmag_ir::FieldTargetIR::Global {},
+            amplitude_b_t: 1.0e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: fullmag_ir::FieldSpatialProfileIR::Uniform {},
+            waveform: fullmag_ir::TimeDependenceIR::SincPulse {
+                cutoff_hz: 5.0e9,
+                t0: 50.0e-12,
+                amplitude: 1.0,
+            },
+            time_origin: fullmag_ir::FieldTimeOriginIR::StageLocal,
+            activation: fullmag_ir::DriveActivationIR::StageIds {
+                stage_ids: vec!["excite".into()],
+            },
+            migration: None,
+        }];
         let resolution = fullmag_plan::SamplingResolutionIR {
             schema_version: fullmag_plan::SAMPLING_RESOLUTION_SCHEMA_VERSION.to_string(),
             requested_policy: fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
@@ -2873,6 +2978,66 @@ mod tests {
                 error.message
             );
         }
+    }
+
+    #[test]
+    fn runtime_sampling_rejects_output_only_auto_without_provenance_or_with_wrong_cadence() {
+        let (mut problem, plan) = resolved_auto_sampling_problem();
+        problem.study.sampling_mut().table_autosave = None;
+        problem.problem_meta.runtime_metadata.remove("sampling_resolution");
+        let error = require_resolved_runtime_sampling(&problem, &plan)
+            .expect_err("output-only resolved auto must retain provenance");
+        assert!(error.message.contains("sampling_resolution"));
+
+        let (mut problem, mut plan_with_wrong_cadence) = resolved_auto_sampling_problem();
+        problem.study.sampling_mut().table_autosave = None;
+        let OutputIR::FieldResolvedAuto { every_seconds, .. } =
+            &mut plan_with_wrong_cadence.output_plan.outputs[0]
+        else {
+            panic!("planner must preserve the resolved-auto marker");
+        };
+        *every_seconds *= 2.0;
+        let error = require_resolved_runtime_sampling(&problem, &plan_with_wrong_cadence)
+            .expect_err("every resolved-auto output cadence must match provenance");
+        assert!(error.message.contains("output cadence"));
+    }
+
+    #[test]
+    fn runtime_sampling_rejects_forged_missing_extra_and_stale_sinc_sources() {
+        for source_ids in [
+            Vec::<String>::new(),
+            vec!["forged".into()],
+            vec!["k0-sinc-antenna".into(), "extra".into()],
+        ] {
+            let (mut problem, plan) = resolved_auto_sampling_problem();
+            problem
+                .problem_meta
+                .runtime_metadata
+                .get_mut("sampling_resolution")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("sampling resolution metadata")
+                .insert("source_drive_ids".into(), json!(source_ids));
+            let error = require_resolved_runtime_sampling(&problem, &plan)
+                .expect_err("source IDs must exactly match active sinc drives");
+            assert!(error.message.contains("source_drive_ids"));
+        }
+
+        let (mut stale, plan) = resolved_auto_sampling_problem();
+        let fullmag_ir::TimeDependenceIR::SincPulse { cutoff_hz, .. } =
+            &mut stale.field_drives[0].waveform
+        else {
+            panic!("fixture drive must be sinc");
+        };
+        *cutoff_hz = 4.0e9;
+        let error = require_resolved_runtime_sampling(&stale, &plan)
+            .expect_err("stale cutoff provenance must be rejected");
+        assert!(error.message.contains("maximum_cutoff_hz"));
+
+        let (mut inactive, plan) = resolved_auto_sampling_problem();
+        inactive.field_drives[0].enabled = false;
+        let error = require_resolved_runtime_sampling(&inactive, &plan)
+            .expect_err("a disabled provenance source must be rejected");
+        assert!(error.message.contains("active sinc source"));
     }
 
     #[test]

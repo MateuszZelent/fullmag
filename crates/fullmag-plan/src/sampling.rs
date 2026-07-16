@@ -146,13 +146,21 @@ pub fn resolve_auto_sampling_for_stage(
     }
     for output in &mut sampling.outputs {
         let resolved = match output {
-            OutputIR::FieldAuto { name, .. } => Some(OutputIR::Field {
+            OutputIR::FieldAuto {
+                name,
+                sample_period_policy,
+            } => Some(OutputIR::FieldResolvedAuto {
                 name: name.clone(),
                 every_seconds: sample_period_s,
+                requested_policy: sample_period_policy.clone(),
             }),
-            OutputIR::ScalarAuto { name, .. } => Some(OutputIR::Scalar {
+            OutputIR::ScalarAuto {
+                name,
+                sample_period_policy,
+            } => Some(OutputIR::ScalarResolvedAuto {
                 name: name.clone(),
                 every_seconds: sample_period_s,
+                requested_policy: sample_period_policy.clone(),
             }),
             _ => None,
         };

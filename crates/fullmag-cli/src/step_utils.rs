@@ -1197,8 +1197,10 @@ fn time_output_name(output: &OutputIR) -> Option<&str> {
     match output {
         OutputIR::Field { name, .. }
         | OutputIR::FieldAuto { name, .. }
+        | OutputIR::FieldResolvedAuto { name, .. }
         | OutputIR::Scalar { name, .. }
-        | OutputIR::ScalarAuto { name, .. } => Some(name),
+        | OutputIR::ScalarAuto { name, .. }
+        | OutputIR::ScalarResolvedAuto { name, .. } => Some(name),
         OutputIR::Snapshot { field, .. } => Some(field),
         _ => None,
     }
@@ -1300,8 +1302,10 @@ fn time_domain_sampling_from(base: &fullmag_ir::SamplingIR) -> fullmag_ir::Sampl
                 output,
                 fullmag_ir::OutputIR::Field { .. }
                     | fullmag_ir::OutputIR::FieldAuto { .. }
+                    | fullmag_ir::OutputIR::FieldResolvedAuto { .. }
                     | fullmag_ir::OutputIR::Scalar { .. }
                     | fullmag_ir::OutputIR::ScalarAuto { .. }
+                    | fullmag_ir::OutputIR::ScalarResolvedAuto { .. }
                     | fullmag_ir::OutputIR::Snapshot { .. }
             )
         })
@@ -5266,11 +5270,11 @@ mod tests {
         );
         assert!(matches!(
             run_3.study.sampling().outputs.as_slice(),
-            [fullmag_ir::OutputIR::Field { .. }]
+            [fullmag_ir::OutputIR::FieldResolvedAuto { .. }]
         ));
         assert!(matches!(
             run_5.study.sampling().outputs.as_slice(),
-            [fullmag_ir::OutputIR::Field { .. }]
+            [fullmag_ir::OutputIR::FieldResolvedAuto { .. }]
         ));
     }
 
@@ -5312,7 +5316,7 @@ mod tests {
         .expect("flat stage should resolve auto sampling");
         assert!(matches!(
             stages[0].ir.study.sampling().outputs.as_slice(),
-            [fullmag_ir::OutputIR::Scalar { every_seconds, .. }]
+            [fullmag_ir::OutputIR::ScalarResolvedAuto { every_seconds, .. }]
                 if *every_seconds == 1.0 / 13e9
         ));
     }

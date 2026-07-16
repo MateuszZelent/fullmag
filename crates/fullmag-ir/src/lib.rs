@@ -550,9 +550,31 @@ impl ProblemIR {
         }
         for output in &self.study.sampling().outputs {
             match output {
+                OutputIR::FieldResolvedAuto {
+                    requested_policy, ..
+                } => validate_sampling_period_policy(
+                    "field_resolved_auto output",
+                    requested_policy,
+                    &mut errors,
+                ),
+                OutputIR::ScalarResolvedAuto {
+                    requested_policy, ..
+                } => validate_sampling_period_policy(
+                    "scalar_resolved_auto output",
+                    requested_policy,
+                    &mut errors,
+                ),
+                _ => {}
+            }
+            match output {
                 OutputIR::Field {
                     name,
                     every_seconds,
+                }
+                | OutputIR::FieldResolvedAuto {
+                    name,
+                    every_seconds,
+                    ..
                 } => {
                     if name.trim().is_empty() {
                         errors.push("field output name must not be empty".to_string());
@@ -580,6 +602,11 @@ impl ProblemIR {
                 OutputIR::Scalar {
                     name,
                     every_seconds,
+                }
+                | OutputIR::ScalarResolvedAuto {
+                    name,
+                    every_seconds,
+                    ..
                 } => {
                     if name.trim().is_empty() {
                         errors.push("scalar output name must not be empty".to_string());
@@ -920,8 +947,10 @@ impl ProblemIR {
                         output,
                         OutputIR::Field { .. }
                             | OutputIR::FieldAuto { .. }
+                            | OutputIR::FieldResolvedAuto { .. }
                             | OutputIR::Scalar { .. }
                             | OutputIR::ScalarAuto { .. }
+                            | OutputIR::ScalarResolvedAuto { .. }
                             | OutputIR::Snapshot { .. }
                     ) {
                         errors.push(
@@ -1066,8 +1095,10 @@ impl ProblemIR {
                         output,
                         OutputIR::Field { .. }
                             | OutputIR::FieldAuto { .. }
+                            | OutputIR::FieldResolvedAuto { .. }
                             | OutputIR::Scalar { .. }
                             | OutputIR::ScalarAuto { .. }
+                            | OutputIR::ScalarResolvedAuto { .. }
                             | OutputIR::Snapshot { .. }
                     ) {
                         errors.push(

@@ -98,7 +98,9 @@ pub(crate) fn build_resolved_stage_event_schedule(
     }
     for every_s in outputs.iter().filter_map(|output| match output {
         OutputIR::Scalar { every_seconds, .. }
+        | OutputIR::ScalarResolvedAuto { every_seconds, .. }
         | OutputIR::Field { every_seconds, .. }
+        | OutputIR::FieldResolvedAuto { every_seconds, .. }
         | OutputIR::Snapshot { every_seconds, .. } => Some(*every_seconds),
         _ => None,
     }) {

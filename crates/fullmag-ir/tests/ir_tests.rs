@@ -125,6 +125,44 @@ fn sampling_policy_preserves_legacy_numeric_field_serialization() {
 }
 
 #[test]
+fn resolved_auto_output_preserves_policy_and_validates_resolved_period() {
+    let output = OutputIR::FieldResolvedAuto {
+        name: "m".into(),
+        every_seconds: 2e-12,
+        requested_policy: SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor: AUTO_SINC_NYQUIST_GUARD_FACTOR,
+        },
+    };
+    assert_eq!(serde_json::to_value(&output).unwrap(), serde_json::json!({
+        "kind": "field_resolved_auto",
+        "name": "m",
+        "every_seconds": 2e-12,
+        "requested_policy": {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3
+        }
+    }));
+
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.study.sampling_mut().outputs = vec![OutputIR::ScalarResolvedAuto {
+        name: "mx".into(),
+        every_seconds: f64::NAN,
+        requested_policy: SamplingPeriodPolicyIR::AutoSincCutoff {
+            nyquist_guard_factor: 1.2,
+        },
+    }];
+    let errors = ir
+        .validate()
+        .expect_err("resolved auto output must retain valid policy and cadence");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("nyquist_guard_factor must be exactly 1.3")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("finite positive every_seconds")));
+}
+
+#[test]
 fn sampling_policy_validation_rejects_missing_mode_and_noncanonical_values() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.study.sampling_mut().table_autosave = Some(TableAutosaveIR {

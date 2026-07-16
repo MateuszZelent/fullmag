@@ -79,8 +79,10 @@ fn output_name(output: &OutputIR) -> String {
     match output {
         OutputIR::Scalar { name, .. }
         | OutputIR::ScalarAuto { name, .. }
+        | OutputIR::ScalarResolvedAuto { name, .. }
         | OutputIR::Field { name, .. }
         | OutputIR::FieldAuto { name, .. }
+        | OutputIR::FieldResolvedAuto { name, .. }
         | OutputIR::DispersionCurve { name } => name.clone(),
         OutputIR::Snapshot { field, component, .. } => format!("{field}:{component}"),
         OutputIR::EigenSpectrum { quantity } => quantity.clone(),

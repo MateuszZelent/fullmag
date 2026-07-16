@@ -614,7 +614,9 @@ pub(crate) fn validate_executable_outputs(
 
     for output in outputs {
         match output {
-            OutputIR::Field { name, .. } | OutputIR::FieldAuto { name, .. } => {
+            OutputIR::Field { name, .. }
+            | OutputIR::FieldAuto { name, .. }
+            | OutputIR::FieldResolvedAuto { name, .. } => {
                 if !allowed_fields.contains(&name.as_str())
                     && !mechanical_fields.contains(&name.as_str())
                     && !(enable_oersted && name == "H_oe")
@@ -669,7 +671,9 @@ pub(crate) fn validate_executable_outputs(
                     ));
                 }
             }
-            OutputIR::Scalar { name, .. } | OutputIR::ScalarAuto { name, .. } => {
+            OutputIR::Scalar { name, .. }
+            | OutputIR::ScalarAuto { name, .. }
+            | OutputIR::ScalarResolvedAuto { name, .. } => {
                 if !allowed_scalars.contains(&name.as_str())
                     && !mechanical_scalars.contains(&name.as_str())
                     && !(enable_regional_field_drive && name == "E_drive")
@@ -839,8 +843,10 @@ pub(crate) fn validate_eigen_outputs(outputs: &[OutputIR], errors: &mut Vec<Stri
             OutputIR::FrequencyResponseOutput { .. }
             | OutputIR::Field { .. }
             | OutputIR::FieldAuto { .. }
+            | OutputIR::FieldResolvedAuto { .. }
             | OutputIR::Scalar { .. }
             | OutputIR::ScalarAuto { .. }
+            | OutputIR::ScalarResolvedAuto { .. }
             | OutputIR::Snapshot { .. }
             | OutputIR::SaveQuantity { .. } => {
                 errors.push(
@@ -870,8 +876,10 @@ pub(crate) fn validate_frequency_response_outputs(outputs: &[OutputIR], errors: 
             | OutputIR::EigenDiagnostics { .. }
             | OutputIR::Field { .. }
             | OutputIR::FieldAuto { .. }
+            | OutputIR::FieldResolvedAuto { .. }
             | OutputIR::Scalar { .. }
             | OutputIR::ScalarAuto { .. }
+            | OutputIR::ScalarResolvedAuto { .. }
             | OutputIR::Snapshot { .. }
             | OutputIR::SaveQuantity { .. } => {
                 errors.push(

@@ -86,7 +86,7 @@ fn auto_sampling_uses_maximum_active_sinc_cutoff_with_guard() {
     );
     assert!(matches!(
         sampling.outputs.as_slice(),
-        [OutputIR::Field { every_seconds: field_period, .. }, OutputIR::Scalar { every_seconds: scalar_period, .. }]
+        [OutputIR::FieldResolvedAuto { every_seconds: field_period, .. }, OutputIR::ScalarResolvedAuto { every_seconds: scalar_period, .. }]
             if *field_period == 1.0 / 13.0e9 && *scalar_period == 1.0 / 13.0e9
     ));
     assert_eq!(

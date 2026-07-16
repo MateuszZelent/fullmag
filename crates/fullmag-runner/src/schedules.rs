@@ -41,6 +41,11 @@ pub(crate) fn collect_scalar_schedules(
         if let OutputIR::Scalar {
             name,
             every_seconds,
+        }
+        | OutputIR::ScalarResolvedAuto {
+            name,
+            every_seconds,
+            ..
         } = output
         {
             if !matches!(
@@ -96,6 +101,11 @@ pub(crate) fn collect_field_schedules(
             OutputIR::Field {
                 name,
                 every_seconds,
+            }
+            | OutputIR::FieldResolvedAuto {
+                name,
+                every_seconds,
+                ..
             } => {
                 if !is_supported_field_quantity(name) {
                     return Err(RunError {
