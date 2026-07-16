@@ -205,6 +205,10 @@ verify-fem-oersted-oet0-cpu-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oet0
 
+verify-fem-oersted-oet0-tsan-cpu-contract:
+    docker compose build fem-cpu
+    docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oet0-tsan
+
 verify-fem-oersted-oef1-cpu-contract:
     docker compose build fem-cpu
     docker compose run --rm --no-deps fem-cpu ./scripts/run_fem_cpu_only_contract.sh oersted-oef1

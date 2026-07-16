@@ -644,8 +644,11 @@ ConservativeCurrentViewRef = {
   mesh_revision, topology_revision, geometry_digest,
   closure_revision, closure_digest,
   unit:"A/m^2", component_convention:"signed_conventional_xyz",
-  fe_space:"RT0_Hdiv_3d", canonical_face_record_count, canonical_face_digest,
-  balance_certificate_ref, evaluation_time_s, stage_identity
+  fe_space:"RT0_Hdiv_3d", canonical_face_record_count,
+  face_record_payload_sha256, canonical_face_digest,
+  balance_certificate_digest, view_identity_digest, balance_certificate_ref,
+  envelope_revision, envelope_digest, evaluated_envelope_multiplier, evaluation_time_s,
+  stage_identity
 }
 ```
 
@@ -670,6 +673,12 @@ object alone never creates a drive. An
 `external_lead_extension` is solved together with the device in the same
 constrained minimum-dissipation system; sequential extrapolation and terminal
 zeroing are invalid closure realizations.
+Device and lead stable vertex IDs must be globally disjoint, including at
+coincident interface coordinates. Interface pairs therefore contain two
+distinct one-sided face keys. The combined resolved mesh uses device vertices
+followed by lead vertices and concatenates the corresponding stable-ID vectors
+in that order; it must not regenerate IDs from coordinates or merge the two
+interface faces.
 
 For a potential-jump source, the charge solve precedes the RT KKT. The
 versioned operator `fem_charge_h1_periodic_jump.v1` identifies the paired
@@ -679,12 +688,85 @@ certifies the paired weak flux. `Cj=d` does not impose a voltage jump; it only
 enforces RT terminal/cut/interface flux constraints after that potential solve.
 V1 has no independently authored total-current source-cut variant.
 
+Both periodic request and accepted snapshot include
+`source_module_id`, `source_state_revision`, `source_field_digest`,
+`evaluation_time_s`, `stage_identity`, `envelope_revision`,
+`envelope_digest` and the finite evaluated envelope multiplier. The RT request
+must match every field exactly; source/time/envelope mismatch is stale input,
+not a cache hit.
+
+The frozen unit-cube qualification independently checks the solved P1 field at
+all element nodes and volume quadrature points against `V=0.5-x V`, its
+physical gradient against `(-1,0,0) V/m`, and each cut-face flux against
+`sigma grad(V).n` for `sigma=4 S/m`. It separately assembles
+`integral sigma grad(V).grad(phi_i) dV` and combines paired cut-side residual
+entries according to the periodic quotient basis. A snapshot residual getter,
+trace-only comparison, or paired-flux summary cannot substitute for this weak
+residual oracle.
+
 The reconstruction uses `Bj=q` for element divergence and a distinct `Cj=d`
 for terminal totals, paired source-cut flux and nonconforming closure-interface
 constraints. Pointwise zero insulating traces are eliminated as essential RT
 DOFs. A deterministic rank analysis of `[B;C]` removes dependent rows and
 records them for independent physical re-evaluation; a singular or
 incompatible constraint set fails closed.
+
+Rank analysis is exclusively owned by
+`cpu/mfem/transport/conservative_constraint_rank.hpp/.cpp` through
+`ConservativeConstraintRank::Analyze(vector<ConservativeConstraintRankRow>,
+physical_absolute_gate_a=1e-18,physical_relative_gate=1e-10)`. Each row contains a unique canonical
+constraint ID, frozen semantic
+`ConservativeConstraintRankRowKind:uint8_t {Generic=1,
+ClosedComponentDivergence=2}`, a four-ID closed-component anchor, a four-ID
+row element key, strictly
+increasing stable `u64` column IDs, equal-length exact
+signed-integer incidence coefficients and finite `rhs_a`. The immutable
+`ConstraintRankCertificate` exposes `rows_before`, `rank`, and canonically
+sorted omitted rows containing ID, `ConstraintOmissionReason`, residual and the
+stable four-vertex anchor of a closed component. `Build` and `Import` must use
+this owner; an implementation-local floating rank heuristic is forbidden.
+Generic rows require all-zero anchor and row-key sentinels. Closed-component
+divergence rows require both keys to contain four strictly increasing nonzero
+stable vertex IDs with `component_anchor<=row_element_key`. Rows group by
+anchor, row keys are unique, and exactly one row per component equals its
+anchor. Missing/duplicate candidates, duplicate component row metadata and
+unknown row-kind codes reject. Omission classification and anchor propagation
+come exclusively from these fields; ID parsing and post-hoc relabeling are
+forbidden. Canonical processing places generic and closed non-candidate rows
+before unique anchor candidates, then uses canonical ID within each class, so
+the physical minimum-anchor divergence candidate is considered last and is
+the deterministic omission. Physical B-row construction supplies both keys.
+The persisted omission enum
+is explicitly `ConstraintOmissionReason:uint8_t
+{ClosedComponentDivergenceDependency=1,
+ConsistentLinearDependency=2}`.
+Canonical rows `r1=[1,0], r2=[0,1], r3=[1,1]` with RHS `(1,1,2)` omit exactly
+r3 as `ConsistentLinearDependency`; RHS `(1,1,3)` throws typed
+`InconsistentDependentConstraint` naming r3 and residual `1 A`.
+Coefficient rank is computed by deterministic fraction-free Bareiss elimination
+over `boost::multiprecision::cpp_int`; fixed-width integer arithmetic and
+floating rank decisions are forbidden. Caps are `rows<=2^20`, distinct
+columns `<=2^20`, total nonzeros `<=2^24`, and nonzeros per row `<=4096`, all
+checked before matrix allocation. `ResourceCounts` and mandatory
+`ConservativeConstraintRank::ValidateResourceCounts` expose bounded validation
+for rows, distinct columns, total/row nonzeros, intermediate nonzeros,
+aggregate intermediate storage bits, checked Bareiss work units and maximum
+observed intermediate bit length without large fixtures. Excess throws
+typed fail-closed `ConstraintRankResourceLimitExceeded`. `Analyze` must call
+the seam, use checked counters, stop above `2^24` intermediate nonzeros,
+`2^31` aggregate intermediate storage bits, `2^32` Bareiss work units, and stop
+when an intermediate `cpp_int` exceeds `2^20` bits. Empty/duplicate IDs, unsorted/duplicate
+columns, ID/coefficient length mismatch, zero stored coefficients, nonfinite
+RHS and cap overflow reject. Dependency consistency applies the frozen current
+gate `abs(residual)<=max(physical_absolute_gate_A,
+physical_relative_gate*max(abs(rhs_A),1e-30 A))` and exposes that residual in
+typed errors/certificates.
+The exact qualification uses `M=4,000,000,000` and
+`C=-2,446,744,073,709,551,616` with rows `[M,1]`, `[C,M]` and their
+exact sum `[M+C,M+1]`. Independent `cpp_int` arithmetic proves
+`M*M-C=2^64`; rank is two and the sum row is omitted. It also includes
+separate exactly-formulated inside/outside absolute- and
+relative-gate cases with the represented residual persisted.
 
 The reference MPI realization gathers the canonical mesh, coefficients and
 constraints, reconstructs in deterministic order on rank zero, then broadcasts
@@ -697,9 +779,52 @@ reduction or quantization policy.
 The immutable resolved payload owns its mesh snapshot and RT0 storage. It is
 published by atomic replacement only after algebraic convergence and an
 independent physical certificate computed from Piola-mapped flux quadrature.
+Its internal C++ balance summary additionally exposes
+`max_closure_interface_mismatch_a`; this diagnostic is retained in the
+canonical balance bytes but is not a new field in the frozen Task 2 C ABI
+summary. The immutable view exposes those exact bytes through
+`canonical_balance_certificate_bytes()` and reports whether canonical face
+records were globally gathered and broadcast through
+`canonical_face_flux_records_are_global_and_broadcast()`.
 The complete certificate artifact retains per-element, per-face, terminal,
 source-cut, interface and outer-boundary diagnostics even when the API summary
 contains only maxima and normalized balances.
+
+The canonical C++ API returns only
+`ConservativeCurrentView::Ptr = std::shared_ptr<const
+ConservativeCurrentView>` from static `Build(request)` and `Import(request)`
+factories; constructors are private. `canonical_face_flux_records()` returns
+the complete globally sorted, rank-broadcast record vector, never a
+partition-local subset. The view deep-owns its mesh, RT collection, space,
+field, identity and complete certificate bytes. The current-transport owner
+stores that `Ptr`; readers obtain a lifetime-safe snapshot with
+`std::atomic_load`, and failed publication preserves the prior accepted owner.
+The owner type is exactly `ConservativeCurrentViewOwner`; it exposes
+`conservative_charge_current()` for the atomic RT0 pointer,
+`charge_current_density()` for the separate nodal visualization field, and
+`publish_accepted(Ptr)` for accepted-only replacement. Failed Build, Import or
+publish retains the previous pointer; the nodal and RT0 buffers may not alias.
+The nodal constructor argument is a non-owning borrow whose mesh, finite-element
+space and `GridFunction` outlive the owner. `ConservativeCurrentViewOwner` is
+explicitly non-copyable and non-movable. Qualification includes four concurrent
+reader threads and one publishing writer alternating two accepted immutable
+pointers; readers may observe only either complete pointer, never null/torn
+state. The same test is run in a dedicated ThreadSanitizer build
+(`-fsanitize=thread -fno-omit-frame-pointer`) and any race report fails OE-T0.
+The concrete managed command is
+`just verify-fem-oersted-oet0-tsan-cpu-contract`: isolated
+`oersted-oet0-tsan` build directory, `FULLMAG_OET0_TSAN=ON`, serial contract
+CTest only, no MPI launcher, and
+`TSAN_OPTIONS=halt_on_error=1:exitcode=66`. OE-T0 GREEN requires this command
+and `just verify-fem-oersted-oet0-cpu-contract`.
+TSan configure skips the MFEM MPI probe, explicit `MPI::MPI_CXX` link and MPI
+CTest registration, and defines `FULLMAG_OET0_DISABLE_MPI=1`; the source guard
+is `MFEM_USE_MPI && !FULLMAG_OET0_DISABLE_MPI`. An MPI-enabled shared MFEM may
+still have a transitive MPI dependency, which is distinct from Fullmag MPI code
+or launcher execution. When GREEN sources exist, rank, periodic-potential and
+view cpp files are added directly to the instrumented test target. Partial
+existence is configure-fatal; all three must appear in the target object list
+and carry TSan compile flags, never arrive through unsanitized `fullmag_fem`.
 
 `OerstedSource` authoring contains only geometry/meshing intent. It MUST NOT
 contain `ConservativeCurrentViewRef`, artifact paths, record counts or digests.
@@ -718,20 +843,233 @@ order, true-dof renumbering and MPI partition changes MUST NOT alter the
 digest. Qualification includes element reorder and MPI partition invariance
 tests with identical physical current and geometry.
 
+`face_record_payload_sha256` is SHA-256 of the raw 32-byte records exactly as
+stored. Define `LP(x)=u64le(byte_length(x)) || UTF8(x)`. There is exactly one
+`canonical_face_digest` preimage:
+
+```text
+SHA256(
+  LP("fem_rt0_canonical_face_digest.v1") ||
+  LP("fem_conservative_current_rt0_view.v1") ||
+  LP("stable_vertex_lexicographic_normal.v1") ||
+  LP(geometry_digest) ||
+  u64le(canonical_face_record_count) ||
+  decode_hex_32(face_record_payload_sha256)
+)
+```
+
+No direct-record or alternative composite preimage is valid. The two hashes
+are never aliases.
+
+`view_identity_digest` is
+`fem_conservative_current_view_identity_digest.v1`. Its fixed-order preimage is
+the schema tag followed by `canonical_face_digest`, source module ID, source
+state revision, source field digest, mesh revision, topology revision, geometry
+digest, closure revision, closure digest, envelope revision, envelope digest,
+evaluated envelope multiplier, evaluation time, stage identity and
+`balance_certificate_digest`. Strings use `u64le length || UTF-8 bytes`;
+multiplier and time use finite binary64 little-endian with negative zero
+normalized; stage uses
+`u64le`. `balance_certificate_digest` hashes the exact bytes of the persisted
+`fem_conservative_current_balance_certificate.v1` artifact, not an in-memory
+reference or only the API summary. Revision-only
+changes invalidate the resolved view/cache through `view_identity_digest` while
+leaving identical physical record bytes content-addressable under the same two
+record digests.
+
+Every SHA-256 field named above is represented at persistence/ABI boundaries as
+exactly 64 lowercase ASCII hex characters without `sha256:`. Validation rejects
+wrong length, non-hex or uppercase. Composite preimages decode nested hashes to
+their 32 raw bytes; they never concatenate a textual spelling.
+
 The canonical binary artifact is
 `current_transport/<id>.rt0-face-flux.v1.bin`. It contains no header or padding;
 each 32-byte record is `(u64le a,u64le b,u64le c,f64le flux_A)` with
 `a<b<c`, and records are lexicographically sorted by `(a,b,c)`. The adjacent
-manifest fixes schema/orientation versions, record size/count, byte length and
-SHA-256 digest. Restore checks `byte_length=32*count`, ordering, finite
-normalized flux bytes and digest before publication.
+manifest fixes schema/orientation versions, record size/count, byte length,
+`face_record_payload_sha256`, `canonical_face_digest`,
+`balance_certificate_digest` and `view_identity_digest`, plus the entire
+identity tuple: `source_module_id`, `source_state_revision`,
+`source_field_digest`, `mesh_revision`, `topology_revision`, `geometry_digest`,
+`closure_revision`, `closure_digest`, `envelope_revision`, `envelope_digest`,
+`evaluated_envelope_multiplier`, `evaluation_time_s` and `stage_identity`.
+It also persists schema/operator/orientation versions and SI/component/FE tags.
+Restore checks
+`byte_length=32*count`, ordering, finite normalized flux bytes, then recomputes
+all four hashes from their frozen preimages before publication.
 
-The C ABI has separate directions. Native-to-Rust export uses a combined
-steady-transport/conservative-current entry point and caller-allocated mutable
-buffers with capacity and written length. Rust-to-native OE import uses const
-pointer+length descriptors that the adapter validates and deep-copies during
-the call. Neither direction returns an MFEM/native object pointer, and neither
-partially publishes output after a capacity or validation failure.
+The complete balance artifact is
+`current_transport/<id>.current-balance.v1.bin`. It has no padding and uses
+little-endian integers/binary64 with finite values and normalized zero. Its
+preimage is, in order:
+
+1. `u64le length || UTF-8` schema
+   `fem_conservative_current_balance_certificate.v1`;
+2. algebraic rtol, physical relative gate and absolute gate in amperes as
+   three binary64 values;
+3. `u64le rows_before, u64le rank` from the exact `[B;C]` certificate;
+4. four `u64le` counts for element, face, circuit and omitted-constraint rows;
+5. element rows sorted by four stable vertex IDs:
+   `4*u64le key, f64 residual_A, f64 denominator_A, f64 normalized_residual`;
+6. face rows sorted by three stable vertex IDs:
+   `3*u64le key, u8 side_count, f64 side1_flux_A, f64 side2_flux_A,
+   f64 canonical_jump_A`;
+7. circuit rows sorted by `(kind,id,face_key_a,face_key_b)`: `u8 kind`
+   (`1=terminal,2=source_cut,3=closure_interface,4=outer_boundary`),
+   `u64le id_length || UTF-8 id`, two `3*u64le` face keys (zero key when
+   absent), then `f64 flux_A, f64 paired_flux_A, f64 mismatch_A`;
+8. omitted-constraint rows sorted by canonical constraint ID:
+   `LP(id), u8 reason, 4*u64le closed_component_anchor,
+   f64 independently_evaluated_residual_A`, where reason is exactly
+   `1=ClosedComponentDivergenceDependency` or
+   `2=ConsistentLinearDependency`. Reason 1 requires four strictly increasing
+   nonzero stable tetrahedron IDs, an exact matching element row, ID
+   `divergence:<v0>:<v1>:<v2>:<v3>`, and the exact residual of that element
+   row; reason 2 requires the all-zero anchor sentinel;
+9. summary values `max_element_divergence_A`, `max_internal_face_jump_A`,
+   `net_outer_flux_A`, `electrode_balance_relative` as four binary64 values,
+   followed by `u8 closure_complete` restricted to `0|1`.
+
+`balance_certificate_digest=SHA256(these exact bytes)`. Restore validates
+ordering, counts, keys, finite values, normalized zero, summary recomputation
+and digest before accepting the certificate. The digest covers rank dimensions,
+reason codes, anchors and residuals; because its decoded 32 bytes participate
+in `view_identity_digest`, rank persistence is also transitively identity-bound.
+
+`side_count` is exactly `1|2`. For `2`, side 1 and side 2 are ordered by the
+lexicographic stable adjacent-element key (four sorted stable vertex IDs). For
+`1`, `side2_flux_A` is the positive-zero binary64 sentinel. Circuit `kind` is
+restricted to `1..4`. Kinds `2` and `3` require two nonzero face keys and a
+real paired flux. Kinds `1` and `4` require the absent second key `(0,0,0)` and
+`paired_flux_A=+0.0`; stable vertex ID zero is reserved. Every zero sentinel,
+including an exact zero mismatch, uses positive-zero bits. Counts are each
+bounded by `2^31-1`, IDs by 4096 UTF-8 bytes, and checked total bytes by
+`2^63-1`. Unknown enums, invalid counts, overflow, non-strict ordering, and
+duplicate element/face/circuit/omitted-constraint keys fail before allocation
+or publication.
+
+Qualification independently decodes these bytes and reconstructs every row
+from field quadrature, classified boundary roles and closure pairs. It must
+match outer, source-cut, electrode and closure-interface fluxes, omitted rows,
+gates, ordering, summary and `closure_complete`; verifying only the SHA-256 is
+insufficient. Import rejects any mismatch between the decoded/recomputed
+summary and `fullmag_fem_current_balance_certificate_v1`. Export derives that
+struct only from the same decoded canonical bytes and never from a second
+summary calculation. The decoder first freezes
+`boundary_element -> stable face key -> (role,circuit_id)`, requires all
+circuit faces to have `side_count=1`, matches kinds 2/3 to the exact authored
+ordered source-cut/lead-interface pairs, and requires the decoded terminal and
+outer-boundary key sets to be complete. It validates the `2^31-1` family caps
+before reserve/iteration and accepts only at most 4096-byte, shortest-form
+UTF-8 IDs without NUL, surrogate, overlong or out-of-range encodings.
+Omitted rows are variable, not fixed to one. Qualification imports uniform
+`J=(4,0,0) A/m^2` on two disconnected periodic cubes (second shifted in y)
+with disjoint stable IDs and unique cuts. An independent exact integer
+oracle explicitly materializes free canonical RT0 face columns after
+insulating-outer elimination, signed element/outward-face divergence rows B,
+and authored source-cut pair rows C, then runs `cpp_int` Bareiss on the real
+`D=[B;C]`. It proves B alone is full row rank, D has nullity two, and removing
+the exact minimum-anchor divergence row of each component makes reduced D full
+row rank. Acceptance requires
+`rows_before-rank=2` and exactly two omitted divergence rows, one per stable
+component anchor, reason `ClosedComponentDivergenceDependency`, and residual
+`<=1e-12 A`. A duplicated physical cut is only a multiple-pairing rejection,
+not evidence for rank analysis.
+
+The C ABI has separate directions. Rust-to-native OE import uses const
+pointer+length descriptors and deep-copies all accepted record, tag and
+certificate bytes during the call. It recomputes all four digests before
+publication. Neither direction returns an MFEM/native object pointer.
+
+Native-to-Rust export uses the following exact mutable-buffer and output ABI;
+all reserved fields must be zero. For `mut_bytes`, `capacity`, `required_len`
+and `written_len` are byte counts. For `mut_u64` and `mut_f64` they are element
+counts, never bytes. All count-to-byte conversions use checked multiplication
+before pointer validation, allocation or copy:
+
+```c
+typedef struct fullmag_fem_current_balance_certificate_v1 {
+    double max_element_divergence_a;
+    double max_internal_face_jump_a;
+    double net_outer_flux_a;
+    double electrode_balance_relative;
+    uint32_t closure_complete;
+    uint32_t reserved_zero;
+} fullmag_fem_current_balance_certificate_v1;
+
+typedef struct fullmag_fem_mut_bytes_buffer_v1 {
+    uint8_t *data;
+    uint64_t capacity;
+    uint64_t required_len;
+    uint64_t written_len;
+} fullmag_fem_mut_bytes_buffer_v1;
+
+typedef struct fullmag_fem_mut_u64_buffer_v1 {
+    uint64_t *data;
+    uint64_t capacity;
+    uint64_t required_len;
+    uint64_t written_len;
+} fullmag_fem_mut_u64_buffer_v1;
+
+typedef struct fullmag_fem_mut_f64_buffer_v1 {
+    double *data;
+    uint64_t capacity;
+    uint64_t required_len;
+    uint64_t written_len;
+} fullmag_fem_mut_f64_buffer_v1;
+
+typedef struct fullmag_fem_conservative_current_view_output_v1 {
+    uint32_t abi_version;
+    uint32_t struct_version;
+    uint64_t struct_size;
+    fullmag_fem_mut_u64_buffer_v1 canonical_face_vertex_ids;
+    fullmag_fem_mut_f64_buffer_v1 canonical_face_flux_a;
+    fullmag_fem_mut_bytes_buffer_v1 schema_id;
+    fullmag_fem_mut_bytes_buffer_v1 operator_version;
+    fullmag_fem_mut_bytes_buffer_v1 source_module_id;
+    fullmag_fem_mut_bytes_buffer_v1 source_state_revision;
+    fullmag_fem_mut_bytes_buffer_v1 source_field_digest;
+    fullmag_fem_mut_bytes_buffer_v1 mesh_revision;
+    fullmag_fem_mut_bytes_buffer_v1 topology_revision;
+    fullmag_fem_mut_bytes_buffer_v1 geometry_digest;
+    fullmag_fem_mut_bytes_buffer_v1 closure_revision;
+    fullmag_fem_mut_bytes_buffer_v1 closure_digest;
+    fullmag_fem_mut_bytes_buffer_v1 face_record_payload_sha256;
+    fullmag_fem_mut_bytes_buffer_v1 canonical_face_digest;
+    fullmag_fem_mut_bytes_buffer_v1 balance_certificate_digest;
+    fullmag_fem_mut_bytes_buffer_v1 view_identity_digest;
+    fullmag_fem_mut_bytes_buffer_v1 envelope_revision;
+    fullmag_fem_mut_bytes_buffer_v1 envelope_digest;
+    fullmag_fem_mut_bytes_buffer_v1 si_unit;
+    fullmag_fem_mut_bytes_buffer_v1 component_convention;
+    fullmag_fem_mut_bytes_buffer_v1 fe_space;
+    fullmag_fem_mut_bytes_buffer_v1 balance_certificate_bytes;
+    fullmag_fem_current_balance_certificate_v1 balance_certificate;
+    double evaluated_envelope_multiplier;
+    double evaluation_time_s;
+    uint64_t stage_identity;
+    uint64_t canonical_face_record_count;
+    uint64_t accepted_generation;
+    uint64_t reserved_zero[4];
+} fullmag_fem_conservative_current_view_output_v1;
+```
+
+The export function takes an explicit `uint64_t retry_accepted_generation`
+immediately before the output descriptor. Zero requests a new solve; nonzero
+requests export of exactly that retained generation and never authorizes a
+solve. The export protocol is transactional. After an accepted solve is atomically
+retained by the transport owner, the adapter computes every required length in
+checked arithmetic. If any capacity is short it returns
+`FULLMAG_FEM_BUFFER_TOO_SMALL`, atomically publishes all `required_len` values,
+sets every `written_len=0`, performs zero payload writes, and publishes
+`accepted_generation` as the only result scalar. Every other scalar/result
+field and the steady result remains untouched. The caller retries with
+the same request identity and that token; the adapter exports the
+retained `std::atomic_load` snapshot and MUST NOT re-solve. If generation or
+identity changed it returns stale-result instead of exporting a different
+view. Only when every capacity is sufficient does one commit copy all payloads,
+set every `written_len`, and publish all scalar/result fields. Validation,
+overflow, or copy failure likewise produces no partial output.
 
 Cache identity includes module/schema/formula/operator versions, normalized
 materials, BCs, oriented interfaces, source bindings, envelope, geometry,
@@ -1181,6 +1519,14 @@ requested/resolved execution, capability evidence scope, runtime/package/image
 identity, state/source revisions, balances/residuals, coupling cadence,
 accepted/rejected counts, Oersted circuit/method metadata, transfer audit,
 warnings/degradations, code commit, and child hashes.
+
+For a conservative-current child, the manifest additionally carries the full
+immutable identity tuple without abbreviation: source module/state/field,
+mesh/topology/geometry, closure revision/digest, envelope revision/digest,
+evaluated envelope multiplier, evaluation time, stage identity,
+`face_record_payload_sha256`, `canonical_face_digest`,
+`balance_certificate_digest`, and `view_identity_digest`, together with the
+schema/operator/orientation, record envelope, and SI/component/FE tags.
 
 Thin JSON manifests never inline large `V`, `J`, `mu_s`, `Q`, torque, or
 Oersted arrays. Those use the existing versioned field data plane.

@@ -17,6 +17,7 @@ GOOD_RECIPE_NAMES = (
     "verify-fem-steady-transport-cpu-only-contract",
     "verify-fem-time-domain-cpu-only-contract",
     "verify-fem-oersted-oet0-cpu-contract",
+    "verify-fem-oersted-oet0-tsan-cpu-contract",
     "verify-fem-oersted-oef1-cpu-contract",
     "verify-fem-oersted-oef2-cpu-contract",
 )
@@ -89,8 +90,11 @@ class RepositoryContractTests(unittest.TestCase):
     def write_repository(self, root: Path) -> None:
         (root / "docker/fem-cpu").mkdir(parents=True)
         (root / "docs/superpowers/plans").mkdir(parents=True)
+        (root / "scripts").mkdir(parents=True)
+        (root / "backends/fem").mkdir(parents=True)
         (root / "docker/fem-cpu/Dockerfile").write_text(
             "FROM ubuntu:22.04\n"
+            "RUN apt-get install -y --no-install-recommends libboost-dev\n"
             "RUN ./configure --without-cuda --prefix=/opt/fullmag-deps\n"
             "RUN cmake -DMFEM_USE_CUDA=NO -DMFEM_USE_HYPRE=YES .\n",
             encoding="utf-8",
@@ -103,17 +107,41 @@ class RepositoryContractTests(unittest.TestCase):
             "      FULLMAG_MANAGED_FEM_DEVICE: cpu\n",
             encoding="utf-8",
         )
-        recipe_body = (
-            "    docker compose build fem-cpu\n"
-            "    docker compose run --rm --no-deps fem-cpu "
-            "./scripts/run_fem_cpu_only_contract.sh\n"
-        )
         (root / "justfile").write_text(
-            "\n".join(f"{name}:\n{recipe_body}" for name in GOOD_RECIPE_NAMES),
+            "\n".join(
+                f"{name}:\n"
+                "    docker compose build fem-cpu\n"
+                "    docker compose run --rm --no-deps fem-cpu "
+                "./scripts/run_fem_cpu_only_contract.sh"
+                f"{' oersted-oet0-tsan' if name == 'verify-fem-oersted-oet0-tsan-cpu-contract' else ''}\n"
+                for name in GOOD_RECIPE_NAMES
+            ),
             encoding="utf-8",
         )
         (root / "docs/superpowers/plans/2026-07-16-fem-oersted-conservative-current-direct-and-mixed.md").write_text(
             "plan with CPU-only managed verification lane\n", encoding="utf-8"
+        )
+        (root / "scripts/run_fem_cpu_only_contract.sh").write_text(
+            "FULLMAG_OET0_DISABLE_MPI=1\n"
+            "-fsanitize=thread -fno-omit-frame-pointer\n"
+            "--tests-regex '^fem_conservative_current_view_contract$'\n"
+            "conservative_constraint_rank.cpp\n"
+            "periodic_charge_potential.cpp\n"
+            "conservative_current_view.cpp\n"
+            "OE-T0 TSan generated instrumentation rules audit: PASS\n",
+            encoding="utf-8",
+        )
+        (root / "backends/fem/CMakeLists.txt").write_text(
+            "FULLMAG_OET0_DISABLE_MPI=1\n"
+            "-fsanitize=thread -fno-omit-frame-pointer\n"
+            "if(NOT FULLMAG_OET0_TSAN)\nendif()\n"
+            "target_sources(fullmag_fem PRIVATE\n)\n"
+            "target_sources(fem_conservative_current_view_contract PRIVATE\n)\n"
+            "OE-T0 production source set is partial\n"
+            "conservative_constraint_rank.cpp\n"
+            "periodic_charge_potential.cpp\n"
+            "conservative_current_view.cpp\n",
+            encoding="utf-8",
         )
 
     def test_repository_contract_accepts_dedicated_cpu_service_and_recipes(self) -> None:
@@ -198,7 +226,11 @@ class RepositoryContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("oersted-oet0)\n    targets=(fem_conservative_current_view_contract)", runner)
+        self.assertIn(
+            "oersted-oet0|oersted-oet0-tsan)\n"
+            "    targets=(fem_conservative_current_view_contract)",
+            runner,
+        )
         self.assertIn(
             "oersted-oef1)\n    targets=(fem_conservative_current_view_contract fem_oersted_direct_tetra_contract)",
             runner,
@@ -212,6 +244,41 @@ class RepositoryContractTests(unittest.TestCase):
             "    # Task 0 proves the isolated lane only.",
             runner,
         )
+
+    def test_oet0_tsan_lane_is_instrumented_and_serial_only(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        runner = (repository_root / "scripts/run_fem_cpu_only_contract.sh").read_text(
+            encoding="utf-8"
+        )
+        cmake = (repository_root / "backends/fem/CMakeLists.txt").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("-DFULLMAG_OET0_TSAN=ON", runner)
+        self.assertIn("TSAN_OPTIONS=\"halt_on_error=1:exitcode=66\"", runner)
+        self.assertIn(
+            "OE-T0 TSan generated instrumentation rules audit: PASS", runner
+        )
+        self.assertIn("-DFULLMAG_OET0_DISABLE_MPI=1", runner)
+        self.assertIn("TSan CTest registration unexpectedly contains an MPI", runner)
+        self.assertIn("conservative_constraint_rank.cpp", runner)
+        self.assertIn("periodic_charge_potential.cpp", runner)
+        self.assertIn("conservative_current_view.cpp", runner)
+        self.assertIn(
+            "--tests-regex '^fem_conservative_current_view_contract$'", runner
+        )
+        self.assertEqual(
+            runner.count('ctest --test-dir "$build_dir/backends/fem"'),
+            4,
+            "OE-T0 CTest discovery must run in the FEM binary directory where "
+            "enable_testing() writes CTestTestfile.cmake",
+        )
+        self.assertIn("-fsanitize=thread -fno-omit-frame-pointer", cmake)
+        self.assertIn("target_link_options(fem_conservative_current_view_contract", cmake)
+        self.assertIn("FULLMAG_OET0_DISABLE_MPI=1", cmake)
+        self.assertIn("if(NOT FULLMAG_OET0_TSAN)", cmake)
+        self.assertIn("target_sources(fem_conservative_current_view_contract PRIVATE", cmake)
+        self.assertIn("OE-T0 production source set is partial", cmake)
 
     def test_cpu_build_uses_macro_values_for_optional_dense_cuda_headers(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

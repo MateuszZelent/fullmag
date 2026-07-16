@@ -6,6 +6,7 @@
 option(FULLMAG_ENABLE_FEM_GPU "Build FEM GPU backend sources" ON)
 option(FULLMAG_USE_MFEM_STACK "Build FEM backend against MFEM/libCEED/hypre" OFF)
 option(FULLMAG_FEM_WITH_SLEPC "Build FEM frequency-domain dependency slice against PETSc/SLEPc" ON)
+option(FULLMAG_OET0_TSAN "Instrument the OE-T0 serial contract with ThreadSanitizer" OFF)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -370,6 +371,128 @@ if(FULLMAG_USE_MFEM_STACK)
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     add_test(NAME fem_steady_transport_contract COMMAND fem_steady_transport_contract)
+
+    # OE-T0 TDD target. The three production TUs (rank, periodic potential,
+    # and conservative current view) are added only in GREEN; keeping them out
+    # lets CMake configure and makes RED occur on the first missing rank/view
+    # public API rather than an unrelated existing target.
+    add_executable(
+        fem_conservative_current_view_contract
+        tests/conservative_current_view_contract.cpp
+    )
+    set(FULLMAG_OET0_PRODUCTION_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/cpu/mfem/transport/conservative_constraint_rank.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/cpu/mfem/transport/periodic_charge_potential.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/cpu/mfem/transport/conservative_current_view.cpp
+    )
+    set(FULLMAG_OET0_PRODUCTION_SOURCE_COUNT 0)
+    foreach(FULLMAG_OET0_SOURCE IN LISTS FULLMAG_OET0_PRODUCTION_SOURCES)
+        if(EXISTS "${FULLMAG_OET0_SOURCE}")
+            math(EXPR FULLMAG_OET0_PRODUCTION_SOURCE_COUNT
+                "${FULLMAG_OET0_PRODUCTION_SOURCE_COUNT} + 1")
+        endif()
+    endforeach()
+    list(LENGTH FULLMAG_OET0_PRODUCTION_SOURCES
+        FULLMAG_OET0_EXPECTED_SOURCE_COUNT)
+    if(FULLMAG_OET0_PRODUCTION_SOURCE_COUNT GREATER 0 AND
+            NOT FULLMAG_OET0_PRODUCTION_SOURCE_COUNT EQUAL
+                FULLMAG_OET0_EXPECTED_SOURCE_COUNT)
+        message(FATAL_ERROR
+            "OE-T0 production source set is partial; rank, periodic potential, and current view must appear together")
+    endif()
+    if(FULLMAG_OET0_PRODUCTION_SOURCE_COUNT EQUAL
+            FULLMAG_OET0_EXPECTED_SOURCE_COUNT)
+        target_sources(fullmag_fem PRIVATE
+            ${FULLMAG_OET0_PRODUCTION_SOURCES})
+        target_sources(fem_conservative_current_view_contract PRIVATE
+            ${FULLMAG_OET0_PRODUCTION_SOURCES})
+    endif()
+    find_package(Threads REQUIRED)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_conservative_current_view_contract PRIVATE
+            MFEM::mfem Threads::Threads)
+    else()
+        target_link_libraries(fem_conservative_current_view_contract PRIVATE
+            mfem Threads::Threads)
+    endif()
+    target_include_directories(fem_conservative_current_view_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    if(FULLMAG_OET0_TSAN)
+        target_compile_definitions(fem_conservative_current_view_contract PRIVATE
+            FULLMAG_OET0_DISABLE_MPI=1)
+        target_compile_options(fem_conservative_current_view_contract PRIVATE
+            -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(fem_conservative_current_view_contract PRIVATE
+            -fsanitize=thread)
+    endif()
+    add_test(
+        NAME fem_conservative_current_view_contract
+        COMMAND fem_conservative_current_view_contract
+    )
+    # MPI qualification is registered only when the configured MFEM stack and
+    # CMake both expose MPI C++ plus a launcher. Serial-only MFEM consumers may
+    # configure this target without a globally REQUIRED mpiexec lookup.
+    unset(FULLMAG_MFEM_MPI_QUALIFICATION CACHE)
+    unset(FULLMAG_MFEM_MPI_QUALIFICATION)
+    if(NOT FULLMAG_OET0_TSAN)
+        find_package(MPI COMPONENTS CXX QUIET)
+    endif()
+    if(NOT FULLMAG_OET0_TSAN AND MPI_CXX_FOUND AND MPIEXEC_EXECUTABLE)
+        include(CheckCXXSourceCompiles)
+        if(TARGET MFEM::mfem)
+            set(CMAKE_REQUIRED_LIBRARIES MFEM::mfem MPI::MPI_CXX)
+        else()
+            set(CMAKE_REQUIRED_LIBRARIES mfem MPI::MPI_CXX)
+        endif()
+        check_cxx_source_compiles(
+            "#include <mfem.hpp>\n#ifndef MFEM_USE_MPI\n#error MFEM MPI disabled\n#endif\nint main(){return 0;}"
+            FULLMAG_MFEM_MPI_QUALIFICATION
+        )
+        unset(CMAKE_REQUIRED_LIBRARIES)
+    endif()
+    if(NOT FULLMAG_OET0_TSAN AND FULLMAG_MFEM_MPI_QUALIFICATION)
+        target_link_libraries(
+            fem_conservative_current_view_contract PRIVATE MPI::MPI_CXX)
+        set(FULLMAG_OET0_MPI_N1_BYTES
+            "${CMAKE_CURRENT_BINARY_DIR}/oet0-mpi-n1.bin")
+        set(FULLMAG_OET0_MPI_N2_BYTES
+            "${CMAKE_CURRENT_BINARY_DIR}/oet0-mpi-n2.bin")
+        add_test(
+            NAME fem_conservative_current_view_mpi_n1
+            COMMAND ${CMAKE_COMMAND} -E env
+                OMPI_ALLOW_RUN_AS_ROOT=1
+                OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+                ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 1
+                $<TARGET_FILE:fem_conservative_current_view_contract>
+                --emit-mpi-records ${FULLMAG_OET0_MPI_N1_BYTES}
+        )
+        add_test(
+            NAME fem_conservative_current_view_mpi_n2
+            COMMAND ${CMAKE_COMMAND} -E env
+                OMPI_ALLOW_RUN_AS_ROOT=1
+                OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+                ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                $<TARGET_FILE:fem_conservative_current_view_contract>
+                --emit-mpi-records ${FULLMAG_OET0_MPI_N2_BYTES}
+        )
+        set_tests_properties(
+            fem_conservative_current_view_mpi_n1
+            fem_conservative_current_view_mpi_n2
+            PROPERTIES FIXTURES_SETUP fem_conservative_current_view_mpi_bytes
+        )
+        add_test(
+            NAME fem_conservative_current_view_mpi_byte_identity
+            COMMAND ${CMAKE_COMMAND} -E compare_files
+                ${FULLMAG_OET0_MPI_N1_BYTES}
+                ${FULLMAG_OET0_MPI_N2_BYTES}
+        )
+        set_tests_properties(
+            fem_conservative_current_view_mpi_byte_identity
+            PROPERTIES FIXTURES_REQUIRED fem_conservative_current_view_mpi_bytes
+        )
+    endif()
 
     add_executable(
         fem_steady_transport_abi_contract

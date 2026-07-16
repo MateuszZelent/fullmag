@@ -310,7 +310,9 @@ ConservativeCurrentView = {
   mesh_revision, topology_revision, geometry_digest,
   source_module_id, source_state_revision, source_field_digest,
   closure_revision, closure_digest,
-  canonical_face_record_count, canonical_face_digest,
+  envelope_revision, envelope_digest, evaluated_envelope_multiplier,
+  canonical_face_record_count, face_record_payload_sha256,
+  canonical_face_digest, balance_certificate_digest, view_identity_digest,
   balance_certificate, evaluation_time_s, stage_identity
 }
 ```
@@ -340,10 +342,11 @@ The digest is not computed from MFEM true-dof order. The canonical serialized
 record is `(face_key, flux_A)`, sorted by a `face_key` made from the three
 stable mesh-vertex identities. Its canonical normal follows the versioned
 orientation of that ordered face key; local/MFEM signs are converted before
-serialization. The digest hashes the operator/schema IDs, geometry digest and
-little-endian records in sorted order. Stable vertex identities are independent
-of element numbering and MPI ownership. Element reorder, local face reorder,
-true-dof reorder and MPI repartition must therefore leave the digest unchanged.
+serialization. Section 3.2.1 freezes the sole composite digest preimage; no
+alternative preimage that hashes records directly is permitted. Stable vertex
+identities are independent of element numbering and MPI ownership. Element
+reorder, local face reorder, true-dof reorder and MPI repartition must therefore
+leave the digest unchanged.
 
 #### 3.2.1 OE-T0 v1 construction contract
 
@@ -393,9 +396,30 @@ transform, and `drop_V` is multiplied by the source time envelope. Missing,
 multiply paired or orientation-inconsistent cut faces are rejected. A future
 total-current cut is a separately versioned charge operator.
 
+The periodic solve request and immutable accepted snapshot both carry the exact
+`source_module_id`, `source_state_revision`, `source_field_digest`,
+`evaluation_time_s`, `stage_identity`, `envelope_revision` and
+`envelope_digest`, plus the evaluated finite envelope multiplier. OE-T0 accepts
+the snapshot only when all values equal its RT build request. A potential from
+another current module, source/field revision, stage time, stage identity or
+envelope is stale even when mesh and conductivity are unchanged.
+
+The OE-T0 manufactured periodic qualification is not satisfied by snapshot
+summary getters. On the unit cube with `sigma=4 S/m` and a `-1 V` jump, an
+independent test evaluates every P1 node and volume quadrature point against
+`V=0.5-x V`, evaluates every physical gradient against `(-1,0,0) V/m`, and
+integrates each cut-face flux against
+`sigma grad(V).n=(-4,0,0).n A/m^2`. It independently assembles
+`integral sigma grad(V).grad(phi_i) dV` from element shape gradients and then
+combines the two cut-side entries belonging to each periodic quotient basis
+function. Every combined residual and every non-cut residual is at most
+`1e-12 A`. Thus exact traces alone cannot hide an incorrect interior weak
+solution.
+
 The construction request contains the potential and conductivity snapshots,
 stable vertex identities, classified boundary faces, terminal/source-cut
 constraints, closure support, all source/mesh/topology revisions and digests,
+`envelope_revision`, `envelope_digest`, the evaluated envelope multiplier,
 evaluation time and stage identity. `closed_geometry` accepts either a
 periodic-drop reconstruction sourced by the same current module or a certified
 imported closed RT0 field. The closure object itself never invents a drive;
@@ -403,13 +427,200 @@ absent either source, its only admissible potential-derived solution is zero
 current. `external_lead_extension` participates in the same coupled
 constrained solve. OE-T0 rejects analytic returns, incomplete interface pairing
 and any attempt to manufacture closure by zeroing an open terminal flux.
+The reference lead fixture uses a device on `x in [0,1]` and disjoint
+volumetric leads on `[-1,0]` and `[1,2]`, joined only on the conforming planes
+`x=0` and `x=1`. For constant cross-section `A`, piecewise conductivities
+`sigma_L,sigma_D,sigma_R` and outer-electrode drop `Delta V`, the required
+series oracle is
+`I=Delta V/(L_L/(sigma_L A)+L_D/(sigma_D A)+L_R/(sigma_R A))`.
+Changing lead conductivity must change the device current; otherwise the
+implementation has not included lead impedance in one coupled solve.
+Device and lead stable vertex identities occupy disjoint namespaces even at
+coincident join coordinates, so the two one-sided interface faces retain
+distinct canonical keys. The combined immutable mesh orders device vertices
+first and lead vertices second, and its identity vector is the exact
+concatenation of the two authored vectors. Recomputing combined IDs from
+coordinates is forbidden; geometric coincidence validates pairing but never
+collapses identity.
 
-The published view owns an immutable mesh snapshot, RT collection, finite
-element space, grid function, canonical records and identity metadata. The
-transport owner atomically replaces its `shared_ptr<const
-ConservativeCurrentView>` only after the charge solve, constrained
-reconstruction and all independent gates succeed. Failure leaves the previous
-accepted view intact; tentative/rejected-stage state is never published.
+Constraint rank is owned by
+`cpu/mfem/transport/conservative_constraint_rank.hpp`, never by an ad hoc
+floating dense rank check inside `ConservativeCurrentView::Build`. Its frozen
+C++ contract is:
+
+```cpp
+enum class ConservativeConstraintRankRowKind : uint8_t {
+    Generic = 1,
+    ClosedComponentDivergence = 2,
+};
+enum class ConstraintOmissionReason : uint8_t {
+    ClosedComponentDivergenceDependency = 1,
+    ConsistentLinearDependency = 2,
+};
+struct ConservativeConstraintRankRow {
+    std::string constraint_id;
+    ConservativeConstraintRankRowKind kind;
+    std::array<uint64_t, 4> closed_component_anchor_element;
+    std::array<uint64_t, 4> row_element_key;
+    std::vector<uint64_t> canonical_column_ids;
+    std::vector<int64_t> incidence_coefficients;
+    double rhs_a;
+};
+struct ConstraintRankOmittedRow {
+    std::string constraint_id;
+    ConstraintOmissionReason reason;
+    double residual_a;
+    std::array<uint64_t, 4> closed_component_anchor_element;
+};
+struct ConstraintRankCertificate {
+    uint64_t rows_before;
+    uint64_t rank;
+    std::vector<ConstraintRankOmittedRow> omitted_rows;
+};
+class InconsistentDependentConstraint : public std::runtime_error {
+public:
+    const std::string &constraint_id() const noexcept;
+    double residual_a() const noexcept;
+};
+class ConstraintRankResourceLimitExceeded : public std::runtime_error {};
+struct ResourceCounts {
+    uint64_t rows;
+    uint64_t distinct_columns;
+    uint64_t total_nonzeros;
+    uint64_t maximum_nonzeros_per_row;
+    uint64_t maximum_intermediate_nonzeros;
+    uint64_t intermediate_storage_bits;
+    uint64_t bareiss_work_units;
+    uint64_t maximum_intermediate_bit_length;
+};
+class ConservativeConstraintRank {
+public:
+    static constexpr std::size_t kMaximumRows = 1u << 20;
+    static constexpr std::size_t kMaximumDistinctColumns = 1u << 20;
+    static constexpr std::size_t kMaximumNonzeros = 1u << 24;
+    static constexpr std::size_t kMaximumColumnsPerRow = 4096;
+    static constexpr uint64_t kMaximumIntermediateNonzeros = uint64_t{1} << 24;
+    static constexpr uint64_t kMaximumIntermediateStorageBits = uint64_t{1} << 31;
+    static constexpr uint64_t kMaximumBareissWorkUnits = uint64_t{1} << 32;
+    static constexpr uint64_t kMaximumIntermediateBitLength = uint64_t{1} << 20;
+    static void ValidateResourceCounts(const ResourceCounts &counts);
+    static ConstraintRankCertificate Analyze(
+        const std::vector<ConservativeConstraintRankRow> &rows,
+        double physical_absolute_gate_a = 1e-18,
+        double physical_relative_gate = 1e-10);
+};
+```
+
+The row kind is semantic input, not inferred from `constraint_id`. Generic rows
+must carry all-zero sentinels for both component anchor and row element key.
+Closed-component divergence rows must carry four strictly increasing, nonzero
+stable vertex IDs in both fields, with `anchor<=row_element_key`. Rows sharing
+an anchor form one component, their row keys are unique, and exactly one row
+per component has `row_element_key==anchor`. Missing/duplicate candidates,
+duplicate component row keys, unknown row kinds and inconsistent metadata
+reject. The analyzer derives the omission reason and copied anchor only from
+these fields; parsing an ID or postprocessing an omission is forbidden.
+Its frozen processing key places every generic and closed non-candidate row
+before all unique anchor candidates, with canonical constraint ID as the
+tie-breaker within each class. Thus the unique minimum-anchor divergence row
+is the dependent row considered last and omitted deterministically even when
+its ID sorts first. Column IDs are strictly increasing canonical stable face/constraint-column
+identities, coefficients are exact signed integers, row IDs are nonempty and
+unique, and canonical constraint ID orders rows only within each frozen
+processing-key class. For
+`r1=[1,0], r2=[0,1], r3=[1,1]`, RHS `(1,1,2)` deterministically retains r1/r2
+and omits r3 with `ConsistentLinearDependency` and zero residual; RHS
+`(1,1,3)` throws typed `InconsistentDependentConstraint` for r3. Build and
+Import must use this analyzer and persist its certificate. Physical
+closed-component omissions use `ClosedComponentDivergenceDependency` and the
+lexicographically smallest stable tetrahedron key as both component anchor and
+the omitted candidate's row element key. Physical B-row construction must
+populate both fields for every divergence row before calling `Analyze`.
+The coefficient rank is deterministic fraction-free Bareiss elimination over
+`boost::multiprecision::cpp_int`; no fixed-width overflow or floating pivot
+tolerance can change it. The public `ValidateResourceCounts` seam is mandatory
+inside `Analyze`, uses checked addition/multiplication, and throws only the
+typed fail-closed `ConstraintRankResourceLimitExceeded` for resource excess.
+Pre-allocation caps are `2^20` rows, `2^20` distinct
+columns, `2^24` total nonzeros and 4096 nonzeros per row. Empty/duplicate row
+IDs, unsorted/duplicate columns, mismatched vector sizes, stored zero
+coefficients, nonfinite RHS and cap overflow reject. A dependent RHS is
+consistent only under the frozen current absolute/relative physical gate, and
+the independently recomputed ampere residual is persisted. Legal but
+pathological matrices additionally stop before `2^24` intermediate nonzeros,
+`2^31` aggregate intermediate storage bits, `2^32` checked Bareiss work units,
+or an intermediate `cpp_int` exceeds `2^20` bits; all use the same typed
+resource exception. Limit and limit+1 are tested through the seam without huge
+fixtures. The physical gate is exactly
+`abs(residual)<=max(abs_gate,rel_gate*max(abs(rhs),1e-30))`.
+Exact-width qualification uses `M=4,000,000,000` and
+`C=-2,446,744,073,709,551,616`: `[M,1]`, `[C,M]`, and their sum are rank two,
+while `cpp_int` proves the independent determinant `M*M-C=2^64`. The sum row
+must be the persisted zero-residual generic omission.
+
+The canonical C++ interface is exactly:
+
+```cpp
+class ConservativeCurrentView {
+public:
+    using Ptr = std::shared_ptr<const ConservativeCurrentView>;
+    static Ptr Build(const ConservativeCurrentBuildRequest &);
+    static Ptr Import(const ConservativeCurrentImportRequest &);
+    const mfem::FiniteElementSpace &space() const;
+    const mfem::GridFunction &field() const;
+    const ConservativeCurrentIdentity &identity() const;
+    const ConservativeCurrentBalanceCertificate &balance() const;
+    const ConstraintRankCertificate &constraint_rank_certificate() const;
+    const std::vector<CanonicalFaceFluxRecord> &
+        canonical_face_flux_records() const;
+    const std::vector<uint8_t> &
+        canonical_balance_certificate_bytes() const;
+    bool canonical_face_flux_records_are_global_and_broadcast() const;
+private:
+    ConservativeCurrentView();
+};
+```
+
+`Build` and `Import` are the only factories and construction remains private.
+The returned `Ptr` owns an immutable deep copy of the mesh, RT collection,
+finite-element space, grid function, globally sorted and rank-broadcast
+canonical records, identity metadata, and the complete canonical balance
+certificate bytes. Destroying every build/import input cannot invalidate
+`space()`, `field()`, record or certificate access. The transport owner stores
+only this `Ptr`; readers use `std::atomic_load` and the owner publishes with
+atomic shared-pointer replacement only after all gates succeed. Failure leaves
+the previous accepted pointer intact; tentative/rejected-stage state is never
+published.
+
+The workflow freezes this ownership through one named public owner:
+
+```cpp
+class ConservativeCurrentViewOwner {
+public:
+    explicit ConservativeCurrentViewOwner(
+        mfem::GridFunction &nodal_visualization);
+    ConservativeCurrentViewOwner(const ConservativeCurrentViewOwner &) = delete;
+    ConservativeCurrentViewOwner &operator=(
+        const ConservativeCurrentViewOwner &) = delete;
+    ConservativeCurrentViewOwner(ConservativeCurrentViewOwner &&) = delete;
+    ConservativeCurrentViewOwner &operator=(
+        ConservativeCurrentViewOwner &&) = delete;
+    ConservativeCurrentView::Ptr conservative_charge_current() const;
+    const mfem::GridFunction &charge_current_density() const;
+    void publish_accepted(ConservativeCurrentView::Ptr accepted);
+};
+```
+
+`conservative_charge_current()` performs `std::atomic_load` of the accepted
+RT0 pointer. `publish_accepted` rejects null/tentative views and atomically
+replaces the pointer only after `Build` or `Import` succeeds. Failed build,
+import or publication retains the prior pointer. The nodal
+`charge_current_density()` is separate visualization storage and cannot alias
+the RT0 `field()`. The visualization argument is an explicit non-owning borrow:
+its mesh, finite-element space and `GridFunction` must outlive the owner. The
+owner is neither copyable nor movable, so the borrow cannot silently migrate
+to another lifetime domain. The immutable RT0 `Ptr` remains independently
+owned and may outlive every build/import input.
 
 The balance certificate is evaluated from the physical Piola-mapped field by
 independent quadrature, not from the KKT residual. It records every element
@@ -417,13 +628,117 @@ residual, shared-face trace jump, terminal/source-cut flux, closure-interface
 pair, net outer flux and normalized global balance using a `1e-30 A` floor.
 The public summary may expose maxima, but the complete diagnostic artifact is
 retained.
+Qualification must independently decode the complete artifact and reproduce
+every element, face, circuit and omitted-constraint row from physical
+quadrature, boundary roles and closure pairing. It then recomputes all gates,
+summary maxima, outer/source-cut/electrode/interface fluxes and
+`closure_complete`; matching only the artifact hash is not evidence of a
+physically correct certificate. The decoder constructs the exact map
+`boundary_element -> stable face key -> (role,circuit_id)`, requires every
+circuit key to be a one-sided physical boundary face, matches source-cut and
+lead-interface rows to the authored ordered face pairs, and proves terminal
+and outer-boundary row-set completeness. Substituting an internal face is a
+hard failure. Before reserve/iteration it enforces every `2^31-1` row cap;
+every length-prefixed semantic string is at most 4096 bytes, valid shortest-form
+UTF-8, contains no surrogate/out-of-range scalar and no embedded NUL.
+The omitted-row count is not hardcoded. A required integration fixture imports
+`J=(4,0,0) A/m^2` on two disconnected periodic unit-cube components (the
+second translated in y), with disjoint stable face IDs and unique source cuts.
+An independent oracle materializes the real `D=[B;C]`: canonical free RT0 face
+columns after insulating-outer elimination, signed element/outward-face B rows,
+and exact authored cut-pair C rows. `cpp_int` Bareiss proves B is full row rank,
+D has nullity two and removing exactly the minimum-anchor divergence row of
+each component makes reduced D full row rank. The accepted view must report
+the exact oracle `rows_before`, `rank`, `rows_before-rank=2` and exactly two omitted
+divergence rows, one per stable component anchor, each with reason
+`ClosedComponentDivergenceDependency` and independently integrated residual
+at most `1e-12 A`; the canonical decoder matches this variable omitted set.
 
 For canonical face records, the sorted stable vertex triple `(a<b<c)` defines
 the face key and its ordered coordinates define the canonical normal. Repeated
 identities, degenerate faces, non-finite fluxes, or identity/coordinate
 disagreement across ranks are rejected. Records normalize negative zero,
-encode unsigned identities and binary64 flux in little-endian form, and hash
-the schema, operator/orientation version, geometry digest and sorted records.
+encode unsigned identities and binary64 flux in little-endian form. The raw
+32-byte record stream has `face_record_payload_sha256=SHA256(file_bytes)`.
+`canonical_face_digest` has one and only one preimage. Define
+`LP(x)=u64le(byte_length(x)) || UTF8(x)`. Then it is exactly
+
+```text
+SHA256(
+  LP("fem_rt0_canonical_face_digest.v1") ||
+  LP("fem_conservative_current_rt0_view.v1") ||
+  LP("stable_vertex_lexicographic_normal.v1") ||
+  LP(geometry_digest) ||
+  u64le(canonical_face_record_count) ||
+  decode_hex_32(face_record_payload_sha256)
+)
+```
+
+The raw record bytes participate only through the nested decoded 32-byte
+`face_record_payload_sha256`; they are not appended again. This replaces every
+earlier informal/direct-record preimage. The digest changes only when this
+versioned physical/geometry preimage changes.
+
+`view_identity_digest` uses
+`fem_conservative_current_view_identity_digest.v1`. Its preimage is the fixed
+ordered field list: schema tag, `canonical_face_digest`, source module ID,
+source state revision, source field digest, mesh revision, topology revision,
+geometry digest, closure revision, closure digest, envelope revision, envelope
+digest, evaluated envelope multiplier, evaluation time, stage identity and
+`balance_certificate_digest`. Every string is UTF-8 encoded as
+`u64le byte_length || bytes`; `stage_identity` is `u64le`; multiplier and time
+are finite IEEE-754 binary64 little-endian with negative zero normalized to
+positive zero.
+The balance digest is the SHA-256 of the canonical bytes of
+`fem_conservative_current_balance_certificate.v1`, not a pointer/reference or
+only the five-field API summary. That persisted binary contains sorted stable
+element, face, terminal, source-cut, interface and outer-boundary records plus
+the applied gates and summary. A revision-only
+change therefore invalidates the view/cache without falsely changing the
+physical record digest.
+
+The exact balance-v1 prefix is schema LP, three gate f64 values,
+`u64le(rows_before)`, `u64le(rank)`, then the four row-family counts. Each
+omitted row is `LP(constraint_id) || u8(reason) || 4*u64le(anchor) ||
+f64le(residual_A)`. Reasons are exactly
+`1=ClosedComponentDivergenceDependency` and
+`2=ConsistentLinearDependency`. Reason 1 requires four strictly increasing,
+nonzero stable tetrahedron IDs, that exact anchor must exist in the decoded
+element-row set, and its constraint ID must equal
+`divergence:<v0>:<v1>:<v2>:<v3>`; its residual must equal that exact element
+row. Reason 2 requires `(0,0,0,0)`, using reserved stable ID zero as the generic
+sentinel. `balance_certificate_digest` hashes these exact rank
+bytes together with every other certificate row and summary, so the existing
+`view_identity_digest` transitively covers the complete rank certificate.
+
+Balance face rows restrict `side_count` to `1|2`. A two-sided row orders its
+sides by the lexicographic stable adjacent-element key (the four sorted stable
+vertex IDs), never by local element/face/RT-DOF number. A one-sided row writes
+the absent `side2_flux_A` as the canonical positive-zero binary64 sentinel.
+Circuit kind is exactly `1=terminal`, `2=source_cut`,
+`3=closure_interface`, `4=outer_boundary`. Source-cut and closure-interface
+rows require two nonzero face keys and paired physical fluxes. Terminal and
+outer-boundary rows require the absent second face key `(0,0,0)` and
+`paired_flux_A=+0.0`; stable vertex ID zero is reserved and cannot occur in a
+real key. All binary64 zero values, including mismatch sentinels, are encoded
+as positive zero. `closure_complete` is `0|1`; every other enum value is
+rejected.
+
+Each row-family count is at most `2^31-1`, each UTF-8 ID is at most 4096 bytes,
+and the checked total certificate byte length is at most `2^63-1`. Count/size
+multiplication or addition overflow is rejected before allocation. Every row
+family is strictly sorted by its documented key; duplicate element, face,
+circuit or omitted-constraint keys are rejected rather than coalesced.
+
+All four SHA-256 values in this contract are transported and persisted as
+exactly 64 lowercase ASCII hexadecimal characters without a prefix. Import
+rejects any other length/alphabet/case. When one SHA value participates in
+another hash preimage it is decoded to its 32 raw bytes; it is never hashed as
+an implementation-selected textual spelling. Import/restore deep-copies the
+complete certificate bytes, recomputes `face_record_payload_sha256`,
+`canonical_face_digest`, `balance_certificate_digest`, and
+`view_identity_digest` from their frozen preimages, and rejects before
+publication if any one differs.
 
 The OE-T0 v1 reference executable guarantees byte-identical one-rank/two-rank
 results by gathering the canonical affine mesh, coefficients and constraints,
@@ -433,6 +748,24 @@ explicit correctness/reference realization, not the production-scalability
 claim. A future distributed reconstruction may replace it only under a new
 deterministic reduction/quantization contract and must retain the same
 physical gates.
+
+OE-T0 GREEN requires both managed commands:
+`just verify-fem-oersted-oet0-cpu-contract` and
+`just verify-fem-oersted-oet0-tsan-cpu-contract`. The latter uses the isolated
+`oersted-oet0-tsan` build directory, compiles and links only the serial contract
+with `-fsanitize=thread -fno-omit-frame-pointer`, executes no MPI launcher, and
+sets `TSAN_OPTIONS=halt_on_error=1:exitcode=66`; any report is a hard failure.
+With `FULLMAG_OET0_TSAN=ON`, CMake skips the MFEM MPI probe, explicit MPI target
+link and every MPI CTest, and defines `FULLMAG_OET0_DISABLE_MPI=1`; MPI code and
+CLI compile only under `MFEM_USE_MPI && !FULLMAG_OET0_DISABLE_MPI`. The shared
+MPI-enabled MFEM library may retain a transitive MPI dependency, but the TSan
+target contains no Fullmag MPI code, launcher or test. GREEN conditionally adds
+`conservative_constraint_rank.cpp`, `periodic_charge_potential.cpp` and
+`conservative_current_view.cpp` directly to the instrumented contract target;
+zero existing files is RED, partial existence is CMake FATAL, and all three are
+compiled with the same sanitizer flags rather than linked from unsanitized
+`fullmag_fem`. The runner audits CTest registration, compile definition,
+source-object list and flags.
 
 ### 3.3 FEM direct tetrahedral Biot--Savart oracle (OE-F1)
 
@@ -652,7 +985,13 @@ strict-GPU transfer counts.
 
 The current artifact gains a versioned RT0 data-plane member plus a compact
 JSON manifest containing its immutable view descriptor and balance
-certificate. Oersted artifacts record the consumed source digest (not merely
+certificate. The manifest persists the complete identity tuple:
+`source_module_id`, `source_state_revision`, `source_field_digest`,
+`mesh_revision`, `topology_revision`, `geometry_digest`, `closure_revision`,
+`closure_digest`, `envelope_revision`, `envelope_digest`,
+`evaluated_envelope_multiplier`, `evaluation_time_s`, `stage_identity`, all
+four record/certificate/view digests, schema/operator/orientation versions,
+record count/length and SI/component/FE tags. Oersted artifacts record the consumed source digest (not merely
 its display-field revision), quadrature/linear-solve convergence, topology and
 airbox certificate, projection identity, and work-snapshot identity. A missing
 or mismatched manifest fails closed. No generic dispatcher, `Context`, or
@@ -683,6 +1022,7 @@ validation and export emits canonical Python.
 | separable envelope | exact amplitude/phase at every RK stage |
 | energy consistency | snapshot from exactly the RHS field, no `1/2` |
 | RT0 conservation | shared-face flux cancellation, element divergence and terminal/closure balance |
+| owner publication | concurrent readers/writer see only whole accepted pointers; rejected publish preserves prior pointer; ThreadSanitizer run has no race |
 | direct tetra singularity | inside/on-face/on-edge targets converge without cutoff |
 | exact-sequence gauge | manufactured `A`, gradient-nullspace and harmonic-topology reject/constraint |
 

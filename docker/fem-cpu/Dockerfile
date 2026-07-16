@@ -83,6 +83,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     gfortran \
+    libboost-dev \
     libopenmpi-dev \
     openmpi-bin \
     pkg-config \

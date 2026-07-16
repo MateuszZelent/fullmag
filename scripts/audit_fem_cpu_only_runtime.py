@@ -18,6 +18,7 @@ RECIPE_NAMES = (
     "verify-fem-steady-transport-cpu-only-contract",
     "verify-fem-time-domain-cpu-only-contract",
     "verify-fem-oersted-oet0-cpu-contract",
+    "verify-fem-oersted-oet0-tsan-cpu-contract",
     "verify-fem-oersted-oef1-cpu-contract",
     "verify-fem-oersted-oef2-cpu-contract",
 )
@@ -143,13 +144,18 @@ def audit_repository_contract(root: Path) -> dict[str, object]:
     compose_path = root / "compose.yaml"
     dockerfile_path = root / "docker/fem-cpu/Dockerfile"
     plan_path = root / PLAN_RELATIVE_PATH
-    for path in (justfile_path, compose_path, dockerfile_path, plan_path):
+    runner_path = root / "scripts/run_fem_cpu_only_contract.sh"
+    fem_cmake_path = root / "backends/fem/CMakeLists.txt"
+    for path in (justfile_path, compose_path, dockerfile_path, plan_path,
+                 runner_path, fem_cmake_path):
         _require(path.is_file(), f"required CPU-only contract file is missing: {path}")
 
     justfile = justfile_path.read_text(encoding="utf-8")
     compose = compose_path.read_text(encoding="utf-8")
     dockerfile = dockerfile_path.read_text(encoding="utf-8")
     plan = plan_path.read_text(encoding="utf-8")
+    runner = runner_path.read_text(encoding="utf-8")
+    fem_cmake = fem_cmake_path.read_text(encoding="utf-8")
 
     for name in RECIPE_NAMES:
         body = _recipe_body(justfile, name)
@@ -172,6 +178,11 @@ def audit_repository_contract(root: Path) -> dict[str, object]:
             "scripts/run_fem_cpu_only_contract.sh" in normalized,
             f"{name} bypasses the pre-build CPU configuration audit",
         )
+        if name == "verify-fem-oersted-oet0-tsan-cpu-contract":
+            _require(
+                "oersted-oet0-tsan" in normalized,
+                "OE-T0 TSan recipe does not select its isolated scenario",
+            )
 
     service = _compose_service_body(compose, "fem-cpu")
     lower_service = service.lower()
@@ -207,6 +218,10 @@ def audit_repository_contract(root: Path) -> dict[str, object]:
         and "mfem_use_hypre=yes" in lower_dockerfile,
         "CPU dependency build must explicitly disable CUDA and enable hypre",
     )
+    _require(
+        "libboost-dev" in lower_dockerfile,
+        "OE-T0 exact-rank build requires the managed Boost.Multiprecision headers",
+    )
 
     forbidden_plan_patterns = (
         r"verify-fem-(steady-transport|time-domain)-native-contract",
@@ -218,6 +233,30 @@ def audit_repository_contract(root: Path) -> dict[str, object]:
         "Oersted implementation plan references a forbidden GPU-backed verification lane",
     )
 
+    for token in (
+        "FULLMAG_OET0_DISABLE_MPI=1",
+        "-fsanitize=thread",
+        "-fno-omit-frame-pointer",
+        "--tests-regex '^fem_conservative_current_view_contract$'",
+        "conservative_constraint_rank.cpp",
+        "periodic_charge_potential.cpp",
+        "conservative_current_view.cpp",
+        "OE-T0 TSan generated instrumentation rules audit: PASS",
+    ):
+        _require(token in runner, f"OE-T0 TSan runner contract missing: {token}")
+    for token in (
+        "FULLMAG_OET0_DISABLE_MPI=1",
+        "-fsanitize=thread -fno-omit-frame-pointer",
+        "if(NOT FULLMAG_OET0_TSAN)",
+        "target_sources(fullmag_fem PRIVATE",
+        "target_sources(fem_conservative_current_view_contract PRIVATE",
+        "OE-T0 production source set is partial",
+        "conservative_constraint_rank.cpp",
+        "periodic_charge_potential.cpp",
+        "conservative_current_view.cpp",
+    ):
+        _require(token in fem_cmake, f"OE-T0 TSan CMake contract missing: {token}")
+
     return {
         "schema": "fullmag.fem.cpu_only_repository_contract.v1",
         "status": "pass",
@@ -227,6 +266,8 @@ def audit_repository_contract(root: Path) -> dict[str, object]:
             "compose": _sha256(compose_path),
             "dockerfile": _sha256(dockerfile_path),
             "plan": _sha256(plan_path),
+            "runner": _sha256(runner_path),
+            "fem_cmake": _sha256(fem_cmake_path),
         },
     }
 
