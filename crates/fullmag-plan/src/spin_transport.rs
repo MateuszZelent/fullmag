@@ -51,19 +51,46 @@ pub(crate) fn resolve_spin_transport(
             BackendTarget::Fdm | BackendTarget::Auto
         ) || resolved_backend != BackendTarget::Fdm
         {
-            errors.push(format!("spin transport '{}' is unsupported on FEM; steady M1/M2 currently supports FDM CPU double only", module.id));
+            errors.push(if transient {
+                format!(
+                    "spin transport '{}' transient M3 reference execution supports FDM CPU double only",
+                    module.id
+                )
+            } else {
+                format!(
+                    "spin transport '{}' is unsupported on FEM; steady M1/M2 currently supports FDM CPU double only",
+                    module.id
+                )
+            });
         }
         if !matches!(
             requested.device,
             ExecutionDevice::Cpu | ExecutionDevice::Auto
         ) {
-            errors.push(format!("spin transport '{}' requested GPU, but steady M1/M2 GPU transport is unavailable and cannot fall back silently", module.id));
+            errors.push(if transient {
+                format!(
+                    "spin transport '{}' requested GPU, but transient M3 reference execution supports CPU double only and cannot fall back silently",
+                    module.id
+                )
+            } else {
+                format!(
+                    "spin transport '{}' requested GPU, but steady M1/M2 GPU transport is unavailable and cannot fall back silently",
+                    module.id
+                )
+            });
         }
         if requested.precision != ExecutionPrecision::Double {
-            errors.push(format!(
-                "spin transport '{}' requested single precision, but steady M1/M2 supports double only",
-                module.id
-            ));
+            errors.push(if transient {
+                format!(
+                    "spin transport '{}' requested single precision, but transient M3 reference execution supports double only",
+                    module.id
+                )
+            } else {
+                format!(
+                    "spin transport '{}' requested single precision, but steady M1/M2 supports double only",
+                    module.id
+                )
+            });
         }
         if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
             errors.push(format!(
@@ -1321,6 +1348,7 @@ mod tests {
         let spin = &mut problem.spin_transport_modules[0];
         spin.mode = SpinTransportModeIR::Transient;
         spin.requested_execution.execution_mode = ExecutionMode::Extended;
+        spin.requested_execution.device = ExecutionDevice::Gpu;
         spin.materials[0].material.spin_capacitance_as_per_v_m3 = Some(2.5);
         spin.materials[0].material.capacitance_formula_version =
             Some("dos_constant.fullmag.v1".into());
@@ -1340,5 +1368,13 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason.contains("strict execution mode")));
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("transient M3 reference execution supports CPU double")));
+        assert!(error
+            .reasons
+            .iter()
+            .all(|reason| !reason.contains("steady M1/M2")));
     }
 }

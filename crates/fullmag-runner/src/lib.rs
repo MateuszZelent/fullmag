@@ -72,6 +72,17 @@ pub fn validate_coupled_m3_checkpoint_value(
     fdm::cpu::spin_transport::validate_coupled_m3_checkpoint_value(value, vector_count)
 }
 
+/// Require exact bidirectional equality of coupled-M3 accepted module IDs and
+/// their runtime identity contracts.
+pub fn compare_coupled_m3_checkpoint_module_identity_values(
+    actual: &serde_json::Value,
+    expected: &serde_json::Value,
+) -> Result<(), RunError> {
+    fdm::cpu::spin_transport::compare_coupled_m3_checkpoint_module_identity_values(
+        actual, expected,
+    )
+}
+
 // Public re-exports (unchanged API surface).
 pub use capabilities::{BackendCapabilities, RuntimeEngineId};
 pub use interactive::backend::BackendGeometry;

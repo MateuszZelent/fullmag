@@ -1279,22 +1279,6 @@ struct CoupledM3CheckpointIdentity {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct CoupledM3AcceptedModule {
-    module_id: String,
-    current_source_id: String,
-    constitutive_version: String,
-    charge_operator_version: String,
-    spin_operator_version: String,
-    torque_formula_version: Option<String>,
-    operator_revision: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct CoupledM3AcceptedState {
-    modules: Vec<CoupledM3AcceptedModule>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 struct CoupledM3CheckpointPayload {
     schema: String,
     problem_ir_abi: String,
@@ -1308,7 +1292,6 @@ struct CoupledM3CheckpointPayload {
     magnetization: Vec<[f64; 3]>,
     time_s: f64,
     previous_dt_s: f64,
-    accepted: CoupledM3AcceptedState,
     thermal_rng_algorithm: String,
     thermal_seed: u64,
 }
@@ -1355,7 +1338,11 @@ fn validate_coupled_checkpoint_restore(
             "coupled M3 checkpoint disagrees with common solver state",
         ));
     }
-    compare_coupled_module_identity(&candidate, &active)
+    fullmag_runner::compare_coupled_m3_checkpoint_module_identity_values(
+        candidate_value,
+        active_value,
+    )
+    .map_err(|error| ApiError::bad_request(error.message))
 }
 
 fn validate_active_coupled_identity(
@@ -1484,32 +1471,6 @@ fn compare_coupled_contract(
         return Err(ApiError::bad_request(
             "coupled M3 checkpoint contract or RNG identity mismatch",
         ));
-    }
-    Ok(())
-}
-
-fn compare_coupled_module_identity(
-    actual: &CoupledM3CheckpointPayload,
-    expected: &CoupledM3CheckpointPayload,
-) -> Result<(), ApiError> {
-    for actual_module in &actual.accepted.modules {
-        let expected_module = expected
-            .accepted
-            .modules
-            .iter()
-            .find(|module| module.module_id == actual_module.module_id)
-            .ok_or_else(|| ApiError::bad_request("coupled M3 checkpoint module mismatch"))?;
-        if actual_module.current_source_id != expected_module.current_source_id
-            || actual_module.constitutive_version != expected_module.constitutive_version
-            || actual_module.charge_operator_version != expected_module.charge_operator_version
-            || actual_module.spin_operator_version != expected_module.spin_operator_version
-            || actual_module.torque_formula_version != expected_module.torque_formula_version
-            || actual_module.operator_revision != expected_module.operator_revision
-        {
-            return Err(ApiError::bad_request(
-                "coupled M3 checkpoint accepted module identity mismatch",
-            ));
-        }
     }
     Ok(())
 }
@@ -2212,7 +2173,7 @@ mod coupled_checkpoint_identity_tests {
                 "state_revision": 1
             }},
             "accepted": {
-                "revision": 1,
+                "revision": 4,
                 "evaluated_time_s": 1.0e-13,
                 "refresh_count": 4,
                 "modules": [{
@@ -2236,7 +2197,7 @@ mod coupled_checkpoint_identity_tests {
                 "combined_transport_torque_per_s": [[0.0, 1.0, 0.0]],
                 "combined_oersted_field_apm": [[0.0, 0.0, 1.0]]
             },
-            "next_revision": 2,
+            "next_revision": 5,
             "refresh_count": 4,
             "accepted_steps": 1,
             "rejected_steps": 0,

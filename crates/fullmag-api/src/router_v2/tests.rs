@@ -16885,7 +16885,7 @@ fn complete_coupled_m3_checkpoint() -> serde_json::Value {
         "time_s": 2.5e-9,
         "previous_dt_s": 1.0e-13,
         "accepted": {
-            "revision": 1,
+            "revision": 4,
             "evaluated_time_s": 2.5e-9,
             "refresh_count": 4,
             "modules": [{
@@ -16930,7 +16930,7 @@ fn complete_coupled_m3_checkpoint() -> serde_json::Value {
                 "state_revision": 1
             }
         },
-        "next_revision": 2,
+        "next_revision": 5,
         "refresh_count": 4,
         "accepted_steps": 42,
         "rejected_steps": 0,
@@ -16941,6 +16941,38 @@ fn complete_coupled_m3_checkpoint() -> serde_json::Value {
         "thermal_seed": 17,
         "thermal_counter": 42
     })
+}
+
+fn append_coupled_m3_checkpoint_module(checkpoint: &mut serde_json::Value, module_id: &str) {
+    let mut module = checkpoint["accepted"]["modules"][0].clone();
+    module["module_id"] = serde_json::json!(module_id);
+    module["current_source_id"] = serde_json::json!(format!("charge-{module_id}"));
+    checkpoint["accepted"]["modules"]
+        .as_array_mut()
+        .unwrap()
+        .push(module);
+    let transient = checkpoint["transient_states"]["spin"].clone();
+    checkpoint["transient_states"]
+        .as_object_mut()
+        .unwrap()
+        .insert(module_id.to_string(), transient);
+    checkpoint["charge_nonlinear_history"]
+        .as_object_mut()
+        .unwrap()
+        .insert(module_id.to_string(), serde_json::json!([]));
+    refresh_coupled_m3_checkpoint_aggregates(checkpoint);
+}
+
+fn refresh_coupled_m3_checkpoint_aggregates(checkpoint: &mut serde_json::Value) {
+    let module_count = checkpoint["accepted"]["modules"]
+        .as_array()
+        .unwrap()
+        .len() as f64;
+    let vector_count = checkpoint["magnetization"].as_array().unwrap().len();
+    checkpoint["accepted"]["combined_transport_torque_per_s"] =
+        serde_json::json!(vec![[0.0, module_count, 0.0]; vector_count]);
+    checkpoint["accepted"]["combined_oersted_field_apm"] =
+        serde_json::json!(vec![[0.0, 0.0, module_count]; vector_count]);
 }
 
 #[tokio::test]
@@ -17191,8 +17223,48 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
 #[tokio::test]
 async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_without_mutation() {
     let (app, state, repo_root) = test_router_with_session_store_state().await;
-    let expected = complete_coupled_m3_checkpoint();
+    let mut expected = complete_coupled_m3_checkpoint();
+    append_coupled_m3_checkpoint_module(&mut expected, "spin-b");
     let mut invalid = Vec::<(&str, serde_json::Value)>::new();
+
+    let mut subset = expected.clone();
+    subset["accepted"]["modules"].as_array_mut().unwrap().pop();
+    subset["transient_states"]
+        .as_object_mut()
+        .unwrap()
+        .remove("spin-b");
+    subset["charge_nonlinear_history"]
+        .as_object_mut()
+        .unwrap()
+        .remove("spin-b");
+    refresh_coupled_m3_checkpoint_aggregates(&mut subset);
+    invalid.push(("module identity subset", subset));
+
+    let mut superset = expected.clone();
+    append_coupled_m3_checkpoint_module(&mut superset, "spin-c");
+    invalid.push(("module identity superset", superset));
+
+    let mut unknown = expected.clone();
+    unknown["accepted"]["modules"][1]["module_id"] = serde_json::json!("spin-unknown");
+    let transient = unknown["transient_states"]
+        .as_object_mut()
+        .unwrap()
+        .remove("spin-b")
+        .unwrap();
+    unknown["transient_states"]
+        .as_object_mut()
+        .unwrap()
+        .insert("spin-unknown".into(), transient);
+    let history = unknown["charge_nonlinear_history"]
+        .as_object_mut()
+        .unwrap()
+        .remove("spin-b")
+        .unwrap();
+    unknown["charge_nonlinear_history"]
+        .as_object_mut()
+        .unwrap()
+        .insert("spin-unknown".into(), history);
+    invalid.push(("unknown module identity", unknown));
 
     for (field, value) in [
         ("requested_discretization", serde_json::json!("fem")),
@@ -17298,9 +17370,14 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
     let mut inconsistent_magnetization = expected.clone();
     inconsistent_magnetization["magnetization"][0] = serde_json::json!([0.0, 0.0, 1.0]);
     invalid.push(("common-state magnetization", inconsistent_magnetization));
+    let mut revision_overflow = expected.clone();
+    revision_overflow["accepted"]["revision"] = serde_json::json!(u64::MAX);
+    revision_overflow["accepted"]["refresh_count"] = serde_json::json!(u64::MAX);
+    revision_overflow["refresh_count"] = serde_json::json!(u64::MAX);
+    invalid.push(("revision overflow", revision_overflow));
     for (label, path, value) in [
-        ("accepted revision", vec!["accepted", "revision"], serde_json::json!(0)),
-        ("next revision", vec!["next_revision"], serde_json::json!(1)),
+        ("accepted revision", vec!["accepted", "revision"], serde_json::json!(3)),
+        ("next revision", vec!["next_revision"], serde_json::json!(6)),
         (
             "accepted refresh",
             vec!["accepted", "refresh_count"],
@@ -17339,7 +17416,56 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
                 &mut target[*segment]
             };
         }
-        target[path[path.len() - 1]] = value;
+        let last = path[path.len() - 1];
+        if let Ok(index) = last.parse::<usize>() {
+            target[index] = value;
+        } else {
+            target[last] = value;
+        }
+        invalid.push((label, candidate));
+    }
+    for (label, path, value) in [
+        (
+            "accepted spin differs from transient state",
+            vec!["accepted", "modules", "0", "spin_potential_volts", "0", "0"],
+            serde_json::json!(9.0),
+        ),
+        (
+            "operator revision differs from active contract",
+            vec!["accepted", "modules", "0", "operator_revision"],
+            serde_json::json!(1),
+        ),
+        (
+            "combined torque differs from module sum",
+            vec!["accepted", "combined_transport_torque_per_s", "0", "1"],
+            serde_json::json!(99.0),
+        ),
+        (
+            "combined Oersted differs from module sum",
+            vec!["accepted", "combined_oersted_field_apm", "0", "2"],
+            serde_json::json!(99.0),
+        ),
+        (
+            "empty torque formula version",
+            vec!["accepted", "modules", "0", "torque_formula_version"],
+            serde_json::json!("   "),
+        ),
+    ] {
+        let mut candidate = expected.clone();
+        let mut target = &mut candidate;
+        for segment in &path[..path.len() - 1] {
+            target = if let Ok(index) = segment.parse::<usize>() {
+                &mut target[index]
+            } else {
+                &mut target[*segment]
+            };
+        }
+        let last = path[path.len() - 1];
+        if let Ok(index) = last.parse::<usize>() {
+            target[index] = value;
+        } else {
+            target[last] = value;
+        }
         invalid.push((label, candidate));
     }
 

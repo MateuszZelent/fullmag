@@ -193,6 +193,90 @@ pub(crate) fn validate_coupled_m3_checkpoint_value(
     validate_complete_coupled_checkpoint(&checkpoint, vector_count)
 }
 
+pub(crate) fn compare_coupled_m3_checkpoint_module_identity_values(
+    actual: &serde_json::Value,
+    expected: &serde_json::Value,
+) -> Result<(), RunError> {
+    let actual: FdmCoupledCheckpoint = serde_json::from_value(actual.clone())
+        .map_err(|error| run_error(format!("invalid coupled M3 checkpoint payload: {error}")))?;
+    let expected: FdmCoupledCheckpoint = serde_json::from_value(expected.clone())
+        .map_err(|error| run_error(format!("invalid coupled M3 checkpoint payload: {error}")))?;
+    let expected = expected
+        .accepted
+        .modules
+        .iter()
+        .map(CheckpointModuleContract::from_snapshot)
+        .collect::<Vec<_>>();
+    compare_checkpoint_module_contracts(&actual.accepted.modules, &expected)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CheckpointModuleContract {
+    module_id: String,
+    current_source_id: String,
+    constitutive_version: String,
+    charge_operator_version: String,
+    spin_operator_version: String,
+    torque_formula_version: Option<String>,
+    operator_revision: u64,
+}
+
+impl CheckpointModuleContract {
+    fn from_snapshot(module: &FdmSpinTransportModuleSnapshot) -> Self {
+        Self {
+            module_id: module.module_id.clone(),
+            current_source_id: module.current_source_id.clone(),
+            constitutive_version: module.constitutive_version.clone(),
+            charge_operator_version: module.charge_operator_version.clone(),
+            spin_operator_version: module.spin_operator_version.clone(),
+            torque_formula_version: module.torque_formula_version.clone(),
+            operator_revision: module.operator_revision,
+        }
+    }
+}
+
+fn compare_checkpoint_module_contracts(
+    actual: &[FdmSpinTransportModuleSnapshot],
+    expected: &[CheckpointModuleContract],
+) -> Result<(), RunError> {
+    if actual.len() != expected.len() {
+        return Err(run_error(
+            "coupled checkpoint module identity set/count mismatch",
+        ));
+    }
+    let actual_by_id = actual
+        .iter()
+        .map(|module| (module.module_id.as_str(), module))
+        .collect::<BTreeMap<_, _>>();
+    let expected_by_id = expected
+        .iter()
+        .map(|module| (module.module_id.as_str(), module))
+        .collect::<BTreeMap<_, _>>();
+    if actual_by_id.len() != actual.len()
+        || expected_by_id.len() != expected.len()
+        || actual_by_id.keys().ne(expected_by_id.keys())
+    {
+        return Err(run_error(
+            "coupled checkpoint module identity set/count mismatch",
+        ));
+    }
+    for (module_id, actual) in actual_by_id {
+        let expected = expected_by_id[module_id];
+        if actual.current_source_id != expected.current_source_id
+            || actual.constitutive_version != expected.constitutive_version
+            || actual.charge_operator_version != expected.charge_operator_version
+            || actual.spin_operator_version != expected.spin_operator_version
+            || actual.torque_formula_version != expected.torque_formula_version
+            || actual.operator_revision != expected.operator_revision
+        {
+            return Err(run_error(
+                "coupled checkpoint accepted module identity mismatch",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_complete_coupled_checkpoint(
     checkpoint: &FdmCoupledCheckpoint,
     vector_count: usize,
@@ -236,7 +320,8 @@ fn validate_complete_coupled_checkpoint(
         || checkpoint.transient_states.is_empty()
         || checkpoint.accepted.modules.is_empty()
         || checkpoint.accepted.revision == 0
-        || checkpoint.next_revision <= checkpoint.accepted.revision
+        || checkpoint.accepted.revision != checkpoint.accepted.refresh_count
+        || checkpoint.accepted.revision.checked_add(1) != Some(checkpoint.next_revision)
         || checkpoint.refresh_count != checkpoint.accepted.refresh_count
         || checkpoint.accepted_steps == 0
         || checkpoint.telemetry_cursor < checkpoint.accepted_steps
@@ -320,7 +405,12 @@ fn validate_complete_coupled_checkpoint(
             || module.constitutive_version.trim().is_empty()
             || module.charge_operator_version.trim().is_empty()
             || module.spin_operator_version.trim().is_empty()
+            || module
+                .torque_formula_version
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
             || module.state_revision != state.state_revision
+            || module.spin_potential_volts != state.spin_potential_v
             || !valid_module_telemetry(&module.telemetry)
             || module.interface_fluxes.iter().any(|flux| {
                 flux.source_id.trim().is_empty()
@@ -339,6 +429,23 @@ fn validate_complete_coupled_checkpoint(
         .any(|value| !value.is_finite())
     {
         return Err(run_error("coupled checkpoint nonlinear history is invalid"));
+    }
+    let mut combined_torque = vec![[0.0; 3]; vector_count];
+    let mut combined_oersted = None;
+    for module in &checkpoint.accepted.modules {
+        add_vector_field(&mut combined_torque, &module.transport_torque_per_s);
+        if let Some(field) = &module.oersted_field_apm {
+            let aggregate =
+                combined_oersted.get_or_insert_with(|| vec![[0.0; 3]; vector_count]);
+            add_vector_field(aggregate, field);
+        }
+    }
+    if combined_torque != checkpoint.accepted.combined_transport_torque_per_s
+        || combined_oersted != checkpoint.accepted.combined_oersted_field_apm
+    {
+        return Err(run_error(
+            "coupled checkpoint aggregate transport fields are inconsistent",
+        ));
     }
     Ok(())
 }
@@ -813,6 +920,12 @@ impl FdmSpinTransportWorkflow {
         compare_checkpoint_identity(&checkpoint.identity, &self.checkpoint_identity)?;
         let count = self.grid.cell_count();
         validate_complete_coupled_checkpoint(&checkpoint, count)?;
+        let expected_modules = self
+            .plans
+            .iter()
+            .map(checkpoint_module_contract_from_plan)
+            .collect::<Result<Vec<_>, _>>()?;
+        compare_checkpoint_module_contracts(&checkpoint.accepted.modules, &expected_modules)?;
         if checkpoint
             .transient_states
             .keys()
@@ -1092,6 +1205,49 @@ impl FdmSpinTransportWorkflow {
         }
         Ok(max_error)
     }
+}
+
+fn checkpoint_module_contract_from_plan(
+    resolved: &fullmag_ir::ResolvedSpinTransportPlanIR,
+) -> Result<CheckpointModuleContract, RunError> {
+    let (charge_operator_version, spin_operator_version, torque_formula_version, operator_revision) =
+        if let Some(transient) = &resolved.fdm_cpu_double_transient {
+            let steady = &transient.steady_operator;
+            (
+                steady.charge_solver.operator_version.clone(),
+                steady.spin_solver.operator_version.clone(),
+                steady.torque_formula_version.clone(),
+                0,
+            )
+        } else if let Some(steady) = &resolved.fdm_cpu_double {
+            (
+                steady.charge_solver.operator_version.clone(),
+                steady.spin_solver.operator_version.clone(),
+                steady.torque_formula_version.clone(),
+                0,
+            )
+        } else if let Some(reciprocal) = &resolved.fdm_cpu_double_reciprocal {
+            (
+                reciprocal.operator_version.clone(),
+                reciprocal.operator_version.clone(),
+                reciprocal.torque_formula_version.clone(),
+                descriptor_revision(reciprocal)?,
+            )
+        } else {
+            return Err(run_error(format!(
+                "spin transport '{}' has no executable checkpoint module contract",
+                resolved.module_id
+            )));
+        };
+    Ok(CheckpointModuleContract {
+        module_id: resolved.module_id.clone(),
+        current_source_id: resolved.current_source_id.clone(),
+        constitutive_version: resolved.constitutive_version.clone(),
+        charge_operator_version,
+        spin_operator_version,
+        torque_formula_version,
+        operator_revision,
+    })
 }
 
 fn normalized_observable_difference(
@@ -2825,7 +2981,55 @@ mod tests {
             ("previous spin history", Box::new(|value| value.transient_states.get_mut("spin").unwrap().previous_spin_potential_v = None)),
             ("module keys", Box::new(|value| value.accepted.modules[0].module_id = "other".into())),
             ("module revision", Box::new(|value| value.accepted.modules[0].state_revision += 1)),
-            ("accepted refresh", Box::new(|value| value.accepted.refresh_count += 1)),
+            (
+                "accepted revision",
+                Box::new(|value| value.accepted.revision += 1),
+            ),
+            (
+                "next revision gap",
+                Box::new(|value| value.next_revision += 1),
+            ),
+            (
+                "revision overflow",
+                Box::new(|value| {
+                    value.accepted.revision = u64::MAX;
+                    value.accepted.refresh_count = u64::MAX;
+                    value.refresh_count = u64::MAX;
+                }),
+            ),
+            (
+                "accepted refresh",
+                Box::new(|value| value.accepted.refresh_count += 1),
+            ),
+            (
+                "accepted spin state",
+                Box::new(|value| {
+                    value.accepted.modules[0].spin_potential_volts[0][0] += 1.0
+                }),
+            ),
+            (
+                "operator revision",
+                Box::new(|value| value.accepted.modules[0].operator_revision += 1),
+            ),
+            (
+                "combined torque",
+                Box::new(|value| {
+                    value.accepted.combined_transport_torque_per_s[0][0] += 1.0
+                }),
+            ),
+            (
+                "combined Oersted presence",
+                Box::new(|value| {
+                    value.accepted.combined_oersted_field_apm =
+                        Some(vec![[0.0; 3]; value.magnetization.len()])
+                }),
+            ),
+            (
+                "empty torque formula",
+                Box::new(|value| {
+                    value.accepted.modules[0].torque_formula_version = Some("   ".into())
+                }),
+            ),
             ("telemetry finite", Box::new(|value| value.accepted.modules[0].telemetry.charge_residual_l2 = f64::NAN)),
             ("telemetry cursor", Box::new(|value| value.telemetry_cursor = 0)),
             ("thermal counter", Box::new(|value| value.thermal_counter += 1)),
