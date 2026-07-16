@@ -25,6 +25,7 @@ describe("viewport 3D mixed-target smoke script", () => {
     expect(smokeScript).toContain("waitForMixedTargetSceneReady");
     expect(smokeScript).toContain("waitForBinaryVectorEndpointReady");
     expect(smokeScript).toContain("ensureComputeFieldsReady");
+    expect(smokeScript).toContain("const detail = await getJsonOrNull(");
     expect(smokeScript).toContain('kind: "compute_fields"');
     expect(smokeScript).toContain("requestTargetsObject");
     expect(smokeScript).toContain('entry.params.scope_kind !== "part"');
@@ -44,6 +45,9 @@ describe("viewport 3D mixed-target smoke script", () => {
     expect(smokeScript).toContain("isSameNode");
     expect(smokeScript).toContain("assertColorbarRangeUpdateDoesNotRemount");
     expect(smokeScript).toContain("assertCanvasNonBlank");
+    expect(smokeScript).toContain("waitForViewport3DBuildQuiescence");
+    expect(smokeScript).toContain("assertSemanticTargetBuildEvidence");
+    expect(smokeScript).toContain('"airbox vectors", "vector-glyph"');
     expect(smokeScript).toContain("fullmag.viewport3d.build-engine");
   });
 
@@ -52,6 +56,9 @@ describe("viewport 3D mixed-target smoke script", () => {
     const fixture = readFileSync(mixedTargetFixtureUrl, "utf8");
 
     expect(justfile).toContain("run-viewport-3d-mixed-target-smoke");
+    expect(justfile).toContain(
+      'run-cofeb-rings-relax-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_port="3193" api_port="8195"',
+    );
     expect(justfile).toContain('api_port="8193"');
     expect(justfile).toContain("FULLMAG_API_PORT");
     expect(justfile).toContain("CONTROL_ROOM_API_BASE_URL");

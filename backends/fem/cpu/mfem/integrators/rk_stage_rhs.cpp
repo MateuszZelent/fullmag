@@ -21,6 +21,7 @@ namespace fullmag::fem {
 bool evaluate_rk_stage_rhs(
     Context &ctx,
     const std::vector<double> &m_state,
+    double evaluation_time_s,
     StepperWorkspace &ws,
     std::vector<double> &out_k,
     double *out_max_rhs,
@@ -32,6 +33,7 @@ bool evaluate_rk_stage_rhs(
     if (!compute_effective_fields_for_magnetization(
             ctx,
             m_state,
+            evaluation_time_s,
             ws.h_ex_tmp,
             ws.h_demag_tmp,
             ws.h_eff_tmp,

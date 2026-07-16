@@ -8,6 +8,7 @@ interface NormalizedBuildJobKey {
   readonly algorithmVersion: number;
   readonly component?: string | null;
   readonly domainId: string;
+  readonly domainGenerationId?: string | null;
   readonly fieldRevision?: string | null;
   readonly lane: Viewport3DBuildLane;
   readonly quantityId?: string | null;
@@ -39,6 +40,7 @@ export function buildViewport3DFieldColorJobKey(
     algorithmVersion: parts.algorithmVersion,
     component: parts.component,
     domainId: parts.domainId,
+    domainGenerationId: parts.domainGenerationId,
     fieldRevision: parts.fieldRevision,
     lane: "field-color",
     quantityId: parts.quantityId,
@@ -59,6 +61,7 @@ export function buildViewport3DFdmCuboidJobKey(
     algorithmVersion: parts.algorithmVersion,
     component: parts.component,
     domainId: parts.domainId,
+    domainGenerationId: parts.domainGenerationId,
     fieldRevision: parts.fieldRevision,
     lane: "fdm-cuboid",
     quantityId: parts.quantityId,
@@ -79,6 +82,7 @@ export function buildViewport3DVectorGlyphJobKey(
     algorithmVersion: parts.algorithmVersion,
     component: parts.component,
     domainId: parts.domainId,
+    domainGenerationId: parts.domainGenerationId,
     fieldRevision: parts.fieldRevision,
     lane: "vector-glyph",
     quantityId: parts.quantityId,

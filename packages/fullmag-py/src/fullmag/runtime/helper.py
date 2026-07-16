@@ -172,6 +172,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         stages = []
         device_override: str | None = None
+        stage_start_time_s = 0.0
         for stage in loaded.stages or ():
             action_device = _change_device_action_device(stage.action)
             stage_device_override = action_device or device_override
@@ -185,6 +186,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
                 study_pipeline=study_pipeline,
                 runtime_device_override=stage_device_override,
+                stage_start_time_s=stage_start_time_s,
             )
             if action_device is not None:
                 device_override = action_device
@@ -199,6 +201,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "action": stage.action,
                 }
             )
+            if stage.default_until_seconds is not None:
+                stage_start_time_s += stage.default_until_seconds
 
         print(
             json.dumps(

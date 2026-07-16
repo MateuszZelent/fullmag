@@ -18,6 +18,7 @@ set(FEM_SOURCES
     core/fem_context_builder.cpp
     core/fem_element_quadrature_material.cpp
     core/fem_material_fields.cpp
+    core/fem_material_runtime.cpp
     core/fem_mesh.cpp
     core/fem_plan_fields.cpp
     core/fem_state.cpp
@@ -101,6 +102,8 @@ set(FEM_SOURCES
     cpu/mfem/interactions/thermal_brown_sampler.cpp
     cpu/mfem/interactions/thermal_brown_sigma.cpp
     cpu/mfem/interactions/zeeman.cpp
+    cpu/mfem/interactions/zeeman_time_dependence.cpp
+    cpu/mfem/interactions/zeeman_regional_field.cpp
     cpu/mfem/interactions/zeeman_energy.cpp
     cpu/mfem/interactions/zeeman_field.cpp
     cpu/mfem/interactions/zeeman_uniform_field.cpp
@@ -261,6 +264,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/interactions/stt/stt_kernels.cu
             gpu/cuda/interactions/thermal/thermal_kernels.cu
             gpu/cuda/interactions/zeeman/zeeman_kernels.cu
+            gpu/cuda/interactions/zeeman/regional_field_kernels.cu
             gpu/cuda/demag_poisson/demag_kernels.cu
             gpu/cuda/observables/observable_kernels.cu
             gpu/cuda/relaxation/pgbb_kernels.cu
@@ -533,6 +537,9 @@ if(FULLMAG_USE_MFEM_STACK)
         target_link_libraries(fem_exchange_contract PRIVATE mfem)
     endif()
 endif()
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_exchange_contract PRIVATE CUDA::cusparse)
+endif()
 target_include_directories(fem_exchange_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -778,6 +785,17 @@ target_include_directories(fem_zeeman_element_quadrature_contract PRIVATE
 add_test(NAME fem_zeeman_element_quadrature_contract COMMAND fem_zeeman_element_quadrature_contract)
 
 add_executable(
+    fem_material_runtime_zeeman_contract
+    tests/fem_material_runtime_zeeman_contract.cpp
+)
+target_link_libraries(fem_material_runtime_zeeman_contract PRIVATE fullmag_fem)
+target_include_directories(fem_material_runtime_zeeman_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_material_runtime_zeeman_contract COMMAND fem_material_runtime_zeeman_contract)
+
+add_executable(
     fem_uniaxial_element_quadrature_contract
     tests/fem_uniaxial_element_quadrature_contract.cpp
 )
@@ -789,6 +807,17 @@ target_include_directories(fem_uniaxial_element_quadrature_contract PRIVATE
 add_test(NAME fem_uniaxial_element_quadrature_contract COMMAND fem_uniaxial_element_quadrature_contract)
 
 add_executable(
+    fem_material_runtime_uniaxial_contract
+    tests/fem_material_runtime_uniaxial_contract.cpp
+)
+target_link_libraries(fem_material_runtime_uniaxial_contract PRIVATE fullmag_fem)
+target_include_directories(fem_material_runtime_uniaxial_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_material_runtime_uniaxial_contract COMMAND fem_material_runtime_uniaxial_contract)
+
+add_executable(
     fem_cubic_element_quadrature_contract
     tests/fem_cubic_element_quadrature_contract.cpp
 )
@@ -798,6 +827,17 @@ target_include_directories(fem_cubic_element_quadrature_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_cubic_element_quadrature_contract COMMAND fem_cubic_element_quadrature_contract)
+
+add_executable(
+    fem_material_runtime_cubic_contract
+    tests/fem_material_runtime_cubic_contract.cpp
+)
+target_link_libraries(fem_material_runtime_cubic_contract PRIVATE fullmag_fem)
+target_include_directories(fem_material_runtime_cubic_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_material_runtime_cubic_contract COMMAND fem_material_runtime_cubic_contract)
 
 add_executable(fem_field_buffers_contract tests/fem_field_buffers_contract.cpp)
 target_link_libraries(fem_field_buffers_contract PRIVATE fullmag_fem)

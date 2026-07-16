@@ -25,6 +25,7 @@ vi.mock("@/kernel/KernelContext", () => ({
 }));
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
+  shouldLoadRuntimeMeshBuild: () => true,
   shouldLoadRuntimeMeshManifest: () => true,
   shouldLoadRuntimeMeshSummary: () => true,
 }));
@@ -56,6 +57,7 @@ vi.mock("@/kernel/resources/useSessionStatus", () => ({
 
 const qualityPayload = {
   global: {
+    warnings: Array.from({ length: 51 }, (_, index) => `warning-${index}-${"界".repeat(1_000)}`),
     characteristic_size: {
       histogram: [
         { count: 3, hi: 3e-9, lo: 1e-9 },
@@ -155,9 +157,31 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
     revision: 3,
     status: "ready",
   }),
+  useMeshBuildCurrent: () => ({
+    data: {
+      effective_airbox_target: { growth_rate: 1.4, hmax: 2e-8, hmin: 4e-9 },
+      last_build_error: "tetrahedralization failed",
+      last_build_summary: { status: "failed" },
+      mesh_pipeline_status: [{ id: "tetrahedralize", status: "failed" }],
+      revision: 5,
+    },
+    error: null,
+    refetch: vi.fn(),
+    revision: 5,
+    status: "ready",
+  }),
+  useMeshBuildLatestSuccessful: () => ({
+    data: { revision: 4 },
+    error: null,
+    refetch: vi.fn(),
+    revision: 4,
+    status: "ready",
+  }),
   useMeshSharedDomainManifestResource: () => ({
     data: {
       domain_mesh_mode: "shared_domain_mesh_with_air",
+      generation_id: "generation-3",
+      geometry_realization_revision: 2,
       mesh_id: "study_domain:3",
       mesh_name: "study_domain",
       mesh_parts: [
@@ -182,6 +206,7 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
       object_segments: [],
       regions: [],
       revision: 3,
+      source_scene_revision: 1,
     },
     error: null,
     refetch: vi.fn(),
@@ -386,7 +411,8 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   }),
   useUniverseMeshPolicyResource: () => ({
     data: {
-      config: null,
+      config: { center: [0, 1e-9, 2e-9], mode: "manual", padding: [1e-7, 2e-7, 3e-7], size: [1e-6, 2e-6, 3e-6] },
+      effective_config: { airbox_hmax: 2e-8, center: [0, 1e-9, 2e-9], mode: "manual", padding: [1e-7, 2e-7, 3e-7], payload: "ż".repeat(5_000), size: [1e-6, 2e-6, 3e-6] },
       revision: 3,
     },
     error: null,
@@ -396,10 +422,20 @@ vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   }),
 }));
 
-import {
-  AirboxMeshPolicyPanel,
-  AirboxMeshPolicyTransactionsSection,
-} from "./AirboxMeshPolicyPanel";
+vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
+  useVisualizationStateResource: () => ({
+    data: { active_quantity_id: "m", overrides: [] },
+    status: "ready",
+  }),
+}));
+
+import { AirboxMeshParametersPanel } from "./airbox/AirboxMeshParametersPanel";
+import { AirboxMeshBuildPanel } from "./airbox/AirboxMeshBuildPanel";
+import { AirboxMeshQualityGatesPanel } from "./airbox/AirboxMeshQualityGatesPanel";
+import { AirboxMeshStatisticsPanel } from "./airbox/AirboxMeshStatisticsPanel";
+import { AirboxMeshTopologyPanel } from "./airbox/AirboxMeshTopologyPanel";
+import { AirboxMeshOverviewPanel } from "./airbox/AirboxMeshOverviewPanel";
+import { AirboxOverviewPanel } from "./airbox/AirboxOverviewPanel";
 import {
   ObjectMeshPolicyPanel,
   ObjectMeshTransactionsSection,
@@ -425,7 +461,7 @@ const airboxSelection: Selection = {
 };
 
 const airboxQualitySelection: Selection = {
-  kind: "airbox.mesh-quality",
+  kind: "airbox.mesh.statistics",
   label: "Airbox quality",
   moduleSource: "inspector",
   nodeId: "airbox:mesh-quality",
@@ -439,9 +475,11 @@ describe("scoped mesh quality panels", () => {
       <ObjectRegionMeshPanel
         addMaterialOverride={vi.fn()}
         applyRegion={vi.fn()}
+        buildRegion={vi.fn()}
         canWriteRegion
         couplingDependencies={[]}
         deleteRegion={vi.fn()}
+        draftDirty={false}
         draft={{
           enabled: true,
           frame: "object",
@@ -512,6 +550,13 @@ describe("scoped mesh quality panels", () => {
           warningCount: 0,
         }}
         pending={false}
+        regionMeshLifecycle={{
+          generationId: "generation-3",
+          membershipRevision: 4,
+          reason: "Certified conformal mesh membership is current.",
+          status: "current",
+          topologyFingerprint: "topology-3",
+        }}
         removeMaterialOverride={vi.fn()}
         revert={vi.fn()}
         updateDraft={vi.fn()}
@@ -574,48 +619,43 @@ describe("scoped mesh quality panels", () => {
 
   it("warns when airbox mesh policy edits are not applied", () => {
     const html = renderToStaticMarkup(
-      <Accordion type="multiple" defaultValue={["transactions"]}>
-        <AirboxMeshPolicyTransactionsSection
-          buildLabel="Apply & Build Shared-Domain Mesh"
-          feedback={null}
-          isDirty
-          onApply={vi.fn()}
-          onBuild={vi.fn()}
-          onRevert={vi.fn()}
-          pending={false}
-        />
-      </Accordion>,
+      <AirboxMeshParametersPanel
+        selection={{ ...airboxSelection, kind: "airbox.mesh.parameters" }}
+      />,
     );
 
-    expect(html).toContain("Unapplied changes");
-    expect(html).toContain("Apply Airbox Policy or Apply &amp; Build");
+    expect(html).toContain("Transactions");
+    expect(html).toContain("Apply Airbox Policy");
   });
 
   it("renders airbox quality histograms in the airbox mesh panel", () => {
     const html = renderToStaticMarkup(
-      <AirboxMeshPolicyPanel selection={airboxQualitySelection} />,
+      <AirboxMeshStatisticsPanel selection={airboxQualitySelection} />,
     );
 
-    expect(html).toContain("Airbox Quality Distributions");
+    expect(html).toContain("Shared-domain Quality Distributions");
+    expect(html).toContain("cross-reference, not Airbox-scoped");
     expect(html).toContain("SICN");
     expect(html).toContain("Gamma");
     expect(html).toContain("Below target");
     expect(html).toContain("Element size distributions");
     expect(html).toContain("Tetra size");
-    expect(html).toContain("Airbox Mesh Part");
+    expect(html).toContain("Airbox Mesh Statistics");
     expect(html).toContain("Points / nodes");
     expect(html).toContain("12,345");
     expect(html).toContain("Tetrahedra");
     expect(html).toContain("59,244");
-    expect(html).toContain("explicit node_indices");
+    expect(html).toContain("shared, not exclusive Airbox memory");
   });
 
   it("renders airbox mesh policy inputs in the airbox mesh panel", () => {
     const html = renderToStaticMarkup(
-      <AirboxMeshPolicyPanel selection={airboxSelection} />,
+      <AirboxMeshParametersPanel
+        selection={{ ...airboxSelection, kind: "airbox.mesh.parameters" }}
+      />,
     );
 
-    expect(html).toContain("Element Size Parameters");
+    expect(html).toContain("Canonical Authored Parameters");
     expect(html).toContain("Maximum element size");
     expect(html).toContain("Minimum element size");
     expect(html).toContain("Maximum element growth rate");
@@ -623,5 +663,83 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("Airbox Geometry");
     expect(html).toContain("Padding X");
     expect(html).toContain("Size X");
+    expect(html).toContain("Effective maximum element size");
+    expect(html).toContain("Effective domain mode");
+    expect(html).toContain("Effective center");
+    expect(html).toContain("Unknown effective keys");
+    expect(html).not.toContain("ż".repeat(513));
+  });
+
+  it("labels absent Airbox-scoped quality gates as unknown backend evidence", () => {
+    const html = renderToStaticMarkup(
+      <AirboxMeshQualityGatesPanel
+        selection={{ ...airboxSelection, kind: "airbox.mesh.quality-gates" }}
+      />,
+    );
+
+    expect(html).toContain("Airbox-scoped quality gates are not published");
+    expect(html).toContain("unknown");
+    expect(html).toContain("ui-derived");
+    expect(html).toContain("cross-reference only");
+  });
+
+  it("renders topology metadata from the manifest without a binary topology hook", () => {
+    const html = renderToStaticMarkup(
+      <AirboxMeshTopologyPanel
+        selection={{ ...airboxSelection, kind: "airbox.mesh.topology" }}
+      />,
+    );
+
+    expect(html).toContain("Airbox Mesh Topology");
+    expect(html).toContain("part:__air__");
+    expect(html).toContain("explicit node_indices");
+    expect(html).toContain("explicit boundary_face_indices");
+    expect(html).toContain("generation-3");
+    expect(html).toContain("Shared-interface caveat");
+    expect(html).toContain("Canonical marker");
+    expect(html).toContain("not published");
+    expect(html).toContain("binary topology is not refetched");
+  });
+
+  it("renders approved Airbox overview and mesh overview facts", () => {
+    const overview = renderToStaticMarkup(<AirboxOverviewPanel selection={airboxSelection} />);
+    const mesh = renderToStaticMarkup(<AirboxMeshOverviewPanel selection={airboxSelection} />);
+
+    expect(overview).toContain("manual");
+    expect(overview).toContain("1e-7, 2e-7, 3e-7");
+    expect(overview).toContain("0.000001, 0.000002, 0.000003");
+    expect(overview).toContain("12,345");
+    expect(overview).toContain("59,244");
+    expect(overview).toContain("Active quantity");
+    expect(overview).toContain("m");
+    expect(overview).toContain("Shortcuts");
+    expect(mesh).toContain("2e-8");
+    expect(mesh).toContain("Parameters status");
+    expect(mesh).toContain("Quality Gates status");
+    expect(mesh).toContain("Statistics status");
+    expect(mesh).toContain("Topology status");
+    expect(mesh).toContain("Build status");
+    expect(mesh).not.toContain("Child status:");
+    expect(mesh).toContain("4e-9");
+    expect(mesh).toContain("Last build summary");
+  });
+
+  it("bounds shared-domain quality cross-reference strings and collections", () => {
+    const html = renderToStaticMarkup(<AirboxMeshStatisticsPanel selection={airboxQualitySelection} />);
+    expect(html).toContain("Shared-domain cross-reference");
+    expect(html).not.toContain("warning-50-");
+    expect(html).not.toContain("界".repeat(513));
+  });
+
+  it("renders degraded build lifecycle and the direct backend reason", () => {
+    const html = renderToStaticMarkup(
+      <AirboxMeshBuildPanel
+        selection={{ ...airboxSelection, kind: "airbox.mesh.build" }}
+      />,
+    );
+
+    expect(html).toContain("degraded");
+    expect(html).toContain("tetrahedralization failed");
+    expect(html).toContain("Current build revision");
   });
 });

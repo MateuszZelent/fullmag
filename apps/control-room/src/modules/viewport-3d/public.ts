@@ -1,0 +1,10 @@
+/**
+ * Public viewport integration surface for kernel and sibling modules.
+ * Internal render/runtime modules remain private to viewport-3d.
+ */
+
+export {
+  acquireViewport3DWorkerRuntime,
+  getViewport3DWorkerRuntimeSnapshot,
+} from "./viewport3dWorkerRuntime";
+export { manifestRenderableCarriers } from "./viewport3dDomainAdapter";

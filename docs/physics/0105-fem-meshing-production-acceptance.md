@@ -95,6 +95,17 @@ or sampled as if airbox nodes belonged to magnetic objects.
 
 ## 3. Numerical interpretation
 
+### 3.0 Mirrored periodic seam acceptance
+
+When a shared-domain mesh declares FEM periodicity, acceptance requires an
+exact node-set bijection on each paired face marker. The extracted face pairs
+must preserve vertex topology, area, orientation, opposite normals, element
+domain and object-region ownership after translation. Multi-axis periodic meshes
+also require closed, order-independent edge/corner equivalence classes; a
+nearest-centroid match or a residual-only pair list is insufficient evidence.
+The v6 certificate must be bound to the current topology and region/material
+realization identities before solver assembly.
+
 ### 3.1 FDM
 
 No FDM discretization behavior is introduced by this acceptance note. FDM uses
@@ -147,6 +158,16 @@ FEM production meshing must satisfy these contracts:
    - Gmsh SICN is reported as SICN only when computed as SICN,
    - swept or topology-proxy quality metrics are labeled as proxy metrics,
    - per-domain quality and histograms use final shared-domain markers.
+
+6. **Adaptive criterion truthfulness**
+   - FEM relaxation adaptivity may use only an explicitly named estimator:
+     `energy_delta`, `max_torque_delta`, or `solution_change`.
+   - `eigenfrequency_delta` is unsupported until a real eigenfrequency
+     observable and estimator are available for the active stage. It must fail
+     closed; an energy change is not an eigenfrequency estimate.
+   - Every accepted adaptive pass records the requested criterion and the
+     resolved estimator in runtime provenance. A topology-changing pass also
+     requires the state-transfer and mesh-certificate gates described above.
 
 ### 3.3 Hybrid
 

@@ -1,0 +1,33 @@
+{
+  "measurements": [],
+  "preCanvasErrorBoundaryProof": {
+    "canvasCount": 0,
+    "componentStackBytes": 6083,
+    "errorStackBytes": 988,
+    "message": "Maximum update depth exceeded (viewport audit injection)",
+    "retryVisible": true
+  },
+  "semanticTargetExplorerProof": {
+    "boundaryFacesExplorerNodeId": "model:boundary-faces",
+    "boundaryFacesFields": {
+      "Explorer address": "model:boundary-faces",
+      "Semantic role": "outer_boundary",
+      "Realized carriers": "1",
+      "Boundary faces": "4",
+      "Manifest state": "ready",
+      "Scope": "Universe boundary; not an Airbox or unassigned mesh target"
+    },
+    "boundaryFacesInspectorVisible": true,
+    "outerBoundaryUnassignedNodeCount": 0,
+    "selectedNodeIds": [
+      "model:airbox",
+      "model:mesh:unassigned:semantic-orphan",
+      "model:object:semantic-magnet"
+    ],
+    "webgl": {
+      "drawingBufferHeight": 483,
+      "drawingBufferWidth": 731,
+      "isContextLost": false
+    }
+  }
+}

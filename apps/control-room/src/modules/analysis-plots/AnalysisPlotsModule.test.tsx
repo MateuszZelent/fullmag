@@ -32,6 +32,7 @@ import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
+import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import {
   adjacentHysteresisPointIndex,
   buildHysteresisAdaptivePointMarkerModel,
@@ -82,6 +83,7 @@ const mockKernel = {
   },
   api: {},
   resources: {},
+  visualizationDebug: new VisualizationDebugController(),
 } as unknown as KernelApi;
 
 const table = {

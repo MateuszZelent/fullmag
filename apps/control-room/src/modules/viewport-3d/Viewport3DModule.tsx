@@ -25,7 +25,10 @@ import {
   quantityUnitForColorbar,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
-import { viewport3DOrbitDebugEnabledFromBrowserConfig } from "@/kernel/browserFullmagConfig";
+import {
+  viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig,
+  viewport3DOrbitDebugEnabledFromBrowserConfig,
+} from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
 import {
@@ -33,6 +36,11 @@ import {
   useSelectionActions,
   useSelectionSelector,
 } from "@/kernel/selection/useSelection";
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+import {
+  resolveSemanticTargetForMeshPart,
+  type SemanticRenderTargetCatalog,
+} from "@/kernel/selection/semanticRenderTargetCatalog";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import type { ModuleProps } from "@/kernel/types";
 import {
@@ -67,6 +75,13 @@ import {
   type Viewport3DFieldDataIssue,
 } from "./hooks/useViewport3DSceneModel";
 import {
+  createViewport3DVisualizationDebugCandidateBuilder,
+  useViewport3DVisualizationDebugPublisher,
+  type Viewport3DVisualizationDebugFrameCommit,
+  type Viewport3DVisualizationDebugSource,
+} from "./hooks/useViewport3DVisualizationDebugPublisher";
+import { createViewport3DRenderAdoptionRegistry } from "./model/viewport3DRenderAdoptionRegistry";
+import {
   resolveViewport3DCameraFit,
   normalizeViewport3DOrbitDebugAngles,
   shouldApplyViewport3DOrbitDebugAngles,
@@ -82,9 +97,8 @@ import type { RegionOverlayMode } from "./regionOverlayMode";
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
 import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog";
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
-import {
-  type Viewport3DPartSelection,
-} from "./viewport3dDomainAdapter";
+import { Viewport3DErrorBoundary } from "./Viewport3DErrorBoundary";
+import { type Viewport3DPartSelection } from "./viewport3dDomainAdapter";
 import type {
   HysteresisReplayGlyphModel,
   HysteresisStepViewportTarget,
@@ -104,7 +118,9 @@ import {
   useViewport3DResourceCounts,
   useViewport3DResourceTracker,
 } from "./viewport3dDiagnostics";
+import { useViewport3DWorkerRuntime } from "./viewport3dWorkerRuntime";
 import { createViewport3DEventManager } from "./viewport3dEventManager";
+import { retainViewport3DMeshSizeHighlight } from "./viewport3dMeshSizeHighlight";
 import {
   formatViewport3DInspectComponents,
   type Viewport3DInspectSample,
@@ -115,6 +131,8 @@ import {
 } from "./viewport3dPrimitiveModel";
 import { toCameraTuple } from "./viewport3dCameraModel";
 import {
+  viewportSelectionForMeshPart,
+  viewportSelectionForDomain,
   viewportSelectionForObject,
   viewportSelectionForRegion,
 } from "./viewport3dSelection";
@@ -151,6 +169,27 @@ type Viewport3DCanvasCreatedState = Parameters<
   NonNullable<ComponentProps<typeof Viewport3DCanvas>["onCreated"]>
 >[0];
 
+export function buildViewport3DVisualizationDebugFrameCommit({
+  contextLost,
+  drawingBuffer,
+  nowMs = Date.now,
+  revision,
+  slotId,
+}: {
+  contextLost: boolean | null;
+  drawingBuffer: readonly [number, number] | null;
+  nowMs?: () => number;
+  revision: number;
+  slotId: string;
+}): Viewport3DVisualizationDebugFrameCommit {
+  return {
+    commitId: `${slotId}:${revision}`,
+    committedAtMs: nowMs(),
+    contextLost,
+    drawingBuffer,
+  };
+}
+
 const VIEWPORT_3D_CANVAS_GL_NO_ANTIALIAS = {
   alpha: false,
   antialias: false,
@@ -171,6 +210,73 @@ const VIEWPORT_3D_CANVAS_GL_CAPTURE = {
   powerPreference: "high-performance" as const,
   preserveDrawingBuffer: true,
 };
+
+interface Viewport3DPointerHoldEventTarget {
+  addEventListener(
+    type: "pointerup" | "pointercancel",
+    listener: EventListener,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  removeEventListener(
+    type: "pointerup" | "pointercancel",
+    listener: EventListener,
+    options?: boolean | EventListenerOptions,
+  ): void;
+}
+
+export interface Viewport3DPointerHoldLifecycle {
+  begin(pointerId: number): void;
+  dispose(): void;
+  end(pointerId: number): void;
+}
+
+export function createViewport3DPointerHoldLifecycle({
+  onBegin,
+  onEnd,
+  target,
+}: {
+  onBegin: () => void;
+  onEnd: () => void;
+  target: Viewport3DPointerHoldEventTarget;
+}): Viewport3DPointerHoldLifecycle {
+  const activePointerIds = new Set<number>();
+  let terminalListenersInstalled = false;
+  const removeTerminalListeners = () => {
+    if (!terminalListenersInstalled) return;
+    terminalListenersInstalled = false;
+    target.removeEventListener("pointerup", handleTerminalEvent, true);
+    target.removeEventListener("pointercancel", handleTerminalEvent, true);
+  };
+  const end = (pointerId: number) => {
+    if (!activePointerIds.delete(pointerId) || activePointerIds.size > 0) return;
+    removeTerminalListeners();
+    onEnd();
+  };
+  const handleTerminalEvent: EventListener = (event) => {
+    const pointerId = (event as PointerEvent).pointerId;
+    if (Number.isInteger(pointerId)) end(pointerId);
+  };
+
+  return {
+    begin(pointerId) {
+      if (activePointerIds.has(pointerId)) return;
+      const wasEmpty = activePointerIds.size === 0;
+      activePointerIds.add(pointerId);
+      if (!wasEmpty) return;
+      onBegin();
+      target.addEventListener("pointerup", handleTerminalEvent, true);
+      target.addEventListener("pointercancel", handleTerminalEvent, true);
+      terminalListenersInstalled = true;
+    },
+    dispose() {
+      if (activePointerIds.size === 0) return;
+      activePointerIds.clear();
+      removeTerminalListeners();
+      onEnd();
+    },
+    end,
+  };
+}
 
 installViewport3DThreeConsolePolicy();
 
@@ -549,7 +655,7 @@ export function buildViewport3DColorbarTargetPlans({
 function isViewport3DColorbarTargetPartEligible(
   part: Viewport3DColorbarTargetPart,
 ): boolean {
-  return part.role !== "air" && part.role !== "interface";
+  return !isVisualizationAirboxIdentity(part) && part.role !== "interface";
 }
 
 export function resolveViewport3DColorbarLegendsFromPlans({
@@ -921,7 +1027,9 @@ function useMeshSizeHistogramHighlight(
   useEffect(
     () =>
       bus.on("viewport:mesh-size-bin-hovered", (event) => {
-        setHighlight(event.highlight);
+        setHighlight((current) =>
+          retainViewport3DMeshSizeHighlight(current, event.highlight),
+        );
       }),
     [bus],
   );
@@ -968,6 +1076,7 @@ interface Viewport3DFrameProps
   topologyRevision: number | string | null;
   visualizationEffectiveRenderMode: string;
   visualizationError: string | null;
+  visualizationDebugSource: Viewport3DVisualizationDebugSource;
 }
 
 export default function Viewport3DModule({
@@ -981,6 +1090,12 @@ export default function Viewport3DModule({
   });
   const { select, clear } = useSelectionActions(moduleId);
   const tracker = useViewport3DResourceTracker();
+  const reportWorkerRuntimeCounts = useCallback(
+    (counts: Parameters<typeof tracker.setWorkerRuntimeCounts>[0]) =>
+      tracker.setWorkerRuntimeCounts(counts),
+    [tracker],
+  );
+  useViewport3DWorkerRuntime(reportWorkerRuntimeCounts);
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
@@ -1002,6 +1117,7 @@ export default function Viewport3DModule({
   const { onSelectDomain, onSelectObject, onSelectPart, onSelectRegion } =
     useViewport3DSelectionHandlers({
       domainId,
+      semanticTargetCatalog: sceneModel.semanticTargetCatalog,
       select,
   });
   const patchCameraState = useCallback(
@@ -1066,8 +1182,12 @@ export default function Viewport3DModule({
   }, [kernel.cameraRegistry]);
 
   return (
-    <WorkspaceRenderProfiler id="Viewport3DModule">
-      <Viewport3DFrame
+    <Viewport3DErrorBoundary diagnosticRecorder={kernel.diagnosticRecorder}>
+      {viewport3DAuditRenderErrorInjectionEnabledFromBrowserConfig() ? (
+        <Viewport3DAuditRenderErrorInjection />
+      ) : (
+        <WorkspaceRenderProfiler id="Viewport3DModule">
+        <Viewport3DFrame
       {...sceneModel}
       clientReady={clientReady}
       colors={colors}
@@ -1100,44 +1220,45 @@ export default function Viewport3DModule({
       slotId={slotId}
       tracker={tracker}
       viewCubeVisible={commandState.widgets.viewCubeVisible}
-      />
-    </WorkspaceRenderProfiler>
+        />
+        </WorkspaceRenderProfiler>
+      )}
+    </Viewport3DErrorBoundary>
   );
+}
+
+function Viewport3DAuditRenderErrorInjection(): never {
+  throw new Error("Maximum update depth exceeded (viewport audit injection)");
 }
 
 function useViewport3DSelectionHandlers({
   domainId,
+  semanticTargetCatalog,
   select,
 }: {
   domainId: string | null | undefined;
+  semanticTargetCatalog: SemanticRenderTargetCatalog;
   select: ReturnType<typeof useSelectionActions>["select"];
 }) {
   const onSelectDomain = useCallback(() => {
-    select({
-      kind: "domain",
-      label: domainId ?? "Domain",
-      nodeId: "domain",
-      objectId: domainId ?? null,
-    });
+    select(viewportSelectionForDomain(domainId));
   }, [domainId, select]);
   const onSelectPart = useCallback(
     (partSelection: Viewport3DPartSelection) => {
-      select({
-        kind: partSelection.kind,
-        label: partSelection.label,
-        nodeId: partSelection.nodeId,
-        objectId: partSelection.objectId,
-        ref: {
+      const address = resolveSemanticTargetForMeshPart(
+        semanticTargetCatalog,
+        partSelection.part,
+      );
+      if (!address) return;
+      select(
+        viewportSelectionForMeshPart(address, {
           boundaryFaceIndex: partSelection.boundaryFaceIndex,
-          kind: partSelection.kind,
-          nodeId: partSelection.nodeId,
-          objectId: partSelection.objectId,
-          type: "mesh-part",
-          visualizationTargetId: `mesh-part:${partSelection.nodeId}`,
-        },
-      });
+          carrierPartId: partSelection.carrierPartId,
+          label: partSelection.label,
+        }),
+      );
     },
-    [select],
+    [select, semanticTargetCatalog],
   );
   const onSelectObject = useCallback(
     (object: Viewport3DPrimitiveObject) => {
@@ -1181,6 +1302,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   status,
   visualizationEffectiveRenderMode,
   visualizationError,
+  visualizationDebugSource,
   ...sceneProps
 }: Viewport3DFrameProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1209,40 +1331,83 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
   const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
     useState<string | null>(null);
-  const fieldUpdatePointerHoldRef = useRef(false);
-  const releaseFieldUpdatePointerHold = useCallback(() => {
-    if (!fieldUpdatePointerHoldRef.current) return;
-    fieldUpdatePointerHoldRef.current = false;
-    endViewport3DFieldUpdateHold();
+  const fieldUpdatePointerHoldLifecycleRef =
+    useRef<Viewport3DPointerHoldLifecycle | null>(null);
+  const releaseFieldUpdatePointerHold = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    fieldUpdatePointerHoldLifecycleRef.current?.end(event.pointerId);
   }, []);
   const holdFieldUpdatesForPointerGesture = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {
       if (event.button < 0 || event.button > 2) return;
-      if (!fieldUpdatePointerHoldRef.current) {
-        fieldUpdatePointerHoldRef.current = true;
-        beginViewport3DFieldUpdateHold();
+      fieldUpdatePointerHoldLifecycleRef.current?.begin(event.pointerId);
+    },
+    [],
+  );
+  useEffect(() => {
+    const lifecycle = createViewport3DPointerHoldLifecycle({
+      onBegin: beginViewport3DFieldUpdateHold,
+      onEnd: endViewport3DFieldUpdateHold,
+      target: window,
+    });
+    fieldUpdatePointerHoldLifecycleRef.current = lifecycle;
+    return () => {
+      lifecycle.dispose();
+      if (fieldUpdatePointerHoldLifecycleRef.current === lifecycle) {
+        fieldUpdatePointerHoldLifecycleRef.current = null;
       }
-      window.addEventListener("pointerup", releaseFieldUpdatePointerHold, {
-        capture: true,
-        once: true,
-      });
-      window.addEventListener("pointercancel", releaseFieldUpdatePointerHold, {
-        capture: true,
-        once: true,
-      });
-    },
-    [releaseFieldUpdatePointerHold],
-  );
-  useEffect(
-    () => () => {
-      releaseFieldUpdatePointerHold();
-    },
-    [releaseFieldUpdatePointerHold],
-  );
+    };
+  }, []);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
   const sendVisualizationAck = useVisualizationClientAckSender({ api: kernel.api });
+  const visualizationDebugAdoptionRegistry = useMemo(
+    () => createViewport3DRenderAdoptionRegistry(),
+    [],
+  );
+  const visualizationDebugCandidateBuilder = useMemo(
+    () =>
+      createViewport3DVisualizationDebugCandidateBuilder({
+        source: visualizationDebugSource,
+        viewportId: slotId,
+      }),
+    [slotId, visualizationDebugSource],
+  );
+  const visualizationDebugTargetIds = useMemo(
+    () => visualizationDebugSource.targets.map(({ target }) => target.id),
+    [visualizationDebugSource.targets],
+  );
+  const visualizationDebugCarrierTargets = useMemo(() => {
+    const mapping = new Map<string, string[]>();
+    const appendTarget = (carrierId: string, targetId: string) => {
+      const targetIds = mapping.get(carrierId) ?? [];
+      if (!targetIds.includes(targetId)) targetIds.push(targetId);
+      mapping.set(carrierId, targetIds);
+    };
+    for (const { carrierIds, target } of visualizationDebugSource.targets) {
+      for (const carrierId of carrierIds) appendTarget(carrierId, target.id);
+    }
+    if (visualizationDebugSource.fullFieldVector) {
+      for (const { carrierIds, target } of visualizationDebugSource.targets) {
+        if (carrierIds.length === 0 && target.kind !== "airbox") {
+          appendTarget("fdm-domain", target.id);
+        }
+      }
+    }
+    return mapping;
+  }, [visualizationDebugSource]);
+  const visualizationDebugPublisher = useViewport3DVisualizationDebugPublisher({
+    adoptionRegistry: visualizationDebugAdoptionRegistry,
+    buildCandidate: visualizationDebugCandidateBuilder,
+    carrierTargets: visualizationDebugCarrierTargets,
+    controller: kernel.visualizationDebug,
+    revision: [
+      visualizationDebugSource.visualizationRevision ?? "none",
+      sceneProps.resourceFrameKey,
+    ].join("|"),
+    targetIds: visualizationDebugTargetIds,
+    viewportId: slotId,
+  });
   const initialCameraFit = resolveViewport3DCameraFit(null);
   const canvasCamera = useMemo(
     () => ({
@@ -1387,6 +1552,18 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     [],
   );
   const onVisualizationFrameCommitted = useCallback((revision: number) => {
+    const canvas = canvasRef.current;
+    const gl = canvas?.getContext("webgl2") ?? canvas?.getContext("webgl");
+    visualizationDebugPublisher.onFrameCommitted(
+      buildViewport3DVisualizationDebugFrameCommit({
+        revision,
+        slotId,
+        contextLost: gl?.isContextLost() ?? null,
+        drawingBuffer: gl
+          ? [gl.drawingBufferWidth, gl.drawingBufferHeight]
+          : null,
+      }),
+    );
     sendVisualizationAck({
       effectiveRenderMode: visualizationEffectiveRenderMode,
       enabled: clientReady && !visualizationError,
@@ -1412,6 +1589,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     sceneProps.renderedMeshRevision,
     sendVisualizationAck,
     slotId,
+    visualizationDebugPublisher,
     visualizationEffectiveRenderMode,
     visualizationError,
   ]);
@@ -1599,6 +1777,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           <Viewport3DRendererProfile visualProfile={visualProfile} />
           <Viewport3DScene
             {...sceneProps}
+            adoptionRegistry={visualizationDebugAdoptionRegistry}
             colors={colors}
             hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
             orbitDebugAngles={orbitDebugAngles}
@@ -1840,6 +2019,8 @@ const Viewport3DFieldRefreshCountdown = memo(
     const display = resolveViewport3DRefreshCountdownDisplay({
       enabled: refresh.enabled,
       nowMs: countdown.nowMs,
+      payloadRevision: refresh.payloadRevision,
+      requestedRevision: refresh.requestedRevision,
       sample: countdown.sample,
       status: refresh.status,
     });
@@ -1883,7 +2064,9 @@ const Viewport3DFieldRefreshCountdown = memo(
         data-pulse-id={countdown.sample.pulseId}
         data-refresh-state={display.state}
         data-resource-key={refresh.resourceKey}
+        data-payload-revision={refresh.payloadRevision ?? "none"}
         data-revision={refresh.revision ?? "none"}
+        data-requested-revision={refresh.requestedRevision ?? "none"}
         style={style}
       >
         <span

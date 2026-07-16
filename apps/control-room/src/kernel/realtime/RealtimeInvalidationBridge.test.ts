@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import {
+  canonicalFieldVectorQuery,
+  serializeCanonicalFieldVectorResourceKey,
+} from "../api/fieldQueryIdentity";
+import {
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELDS_PATH,
@@ -24,10 +28,12 @@ import {
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_SEMANTICS_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
@@ -152,6 +158,9 @@ describe("RealtimeInvalidationBridge", () => {
       dependentRevision(MODEL_SCENE_PATH, 12),
     );
     expect(resources.getRevision(MODEL_MATERIAL_FIELDS_PATH)).toBe(
+      dependentRevision(MODEL_SCENE_PATH, 12),
+    );
+    expect(resources.getRevision("session:status")).toBe(
       dependentRevision(MODEL_SCENE_PATH, 12),
     );
     expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBeNull();
@@ -690,6 +699,68 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(fieldKey)).toBe(11);
   });
 
+  it("refreshes subscribed field resources when only domain generation changes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const fieldKey = `${DATA_FIELD_VECTOR_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=full`;
+
+    resources.subscribe(fieldKey, () => {});
+
+    for (const domainGenerationId of ["7", "8"]) {
+      expect(
+        bridge.handleEvent({
+          payload: {
+            changes: [
+              {
+                domain_generation_id: domainGenerationId,
+                resource: "fields",
+                resource_id: "samples",
+                revision: 11,
+              },
+            ],
+          },
+          type: "resource.batch_changed",
+        }),
+      ).toBe(true);
+    }
+
+    expect(resources.getRevision(fieldKey)).toBe("generation:8:revision:11");
+  });
+
+  it("treats unsafe numeric domain generation IDs as unknown", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const fieldKey = `${DATA_FIELD_VECTOR_PATH.replace(
+      "{quantity_id}",
+      "m",
+    )}?component=full`;
+
+    resources.subscribe(fieldKey, () => {});
+
+    expect(
+      bridge.handleEvent({
+        payload: {
+          changes: [
+            {
+              domain_generation_id: Number.MAX_SAFE_INTEGER + 2,
+              resource: "fields",
+              resource_id: "samples",
+              revision: 11,
+            },
+          ],
+        },
+        type: "resource.batch_changed",
+      }),
+    ).toBe(true);
+
+    expect(resources.getRevision(fieldKey)).toBe(11);
+  });
+
   it("maps quantity-scoped field sample invalidations only to matching field resources", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
@@ -731,6 +802,147 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(mCollectionKey)).toBe(12);
     expect(resources.getRevision(hEffFieldKey)).toBeNull();
     expect(resources.getRevision(hEffCollectionKey)).toBeNull();
+    expect(bridge.getFieldInvalidationTelemetry()).toEqual({
+      broadInvalidations: 1,
+      exactInvalidations: 0,
+      invalidatedResourceKeys: 2,
+    });
+  });
+
+  it("counts every subscribed field resource for broad sample invalidation", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const keys = [
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "m")}?component=full`,
+      `${DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff")}?component=x`,
+      `${DATA_FIELDS_PATH}#viewport-3d:field-collection`,
+    ];
+    for (const key of keys) resources.subscribe(key, () => {});
+
+    bridge.handleEvent({
+      payload: {
+        changes: [
+          { resource: "fields", resource_id: "samples", revision: 13 },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(bridge.getFieldInvalidationTelemetry()).toEqual({
+      broadInvalidations: 1,
+      exactInvalidations: 0,
+      invalidatedResourceKeys: keys.length,
+    });
+  });
+
+  it("uses an exact recommended field fetch before the quantity fallback", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const exactKey = serializeCanonicalFieldVectorResourceKey(
+      canonicalFieldVectorQuery("H_eff", {
+        component: "x",
+        max_samples: 1200,
+        phase_rad: 1.5,
+        scope_id: "film",
+        scope_kind: "object",
+        snapshot_id: "snapshot-1",
+        stage_id: "stage-1",
+        view: "phase_rotated_real",
+      }),
+    );
+    const otherObjectKey = serializeCanonicalFieldVectorResourceKey(
+      canonicalFieldVectorQuery("H_eff", {
+        component: "x",
+        scope_id: "bar",
+        scope_kind: "object",
+      }),
+    );
+    const otherComponentKey = serializeCanonicalFieldVectorResourceKey(
+      canonicalFieldVectorQuery("H_eff", {
+        component: "y",
+        scope_id: "film",
+        scope_kind: "object",
+      }),
+    );
+    const exactCollectionKey = `${DATA_FIELDS_PATH}#viewport-3d:quantity-field-vectors:${exactKey}`;
+    const aggregateCollectionKey = `${DATA_FIELDS_PATH}#viewport-3d:quantity-field-vectors:${otherObjectKey}|${exactKey}|${otherComponentKey}`;
+
+    resources.subscribe(exactKey, () => {});
+    resources.subscribe(otherObjectKey, () => {});
+    resources.subscribe(otherComponentKey, () => {});
+    resources.subscribe(exactCollectionKey, () => {});
+    resources.subscribe(aggregateCollectionKey, () => {});
+
+    bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            quantity_ids: ["H_eff"],
+            recommended_fetch: serializeCanonicalFieldVectorResourceKey(
+              canonicalFieldVectorQuery("H_eff", {
+                component: "x",
+                max_samples: 1200,
+                phase_rad: 1.5,
+                scope_id: "object:film",
+                scope_kind: "object",
+                snapshot_id: "snapshot-1",
+                stage_id: "stage-1",
+                view: "phase_rotated_real",
+              }),
+            ),
+            resource: "fields",
+            resource_id: "samples",
+            revision: 14,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(resources.getRevision(exactKey)).toBe(14);
+    expect(resources.getRevision(exactCollectionKey)).toBe(14);
+    expect(resources.getRevision(aggregateCollectionKey)).toBe(14);
+    expect(resources.getRevision(otherObjectKey)).toBeNull();
+    expect(resources.getRevision(otherComponentKey)).toBeNull();
+    expect(bridge.getFieldInvalidationTelemetry()).toEqual({
+      broadInvalidations: 0,
+      exactInvalidations: 1,
+      invalidatedResourceKeys: 3,
+    });
+  });
+
+  it("keeps topological-charge dependents current for exact magnetization events", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const topologicalChargeKey = ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace(
+      "{object_id}",
+      "film",
+    );
+    resources.subscribe(topologicalChargeKey, () => {});
+
+    bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: serializeCanonicalFieldVectorResourceKey(
+              canonicalFieldVectorQuery("m", {
+                component: "full",
+                scope_kind: "full",
+              }),
+            ),
+            resource: "fields",
+            resource_id: "samples",
+            revision: 15,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(resources.getRevision(topologicalChargeKey)).toBe(15);
   });
 
   it("refreshes component field metadata when matching quantity samples change", () => {
@@ -902,7 +1114,11 @@ describe("RealtimeInvalidationBridge", () => {
       "mesh-build-9",
     );
     expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe("mesh-build-9");
+    expect(resources.getRevision(MESHING_SEMANTICS_PATH)).toBe("mesh-build-9");
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(
+      "mesh-build-9",
+    );
+    expect(resources.getRevision(MESHING_PERIODIC_PAIRS_PATH)).toBe(
       "mesh-build-9",
     );
     expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_PATH)).toBe(

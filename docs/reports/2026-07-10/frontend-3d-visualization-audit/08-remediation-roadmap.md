@@ -1,5 +1,36 @@
 # 08. Skonsolidowana mapa napraw
 
+## Aktualizacja reaudytu 2026-07-14
+
+Pierwotne fazy poniżej opisują historyczny program F3D-001–F3D-028. Według
+bieżącej macierzy 26 z tych findings jest zamkniętych w pierwotnym zakresie, a
+F3D-003 i F3D-013 są częściowe. Aktualny program naprawczy obejmuje również
+F3D-029–F3D-032 i ma trzy równoległe tory:
+
+| Tor | Kolejność | Findings | Warunek wyjścia |
+|---|---:|---|---|
+| P0 — identity/correctness | 1 | F3D-032, F3D-003 | jeden katalog semantic target → Explorer node → carriers; wszystkie generation IDs bez utraty `u64` |
+| P0 — renderer/runtime | 2 | F3D-030, F3D-029 | brak pętli React; surface i vectors publikowane niezależnie i w budżecie na reprezentatywnym FEM |
+| P1 — sync/evidence | 3 | F3D-013, F3D-031 | terminalny 4xx bez retry loop; zgodny scenariusz CoFeB i pełny artifact również pre-canvas |
+
+Zależności:
+
+1. Najpierw recorder musi zbierać console/pageerror przed mountem, aby naprawy
+   F3D-030 nie odbywały się bez śladu.
+2. F3D-032 musi ustalić kanoniczne targety i carriery przed optymalizacją
+   F3D-029; inaczej można przyspieszyć podwójny lub błędnie przypisany pass.
+3. F3D-029 wymaga rozdzielenia publikacji surface od vector work i nie może być
+   „naprawione” obniżeniem jakości, ukryciem warstwy ani zmniejszeniem domyślnej
+   gęstości.
+4. Reprezentatywny gate F3D-031 jest końcowym dowodem, ale jego świeży przebieg
+   wymaga najpierw usunięcia niezależnej blokady materializacji mesha CoFeB.
+5. Niezacommitowane poprawki Airbox registry pozostają implementacją w toku:
+   lokalne testy przechodzą, lecz selection nadal może zapisać ID carriera
+   zamiast istniejącego węzła Explorera.
+
+Poniższe fazy zachowano jako historię i szczegółową mapę właścicieli. Nie należy
+interpretować ich list „Findings zamykane” jako bieżącego statusu.
+
 ## Zasada kolejności
 
 Nie należy zaczynać od kosmetyki Inspektora ani od obniżania jakości renderu.
@@ -215,6 +246,8 @@ minimalny kontrakt i testy, później ewentualne rozdzielenie mixed responsibili
 | Current -> scene edit -> rebuilt | brak pola na stale, ghost widoczny, nowe pole dopiero po exact identity |
 | Domain generation switch | zero klatek starego koloru/glyphów |
 | Object/part projection | trzy tryby różne, target id zgodny w UI/PATCH/renderer |
+| Viewport pick -> Explorer | każdy semantyczny target ma istniejący węzeł; click przełącza kartę, rozwija, przewija i podświetla dokładnie ten węzeł |
+| Airbox canonical identity | `part:__air__` jest tylko carrierem; zero `object:__air__`/part override'ów i jeden zestaw passów |
 | Region authoring | region hidden domyślnie, owner field bez zmian, explicit region HSL tylko na carrierze |
 | Airbox reload/reset | wszystkie style round-tripują, reset usuwa override |
 | Hidden target | pass controls disabled, configured values zachowane |
@@ -223,6 +256,7 @@ minimalny kontrakt i testy, później ewentualne rozdzielenie mixed responsibili
 | 3D <-> 2D stress | workery/listenery/WebGL/cache wracają do plateau |
 | Upload exception | kolejny target nadal staje się visible |
 | Realtime field update | quantity fallback odświeża pełny właściwy zakres; exact scope tylko jeśli schema zostanie rozszerzone |
+| CoFeB >= 800k tetra | osobne asercje surface/shader/vector/points/wireframe dla airboxa i wszystkich magnetyków; brak long task > 200 ms |
 
 ## Definicja końca programu naprawczego
 

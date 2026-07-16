@@ -32,6 +32,7 @@ __global__ void total_energy_scalar_kernel(
     const double *scalars,
     bool demag_enabled,
     bool external_enabled,
+    bool drive_enabled,
     bool uniaxial_enabled,
     bool cubic_enabled,
     bool interfacial_dmi_enabled,
@@ -47,6 +48,7 @@ __global__ void total_energy_scalar_kernel(
         scalars[static_cast<int>(GpuFinalScalarSlot::ExchangeEnergy)] +
         demag_energy +
         (external_enabled ? scalars[static_cast<int>(GpuFinalScalarSlot::ExternalEnergy)] : 0.0) +
+        (drive_enabled ? scalars[static_cast<int>(GpuFinalScalarSlot::DriveEnergy)] : 0.0) +
         (uniaxial_enabled ? scalars[static_cast<int>(GpuFinalScalarSlot::AnisotropyEnergy)] : 0.0) +
         (cubic_enabled ? scalars[static_cast<int>(GpuFinalScalarSlot::CubicAnisotropyEnergy)] : 0.0) +
         (interfacial_dmi_enabled ? scalars[static_cast<int>(GpuFinalScalarSlot::DmiEnergy)] : 0.0) +
@@ -73,6 +75,7 @@ bool gpu_rk_reduce_total_energy_scalar(
         gpu.reductions.scalar_result,
         ctx.demag.enabled,
         ctx.zeeman.has_external_field,
+        !ctx.zeeman.regional_drives.empty(),
         ctx.anisotropy.uniaxial_enabled,
         ctx.anisotropy.cubic_enabled,
         ctx.dmi.interfacial_enabled,

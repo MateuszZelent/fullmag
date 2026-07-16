@@ -21,6 +21,7 @@ import {
   OperationStatusesSection,
   ThinFilmDiagnosticsSection,
 } from "./mesh-details/MeshRealizedSizeFieldsSection";
+import { MeshEditorCapabilitiesSection } from "./mesh-details/MeshEditorCapabilitiesSection";
 import { MeshViewportDeliverySection } from "./mesh-details/MeshViewportDeliverySection";
 import { useMeshDetailsModel } from "./mesh-details/useMeshDetailsModel";
 
@@ -33,8 +34,10 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
         "pipeline",
         "policy-comparison",
         "viewport-delivery",
+        "editor-capabilities",
         "json-capabilities",
         "json-semantics",
+        "json-mesh-build-report",
       ];
     case "mesh.shared-domain":
       return [
@@ -42,8 +45,10 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
         "identity",
         "counts",
         "viewport-delivery",
+        "editor-capabilities",
         "json-universe-report",
         "json-shared-report",
+        "json-mesh-build-report",
       ];
     case "mesh.builds":
       return [
@@ -52,6 +57,7 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
         "build-history",
         "operation-statuses",
         "thin-film",
+        "editor-capabilities",
         "json-last-build",
       ];
     case "mesh.quality":
@@ -88,8 +94,10 @@ function meshDetailsInspectorSections(selectionKind: string | null): string[] {
         "viewport-delivery",
         "operation-statuses",
         "thin-film",
+        "editor-capabilities",
         "json-capabilities",
         "json-semantics",
+        "json-mesh-build-report",
         "json-universe-report",
         "json-universe-quality",
         "json-shared-report",
@@ -185,6 +193,9 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
           meshRevision={model.meshRevision}
         />
       ) : null}
+      {showSection("editor-capabilities") ? (
+        <MeshEditorCapabilitiesSection model={model.editorCapabilities} />
+      ) : null}
       {showSection("operation-statuses") ? (
         <OperationStatusesSection operationStatuses={model.operationStatuses} />
       ) : null}
@@ -207,6 +218,13 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
           sectionValue="json-semantics"
           title="Mesh Semantics JSON"
           value={model.semanticsData}
+        />
+      ) : null}
+      {showSection("json-mesh-build-report") ? (
+        <JsonResourceSection
+          sectionValue="json-mesh-build-report"
+          title="Mesh Build Report JSON"
+          value={model.meshBuildReport}
         />
       ) : null}
       {showSection("json-universe-report") ? (

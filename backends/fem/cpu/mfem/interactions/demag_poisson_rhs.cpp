@@ -8,6 +8,7 @@
 #include "cpu/mfem/interactions/demag_poisson_rhs.hpp"
 
 #include "context.hpp"
+#include "core/fem_material_runtime.hpp"
 #include "fem_common.hpp"
 
 #include <cstddef>
@@ -88,7 +89,18 @@ public:
         }
 
         double Ms = ctx_.material_fields.material.saturation_magnetisation;
-        if (!ctx_.material_fields.Ms_field.empty()) {
+        const auto *runtime = ctx_.material_fields.runtime
+            ? &*ctx_.material_fields.runtime
+            : nullptr;
+        if (runtime != nullptr && runtime->has_elementwise_ms()) {
+            if (elem_no < 0 || static_cast<size_t>(elem_no) >= ctx_.mesh.n_elements ||
+                (!ctx_.mesh.magnetic_element_mask.empty() &&
+                 ctx_.mesh.magnetic_element_mask[static_cast<size_t>(elem_no)] == 0u)) {
+                V = 0.0;
+                return;
+            }
+            Ms = runtime->realization().ms_a_per_m(static_cast<size_t>(elem_no));
+        } else if (!ctx_.material_fields.Ms_field.empty()) {
             Ms = 0.0;
             for (int i = 0; i < ndof; ++i) {
                 const int global_dof = dofs[i] >= 0 ? dofs[i] : -1 - dofs[i];

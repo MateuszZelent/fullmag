@@ -6,12 +6,14 @@ use crate::{
     FdmDemagPeriodicityIR, FdmMultilayerPlanIR, FdmPeriodicityIR, FemDomainMeshAssetIR,
     FemLinearSolverPolicy, FemSharedDomainBuildReportIR, FieldRefreshPolicyIR,
     FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR, IntegratorChoice,
-    KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
+    GeometryEntryIR, KSamplingIR, MagnetostrictionLawIR, MaterialFieldLocationIR, MaterialIR,
     MaterialParameterNameIR, MechanicalBoundaryConditionIR, MechanicalLoadIR, MeshIR,
     ModeTrackingIR, OerstedRealization, OutputIR, RelaxStopIR, RelaxationAlgorithmIR, SeedPolicy,
-    SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
+    RegionalFieldDriveIR, SpinWaveBoundaryConditionIR, ThermalSeedConfig, TimeDependenceIR,
+    ResolvedPeriodicImagesIR,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExecutionPlanSummary {
@@ -54,6 +56,330 @@ pub struct GridDimensions {
     pub cells: [u32; 3],
 }
 
+/// Immutable description of one resolved FDM grid realization.
+///
+/// The certificate records resolved geometry-to-grid facts.  It is deliberately
+/// separate from the requested discretization hints and from any PBC policy;
+/// PBC, when present, is part of the identity of this same grid.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmGridCertificateIR {
+    /// Lower world-space corner of the grid [m].
+    pub origin_m: [f64; 3],
+    /// Number of cells in each axis.
+    pub counts: [u32; 3],
+    /// Cell edge lengths [m].
+    pub cell_m: [f64; 3],
+    /// Realized extent `L_i = N_i d_i` [m].
+    pub extent_m: [f64; 3],
+    /// Number of active magnetic cells in the realized mask.
+    pub active_cells: u64,
+    /// Planner memory estimate [bytes].
+    pub estimated_bytes: u64,
+    /// SHA-256 of the canonical resolved grid payload, lowercase hex.
+    pub grid_fingerprint: String,
+    /// Deterministic legend for numeric region IDs in `FdmPlanIR.region_mask`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub region_legend: Vec<FdmRegionLegendEntryIR>,
+    /// SHA-256 of the canonical region legend, when a realized region mask exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_legend_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FdmRegionLegendEntryIR {
+    pub numeric_id: u32,
+    pub object_id: String,
+    pub region_id: String,
+    pub priority: i32,
+}
+
+impl FdmGridCertificateIR {
+    /// Build and validate a certificate from resolved planner facts.
+    pub fn new(
+        origin_m: [f64; 3],
+        counts: [u32; 3],
+        cell_m: [f64; 3],
+        active_cells: u64,
+        estimated_bytes: u64,
+    ) -> Result<Self, String> {
+        Self::new_with_masks(origin_m, counts, cell_m, active_cells, estimated_bytes, None, &[])
+    }
+
+    /// Build a certificate including the resolved active/region topology.
+    pub fn new_with_masks(
+        origin_m: [f64; 3],
+        counts: [u32; 3],
+        cell_m: [f64; 3],
+        active_cells: u64,
+        estimated_bytes: u64,
+        active_mask: Option<&[bool]>,
+        region_mask: &[u32],
+    ) -> Result<Self, String> {
+        crate::validate_fdm_region_lut_indices(region_mask, &[])?;
+        Self::new_with_payload(
+            origin_m,
+            counts,
+            cell_m,
+            active_cells,
+            estimated_bytes,
+            active_mask,
+            region_mask,
+        )
+    }
+
+    /// Build a certificate fingerprinting multilayer topology tokens rather than
+    /// the bounded native FDM region LUT payload.
+    pub fn new_with_topology_tokens(
+        origin_m: [f64; 3],
+        counts: [u32; 3],
+        cell_m: [f64; 3],
+        active_cells: u64,
+        estimated_bytes: u64,
+        active_mask: Option<&[bool]>,
+        topology_tokens: &[u32],
+    ) -> Result<Self, String> {
+        Self::new_with_payload(
+            origin_m,
+            counts,
+            cell_m,
+            active_cells,
+            estimated_bytes,
+            active_mask,
+            topology_tokens,
+        )
+    }
+
+    fn new_with_payload(
+        origin_m: [f64; 3],
+        counts: [u32; 3],
+        cell_m: [f64; 3],
+        active_cells: u64,
+        estimated_bytes: u64,
+        active_mask: Option<&[bool]>,
+        payload: &[u32],
+    ) -> Result<Self, String> {
+        let extent_m: [f64; 3] =
+            std::array::from_fn(|axis| counts[axis] as f64 * cell_m[axis]);
+        let grid_fingerprint = Self::fingerprint_for(
+            origin_m,
+            counts,
+            cell_m,
+            extent_m,
+            active_mask.unwrap_or(&[]),
+            payload,
+        )?;
+        let certificate = Self {
+            origin_m,
+            counts,
+            cell_m,
+            extent_m,
+            active_cells,
+            estimated_bytes,
+            grid_fingerprint,
+            region_legend: Vec::new(),
+            region_legend_fingerprint: None,
+        };
+        certificate.validate()?;
+        Ok(certificate)
+    }
+
+    /// Attach a canonical realized-region legend without changing the grid
+    /// topology fingerprint. The legend has its own identity so membership
+    /// edits cannot be mistaken for a geometry-only cache hit.
+    pub fn with_region_legend(mut self, legend: Vec<FdmRegionLegendEntryIR>) -> Self {
+        let payload = serde_json::to_vec(&legend).unwrap_or_default();
+        self.region_legend_fingerprint = Some(format!("sha256:{:x}", Sha256::digest(payload)));
+        self.region_legend = legend;
+        self
+    }
+
+    /// Validate intrinsic consistency before a runner consumes the certificate.
+    pub fn validate(&self) -> Result<(), String> {
+        if self
+            .origin_m
+            .iter()
+            .chain(self.cell_m.iter())
+            .chain(self.extent_m.iter())
+            .any(|value| !value.is_finite())
+        {
+            return Err("FDM grid certificate contains a non-finite coordinate".to_string());
+        }
+        if self.counts.iter().any(|count| *count == 0) {
+            return Err(format!(
+                "FDM grid certificate counts must be positive, got {:?}",
+                self.counts
+            ));
+        }
+        if self.cell_m.iter().any(|cell| *cell <= 0.0) {
+            return Err(format!(
+                "FDM grid certificate cell sizes must be positive, got {:?}",
+                self.cell_m
+            ));
+        }
+        let total_cells = (self.counts[0] as u64)
+            .checked_mul(self.counts[1] as u64)
+            .and_then(|value| value.checked_mul(self.counts[2] as u64))
+            .ok_or_else(|| "FDM grid certificate cell count overflows u64".to_string())?;
+        if self.active_cells > total_cells {
+            return Err(format!(
+                "FDM grid certificate active_cells={} exceeds total_cells={total_cells}",
+                self.active_cells
+            ));
+        }
+        if self.estimated_bytes == 0 {
+            return Err("FDM grid certificate estimated_bytes must be positive".to_string());
+        }
+        for axis in 0..3 {
+            let expected = self.counts[axis] as f64 * self.cell_m[axis];
+            let tolerance = 1.0e-12 * expected.abs().max(1.0e-30);
+            if (self.extent_m[axis] - expected).abs() > tolerance {
+                return Err(format!(
+                    "FDM grid certificate extent_m[{axis}]={} disagrees with N*d={expected}",
+                    self.extent_m[axis]
+                ));
+            }
+        }
+        if self.grid_fingerprint.len() != 64
+            || !self
+                .grid_fingerprint
+                .chars()
+                .all(|character| character.is_ascii_digit() || ('a'..='f').contains(&character))
+        {
+            return Err(format!(
+                "FDM grid certificate fingerprint must be 64 lowercase hexadecimal characters, got {}",
+                self.grid_fingerprint
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate the certificate against the exact resolved topology payload.
+    pub fn validate_against_masks(
+        &self,
+        active_mask: Option<&[bool]>,
+        region_mask: &[u32],
+    ) -> Result<(), String> {
+        crate::validate_fdm_region_lut_indices(region_mask, &[])?;
+        self.validate_region_legend(region_mask)?;
+        self.validate_against_payload(active_mask, region_mask)
+    }
+
+    /// Ensure realized numeric region IDs can be decoded without relying on
+    /// planner-local ordering or an implicit fallback.  ID zero is reserved
+    /// for the unassigned/background cell state; authored regions are
+    /// represented by contiguous IDs starting at one.
+    pub fn validate_region_legend(&self, region_mask: &[u32]) -> Result<(), String> {
+        let max_id = region_mask.iter().copied().max().unwrap_or(0);
+        if max_id == 0 && self.region_legend.is_empty() {
+            return Ok(());
+        }
+        if self.region_legend.is_empty() {
+            return Err(
+                "FDM region mask contains authored numeric IDs but region legend is missing"
+                    .to_string(),
+            );
+        }
+        for (index, entry) in self.region_legend.iter().enumerate() {
+            let expected_id = u32::try_from(index + 1)
+                .map_err(|_| "FDM region legend exceeds u32 numeric ID space".to_string())?;
+            if entry.numeric_id != expected_id {
+                return Err(format!(
+                    "FDM region legend numeric IDs must be contiguous starting at 1, expected {}, got {}",
+                    expected_id, entry.numeric_id
+                ));
+            }
+            if entry.object_id.is_empty() || entry.region_id.is_empty() {
+                return Err(format!(
+                    "FDM region legend entry {} must include object_id and region_id",
+                    entry.numeric_id
+                ));
+            }
+            if self.region_legend[..index]
+                .iter()
+                .any(|previous| previous.object_id == entry.object_id && previous.region_id == entry.region_id)
+            {
+                return Err(format!(
+                    "FDM region legend contains duplicate authored region {}:{}",
+                    entry.object_id, entry.region_id
+                ));
+            }
+        }
+        if max_id > self.region_legend.len() as u32 {
+            return Err(format!(
+                "FDM region mask numeric ID {} has no legend entry (legend_len={})",
+                max_id,
+                self.region_legend.len()
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate a certificate against multilayer topology tokens.
+    pub fn validate_against_topology_tokens(
+        &self,
+        active_mask: Option<&[bool]>,
+        topology_tokens: &[u32],
+    ) -> Result<(), String> {
+        self.validate_against_payload(active_mask, topology_tokens)
+    }
+
+    fn validate_against_payload(
+        &self,
+        active_mask: Option<&[bool]>,
+        payload: &[u32],
+    ) -> Result<(), String> {
+        self.validate()?;
+        let expected_fingerprint = Self::fingerprint_for(
+            self.origin_m,
+            self.counts,
+            self.cell_m,
+            self.extent_m,
+            active_mask.unwrap_or(&[]),
+            payload,
+        )?;
+        if self.grid_fingerprint != expected_fingerprint {
+            return Err(format!(
+                "FDM grid certificate fingerprint mismatch: expected {expected_fingerprint}, got {}",
+                self.grid_fingerprint
+            ));
+        }
+        if let Some(mask) = active_mask {
+            let active_cells = mask.iter().filter(|active| **active).count() as u64;
+            if self.active_cells != active_cells {
+                return Err(format!(
+                    "FDM grid certificate active count mismatch: certificate={} resolved={active_cells}",
+                    self.active_cells
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn fingerprint_for(
+        origin_m: [f64; 3],
+        counts: [u32; 3],
+        cell_m: [f64; 3],
+        extent_m: [f64; 3],
+        active_mask: &[bool],
+        region_mask: &[u32],
+    ) -> Result<String, String> {
+        let payload = serde_json::json!({
+            "origin_m": origin_m,
+            "counts": counts,
+            "cell_m": cell_m,
+            "extent_m": extent_m,
+            "active_mask": active_mask,
+            "region_mask": region_mask,
+        });
+        let encoded = serde_json::to_vec(&payload)
+            .map_err(|error| format!("FDM grid certificate fingerprint serialization failed: {error}"))?;
+        Ok(Sha256::digest(encoded)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedAntennaZeemanMaskIR {
     pub source: String,
@@ -69,10 +395,36 @@ pub struct ResolvedAntennaZeemanMaskIR {
     pub field_xyz: Vec<[f64; 3]>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedRegionalFieldDriveBasisIR {
+    pub drive: RegionalFieldDriveIR,
+    /// Immutable cell-wise field basis in A/m. The waveform is evaluated by
+    /// the integrator at every RK stage and never folded into this vector.
+    pub field_xyz: Vec<[f64; 3]>,
+    pub projection_signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct TimeStageContextIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_stage_id: Option<String>,
+    #[serde(default)]
+    pub start_time_s: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct FdmPlanIR {
+    /// Physical world-space origin of the resolved FDM grid (lower corner), in metres.
+    ///
+    /// The planner owns this value; runners and artifacts must consume it rather
+    /// than reconstructing an origin from the grid extent.
+    #[serde(default)]
+    pub origin_m: [f64; 3],
     pub grid: GridDimensions,
     pub cell_size: [f64; 3],
+    /// Validated certificate for this resolved geometry-to-grid realization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_certificate: Option<FdmGridCertificateIR>,
     pub region_mask: Vec<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_mask: Option<Vec<bool>>,
@@ -84,6 +436,14 @@ pub struct FdmPlanIR {
     pub external_field: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub antenna_zeeman_masks: Vec<ResolvedAntennaZeemanMaskIR>,
+    /// Canonical regional time-domain magnetic drives. Legacy antenna masks
+    /// remain migration-only and must not be populated for the same source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_drives: Vec<RegionalFieldDriveIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regional_field_drive_bases: Vec<ResolvedRegionalFieldDriveBasisIR>,
+    #[serde(default)]
+    pub time_stage: TimeStageContextIR,
     /// Explicit inter-region exchange coupling overrides.
     /// Each entry `(region_i, region_j, A_ij)` sets the exchange stiffness [J/m]
     /// between regions i and j (symmetric: A_ij = A_ji). When a region mask is
@@ -101,6 +461,10 @@ pub struct FdmPlanIR {
     /// See `docs/physics/0600-periodic-boundary-conditions.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub periodicity: Option<FdmPeriodicityIR>,
+    /// Planner-resolved periodic image/padding budget consumed by runtime
+    /// allocators; requested periodicity remains in `periodicity` above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_periodic_images: Option<ResolvedPeriodicImagesIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integrator: Option<IntegratorChoice>,
     pub fixed_timestep: Option<f64>,
@@ -511,6 +875,10 @@ pub struct FemPlanIR {
     pub object_segments: Vec<FemObjectSegmentIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_parts: Vec<FemMeshPartIR>,
+    /// Immutable report describing the requested and realized mesh build.
+    /// This is scoped to this plan's mesh generation and is not session status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh_build_report: Option<FemSharedDomainBuildReportIR>,
     #[serde(default)]
     pub domain_mesh_mode: FemDomainMeshModeIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -541,6 +909,16 @@ pub struct FemPlanIR {
     pub external_field: Option<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub antenna_zeeman_masks: Vec<ResolvedAntennaZeemanMaskIR>,
+    /// Canonical regional time-domain magnetic drives. Native FEM resolves
+    /// their spatial basis against the realized mesh.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_drives: Vec<RegionalFieldDriveIR>,
+    /// Closed geometry trees referenced by regional-drive geometry masks.
+    /// Native FEM consumes these descriptors and owns spatial projection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_drive_geometry_masks: Vec<GeometryEntryIR>,
+    #[serde(default)]
+    pub time_stage: TimeStageContextIR,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_modules: Vec<CurrentModuleIR>,
     pub gyromagnetic_ratio: f64,
@@ -779,6 +1157,8 @@ pub struct FemEigenPlanIR {
     pub object_segments: Vec<FemObjectSegmentIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_parts: Vec<FemMeshPartIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_build_report: Option<FemSharedDomainBuildReportIR>,
     #[serde(default)]
     pub domain_mesh_mode: FemDomainMeshModeIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -835,6 +1215,8 @@ pub struct FemFrequencyResponsePlanIR {
     pub object_segments: Vec<FemObjectSegmentIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mesh_parts: Vec<FemMeshPartIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_build_report: Option<FemSharedDomainBuildReportIR>,
     #[serde(default)]
     pub domain_mesh_mode: FemDomainMeshModeIR,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -964,7 +1346,7 @@ pub struct AirBoxConfigIR {
     /// How the air-box factor was derived: `"user"`, `"study_universe"`, `"mesh_auto"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub factor_source: Option<String>,
-    /// How the boundary marker was selected: `"mesh_marker_99"`, `"mesh_max_marker"`, `"fallback_99"`.
+    /// How the boundary marker was selected: `"certified_gamma_out"` or `"user_policy"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boundary_marker_source: Option<String>,
 }
@@ -1025,7 +1407,10 @@ pub struct ProvenancePlanIR {
 
 #[cfg(test)]
 mod tests {
-    use super::{RequestedFemDemagIR, ResolvedFemDemagIR};
+    use super::{
+        FdmGridCertificateIR, FdmRegionLegendEntryIR, RequestedFemDemagIR, ResolvedFemDemagIR,
+    };
+    use crate::{validate_fdm_region_lut_indices, MAX_FDM_REGION_IDS};
 
     #[test]
     fn fredkin_koehler_demag_is_body_only_and_executable() {
@@ -1045,6 +1430,179 @@ mod tests {
         assert!(!RequestedFemDemagIR::Bem.is_implemented());
         assert!(!RequestedFemDemagIR::Fmm.requires_airbox());
         assert!(!RequestedFemDemagIR::Fmm.is_implemented());
+    }
+
+    #[test]
+    fn fdm_grid_certificate_round_trips_and_enforces_extent() {
+        let certificate = FdmGridCertificateIR::new(
+            [-2.0e-9, 0.0, 1.0e-9],
+            [4, 3, 2],
+            [1.0e-9, 2.0e-9, 3.0e-9],
+            17,
+            4_096,
+        )
+        .expect("resolved grid certificate should validate");
+        let encoded = serde_json::to_vec(&certificate).expect("certificate serializes");
+        let decoded: FdmGridCertificateIR =
+            serde_json::from_slice(&encoded).expect("certificate deserializes");
+        assert_eq!(decoded, certificate);
+
+        let mut invalid = certificate.clone();
+        invalid.extent_m[0] += 1.0e-12;
+        let error = invalid.validate().expect_err("N*d mismatch must reject");
+        assert!(error.contains("extent_m[0]"));
+    }
+
+    #[test]
+    fn fdm_grid_certificate_rejects_active_count_and_fingerprint_tampering() {
+        let certificate = FdmGridCertificateIR::new(
+            [0.0; 3],
+            [2, 2, 1],
+            [1.0e-9; 3],
+            3,
+            1_024,
+        )
+        .expect("resolved grid certificate should validate");
+        let mut active_invalid = certificate.clone();
+        active_invalid.active_cells = 5;
+        assert!(active_invalid
+            .validate()
+            .expect_err("active count beyond grid must reject")
+            .contains("active_cells"));
+
+        let mut hash_invalid = certificate;
+        hash_invalid.grid_fingerprint.replace_range(..2, "00");
+        assert!(hash_invalid
+            .validate_against_masks(None, &[])
+            .expect_err("fingerprint tampering must reject")
+            .contains("fingerprint mismatch"));
+
+        let topology_certificate = FdmGridCertificateIR::new_with_masks(
+            [0.0; 3],
+            [2, 2, 1],
+            [1.0e-9; 3],
+            2,
+            1_024,
+            Some(&[true, false, true, false]),
+            &[1, 1, 2, 2],
+        )
+        .expect("topology certificate should validate")
+        .with_region_legend(vec![
+            FdmRegionLegendEntryIR {
+                numeric_id: 1,
+                object_id: "magnet-a".to_string(),
+                region_id: "magnet-a:core".to_string(),
+                priority: 0,
+            },
+            FdmRegionLegendEntryIR {
+                numeric_id: 2,
+                object_id: "magnet-b".to_string(),
+                region_id: "magnet-b:core".to_string(),
+                priority: 0,
+            },
+        ]);
+        assert!(topology_certificate
+            .validate_against_masks(Some(&[false, true, true, false]), &[1, 1, 2, 2])
+            .expect_err("active topology swap must reject")
+            .contains("fingerprint mismatch"));
+    }
+
+    #[test]
+    fn fdm_grid_certificate_binds_deterministic_region_legend() {
+        let certificate = FdmGridCertificateIR::new(
+            [0.0; 3],
+            [2, 2, 1],
+            [1.0e-9; 3],
+            2,
+            1_024,
+        )
+        .expect("resolved grid certificate should validate")
+        .with_region_legend(vec![FdmRegionLegendEntryIR {
+            numeric_id: 1,
+            object_id: "magnet".to_string(),
+            region_id: "magnet:core".to_string(),
+            priority: 0,
+        }]);
+        assert_eq!(certificate.region_legend.len(), 1);
+        assert!(certificate
+            .region_legend_fingerprint
+            .as_deref()
+            .is_some_and(|value| value.starts_with("sha256:")));
+        let changed = certificate.clone().with_region_legend(vec![
+            FdmRegionLegendEntryIR {
+                numeric_id: 1,
+                object_id: "magnet".to_string(),
+                region_id: "magnet:shell".to_string(),
+                priority: 0,
+            },
+        ]);
+        assert_ne!(
+            certificate.region_legend_fingerprint,
+            changed.region_legend_fingerprint
+        );
+    }
+
+    #[test]
+    fn fdm_grid_certificate_rejects_unlisted_realized_region_id() {
+        let certificate = FdmGridCertificateIR::new_with_masks(
+            [0.0; 3],
+            [2, 1, 1],
+            [1.0e-9; 3],
+            2,
+            1_024,
+            None,
+            &[1, 2],
+        )
+        .expect("resolved grid certificate should validate")
+        .with_region_legend(vec![FdmRegionLegendEntryIR {
+            numeric_id: 1,
+            object_id: "magnet".to_string(),
+            region_id: "magnet:core".to_string(),
+            priority: 0,
+        }]);
+        let error = certificate
+            .validate_against_masks(None, &[1, 2])
+            .expect_err("unknown realized region ID must fail closed");
+        assert!(error.contains("has no legend entry"));
+    }
+
+    #[test]
+    fn fdm_grid_certificate_rejects_realized_region_mask_without_legend() {
+        let certificate = FdmGridCertificateIR::new_with_masks(
+            [0.0; 3],
+            [2, 1, 1],
+            [1.0e-9; 3],
+            2,
+            1_024,
+            None,
+            &[1, 1],
+        )
+        .expect("resolved grid certificate should validate");
+        let error = certificate
+            .validate_against_masks(None, &[1, 1])
+            .expect_err("realized region mask without legend must fail closed");
+        assert!(error.contains("region legend is missing"));
+    }
+
+    #[test]
+    fn fdm_region_lut_accepts_boundary_id_and_rejects_256() {
+        validate_fdm_region_lut_indices(&[0, MAX_FDM_REGION_IDS], &[])
+            .expect("id 255 is the last addressable non-background region");
+        let error = validate_fdm_region_lut_indices(&[0, MAX_FDM_REGION_IDS + 1], &[])
+            .expect_err("id 256 would index past the 256-entry LUT");
+        assert!(error.contains("fdm_region_lut_capacity_exceeded"));
+        assert!(error.contains("requested_region_id=256"));
+    }
+
+    #[test]
+    fn fdm_region_lut_rejects_out_of_range_exchange_pair() {
+        let error = validate_fdm_region_lut_indices(
+            &[1, 2],
+            &[(1, MAX_FDM_REGION_IDS + 1, 1.0)],
+        )
+        .expect_err("exchange pair ids must use the same LUT bound");
+        assert!(error.contains("exchange_pair_index=0"));
+        assert!(error.contains("supported_region_ids=255"));
     }
 }
 

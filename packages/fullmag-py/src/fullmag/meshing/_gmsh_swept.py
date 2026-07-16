@@ -97,6 +97,16 @@ def classify_sweepability(geometry: Geometry) -> SweepabilityResult:
     Returns a :class:`SweepabilityResult` with diagnostics.
     """
     if isinstance(geometry, Cylinder):
+        if geometry.axis != (0.0, 0.0, 1.0):
+            return SweepabilityResult(
+                sweepable=False,
+                thin_axis=None,
+                thickness=geometry.height,
+                aspect_ratio=(2.0 * geometry.radius / geometry.height)
+                if geometry.height > 0
+                else float("inf"),
+                reason="Arbitrary-axis cylinders require the OCC free-tetrahedral path",
+            )
         h = geometry.height
         d = 2.0 * geometry.radius
         ar = d / h if h > 0 else float("inf")
@@ -782,6 +792,10 @@ def should_use_swept(geometry: Geometry, opts: MeshOptions) -> bool:
     if strategy == SWEEP_STRATEGY_FREE_TET:
         return False
     if strategy in (SWEEP_STRATEGY_PRISM, SWEEP_STRATEGY_HEX):
+        if isinstance(geometry, Cylinder) and geometry.axis != (0.0, 0.0, 1.0):
+            raise ValueError(
+                "explicit swept meshing requires a Z-axis cylinder; use free_tet for arbitrary axes"
+            )
         return True
     if strategy == SWEEP_STRATEGY_AUTO or strategy is None:
         # Auto-detect: use swept if geometry is sweepable AND
@@ -807,6 +821,10 @@ def generate_swept_mesh(
 ) -> MeshData:
     """Dispatch swept mesh generation based on geometry type."""
     if isinstance(geometry, Cylinder):
+        if geometry.axis != (0.0, 0.0, 1.0):
+            raise ValueError(
+                "swept cylinder meshing supports only the canonical Z axis; use OCC free tetrahedral meshing for arbitrary axes"
+            )
         return generate_swept_cylinder_mesh(
             geometry.radius, geometry.height, hmax, n_layers,
             order=order, distribution=distribution,

@@ -157,12 +157,14 @@ impl std::error::Error for TopologicalChargeQueryError {}
 
 /// Typed query for the v2 analysis resource.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, IntoParams, ToSchema)]
+#[into_params(parameter_in = Query)]
 pub struct TopologicalChargeQueryV2 {
     #[serde(default = "default_plane")]
     pub plane: TopologicalChargePlane,
     #[serde(default = "default_support")]
     pub support: TopologicalChargeSupportMode,
     #[serde(default)]
+    #[schema(value_type = String, example = "auto")]
     pub profile_samples: Option<TopologicalChargeProfileSamples>,
     #[serde(default)]
     pub snapshot_id: Option<String>,
@@ -269,7 +271,20 @@ pub struct TopologicalChargeProvenance {
     pub stage_id: Option<String>,
     pub discretization: String,
     pub fe_order: Option<u8>,
+    pub requested_execution: TopologicalChargeExecutionProvenance,
+    pub resolved_execution: Option<TopologicalChargeExecutionProvenance>,
     pub cache_key_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct TopologicalChargeExecutionProvenance {
+    pub backend: String,
+    pub device: String,
+    pub precision: String,
+    pub mode: String,
+    pub runtime_family: Option<String>,
+    pub engine_id: Option<String>,
+    pub lossy_fallback_used: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

@@ -32,8 +32,9 @@ import { useViewport3DGeometryUpload } from "../hooks/useViewport3DGeometryUploa
 import { useViewport3DScalarColorUpload } from "../hooks/useViewport3DScalarColorUpload";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry";
+import { attachViewport3DSharedTopologyPosition } from "../viewport3dSharedTopologyPositions";
 import {
-  isViewport3DTopologyRenderable,
+  isViewport3DTopologyCurrent,
   resolveUnavailableTopologyVisualizationSettings,
   type Viewport3DTopologyFreshness,
 } from "../viewport3dTopologyStaleness";
@@ -48,6 +49,8 @@ import type { Viewport3DColors } from "../viewport3dTypes";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { VectorFieldLayer } from "./VectorFieldLayer";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import { recordMeshPartSurfaceAdoption } from "./MeshPartLayer";
+import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import {
   opacityFromSettings,
   percentToUnit,
@@ -60,10 +63,15 @@ import {
   vectorStyleFromSettings,
   wireframeColorFromSettings,
 } from "./viewport3DLayerSettings";
+import { resolveViewport3DTargetLayerRequestedSourceIdentity } from "./viewport3DLayerPassInputs";
 import {
   resolveViewport3DTargetSurfaceLayerInput,
   resolveViewport3DTargetVectorLayerInput,
 } from "./viewport3DLayerPassInputs";
+import {
+  VIEWPORT_3D_PICK_PRIORITY,
+  viewport3DPickShouldDefer,
+} from "./viewport3DPickPriority";
 
 export interface AirboxSurfaceColorState {
   hasScalarColors: boolean;
@@ -179,6 +187,7 @@ function BoundsVolumeWireframe({
 }
 
 const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
+  adoptionRegistry,
   colors,
   fieldModel,
   materialProfile,
@@ -191,6 +200,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   vectorColorMode,
   vectorStyle,
 }: {
+  adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
   fieldModel: Viewport3DFieldRenderModel | null;
   materialProfile: Viewport3DMaterialProfile;
@@ -224,7 +234,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   const createSurfaceGeometry = useCallback(() => {
     if (!surfaceIndices?.length) return null;
     const next = new BufferGeometry();
-    next.setAttribute("position", new BufferAttribute(topologyModel.positions, 3));
+    attachViewport3DSharedTopologyPosition(next, topologyModel.positions);
     next.setIndex(new BufferAttribute(surfaceIndices, 1));
     return next;
   }, [surfaceIndices, topologyModel.positions]);
@@ -328,6 +338,32 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     vertexColorsEnabled: surfaceColorState.vertexColorsEnabled,
     vertexCount: topologyModel.nodeCount,
   });
+  const requestedFieldBufferId = resolveViewport3DTargetLayerRequestedSourceIdentity({
+    fieldModel,
+    partId: part.id,
+  }).fieldBufferId;
+  useEffect(() => {
+    if (!adoptionRegistry || !visibleScalarColors) return;
+    let adoption = recordMeshPartSurfaceAdoption({
+      carrierId: part.id,
+      fieldBufferId: requestedFieldBufferId,
+      registry: adoptionRegistry,
+      scalarBuffer: visibleScalarColors,
+    });
+    const replay = () => {
+      adoption = recordMeshPartSurfaceAdoption({
+        carrierId: part.id,
+        fieldBufferId: requestedFieldBufferId,
+        registry: adoptionRegistry,
+        scalarBuffer: visibleScalarColors,
+      });
+    };
+    const unregister = adoptionRegistry.registerCarrierAdoptionReplay(part.id, replay);
+    return () => {
+      unregister();
+      adoptionRegistry.clearAdoption(adoption);
+    };
+  }, [adoptionRegistry, part.id, requestedFieldBufferId, visibleScalarColors]);
 
   const hasScalarColors =
     surfaceColorState.hasScalarColors &&
@@ -344,12 +380,23 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   });
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    if (
+      viewport3DPickShouldDefer(
+        event.intersections,
+        VIEWPORT_3D_PICK_PRIORITY.airbox,
+      )
+    ) {
+      return;
+    }
     event.stopPropagation();
     onSelectPart(selectionForMeshPart(part));
   };
   if (!geometry) {
     return (
-      <group onPointerDown={handlePointerDown}>
+      <group
+        onPointerDown={handlePointerDown}
+        userData={{ viewportSemanticPickPriority: VIEWPORT_3D_PICK_PRIORITY.airbox }}
+      >
         {renderSettings.shaderVisible ? (
           <BoundsBox
             bounds={resolveMeshPartBounds(part)}
@@ -421,11 +468,14 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
         {viewport3DVectorLayersEnabledFromBrowserConfig() &&
         renderSettings.vectorsVisible ? (
           <VectorFieldLayer
+            adoptionRegistry={adoptionRegistry}
             buildReference={vectorLayerInput.buildReference}
+            carrierId={part.id}
             colors={colors}
             colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
             materialProfile={materialProfile.glyphs}
             opacity={opacity}
+            fieldBufferId={requestedFieldBufferId}
             segments={vectorLayerInput.segments}
             style={vectorStyleFromSettings(renderSettings, vectorStyle)}
             tracker={tracker}
@@ -436,7 +486,10 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
   }
 
   return (
-    <group onPointerDown={handlePointerDown}>
+    <group
+      onPointerDown={handlePointerDown}
+      userData={{ viewportSemanticPickPriority: VIEWPORT_3D_PICK_PRIORITY.airbox }}
+    >
       {renderSettings.shaderVisible ? (
         <mesh
           geometry={geometry}
@@ -513,11 +566,14 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
       renderSettings.vectorsVisible ? (
         <VectorFieldLayer
+          adoptionRegistry={adoptionRegistry}
           buildReference={vectorLayerInput.buildReference}
+          carrierId={part.id}
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
           opacity={opacity}
+          fieldBufferId={requestedFieldBufferId}
           segments={vectorLayerInput.segments}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
@@ -756,7 +812,7 @@ export function resolveAirboxTopologyVisualizationSettings(
   settings: VisualizationTargetSettings,
   topologyFreshness: Viewport3DTopologyFreshness,
 ): VisualizationTargetSettings {
-  if (isViewport3DTopologyRenderable(topologyFreshness)) {
+  if (isViewport3DTopologyCurrent(topologyFreshness)) {
     return settings;
   }
 
@@ -923,6 +979,7 @@ export const DomainBoxLayer = memo(function DomainBoxLayer({
 });
 
 export function AirboxLayerContent({
+  adoptionRegistry,
   colors,
   vectorColorMode,
   fieldModel,
@@ -934,6 +991,7 @@ export function AirboxLayerContent({
   tracker,
   vectorStyle,
 }: {
+  adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
   vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
@@ -960,6 +1018,7 @@ export function AirboxLayerContent({
     <>
       {topologyModel?.airboxParts.map((partModel) => (
         <AirboxMeshPartLayer
+          adoptionRegistry={adoptionRegistry}
           key={partModel.part.id}
           colors={colors}
           fieldModel={fieldModel}

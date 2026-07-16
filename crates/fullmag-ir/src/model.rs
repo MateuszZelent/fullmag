@@ -52,6 +52,7 @@ pub enum GeometryEntryIR {
         name: String,
         radius: f64,
         height: f64,
+        axis: [f64; 3],
     },
     SinWaveguide {
         name: String,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Sequence
 
 from fullmag._validation import as_vector3, require_finite, require_non_empty, require_positive
@@ -188,6 +189,11 @@ class Sinusoidal:
 
     def __post_init__(self) -> None:
         require_positive(self.frequency_hz, "frequency_hz")
+        require_finite(self.phase_rad, "phase_rad")
+        require_finite(self.offset, "offset")
+        object.__setattr__(self, "frequency_hz", float(self.frequency_hz))
+        object.__setattr__(self, "phase_rad", float(self.phase_rad))
+        object.__setattr__(self, "offset", float(self.offset))
 
     def to_ir(self) -> dict[str, object]:
         return {
@@ -206,8 +212,12 @@ class Pulse:
     t_off: float
 
     def __post_init__(self) -> None:
+        require_finite(self.t_on, "t_on")
+        require_finite(self.t_off, "t_off")
         if self.t_off <= self.t_on:
             raise ValueError("t_off must be greater than t_on")
+        object.__setattr__(self, "t_on", float(self.t_on))
+        object.__setattr__(self, "t_off", float(self.t_off))
 
     def to_ir(self) -> dict[str, object]:
         return {"kind": "pulse", "t_on": self.t_on, "t_off": self.t_off}
@@ -258,7 +268,21 @@ class SincPulse:
     def __post_init__(self) -> None:
         require_positive(self.cutoff_hz, "cutoff_hz")
         require_finite(self.t0, "t0")
+        if self.t0 < 0.0:
+            raise ValueError("t0 must be non-negative")
         require_finite(self.amplitude, "amplitude")
+        object.__setattr__(self, "cutoff_hz", float(self.cutoff_hz))
+        object.__setattr__(self, "t0", float(self.t0))
+        object.__setattr__(self, "amplitude", float(self.amplitude))
+
+    def value_at(self, time_s: float) -> float:
+        """Evaluate the normalized sinc with a stable limit at its centre."""
+        require_finite(time_s, "time_s")
+        x = 2.0 * self.cutoff_hz * (float(time_s) - self.t0)
+        if abs(x) < 1e-8:
+            pix = math.pi * x
+            return self.amplitude * (1.0 - pix * pix / 6.0 + pix**4 / 120.0)
+        return self.amplitude * math.sin(math.pi * x) / (math.pi * x)
 
     def to_ir(self) -> dict[str, object]:
         return {
@@ -515,6 +539,8 @@ class ThermalNoise:
 
     def __post_init__(self) -> None:
         require_positive(self.temperature, "temperature")
+        if self.seed is not None and self.seed <= 0:
+            raise ValueError("seed must be a positive integer; use None for system entropy")
 
     def to_ir(self) -> dict[str, object]:
         ir: dict[str, object] = {

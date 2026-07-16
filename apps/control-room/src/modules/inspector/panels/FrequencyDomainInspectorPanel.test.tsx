@@ -863,6 +863,7 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
       ],
       revision: 7,
       schema_version: "periodic_pairs.v1",
+      status: "valid",
     },
     revision: 7,
     status: "ready",
@@ -1077,6 +1078,9 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Periodic/Floquet");
     expect(html).toContain("periodic pair table and Floquet capability gates");
     expect(html).toContain("Periodic / Floquet Boundary Conditions");
+    expect(html).toContain(
+      '<span class="fm-inspector-field-row__label">Periodic pairs status</span><span class="fm-inspector-field-row__value">valid</span>',
+    );
     expect(html).toContain(MESHING_PERIODIC_PAIRS_PATH);
     expect(html).toContain("Pair count");
     expect(html).toContain("x-periodic");
@@ -2391,6 +2395,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(observablesHtml).toContain("Field payloads");
     expect(observablesHtml).toContain("1/1 point(s) field-ready");
     expect(periodicResourceHtml).toContain("Periodic/Floquet Pair Resource");
+    expect(periodicResourceHtml).toContain("valid");
     expect(periodicResourceHtml).toContain("Pair count");
     expect(periodicResourceHtml).toContain("1 pair(s)");
     expect(periodicResourceHtml).toContain("x-periodic");

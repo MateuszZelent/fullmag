@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_VIEWPORT_3D_CAMERA_STATE,
@@ -30,6 +30,26 @@ describe("viewport3dStore", () => {
         paletteGradient: "linear-gradient(90deg, black, white)",
       },
     ]);
+  });
+
+  it("commits one notification only when colorbar legends actually change", () => {
+    viewport3dStore.resetForTest();
+    const listener = vi.fn();
+    const unsubscribe = viewport3dStore.subscribe(listener);
+    const legends = [
+      {
+        label: "m [1]",
+        maxLabel: "1",
+        minLabel: "0",
+        paletteGradient: "linear-gradient(90deg, black, white)",
+      },
+    ];
+
+    viewport3dStore.setActiveScalarColorbarLegends(legends);
+    viewport3dStore.setActiveScalarColorbarLegends([...legends]);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
   });
 
   it("keeps the canonical camera snapshot in module-local state", () => {

@@ -159,13 +159,17 @@ const baseResources: LiveStatusResource["resources"] = {
   command_completion_revision: 0,
   commands_revision: 0,
   display_revision: 0,
-  domain_generation_id: 1,
+  domain_generation_id: "1",
   engine_log_revision: 0,
   field_catalog_revision: 0,
   field_revision: 0,
   fields_revision: 0,
   mesh_build_revision: 0,
   mesh_revision: 0,
+  region_coefficients_revision: 0,
+  region_initial_state_revision: 0,
+  region_membership_revision: 0,
+  region_topology_revision: 0,
   scalars_revision: 0,
   scene_revision: 1,
   slice_revision: 0,
@@ -209,7 +213,7 @@ function statusWith({
     domain: {
       cell_count: 1,
       discretization,
-      generation_id: 1,
+      generation_id: "1",
     },
     resources: { ...baseResources, ...resources },
     run,
@@ -389,7 +393,7 @@ describe("study runtime command resource bundles", () => {
       data: statusWith({
         discretization: "fem",
         resources: {
-          domain_generation_id: 0,
+          domain_generation_id: "0",
           mesh_revision: 0,
         },
       }) as LiveStatusResource,
@@ -398,7 +402,7 @@ describe("study runtime command resource bundles", () => {
       data: statusWith({
         discretization: "fem",
         resources: {
-          domain_generation_id: 5,
+          domain_generation_id: "5",
           mesh_revision: 0,
         },
       }) as LiveStatusResource,
@@ -1011,7 +1015,7 @@ describe("study runtime command resource bundles", () => {
         true,
         statusWith({
           discretization: "fem",
-          resources: { domain_generation_id: 0 },
+          resources: { domain_generation_id: "0" },
         }),
       ),
     ).toBe(false);
@@ -1035,7 +1039,7 @@ describe("study runtime command resource bundles", () => {
         true,
         statusWith({
           discretization: "fem",
-          resources: { domain_generation_id: 5, mesh_revision: 0 },
+          resources: { domain_generation_id: "5", mesh_revision: 0 },
         }),
       ),
     ).toBe(true);

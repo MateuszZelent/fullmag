@@ -550,7 +550,7 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
   const requests = new Map<string, Viewport3DFieldResourceRequest>();
   for (const part of airboxParts) {
     const plan = buildViewport3DTargetRenderPlan({
-      label: part.label ?? part.id,
+      label: "Airbox",
       quantityId,
       settings: {
         geometryScope: "full",
@@ -579,13 +579,17 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
       scopeKind: "airbox",
     });
     demands.push(...partDemands);
+    if (partDemands.length === 0) continue;
     const [plannedRequest] = planViewport3DFieldResourceRequests(partDemands);
-    const query = plannedRequest?.query ?? {
+    const plannedQuery = plannedRequest?.query ?? {
       ...fieldQuery,
       component: fieldQuery.component ?? "full",
       scope_id: part.id,
       scope_kind: "airbox" as const,
     };
+    const query = fieldQuery.geometry_scope
+      ? { ...plannedQuery, geometry_scope: fieldQuery.geometry_scope }
+      : plannedQuery;
     requests.set(part.id, {
       consumers: plannedRequest?.consumers ?? [],
       quantityId: resolveCanonicalQuantityId(quantityId),

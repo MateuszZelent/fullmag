@@ -10,13 +10,17 @@ const resources: LiveStatusResource["resources"] = {
   command_completion_revision: 0,
   commands_revision: 0,
   display_revision: 0,
-  domain_generation_id: 0,
+  domain_generation_id: "0",
   engine_log_revision: 0,
   field_catalog_revision: 0,
   field_revision: 0,
   fields_revision: 0,
   mesh_build_revision: 0,
   mesh_revision: 0,
+  region_coefficients_revision: 0,
+  region_initial_state_revision: 0,
+  region_membership_revision: 0,
+  region_topology_revision: 0,
   scalars_revision: 0,
   scene_revision: null,
   slice_revision: 0,
@@ -63,5 +67,19 @@ describe("resolveSessionStatusRevision", () => {
     } as LiveStatusResource;
 
     expect(resolveSessionStatusRevision(status)).toBe(13);
+  });
+
+  it("tracks independent region realization revisions", () => {
+    const status = {
+      resources: {
+        ...resources,
+        region_topology_revision: 21,
+        region_membership_revision: 22,
+        region_coefficients_revision: 23,
+        region_initial_state_revision: 24,
+      },
+    } as LiveStatusResource;
+
+    expect(resolveSessionStatusRevision(status)).toBe(24);
   });
 });

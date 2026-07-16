@@ -5,6 +5,9 @@ import type { KernelEventMap } from "../events/eventTypes";
 import {
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
+  DATA_FDM_REGION_MEMBERSHIPS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_HISTOGRAM_BIN_ELEMENTS_PATH,
@@ -18,6 +21,7 @@ import {
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
+  MODEL_MAGNETIZATION_ASSET_PATH,
   MODEL_REALIZED_REGIONS_PATH,
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_SCENE_PATH,
@@ -30,6 +34,8 @@ import {
   GEOMETRY_DIAGNOSTICS_RESOURCE_KEY,
   GEOMETRY_CAPABILITIES_RESOURCE_KEY,
   GEOMETRY_VALIDATION_RESOURCE_KEY,
+  FDM_REGION_MEMBERSHIPS_RESOURCE_KEY,
+  FDM_REGION_MEMBERSHIP_BINARY_RESOURCE_KEY,
   MESH_BUILD_CURRENT_RESOURCE_KEY,
   MESH_BUILD_LATEST_SUCCESSFUL_RESOURCE_KEY,
   MESH_UNIVERSE_POLICY_RESOURCE_KEY,
@@ -39,12 +45,18 @@ import {
   SCENE_RESOURCE_KEY,
   VISUALIZATION_STATE_RESOURCE_KEY,
   resolveJsonResourceRevision,
+  resolveRegionCoefficientsRevision,
+  resolveRegionRealizationRevision,
+  resolveFdmRegionMembershipBinaryResourceKey,
+  resolveFdmRegionMembershipRevision,
   resolveMeshHistogramBinElementsResourceKey,
   resolveMeshRegionMembershipsRevision,
   resolveMeshRegionMembershipsResourceKey,
   resolveMeshRegionMembershipListRevision,
   resolveMeshRegionQualityResourceKey,
   resolveMeshSharedDomainManifestRevision,
+  resolveMagnetizationAssetResourceKey,
+  resolveMagnetizationAssetResourceRevision,
   resolveObjectMeshQualityResourceKey,
   resolveObjectMeshPolicyResourceKey,
   resolveObjectMeshReportResourceKey,
@@ -70,6 +82,12 @@ describe("geometry lifecycle resources", () => {
     expect(MODEL_REGION_DIAGNOSTICS_RESOURCE_KEY).toBe(
       MODEL_REGION_DIAGNOSTICS_PATH,
     );
+    expect(resolveMagnetizationAssetResourceKey("mag:free layer")).toBe(
+      MODEL_MAGNETIZATION_ASSET_PATH.replace(
+        "{asset_id}",
+        "mag%3Afree%20layer",
+      ),
+    );
     expect(MODEL_REALIZED_REGIONS_RESOURCE_KEY).toBe(
       MODEL_REALIZED_REGIONS_PATH,
     );
@@ -82,6 +100,18 @@ describe("geometry lifecycle resources", () => {
     );
     expect(MESH_REGION_MEMBERSHIPS_RESOURCE_KEY).toBe(
       DATA_MESH_REGION_MEMBERSHIPS_PATH,
+    );
+    expect(FDM_REGION_MEMBERSHIPS_RESOURCE_KEY).toBe(
+      DATA_FDM_REGION_MEMBERSHIPS_PATH,
+    );
+    expect(FDM_REGION_MEMBERSHIP_BINARY_RESOURCE_KEY).toBe(
+      DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+    );
+    expect(resolveFdmRegionMembershipBinaryResourceKey("film:core")).toBe(
+      `${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:film%3Acore`,
+    );
+    expect(resolveFdmRegionMembershipBinaryResourceKey("film:core", "r7")).toBe(
+      `${DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH}:film%3Acore#revision=r7`,
     );
     expect(VISUALIZATION_STATE_RESOURCE_KEY).toBe(VISUALIZATION_STATE_PATH);
     expect(resolveObjectTopologyResourceKey("box 1")).toBe(
@@ -129,6 +159,34 @@ describe("geometry lifecycle resources", () => {
     expect(resolveVisualizationStateRevision({ revision: 15 } as never)).toBe(15);
   });
 
+  it("keys region-owned resources by independent realization revisions", () => {
+    expect(
+      resolveRegionRealizationRevision({
+        region_topology_revision: 4,
+        region_membership_revision: 5,
+        region_coefficients_revision: 6,
+        region_initial_state_revision: 7,
+      }),
+    ).toBe("4:5:6:7");
+    expect(
+      resolveRegionCoefficientsRevision({ region_coefficients_revision: 6 }),
+    ).toBe(6);
+    expect(
+      resolveRegionCoefficientsRevision({ region_coefficients_revision: 7 }),
+    ).not.toBe(6);
+    expect(resolveRegionCoefficientsRevision({ revision: 99 } as never)).toBeNull();
+  });
+
+  it("keys magnetization assets by the initial-state realization lane", () => {
+    expect(
+      resolveMagnetizationAssetResourceRevision({
+        scene_revision: 9,
+        region_initial_state_revision: 12,
+        asset: { id: "mag:free" },
+      } as never),
+    ).toBe("9:12");
+  });
+
   it("includes mesh provenance in shared-domain manifest revision signatures", () => {
     expect(
       resolveMeshSharedDomainManifestRevision({
@@ -146,6 +204,26 @@ describe("geometry lifecycle resources", () => {
     ).toBe("4:unknown:unknown");
   });
 
+  it("keeps FDM membership revisions tied to grid and legend identity", () => {
+    expect(
+      resolveFdmRegionMembershipRevision({
+        binary_path: "mesh/fdm_region_membership.v1.bin",
+        cell_count: 8,
+        cell_m: [1, 1, 1],
+        counts: [2, 2, 2],
+        encoding: "u32le",
+        freshness: "current",
+        grid_fingerprint: "grid-1",
+        mesh_revision: 7,
+        origin_m: [0, 0, 0],
+        region_legend: [],
+        region_legend_fingerprint: "legend-1",
+        region_membership_revision: 9,
+        schema_version: "fdm_region_membership.v1",
+      }),
+    ).toBe("fdm_region_membership.v1:7:9:grid-1:legend-1");
+  });
+
   it("uses a deterministic batch resource key and revision for mesh region memberships", () => {
     expect(
       resolveMeshRegionMembershipsResourceKey(["film:edge", "film:core", "film:core"]),
@@ -161,18 +239,20 @@ describe("geometry lifecycle resources", () => {
         {
           mesh_id: "mesh:shared-domain",
           mesh_revision: 42,
+          region_membership_revision: 8,
           region_id: "film:edge",
           source: "geometry_projection",
         },
         {
           mesh_id: "mesh:shared-domain",
           mesh_revision: 41,
+          region_membership_revision: 7,
           region_id: "film:core",
           source: "geometry_projection",
         },
       ] as never),
     ).toBe(
-      "mesh:shared-domain:41:film:core:geometry_projection|mesh:shared-domain:42:film:edge:geometry_projection",
+      "mesh:shared-domain:41:7:film:core:geometry_projection|mesh:shared-domain:42:8:film:edge:geometry_projection",
     );
     expect(
       resolveMeshRegionMembershipListRevision({
@@ -180,6 +260,7 @@ describe("geometry lifecycle resources", () => {
           {
             mesh_id: "mesh:shared-domain",
             mesh_revision: 41,
+            region_membership_revision: 7,
             region_id: "film:core",
             source: "geometry_projection",
           },
@@ -189,7 +270,7 @@ describe("geometry lifecycle resources", () => {
         unresolved_region_ids: ["film:csg"],
       } as never),
     ).toBe(
-      "mesh:shared-domain:41:mesh:shared-domain:41:film:core:geometry_projection:film:csg",
+      "mesh:shared-domain:41:mesh:shared-domain:41:7:film:core:geometry_projection:film:csg",
     );
   });
 

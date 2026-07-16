@@ -52,6 +52,7 @@ import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { sharedResourceRuntimeStore } from "@/kernel/resources/ResourceRuntimeStore";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
+import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 
 const selection = new SelectionController(new EventBus<KernelEventMap>());
 
@@ -134,6 +135,7 @@ const mockKernel = {
     read: () => null,
   },
   selection,
+  visualizationDebug: new VisualizationDebugController(),
 } as unknown as KernelApi;
 
 import { createDefaultStudyStageDraft } from "../StudyStageAuthoringModel";
@@ -719,6 +721,9 @@ describe("Study stage inspectors", () => {
     expect(html).toContain("Excitation");
     expect(html).toContain("Excitation phase");
     expect(html).toContain("Save stage");
+    expect(html).not.toMatch(
+      /<button[^>]*disabled=""[^>]*>.*Save stage.*<\/button>/,
+    );
     expect(html).not.toContain("Frequencies");
     expect(html).not.toContain("k sampling");
   });

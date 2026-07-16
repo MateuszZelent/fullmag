@@ -46,6 +46,19 @@ let fdmCuboidBuildJobScheduler:
 let fdmCuboidWorkerClient: FdmCuboidWorkerClient | null | undefined;
 let fdmCuboidWorkerFallbackReason: string | null | undefined;
 
+export function disposeViewport3DFdmCuboidBuildWorker(): void {
+  fdmCuboidBuildJobScheduler?.dispose();
+  fdmCuboidBuildJobScheduler = undefined;
+  fdmCuboidWorkerClient?.dispose();
+  fdmCuboidWorkerClient = undefined;
+  fdmCuboidWorkerFallbackReason = undefined;
+}
+
+export function getViewport3DFdmCuboidWorkerRuntimeCounts(): { timers: number; workers: number } {
+  return fdmCuboidWorkerClient?.getRuntimeCounts() ?? { timers: 0, workers: 0 };
+}
+export function getViewport3DFdmCuboidPendingJobCount(): number { return fdmCuboidBuildJobScheduler?.getPendingJobCount() ?? 0; }
+
 export async function buildViewport3DFdmCuboidOffMainThread(
   request: FdmCuboidBuildRequest,
   options: FdmCuboidBuildOptions = {},
@@ -214,6 +227,10 @@ class FdmCuboidWorkerClient {
     }
   }
 
+  getRuntimeCounts(): { timers: number; workers: number } {
+    return { timers: this.idleTimeoutId === null ? 0 : 1, workers: this.disposed ? 0 : 1 };
+  }
+
   private readonly handleMessage = (
     event: MessageEvent<FdmCuboidBuildWorkerResponse>,
   ): void => {
@@ -284,6 +301,9 @@ function cloneFdmCuboidBuildRequestForWorker(
     ...input,
     id,
     modelFieldVector: cloneFieldVectorForWorker(input.modelFieldVector),
+    realizedRegionIds: input.realizedRegionIds
+      ? new Uint32Array(input.realizedRegionIds)
+      : input.realizedRegionIds,
     vectorField: cloneFieldVectorForWorker(input.vectorField),
   };
 }
@@ -310,6 +330,7 @@ function transferablesForFdmCuboidBuildRequest(
   if (request.vectorField?.values.buffer !== request.modelFieldVector?.values.buffer) {
     addArrayBufferTransferable(transferables, request.vectorField?.values.buffer);
   }
+  addArrayBufferTransferable(transferables, request.realizedRegionIds?.buffer);
   return transferables;
 }
 

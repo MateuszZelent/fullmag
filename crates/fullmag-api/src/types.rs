@@ -305,6 +305,10 @@ pub(crate) struct ArtifactEntry {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
 pub(crate) struct RegionOwnedArtifactProvenance {
     pub scene_revision: u64,
+    pub region_topology_revision: u64,
+    pub region_membership_revision: u64,
+    pub region_coefficients_revision: u64,
+    pub region_initial_state_revision: u64,
     pub authored_region_count: u64,
     pub material_parameter_field_count: u64,
     pub coupling_count: u64,
@@ -358,6 +362,10 @@ pub(crate) fn region_owned_artifact_provenance(
 
     Some(RegionOwnedArtifactProvenance {
         scene_revision: scene.revision,
+        region_topology_revision: snapshot.region_realization_revisions.topology,
+        region_membership_revision: snapshot.region_realization_revisions.membership,
+        region_coefficients_revision: snapshot.region_realization_revisions.coefficients,
+        region_initial_state_revision: snapshot.region_realization_revisions.initial_state,
         authored_region_count,
         material_parameter_field_count,
         coupling_count,
@@ -609,6 +617,9 @@ pub(crate) struct SessionStateResponse {
     /// Revision for simulation stage execution state.
     #[serde(skip)]
     pub stage_execution_revision: u64,
+    /// Independent region-realization product revisions; scene revision is not a substitute.
+    #[serde(skip)]
+    pub region_realization_revisions: fullmag_authoring::RegionRealizationRevisions,
 }
 
 #[derive(Debug, Serialize)]
@@ -637,6 +648,7 @@ pub(crate) struct SessionStateResponseView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_update_v2: Option<fullmag_quantities::StepUpdateV2>,
     pub state_version: u64,
+    pub region_realization_revisions: &'a fullmag_authoring::RegionRealizationRevisions,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1370,6 +1382,7 @@ mod tests {
             }],
             mesh_interfaces: Vec::new(),
             current_modules: Vec::new(),
+            field_drives: Vec::new(),
             excitation_analysis: None,
         }
     }
@@ -1443,6 +1456,7 @@ mod tests {
             field_samples_revision: 0,
             field_quantity_revisions: BTreeMap::new(),
             stage_execution_revision: 0,
+            region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
         };
 
         let value = serde_json::to_value(SessionStateResponseView {
@@ -1467,6 +1481,7 @@ mod tests {
             step_update_v2: None,
             scalar_rows_total: 0,
             state_version: 0,
+            region_realization_revisions: &response.region_realization_revisions,
         })
         .expect("response should serialize");
 

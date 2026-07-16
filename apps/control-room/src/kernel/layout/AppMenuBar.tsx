@@ -226,10 +226,13 @@ function ApiConnectionErrorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent aria-label="API connection error details">
+      <DialogContent
+        aria-describedby="fm-api-connection-error-description"
+        aria-label="API connection error details"
+      >
         <DialogHeader>
           <DialogTitle>API connection error</DialogTitle>
-          <DialogDescription>
+          <DialogDescription id="fm-api-connection-error-description">
             The session status resource failed. The exact frontend error and
             request target are shown below.
           </DialogDescription>
@@ -569,6 +572,9 @@ export function AppMenuBar() {
         syncSnapshot={visualizationSyncSnapshot}
         visualizationState={visualizationState.data}
         onOpenChange={setRegistryOpen}
+        onRetryMutation={() => {
+          void kernel.visualizationSync.retryRejectedMutation();
+        }}
       />
 
       <DiagnosticRecorderDialog

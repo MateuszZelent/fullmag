@@ -481,6 +481,17 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             + ", got " + std::to_string(plan->region_mask_len);
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
+    if (ctx->has_region_mask) {
+        for (uint64_t index = 0; index < plan->region_mask_len; ++index) {
+            if (plan->region_mask[index] > FULLMAG_FDM_MAX_REGION_ID) {
+                ctx->last_error = "fdm_region_lut_capacity_exceeded: requested_region_id="
+                    + std::to_string(plan->region_mask[index])
+                    + " supported_region_ids="
+                    + std::to_string(FULLMAG_FDM_MAX_REGION_ID);
+                return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+            }
+        }
+    }
     if (plan->exchange_pair_count != 0 && plan->exchange_pairs == nullptr) {
         ctx->last_error = "exchange_pair_count is non-zero but exchange_pairs is null";
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
@@ -599,8 +610,10 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
             }
             for (uint64_t index = 0; index < plan->exchange_pair_count; ++index) {
                 const fullmag_fdm_exchange_pair_desc &pair = plan->exchange_pairs[index];
-                if (pair.region_i >= N || pair.region_j >= N) {
-                    ctx->last_error = "exchange pair region index exceeds FULLMAG_FDM_MAX_EXCHANGE_REGIONS";
+                if (pair.region_i > FULLMAG_FDM_MAX_REGION_ID ||
+                    pair.region_j > FULLMAG_FDM_MAX_REGION_ID) {
+                    ctx->last_error = "fdm_region_lut_capacity_exceeded: exchange pair region index exceeds supported_region_ids="
+                        + std::to_string(FULLMAG_FDM_MAX_REGION_ID);
                     return reinterpret_cast<fullmag_fdm_backend *>(ctx);
                 }
                 double value = 0.0;

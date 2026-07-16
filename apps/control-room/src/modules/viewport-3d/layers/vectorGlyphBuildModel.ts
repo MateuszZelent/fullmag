@@ -15,6 +15,9 @@ export interface VectorGlyphBuildRequest {
 
 export interface VectorGlyphBuildResult {
   colors: Float32Array | null;
+  sourceFieldBufferId?: string | null;
+  sourceResourceKey?: string | null;
+  sourceVectorBuildKey?: string | null;
   transforms: VectorGlyphTransforms;
 }
 

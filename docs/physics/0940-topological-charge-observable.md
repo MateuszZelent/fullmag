@@ -628,7 +628,7 @@ host-only build.
 - [ ] Runtime implementation conforms to this note
 - [ ] OpenAPI and generated client conform to this note
 - [ ] Inspector and Explorer conform to this note
-- [ ] Managed FDM/FEM runtime evidence passes
+- [x] Managed FDM/FEM runtime evidence passes (`just verify-topological-charge-cross-backend`)
 
 ## 8. Known limits and deferred work
 

@@ -12,6 +12,7 @@
 #include "context.hpp"
 #include "gpu/cuda/integrators/rk/rk_step_stats.hpp"
 #include "gpu/cuda/interactions/zeeman/zeeman_kernels.hpp"
+#include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
 #include "gpu/cuda/reductions/reduction_kernels.hpp"
 
 #include <cuda_runtime.h>
@@ -46,42 +47,45 @@ bool gpu_rk_reduce_final_external_energy_terms(
     int blocks,
     std::string &reason)
 {
-    if (!ctx.zeeman.has_external_field) {
+    const bool has_drive = !ctx.zeeman.regional_drives.empty();
+    if (!ctx.zeeman.has_external_field && !has_drive) {
         return true;
     }
 
     auto &gpu = ctx.gpu_state.device;
-    if (gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr ||
-        gpu.fields.h_ext.x == nullptr || gpu.fields.h_ext.y == nullptr || gpu.fields.h_ext.z == nullptr) {
-        reason = "GPU RK external energy requires device-resident Ms, lumped mass, and H_ext";
+    if (gpu.materials.ms == nullptr || gpu.mesh_metrics.lumped_mass == nullptr) {
+        reason = "GPU RK Zeeman energy requires device-resident Ms and lumped mass";
         return false;
     }
-    fullmag_cuda_external_energy_blocks(
-        gpu.magnetization.m.x,
-        gpu.magnetization.m.y,
-        gpu.magnetization.m.z,
-        gpu.fields.h_ext.x,
-        gpu.fields.h_ext.y,
-        gpu.fields.h_ext.z,
-        gpu.materials.ms,
-        gpu.mesh_metrics.lumped_mass,
-        gpu.mesh_regions.magnetic_node_mask,
-        gpu.reductions.scalar_workspace,
-        n,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK external energy blocks", reason)) {
+    const auto reduce_field = [&](const FemGpuComponentField &field,
+                                  GpuFinalScalarSlot slot,
+                                  const char *blocks_label,
+                                  const char *reduce_label) {
+        fullmag_cuda_external_energy_blocks(
+            gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+            field.x, field.y, field.z, gpu.materials.ms,
+            gpu.mesh_metrics.lumped_mass, gpu.mesh_regions.magnetic_node_mask,
+            gpu.reductions.scalar_workspace, n, stream);
+        if (!cuda_launch_ok(blocks_label, reason)) return false;
+        size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
+        fullmag_cuda_device_sum(
+            gpu.reductions.scalar_workspace, blocks,
+            gpu_rk_final_scalar_result(gpu, slot), gpu.reductions.temp_storage,
+            reduce_bytes, stream);
+        return cuda_launch_ok(reduce_label, reason);
+    };
+    if (ctx.zeeman.has_external_field &&
+        !reduce_field(gpu.fields.h_ext, GpuFinalScalarSlot::ExternalEnergy,
+            "launch GPU RK external energy blocks", "launch GPU RK external energy reduction")) {
         return false;
     }
-    size_t reduce_bytes = static_cast<size_t>(gpu.reductions.temp_storage_bytes);
-    fullmag_cuda_device_sum(
-        gpu.reductions.scalar_workspace,
-        blocks,
-        gpu_rk_final_scalar_result(gpu, GpuFinalScalarSlot::ExternalEnergy),
-        gpu.reductions.temp_storage,
-        reduce_bytes,
-        stream);
-    if (!cuda_launch_ok("launch GPU RK external energy reduction", reason)) {
-        return false;
+    if (has_drive) {
+        if (!gpu_regional_field_drive_materialize_and_accumulate(
+                ctx, stream, n, ctx.state.current_time, false, reason)) return false;
+        if (!reduce_field(gpu.fields.h_drive, GpuFinalScalarSlot::DriveEnergy,
+            "launch GPU RK drive energy blocks", "launch GPU RK drive energy reduction")) {
+            return false;
+        }
     }
 
     return true;

@@ -9,6 +9,7 @@ import type { EventBus } from "@/kernel/events/EventBus";
 import {
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
+  useMeshRegionMembershipsResource,
   useMeshSharedDomainManifestResource,
   useMeshSharedDomainQualityGatesResource,
   useMeshSharedDomainRealizedSizeFieldsResource,
@@ -36,6 +37,12 @@ import {
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+import {
+  buildSemanticRenderTargetCatalog,
+  isUniverseOuterBoundaryCarrier,
+  semanticRenderTargetCarriersFromManifest,
+} from "@/kernel/selection/semanticRenderTargetCatalog";
 import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import {
   resolveActiveObjectExtensionExplorerItems,
@@ -55,6 +62,7 @@ import {
   buildExplorerTree,
   buildModelTree,
   filterExplorerNodes,
+  findExplorerNodePath,
 } from "./builders/buildModelTree";
 import {
   modelTreeSnapshotFromScene,
@@ -69,6 +77,7 @@ import {
 import {
   activateTextureLoadNode,
   expandExplorerNodes,
+  revealExplorerNode,
   setExplorerActiveTab,
   setExplorerFilterText,
   useExplorerStoreSelector,
@@ -204,6 +213,13 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   );
   const modelResource = useSceneResource({ enabled: modelTabActive });
   const modelRegions = useModelRegionsResource({ enabled: modelTabActive });
+  const regionIds = useMemo(
+    () => (modelRegions.data?.regions ?? []).map((region) => region.region_id),
+    [modelRegions.data?.regions],
+  );
+  const regionMemberships = useMeshRegionMembershipsResource(regionIds, {
+    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatusData),
+  });
   const modelMaterialFields = useModelMaterialFieldsResource({
     enabled: modelTabActive,
   });
@@ -280,6 +296,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           couplings: modelCouplings.data,
           materialFields: modelMaterialFields.data,
           regions: modelRegions.data,
+          regionMemberships: regionMemberships.data,
         }),
         stageExecution.data,
       ),
@@ -292,6 +309,12 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     const latestSuccessfulBuildRecord = record(latestSuccessfulBuild.data);
     const latestBuildProvenance = record(latestSuccessfulBuildRecord?.provenance);
     const modelResourceRecord = record(modelResource.data);
+    const semanticTargetCatalog = buildSemanticRenderTargetCatalog({
+      parts: semanticRenderTargetCarriersFromManifest(manifest.data),
+      sceneObjectIds: new Set(
+        (modelSnapshot.objects ?? []).map((object) => object.id),
+      ),
+    });
     const mesh: ModelTreeMeshSnapshot = {
       activeBuildStatus: meshPipelineStatusIsActive(activeBuildStatus)
         ? activeBuildStatus
@@ -307,21 +330,34 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       meshName: manifest.data?.mesh_name,
       meshRevision: meshSummary.data?.revision ?? manifest.data?.revision,
       objectSegmentCount: manifest.data?.object_segments?.length ?? null,
+      outerBoundaryPartCount:
+        manifest.data?.mesh_parts?.filter(isUniverseOuterBoundaryCarrier).length ?? null,
       partCount: manifest.data?.mesh_parts?.length ?? null,
       qualityStatus: qualityStatus(qualityGates.data?.gates),
       realizedSizeFieldCount:
         realizedSizeFields.data?.realized_size_fields?.fields?.length ?? null,
       regionCount: manifest.data?.regions?.length ?? null,
       sourceSceneRevision: revisionValue(modelResourceRecord?.revision),
+      visualizationPartFallbacks: semanticTargetCatalog.entries
+        .filter((entry) => entry.targetKind === "part")
+        .flatMap((entry) =>
+          entry.carrierIds.slice(0, 1).map((carrierId) => ({
+            id: carrierId,
+            label: entry.label,
+            visualizationTargetId: entry.targetId,
+          })),
+        ),
     };
-    const objects = modelSnapshot.objects?.map((object) => ({
-      ...object,
-      extensions: resolveActiveObjectExtensionExplorerItems(
-        object.id,
-        objectExtensionActivation,
-      ),
-      textureLoadEnabled: textureLoadObjectIds.has(object.id),
-    }));
+    const objects = modelSnapshot.objects
+      ?.filter((object) => !isVisualizationAirboxIdentity(object))
+      .map((object) => ({
+        ...object,
+        extensions: resolveActiveObjectExtensionExplorerItems(
+          object.id,
+          objectExtensionActivation,
+        ),
+        textureLoadEnabled: textureLoadObjectIds.has(object.id),
+      }));
     const baseNodes =
       activeTab === "model"
         ? buildModelTree(
@@ -343,12 +379,13 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
             frequencyDomainSpectrum: frequencyDomainSpectrum.data,
           });
-    return filterExplorerNodes(baseNodes, filterText);
+    return filterExplorerNodes(baseNodes, filterText, selectedNodeId);
   }, [
     activeBuild.data,
     latestSuccessfulBuild.data,
     activeTab,
     filterText,
+    selectedNodeId,
     crossSections,
     manifest.data,
     meshSummary.data,
@@ -356,6 +393,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelCouplings.data,
     modelMaterialFields.data,
     modelRegions.data,
+    regionMemberships.data,
     stageExecution.data,
     hysteresisExecutionTree.data,
     textureLoadObjectIds,
@@ -371,6 +409,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     frequencyDomainResponseSweep.data,
     frequencyDomainSpectrum.data,
   ]);
+
+  useEffect(() => {
+    if (!selectedNodeId?.startsWith("model:") || activeTab === "model") return;
+    setExplorerActiveTab("model");
+  }, [activeTab, selectedNodeId]);
+
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    const path = findExplorerNodePath(nodes, selectedNodeId);
+    if (!path) return;
+    revealExplorerNode(activeTab, selectedNodeId, path.slice(0, -1));
+  }, [activeTab, nodes, selectedNodeId]);
 
   useEffect(() => {
     const unsubscribe = subscribeExplorerTextureLoadNodeRequested(

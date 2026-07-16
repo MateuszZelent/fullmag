@@ -825,6 +825,7 @@ mod tests {
             domain_frame: None,
             generation_id: Some(generation_id.to_string()),
             per_domain_quality: std::collections::HashMap::new(),
+            build_report: None,
         }
     }
 
@@ -845,6 +846,7 @@ mod tests {
             domain_frame: None,
             generation_id: None,
             per_domain_quality: std::collections::HashMap::new(),
+            build_report: None,
         }
     }
 

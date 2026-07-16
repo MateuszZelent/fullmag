@@ -618,7 +618,7 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             stats_publication_source.find("stats.total_energy_joules =") !=
                 std::string::npos &&
-            stats_publication_source.find("stats.mx = mx_sum / magnetic_count") !=
+            stats_publication_source.find("stats.mx = mx_sum / moment_weight") !=
                 std::string::npos &&
             stats_publication_source.find("fill_demag_solver_stats(ctx, stats)") !=
                 std::string::npos &&
@@ -627,7 +627,7 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
         "GPU CUDA RK final stats publication source must own scalar-to-stats publication");
     check(
         stats_source.find("stats.total_energy_joules =") == std::string::npos &&
-            stats_source.find("stats.mx = mx_sum / magnetic_count") ==
+            stats_source.find("stats.mx = mx_sum / moment_weight") ==
                 std::string::npos &&
             stats_source.find("fill_demag_solver_stats(ctx, stats)") ==
                 std::string::npos &&
@@ -1000,22 +1000,22 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             magnetization_source.find("GpuFinalScalarSlot::MzSum") !=
                 std::string::npos &&
-            magnetization_source.find("GpuFinalScalarSlot::MagneticCount") !=
+            magnetization_source.find("GpuFinalScalarSlot::MomentWeight") !=
                 std::string::npos &&
-            magnetization_source.find("launch GPU RK magnetic count reduction") !=
+            magnetization_source.find("launch GPU RK magnetic moment weight reduction") !=
                 std::string::npos,
-        "GPU CUDA RK magnetization reductions source must own average magnetization reductions");
+        "GPU CUDA RK magnetization reductions source must own moment-weighted average magnetization reductions");
     check(
         observable_source.find("fullmag_cuda_field_metric_blocks(") == std::string::npos &&
             observable_source.find("fullmag_cuda_magnetization_sum_blocks(") ==
                 std::string::npos &&
             observable_source.find("GpuFinalScalarSlot::MaxTorque") ==
                 std::string::npos &&
-            observable_source.find("GpuFinalScalarSlot::MagneticCount") ==
+            observable_source.find("GpuFinalScalarSlot::MomentWeight") ==
                 std::string::npos &&
             observable_source.find("launch GPU RK max H_eff reduction") ==
                 std::string::npos &&
-            observable_source.find("launch GPU RK magnetic count reduction") ==
+            observable_source.find("launch GPU RK magnetic moment weight reduction") ==
                 std::string::npos,
         "GPU CUDA RK final observable reductions source must delegate observable reduction internals");
     check(
@@ -1503,6 +1503,8 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
     const std::string stage_compute =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
+    const std::string runtime_snapshot =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "snapshot.cpp");
 
     check(
         cmake.find("gpu/cuda/demag_poisson/poisson.cpp") != std::string::npos,
@@ -1553,8 +1555,24 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         stage_compute_header.find("GPU CUDA Poisson demag stage compute header") !=
                 std::string::npos &&
             stage_compute_header.find("bool compute_device_demag_for_device_stage(") !=
+                std::string::npos &&
+            stage_compute_header.find("bool recover_device_demag_visual_field(") !=
                 std::string::npos,
-        "GPU CUDA Poisson demag stage compute header must declare stage compute");
+        "GPU CUDA Poisson demag stage compute header must declare stage compute and snapshot-only full-domain visual recovery");
+    check(
+        stage_compute.find("bool recover_device_demag_visual_field(") !=
+                std::string::npos &&
+            stage_compute.find("auto &visual = gpu.demag_poisson.poisson_gradient;") !=
+                std::string::npos &&
+            stage_compute.find("nullptr,\n        visual.x") != std::string::npos &&
+            stage_compute.find("ctx.demag.h_visual_xyz") != std::string::npos &&
+            runtime_snapshot.find("recover_device_demag_visual_field(") !=
+                std::string::npos,
+        "strict GPU snapshots must recover full-domain H_demag into the dedicated Poisson gradient buffer before observable readback");
+    check(
+        runtime_snapshot.find("ctx.demag.h_visual_xyz = ctx.demag.h_xyz;") ==
+            std::string::npos,
+        "GPU snapshot readback must not replace full-domain visual H_demag with the material-masked solver field");
     check(
         demag_state_header.find("GPU CUDA Poisson demag device-state module header") !=
                 std::string::npos &&

@@ -22,6 +22,18 @@ __global__ void add_scaled_field_inplace_kernel(
     }
 }
 
+__global__ void scale_field_kernel(
+    const double *__restrict__ h_basis,
+    double *__restrict__ h_out,
+    double scale,
+    int N)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) {
+        h_out[i] = scale * h_basis[i];
+    }
+}
+
 void fullmag_cuda_add_scaled_field_inplace(
     const double *h_add,
     double *h_accum,
@@ -35,6 +47,17 @@ void fullmag_cuda_add_scaled_field_inplace(
         h_accum,
         scale,
         N);
+}
+
+void fullmag_cuda_scale_field(
+    const double *h_basis,
+    double *h_out,
+    double scale,
+    int N,
+    cudaStream_t stream)
+{
+    const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
+    scale_field_kernel<<<num_blocks, kBlockSize, 0, stream>>>(h_basis, h_out, scale, N);
 }
 
 } // namespace fullmag::fem

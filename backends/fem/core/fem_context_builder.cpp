@@ -14,6 +14,7 @@
 #include "context.hpp"
 #include "core/fem_field_buffers.hpp"
 #include "core/fem_material_fields.hpp"
+#include "core/fem_material_runtime.hpp"
 #include "core/fem_mesh.hpp"
 #include "core/fem_plan_fields.hpp"
 #include "core/fem_state.hpp"
@@ -35,6 +36,8 @@
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
 
+#include <cmath>
+
 namespace fullmag::fem {
 
 bool build_context_from_plan(
@@ -55,6 +58,9 @@ bool build_context_from_plan(
     initialize_exchange_plan_fields(ctx, plan);
     initialize_demag_plan_fields(ctx, plan);
     initialize_zeeman_plan_fields(ctx, plan);
+    if (!copy_regional_field_drive_plan(ctx, plan, error)) {
+        return false;
+    }
     if (!initialize_mesh_plan_fields(ctx, plan.mesh, error)) {
         return false;
     }
@@ -76,6 +82,10 @@ bool build_context_from_plan(
         return false;
     }
 
+    if (!initialize_material_runtime(ctx, error)) {
+        return false;
+    }
+
     if (!normalize_anisotropy_axes(ctx, error)) {
         return false;
     }
@@ -87,9 +97,18 @@ bool build_context_from_plan(
     if (!initialize_state_plan_fields(ctx, plan, error)) {
         return false;
     }
+    if (!std::isfinite(plan.stage_start_time_s) || plan.stage_start_time_s < 0.0) {
+        error = "stage_start_time_s must be finite and non-negative";
+        return false;
+    }
+    ctx.state.current_time = plan.stage_start_time_s;
 
     // Precompute per-node dual volumes for thermal noise after mesh masks exist.
     compute_node_volumes(ctx);
+
+    if (!project_regional_field_drive_bases(ctx, error)) {
+        return false;
+    }
 
     initialize_uniform_zeeman_field(ctx);
     initialize_context_field_buffers(ctx);

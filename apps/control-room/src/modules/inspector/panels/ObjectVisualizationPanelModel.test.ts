@@ -5,6 +5,7 @@ import type {
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
 import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
+import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 import {
   DEFAULT_AIRBOX_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
@@ -15,8 +16,9 @@ import {
 
 import {
   buildAirboxVectorDiagnostic,
+  queuePartVectorVisibilityPatch,
+  queueTargetVectorVisibilityPatch,
   buildAirboxVisibilityDiagnostic,
-  buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
   displayPassTogglePatch,
@@ -26,13 +28,20 @@ import {
   geometryScopeDisplayPatch,
   geometryScopeVectorBudgetPatch,
   quantitySourcePatch,
-  objectVisualizationTargetForMeshPart,
+  resolveObjectVisualizationPanelTarget,
+  resolveSelectedTargetVectorMeshPartRows,
+  resolveSelectedTargetVectorMeshParts,
+  visualizationVectorSurfaceActionTargetLabel,
+  resolveObjectVisualizationPanelSelectionTarget,
   resolveSurfaceColorSourceItems,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
+  resolveChildRegionOverrideTargetIds,
+  removeOwnerChildRegionVisualizationOverrides,
   resolveRegionVisualizationCarrier,
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
+  resolveVisualizationVectorAccounting,
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowSurfaceFieldColorbar,
@@ -55,6 +64,417 @@ import {
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
+  it("reports decoded and adopted vector counts only for matching identities", () => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: { pointCount: 10_586 },
+        request: { resourceKey: "field-key" },
+        revisions: { meshTopologyHash: "topology-a" },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build" },
+          adoption: {
+            adoptedFieldBufferId: "field-buffer",
+            adoptedResourceKey: "field-key",
+            adoptedVectorBuildKey: "vector-build",
+            adoptedVectorItemCount: 10_586,
+          },
+        },
+      }],
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-a",
+      snapshots: [snapshot],
+    })).toEqual({
+      adoptedGlyphCount: 10_586,
+      availableNodeCount: 10_586,
+      decodedSampleCount: 10_586,
+    });
+  });
+
+  it("rejects oversized decoded payloads from vector accounting", () => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: { pointCount: 16_940 },
+        request: { resourceKey: "field-key" },
+        revisions: { meshTopologyHash: "topology-a" },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build" },
+          adoption: {
+            adoptedFieldBufferId: "field-buffer",
+            adoptedResourceKey: "field-key",
+            adoptedVectorBuildKey: "vector-build",
+            adoptedVectorItemCount: 16_940,
+          },
+        },
+      }],
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-a",
+      snapshots: [snapshot],
+    })).toEqual({
+      adoptedGlyphCount: null,
+      availableNodeCount: 10_586,
+      decodedSampleCount: null,
+    });
+  });
+
+  it.each([
+    "scope-kind-mismatch",
+    "scope-id-mismatch",
+    "quantity-mismatch",
+  ])("rejects blocked %s payload identity from vector accounting", (code) => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: { pointCount: 10_586 },
+        request: { resourceKey: "field-key" },
+        revisions: { meshTopologyHash: "topology-a" },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build" },
+          adoption: {
+            adoptedFieldBufferId: "field-buffer",
+            adoptedResourceKey: "field-key",
+            adoptedVectorBuildKey: "vector-build",
+            adoptedVectorItemCount: 10_586,
+          },
+        },
+      }],
+      disposition: "blocked",
+      issues: [{
+        code,
+        evidence: [],
+        message: "Decoded field identity does not match its request.",
+        severity: "error",
+        source: "decoded-payload",
+      }],
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-a",
+      snapshots: [snapshot],
+    })).toEqual({
+      adoptedGlyphCount: null,
+      availableNodeCount: 10_586,
+      decodedSampleCount: null,
+    });
+  });
+
+  it("reports waiting until a current debug snapshot exists", () => {
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-a",
+      snapshots: [],
+    })).toEqual({
+      adoptedGlyphCount: null,
+      availableNodeCount: 10_586,
+      decodedSampleCount: null,
+    });
+  });
+
+  it("clears decoded and adopted counts from a stale topology", () => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: { pointCount: 10_586 },
+        request: { resourceKey: "field-key" },
+        revisions: { meshTopologyHash: "topology-old" },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build" },
+          adoption: {
+            adoptedFieldBufferId: "field-buffer",
+            adoptedResourceKey: "field-key",
+            adoptedVectorBuildKey: "vector-build",
+            adoptedVectorItemCount: 10_586,
+          },
+        },
+      }],
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-current",
+      snapshots: [snapshot],
+    })).toEqual({
+      adoptedGlyphCount: null,
+      availableNodeCount: 10_586,
+      decodedSampleCount: null,
+    });
+  });
+
+  it("keeps decoded samples but clears adoption on a stale build identity", () => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: { pointCount: 10_586 },
+        request: { resourceKey: "field-key" },
+        revisions: { meshTopologyHash: "topology-a" },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build-current" },
+          adoption: {
+            adoptedFieldBufferId: "field-buffer",
+            adoptedResourceKey: "field-key",
+            adoptedVectorBuildKey: "vector-build-old",
+            adoptedVectorItemCount: 10_586,
+          },
+        },
+      }],
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      availableNodeCount: 10_586,
+      currentTopologyHash: "topology-a",
+      snapshots: [snapshot],
+    })).toEqual({
+      adoptedGlyphCount: null,
+      availableNodeCount: 10_586,
+      decodedSampleCount: 10_586,
+    });
+  });
+
+  it("counts backend-only child region overrides after reload", () => {
+    const childTargets = [
+      { id: "region:object-a:core", kind: "region" as const },
+      { id: "region:object-a:shell", kind: "region" as const },
+    ];
+
+    expect(
+      resolveChildRegionOverrideTargetIds({
+        backendOverrides: [
+          {
+            scope: "region",
+            scope_id: "region:object-a:core",
+            style: { surface_color_source: "component_x" },
+          },
+        ],
+        childTargets,
+        objectId: "object-a",
+        snapshot: { overrides: {} },
+      }),
+    ).toEqual(new Set(["region:object-a:core"]));
+  });
+
+  it("deduplicates backend and pending child region overrides", () => {
+    const childTargets = [{ id: "region:object-a:core", kind: "region" as const }];
+
+    expect(
+      resolveChildRegionOverrideTargetIds({
+        backendOverrides: [
+          {
+            scope: "region",
+            scope_id: "region:object-a:core",
+            display: { vectors: { visible: false } },
+          },
+        ],
+        childTargets,
+        objectId: "object-a",
+        snapshot: {
+          overrides: {},
+          pendingOverrides: {
+            "region:object-a:core": { baseRevision: 4, patch: { vectorsVisible: false } },
+          },
+        },
+      }),
+    ).toEqual(new Set(["region:object-a:core"]));
+  });
+
+  it("counts and clears a backend-only owner region when no child targets are loaded", () => {
+    const overrides = [
+      { scope: "region", scope_id: "region:object-a:core" },
+      { scope: "region", scope_id: "region:object-b:core" },
+    ] as const;
+
+    expect(
+      resolveChildRegionOverrideTargetIds({
+        backendOverrides: overrides,
+        childTargets: [],
+        objectId: "object-a",
+        snapshot: { overrides: {} },
+      }),
+    ).toEqual(new Set(["region:object-a:core"]));
+    expect(
+      removeOwnerChildRegionVisualizationOverrides({ objectId: "object-a", overrides }),
+    ).toEqual([{ scope: "region", scope_id: "region:object-b:core" }]);
+  });
+
+  it("resets only region overrides owned by the current object", () => {
+    expect(
+      removeOwnerChildRegionVisualizationOverrides({
+        objectId: "object-a",
+        overrides: [
+          { scope: "region", scope_id: "region:object-a:core" },
+          { scope: "region", scope_id: "region:object-b:core" },
+          { scope: "object", scope_id: "object-a" },
+        ],
+      }),
+    ).toEqual([
+      { scope: "region", scope_id: "region:object-b:core" },
+      { scope: "object", scope_id: "object-a" },
+    ]);
+  });
+  it.each([
+    [{ id: "region:object-a:shell", kind: "region" } as const, "Target: region:object-a:shell"],
+    [{ id: "airbox", kind: "airbox" } as const, "Target: airbox"],
+  ])("labels every scoped surface row with its canonical action target", (target, label) => {
+    expect(visualizationVectorSurfaceActionTargetLabel(target)).toBe(label);
+  });
+
+  it("limits object surface rows to the selected object target", () => {
+    const meshParts = [
+      { id: "part-a", label: "Object A", object_id: "object-a", role: "magnetic" },
+      { id: "part-b", label: "Object B", object_id: "object-b", role: "magnetic" },
+    ] as MeshPart[];
+
+    expect(
+      resolveSelectedTargetVectorMeshParts({
+        meshParts,
+        manifestRegions: [],
+        sceneObjectIds: new Set(["object-a", "object-b"]),
+        target: { id: "object:object-a", kind: "object" },
+        visualizationState: null,
+      }).map((part) => part.id),
+    ).toEqual(["part-a"]);
+  });
+
+  it("uses only manifest region mesh-part carriers for a selected region", () => {
+    const meshParts = [
+      { id: "part-region", label: "Region", object_id: "object-a", role: "magnetic" },
+      { id: "part-other", label: "Other", object_id: "object-a", role: "magnetic" },
+    ] as MeshPart[];
+
+    expect(
+      resolveSelectedTargetVectorMeshParts({
+        meshParts,
+        manifestRegions: [
+          {
+            mesh_part_ids: ["part-region"],
+            source_object_ids: ["object-a"],
+            source_region_candidate_id: "shell",
+          },
+        ] as never,
+        sceneObjectIds: new Set(["object-a"]),
+        target: { id: "region:object-a:shell", kind: "region" },
+        visualizationState: null,
+      }).map((part) => part.id),
+    ).toEqual(["part-region"]);
+  });
+
+  it("uses only air carriers for a selected airbox", () => {
+    const meshParts = [
+      { id: "part-air", label: "Air", role: "air" },
+      { id: "part-a", label: "Object A", object_id: "object-a", role: "magnetic" },
+    ] as MeshPart[];
+
+    expect(
+      resolveSelectedTargetVectorMeshParts({
+        meshParts,
+        manifestRegions: [],
+        sceneObjectIds: new Set(["object-a"]),
+        target: { id: "airbox", kind: "airbox" },
+        visualizationState: null,
+      }).map((part) => part.id),
+    ).toEqual(["part-air"]);
+  });
+
+  it("labels every multi-carrier region and airbox row with its selected target", () => {
+    const regionRows = resolveSelectedTargetVectorMeshPartRows({
+      meshParts: [
+        { id: "part-region-a", label: "Region A", object_id: "object-a", role: "magnetic" },
+        { id: "part-region-b", label: "Region B", object_id: "object-a", role: "magnetic" },
+      ] as MeshPart[],
+      manifestRegions: [{ mesh_part_ids: ["part-region-a", "part-region-b"], source_object_ids: ["object-a"], source_region_candidate_id: "shell" }] as never,
+      sceneObjectIds: new Set(["object-a"]),
+      target: { id: "region:object-a:shell", kind: "region" },
+      visualizationState: null,
+    });
+    const airboxRows = resolveSelectedTargetVectorMeshPartRows({
+      meshParts: [
+        { id: "part-air-a", label: "Air A", role: "air" },
+        { id: "part-air-b", label: "Air B", role: "airbox" },
+      ] as MeshPart[],
+      manifestRegions: [],
+      sceneObjectIds: new Set(),
+      target: { id: "airbox", kind: "airbox" },
+      visualizationState: null,
+    });
+
+    expect(regionRows.map((row) => row.actionTargetLabel)).toEqual([
+      "Target: region:object-a:shell",
+      "Target: region:object-a:shell",
+    ]);
+    expect(airboxRows.map((row) => row.actionTargetLabel)).toEqual([
+      "Target: airbox",
+      "Target: airbox",
+    ]);
+    expect(airboxRows.map((row) => row.label)).toEqual(["Airbox", "Airbox"]);
+  });
+
+  it("patches the selected region target instead of a listed mesh-part carrier", () => {
+    const queuedPatches: unknown[] = [];
+    const controller = new ObjectVisualizationController();
+    const state = { revision: 7, overrides: [], targets: { airbox: {}, objects: [], parts: [] } } as never;
+    const target = { id: "region:object-a:shell", kind: "region" } as const;
+
+    expect(
+      queueTargetVectorVisibilityPatch({
+        controller,
+        state,
+        sync: { queuePatch: (patch) => queuedPatches.push(patch) },
+        target,
+        visible: false,
+      }),
+    ).toEqual(target);
+    expect(queuedPatches).toEqual([
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: false } },
+            scope: "region",
+            scope_id: "region:object-a:shell",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it.each([
+    { scopeId: "object-a", target: { id: "object:object-a", kind: "object" } as const },
+    { scopeId: "region:object-a:shell", target: { id: "region:object-a:shell", kind: "region" } as const },
+    { scopeId: "airbox", target: { id: "airbox", kind: "airbox" } as const },
+  ])("keeps vector actions on the selected $target.kind target", ({ scopeId, target }) => {
+    const queuedPatches: unknown[] = [];
+    const controller = new ObjectVisualizationController();
+    const state = { revision: 7, overrides: [], targets: { airbox: {}, objects: [], parts: [] } } as never;
+
+    expect(
+      queueTargetVectorVisibilityPatch({
+        controller,
+        state,
+        sync: { queuePatch: (patch) => queuedPatches.push(patch) },
+        target,
+        visible: false,
+      }),
+    ).toEqual(target);
+    expect(queuedPatches[0]).toMatchObject({
+      overrides: [
+        expect.objectContaining({
+          scope: target.kind,
+          scope_id: scopeId,
+        }),
+      ],
+    });
+  });
   it("exposes the surface color source options used by Surface Coloring", () => {
     expect(SURFACE_COLOR_SOURCE_ITEMS.map((item) => item.value)).toEqual([
       "solid",
@@ -385,33 +805,161 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(visualizationResetActionLabel("object")).toBe("Reset display");
   });
 
-  it("maps manifest mesh parts to the same canonical object targets as the viewport", () => {
+  it("keeps geometry-only parts scoped to the backend registry target", () => {
     expect(
-      objectVisualizationTargetForMeshPart({
-        id: "part:permalloy_layer",
-        label: "Permalloy layer",
-        object_id: "permalloy_layer",
-      } as MeshPart),
-    ).toEqual({
-      id: "object:permalloy_layer",
-      kind: "object",
-      label: "Permalloy layer",
-    });
+      resolveObjectVisualizationPanelTarget({
+        part: {
+          geometry_id: "projection-film",
+          id: "part-film",
+          object_id: null,
+        } as MeshPart,
+        sceneObjectIds: new Set(),
+        visualizationState: {
+          targets: {
+            airbox: {},
+            objects: [],
+            parts: [{ scope: "part", scope_id: "part-film" }],
+          },
+        } as never,
+      }),
+    ).toMatchObject({ id: "part-film", kind: "part" });
   });
 
-  it("maps geometry-only mesh parts to canonical object targets", () => {
+  it("keeps a selected mesh part scoped to the part while its manifest is unavailable", () => {
     expect(
-      objectVisualizationTargetForMeshPart({
-        id: "part:permalloy_layer",
-        geometry_id: "permalloy_layer_geom",
-        label: "Permalloy layer",
-        object_id: null,
-      } as MeshPart),
-    ).toEqual({
-      id: "object:permalloy_layer",
-      kind: "object",
-      label: "Permalloy layer",
+      resolveObjectVisualizationPanelSelectionTarget({
+        selectedMeshPart: null,
+        selection: {
+          kind: "mesh-part",
+          label: "Film mesh",
+          nodeId: "part-film",
+          objectId: "projection-film",
+          ref: {
+            kind: "mesh-part",
+            nodeId: "part-film",
+            objectId: "projection-film",
+            type: "mesh-part",
+            visualizationTargetId: "mesh-part:part-film",
+          },
+        } as never,
+        selectionTarget: { id: "object:projection-film", kind: "object" },
+        sceneObjectIds: new Set(),
+        visualizationState: null,
+      }),
+    ).toMatchObject({ id: "part-film", kind: "part" });
+  });
+
+  it("uses the semantic target id rather than an Explorer node id when an orphan manifest is unavailable", () => {
+    expect(
+      resolveObjectVisualizationPanelSelectionTarget({
+        selectedMeshPart: null,
+        selection: {
+          kind: "mesh-part",
+          label: "Recovered volume",
+          nodeId: "model:mesh:unassigned:part%3Aorphan",
+          objectId: null,
+          ref: {
+            carrierPartId: "part:orphan",
+            kind: "mesh-part",
+            nodeId: "model:mesh:unassigned:part%3Aorphan",
+            objectId: null,
+            type: "mesh-part",
+            visualizationTargetId: "part:orphan",
+          },
+        } as never,
+        selectionTarget: { id: "part:orphan", kind: "part" },
+        sceneObjectIds: new Set(),
+        visualizationState: null,
+      }),
+    ).toMatchObject({ id: "part:orphan", kind: "part" });
+  });
+
+  it("maps a selected degraded object-segment carrier back to its object target", () => {
+    expect(
+      resolveObjectVisualizationPanelSelectionTarget({
+        selectedMeshPart: {
+          carrierKind: "object-segment",
+          fieldCapable: false,
+          id: "segment:projection-film:0",
+          label: "projection-film",
+          object_id: "projection-film",
+          role: "magnetic",
+        } as never,
+        selection: {
+          kind: "mesh-part",
+          label: "Projection film fallback",
+          nodeId: "segment:projection-film:0",
+          objectId: "projection-film",
+          ref: {
+            kind: "mesh-part",
+            nodeId: "segment:projection-film:0",
+            objectId: "projection-film",
+            type: "mesh-part",
+          },
+        } as never,
+        selectionTarget: { id: "segment:projection-film:0", kind: "part" },
+        sceneObjectIds: new Set(["projection-film"]),
+        visualizationState: null,
+      }),
+    ).toMatchObject({ id: "object:projection-film", kind: "object" });
+  });
+
+  it("applies a part-vector patch immediately until a newer registry revision acknowledges it", () => {
+    const controller = new ObjectVisualizationController();
+    const queuedPatches: unknown[] = [];
+    const state = {
+      revision: 7,
+      overrides: [],
+      targets: {
+        airbox: {},
+        objects: [],
+        parts: [
+          {
+            scope: "part",
+            scope_id: "part-film",
+            settings: { vectors_visible: true },
+          },
+        ],
+      },
+    } as never;
+
+    const target = queuePartVectorVisibilityPatch({
+      controller,
+      part: { id: "part-film", object_id: "projection-film" } as MeshPart,
+      sceneObjectIds: new Set(["projection-film"]),
+      state,
+      sync: { queuePatch: (patch) => queuedPatches.push(patch) },
+      visible: false,
     });
+
+    expect(target).toMatchObject({ id: "part-film", kind: "part" });
+    expect(queuedPatches).toEqual([
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: false } },
+            scope: "part",
+            scope_id: "part-film",
+          },
+        ],
+      },
+    ]);
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: state,
+      }).settings.vectorsVisible,
+    ).toBe(false);
+
+    controller.acknowledgePendingTargetPatches(8);
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: state,
+      }).settings.vectorsVisible,
+    ).toBe(true);
   });
 
   it("builds scalar palette patches for the visualization quantity colormap", () => {
@@ -454,9 +1002,12 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
-  it("does not force region visualization through mesh topology safety mode", () => {
-    const scene = { objects: [{ id: "film", tags: ["mesh:dirty"] }], revision: 2 };
-    const staleManifest = { source_scene_revision: 1 };
+  it("uses the shared freshness resolver for region visualization", () => {
+    const scene = { objects: [{ id: "film", tags: ["mesh:ready"] }], revision: 12 };
+    const staleManifest = {
+      mesh_parts: [{ object_id: "film" }],
+      source_scene_revision: 11,
+    };
 
     expect(
       resolveObjectVisualizationPanelTopologyFreshness({
@@ -464,7 +1015,7 @@ describe("ObjectVisualizationPanelModel", () => {
         scene,
         targetKind: "region",
       }),
-    ).toBeNull();
+    ).toBe("stale");
     expect(
       resolveObjectVisualizationPanelTopologyFreshness({
         manifest: staleManifest,
@@ -551,7 +1102,7 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual({ shaderVisible: false });
   });
 
-  it("turns hidden target pass toggles into visible renderable passes", () => {
+  it("preserves a hidden target while computing pass-only patches", () => {
     const hiddenRegionSettings = {
       ...DEFAULT_OBJECT_VISUALIZATION,
       boundsVisible: false,
@@ -565,24 +1116,40 @@ describe("ObjectVisualizationPanelModel", () => {
 
     expect(surfaceDisplayPassPatch(hiddenRegionSettings)).toMatchObject({
       shaderVisible: true,
-      visible: true,
     });
+    expect(surfaceDisplayPassPatch(hiddenRegionSettings)).not.toHaveProperty("visible");
     expect(
       displayPassTogglePatch(hiddenRegionSettings, "wireframeVisible"),
-    ).toEqual({
-      visible: true,
-      wireframeVisible: true,
-    });
+    ).toEqual({ wireframeVisible: true });
     expect(
       displayPassTogglePatch(hiddenRegionSettings, "boundsVisible"),
-    ).toEqual({
-      boundsVisible: true,
-      visible: true,
-    });
+    ).toEqual({ boundsVisible: true });
     expect(renderModeDisplayPatch("points")).toMatchObject({
       pointsVisible: true,
-      visible: true,
     });
+    expect(renderModeDisplayPatch("points")).not.toHaveProperty("visible");
+  });
+
+  it("restores configured passes after a hidden target becomes visible", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:free-layer", kind: "object" as const };
+    controller.patchTarget(target, {
+      visible: false,
+      wireframeVisible: true,
+    });
+
+    const hidden = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+    });
+    expect(hidden.settings).toMatchObject({ visible: false, wireframeVisible: true });
+    expect(hidden.effectiveSettings.wireframeVisible).toBe(false);
+
+    controller.patchTarget(target, { visible: true });
+    expect(
+      resolveTargetVisualization({ snapshot: controller.getSnapshot(), target })
+        .effectiveSettings,
+    ).toMatchObject({ visible: true, wireframeVisible: true });
   });
 
   it("turns Full geometry scope into a visible volume-mesh pass when only the surface is active", () => {
@@ -740,19 +1307,21 @@ describe("ObjectVisualizationPanelModel", () => {
     ]));
   });
 
-  it("scales the airbox arrow budget to the airbox node count", () => {
+  it("scales the airbox arrow budget to the air-only node count", () => {
     const meshParts: MeshPart[] = [
       meshPart({
         id: "part:__air__",
         label: "Airbox",
-        node_count: 34668,
-        role: "air",
+        node_count: 16_940,
+        node_indices: Array.from({ length: 16_940 }, (_, index) => index),
+        role: "carrier",
       }),
       meshPart({
         id: "arch_waveguide",
         label: "Arch",
-        node_count: 34229,
-        role: "object",
+        node_count: 6_354,
+        node_indices: Array.from({ length: 6_354 }, (_, index) => index),
+        role: "magnetic",
       }),
     ];
 
@@ -762,9 +1331,42 @@ describe("ObjectVisualizationPanelModel", () => {
         target: { id: "airbox", kind: "airbox" },
       }),
     ).toEqual({
-      availableNodeCount: 34668,
+      availableNodeCount: 10_586,
       exact: true,
-      max: 34668,
+      max: 10_586,
+      min: 0,
+      step: 1,
+    });
+  });
+
+  it("preserves an exact zero budget when magnetic membership covers the Airbox carrier", () => {
+    const sharedNodes = [0, 1, 2, 3];
+    const meshParts: MeshPart[] = [
+      meshPart({
+        id: "part:__air__",
+        label: "Airbox",
+        node_count: sharedNodes.length,
+        node_indices: sharedNodes,
+        role: "carrier",
+      }),
+      meshPart({
+        id: "magnet",
+        label: "Magnet",
+        node_count: sharedNodes.length,
+        node_indices: sharedNodes,
+        role: "magnetic",
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        meshParts,
+        target: { id: "airbox", kind: "airbox" },
+      }),
+    ).toEqual({
+      availableNodeCount: 0,
+      exact: true,
+      max: 0,
       min: 0,
       step: 1,
     });
@@ -1000,6 +1602,9 @@ describe("ObjectVisualizationPanelModel", () => {
         mesh_id: "shared-domain",
         mesh_part_ids: [],
         mesh_revision: 1,
+        freshness: "current",
+        realization: "realized",
+        region_membership_revision: 1,
         node_indices: [1, 2, 3, 4],
         region_id: "film:shell",
         source: "test",
@@ -1095,6 +1700,60 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
+  it("uses canonical surface-node membership when inline surface faces are absent", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        id: "part:__air__",
+        label: "Airbox",
+        node_count: 8,
+        node_indices: [0, 1, 2, 3, 4, 5, 6, 7],
+        role: "carrier",
+        surface_faces: [],
+        surface_node_indices: [0, 1, 4, 5, 6],
+      }),
+      meshPart({
+        id: "magnet",
+        label: "Magnet",
+        node_count: 4,
+        node_indices: [0, 1, 2, 3],
+        role: "magnetic",
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        geometryScope: "surface",
+        meshParts,
+        target: { id: "airbox", kind: "airbox" },
+      }),
+    ).toMatchObject({
+      availableNodeCount: 3,
+      exact: true,
+      max: 3,
+    });
+  });
+
+  it("keeps Airbox Surface accounting non-exact without canonical membership", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        id: "part:__air__",
+        label: "Airbox",
+        node_count: 8,
+        node_indices: [0, 1, 2, 3, 4, 5, 6, 7],
+        role: "air",
+        surface_faces: [],
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        geometryScope: "surface",
+        meshParts,
+        target: { id: "airbox", kind: "airbox" },
+      }),
+    ).toMatchObject({ exact: false });
+  });
+
   it("expands full arrow budgets from the current surface coverage", () => {
     expect(
       geometryScopeVectorBudgetPatch({
@@ -1155,26 +1814,6 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
-  it("reports displayed arrow samples against available target nodes", () => {
-    expect(
-      buildVisualizationVectorBudgetDiagnostic({
-        requestedBudget: 12,
-        vectorBudgetRange: {
-          availableNodeCount: 5,
-          exact: true,
-          max: 5,
-          min: 0,
-          step: 1,
-        },
-      }),
-    ).toEqual({
-      availableNodeCount: 5,
-      displayedGlyphCount: 5,
-      exact: true,
-      requestedBudget: 12,
-    });
-  });
-
   it("explains an airbox Visible request that is still off in backend state", () => {
     const diagnostic = buildAirboxVisibilityDiagnostic({
       displaySettings: {
@@ -1226,12 +1865,12 @@ describe("ObjectVisualizationPanelModel", () => {
 
   it("confirms airbox H_eff vectors when gates and catalog are available", () => {
     const fieldCatalog: FieldCatalogResource = {
-      domain_generation_id: 1,
+      domain_generation_id: "1",
       quantities: [
         {
           available: true,
           components: 3,
-          domain_generation_id: 1,
+          domain_generation_id: "1",
           field_revision: 3,
           kind: "vector",
           label: "Effective field",

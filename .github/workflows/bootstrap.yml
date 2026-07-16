@@ -21,14 +21,32 @@ jobs:
       - name: Run Rust contract tests
         run: cargo test -p fullmag-ir -p fullmag-plan -p fullmag-authoring
 
+  api-hygiene-rg13:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+
+      - name: Assert Ubuntu ripgrep 13
+        run: test "$(/usr/bin/rg --version | head -n 1)" = "ripgrep 13.0.0"
+
+      - name: Run API hygiene with ripgrep 13
+        run: |
+          set -euo pipefail
+          node_bin="$(command -v node)"
+          test "$("$node_bin" --version)" = "v24.18.0"
+          PATH=/usr/bin:/bin "$node_bin" apps/control-room/scripts/check-api-hygiene.mjs
+
   control-room-contracts:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Resource-first migration gates
-        run: ./scripts/ci-resource-first-gates.sh --strict
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -38,9 +56,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.15.0
+          node-version: 24.18.0
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+
+      - name: Resource-first migration gates
+        run: ./scripts/ci-resource-first-gates.sh --strict
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
@@ -65,6 +86,36 @@ jobs:
 
       - name: Test control-room app
         run: pnpm --dir apps/control-room test
+
+      - name: Install Chromium for viewport lifecycle audit
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Audit production viewport lifecycle and memory
+        run: pnpm --dir apps/control-room audit:viewport-3d-memory-churn
+
+      - name: Audit FEM topology WebGL position uploads
+        run: pnpm --dir apps/control-room audit:viewport-3d-fem-topology-uploads
+
+      - name: Verify viewport lifecycle audit negative controls
+        run: |
+          set -euo pipefail
+          for control in \
+            CONTROL_ROOM_AUDIT_INJECT_IDLE_LOOP \
+            CONTROL_ROOM_AUDIT_INJECT_WORKER_LEAK \
+            CONTROL_ROOM_AUDIT_INJECT_GPU_BUFFER_LEAK; do
+            if env "$control=1" pnpm --dir apps/control-room audit:viewport-3d-memory-churn; then
+              echo "Expected $control to fail the lifecycle audit."
+              exit 1
+            fi
+          done
+
+      - name: Upload viewport lifecycle audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: viewport-3d-browser-audit
+          path: apps/control-room/.artifacts/viewport-3d-browser-audit
+          if-no-files-found: warn
 
       - name: Build control-room app
         run: pnpm --dir apps/control-room build

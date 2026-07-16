@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-05-15
+- Last updated: 2026-07-14
 - Related ADRs:
   - `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
@@ -121,6 +121,22 @@ E_{\mathrm{d}}^{\mathrm{boot}}
 $$
 
 where $b$ is the assembled right-hand side.
+
+The equivalent field form is
+
+$$
+E_{\mathrm{d}}^{\mathrm{boot}}
+= -\frac{\mu_0}{2}\int_{\Omega_m}
+\mathbf{M}\cdot\mathbf{H}_{\mathrm{d}}\,dV.
+$$
+
+For a Robin solve, $\mathbf{H}_{\mathrm{d}}$ is recovered from the solution of
+$(K+\beta M_{\partial D})u=b$.  Therefore both $u^\top b$ and the field form
+already include the Robin boundary form.  A cached field-energy evaluation must
+return the same value as the direct Poisson energy; the legacy telemetry value
+`cached_robin_boundary_energy` is not an additional physical energy term.
+Adding $\mu_0\beta u^\top M_{\partial D}u/2$ a second time double-counts the
+boundary contribution and breaks $\delta E/\delta\mathbf{m}=-\mu_0M_s\mathbf{H}_{\mathrm{d}}$.
 
 ## 3. Discrete interpretation
 

@@ -222,6 +222,96 @@ double uniaxial_anisotropy_energy_from_element_quadrature_material(
     return energy_j;
 }
 
+double uniaxial_anisotropy_energy_from_material_realization(
+    const P1TetrahedralMaterialRealization &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &ku1_j_per_m3,
+    const std::vector<double> &ku2_j_per_m3,
+    const std::array<double, 3> &axis)
+{
+    const std::size_t nodes = material.node_count();
+    require_p1_aos3(m_xyz, nodes, "P1 magnetization");
+    require_p1_scalar(ku1_j_per_m3, nodes, "P1 Ku1");
+    require_p1_scalar(ku2_j_per_m3, nodes, "P1 Ku2");
+    require_unit_axis(axis);
+    if (material.ms_location() != MaterialCoefficientLocation::element_dg0) {
+        throw std::invalid_argument("sharp uniaxial material realization requires element_dg0 Ms");
+    }
+
+    double energy_j = 0.0;
+    for (const std::size_t ordinal : material.active_element_ordinals()) {
+        const P1TetrahedronMaterialTopology &element = material.element_topology(ordinal);
+        for (std::size_t ir = 0; ir < kGl4Nodes.size(); ++ir) {
+            const double r = kGl4Nodes[ir];
+            for (std::size_t is = 0; is < kGl4Nodes.size(); ++is) {
+                const double s = kGl4Nodes[is];
+                for (std::size_t it = 0; it < kGl3Nodes.size(); ++it) {
+                    const double t = kGl3Nodes[it];
+                    const std::array<double, 4> shape = {
+                        (1.0 - r) * (1.0 - s) * (1.0 - t), r,
+                        (1.0 - r) * s, (1.0 - r) * (1.0 - s) * t,
+                    };
+                    const double weight = 6.0 * element.volume_m3 *
+                        kGl4Weights[ir] * kGl4Weights[is] * kGl3Weights[it] *
+                        (1.0 - r) * (1.0 - r) * (1.0 - s);
+                    const double q = interpolate_m_dot_axis(m_xyz, axis, element, shape);
+                    const double q2 = q * q;
+                    energy_j -= weight * (
+                        interpolate_scalar(ku1_j_per_m3, element, shape) * q2 +
+                        interpolate_scalar(ku2_j_per_m3, element, shape) * q2 * q2);
+                }
+            }
+        }
+    }
+    return energy_j;
+}
+
+double uniaxial_anisotropy_directional_derivative_from_material_realization(
+    const P1TetrahedralMaterialRealization &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &p_xyz,
+    const std::vector<double> &ku1_j_per_m3,
+    const std::vector<double> &ku2_j_per_m3,
+    const std::array<double, 3> &axis)
+{
+    const std::size_t nodes = material.node_count();
+    require_p1_aos3(m_xyz, nodes, "P1 magnetization");
+    require_p1_aos3(p_xyz, nodes, "P1 probe");
+    require_p1_scalar(ku1_j_per_m3, nodes, "P1 Ku1");
+    require_p1_scalar(ku2_j_per_m3, nodes, "P1 Ku2");
+    require_unit_axis(axis);
+    if (material.ms_location() != MaterialCoefficientLocation::element_dg0) {
+        throw std::invalid_argument("sharp uniaxial material realization requires element_dg0 Ms");
+    }
+
+    double derivative_j = 0.0;
+    for (const std::size_t ordinal : material.active_element_ordinals()) {
+        const P1TetrahedronMaterialTopology &element = material.element_topology(ordinal);
+        for (std::size_t ir = 0; ir < kGl4Nodes.size(); ++ir) {
+            const double r = kGl4Nodes[ir];
+            for (std::size_t is = 0; is < kGl4Nodes.size(); ++is) {
+                const double s = kGl4Nodes[is];
+                for (std::size_t it = 0; it < kGl3Nodes.size(); ++it) {
+                    const double t = kGl3Nodes[it];
+                    const std::array<double, 4> shape = {
+                        (1.0 - r) * (1.0 - s) * (1.0 - t), r,
+                        (1.0 - r) * s, (1.0 - r) * (1.0 - s) * t,
+                    };
+                    const double weight = 6.0 * element.volume_m3 *
+                        kGl4Weights[ir] * kGl4Weights[is] * kGl3Weights[it] *
+                        (1.0 - r) * (1.0 - r) * (1.0 - s);
+                    const double q = interpolate_m_dot_axis(m_xyz, axis, element, shape);
+                    const double d = interpolate_m_dot_axis(p_xyz, axis, element, shape);
+                    derivative_j -= weight * d * (
+                        2.0 * interpolate_scalar(ku1_j_per_m3, element, shape) * q +
+                        4.0 * interpolate_scalar(ku2_j_per_m3, element, shape) * q * q * q);
+                }
+            }
+        }
+    }
+    return derivative_j;
+}
+
 relaxation::EnergyDifference uniaxial_anisotropy_energy_difference(
     const Context &ctx,
     const std::vector<double> &current_m_xyz,

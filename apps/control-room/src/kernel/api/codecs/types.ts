@@ -59,6 +59,13 @@ export interface DecodedTopology {
   positions: Float64Array;
 }
 
+export type {
+  DecodedPeriodicFacePair,
+  DecodedPeriodicPair,
+  DecodedPeriodicPairs,
+  DecodedPeriodicPairsStatus,
+} from "./periodicPairsCodec";
+
 export interface DecodedMeshQualityData {
   elementCount: number;
   gamma: Float64Array | null;

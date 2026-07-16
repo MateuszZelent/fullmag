@@ -171,7 +171,8 @@
 
 .fm-explorer-tree-row[data-status="queued"],
 .fm-explorer-tree-row[data-status="skipped"],
-.fm-explorer-tree-row[data-status="cancelled"] {
+.fm-explorer-tree-row[data-status="cancelled"],
+.fm-explorer-tree-row[data-status="unavailable"] {
   color: var(--fm-text-muted);
 }
 

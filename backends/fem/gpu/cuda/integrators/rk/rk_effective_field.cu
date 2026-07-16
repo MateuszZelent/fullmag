@@ -14,6 +14,7 @@
 #include "context.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk_oersted_field.hpp"
+#include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
 
 #include <cuda_runtime.h>
 
@@ -43,6 +44,7 @@ bool gpu_rk_accumulate_effective_field(
     Context &ctx,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     const char *base_label,
     std::string &reason)
 {
@@ -51,6 +53,10 @@ bool gpu_rk_accumulate_effective_field(
     fullmag_cuda_accumulate_heff(gpu.fields.h_ex.y, gpu.fields.h_demag.y, gpu.fields.h_ext.y, gpu.fields.h_eff.y, n, true, stream);
     fullmag_cuda_accumulate_heff(gpu.fields.h_ex.z, gpu.fields.h_demag.z, gpu.fields.h_ext.z, gpu.fields.h_eff.z, n, true, stream);
     if (!cuda_launch_ok(base_label, reason)) {
+        return false;
+    }
+    if (!gpu_regional_field_drive_materialize_and_accumulate(
+            ctx, stream, n, evaluation_time_s, true, reason)) {
         return false;
     }
     if (ctx.anisotropy.uniaxial_enabled) {
@@ -85,7 +91,7 @@ bool gpu_rk_accumulate_effective_field(
             return false;
         }
     }
-    if (!gpu_rk_accumulate_oersted_field(ctx, stream, n, reason)) {
+    if (!gpu_rk_accumulate_oersted_field(ctx, stream, n, evaluation_time_s, reason)) {
         return false;
     }
     if (ctx.magnetoelastic.enabled) {

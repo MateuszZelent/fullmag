@@ -11,6 +11,8 @@ use std::os::raw::c_char;
 // ── Constants ──
 
 pub const FULLMAG_FDM_MAX_EXCHANGE_REGIONS: usize = 256;
+pub const FULLMAG_FDM_MAX_REGION_ID: u32 =
+    (FULLMAG_FDM_MAX_EXCHANGE_REGIONS - 1) as u32;
 
 // ── Return codes ──
 

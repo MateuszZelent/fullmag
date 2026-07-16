@@ -4,12 +4,15 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
+import { recordVisualizationDebugViewportFrame } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import {
   DIAGNOSTIC_EVENT_NAMES,
   type DiagnosticViewport3DRecord,
   redactDiagnosticDetail,
 } from "@/kernel/performance/diagnostic-recorder/diagnosticRecorderTypes";
 import type { ResourceCacheStats } from "@/kernel/resources/ResourceCache";
+
+import type { Viewport3DDerivedBufferCacheSnapshot } from "./build-engine/cache/viewport3dDerivedBufferCache";
 
 import type { Viewport3DFieldDemandDiagnosticSummary } from "./model/viewport3DFieldDataPlan";
 import type { Viewport3DTargetDiagnosticSummary } from "./model/viewport3DTargetDiagnostics";
@@ -38,10 +41,16 @@ export interface Viewport3DResourceCounts {
   dirtyReason: string | null;
   frames: number;
   geometries: number;
+  glyphCacheBytes?: number;
+  glyphCacheEntries?: number;
+  glyphCacheRetainedBytes?: number;
   materials: number;
   renderTargets: number;
   textures: number;
   workers: number;
+  workerRuntimeJobs?: number;
+  workerRuntimeTimers?: number;
+  workerRuntimeWorkers?: number;
   contextLosses: number;
   contextRestores: number;
 }
@@ -52,8 +61,14 @@ export interface Viewport3DDiagnosticsInput {
   cache: ResourceCacheStats;
   dataPlaneIssues?: readonly string[];
   fieldDemandDiagnostics?: readonly Viewport3DFieldDemandDiagnosticSummary[];
+  fieldPayloadRevision?: string | number | null;
   fieldRevision: string | number | null;
+  fieldRequestedRevision?: string | number | null;
+  fieldStatus?: "loading" | "stale" | "ready" | "idle" | "error";
   objectCount: number;
+  manifestCarrierDegradedCount?: number;
+  manifestCarrierKind?: string | null;
+  manifestCarrierRejectedCount?: number;
   pipelineDiagnostics?: readonly Viewport3DPipelineDiagnosticSummary[];
   quantityId: string;
   surfaceColorStatus?: string | null;
@@ -104,10 +119,16 @@ const EMPTY_COUNTS: Viewport3DResourceCounts = {
   dirtyReason: null,
   frames: 0,
   geometries: 0,
+  glyphCacheBytes: 0,
+  glyphCacheEntries: 0,
+  glyphCacheRetainedBytes: 0,
   materials: 0,
   renderTargets: 0,
   textures: 0,
   workers: 0,
+  workerRuntimeJobs: 0,
+  workerRuntimeTimers: 0,
+  workerRuntimeWorkers: 0,
 };
 
 export class Viewport3DResourceTracker {
@@ -126,6 +147,27 @@ export class Viewport3DResourceTracker {
 
   getLedgerSnapshot(): Viewport3DResourceLedgerEntry[] {
     return Array.from(this.ledgerEntries.values()).map((entry) => ({ ...entry }));
+  }
+
+  setWorkerRuntimeCounts(counts: {
+    jobs: number;
+    timers: number;
+    workers: number;
+  }): void {
+    if (
+      this.counts.workerRuntimeJobs === counts.jobs &&
+      this.counts.workerRuntimeTimers === counts.timers &&
+      this.counts.workerRuntimeWorkers === counts.workers
+    ) {
+      return;
+    }
+    this.counts = {
+      ...this.counts,
+      workerRuntimeJobs: counts.jobs,
+      workerRuntimeTimers: counts.timers,
+      workerRuntimeWorkers: counts.workers,
+    };
+    this.notify();
   }
 
   recordCanvasReady(detail: Record<string, unknown> = {}): void {
@@ -168,6 +210,7 @@ export class Viewport3DResourceTracker {
   }
 
   recordDirtyFrame(reason: string): void {
+    recordVisualizationDebugViewportFrame(reason);
     this.dirtyReasonCounts.set(
       reason,
       (this.dirtyReasonCounts.get(reason) ?? 0) + 1,
@@ -177,6 +220,25 @@ export class Viewport3DResourceTracker {
       dirtyReason: reason,
       frames: this.counts.frames + 1,
     };
+  }
+
+  recordGlyphDerivedBufferCache(
+    snapshot: Viewport3DDerivedBufferCacheSnapshot<unknown>,
+  ): void {
+    const next = {
+      glyphCacheBytes: snapshot.estimatedBytes,
+      glyphCacheEntries: snapshot.entryCount,
+      glyphCacheRetainedBytes: snapshot.retainedBytes,
+    };
+    if (
+      this.counts.glyphCacheBytes === next.glyphCacheBytes &&
+      this.counts.glyphCacheEntries === next.glyphCacheEntries &&
+      this.counts.glyphCacheRetainedBytes === next.glyphCacheRetainedBytes
+    ) {
+      return;
+    }
+    this.counts = { ...this.counts, ...next };
+    this.notify();
   }
 
   consumeDirtyReasonCounts(): Viewport3DDirtyReasonCounts {
@@ -342,7 +404,8 @@ export function buildViewport3DDiagnostics(
   return [
     `q:${input.quantityId}`,
     `top:${input.topologyRevision ?? "none"}`,
-    `field:${input.fieldRevision ?? "none"}`,
+    `field:${input.fieldPayloadRevision ?? input.fieldRevision ?? "none"}`,
+    ...formatFieldSyncDiagnostic(input),
     ...(input.surfaceColorStatus
       ? [`surface:${input.surfaceColorStatus}`]
       : []),
@@ -351,12 +414,42 @@ export function buildViewport3DDiagnostics(
     ...formatDataPlaneIssues(input.dataPlaneIssues),
     ...formatPipelineDiagnostics(input.pipelineDiagnostics),
     ...formatBuildFallbackDiagnostics(input.buildFallbacks),
+    ...(input.manifestCarrierKind
+      ? [
+          `carrier:${input.manifestCarrierKind}/${input.manifestCarrierDegradedCount ?? 0}`,
+        ]
+      : []),
+    ...((input.manifestCarrierRejectedCount ?? 0) > 0
+      ? [
+          `unaddressable-render-target:${input.manifestCarrierRejectedCount}`,
+        ]
+      : []),
     `obj:${input.objectCount}`,
     `air:${input.airboxPartCount}`,
     `geo:${input.tracker.geometries}`,
     `cache:${formatBytes(input.cache.byteLength)}`,
+    `glyph-cache:${input.tracker.glyphCacheEntries ?? 0}/${formatBytes(input.tracker.glyphCacheBytes ?? 0)}/${formatBytes(input.tracker.glyphCacheRetainedBytes ?? 0)}`,
+    `worker-runtime:${input.tracker.workerRuntimeWorkers ?? 0}/${input.tracker.workerRuntimeTimers ?? 0}/${input.tracker.workerRuntimeJobs ?? 0}`,
     `frames:${input.tracker.frames}`,
   ].join(" ");
+}
+
+function formatFieldSyncDiagnostic(
+  input: Viewport3DDiagnosticsInput,
+): string[] {
+  if (
+    (input.fieldStatus !== "loading" && input.fieldStatus !== "stale") ||
+    input.fieldPayloadRevision === null ||
+    input.fieldPayloadRevision === undefined ||
+    input.fieldRequestedRevision === null ||
+    input.fieldRequestedRevision === undefined ||
+    Object.is(input.fieldPayloadRevision, input.fieldRequestedRevision)
+  ) {
+    return [];
+  }
+  return [
+    `field syncing r${input.fieldPayloadRevision} -> r${input.fieldRequestedRevision}`,
+  ];
 }
 
 function formatBuildFallbackDiagnostics(

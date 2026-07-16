@@ -10,7 +10,7 @@ import type {
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
 import {
-  isViewport3DTopologyRenderable,
+  isViewport3DTopologyCurrent,
   resolveUnavailableTopologyVisualizationSettings,
   type Viewport3DTopologyFreshness,
 } from "../viewport3dTopologyStaleness";
@@ -24,8 +24,10 @@ import { FallbackTopologyMeshLayer } from "./FallbackTopologyMeshLayer";
 import { MeshPartLayer } from "./MeshPartLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
+import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
 export function TopologyMeshLayer({
+  adoptionRegistry,
   colors,
   vectorColorMode,
   fallbackSettings,
@@ -43,6 +45,7 @@ export function TopologyMeshLayer({
   topologyFreshness,
   vectorStyle,
 }: {
+  adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
   vectorColorMode: string;
   fallbackSettings: VisualizationTargetSettings;
@@ -60,8 +63,10 @@ export function TopologyMeshLayer({
   topologyFreshness: Viewport3DTopologyFreshness;
   vectorStyle: VectorFieldLayerVectorStyle;
 }) {
-  const topologyRenderable = isViewport3DTopologyRenderable(topologyFreshness);
-  const resolvedFieldModel = topologyRenderable ? fieldModel : null;
+  const topologyCurrent = isViewport3DTopologyCurrent(topologyFreshness);
+  const resolvedFieldModel = topologyCurrent
+    ? fieldModel
+    : null;
 
   if (topologyModel?.magneticParts.length) {
     return (
@@ -70,6 +75,7 @@ export function TopologyMeshLayer({
           const settings = getPartSettings(partModel.part);
           return (
             <MeshPartLayer
+              adoptionRegistry={adoptionRegistry}
               colors={colors}
               fieldModel={resolvedFieldModel}
               key={partModel.part.id}
@@ -103,7 +109,7 @@ export function TopologyMeshLayer({
               onSelectPart={onSelectPart}
               partModel={partModel}
               settings={
-                topologyRenderable
+                topologyCurrent
                   ? settings
                   : resolveUnavailableTopologyVisualizationSettings(settings)
               }
@@ -122,7 +128,7 @@ export function TopologyMeshLayer({
     <FallbackTopologyMeshLayer
       colors={colors}
       fallbackSettings={
-        topologyRenderable
+        topologyCurrent
           ? fallbackSettings
           : resolveUnavailableTopologyVisualizationSettings(fallbackSettings)
       }

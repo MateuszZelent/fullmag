@@ -2,7 +2,10 @@ import type {
   Viewport3DFieldRenderModel,
   Viewport3DVectorBuildReference,
 } from "../viewport3dRenderModel";
-import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
+import {
+  resolveViewport3DScalarColorBufferKey,
+  type ScalarColorBuffer,
+} from "../viewport3dFieldMapping";
 
 interface Viewport3DTargetSurfaceLayerFieldModel {
   scalarColorsByMode: ReadonlyMap<string, ScalarColorBuffer | null>;
@@ -13,6 +16,7 @@ interface Viewport3DTargetSurfaceLayerFieldModel {
   targetPasses?: ReadonlyMap<
     string,
     {
+      fieldBuffer?: { bufferId: string } | null;
       surface: {
         scalarColorMode: string | null;
         scalarColors: ScalarColorBuffer | null;
@@ -94,5 +98,35 @@ export function resolveViewport3DTargetVectorLayerInput({
   return {
     buildReference: fieldModel.partVectorBuilds.get(partId) ?? null,
     segments: fieldModel.partVectorSegments.get(partId) ?? null,
+  };
+}
+
+export function resolveViewport3DTargetLayerRequestedSourceIdentity({
+  fieldModel,
+  partId,
+}: {
+  fieldModel: {
+    targetPasses: ReadonlyMap<
+      string,
+      {
+        fieldBuffer?: { bufferId: string } | null;
+        surface: { scalarColors: ScalarColorBuffer | null };
+        vectors: { buildReference: { buildKey: string } | null };
+      }
+    >;
+  } | null;
+  partId: string;
+}): {
+  fieldBufferId: string | null;
+  scalarBufferKey: string | null;
+  vectorBuildKey: string | null;
+} {
+  const pass = fieldModel?.targetPasses.get(partId);
+  return {
+    fieldBufferId: pass?.fieldBuffer?.bufferId ?? null,
+    scalarBufferKey: resolveViewport3DScalarColorBufferKey(
+      pass?.surface.scalarColors,
+    ),
+    vectorBuildKey: pass?.vectors.buildReference?.buildKey ?? null,
   };
 }

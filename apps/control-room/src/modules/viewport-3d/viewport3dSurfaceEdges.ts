@@ -1,6 +1,7 @@
 import { BufferAttribute, BufferGeometry } from "three";
 
 import { buildSurfaceEdgeIndices } from "./viewport3dTopologyIndexModel";
+import { attachViewport3DSharedTopologyPosition } from "./viewport3dSharedTopologyPositions";
 
 export { buildSurfaceEdgeIndices } from "./viewport3dTopologyIndexModel";
 
@@ -19,7 +20,7 @@ export function buildLineIndexGeometry(
     lineIndices instanceof Uint32Array
       ? lineIndices
       : new Uint32Array(lineIndices);
-  geometry.setAttribute("position", new BufferAttribute(positions, 3));
+  attachViewport3DSharedTopologyPosition(geometry, positions);
   geometry.setIndex(new BufferAttribute(indexArray, 1));
   return geometry;
 }

@@ -7,6 +7,7 @@ namespace fullmag::fem {
 
 struct Context;
 class ElementQuadratureMaterial;
+class P1TetrahedralMaterialRealization;
 
 /*
  * Compute the cubic anisotropy effective field for the native FEM CPU path.
@@ -45,6 +46,25 @@ void compute_cubic_anisotropy_field(
 double cubic_anisotropy_energy_from_element_quadrature_material(
     const ElementQuadratureMaterial &material,
     const std::vector<double> &m_xyz,
+    const std::vector<double> &kc1_j_per_m3,
+    const std::vector<double> &kc2_j_per_m3,
+    const std::vector<double> &kc3_j_per_m3,
+    const std::array<double, 3> &axis1,
+    const std::array<double, 3> &axis2);
+
+double cubic_anisotropy_energy_from_material_realization(
+    const P1TetrahedralMaterialRealization &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &kc1_j_per_m3,
+    const std::vector<double> &kc2_j_per_m3,
+    const std::vector<double> &kc3_j_per_m3,
+    const std::array<double, 3> &axis1,
+    const std::array<double, 3> &axis2);
+
+double cubic_anisotropy_directional_derivative_from_material_realization(
+    const P1TetrahedralMaterialRealization &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &p_xyz,
     const std::vector<double> &kc1_j_per_m3,
     const std::vector<double> &kc2_j_per_m3,
     const std::vector<double> &kc3_j_per_m3,

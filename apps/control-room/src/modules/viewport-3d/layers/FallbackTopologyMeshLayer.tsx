@@ -27,6 +27,7 @@ import {
   buildLineIndexGeometry,
 } from "../viewport3dSurfaceEdges";
 import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry";
+import { attachViewport3DSharedTopologyPosition } from "../viewport3dSharedTopologyPositions";
 import {
   canApplyVertexScalarColorBuffer,
 } from "../viewport3dGeometryColors";
@@ -113,10 +114,7 @@ export function FallbackTopologyMeshLayer({
   const createSurfaceGeometry = useCallback(() => {
     if (!topologyModel) return null;
     const next = new BufferGeometry();
-    next.setAttribute(
-      "position",
-      new BufferAttribute(topologyModel.positions, 3),
-    );
+    attachViewport3DSharedTopologyPosition(next, topologyModel.positions);
     next.setIndex(new BufferAttribute(topologyModel.fallbackSurfaceIndices, 1));
     return next;
   }, [topologyModel]);

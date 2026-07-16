@@ -132,15 +132,20 @@ class CurrentTransportTests(unittest.TestCase):
             direction=(0.0, 0.0, 1.0),
             waveform=fm.SincPulse(cutoff_hz=20e9, t0=50e-12),
         )
-        problem = _base_problem(current_modules=[source])
-        from fullmag.runtime.script_builder import _render_current_modules
+        problem = _base_problem(
+            current_modules=[source],
+            auxiliary_geometries=[
+                fm.Box(size=(50e-9, 100e-9, 5e-9), name="center_microstrip")
+            ],
+        )
+        from fullmag.runtime.script_builder import _render_field_drives
 
         rendered = "\n".join(
-            _render_current_modules(problem, surface="flat", overrides={})
+            _render_field_drives(problem, surface="flat")
         )
-        self.assertIn('model="prescribed_zeeman_mask"', rendered)
-        self.assertIn('object="center_microstrip"', rendered)
-        self.assertIn("B=0.001", rendered)
+        self.assertNotIn('model="prescribed_zeeman_mask"', rendered)
+        self.assertIn('object_id="center_microstrip"', rendered)
+        self.assertIn("amplitude_B_T=0.001", rendered)
         self.assertIn("SincPulse", rendered)
 
     def test_flat_antenna_object_prescribed_zeeman_mask_round_trip(self) -> None:
@@ -166,7 +171,7 @@ class CurrentTransportTests(unittest.TestCase):
                 direction=(0, 1, 0),
                 waveform=fm.SincPulse(cutoff_hz=20e9, t0=50e-12),
             )
-            fm.save("H_ant", every=1e-12)
+            fm.save("H_drive", every=1e-12)
             fm.run(2e-12)
             """
         )
@@ -177,11 +182,15 @@ class CurrentTransportTests(unittest.TestCase):
             ir = loaded.problem.to_ir(script_source=script, source_root=script_path.parent)
             geometry_names = [entry["name"] for entry in ir["geometry"]["entries"]]  # type: ignore[index]
             self.assertIn("center_microstrip", geometry_names)
-            self.assertEqual(ir["current_modules"][0]["object"], "center_microstrip")  # type: ignore[index]
+            self.assertEqual(ir["current_modules"], [])
+            self.assertEqual(
+                ir["field_drives"][0]["spatial_profile"]["object_id"],  # type: ignore[index]
+                "center_microstrip",
+            )
 
             rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
             self.assertIn("fm.antenna_object", rendered)
-            self.assertIn('object="center_microstrip"', rendered)
+            self.assertIn('object_id="center_microstrip"', rendered)
 
     def test_flat_antenna_object_exports_scene_document_object(self) -> None:
         script = textwrap.dedent(
@@ -222,7 +231,7 @@ class CurrentTransportTests(unittest.TestCase):
         self.assertIsNone(antenna["magnetization_ref"])
         self.assertEqual(antenna["visualization_hint"]["role"], "antenna")
         self.assertEqual(
-            scene["current_modules"]["modules"][0]["object"],
+            scene["field_drives"]["drives"][0]["spatial_profile"]["object_id"],
             "center_microstrip",
         )
 

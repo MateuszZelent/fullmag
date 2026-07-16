@@ -11,6 +11,7 @@ import unittest
 import numpy as np
 
 from fullmag.analysis import analyze_stno_artifacts, write_stno_report
+from fullmag.analysis.stno_report import _snapshot_coordinates
 
 
 def _write_scalars_csv(path: Path, t: np.ndarray, mx: np.ndarray, my: np.ndarray, mz: np.ndarray) -> None:
@@ -118,6 +119,19 @@ def _write_vortex_snapshots(path: Path, *, f_hz: float, orbit_radius_m: float) -
 
 
 class TestStnoArtifactReport(unittest.TestCase):
+    def test_snapshot_coordinates_prefer_resolved_origin_m(self) -> None:
+        payload = {
+            "layout": {
+                "backend": "fdm",
+                "grid_cells": [1, 1, 1],
+                "cell_size": [2.0, 3.0, 4.0],
+                "origin_m": [10.0, 20.0, 30.0],
+                "origin": [-1.0, -1.0, -1.0],
+            }
+        }
+        x, y, z = _snapshot_coordinates(payload)
+        np.testing.assert_allclose([x[0], y[0], z[0]], [11.0, 21.5, 32.0])
+
     def test_analyze_realistic_artifact_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             artifact_dir = Path(tmp)

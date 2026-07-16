@@ -9,6 +9,7 @@ namespace fullmag::fem {
 
 struct Context;
 class ElementQuadratureMaterial;
+class P1TetrahedralMaterialRealization;
 
 /*
  * Compute the uniaxial anisotropy effective field for the native FEM CPU path.
@@ -45,6 +46,25 @@ relaxation::EnergyDifference uniaxial_anisotropy_energy_difference(
 double uniaxial_anisotropy_energy_from_element_quadrature_material(
     const ElementQuadratureMaterial &material,
     const std::vector<double> &m_xyz,
+    const std::vector<double> &ku1_j_per_m3,
+    const std::vector<double> &ku2_j_per_m3,
+    const std::array<double, 3> &axis);
+
+/*
+ * Pure sharp-material oracle over the ordered active scope of the independent
+ * P1/DG0 realization.  It deliberately owns no Context or field projection.
+ */
+double uniaxial_anisotropy_energy_from_material_realization(
+    const P1TetrahedralMaterialRealization &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &ku1_j_per_m3,
+    const std::vector<double> &ku2_j_per_m3,
+    const std::array<double, 3> &axis);
+
+double uniaxial_anisotropy_directional_derivative_from_material_realization(
+    const P1TetrahedralMaterialRealization &material,
+    const std::vector<double> &m_xyz,
+    const std::vector<double> &p_xyz,
     const std::vector<double> &ku1_j_per_m3,
     const std::vector<double> &ku2_j_per_m3,
     const std::array<double, 3> &axis);

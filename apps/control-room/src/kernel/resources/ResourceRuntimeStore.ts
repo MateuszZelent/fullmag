@@ -127,6 +127,17 @@ export class ResourceRuntimeStore<TData = unknown> {
     };
   }
 
+  listenerCounts(): Record<ResourceKey, number> {
+    const counts: Record<ResourceKey, number> = {};
+    for (const [resourceKey, stored] of this.entries) {
+      const entry = stored as unknown as ResourceRuntimeEntry<unknown>;
+      if (entry.listeners.size > 0) {
+        counts[resourceKey] = entry.listeners.size;
+      }
+    }
+    return counts;
+  }
+
   getSnapshot<TSnapshotData = TData>(
     resourceKey: ResourceKey,
   ): ResourceRuntimeSnapshot<TSnapshotData> {

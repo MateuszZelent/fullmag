@@ -179,7 +179,9 @@ pub async fn replace_visualization_state(
         presentation.visualization_camera = Some(replacement.camera);
         presentation.visualization_clip = Some(replacement.clip);
         presentation.visualization_vector_style = Some(replacement.vector_style);
-        presentation.visualization_overrides = Some(replacement.overrides);
+        presentation.visualization_overrides = Some(canonicalize_visualization_overrides(
+            &replacement.overrides,
+        ));
     }
     let selection = state.current_display_selection.read().await;
     let presentation = state.current_display_presentation.read().await;
@@ -1154,7 +1156,8 @@ fn apply_visualization_presentation_patch(
         presentation.visualization_vector_style = Some(style);
     }
     if let Some(overrides) = &update.overrides {
-        presentation.visualization_overrides = Some(overrides.clone());
+        presentation.visualization_overrides =
+            Some(canonicalize_visualization_overrides(overrides));
     }
     if let Some(airbox_patch) = update
         .layers
@@ -1600,10 +1603,12 @@ pub(crate) fn build_visualization_state_response(
         .visualization_vector_style
         .clone()
         .unwrap_or_else(default_vector_style_visualization);
-    let overrides = presentation
-        .visualization_overrides
-        .clone()
-        .unwrap_or_default();
+    let overrides = canonicalize_visualization_overrides(
+        presentation
+            .visualization_overrides
+            .as_deref()
+            .unwrap_or_default(),
+    );
     let targets = build_visualization_target_registry(
         &quantity.active_quantity_id,
         &quantity.colormap,
@@ -1667,6 +1672,57 @@ pub(crate) fn build_visualization_state_response(
     }
 }
 
+fn canonicalize_visualization_overrides(
+    overrides: &[VisualizationOverrideState],
+) -> Vec<VisualizationOverrideState> {
+    let canonical = overrides
+        .iter()
+        .find(|entry| {
+            entry.scope == VisualizationScopeKind::Airbox && entry.scope_id == "airbox"
+        })
+        .or_else(|| {
+            overrides.iter().find(|entry| {
+                entry.scope == VisualizationScopeKind::Part
+                    && is_airbox_identity_id(&entry.scope_id)
+            })
+        })
+        .or_else(|| {
+            overrides.iter().find(|entry| {
+                entry.scope == VisualizationScopeKind::Object
+                    && is_airbox_identity_id(&entry.scope_id)
+            })
+        })
+        .or_else(|| {
+            overrides.iter().find(|entry| {
+                entry.scope == VisualizationScopeKind::Airbox
+                    && is_airbox_identity_id(&entry.scope_id)
+            })
+        })
+        .cloned()
+        .map(|mut entry| {
+            entry.scope = VisualizationScopeKind::Airbox;
+            entry.scope_id = "airbox".to_string();
+            entry
+        });
+
+    let mut normalized = overrides
+        .iter()
+        .filter(|entry| {
+            !matches!(
+                entry.scope,
+                VisualizationScopeKind::Airbox
+                    | VisualizationScopeKind::Object
+                    | VisualizationScopeKind::Part
+            ) || !is_airbox_identity_id(&entry.scope_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(canonical) = canonical {
+        normalized.push(canonical);
+    }
+    normalized
+}
+
 fn build_visualization_target_registry(
     active_quantity_id: &str,
     scalar_color_palette: &str,
@@ -1675,6 +1731,10 @@ fn build_visualization_target_registry(
     overrides: &[VisualizationOverrideState],
     live_snapshot: Option<&SessionStateResponse>,
 ) -> VisualizationTargetRegistryState {
+    let scene_objects = live_snapshot
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+        .map(|scene| scene.objects.as_slice())
+        .unwrap_or_default();
     VisualizationTargetRegistryState {
         airbox: visualization_target_registry_entry(
             VisualizationScopeKind::Airbox,
@@ -1689,12 +1749,12 @@ fn build_visualization_target_registry(
             ),
             overrides,
         ),
-        objects: live_snapshot
-            .and_then(|snapshot| snapshot.scene_document.as_ref())
-            .map(|scene| {
-                scene
-                    .objects
+        objects: if scene_objects.is_empty() {
+            Vec::new()
+        } else {
+            scene_objects
                     .iter()
+                    .filter(|object| !is_airbox_scene_object(object))
                     .map(|object| {
                         visualization_target_registry_entry(
                             VisualizationScopeKind::Object,
@@ -1711,13 +1771,16 @@ fn build_visualization_target_registry(
                         )
                     })
                     .collect()
-            })
-            .unwrap_or_default(),
+        },
         parts: live_snapshot
             .and_then(|snapshot| snapshot.fem_mesh.as_ref())
             .map(|mesh| {
                 mesh.mesh_parts
                     .iter()
+                    .filter(|part| {
+                        !is_airbox_mesh_part(part)
+                            && mesh_part_requires_visualization_fallback(part, scene_objects)
+                    })
                     .map(|part| {
                         visualization_target_registry_entry(
                             VisualizationScopeKind::Part,
@@ -1737,6 +1800,56 @@ fn build_visualization_target_registry(
             })
             .unwrap_or_default(),
     }
+}
+
+fn is_airbox_scene_object(object: &fullmag_authoring::SceneObject) -> bool {
+    is_airbox_identity_id(&object.id) || is_airbox_role(&object.role)
+}
+
+fn is_airbox_mesh_part(part: &fullmag_runner::FemMeshPartPayload) -> bool {
+    is_airbox_identity_id(&part.id) || is_airbox_role(&part.role)
+}
+
+fn is_airbox_role(role: &str) -> bool {
+    matches!(role.trim().to_ascii_lowercase().as_str(), "air" | "airbox")
+}
+
+fn is_airbox_identity_id(id: &str) -> bool {
+    let mut normalized = id.trim().to_ascii_lowercase();
+    while normalized.starts_with("part:") || normalized.starts_with("object:") {
+        normalized = normalized
+            .split_once(':')
+            .map(|(_, value)| value.to_string())
+            .unwrap_or_default();
+    }
+    matches!(normalized.as_str(), "airbox" | "__air__" | "__airbox__")
+}
+
+fn mesh_part_requires_visualization_fallback(
+    part: &fullmag_runner::FemMeshPartPayload,
+    scene_objects: &[fullmag_authoring::SceneObject],
+) -> bool {
+    if part.object_id.as_deref().is_some_and(|object_id| {
+        scene_objects
+            .iter()
+            .any(|object| visualization_object_ids_match(&object.id, object_id))
+    }) {
+        return false;
+    }
+    !part.geometry_id.as_deref().is_some_and(|geometry_id| {
+        scene_objects
+            .iter()
+            .any(|object| visualization_object_ids_match(&object.id, geometry_id))
+    })
+}
+
+fn visualization_object_ids_match(left: &str, right: &str) -> bool {
+    fn normalize(value: &str) -> &str {
+        let value = value.strip_prefix("object:").unwrap_or(value);
+        value.strip_suffix("_geom").unwrap_or(value)
+    }
+
+    normalize(left) == normalize(right)
 }
 
 fn visualization_target_registry_entry(

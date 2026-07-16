@@ -1,5 +1,10 @@
 # Microwave Antenna UI and Analysis Implementation Plan
 
+> Supersession note (2026-07-15): RegionalFieldDrive authoring, `H_drive`, and
+> Gamma/finite-k regional-drive analysis are governed by ADR 0019, physics note
+> 0920, and the 2026-07-15 regional-field implementation plan. This document
+> remains canonical for solved-antenna UI and analysis surfaces.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add complete control-room authoring, staged execution, 3D inspection, CST-style field maps, line cuts, source k-spectrum, and spin-wave response surfaces for the canonical variable-width antenna workflow.

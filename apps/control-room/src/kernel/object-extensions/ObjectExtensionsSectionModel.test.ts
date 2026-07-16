@@ -77,7 +77,7 @@ describe("ObjectExtensionsSectionModel", () => {
     });
   });
 
-  it("projects enabled object extensions into explorer child node snapshots", () => {
+  it("projects enabled on-demand extensions as stale until a result exists", () => {
     const activation = setObjectExtensionEnabled(
       createObjectExtensionActivationState(),
       "permalloy_layer",
@@ -91,7 +91,7 @@ describe("ObjectExtensionsSectionModel", () => {
       {
         id: "topological_charge",
         label: "Topological Charge",
-        status: "ready",
+        status: "stale",
       },
     ]);
     expect(resolveActiveObjectExtensionExplorerItems("cofeb_ring", activation))

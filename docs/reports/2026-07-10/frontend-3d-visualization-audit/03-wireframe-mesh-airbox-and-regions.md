@@ -1,5 +1,14 @@
 # 03. Wireframe, mesh, airbox i regiony
 
+## Stan reaudytu 2026-07-14
+
+F3D-009–F3D-012 pozostają **naprawione w swoim pierwotnym zakresie**. Obecne
+działanie points/wireframe dla airboxa nie jest dowodem działania surface ani
+vectors dla airboxa i obiektów magnetycznych; awaria tych passów ma osobny
+finding F3D-029. Rozdzielenie kanonicznego `airbox` od transportowego carriera
+`part:__air__` oraz ogólny kontrakt adresowalności renderer ↔ Explorer opisuje
+F3D-032.
+
 ## F3D-009 — region dziedziczy master visibility i aktywne passy obiektu
 
 **Priorytet:** P1 — wysoki

@@ -2,6 +2,7 @@ import {
   MESHING_BUILDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_CAPABILITIES_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
@@ -11,6 +12,7 @@ import {
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
   MESHING_SHARED_DOMAIN_REPORT_PATH,
+  MESHING_SEMANTICS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
@@ -18,18 +20,25 @@ import {
   MODEL_SCENE_PATH,
 } from "../api/apiPaths";
 import type { JsonObject, JsonValue } from "../api/apiTypes";
+import type { CommandDetailResource } from "../api/apiTypes";
 import type { CommandContext, CommandContribution } from "../commands/commandTypes";
 import type { Selection } from "../selection/selectionTypes";
+import {
+  meshEditorCapabilityBlocks,
+  resolveMeshEditorCapabilities,
+} from "@/shared/domain/mesh/meshEditorCapabilityModel";
 import {
   renderModePatch,
   type VisualizationTargetRef,
 } from "../visualization/ObjectVisualizationController";
 
 import {
+  awaitMeshCommandTerminal,
   createObjectTransaction,
   deleteObjectTransaction,
   submitObjectMeshBuild,
 } from "./geometryLifecycleCommands";
+import { SESSION_STATUS_RESOURCE_KEY } from "../resources/useSessionStatus";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -231,6 +240,8 @@ function isSharedDomainMeshBuildRunning(context: CommandContext): boolean {
 }
 
 function selectedObjectMeshDisabledReason(context: CommandContext): string | null {
+  const capabilityReason = meshCapabilityDisabledReason(context, "fem");
+  if (capabilityReason) return capabilityReason;
   const objectId = selectedObjectId(context);
   if (!objectId) return "Select a scene object to use this command.";
   if (hasObjectValidationBlocker(context, objectId)) {
@@ -240,6 +251,22 @@ function selectedObjectMeshDisabledReason(context: CommandContext): string | nul
     return "A mesh build is already running for this object.";
   }
   return null;
+}
+
+function meshCapabilityDisabledReason(
+  context: CommandContext,
+  capability: "fem",
+): string | null {
+  if (!context.resourceData || !(MESHING_CAPABILITIES_PATH in context.resourceData)) {
+    return null;
+  }
+  const option = resolveMeshEditorCapabilities(
+    context.resourceData[MESHING_CAPABILITIES_PATH] as {
+      mesh_capabilities?: unknown;
+      mesh_adaptivity_state?: unknown;
+    } | null,
+  ).option(capability);
+  return meshEditorCapabilityBlocks(option) ? option.reason : null;
 }
 
 function selectedObjectTarget(
@@ -283,6 +310,7 @@ function invalidateObjectMeshResources(
 ): void {
   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
   context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
+  context.resources?.invalidate(MESHING_SEMANTICS_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH, revision);
   context.resources?.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
   context.resources?.invalidate(
@@ -305,6 +333,7 @@ function invalidateSharedDomainMeshResources(
 ): void {
   context.resources?.invalidate(MESHING_BUILDS_PATH, revision);
   context.resources?.invalidate(MESHING_SUMMARY_PATH, revision);
+  context.resources?.invalidate(MESHING_SEMANTICS_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
   context.resources?.invalidate(MESHING_BUILDS_LATEST_SUCCESSFUL_PATH, revision);
   context.resources?.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
@@ -317,6 +346,34 @@ function invalidateSharedDomainMeshResources(
     revision,
   );
   context.resources?.invalidate(MODEL_SCENE_PATH, revision);
+}
+
+function currentMeshRevision(context: CommandContext): number | null {
+  const status = asRecord(resourceData(context, SESSION_STATUS_RESOURCE_KEY));
+  const resources = asRecord(status?.resources);
+  return typeof resources?.mesh_revision === "number"
+    ? resources.mesh_revision
+    : null;
+}
+
+function authoritativeMeshCommandRevision(
+  detail: CommandDetailResource,
+): number {
+  const meshRevision = detail.resource_invalidations?.find((entry) => {
+    const key = entry.resource_key;
+    return (
+      key === "meshing/shared-domain/manifest" ||
+      key === "data/domain/topology" ||
+      (key.startsWith("meshing/objects/") && key.endsWith("/topology"))
+    );
+  })?.revision;
+  if (meshRevision !== undefined) return meshRevision;
+
+  return (
+    detail.resource_invalidations?.find(
+      (entry) => entry.resource_key === "meshing/builds/current",
+    )?.revision ?? detail.seq
+  );
 }
 
 function focusMeshJobs(context: CommandContext): void {
@@ -412,12 +469,10 @@ function sceneObjects(scene: unknown): JsonObject[] {
     : [];
 }
 
-function sceneCurrentModules(scene: unknown): JsonObject[] {
-  const modules = asRecord(asRecord(scene)?.current_modules)?.modules;
-  return Array.isArray(modules)
-    ? modules.filter((module): module is JsonObject =>
-        Boolean(module && typeof module === "object" && !Array.isArray(module)),
-      )
+function sceneFieldDrives(scene: unknown): JsonObject[] {
+  const drives = asRecord(asRecord(scene)?.field_drives)?.drives;
+  return Array.isArray(drives)
+    ? drives.filter((drive): drive is JsonObject => Boolean(drive && typeof drive === "object" && !Array.isArray(drive)))
     : [];
 }
 
@@ -472,17 +527,19 @@ function defaultMicrostripAntennaObject(objectId: string): JsonObject {
   };
 }
 
-function defaultMicrostripAntennaModule(objectId: string): JsonObject {
+function defaultMicrostripFieldDrive(objectId: string): JsonObject {
   return {
-    B: 0.001,
+    activation: { kind: "all_time_evolution" },
+    amplitude_B_T: 0.001,
     direction: [0, 1, 0],
+    enabled: true,
     id: `${objectId}:H_ant`,
-    kind: "antenna_field_source",
-    model: "prescribed_zeeman_mask",
+    kind: "regional",
     name: "Microstrip antenna field",
-    object: objectId,
-    spatial_profile: { kind: "uniform" },
-    waveform: { cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
+    spatial_profile: { kind: "geometry_mask", object_id: objectId, envelope: { kind: "uniform" } },
+    target: { kind: "global" },
+    time_origin: "stage_local",
+    waveform: { amplitude: 1, cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
   };
 }
 
@@ -606,10 +663,10 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       const response = await context.api.model.commitTransaction({
         kind: "merge_patch",
         merge_patch: {
-          current_modules: {
-            modules: [
-              ...sceneCurrentModules(scene),
-              defaultMicrostripAntennaModule(objectId),
+          field_drives: {
+            drives: [
+              ...sceneFieldDrives(scene),
+              defaultMicrostripFieldDrive(objectId),
             ],
           },
           objects: [
@@ -729,15 +786,27 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
       if (!response.accepted) {
         return { message: response.error ?? "Mesh build rejected.", status: "failed" };
       }
-      const revision = response.command_id ?? `mesh-build:${Date.now()}`;
-      invalidateObjectMeshResources(context, objectId, revision);
+      const commandId = response.command_id;
+      invalidateObjectMeshResources(context, objectId, commandId);
       emitMeshBuildSubmitted(context, {
-        commandId: revision,
+        commandId,
         objectId,
         reason: "selected-object",
         targetKind: "object_mesh",
       });
-      return { status: "completed" };
+      const terminal = await awaitMeshCommandTerminal(
+        context.api.commands,
+        commandId,
+        { baseMeshRevision: currentMeshRevision(context) },
+      );
+      invalidateObjectMeshResources(
+        context,
+        objectId,
+        authoritativeMeshCommandRevision(terminal.detail),
+      );
+      return terminal.status === "completed"
+        ? { status: "completed" }
+        : { message: terminal.message, status: terminal.status };
     },
   },
   {
@@ -746,6 +815,8 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
     category: "Mesh",
     group: "mesh",
     scope: "workspace",
+    isEnabled: (context) => meshCapabilityDisabledReason(context, "fem") === null,
+    disabledReason: (context) => meshCapabilityDisabledReason(context, "fem"),
     run: async (context) => {
       if (!context.api) {
         return { message: "Control-room API is unavailable.", status: "failed" };
@@ -756,20 +827,27 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
         mesh_target: { kind: "study_domain" },
       });
       if (response.accepted) {
-        const revision = response.command_id ?? `mesh-build:${Date.now()}`;
-        invalidateSharedDomainMeshResources(
-          context,
-          revision,
-        );
+        const commandId = response.command_id;
+        invalidateSharedDomainMeshResources(context, commandId);
         emitMeshBuildSubmitted(context, {
-          commandId: revision,
+          commandId,
           reason: "shared-domain",
           targetKind: "study_domain",
         });
+        const terminal = await awaitMeshCommandTerminal(
+          context.api.commands,
+          commandId,
+          { baseMeshRevision: currentMeshRevision(context) },
+        );
+        invalidateSharedDomainMeshResources(
+          context,
+          authoritativeMeshCommandRevision(terminal.detail),
+        );
+        return terminal.status === "completed"
+          ? { status: "completed" }
+          : { message: terminal.message, status: terminal.status };
       }
-      return response.accepted
-        ? { status: "completed" }
-        : { message: response.error ?? "Mesh build rejected.", status: "failed" };
+      return { message: response.error ?? "Mesh build rejected.", status: "failed" };
     },
   },
   {
@@ -805,14 +883,22 @@ export const GEOMETRY_LIFECYCLE_COMMANDS: CommandContribution[] = [
         mesh_target: { kind: "study_domain" },
       });
       if (response.accepted) {
+        const commandId = response.command_id;
+        invalidateSharedDomainMeshResources(context, commandId);
+        const terminal = await awaitMeshCommandTerminal(
+          context.api.commands,
+          commandId,
+          { baseMeshRevision: currentMeshRevision(context) },
+        );
         invalidateSharedDomainMeshResources(
           context,
-          response.command_id ?? `mesh-build:${Date.now()}`,
+          authoritativeMeshCommandRevision(terminal.detail),
         );
+        return terminal.status === "completed"
+          ? { status: "completed" }
+          : { message: terminal.message, status: terminal.status };
       }
-      return response.accepted
-        ? { status: "completed" }
-        : { message: response.error ?? "Mesh refinement rejected.", status: "failed" };
+      return { message: response.error ?? "Mesh refinement rejected.", status: "failed" };
     },
   },
   meshNavigationCommand(

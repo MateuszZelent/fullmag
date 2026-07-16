@@ -1860,13 +1860,13 @@ fn runtime_selection(problem: &ProblemIR) -> Option<&serde_json::Map<String, Val
         .and_then(Value::as_object)
 }
 
-fn runtime_device(problem: &ProblemIR) -> Option<&str> {
+pub(crate) fn runtime_device(problem: &ProblemIR) -> Option<&str> {
     runtime_selection(problem)
         .and_then(|selection| selection.get("device"))
         .and_then(Value::as_str)
 }
 
-fn runtime_precision(problem: &ProblemIR) -> &str {
+pub(crate) fn runtime_precision(problem: &ProblemIR) -> &str {
     runtime_selection(problem)
         .and_then(|selection| selection.get("precision"))
         .and_then(Value::as_str)
@@ -1876,7 +1876,7 @@ fn runtime_precision(problem: &ProblemIR) -> &str {
         })
 }
 
-fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
+pub(crate) fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
     match std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref() {
         Some("cpu") => "cpu".to_string(),
         Some("cuda") => "gpu".to_string(),
@@ -1887,7 +1887,7 @@ fn requested_registry_device_for_fdm(problem: &ProblemIR) -> String {
     }
 }
 
-fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
+pub(crate) fn requested_registry_device_for_fem(problem: &ProblemIR) -> String {
     if all_in_gpu_fem_env_requested() {
         return "gpu".to_string();
     }
@@ -2092,7 +2092,7 @@ pub(crate) fn execute_fdm<'a>(
             });
         }
     }
-    match engine {
+    let mut executed = match engine {
         FdmEngine::CpuReference => cpu_reference::execute_reference_fdm(
             plan,
             until_seconds,
@@ -2101,7 +2101,17 @@ pub(crate) fn execute_fdm<'a>(
             artifact_writer,
         ),
         FdmEngine::CudaFdm => execute_cuda_fdm(plan, until_seconds, outputs, live, artifact_writer),
+    }?;
+    if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
+        &plan.field_drives,
+        &plan.time_stage,
+        until_seconds,
+        outputs,
+        &executed.provenance,
+    )? {
+        executed.auxiliary_artifacts.push(artifact);
     }
+    Ok(executed)
 }
 
 /// Execute a multilayer FDM plan using the selected engine.
@@ -2177,13 +2187,23 @@ pub(crate) fn execute_fem<'a>(
                         .unwrap_or("operator reduction required")
                 ),
             );
-            return fem_baseline::execute_reference_fem(
+            let mut executed = fem_baseline::execute_reference_fem(
                 &normalized_plan,
                 until_seconds,
                 outputs,
                 live,
                 artifact_writer,
-            );
+            )?;
+            if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
+                &normalized_plan.field_drives,
+                &normalized_plan.time_stage,
+                until_seconds,
+                outputs,
+                &executed.provenance,
+            )? {
+                executed.auxiliary_artifacts.push(artifact);
+            }
+            return Ok(executed);
         }
         FemStaticPbcLane::None
         | FemStaticPbcLane::NativeExchangeOnly
@@ -2192,7 +2212,7 @@ pub(crate) fn execute_fem<'a>(
             // Fall through to native execution below.
         }
     }
-    match engine {
+    let mut executed = match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
             execute_native_fem(
@@ -2216,14 +2236,24 @@ pub(crate) fn execute_fem<'a>(
                     min_nodes
                 );
                 let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
-                return execute_native_fem(
+                let mut executed = execute_native_fem(
                     FemEngine::CpuNative,
                     &cpu_plan,
                     until_seconds,
                     outputs,
                     live,
                     artifact_writer,
-                );
+                )?;
+                if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
+                    &normalized_plan.field_drives,
+                    &normalized_plan.time_stage,
+                    until_seconds,
+                    outputs,
+                    &executed.provenance,
+                )? {
+                    executed.auxiliary_artifacts.push(artifact);
+                }
+                return Ok(executed);
             }
             let gpu_plan = fem_plan_for_native_gpu(&normalized_plan);
             execute_native_fem(
@@ -2235,7 +2265,17 @@ pub(crate) fn execute_fem<'a>(
                 artifact_writer,
             )
         }
+    }?;
+    if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
+        &normalized_plan.field_drives,
+        &normalized_plan.time_stage,
+        until_seconds,
+        outputs,
+        &executed.provenance,
+    )? {
+        executed.auxiliary_artifacts.push(artifact);
     }
+    Ok(executed)
 }
 
 pub(crate) fn execute_fem_eigen(
@@ -4725,6 +4765,13 @@ fn execute_cuda_fdm(
             message: "until_seconds must be positive".to_string(),
         });
     }
+    let time_events = crate::time_events::build_resolved_stage_event_schedule(
+        &plan.field_drives,
+        plan.time_stage.start_time_s,
+        plan.time_stage.start_time_s + until_seconds,
+        outputs,
+        crate::schedules::OUTPUT_TIME_TOLERANCE,
+    );
 
     let mut backend = NativeFdmBackend::create(plan)?;
     let device_info = backend.device_info()?;
@@ -4839,7 +4886,13 @@ fn execute_cuda_fdm(
                 }
             }
 
-            let dt_step = dt.min(until_seconds - current_time);
+            let proposed_dt = dt.min(until_seconds - current_time);
+            let dt_step = crate::time_events::cap_timestep_to_next_event(
+                current_time,
+                proposed_dt,
+                &time_events.times_s,
+                crate::schedules::OUTPUT_TIME_TOLERANCE,
+            );
             let interrupt_requested = live
                 .as_ref()
                 .and_then(|consumer| consumer.interrupt_requested);
@@ -5319,9 +5372,16 @@ fn execute_native_fem(
             message: "until_seconds must be positive".to_string(),
         });
     }
-
     let native_relaxation_step =
         crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref());
+    let time_events = crate::time_events::build_native_fem_stage_event_schedule(
+        &plan.field_drives,
+        0.0,
+        until_seconds,
+        outputs,
+        crate::schedules::OUTPUT_TIME_TOLERANCE,
+        native_relaxation_step.is_none(),
+    );
     let needs_initial_snapshot = native_fem_requires_initial_snapshot(
         live.as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot),
@@ -5493,7 +5553,11 @@ fn execute_native_fem(
             &mut backend,
             engine,
             plan,
-            until_seconds,
+            plan.time_stage.start_time_s + until_seconds,
+            &time_events
+                .as_ref()
+                .expect("physical-time FEM relaxation requires an event schedule")
+                .times_s,
             node_count,
             dt,
             dt_is_fixed,
@@ -5989,6 +6053,7 @@ mod tests {
             },
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
+            mesh_build_report: None,
             domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
             domain_frame: None,
             fe_order: 1,
@@ -6028,6 +6093,9 @@ mod tests {
             enable_demag: false,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            field_drives: Vec::new(),
+            field_drive_geometry_masks: Vec::new(),
+            time_stage: Default::default(),
             current_modules: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: fullmag_ir::ExecutionPrecision::Double,
@@ -6079,6 +6147,7 @@ mod tests {
     fn tiny_fem_eigen_plan(k_sampling: Option<fullmag_ir::KSamplingIR>) -> FemEigenPlanIR {
         let plan = tiny_fem_plan();
         FemEigenPlanIR {
+            mesh_build_report: None,
             mesh_name: plan.mesh_name,
             mesh_source: plan.mesh_source,
             mesh: plan.mesh,

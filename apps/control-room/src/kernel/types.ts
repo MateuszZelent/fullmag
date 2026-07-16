@@ -16,6 +16,7 @@ import type { DiagnosticRecorderController } from "./performance/diagnostic-reco
 import type { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import type { CameraRegistryController } from "./visualization/CameraRegistryController";
 import type { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
+import type { VisualizationDebugController } from "./visualization/VisualizationDebugController";
 import type { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 
 export type SlotId =
@@ -70,6 +71,7 @@ export interface KernelApi {
   readonly resources: ResourceInvalidationController;
   readonly selection: SelectionController;
   readonly visualization: ObjectVisualizationController;
+  readonly visualizationDebug: VisualizationDebugController;
   readonly visualizationSync: VisualizationRegistrySyncController;
   readonly layout: LayoutController;
 }

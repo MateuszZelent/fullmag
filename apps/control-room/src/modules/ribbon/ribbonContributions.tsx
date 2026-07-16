@@ -55,10 +55,14 @@ import {
 } from "lucide-react";
 import { createElement } from "react";
 
-import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import {
+  MESHING_CAPABILITIES_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
 import type {
   LiveStatusResource,
   MeshActiveBuildResource,
+  MeshCapabilitiesResource,
   MeshLastSuccessfulBuildResource,
   MeshSemanticsResource,
   MeshSummaryResource,
@@ -73,7 +77,11 @@ import {
 } from "@/kernel/api/quantityIds";
 import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
-import type { Selection } from "@/kernel/selection/selectionTypes";
+import type {
+  Selection,
+  VisualizationMeshPartLike,
+} from "@/kernel/selection/selectionTypes";
+import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   DEFAULT_AIRBOX_VISUALIZATION,
@@ -92,6 +100,7 @@ import {
   type VisualizationRenderMode,
   type VisualizationTargetKind,
   type VisualizationTargetPatch,
+  type VisualizationTargetRef,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   meshPipelineStatusTone,
@@ -1602,14 +1611,45 @@ export interface RibbonBuildContext {
   commands?: CommandRegistry;
   meshBuildCurrent?: MeshActiveBuildResource | null;
   meshBuildLatest?: MeshLastSuccessfulBuildResource | null;
+  meshCapabilities?: MeshCapabilitiesResource | null;
   meshSemantics?: MeshSemanticsResource | null;
   meshSummary?: MeshSummaryResource | null;
   resources?: RibbonResourceInvalidator;
   selection: Selection;
   sessionStatus?: RibbonSessionStatus | null;
+  sceneObjectIds?: ReadonlySet<string>;
+  selectedMeshPart?: VisualizationMeshPartLike | null;
   visualization: ObjectVisualizationController;
   visualizationSnapshot: ObjectVisualizationSnapshot;
   visualizationState?: VisualizationStateResource | null;
+}
+
+export function resolveRibbonVisualizationTarget({
+  sceneObjectIds = new Set(),
+  selectedMeshPart,
+  selection,
+  visualizationState,
+}: Pick<
+  RibbonBuildContext,
+  "sceneObjectIds" | "selectedMeshPart" | "selection" | "visualizationState"
+>): VisualizationTargetRef | null {
+  if (selection.ref?.type === "mesh-part" && selectedMeshPart) {
+    return resolveVisualizationTargetForMeshPart({
+      part: selectedMeshPart,
+      sceneObjectIds,
+      targetRegistry: visualizationState?.targets,
+    });
+  }
+
+  if (selection.ref?.type === "mesh-part") {
+    return {
+      id: selection.ref.nodeId,
+      kind: "part",
+      label: selection.label,
+    };
+  }
+
+  return resolveVisualizationTargetFromSelection(selection);
 }
 
 function resultsQuantityCommandInput(quantityId: string) {
@@ -2074,9 +2114,15 @@ function shouldDisableMissingCommand(
 
 function ribbonCommandContext(context: RibbonBuildContext): CommandContext {
   const base = context.commandContext ?? { source: "ribbon" as const };
-  const resourceData = context.visualizationState
+  const resourceData =
+    context.visualizationState || context.meshCapabilities !== undefined
     ? {
-        [VISUALIZATION_STATE_PATH]: context.visualizationState,
+        ...(context.visualizationState
+          ? { [VISUALIZATION_STATE_PATH]: context.visualizationState }
+          : {}),
+        ...(context.meshCapabilities !== undefined
+          ? { [MESHING_CAPABILITIES_PATH]: context.meshCapabilities }
+          : {}),
         ...base.resourceData,
       }
     : base.resourceData;
@@ -2101,6 +2147,8 @@ function ribbonCommandContext(context: RibbonBuildContext): CommandContext {
     resources: (base.resources ?? context.resources) as CommandContext["resources"],
     selection,
     visualization: base.visualization ?? context.visualization,
+    visualizationTarget:
+      base.visualizationTarget ?? resolveRibbonVisualizationTarget(context),
   };
 }
 
@@ -3564,8 +3612,6 @@ function buildAirboxAction(
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number]["actions"][number] {
   const { commandContext, visualizationSnapshot } = context;
-  const vectorLayer = context.visualizationState?.layers?.airbox?.vectors;
-  const vectorStyle = context.visualizationState?.vector_style;
   const targetVisualization = resolveTargetVisualization({
     snapshot: visualizationSnapshot,
     target: AIRBOX_VISUALIZATION_TARGET,
@@ -3711,22 +3757,13 @@ function buildAirboxAction(
             type: "slider",
             id: "airbox:vectors-density",
             label: "Density / Every N",
-            value: vectorLayer?.density ?? 128,
+            value: settings.vectorBudget,
             min: 8,
             max: 4096,
             step: 8,
-            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
             commandInput: (value: number) =>
-              visualizationStateCommandInput({
-                layers: {
-                  airbox: {
-                    vectors: {
-                      density: value,
-                      domain: "airbox_only",
-                    },
-                  },
-                },
-              }),
+              visualizationAirboxCommandInput({ vectorBudget: value }),
           },
           {
             type: "slider",
@@ -3756,15 +3793,13 @@ function buildAirboxAction(
             type: "slider",
             id: "airbox:vectors-alpha",
             label: "Alpha",
-            value: vectorStyle?.alpha ?? 0.9,
+            value: settings.vectorAlphaPercent / 100,
             min: 0,
             max: 1,
             step: 0.05,
-            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
             commandInput: (value: number) =>
-              visualizationStateCommandInput({
-                vector_style: { alpha: value },
-              }),
+              visualizationAirboxCommandInput({ vectorAlphaPercent: value * 100 }),
           },
         ],
       },
@@ -3777,20 +3812,22 @@ function buildAirboxAction(
             type: "radio-group",
             id: "airbox:vector-coloring",
             label: "Vector colors",
-            value: vectorStyle?.color_mode ?? "orientation",
+            value: settings.vectorColorMode,
             items: VECTOR_COLOR_ITEMS,
-            commandId: RIBBON_VISUALIZATION_PATCH_STATE_COMMAND,
+            commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
             commandInput: (value: string) =>
-              visualizationStateCommandInput({
-                vector_style: { color_mode: value as VectorColorModePatch },
+              visualizationAirboxCommandInput({
+                vectorColorMode: value as VisualizationColorMode,
               }),
           },
           {
             type: "color",
             id: "airbox:vector-mono-color",
             label: "Monochrome vector color",
-            value: vectorStyle?.mono_color ?? "var(--fm-accent)",
-            disabled: true,
+            value: settings.vectorMonoColor,
+            commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
+            commandInput: (value: string) =>
+              visualizationAirboxCommandInput({ vectorMonoColor: value }),
           },
         ],
       },
@@ -3971,7 +4008,7 @@ function buildSelectedVisualizationGroup(
   context: RibbonBuildContext,
 ): RibbonTabContent["groups"][number] {
   const { selection, visualizationSnapshot } = context;
-  const target = resolveVisualizationTargetFromSelection(selection);
+  const target = resolveRibbonVisualizationTarget(context);
   const inheritedRegionSettings =
     target?.kind === "region" && selection.objectId
       ? resolveTargetVisualization({
@@ -4347,7 +4384,7 @@ function buildSelectedVisualizationGroup(
         icon: icon(Blend),
         label: "Opacity",
         iconColor: "text-lime-300",
-        disabled: !enabled,
+        disabled: !enabled || passControlsDisabled,
         menu: [
           {
             type: "slider",
@@ -4358,7 +4395,7 @@ function buildSelectedVisualizationGroup(
             max: 100,
             step: 1,
             unit: "%",
-            disabled: !enabled,
+            disabled: !enabled || passControlsDisabled,
             commandId: "visualization.target.set-opacity-percent",
             commandInput: (value: unknown) => value,
           },
@@ -4366,7 +4403,7 @@ function buildSelectedVisualizationGroup(
             type: "item",
             id: "selected-opacity:100",
             label: "100%",
-            disabled: !enabled,
+            disabled: !enabled || passControlsDisabled,
             commandId: "visualization.target.set-opacity-percent",
             commandInput: 100,
           },
@@ -4374,7 +4411,7 @@ function buildSelectedVisualizationGroup(
             type: "item",
             id: "selected-opacity:70",
             label: "70%",
-            disabled: !enabled,
+            disabled: !enabled || passControlsDisabled,
             commandId: "visualization.target.set-opacity-percent",
             commandInput: 70,
           },
@@ -4382,7 +4419,7 @@ function buildSelectedVisualizationGroup(
             type: "item",
             id: "selected-opacity:35",
             label: "35%",
-            disabled: !enabled,
+            disabled: !enabled || passControlsDisabled,
             commandId: "visualization.target.set-opacity-percent",
             commandInput: 35,
           },
@@ -4390,7 +4427,7 @@ function buildSelectedVisualizationGroup(
             type: "item",
             id: "selected-opacity:15",
             label: "Ghost 15%",
-            disabled: !enabled,
+            disabled: !enabled || passControlsDisabled,
             commandId: "visualization.target.set-opacity-percent",
             commandInput: 15,
           },

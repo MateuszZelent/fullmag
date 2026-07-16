@@ -40,7 +40,7 @@ describe("viewport3DTargets", () => {
         id: "mesh-part:free-layer",
         label: "Free layer",
         object_id: "free-layer",
-      } as Parameters<typeof targetForMeshPart>[0]),
+      } as Parameters<typeof targetForMeshPart>[0], new Set(["free-layer"])),
     ).toEqual({
       id: "object:free-layer",
       kind: "object",
@@ -54,7 +54,7 @@ describe("viewport3DTargets", () => {
         id: "mesh-part:free-layer",
         label: "Free layer",
         object_id: "free-layer_geom",
-      } as Parameters<typeof targetForMeshPart>[0]),
+      } as Parameters<typeof targetForMeshPart>[0], new Set(["free-layer"])),
     ).toEqual({
       id: "object:free-layer",
       kind: "object",
@@ -62,7 +62,7 @@ describe("viewport3DTargets", () => {
     });
   });
 
-  it("maps geometry-only mesh parts to canonical object visualization targets", () => {
+  it("keeps geometry-only mesh parts on their mesh-part visualization target until the scene confirms ownership", () => {
     expect(
       targetForMeshPart({
         id: "mesh-part:free-layer",
@@ -71,8 +71,8 @@ describe("viewport3DTargets", () => {
         object_id: null,
       } as Parameters<typeof targetForMeshPart>[0]),
     ).toEqual({
-      id: "object:free-layer",
-      kind: "object",
+      id: "mesh-part:free-layer",
+      kind: "part",
       label: "Free layer",
     });
   });

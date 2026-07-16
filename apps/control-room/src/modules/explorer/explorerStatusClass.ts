@@ -7,7 +7,12 @@ export function explorerStatusClassName(
   if (status === "completed" || status === "mesh-ready") {
     return "fm-explorer-node--done";
   }
-  if (status === "queued" || status === "skipped" || status === "cancelled") {
+  if (
+    status === "queued" ||
+    status === "skipped" ||
+    status === "cancelled" ||
+    status === "unavailable"
+  ) {
     return "fm-explorer-node--muted";
   }
   if (status === "running" || status === "mesh-building") {

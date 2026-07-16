@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 const checks = [
   {
     args: [
-      "\\bfetch\\(",
+      "\\bfetch\\s*\\(",
       "src",
       "--glob",
       "!src/kernel/api/**",
@@ -30,7 +30,7 @@ const checks = [
   {
     args: [
       "-i",
-      "/v1/live/current|\\bbootstrap\\b|\\bpoll\\b|/preview[-/]|preview/",
+      `/v1/live/current(?:/|["'])|\\bbootstrap\\b|\\bpoll\\b|["'][^"']*/preview(?:/|["'])`,
       "src",
       "--glob",
       "!src/kernel/api/generated/**",

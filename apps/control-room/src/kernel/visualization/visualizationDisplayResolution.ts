@@ -1,9 +1,17 @@
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+
 import type { VisualizationTargetSettings } from "./ObjectVisualizationController";
 
 export type VisualizationTopologyFreshness = "current" | "stale" | "unknown";
 
+export type ManifestRenderableCarrierKind =
+  | "mesh-parts"
+  | "mixed"
+  | "object-segments"
+  | "unavailable";
+
 interface VisualizationRenderDegradation {
-  code: "topology-provenance-unknown";
+  code: "topology-provenance-unknown" | "topology-stale";
   message: string;
 }
 
@@ -28,11 +36,10 @@ export function resolveVisualizationTopologyFreshness(
     return "unknown";
   }
 
-  const cleanTopologyCoverage =
-    !sceneHasDirtyGeometry(sceneRecord) &&
-    manifestCoversVisibleSceneObjects(sceneRecord, manifestRecord);
-
   if (sourceSceneRevision === null) {
+    const cleanTopologyCoverage =
+      !sceneHasDirtyGeometry(sceneRecord) &&
+      manifestCoversVisibleSceneObjects(sceneRecord, manifestRecord);
     if (sceneHasDirtyGeometry(sceneRecord)) {
       return "unknown";
     }
@@ -42,15 +49,7 @@ export function resolveVisualizationTopologyFreshness(
     return cleanTopologyCoverage ? "current" : "unknown";
   }
 
-  if (sceneRevision === sourceSceneRevision) {
-    return "current";
-  }
-
-  if (sceneHasKnownObjects(sceneRecord) && !sceneHasDirtyGeometry(sceneRecord)) {
-    return "current";
-  }
-
-  return "stale";
+  return sceneRevision === sourceSceneRevision ? "current" : "stale";
 }
 
 export function isVisualizationTopologyCurrent(
@@ -99,7 +98,7 @@ export function resolveVisualizationRenderResolution({
   settings: VisualizationTargetSettings;
   topologyFreshness?: VisualizationTopologyFreshness | null;
 }): VisualizationRenderResolution {
-  if (!topologyFreshness || isVisualizationTopologyRenderable(topologyFreshness)) {
+  if (!topologyFreshness || topologyFreshness === "current") {
     return {
       degradedReasons: [],
       finalSettings: effectiveSettings,
@@ -110,8 +109,14 @@ export function resolveVisualizationRenderResolution({
   return {
     degradedReasons: [
       {
-        code: "topology-provenance-unknown",
-        message: "Mesh provenance is unknown; rendering an edge-only safety view.",
+        code:
+          topologyFreshness === "stale"
+            ? "topology-stale"
+            : "topology-provenance-unknown",
+        message:
+          topologyFreshness === "stale"
+            ? "Mesh topology is stale; rendering an edge-only ghost view."
+            : "Mesh provenance is unknown; rendering an edge-only safety view.",
       },
     ],
     finalSettings: resolveTopologyConstrainedVisualizationSettings(
@@ -172,16 +177,83 @@ function manifestCoversVisibleSceneObjects(
   }
 
   const manifestObjectIds = new Set<string>();
+  const meshParts = Array.isArray(manifest?.mesh_parts)
+    ? manifest.mesh_parts
+    : [];
+  const objectSegments = Array.isArray(manifest?.object_segments)
+    ? manifest.object_segments
+    : [];
+  if (
+    resolveManifestRenderableCarrierKind({
+      meshParts,
+      objectSegments,
+    }) === "unavailable"
+  ) {
+    return false;
+  }
 
-  for (const collection of [manifest?.object_segments, manifest?.mesh_parts]) {
+  for (const collection of [objectSegments, meshParts]) {
     if (!Array.isArray(collection)) continue;
     for (const value of collection) {
-      const objectId = asRecord(value)?.object_id;
-      if (typeof objectId === "string" && objectId.length > 0) {
-        manifestObjectIds.add(objectId);
+      for (const alias of manifestCarrierOwnershipAliases(value)) {
+        manifestObjectIds.add(alias);
       }
     }
   }
 
-  return visibleSceneObjectIds.every((objectId) => manifestObjectIds.has(objectId));
+  return visibleSceneObjectIds.every((objectId) =>
+    manifestCarrierOwnershipAliases({ object_id: objectId }).some((alias) =>
+      manifestObjectIds.has(alias),
+    ),
+  );
+}
+
+export function resolveManifestRenderableCarrierKind({
+  meshPartCount = 0,
+  meshParts,
+  objectSegmentCount = 0,
+  objectSegments,
+}: {
+  meshPartCount?: number;
+  meshParts?: readonly unknown[];
+  objectSegmentCount?: number;
+  objectSegments?: readonly unknown[];
+}): ManifestRenderableCarrierKind {
+  if (meshParts || objectSegments) {
+    meshPartCount = meshParts?.length ?? 0;
+    objectSegmentCount = (objectSegments ?? []).filter((segment) => {
+      const segmentAliases = manifestCarrierOwnershipAliases(segment);
+      return !meshParts?.some((part) =>
+        manifestCarrierOwnershipAliases(part).some((alias) =>
+          segmentAliases.includes(alias),
+        ),
+      );
+    }).length;
+  }
+  if (meshPartCount > 0 && objectSegmentCount > 0) return "mixed";
+  if (meshPartCount > 0) return "mesh-parts";
+  if (objectSegmentCount > 0) return "object-segments";
+  return "unavailable";
+}
+
+export function manifestCarrierOwnershipAliases(value: unknown): string[] {
+  const record = asRecord(value);
+  if (
+    isVisualizationAirboxIdentity({
+      geometry_id:
+        typeof record?.geometry_id === "string" ? record.geometry_id : null,
+      id: typeof record?.id === "string" ? record.id : null,
+      object_id: typeof record?.object_id === "string" ? record.object_id : null,
+      role: typeof record?.role === "string" ? record.role : null,
+    })
+  ) {
+    return ["airbox"];
+  }
+  const aliases = new Set<string>();
+  for (const candidate of [record?.object_id, record?.geometry_id]) {
+    if (typeof candidate !== "string" || !candidate) continue;
+    aliases.add(candidate);
+    aliases.add(candidate.endsWith("_geom") ? candidate.slice(0, -5) : `${candidate}_geom`);
+  }
+  return [...aliases];
 }

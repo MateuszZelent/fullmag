@@ -2,10 +2,38 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveViewport3DTargetSurfaceLayerInput,
+  resolveViewport3DTargetLayerRequestedSourceIdentity,
   resolveViewport3DTargetVectorLayerInput,
 } from "./viewport3DLayerPassInputs";
 
 describe("viewport3DLayerPassInputs", () => {
+  it("keeps requested source identities separate for later visible-adoption receipts", () => {
+    const scalarColors = {
+      buildKey: "scalar-requested",
+      colors: new Float32Array(3),
+      range: { max: 1, min: 0 },
+    };
+    const pass = {
+      fieldBuffer: { bufferId: "field-requested" },
+      fieldBufferState: "target-buffer" as const,
+      surface: { scalarColorMode: "x", scalarColors },
+      vectors: {
+        buildReference: { buildKey: "vector-requested" },
+        segments: new Float32Array(6),
+      },
+    };
+
+    expect(
+      resolveViewport3DTargetLayerRequestedSourceIdentity({
+        fieldModel: { targetPasses: new Map([["part:a", pass]]) },
+        partId: "part:a",
+      }),
+    ).toEqual({
+      fieldBufferId: "field-requested",
+      scalarBufferKey: "scalar-requested",
+      vectorBuildKey: "vector-requested",
+    });
+  });
   it("does not fall back to global surface colors when a target surface pass exists", () => {
     const globalColors = {
       colors: new Float32Array(0),

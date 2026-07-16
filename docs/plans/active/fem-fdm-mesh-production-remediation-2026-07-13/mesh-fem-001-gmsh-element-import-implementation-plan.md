@@ -1,0 +1,57 @@
+# MESH-FEM-001 — Fail-closed Gmsh element import Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `subagent-driven-development` (recommended) or `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Nigdy nie zamieniać prism/hex/pyramid/tet10/quad na fałszywy tet4/tri3 przez obcięcie connectivity.
+
+**Architecture:** Pierwszy bezpieczny rollout jest fail-closed: extraction akceptuje wyłącznie jawnie wspierane typy i arity. Mixed elements lub konformalna tetrahedralizacja wymagają osobnej decyzji ADR i pełnego native support.
+
+**Tech Stack:** Python Gmsh API, NumPy, Pytest, FEM managed gates
+
+## Global Constraints
+
+- Brak heurystycznego `nodes[:4]` lub `nodes[:3]`.
+- Error zawiera Gmsh element type, dimension, order i arity.
+- Native FEM build jest weryfikowany przez container-backed `just`.
+
+---
+
+**Finding:** MESH-FEM-001, P0.
+**Files:** `packages/fullmag-py/src/fullmag/meshing/_gmsh_extraction.py`, `packages/fullmag-py/src/fullmag/meshing/_gmsh_types.py`, `packages/fullmag-py/src/fullmag/meshing/_gmsh_swept.py`, `packages/fullmag-py/src/fullmag/meshing/asset_pipeline.py`, `packages/fullmag-py/tests/test_meshing.py`.
+
+### Task 1: RED — nieobsługiwane elementy
+
+- [ ] Dodać fixtures prism6, hex8, pyramid5, tet10 i quad4 boundary; każdy import ma zwracać stabilny `UnsupportedGmshElementError`, nie MeshIR.
+- [ ] Uruchomić `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_meshing.py -k 'element_type or connectivity' -vv`; nowe testy mają FAIL.
+
+### Task 2: GREEN — typed dispatch
+
+```python
+SUPPORTED_VOLUME_ELEMENTS = {4: ("tet4", 4)}
+SUPPORTED_BOUNDARY_ELEMENTS = {2: ("tri3", 3)}
+```
+
+- [x] Dispatchować po Gmsh type i dokładnej liczbie primary nodes; odrzucać każdy brak wpisu lub rozjazd arity przed budową arrays.
+- [x] Usunąć obcinanie connectivity i dodać report field `rejected_element_types` do nieudanej diagnostyki buildu.
+- [x] Uruchomić focused extraction tests; wynik PASS.
+
+### Evidence (2026-07-14, implementation slice)
+
+- `UnsupportedGmshElementError` carries exact type, dimension, order, full arity and primary arity.
+- Both volume and boundary blocks are validated before physical-group extraction, so unsupported mixed blocks cannot be silently skipped.
+- Connectivity extraction dispatches only exact `tet4`/`tri3`; no connectivity truncation remains.
+- `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_meshing.py -k 'element_type or connectivity' -q` — 1 passed, 243 deselected.
+- Managed native/browser proof remains open; MESH-FEM-001 is not production-closed.
+
+### Task 3: managed proof
+
+- [ ] Uruchomić `just verify-fem-meshing-production` i `just verify-fem-time-domain-native-contract`; oba PASS.
+- [ ] Commit: `git add packages/fullmag-py/src/fullmag/meshing packages/fullmag-py/tests/test_meshing.py && git commit -m "fix(fem): reject unsupported Gmsh element types"`.
+
+### Evidence update (2026-07-14, import return and periodic preflight)
+
+- [x] Fixed `_read_mesh_file` to return the validated `MeshData` instead of silently returning `None` after a legal tet4/tri3 import.
+- [x] Focused RED/GREEN evidence: `test_meshio_import_ignores_standard_lower_dimensional_blocks` and `test_extract_gmsh_connectivity_rejects_unsupported_element_types` pass; the former reproduced the missing return before the fix.
+- [ ] Managed native/browser proof remains open.
+
+**Exit:** żaden nieobsługiwany element nie tworzy pozornie legalnego MeshIR; tet4/tri3 fixtures pozostają zielone.

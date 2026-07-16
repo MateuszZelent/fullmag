@@ -3,6 +3,7 @@
 mod adapters;
 mod builder;
 mod geometry;
+mod region_revisions;
 mod scene;
 mod validation;
 
@@ -14,5 +15,6 @@ pub use adapters::{
 };
 pub use builder::*;
 pub use geometry::*;
+pub use region_revisions::*;
 pub use scene::*;
 pub use validation::{validate_scene_document, SceneDocumentValidationError};

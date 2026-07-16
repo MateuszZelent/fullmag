@@ -1006,7 +1006,7 @@ impl MeshTopology {
     }
 
     pub fn from_ir(mesh: &MeshIR) -> Result<Self> {
-        mesh.validate()
+        fullmag_ir::validate_mesh_for_execution(mesh)
             .map_err(|errors| EngineError::new(errors.join("; ")))?;
 
         let coords = mesh.nodes.clone();
@@ -3637,6 +3637,30 @@ fn normalized_dmi_interface_normal(normal: Vector3) -> Vector3 {
 mod tests {
     use super::*;
     use crate::{CubicAnisotropyConfig, EffectiveFieldTerms, DEFAULT_GYROMAGNETIC_RATIO};
+
+    #[test]
+    fn mesh_topology_rejects_inverted_tetra_before_native_assembly() {
+        let mesh = MeshIR {
+            mesh_name: "inverted".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            elements: vec![[0, 1, 3, 2]],
+            element_markers: vec![1],
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+
+        let error = MeshTopology::from_ir(&mesh)
+            .expect_err("inverted mesh must fail before assembly");
+        assert!(error.to_string().contains("negative tetra orientation"));
+    }
 
     fn unit_tet_problem() -> FemLlgProblem {
         unit_tet_problem_with_static_periodic(false, false)

@@ -61,6 +61,9 @@ pub struct MeshSolverMeshResource {
     pub domain_mesh_mode: Option<String>,
     pub object_segment_count: u32,
     pub mesh_part_count: u32,
+    /// Immutable requested-vs-realized report for this mesh build revision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build_report: Option<MeshSharedDomainBuildReportResource>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -379,6 +382,9 @@ pub struct MeshSharedDomainBuildReportResource {
     pub effective_per_object_targets: HashMap<String, MeshPerObjectTargetResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub region_markers: Vec<MeshDomainRegionMarkerResource>,
+    #[schema(value_type = [Object])]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_region_markers: Vec<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub used_size_field_kinds: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -387,6 +393,15 @@ pub struct MeshSharedDomainBuildReportResource {
     pub operation_statuses: Vec<MeshOperationStatusResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thin_film_diagnostics: Vec<MeshThinFilmDiagnosticResource>,
+    #[schema(value_type = [Object])]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selector_resolution: Vec<Value>,
+    #[schema(value_type = [Object])]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orphan_entities: Vec<Value>,
+    #[schema(value_type = [Object])]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected_element_types: Vec<Value>,
     #[serde(default)]
     pub degraded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -440,7 +455,38 @@ pub struct MeshQualityGatesResource {
 pub struct MeshPeriodicPairsResource {
     pub revision: u64,
     pub schema_version: String,
+    /// Aggregate certificate/resource status. `valid` is reserved for a
+    /// current accepted v6 certificate with complete pair diagnostics.
+    #[serde(default)]
+    pub status: PeriodicValidationStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub status_reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_scene_revision: Option<u64>,
     pub pairs: Vec<MeshPeriodicPairResource>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PeriodicValidationStatus {
+    Valid,
+    Invalid,
+    Stale,
+    Unavailable,
+}
+
+impl Default for PeriodicValidationStatus {
+    fn default() -> Self {
+        Self::Unavailable
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
@@ -455,10 +501,18 @@ pub struct MeshPeriodicPairResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_translation_m: Option<[f64; 3]>,
     pub paired_node_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_pairs: Vec<[u32; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain_node_pair_counts: Option<MeshPeriodicDomainNodePairCountsResource>,
+    #[serde(default)]
+    pub mixed_domain_node_pair_count: u32,
     pub unpaired_source_node_count: u32,
     pub unpaired_destination_node_count: u32,
+    #[serde(default)]
+    pub unpaired_source_face_count: u32,
+    #[serde(default)]
+    pub unpaired_destination_face_count: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub boundary_face_pairs: Vec<MeshPeriodicBoundaryFacePairResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -478,7 +532,17 @@ pub struct MeshPeriodicDomainNodePairCountsResource {
 pub struct MeshPeriodicBoundaryFacePairResource {
     pub face_a: u32,
     pub face_b: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vertex_pairs: Vec<[u32; 2]>,
     pub translation_m: [f64; 3],
+    #[serde(default)]
+    pub translation_residual_m: f64,
+    #[serde(default)]
+    pub area_residual_m2: f64,
+    #[serde(default)]
+    pub source_marker: u32,
+    #[serde(default)]
+    pub destination_marker: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normal_dot: Option<f64>,
     pub orientation: String,
@@ -533,6 +597,8 @@ pub struct MeshPartResource {
     pub node_count: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_indices: Vec<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_node_indices: Option<Vec<u32>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub surface_faces: Vec<[u32; 3]>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -558,6 +624,7 @@ impl From<&FemMeshPartPayload> for MeshPartResource {
             node_start: value.node_start,
             node_count: value.node_count,
             node_indices: value.node_indices.clone(),
+            surface_node_indices: None,
             surface_faces: value.surface_faces.clone(),
             bounds_min: value.bounds_min,
             bounds_max: value.bounds_max,
@@ -579,6 +646,16 @@ pub struct MeshHistogramBinElementsResource {
 pub struct MeshRegionMembershipResource {
     pub mesh_id: String,
     pub mesh_revision: u64,
+    /// Stable identity of the mesh topology used for this membership.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_generation_id: Option<String>,
+    /// Independent region-membership realization revision, not the scene journal revision.
+    pub region_membership_revision: u64,
+    /// `current` applies only to certified mesh membership; `preview` is analytic projection.
+    pub freshness: String,
+    pub realization: String,
     pub region_id: String,
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -598,6 +675,34 @@ pub struct MeshRegionMembershipListResource {
     pub memberships: Vec<MeshRegionMembershipResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unresolved_region_ids: Vec<String>,
+}
+
+/// Thin descriptor for realized FDM cell membership. The mask itself is kept
+/// on the binary data plane under the companion FMRM resource.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct FdmRegionLegendEntryResource {
+    pub numeric_id: u32,
+    pub object_id: String,
+    pub region_id: String,
+    pub priority: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
+pub struct FdmRegionMembershipResource {
+    pub schema_version: String,
+    pub mesh_revision: u64,
+    pub region_membership_revision: u64,
+    pub freshness: String,
+    pub binary_path: String,
+    pub grid_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_legend_fingerprint: Option<String>,
+    pub origin_m: [f64; 3],
+    pub counts: [u32; 3],
+    pub cell_m: [f64; 3],
+    pub cell_count: u64,
+    pub region_legend: Vec<FdmRegionLegendEntryResource>,
+    pub encoding: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]

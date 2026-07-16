@@ -31,7 +31,8 @@ function checkKernelModuleImports() {
       const allowedModuleRegistryImport =
         relativePath === "src/kernel/KernelProvider.tsx" &&
         source === "@/modules";
-      if (allowedModuleRegistryImport) continue;
+      const allowedPublicModuleImport = /^@\/modules\/[^/]+\/public$/.test(source);
+      if (allowedModuleRegistryImport || allowedPublicModuleImport) continue;
 
       if (source.startsWith("@/modules/") || source.includes("/modules/")) {
         failures.push(
@@ -57,7 +58,11 @@ function checkCrossModuleImports() {
     const content = readFileSync(filePath, "utf8");
     for (const source of collectImports(content)) {
       const absoluteModuleImport = source.match(/^@\/modules\/([^/]+)/);
-      if (absoluteModuleImport && absoluteModuleImport[1] !== moduleId) {
+      if (
+        absoluteModuleImport &&
+        absoluteModuleImport[1] !== moduleId &&
+        !source.endsWith("/public")
+      ) {
         failures.push(
           `${relativePath} imports sibling module "${absoluteModuleImport[1]}" through "${source}".`,
         );

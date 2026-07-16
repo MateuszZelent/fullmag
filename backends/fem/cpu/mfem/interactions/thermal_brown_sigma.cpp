@@ -35,10 +35,9 @@ double thermal_brown_sigma(
         return 0.0;
     }
 
-    const double gamma0 = gyromagnetic_ratio * (1.0 + damping * damping);
     return std::sqrt(
         2.0 * damping * kB * temperature /
-        (gamma0 * kMu0 * saturation_magnetisation * node_volume * dt_seconds));
+        (gyromagnetic_ratio * kMu0 * saturation_magnetisation * node_volume * dt_seconds));
 }
 
 } // namespace fullmag::fem

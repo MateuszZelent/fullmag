@@ -6,6 +6,8 @@ use utoipa::ToSchema;
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct FieldCatalog {
     pub revision: u64,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub domain_generation_id: u64,
     pub quantities: Vec<FieldDescriptor>,
 }
@@ -19,6 +21,8 @@ pub struct FieldDescriptor {
     pub location: String,
     pub unit: String,
     pub field_revision: u64,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub domain_generation_id: u64,
     pub available: bool,
 }
@@ -32,6 +36,8 @@ pub struct FieldMeta {
     pub location: String,
     pub unit: String,
     pub field_revision: u64,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub domain_generation_id: u64,
     pub stats: Option<FieldStats>,
 }
@@ -65,6 +71,12 @@ pub struct FieldVectorQuery {
     pub scope_kind: Option<String>,
     /// Scope identifier for `object` and `part` scopes.
     pub scope_id: Option<String>,
+    /// Optional geometric subset for scoped vector samples.
+    ///
+    /// Accepted values: `full` (default) and `surface`. `surface` is currently
+    /// supported for `airbox` scope and is resolved from the selected mesh
+    /// part's canonical surface-node membership before `max_samples` is applied.
+    pub geometry_scope: Option<String>,
     /// Optional hard cap for vector samples returned by the binary payload.
     ///
     /// FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
@@ -105,6 +117,8 @@ pub struct FieldSliceMeta {
     /// Resolved cut in world coordinates (m), if domain bounds are known.
     pub cut_world: Option<f64>,
     pub field_revision: u64,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub domain_generation_id: u64,
     /// Sampling path used to construct this slice.
     ///
@@ -186,6 +200,8 @@ pub struct FieldProjectionMeta {
     pub include_air_as_zero: bool,
     pub samples: u32,
     pub field_revision: u64,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub domain_generation_id: u64,
     pub sampling_method: String,
     pub etag: String,
@@ -217,6 +233,8 @@ pub struct FieldProjectionProfile {
     pub component: String,
     pub plane: String,
     pub field_revision: u64,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub domain_generation_id: u64,
     pub sampling_method: String,
     pub pixel_x: u32,

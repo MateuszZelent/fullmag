@@ -150,7 +150,9 @@ fn guardrail_fdm_periodic_demag_workspace_uses_periodic_padding() {
         },
     );
     p.boundary_policy = periodic_x_policy();
-    p.demag_image_counts = [3, 0, 0];
+    p.demag_boundary = FdmDemagBoundary::PeriodicTruncatedImages {
+        image_counts: [3, 0, 0],
+    };
 
     let ws = p.create_workspace();
     assert_eq!(
@@ -159,6 +161,96 @@ fn guardrail_fdm_periodic_demag_workspace_uses_periodic_padding() {
     );
     assert_eq!(ws.py, p.grid.ny * 2, "open y axis should keep 2N padding");
     assert_eq!(ws.pz, p.grid.nz * 2, "open z axis should keep 2N padding");
+}
+
+#[test]
+fn guardrail_fdm_periodic_workspace_budget_is_checked_before_allocation() {
+    let boundary = periodic_x_policy();
+    let error = match FftWorkspace::try_new_with_boundary(
+        8,
+        8,
+        8,
+        1.0e-9,
+        1.0e-9,
+        1.0e-9,
+        &boundary,
+        [500_000, 0, 0],
+    ) {
+        Ok(_) => panic!("periodic image work must be rejected before FFT allocation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("periodic image budget exceeded"));
+}
+
+#[test]
+fn guardrail_fdm_periodic_workspace_checks_padding_overflow() {
+    let boundary = FdmBoundaryPolicy {
+        x: AxisBoundary::Periodic,
+        y: AxisBoundary::Open,
+        z: AxisBoundary::Open,
+    };
+    let error = match FftWorkspace::try_new_with_boundary(
+        1,
+        usize::MAX,
+        1,
+        1.0e-9,
+        1.0e-9,
+        1.0e-9,
+        &boundary,
+        [0, 0, 0],
+    ) {
+        Ok(_) => panic!("padded dimension multiplication must be checked"),
+        Err(error) => error,
+    };
+    assert!(error.contains("padded grid count overflow"));
+}
+
+#[test]
+fn guardrail_fdm_periodic_workspace_rejects_stale_resolved_contract_before_allocation() {
+    let boundary = periodic_x_policy();
+    let stale = fullmag_engine::ResolvedFdmPeriodicWorkspace {
+        image_counts: [3, 0, 0],
+        padded_counts: [7, 16, 16],
+        image_terms: 7,
+        estimated_bytes: 393_216,
+    };
+    let error = match FftWorkspace::try_new_with_boundary_and_resolution(
+        8,
+        8,
+        8,
+        1.0e-9,
+        1.0e-9,
+        1.0e-9,
+        &boundary,
+        [3, 0, 0],
+        &stale,
+    ) {
+        Ok(_) => panic!("stale planner workspace contract must fail before allocation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("resolved periodic workspace padded_counts mismatch"));
+}
+
+#[test]
+fn guardrail_fdm_periodic_local_policy_does_not_reinterpret_open_demag() {
+    let mut p = permalloy_problem(
+        5,
+        4,
+        3,
+        2.0,
+        TimeIntegrator::Heun,
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: true,
+            ..Default::default()
+        },
+    );
+    p.boundary_policy = periodic_x_policy();
+
+    let ws = p.create_workspace();
+    assert_eq!(ws.px, p.grid.nx * 2);
+    assert_eq!(ws.py, p.grid.ny * 2);
+    assert_eq!(ws.pz, p.grid.nz * 2);
 }
 
 /// Uniform sphere/ellipsoid average demag field sanity.
@@ -389,4 +481,57 @@ fn guardrail_soa_round_trip() {
     for (i, (a, b)) in mag.iter().zip(result.iter()).enumerate() {
         assert_eq!(*a, *b, "SoA round-trip mismatch at {i}");
     }
+}
+
+#[test]
+fn guardrail_regional_drive_is_evaluated_at_requested_rhs_time() {
+    let mut problem = permalloy_problem(
+        2,
+        1,
+        1,
+        5.0,
+        TimeIntegrator::Heun,
+        EffectiveFieldTerms { exchange: false, demag: false, ..Default::default() },
+    );
+    problem.regional_field_drives.push(RegionalFieldDriveTerm {
+        basis_field: vec![[0.0, 2.0, 0.0], [0.0, -1.0, 0.0]],
+        waveform: fullmag_ir::TimeDependenceIR::Sinusoidal {
+            frequency_hz: 0.25,
+            phase_rad: 0.0,
+            offset: 0.0,
+        },
+        time_offset_s: 0.0,
+        enabled: true,
+    });
+
+    assert_eq!(problem.regional_drive_field_at_time(0.0), vec![[0.0; 3]; 2]);
+    assert_eq!(
+        problem.regional_drive_field_at_time(1.0),
+        vec![[0.0, 2.0, 0.0], [0.0, -1.0, 0.0]]
+    );
+}
+
+#[test]
+fn guardrail_heun_uses_end_stage_time_for_regional_drive() {
+    let grid = GridShape::new(1, 1, 1).unwrap();
+    let mut problem = ExchangeLlgProblem::with_terms(
+        grid,
+        CellSize::new(1.0, 1.0, 1.0).unwrap(),
+        MaterialParameters::new(1.0, 1.0, 0.0).unwrap(),
+        LlgConfig::new(1.0, TimeIntegrator::Heun).unwrap(),
+        EffectiveFieldTerms { exchange: false, demag: false, ..Default::default() },
+    );
+    problem.regional_field_drives.push(RegionalFieldDriveTerm {
+        basis_field: vec![[0.0, 1.0, 0.0]],
+        waveform: fullmag_ir::TimeDependenceIR::Pulse { t_on: 0.5, t_off: 1.5 },
+        time_offset_s: 0.0,
+        enabled: true,
+    });
+    let mut state = problem.uniform_state([1.0, 0.0, 0.0]).unwrap();
+    let mut ws = problem.create_workspace();
+    let mut buffers = problem.create_integrator_buffers();
+
+    problem.step_with_buffers(&mut state, 1.0, &mut ws, &mut buffers).unwrap();
+
+    assert!(state.magnetization()[0][2] < -0.1, "end-stage pulse was frozen at t_n");
 }

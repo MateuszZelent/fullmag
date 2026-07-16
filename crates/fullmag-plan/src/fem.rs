@@ -5,6 +5,7 @@ use fullmag_ir::{
     FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
     FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
     MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, TimeDependenceIR, IR_VERSION,
+    SeedPolicy, ThermalSeedConfig,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -156,6 +157,26 @@ pub(crate) fn elementwise_material_legality_error(
         return Some(format!(
             "A_element_field is unsupported for exchange-disabled plan on resolved device '{device}': this runtime has no exchange weak form to consume the sharp coefficient"
         ));
+    }
+    None
+}
+
+fn exclusive_coefficient_realization_error(
+    material: &fullmag_ir::MaterialIR,
+    ms_element_field: &Option<Vec<f64>>,
+    a_element_field: &Option<Vec<f64>>,
+) -> Option<String> {
+    if material.ms_field.is_some() && ms_element_field.is_some() {
+        return Some(
+            "FEM material coefficient 'Ms' has conflicting nodal P1 'material.ms_field' and element DG0 'ms_element_field' realizations"
+                .to_string(),
+        );
+    }
+    if material.a_field.is_some() && a_element_field.is_some() {
+        return Some(
+            "FEM material coefficient 'A' has conflicting nodal P1 'material.a_field' and element DG0 'a_element_field' realizations"
+                .to_string(),
+        );
     }
     None
 }
@@ -1269,6 +1290,11 @@ fn build_region_material_fields(
     let mut dind_values = vec![base_material.interfacial_dmi.unwrap_or(0.0); node_count];
     let mut dbulk_values = vec![base_material.bulk_dmi.unwrap_or(0.0); node_count];
 
+    let sharp_conformal_aex_regions = sharp_conformal_parameter_regions(
+        problem,
+        fullmag_ir::MaterialParameterNameIR::Aex,
+    )?;
+
     for segment in object_segments {
         if segment.object_id == AIR_OBJECT_SEGMENT_ID {
             continue;
@@ -1301,13 +1327,14 @@ fn build_region_material_fields(
         )
         .map_err(|e| PlanError { reasons: vec![e] })?;
 
-        let aex_resolved = crate::material::resolve_spatial_parameter(
+        let aex_resolved = crate::material::resolve_spatial_parameter_excluding_regions(
             problem,
             &segment.object_id,
             fullmag_ir::MaterialParameterNameIR::Aex,
             region_material.exchange_stiffness,
             &points,
             object_translation,
+            &sharp_conformal_aex_regions,
         )
         .map_err(|e| PlanError { reasons: vec![e] })?;
 
@@ -1371,6 +1398,22 @@ fn build_region_material_fields(
     let anisotropy_axis_field =
         axes_differ(&anisotropy_axis_values, base_axis).then_some(anisotropy_axis_values);
     Ok((material, anisotropy_axis_field))
+}
+
+fn sharp_conformal_parameter_regions(
+    problem: &ProblemIR,
+    parameter: fullmag_ir::MaterialParameterNameIR,
+) -> Result<BTreeSet<String>, PlanError> {
+    let mut region_ids = BTreeSet::new();
+    for region in problem.object_regions.iter().filter(|region| region.enabled) {
+        if region.realization_policy != fullmag_ir::RegionRealizationPolicyIR::Project
+            && crate::validate::region_is_conformal(problem, region)
+            && sharp_constant_region_parameter(problem, region, parameter)?.is_some()
+        {
+            region_ids.insert(region.region_id.clone());
+        }
+    }
+    Ok(region_ids)
 }
 
 fn material_field_constant_value(field: &fullmag_ir::MaterialParameterFieldIR) -> Option<f64> {
@@ -1530,21 +1573,27 @@ fn build_conformal_region_element_fields(
             .unwrap_or(base_material);
         ms_values[element_index] = owner_material.saturation_magnetisation;
         a_values[element_index] = owner_material.exchange_stiffness;
-        if let Some(value) = sharp_constant_region_parameter(
-            problem,
-            region,
-            fullmag_ir::MaterialParameterNameIR::Ms,
-        )? {
-            ms_values[element_index] = value;
-            ms_changed = true;
-        }
-        if let Some(value) = sharp_constant_region_parameter(
-            problem,
-            region,
-            fullmag_ir::MaterialParameterNameIR::Aex,
-        )? {
-            a_values[element_index] = value;
-            a_changed = true;
+        // Explicit Project remains a nodal approximation even if a conformal
+        // marker is available. DG0 is reserved for non-Project conformal
+        // realizations, otherwise one authored coefficient acquires both
+        // public realizations.
+        if region.realization_policy != fullmag_ir::RegionRealizationPolicyIR::Project {
+            if let Some(value) = sharp_constant_region_parameter(
+                problem,
+                region,
+                fullmag_ir::MaterialParameterNameIR::Ms,
+            )? {
+                ms_values[element_index] = value;
+                ms_changed = true;
+            }
+            if let Some(value) = sharp_constant_region_parameter(
+                problem,
+                region,
+                fullmag_ir::MaterialParameterNameIR::Aex,
+            )? {
+                a_values[element_index] = value;
+                a_changed = true;
+            }
         }
     }
 
@@ -1873,6 +1922,9 @@ pub(crate) fn plan_fem(
     let mut interfacial_dmi_normal: Option<[f64; 3]> = None;
     let mut bulk_dmi: Option<f64> = None;
     let mut has_magnetoelastic = false;
+    let mut has_thermal_noise = false;
+    let mut thermal_seed_config = None;
+    let mut thermal_temperature = problem.temperature;
     for term in &problem.energy_terms {
         match term {
             fullmag_ir::EnergyTermIR::Exchange => {
@@ -1880,6 +1932,31 @@ pub(crate) fn plan_fem(
                     errors.push("Exchange is declared more than once".to_string());
                 }
                 enable_exchange = true;
+            }
+            fullmag_ir::EnergyTermIR::ThermalNoise { temperature, seed } => {
+                if has_thermal_noise {
+                    errors.push("ThermalNoise is declared more than once".to_string());
+                }
+                has_thermal_noise = true;
+                if runtime_requests_cuda(problem) {
+                    errors.push(
+                        "strict FEM GPU ThermalNoise remains unsupported pending CAP-THERM-GPU-001"
+                            .to_string(),
+                    );
+                }
+                if let Some(problem_temperature) = thermal_temperature {
+                    if (problem_temperature - *temperature).abs() > 1.0e-6 {
+                        errors.push("ThermalNoise temperature disagrees with Problem temperature".to_string());
+                    }
+                }
+                thermal_temperature = Some(*temperature);
+                if *seed == Some(0) {
+                    errors.push("ThermalNoise seed must be positive; use system entropy for an unspecified seed".to_string());
+                }
+                thermal_seed_config = Some(ThermalSeedConfig {
+                    policy: if seed.is_some() { SeedPolicy::Fixed } else { SeedPolicy::SystemEntropy },
+                    seed: *seed,
+                });
             }
             fullmag_ir::EnergyTermIR::Demag { realization } => {
                 if enable_demag {
@@ -1975,7 +2052,9 @@ pub(crate) fn plan_fem(
         bulk_dmi.is_some() || has_material_bulk_dmi,
         true,
         has_magnetoelastic,
+        problem.energy_terms.iter().any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
         has_mqs_antenna_field_source(problem) || has_prescribed_zeeman_mask_source(problem),
+        !problem.field_drives.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double {
@@ -2105,10 +2184,14 @@ pub(crate) fn plan_fem(
             )
         };
     let object_segments = remap_segment_object_ids(&raw_object_segments, &geometry_to_object_id)?;
+    let mesh_build_report = resolved_domain_mesh_asset
+        .as_ref()
+        .and_then(|asset| asset.build_report.clone());
     let n_nodes = mesh.nodes.len();
     let n_elements = mesh.elements.len();
     let mesh_name = mesh.mesh_name.clone();
     let domain_mesh_mode = resolved_domain_mesh_mode(&mesh);
+    let mut periodic_mesh_certificate_v6 = None;
     if !requested_static_pbc && !mesh.periodic_node_pairs.is_empty() {
         return Err(PlanError {
             reasons: vec![
@@ -2190,6 +2273,14 @@ pub(crate) fn plan_fem(
                 ],
             });
         }
+        periodic_mesh_certificate_v6 = Some(mesh.periodic_mesh_certificate_v6().map_err(
+            |certificate_errors| PlanError {
+                reasons: certificate_errors
+                    .into_iter()
+                    .map(|reason| format!("FEM periodic mesh certificate v6: {reason}"))
+                    .collect(),
+            },
+        )?);
         // Demag PBC with open boundary: allowed (P^T A P reduction via Rust reference path).
         // Fully 3D periodic demag is not supported in v1.
     }
@@ -2236,7 +2327,7 @@ pub(crate) fn plan_fem(
         Vec::new()
     };
 
-    let (mut material, anisotropy_axis_field) = build_region_material_fields(
+    let (material, anisotropy_axis_field) = build_region_material_fields(
         problem,
         &base_material,
         &mesh,
@@ -2251,13 +2342,39 @@ pub(crate) fn plan_fem(
         &object_segments,
         &magnet_materials,
     )?;
-    if ms_element_field.is_some() {
-        material.ms_field = None;
-    }
-    if a_element_field.is_some() {
-        material.a_field = None;
+    if let Some(reason) = exclusive_coefficient_realization_error(
+        &material,
+        &ms_element_field,
+        &a_element_field,
+    ) {
+        return Err(PlanError {
+            reasons: vec![reason],
+        });
     }
     let requires_consistent_mass_exchange = ms_element_field.is_some();
+
+    if periodic_mesh_certificate_v6.is_some() {
+        periodic_mesh_certificate_v6 = Some(
+            mesh.periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+                ms_element_field.as_deref(),
+                a_element_field.as_deref(),
+                material.ms_field.as_deref(),
+                material.a_field.as_deref(),
+            )
+            .map(|certificate| {
+                fullmag_ir::MeshIR::periodic_certificate_with_region_identity(
+                    certificate,
+                    &problem.object_regions,
+                )
+            })
+            .map_err(|certificate_errors| PlanError {
+                reasons: certificate_errors
+                    .into_iter()
+                    .map(|reason| format!("FEM periodic region/material certificate v6: {reason}"))
+                    .collect(),
+            })?,
+        );
+    }
 
     if interfacial_dmi.is_none() {
         interfacial_dmi = material.interfacial_dmi;
@@ -2355,6 +2472,15 @@ pub(crate) fn plan_fem(
     let dind_field = material.dind_field.clone();
     let dbulk_field = material.dbulk_field.clone();
     let antenna_zeeman_masks = resolve_prescribed_zeeman_masks(problem, &mesh.nodes, None)?;
+    let active_field_drives: Vec<_> = problem.field_drives.iter()
+        .filter(|drive| crate::util::field_drive_is_active(drive, crate::util::active_stage_id(problem)))
+        .cloned().collect();
+    let field_drive_geometry_masks = active_field_drives.iter().filter_map(|drive| {
+        let fullmag_ir::FieldSpatialProfileIR::GeometryMask { object_id, .. } = &drive.spatial_profile else {
+            return None;
+        };
+        problem.geometry.entries.iter().find(|entry| entry.name() == object_id).cloned()
+    }).collect();
 
     let mut fem_plan = FemPlanIR {
         mesh_name: mesh_name.clone(),
@@ -2362,6 +2488,7 @@ pub(crate) fn plan_fem(
         mesh,
         object_segments,
         mesh_parts: resolved_mesh_parts,
+        mesh_build_report,
         domain_mesh_mode,
         domain_frame,
         fe_order: fem_hints.order,
@@ -2376,6 +2503,9 @@ pub(crate) fn plan_fem(
         enable_demag,
         external_field,
         antenna_zeeman_masks,
+        field_drives: active_field_drives,
+        field_drive_geometry_masks,
+        time_stage: crate::util::time_stage_context(problem),
         current_modules: problem.current_modules.clone(),
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
@@ -2392,7 +2522,7 @@ pub(crate) fn plan_fem(
         bulk_dmi,
         dind_field,
         dbulk_field,
-        temperature: problem.temperature,
+        temperature: thermal_temperature,
         current_density: spin_torque.current_density,
         stt_degree: spin_torque.stt_degree,
         stt_beta: spin_torque.stt_beta,
@@ -2416,7 +2546,7 @@ pub(crate) fn plan_fem(
         magnetoelastic,
         mechanics,
         demag_solver_policy,
-        thermal_seed_config: None,
+        thermal_seed_config,
         oersted_realization: None,
         gpu_device_index: None,
         mfem_device_string: None,
@@ -2542,6 +2672,21 @@ pub(crate) fn plan_fem(
         "Executable time-domain FEM requires the native MFEM/libCEED/hypre backend; the Rust FEM baseline remains internal-only for preview and validation helpers"
             .to_string(),
     ];
+    if let Some(certificate) = periodic_mesh_certificate_v6.as_ref() {
+        provenance_notes.push(format!(
+            "periodic mesh certificate: schema={} topology={} marker_map={} material_realization={} region_classes={} max_material_residual={:.6e} magnetic_classes={} scalar_classes={} translation_residual_max_m={:.6e} normal_mismatch_max={:.6e}",
+            certificate.schema_version,
+            certificate.topology_fingerprint,
+            certificate.marker_map_fingerprint,
+            certificate.material_realization_fingerprint,
+            certificate.region_class_count,
+            certificate.max_material_residual,
+            certificate.magnetic_class_count,
+            certificate.scalar_class_count,
+            certificate.translation_residual_max_m,
+            certificate.normal_mismatch_max,
+        ));
+    }
     if fem_plan.relaxation.as_ref().is_some_and(|control| {
         control.algorithm == fullmag_ir::RelaxationAlgorithmIR::TangentPlaneImplicit
     }) {
@@ -3072,6 +3217,9 @@ pub(crate) fn plan_fem_eigen(
             (mesh, object_segments, mesh_source, merged_equilibrium)
         };
     let object_segments = remap_segment_object_ids(&raw_object_segments, &geometry_to_object_id)?;
+    let mesh_build_report = resolved_domain_mesh_asset
+        .as_ref()
+        .and_then(|asset| asset.build_report.clone());
     let mesh_name = mesh.mesh_name.clone();
     let n_nodes = mesh.nodes.len();
     let n_elements = mesh.elements.len();
@@ -3172,6 +3320,7 @@ pub(crate) fn plan_fem_eigen(
         mesh,
         object_segments,
         mesh_parts: resolved_mesh_parts,
+        mesh_build_report,
         domain_mesh_mode,
         domain_frame,
         fe_order: fem_hints.order,
@@ -3393,6 +3542,7 @@ pub(crate) fn plan_fem_frequency_response(
         mesh: eigen.mesh,
         object_segments: eigen.object_segments,
         mesh_parts: eigen.mesh_parts,
+        mesh_build_report: eigen.mesh_build_report,
         domain_mesh_mode: eigen.domain_mesh_mode,
         domain_mesh_workflow_mode: domain_mesh_workflow_mode(problem),
         domain_frame: eigen.domain_frame,

@@ -7,6 +7,7 @@
  */
 
 #include "context.hpp"
+#include "core/fem_material_runtime.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "cpu/mfem/interactions/demag_poisson_field.hpp"
@@ -359,24 +360,34 @@ void demag_cache_refresh_policy_matches_bridge_contract() {
         "demag refresh for non-positive interval");
 }
 
-void cached_demag_energy_includes_frozen_robin_boundary_term() {
+void cached_demag_energy_matches_direct_without_legacy_robin_addition() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 1;
     ctx.material_fields.material.saturation_magnetisation = 800e3;
     ctx.integration_weights.mfem_lumped_mass = {2.0e-27};
+    // This legacy telemetry field must not alter the physical energy.  The
+    // Robin form is already represented by the solved H_demag endpoint.
     ctx.demag.cached_robin_boundary_energy = 7.0e-21;
 
     const std::vector<double> m = {1.0, 0.0, 0.0};
     const std::vector<double> h_demag = {-100.0, 0.0, 0.0};
-    const double expected =
-        fullmag::fem::demag_poisson_energy_from_field(ctx, m, h_demag) +
-        ctx.demag.cached_robin_boundary_energy;
+    // Independent one-node oracle: -mu0/2 * Ms * (m dot H_demag) * V.
+    const double expected_direct =
+        -0.5 * kMu0Test * 800e3 * (-100.0) * 2.0e-27;
+    const double direct =
+        fullmag::fem::demag_poisson_energy_from_field(ctx, m, h_demag);
+
+    check_near(
+        direct,
+        expected_direct,
+        std::fabs(expected_direct) * 1e-12,
+        "direct demag energy matches independent field oracle");
 
     check_near(
         fullmag::fem::demag_poisson_cached_energy_from_field(ctx, m, h_demag),
-        expected,
-        std::fabs(expected) * 1e-12,
-        "cached demag energy includes frozen Robin boundary term");
+        direct,
+        std::fabs(direct) * 1e-12,
+        "cached demag energy ignores legacy frozen Robin telemetry");
 }
 
 void demag_energy_is_owned_by_poisson_energy_module() {
@@ -568,6 +579,220 @@ void demag_rhs_sign_contract_matches_laplace_phi_equals_div_m() {
         "Poisson demag RHS must not negate the Ms*m source coefficient");
 }
 
+fullmag::fem::Context sharp_ms_demag_context() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 6;
+    ctx.mesh.n_elements = 3;
+    ctx.mesh.nodes_xyz = {
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 2.0,
+    };
+    ctx.mesh.elements = {0u, 1u, 2u, 3u, 0u, 1u, 3u, 4u, 0u, 2u, 4u, 5u};
+    ctx.mesh.magnetic_element_mask = {1u, 1u, 0u};
+    ctx.mesh.magnetic_node_mask = {1u, 1u, 1u, 1u, 1u, 0u};
+    ctx.material_fields.material.saturation_magnetisation = 800e3;
+    ctx.material_fields.Ms_element_field = {0.7e6, 1.1e6, 0.0};
+    ctx.material_fields.A_element_field = {0.0, 0.0, 0.0};
+    std::string error;
+    check(fullmag::fem::initialize_material_runtime(ctx, error),
+          "sharp demag fixture must build the typed material runtime");
+    return ctx;
+}
+
+struct SharpMsP1TermwiseOracle {
+    double value = 0.0;
+    double absolute_term_sum = 0.0;
+    std::size_t term_count = 0u;
+};
+
+// This deliberately duplicates the two magnetic tetrahedra in the fixture
+// rather than asking the material runtime for a mass bilinear.  It is the
+// independent oracle for the production sharp-Ms implementation below.
+SharpMsP1TermwiseOracle sharp_ms_p1_termwise_oracle(
+    const std::vector<double> &lhs,
+    const std::vector<double> &rhs) {
+    check(lhs.size() == 18u && rhs.size() == 18u,
+          "sharp-Ms P1 oracle input extent");
+    constexpr int active_tetrahedra[][4] = {
+        {0, 1, 2, 3},
+        {0, 1, 3, 4},
+    };
+    constexpr double ms_a_per_m[] = {0.7e6, 1.1e6};
+    constexpr double tetra_volume_m3 = 1.0 / 6.0;
+
+    SharpMsP1TermwiseOracle result;
+    for (std::size_t element = 0; element < 2u; ++element) {
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                const double p1_mass = tetra_volume_m3 * (i == j ? 2.0 : 1.0) / 20.0;
+                for (int component = 0; component < 3; ++component) {
+                    const std::size_t lhs_index =
+                        static_cast<std::size_t>(active_tetrahedra[element][i]) * 3u +
+                        static_cast<std::size_t>(component);
+                    const std::size_t rhs_index =
+                        static_cast<std::size_t>(active_tetrahedra[element][j]) * 3u +
+                        static_cast<std::size_t>(component);
+                    const double term = ms_a_per_m[element] * p1_mass *
+                        lhs[lhs_index] * rhs[rhs_index];
+                    result.value += term;
+                    result.absolute_term_sum += std::fabs(term);
+                    ++result.term_count;
+                }
+            }
+        }
+    }
+    return result;
+}
+
+void sharp_ms_demag_energy_and_delta_use_active_exact_mass() {
+    auto ctx = sharp_ms_demag_context();
+    const std::vector<double> current = {
+        1.0, 0.0, 0.0,  0.0, 0.0, 0.0,  0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0,  0.0, 0.0, 0.0,  99.0, 99.0, 99.0,
+    };
+    std::vector<double> trial = current;
+    trial[0] += 1.0;
+    trial[1] += 1.0;
+    const std::vector<double> h = {
+        1.0, -1.0, 0.0,  1.0, -1.0, 0.0,  1.0, -1.0, 0.0,
+        1.0, -1.0, 0.0,  1.0, -1.0, 0.0,  1.0e9, 1.0e9, 1.0e9,
+    };
+    const auto energy_oracle = sharp_ms_p1_termwise_oracle(current, h);
+    const double expected = -0.5 * kMu0Test * energy_oracle.value;
+    check_near(fullmag::fem::demag_poisson_energy_from_field(ctx, current, h), expected,
+               std::fabs(expected) * 1e-12 + 1e-300,
+               "sharp-Ms Poisson energy must use the active exact M_Ms mass");
+
+    const auto difference = fullmag::fem::demag_poisson_energy_difference_from_endpoint_fields(
+        ctx, current, trial, h, h);
+    std::vector<double> dm(current.size());
+    std::vector<double> hs(current.size());
+    for (std::size_t i = 0; i < current.size(); ++i) {
+        dm[i] = trial[i] - current[i];
+        hs[i] = h[i] + h[i];
+    }
+    const auto delta_oracle = sharp_ms_p1_termwise_oracle(dm, hs);
+    check(delta_oracle.term_count == 96u,
+          "sharp-Ms two-active-tetra oracle must expose 96 scalar terms");
+    check_near(delta_oracle.value, 0.0, 1e-300,
+               "sharp-Ms x/y endpoint fixture must cancel to exactly zero before scaling");
+    check(delta_oracle.absolute_term_sum > 0.0,
+          "sharp-Ms x/y endpoint fixture must retain a positive pre-cancellation absolute sum");
+    check_near(difference.delta_joules, 0.0, 1e-300,
+               "sharp-Ms Poisson delta must preserve exact x/y cancellation");
+    check_near(difference.delta_joules, -0.5 * kMu0Test * delta_oracle.value, 1e-300,
+               "sharp-Ms Poisson delta must use exact active M_Ms mass");
+    check_near(difference.absolute_term_sum_joules,
+               0.5 * kMu0Test * delta_oracle.absolute_term_sum, 1e-300,
+               "sharp-Ms Poisson delta must preserve pre-cancellation absolute terms");
+    check_near(difference.roundoff_bound_joules,
+               fullmag::fem::relaxation::reduction_roundoff_bound(96u) * difference.absolute_term_sum_joules,
+               1e-300,
+               "sharp-Ms Poisson delta must use gamma_96 for two active tetrahedra");
+
+    std::vector<double> non_cancelling_trial = current;
+    non_cancelling_trial[0] += 1.0;
+    const std::vector<double> positive_h = {
+        1.0, 0.0, 0.0,  1.0, 0.0, 0.0,  1.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,  1.0, 0.0, 0.0,  1.0e9, 1.0e9, 1.0e9,
+    };
+    const auto non_cancelling_difference =
+        fullmag::fem::demag_poisson_energy_difference_from_endpoint_fields(
+            ctx, current, non_cancelling_trial, positive_h, positive_h);
+    std::vector<double> non_cancelling_dm(current.size());
+    std::vector<double> positive_h_sum(current.size());
+    for (std::size_t i = 0; i < current.size(); ++i) {
+        non_cancelling_dm[i] = non_cancelling_trial[i] - current[i];
+        positive_h_sum[i] = positive_h[i] + positive_h[i];
+    }
+    const auto non_cancelling_oracle =
+        sharp_ms_p1_termwise_oracle(non_cancelling_dm, positive_h_sum);
+    check(non_cancelling_oracle.term_count == 96u,
+          "sharp-Ms non-cancelling oracle must expose 96 scalar terms");
+    check(non_cancelling_oracle.value > 0.0,
+          "sharp-Ms positive-x endpoint fixture must have a positive unscaled delta");
+    check(non_cancelling_difference.delta_joules != 0.0,
+          "sharp-Ms positive-x Poisson delta must not cancel to zero");
+    check_near(non_cancelling_difference.delta_joules,
+               -0.5 * kMu0Test * non_cancelling_oracle.value,
+               std::fabs(0.5 * kMu0Test * non_cancelling_oracle.value) * 1e-12 + 1e-300,
+               "sharp-Ms positive-x Poisson delta must retain the demag sign and scale");
+}
+
+void sharp_ms_demag_rhs_uses_typed_element_accessor() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string rhs = read_text_file(root / "cpu" / "mfem" / "interactions" / "demag_poisson_rhs.cpp");
+    check(rhs.find("runtime->realization().ms_a_per_m") != std::string::npos,
+          "sharp-Ms Poisson RHS must obtain Ms from the typed realization at ElementNo");
+    check(rhs.find("Ms_element_field") == std::string::npos,
+          "sharp-Ms Poisson RHS must not read the raw element coefficient");
+}
+
+#if FULLMAG_HAS_MFEM_STACK
+void sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle() {
+    auto ctx = sharp_ms_demag_context();
+    mfem::Mesh mesh(3, 6, 3, 0, 3);
+    const double vertices[][3] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0}, {1.0, 1.0, 1.0}, {0.0, 0.0, 2.0},
+    };
+    for (const auto &vertex : vertices) {
+        mesh.AddVertex(vertex);
+    }
+    int t0[] = {0, 1, 2, 3};
+    int t1[] = {0, 1, 3, 4};
+    int t2[] = {0, 2, 4, 5};
+    mesh.AddTet(t0, 1);
+    mesh.AddTet(t1, 1);
+    mesh.AddTet(t2, 1);
+    mesh.FinalizeTetMesh(1, 0, true);
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    std::string error;
+    check(fullmag::fem::initialize_demag_poisson_rhs_workspace(ctx, fes, error),
+          "sharp-Ms Poisson RHS workspace must initialize");
+    const std::vector<double> m = {
+        1.0, 2.0, -1.0,  -0.5, 0.25, 1.5,  0.75, -1.0, 0.5,
+        2.0, -0.25, 1.0,  -1.5, 0.5, 0.25,  99.0, -77.0, 55.0,
+    };
+    mfem::Vector *rhs = nullptr;
+    check(fullmag::fem::assemble_demag_poisson_rhs(ctx, m, rhs, error),
+          "sharp-Ms Poisson RHS must assemble");
+    check(rhs != nullptr, "sharp-Ms Poisson RHS must return true DOFs");
+
+    mfem::Vector expected(fes.GetTrueVSize());
+    expected = 0.0;
+    const int active_nodes[][4] = {{0, 1, 2, 3}, {0, 1, 3, 4}};
+    const double gradients[][4][3] = {
+        {{-1.0, -1.0, -1.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}},
+        {{-1.0, 1.0, -1.0}, {1.0, -1.0, 0.0}, {0.0, -1.0, 1.0}, {0.0, 1.0, 0.0}},
+    };
+    for (int element = 0; element < 2; ++element) {
+        double mean_m[3] = {0.0, 0.0, 0.0};
+        for (int i = 0; i < 4; ++i) {
+            const std::size_t base = static_cast<std::size_t>(active_nodes[element][i]) * 3u;
+            for (int c = 0; c < 3; ++c) {
+                mean_m[c] += 0.25 * m[base + static_cast<std::size_t>(c)];
+            }
+        }
+        const double ms = ctx.material_fields.Ms_element_field[static_cast<std::size_t>(element)];
+        for (int i = 0; i < 4; ++i) {
+            double dot = 0.0;
+            for (int c = 0; c < 3; ++c) {
+                dot += mean_m[c] * gradients[element][i][c];
+            }
+            expected[active_nodes[element][i]] += ms * dot / 6.0;
+        }
+    }
+    check(rhs->Size() == expected.Size(), "sharp-Ms Poisson RHS true DOF extent");
+    for (int i = 0; i < rhs->Size(); ++i) {
+        check_near((*rhs)[i], expected[i], 1e-9 * std::max(1.0, std::fabs(expected[i])),
+                   "sharp-Ms Poisson RHS must match independent P1-gradient oracle");
+    }
+    fullmag::fem::destroy_demag_poisson_rhs_workspace(ctx);
+}
+#endif
+
 void demag_boundary_operator_is_owned_by_poisson_boundary_module() {
     const std::filesystem::path root = fem_source_root();
     const std::string poisson =
@@ -650,6 +875,12 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
         periodic.find("return reduced < ctx.mesh.periodic_reduced_node_count;") !=
             std::string::npos,
         "Poisson periodic module must reject reduced-node ids outside the class count");
+    check(
+        periodic.find("A.Height() != static_cast<int>(ctx.mesh.n_nodes)") !=
+                std::string::npos &&
+            periodic.find("A.Width() != static_cast<int>(ctx.mesh.n_nodes)") !=
+                std::string::npos,
+        "Poisson periodic reduction must fail closed before indexing a matrix whose true-DOF dimensions do not match the complete node-class map");
     check(
         periodic.find("periodic_workspace->solver.GetNumIterations()") != std::string::npos,
         "Poisson periodic reduced solve must publish actual CG iteration telemetry");
@@ -969,7 +1200,6 @@ void demag_recovery_is_owned_by_poisson_recovery_module() {
         "ctx.demag.h_visual_xyz = h_demag_xyz;",
         "finalize_demag_poisson_recovered_field(ctx, h_demag_xyz);",
         "ctx.demag.cached_robin_boundary_energy =",
-        "bdr_mass->SpMat().Mult(gf_u",
     };
     for (const char *symbol : symbols) {
         check(
@@ -979,6 +1209,12 @@ void demag_recovery_is_owned_by_poisson_recovery_module() {
             recovery.find(symbol) != std::string::npos,
             "Poisson demag field recovery must be defined in demag_poisson_recovery.cpp");
     }
+    check(
+        recovery.find("demag_poisson_energy_from_field(") != std::string::npos,
+        "Poisson demag recovery must obtain energy from the recovered physical field");
+    check(
+        recovery.find("bdr_mass->SpMat().Mult(gf_u") == std::string::npos,
+        "Poisson demag recovery must not add a separate Robin boundary energy term");
 }
 
 void demag_recovery_parallel_path_avoids_full_per_thread_node_buffers() {
@@ -1339,13 +1575,18 @@ int main() {
     poisson_debug_env_gate_is_cached_on_hot_path();
     demag_energy_uses_half_factor_ms_mass_and_magnetic_mask();
     demag_cache_refresh_policy_matches_bridge_contract();
-    cached_demag_energy_includes_frozen_robin_boundary_term();
+    cached_demag_energy_matches_direct_without_legacy_robin_addition();
     demag_energy_is_owned_by_poisson_energy_module();
     demag_cache_store_and_reuse_are_owned_by_poisson_module();
     demag_telemetry_is_owned_by_poisson_telemetry_module();
     demag_field_visual_postprocessing_is_owned_by_poisson_field_module();
     demag_rhs_assembly_is_owned_by_poisson_rhs_module();
     demag_rhs_sign_contract_matches_laplace_phi_equals_div_m();
+    sharp_ms_demag_energy_and_delta_use_active_exact_mass();
+    sharp_ms_demag_rhs_uses_typed_element_accessor();
+#if FULLMAG_HAS_MFEM_STACK
+    sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle();
+#endif
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();
     demag_periodic_reduction_predicate_requires_complete_class_map();

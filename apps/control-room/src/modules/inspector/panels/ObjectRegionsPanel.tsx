@@ -3,7 +3,10 @@
 import { useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
+  useMeshBuildCurrent,
+  useMeshRegionMembershipResource,
   useModelCouplingsResource,
   useModelMaterialFieldsResource,
   useModelRegionDiagnosticsResource,
@@ -26,6 +29,7 @@ import {
   defaultMaterialOverrideDraft,
   formatRegionPhysicalScalar,
   objectRegionDraftFromModel,
+  objectRegionDraftDirty,
   objectRegionDraftIdentityKey,
   objectRegionDraftKey,
   parseRegionPhysicalScalar,
@@ -36,6 +40,7 @@ import {
   type RegionMeshPolicyDraft,
   type RegionShapeDraft,
 } from "./ObjectRegionsPanelModel";
+import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
 import { syncAuthoringScriptBestEffort } from "./ObjectMagneticTexturePanelViewModel";
 import { findLastRegionSelection, regionNodeId } from "./RegionsListPanelModel";
 import { publishRegionAuthoringScene } from "./regionAuthoringInvalidation";
@@ -126,7 +131,8 @@ export function ObjectRegionsPanel(props: InspectorPanelProps) {
 }
 
 function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
-  const { api, resources, selection: selectionController } = useKernel();
+  const kernel = useKernel();
+  const { api, resources, selection: selectionController } = kernel;
   const scene = useSceneResource();
   const regions = useModelRegionsResource();
   const materialFields = useModelMaterialFieldsResource();
@@ -163,9 +169,31 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     baseDraft,
     baseKey: draftKey,
     identityKey: draftIdentityKey,
-    isDirty: () => true,
+    isDirty: objectRegionDraftDirty,
     state: draftState,
   });
+
+  const membership = useMeshRegionMembershipResource(model.regionId, {
+    enabled: model.mode === "committed" && model.regionId !== "none",
+  });
+  const activeBuild = useMeshBuildCurrent({
+    enabled: model.mode === "committed" && model.regionId !== "none",
+  });
+  const regionMeshLifecycle = useMemo(
+    () =>
+      resolveRegionMeshLifecycle({
+        build: activeBuild.data,
+        draftDirty: objectRegionDraftDirty(draft, baseDraft),
+        membership: membership.data,
+        policyEnabled: draft.meshPolicy.enabled,
+        supported: !model.diagnostics.some(
+          (diagnostic) =>
+            diagnostic.capabilityGate === "regions.mesh_policy" &&
+            diagnostic.severity === "error",
+        ),
+      }),
+    [activeBuild.data, baseDraft, draft, membership.data, model.diagnostics],
+  );
 
   const canWriteRegion =
     model.mode === "committed" && model.source === "authored_object_region";
@@ -276,15 +304,15 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     );
   }
 
-  async function applyRegion(): Promise<void> {
+  async function applyRegion(): Promise<boolean> {
     if (!canWriteRegion) {
       setFeedback({ kind: "error", message: "Select an authored object region." });
-      return;
+      return false;
     }
     const validationErrors = validateObjectRegionDraft(draft);
     if (validationErrors.length > 0) {
       setFeedback({ kind: "error", message: validationErrors[0] ?? "Invalid region draft." });
-      return;
+      return false;
     }
 
     setPending(true);
@@ -304,10 +332,39 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
           ? `Object region updated. Authoring script sync skipped: ${syncWarning}`
           : "Object region updated.",
       });
+      return true;
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
+      return false;
     } finally {
       setPending(false);
+    }
+  }
+
+  async function buildRegion(): Promise<void> {
+    if (!canWriteRegion) {
+      setFeedback({ kind: "error", message: "Select an authored object region." });
+      return;
+    }
+    if (regionMeshLifecycle.status === "unsupported") {
+      setFeedback({ kind: "error", message: regionMeshLifecycle.reason });
+      return;
+    }
+    if (objectRegionDraftDirty(draft, baseDraft)) {
+      const applied = await applyRegion();
+      if (!applied) return;
+    }
+    try {
+      const commandContext = createCommandContext("inspector", kernel, {
+        sourceDetail: "object-region-mesh",
+      });
+      await kernel.commands.execute("mesh.build-shared-domain", commandContext);
+      setFeedback({
+        kind: "success",
+        message: "Region policy applied. Shared-domain mesh build submitted.",
+      });
+    } catch (error) {
+      setFeedback({ kind: "error", message: errorMessage(error) });
     }
   }
 
@@ -405,6 +462,9 @@ function useObjectRegionsPanelView({ selection }: InspectorPanelProps) {
     model,
     draft,
     pending,
+    draftDirty: objectRegionDraftDirty(draft, baseDraft),
+    buildRegion,
+    regionMeshLifecycle,
     canWriteRegion,
     updateDraft,
     updateShape,

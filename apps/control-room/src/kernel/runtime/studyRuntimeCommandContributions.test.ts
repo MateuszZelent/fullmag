@@ -157,6 +157,10 @@ function runtimeResourceData({
   meshRevision = 0,
   runtimeState = "idle",
   runtimeControls = null,
+  regionCoefficientsRevision,
+  regionInitialStateRevision,
+  regionMembershipRevision,
+  regionTopologyRevision,
   sceneRevision = 3,
   solverProfile = null,
   stageRevision = 7,
@@ -189,6 +193,10 @@ function runtimeResourceData({
     kind: string;
     reason?: string | null;
   }> | null;
+  regionCoefficientsRevision?: number;
+  regionInitialStateRevision?: number;
+  regionMembershipRevision?: number;
+  regionTopologyRevision?: number;
   sceneRevision?: number | null;
   solverProfile?: unknown;
   stageRevision?: number;
@@ -230,6 +238,18 @@ function runtimeResourceData({
       },
       resources: {
         mesh_revision: meshRevision,
+        ...(regionCoefficientsRevision === undefined
+          ? {}
+          : { region_coefficients_revision: regionCoefficientsRevision }),
+        ...(regionInitialStateRevision === undefined
+          ? {}
+          : { region_initial_state_revision: regionInitialStateRevision }),
+        ...(regionMembershipRevision === undefined
+          ? {}
+          : { region_membership_revision: regionMembershipRevision }),
+        ...(regionTopologyRevision === undefined
+          ? {}
+          : { region_topology_revision: regionTopologyRevision }),
         scene_revision: sceneRevision,
       },
     },
@@ -2728,6 +2748,10 @@ describe("study runtime command contributions", () => {
       } as never,
       resourceData: runtimeResourceData({
         commandCount: 3,
+        regionCoefficientsRevision: 17,
+        regionInitialStateRevision: 18,
+        regionMembershipRevision: 16,
+        regionTopologyRevision: 15,
         runtimeState: "cancelled",
         stageRevision: 9,
       }),
@@ -2743,6 +2767,10 @@ describe("study runtime command contributions", () => {
         kind: "solve",
         precondition: {
           command_revision: 0,
+          region_coefficients_revision: 17,
+          region_initial_state_revision: 18,
+          region_membership_revision: 16,
+          region_topology_revision: 15,
           runtime_state: "awaiting_command",
         },
       }),

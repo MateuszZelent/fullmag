@@ -112,6 +112,15 @@ void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {
         0.0, 20.0, 0.0,
         0.0, 0.0, 30.0,
     };
+    fullmag::fem::RegionalFieldDriveRuntime drive;
+    drive.waveform.kind = FULLMAG_FEM_TIME_CONSTANT;
+    drive.basis_h_xyz = {
+        0.0, 7.0, 0.0,
+        0.0, 8.0, 0.0,
+        0.0, 0.0, 9.0,
+    };
+    ctx.zeeman.regional_drives.push_back(drive);
+    ctx.zeeman.h_drive_xyz.assign(9, 0.0);
     ctx.state.m_xyz = {
         1.0, 0.0, 0.0,
         0.0, 1.0, 0.0,
@@ -143,22 +152,29 @@ void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {
 
     const double expected_external =
         -kMu0Test * (800e3 * 10.0 * 1.0e-27 + 1.0e6 * 20.0 * 2.0e-27);
+    const double expected_drive =
+        -kMu0Test * (1.0e6 * 8.0 * 2.0e-27);
     check_near(
         stats.external_energy_joules,
         expected_external,
         std::fabs(expected_external) * 1e-12,
         "external energy is filled");
     check_near(
+        stats.drive_energy_joules,
+        expected_drive,
+        std::fabs(expected_drive) * 1e-12,
+        "regional drive energy is filled without half factor");
+    check_near(
         stats.total_energy_joules,
-        4.0 + 5.0 + expected_external + 1.0 + 2.0 + 3.0,
+        4.0 + 5.0 + expected_external + expected_drive + 1.0 + 2.0 + 3.0,
         1e-30,
         "total energy aggregation");
     check_near(stats.max_effective_field_amplitude, 3.0, 1e-15, "max H_eff");
     check_near(stats.max_demag_field_amplitude, 5.0, 1e-15, "max H_demag");
     check_near(stats.max_rhs_amplitude, 6.0, 1e-15, "max RHS passthrough");
     check_near(stats.max_torque_Apm, 3.0, 1e-15, "max torque m cross H_eff");
-    check_near(stats.mx, 0.5, 1e-15, "average mx");
-    check_near(stats.my, 0.5, 1e-15, "average my");
+    check_near(stats.mx, 2.0 / 7.0, 1e-15, "Ms-times-lumped-volume weighted mx");
+    check_near(stats.my, 5.0 / 7.0, 1e-15, "Ms-times-lumped-volume weighted my");
     check_near(stats.mz, 0.0, 1e-15, "average mz");
 #if FULLMAG_HAS_MFEM_STACK
     check(stats.requested_omp_threads == 7, "requested OMP threads");

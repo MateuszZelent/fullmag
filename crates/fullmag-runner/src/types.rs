@@ -271,6 +271,8 @@ pub struct FemCpuRelaxationEnergyTerms {
     pub e_demag: f64,
     #[serde(rename = "E_ext")]
     pub e_ext: f64,
+    #[serde(default)]
+    pub e_drive: f64,
     #[serde(rename = "E_ani")]
     pub e_ani: f64,
     #[serde(rename = "E_dmi")]
@@ -315,6 +317,8 @@ pub struct StepStats {
     pub e_ex: f64,
     pub e_demag: f64,
     pub e_ext: f64,
+    #[serde(default)]
+    pub e_drive: f64,
     pub e_ani: f64,
     pub e_dmi: f64,
     pub e_total: f64,
@@ -524,6 +528,7 @@ impl Default for StepStats {
             e_ex: 0.0,
             e_demag: 0.0,
             e_ext: 0.0,
+            e_drive: 0.0,
             e_ani: 0.0,
             e_dmi: 0.0,
             e_total: 0.0,
@@ -960,6 +965,7 @@ impl StepStats {
             e_ex: self.e_ex,
             e_demag: self.e_demag,
             e_ext: self.e_ext,
+            e_drive: self.e_drive,
             e_ani: self.e_ani,
             e_dmi: self.e_dmi,
             e_el: 0.0,
@@ -1275,6 +1281,9 @@ pub struct FemMeshPayload {
     pub generation_id: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_domain_quality: HashMap<u32, MeshQualityPayload>,
+    /// Immutable report for the mesh build that produced this solver mesh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_report: Option<fullmag_ir::FemSharedDomainBuildReportIR>,
 }
 
 pub fn fem_mesh_topology_fingerprint(mesh: &FemMeshPayload) -> String {
@@ -1507,6 +1516,7 @@ impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
                 .iter()
                 .map(|(k, v)| (*k, MeshQualityPayload::from(v)))
                 .collect(),
+            build_report: plan.mesh_build_report.clone(),
         }
     }
 }
@@ -1560,6 +1570,7 @@ impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
                 .iter()
                 .map(|(k, v)| (*k, MeshQualityPayload::from(v)))
                 .collect(),
+            build_report: plan.mesh_build_report.clone(),
         }
     }
 }
@@ -1613,6 +1624,7 @@ impl From<&fullmag_ir::FemFrequencyResponsePlanIR> for FemMeshPayload {
                 .iter()
                 .map(|(k, v)| (*k, MeshQualityPayload::from(v)))
                 .collect(),
+            build_report: plan.mesh_build_report.clone(),
         }
     }
 }
@@ -1978,6 +1990,7 @@ pub(crate) struct StateObservables {
     pub demag_field: Vec<[f64; 3]>,
     pub external_field: Vec<[f64; 3]>,
     pub antenna_field: Vec<[f64; 3]>,
+    pub drive_field: Vec<[f64; 3]>,
     pub effective_field: Vec<[f64; 3]>,
     // PH-02: extended vector observables
     pub anisotropy_field: Vec<[f64; 3]>,
@@ -1990,6 +2003,7 @@ pub(crate) struct StateObservables {
     pub exchange_energy: f64,
     pub demag_energy: f64,
     pub external_energy: f64,
+    pub drive_energy: f64,
     pub anisotropy_energy: f64,
     pub dmi_energy: f64,
     pub total_energy: f64,
@@ -2035,6 +2049,7 @@ mod tests {
             },
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
+            mesh_build_report: None,
             domain_mesh_mode: FemDomainMeshModeIR::MergedMagneticMesh,
             domain_frame: None,
             fe_order: 1,
@@ -2074,6 +2089,9 @@ mod tests {
             enable_demag: false,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            field_drives: Vec::new(),
+            field_drive_geometry_masks: Vec::new(),
+            time_stage: Default::default(),
             current_modules: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,

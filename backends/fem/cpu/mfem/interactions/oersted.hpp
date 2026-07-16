@@ -17,8 +17,8 @@ struct Context;
  * Oersted runtime state shared by explicit and cylinder paths.
  *
  * Owns plan-level realization selection, analytical-cylinder parameters,
- * current/time-envelope configuration, and the AoS-3 H_oe buffer after
- * explicit import or analytical-cylinder precomputation.
+ * current/time-envelope configuration, the non-public analytical unit-current
+ * basis, and the public realized AoS-3 H_oe buffer.
  */
 struct OerstedRuntimeState {
     bool has_cylinder = false;
@@ -33,6 +33,7 @@ struct OerstedRuntimeState {
     double time_dep_offset = 0.0;
     double time_dep_t_on = 0.0;
     double time_dep_t_off = 0.0;
+    std::vector<double> h_basis_per_ampere_xyz;
     std::vector<double> h_xyz;
 };
 
@@ -49,10 +50,15 @@ bool initialize_oersted_plan_fields(
     const fullmag_fem_plan_desc &plan,
     std::string &error);
 
+/* Materialize public H_oe(t) in A/m.  The cylinder basis remains immutable. */
+const std::vector<double> &materialize_oersted_field(
+    Context &ctx,
+    double evaluation_time_s);
+
 /*
  * Aggregated include surface and public dispatcher for Oersted realizations.
  *
- * Analytical-cylinder fields are scaled by `oersted_current_scale(ctx)`.
+ * Analytical-cylinder fields are scaled by `oersted_current_scale(ctx, evaluation_time_s)`.
  * Explicit nodal `oersted_field_xyz` inputs are already final H values and are
  * added without current scaling.
  *
@@ -60,6 +66,9 @@ bool initialize_oersted_plan_fields(
  * only. It does not sample analytical cylinders or add explicit nodal fields.
  * Those responsibilities stay in oersted_cylinder.* and oersted_explicit.*.
  */
-void add_oersted_field(const Context &ctx, std::vector<double> &h_eff_xyz);
+void add_oersted_field(
+    const Context &ctx,
+    double evaluation_time_s,
+    std::vector<double> &h_eff_xyz);
 
 } // namespace fullmag::fem

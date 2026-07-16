@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_PATH,
+  MESHING_CAPABILITIES_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
@@ -12,6 +13,7 @@ import {
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH,
   MESHING_SHARED_DOMAIN_REPORT_PATH,
+  MESHING_SEMANTICS_PATH,
   MESHING_SUMMARY_PATH,
   MODEL_GEOMETRY_CAPABILITIES_PATH,
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
@@ -73,6 +75,15 @@ describe("geometry lifecycle command contributions", () => {
       command_id: "cmd-1",
       error: null,
     }));
+    const detail = vi.fn(async () => ({
+      command_id: "cmd-1",
+      status: "completed",
+      completion_status: "completed",
+      seq: 1,
+      resource_invalidations: [
+        { resource_key: "meshing/shared-domain/manifest", revision: 1 },
+      ],
+    }));
 
     expect(
       registry.isEnabled("mesh.build-selected", {
@@ -83,7 +94,7 @@ describe("geometry lifecycle command contributions", () => {
 
     const result = await registry.execute("mesh.build-selected", {
       api: {
-        commands: { submit },
+        commands: { submit, detail },
       } as never,
       bus,
       layout: layout as never,
@@ -98,22 +109,22 @@ describe("geometry lifecycle command contributions", () => {
       mesh_reason: "selected-object",
       mesh_target: { kind: "object_mesh", object_id: "box" },
     });
-    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe("cmd-1");
+    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe(1);
     expect(
       resources.getRevision(
         MESHING_OBJECT_TOPOLOGY_PATH.replace("{object_id}", "box"),
       ),
-    ).toBe("cmd-1");
+    ).toBe(1);
     expect(
       resources.getRevision(
         MESHING_OBJECT_REPORT_PATH.replace("{object_id}", "box"),
       ),
-    ).toBe("cmd-1");
+    ).toBe(1);
     expect(
       resources.getRevision(
         MESHING_OBJECT_QUALITY_PATH.replace("{object_id}", "box"),
       ),
-    ).toBe("cmd-1");
+    ).toBe(1);
     expect(meshEvents).toEqual([
       {
         commandId: "cmd-1",
@@ -141,10 +152,19 @@ describe("geometry lifecycle command contributions", () => {
       command_id: "cmd-shared",
       error: null,
     }));
+    const detail = vi.fn(async () => ({
+      command_id: "cmd-shared",
+      status: "completed",
+      completion_status: "completed",
+      seq: 2,
+      resource_invalidations: [
+        { resource_key: "meshing/shared-domain/manifest", revision: 2 },
+      ],
+    }));
 
     const result = await registry.execute("mesh.build-shared-domain", {
       api: {
-        commands: { submit },
+        commands: { submit, detail },
       } as never,
       bus,
       layout: layout as never,
@@ -158,7 +178,7 @@ describe("geometry lifecycle command contributions", () => {
       mesh_reason: "shared-domain",
       mesh_target: { kind: "study_domain" },
     });
-    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe("cmd-shared");
+    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe(2);
     expect(meshEvents).toEqual([
       {
         commandId: "cmd-shared",
@@ -186,6 +206,50 @@ describe("geometry lifecycle command contributions", () => {
         source: "test",
       }),
     ).toBe(false);
+  });
+
+  it("uses the mesh capability resource reason for build commands", () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selectBox(selection);
+    const context = {
+      selection,
+      source: "test" as const,
+      resourceData: {
+        [MESHING_CAPABILITIES_PATH]: {
+          mesh_capabilities: {
+            fem: {
+              status: "unsupported",
+              reason: "FEM shared-domain meshing is disabled for this session.",
+            },
+          },
+        },
+      },
+    };
+
+    expect(registry.isEnabled("mesh.build-selected", context)).toBe(false);
+    expect(registry.get("mesh.build-selected")?.disabledReason?.(context)).toBe(
+      "FEM shared-domain meshing is disabled for this session.",
+    );
+    expect(registry.isEnabled("mesh.build-shared-domain", context)).toBe(false);
+  });
+
+  it("does not block builds when a legacy mesh resource omits lane keys", () => {
+    const registry = registryWithLifecycleCommands();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selectBox(selection);
+
+    expect(
+      registry.isEnabled("mesh.build-selected", {
+        selection,
+        source: "test",
+        resourceData: {
+          [MESHING_CAPABILITIES_PATH]: {
+            mesh_capabilities: { has_volume_mesh: true },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("focuses primitive display explicitly for the selected object", async () => {
@@ -250,12 +314,21 @@ describe("geometry lifecycle command contributions", () => {
       command_id: "cmd-refine",
       error: null,
     }));
+    const detail = vi.fn(async () => ({
+      command_id: "cmd-refine",
+      status: "completed",
+      completion_status: "completed",
+      seq: 3,
+      resource_invalidations: [
+        { resource_key: "meshing/shared-domain/manifest", revision: 3 },
+      ],
+    }));
 
     const result = await registry.execute(
       "mesh.refine-worst-quality-element",
       {
         api: {
-          commands: { submit },
+          commands: { submit, detail },
         } as never,
         resources,
         source: "test",
@@ -270,27 +343,18 @@ describe("geometry lifecycle command contributions", () => {
       mesh_reason: "quality_threshold_refinement",
       mesh_target: { kind: "study_domain" },
     });
-    expect(resources.getRevision(MESHING_BUILDS_PATH)).toBe("cmd-refine");
-    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe("cmd-refine");
-    expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe("cmd-refine");
-    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(
-      "cmd-refine",
-    );
-    expect(resources.getRevision(MESHING_SHARED_DOMAIN_REPORT_PATH)).toBe(
-      "cmd-refine",
-    );
-    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_PATH)).toBe(
-      "cmd-refine",
-    );
-    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH)).toBe(
-      "cmd-refine",
-    );
-    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH)).toBe(
-      "cmd-refine",
-    );
+    expect(resources.getRevision(MESHING_BUILDS_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_BUILDS_CURRENT_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SUMMARY_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SEMANTICS_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_MANIFEST_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_REPORT_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH)).toBe(3);
+    expect(resources.getRevision(MESHING_SHARED_DOMAIN_QUALITY_GATES_PATH)).toBe(3);
     expect(
       resources.getRevision(MESHING_SHARED_DOMAIN_REALIZED_SIZE_FIELDS_PATH),
-    ).toBe("cmd-refine");
+    ).toBe(3);
   });
 
   it("disables primitive commands when geometry capabilities reject them", () => {
@@ -469,7 +533,7 @@ describe("geometry lifecycle command contributions", () => {
     now.mockRestore();
   });
 
-  it("adds microstrip antennas as auxiliary scene objects with field modules", async () => {
+  it("adds microstrip antennas as auxiliary scene objects with canonical field drives", async () => {
     const registry = registryWithLifecycleCommands();
     const bus = new EventBus<KernelEventMap>();
     const selection = new SelectionController(bus);
@@ -479,6 +543,7 @@ describe("geometry lifecycle command contributions", () => {
       current_modules: {
         modules: [{ id: "existing-source", kind: "antenna_field_source" }],
       },
+      field_drives: { drives: [{ id: "existing-drive", kind: "regional" }] },
       objects: [{ id: "waveguide", name: "Waveguide", role: "magnet" }],
       revision: 20,
     }));
@@ -504,19 +569,21 @@ describe("geometry lifecycle command contributions", () => {
     expect(commitTransaction).toHaveBeenCalledWith({
       kind: "merge_patch",
       merge_patch: {
-        current_modules: {
-          modules: [
-            { id: "existing-source", kind: "antenna_field_source" },
+        field_drives: {
+          drives: [
+            { id: "existing-drive", kind: "regional" },
             {
-              B: 0.001,
+              activation: { kind: "all_time_evolution" },
+              amplitude_B_T: 0.001,
               direction: [0, 1, 0],
+              enabled: true,
               id: "antenna-9ix:H_ant",
-              kind: "antenna_field_source",
-              model: "prescribed_zeeman_mask",
+              kind: "regional",
               name: "Microstrip antenna field",
-              object: "antenna-9ix",
-              spatial_profile: { kind: "uniform" },
-              waveform: { cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
+              spatial_profile: { kind: "geometry_mask", object_id: "antenna-9ix", envelope: { kind: "uniform" } },
+              target: { kind: "global" },
+              time_origin: "stage_local",
+              waveform: { amplitude: 1, cutoff_hz: 20e9, kind: "sinc_pulse", t0: 5e-11 },
             },
           ],
         },

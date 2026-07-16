@@ -123,6 +123,7 @@ import type {
   HysteresisSettleTraceResource,
   HysteresisStagePlanSchema,
   HysteresisStageSaturationSchema,
+  TopologicalChargeQuery,
   TopologicalChargeResource,
 } from "../api/apiTypes";
 import { normalizeQuantityIdOrDefault } from "../api/quantityIds";
@@ -526,8 +527,13 @@ export function frequencyDomainTextArtifactRevision(
   ].join("|");
 }
 
-function hasPositiveRevision(revision: number | null | undefined): boolean {
-  return typeof revision === "number" && revision > 0;
+function hasPositiveRevision(
+  revision: number | string | null | undefined,
+): boolean {
+  return (
+    (typeof revision === "number" && revision > 0) ||
+    (typeof revision === "string" && /^[1-9]\d*$/.test(revision))
+  );
 }
 
 export function useCommandQueueResource({
@@ -2299,27 +2305,31 @@ export function useObjectMetricsResource(objectId: string | null | undefined) {
 
 export function useObjectTopologicalChargeResource(
   objectId: string | null | undefined,
-  options: RuntimeResourceOptions & { pauseLoad?: boolean } = {},
+  options: RuntimeResourceOptions & {
+    pauseLoad?: boolean;
+    query?: TopologicalChargeQuery;
+  } = {},
 ) {
   const { api } = useKernel();
+  const queryToken = JSON.stringify(options.query ?? {});
   const resourceKey = objectId
-    ? ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", objectId)
+    ? `${ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", objectId)}?${queryToken}`
     : `${ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH}:none`;
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       objectId
         ? api.analysis.extensions.objects
-            .topologicalCharge(objectId, {}, { signal })
+            .topologicalCharge(objectId, JSON.parse(queryToken) as TopologicalChargeQuery, { signal })
             .catch(ignoreMissingResource<TopologicalChargeResource>)
         : Promise.resolve(null),
-    [api, objectId],
+    [api, objectId, queryToken],
   );
 
   return useResource<TopologicalChargeResource | null>({
     enabled: Boolean(objectId) && options.enabled !== false,
     load,
     pauseLoad: options.pauseLoad,
-    resolveRevision: (data) => data?.revision ?? null,
+    resolveRevision: (data) => data?.resource_revision ?? null,
     resourceKey,
   });
 }

@@ -63,11 +63,16 @@ describe("study authoring smoke script", () => {
     expect(smokeScript).toContain("execution_mode");
   });
 
-  it("retains the legacy full-smoke projected-gradient BB assertion", () => {
+  it("retains the current full-smoke projected-gradient BB availability assertions", () => {
     expect(smokeScript).toContain(
-      'throw new Error("FEM demag projected-gradient BB must be unavailable.")',
+      "FEM demag projected-gradient BB must be available when advertised by runtime capabilities.",
     );
-    expect(smokeScript).toContain("if (!k0Only)");
+    expect(smokeScript).toContain(
+      "FEM demag projected-gradient BB must not retain a stale quarantine reason when available.",
+    );
+    expect(smokeScript).not.toContain(
+      "FEM demag projected-gradient BB must be unavailable.",
+    );
   });
 
   it("asserts transaction-backed frequency-response response-map authoring", () => {

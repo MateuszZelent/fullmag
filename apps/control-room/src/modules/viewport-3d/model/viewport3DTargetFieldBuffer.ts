@@ -7,6 +7,11 @@ import type {
   Viewport3DFieldScopeKind,
 } from "./viewport3DFieldDataPlan";
 import { buildViewport3DFieldResourceRequestId } from "./viewport3DFieldDataPlan";
+import {
+  resolveViewport3DFieldDomainCompatibility,
+  type Viewport3DFieldDomainCompatibility,
+  type Viewport3DFieldDomainIdentity,
+} from "./viewport3DFieldDomainCompatibility";
 
 export type Viewport3DFieldPayloadCapability =
   | "full-vector-complete"
@@ -19,6 +24,10 @@ export interface Viewport3DTargetFieldBuffer {
   capability: Viewport3DFieldPayloadCapability;
   component: Exclude<Viewport3DFieldComponentDemand, "none">;
   componentCount: number;
+  currentDomainGenerationId: string | null;
+  currentMeshTopologyHash: string | null;
+  domainCompatibility: Viewport3DFieldDomainCompatibility;
+  domainGenerationId: string | null;
   complete: boolean;
   consumers: readonly string[];
   fieldRevision: string | null;
@@ -29,6 +38,8 @@ export interface Viewport3DTargetFieldBuffer {
   pointCount: number;
   quantityId: string;
   requestId: string | null;
+  requestIdentityCompatible: boolean;
+  resourceKey: string | null;
   sampled: boolean;
   scopeId: string | null;
   scopeKind: Viewport3DFieldScopeKind;
@@ -53,17 +64,21 @@ export interface Viewport3DTargetFieldInput {
 
 export function buildViewport3DTargetFieldBuffer({
   consumers = [],
+  domain,
   fieldRevision = null,
   fieldVector,
   query,
+  resourceKey,
   synthetic = false,
   targetIds,
   topologyRevision = null,
 }: {
   consumers?: readonly string[];
+  domain?: Viewport3DFieldDomainIdentity;
   fieldRevision?: string | null;
   fieldVector: DecodedFieldVector;
   query: FieldVectorQuery;
+  resourceKey: string | null;
   synthetic?: boolean;
   targetIds: readonly string[];
   topologyRevision?: string | null;
@@ -72,6 +87,33 @@ export function buildViewport3DTargetFieldBuffer({
   const indexing = fieldVector.indexing ?? "legacy_count_only";
   const sampled = indexing === "sampled_node_indices" || query.max_samples != null;
   const meshTopologyHash = fieldVector.meshTopologyHash ?? null;
+  const domainGenerationId = fieldVector.domainGenerationId ?? null;
+  const requestedScopeKind = resolveTargetFieldBufferScopeKind(query.scope_kind);
+  const requestedScopeId = canonicalTargetFieldBufferScopeId(
+    requestedScopeKind,
+    query.scope_id ?? null,
+  );
+  const hasDecodedScopeIdentity = fieldVector.formatVersion === 3;
+  const scopeKind = hasDecodedScopeIdentity
+    ? resolveTargetFieldBufferScopeKind(fieldVector.scopeKind)
+    : requestedScopeKind;
+  const scopeId = hasDecodedScopeIdentity
+    ? canonicalTargetFieldBufferScopeId(scopeKind, fieldVector.scopeId ?? null)
+    : requestedScopeId;
+  const requestIdentityCompatible = Boolean(
+    synthetic ||
+      !hasDecodedScopeIdentity ||
+      (scopeKind === requestedScopeKind && scopeId === requestedScopeId),
+  );
+  const domainCompatibility = resolveViewport3DFieldDomainCompatibility({
+    domain: domain ?? {
+      domainGenerationId: null,
+      meshTopologyHash: null,
+      meshTopologyRevision: null,
+      pointCount: 0,
+    },
+    field: fieldVector,
+  });
   const capability = resolveTargetFieldBufferCapability({
     component,
     fieldVector,
@@ -83,16 +125,21 @@ export function buildViewport3DTargetFieldBuffer({
       component,
       fieldRevision,
       quantityId: fieldVector.quantityId,
-      scopeId: query.scope_id ?? null,
-      scopeKind: resolveTargetFieldBufferScopeKind(query.scope_kind),
+      scopeId,
+      scopeKind,
       targetIds,
       meshTopologyHash,
+      domainGenerationId,
       indexing,
       topologyRevision,
     }),
     capability,
     component,
     componentCount: fieldVector.nComp,
+    currentDomainGenerationId: domain?.domainGenerationId ?? null,
+    currentMeshTopologyHash: domain?.meshTopologyHash ?? null,
+    domainCompatibility,
+    domainGenerationId,
     complete: capability !== "full-vector-sampled",
     consumers: [...consumers].sort(),
     fieldRevision,
@@ -105,9 +152,11 @@ export function buildViewport3DTargetFieldBuffer({
     requestId: synthetic
       ? null
       : buildViewport3DFieldResourceRequestId(fieldVector.quantityId, query),
+    requestIdentityCompatible,
+    resourceKey,
     sampled,
-    scopeId: query.scope_id ?? null,
-    scopeKind: resolveTargetFieldBufferScopeKind(query.scope_kind),
+    scopeId,
+    scopeKind,
     targetIds: [...targetIds].sort(),
     topologyRevision,
     values: fieldVector.values,
@@ -168,6 +217,8 @@ export function viewport3DTargetFieldBufferCanServeSurface(
   quantityId?: string | null,
 ): boolean {
   if (!buffer || !colorMode) return false;
+  if (!buffer.requestIdentityCompatible) return false;
+  if (buffer.domainCompatibility.status === "mismatch") return false;
   if (!viewport3DTargetFieldBufferMatchesQuantity(buffer, quantityId)) {
     return false;
   }
@@ -192,6 +243,8 @@ export function viewport3DTargetFieldBufferCanServeVectors(
   quantityId?: string | null,
 ): boolean {
   if (!buffer) return false;
+  if (!buffer.requestIdentityCompatible) return false;
+  if (buffer.domainCompatibility.status === "mismatch") return false;
   if (!viewport3DTargetFieldBufferMatchesQuantity(buffer, quantityId)) {
     return false;
   }
@@ -282,6 +335,16 @@ function resolveTargetFieldBufferScopeKind(
   return "full";
 }
 
+function canonicalTargetFieldBufferScopeId(
+  scopeKind: Viewport3DFieldScopeKind,
+  scopeId: string | null,
+): string | null {
+  if (!scopeId || scopeKind !== "object") return scopeId;
+  return scopeId.startsWith("object:")
+    ? scopeId.slice("object:".length)
+    : scopeId;
+}
+
 export function viewport3DTargetFieldBufferMatchesQuantity(
   buffer: Viewport3DTargetFieldBuffer | null | undefined,
   quantityId?: string | null,
@@ -302,6 +365,7 @@ function buildViewport3DTargetFieldBufferId({
   scopeKind,
   targetIds,
   meshTopologyHash,
+  domainGenerationId,
   indexing,
   topologyRevision,
 }: {
@@ -312,6 +376,7 @@ function buildViewport3DTargetFieldBufferId({
   scopeKind: Viewport3DFieldScopeKind;
   targetIds: readonly string[];
   meshTopologyHash: string | null;
+  domainGenerationId: string | null;
   indexing: NonNullable<DecodedFieldVector["indexing"]>;
   topologyRevision: string | null;
 }): string {
@@ -321,6 +386,7 @@ function buildViewport3DTargetFieldBufferId({
     scopeKind,
     scopeId ?? "none",
     fieldRevision ?? "field:none",
+    domainGenerationId ?? "generation:none",
     topologyRevision ?? "topology:none",
     meshTopologyHash ?? "topology-hash:none",
     indexing,

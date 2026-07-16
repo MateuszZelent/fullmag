@@ -2,6 +2,20 @@ use fullmag_ir::*;
 use std::collections::{BTreeMap, HashMap};
 
 #[test]
+fn execution_plans_carry_regional_field_drives_without_legacy_aliasing() {
+    fn fdm_drives(plan: &FdmPlanIR) -> &[RegionalFieldDriveIR] {
+        &plan.field_drives
+    }
+    fn fem_drives(plan: &FemPlanIR) -> &[RegionalFieldDriveIR] {
+        &plan.field_drives
+    }
+
+    let fdm = FdmPlanIR::default();
+    assert!(fdm_drives(&fdm).is_empty());
+    let _fem_contract: fn(&FemPlanIR) -> &[RegionalFieldDriveIR] = fem_drives;
+}
+
+#[test]
 fn bootstrap_example_round_trips_as_json() {
     let ir = ProblemIR::bootstrap_example();
     let json = serde_json::to_string_pretty(&ir).expect("bootstrap example should serialize");
@@ -115,6 +129,48 @@ fn problem_ir_deserialize_migrates_previous_public_version() {
 }
 
 #[test]
+fn previous_public_cylinder_without_axis_migrates_explicitly() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
+        .expect("bootstrap ProblemIR should serialize");
+    value["ir_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["script_api_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["serializer_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["geometry"]["entries"] = serde_json::json!([{
+        "kind": "cylinder",
+        "name": "legacy",
+        "radius": 1.0,
+        "height": 2.0
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value)
+        .expect("legacy cylinder should migrate its axis explicitly");
+    match &decoded.geometry.entries[0] {
+        GeometryEntryIR::Cylinder { axis, .. } => assert_eq!(*axis, [0.0, 0.0, 1.0]),
+        other => panic!("expected migrated cylinder, got {other:?}"),
+    }
+}
+
+#[test]
+fn legacy_migration_adds_axes_to_nested_geometry_and_region_csg() {
+    let mut value = serde_json::json!({
+        "ir_version": PREVIOUS_PUBLIC_IR_VERSION,
+        "geometry": {"entries": [{
+            "kind": "translate", "name": "translated", "by": [0.0, 0.0, 0.0],
+            "base": {"kind": "difference", "name": "difference",
+                "base": {"kind": "cylinder", "name": "base", "radius": 1.0, "height": 2.0},
+                "tool": {"kind": "cylinder", "name": "tool", "radius": 0.5, "height": 1.0}}
+        }]},
+        "object_regions": [{"shape": {"kind": "csg", "expression":
+            {"kind": "cylinder", "name": "region", "radius": 1.0, "height": 2.0}}}]
+    });
+
+    migrate_problem_ir_json_value(&mut value).expect("legacy payload should migrate");
+    assert_eq!(value["geometry"]["entries"][0]["base"]["base"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
+    assert_eq!(value["geometry"]["entries"][0]["base"]["tool"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
+    assert_eq!(value["object_regions"][0]["shape"]["expression"]["axis"], serde_json::json!([0.0, 0.0, 1.0]));
+}
+
+#[test]
 fn previous_public_ir_golden_fixture_migrates_to_current() {
     let fixture = include_str!("../../../tests/golden/problem_ir/bootstrap_v0_1_read_compat.json");
     let decoded: ProblemIR =
@@ -142,6 +198,129 @@ fn unsupported_ir_version_is_rejected() {
 fn bootstrap_example_validates() {
     let ir = ProblemIR::bootstrap_example();
     assert!(ir.validate().is_ok());
+}
+
+#[test]
+fn regional_field_drive_exact_wire_round_trips() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["field_drives"] = serde_json::json!([{
+        "id": "drive-pulse",
+        "name": "Gamma sinc pulse",
+        "kind": "regional",
+        "enabled": true,
+        "target": {"kind": "global"},
+        "amplitude_B_T": 0.001,
+        "direction": [0.0, 1.0, 0.0],
+        "spatial_profile": {"kind": "geometry_mask", "object_id": "strip", "envelope": {
+            "kind": "sinc", "axis": [1.0, 0.0, 0.0], "period_m": 2.0e-7,
+            "center_m": 0.0, "width_m": 4.0e-7, "window": "hann"
+        }},
+        "waveform": {"kind": "sinc_pulse", "cutoff_hz": 2.0e10, "t0": 1.0e-10, "amplitude": 1.0},
+        "time_origin": "stage_local",
+        "activation": {"kind": "stage_ids", "stage_ids": ["excite_gamma"]}
+    }]);
+
+    let decoded: ProblemIR = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(decoded.field_drives.len(), 1);
+    assert_eq!(decoded.field_drives[0].id, "drive-pulse");
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert_eq!(encoded["field_drives"], value["field_drives"]);
+}
+
+#[test]
+fn regional_field_drive_unknown_fields_are_rejected() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["field_drives"] = serde_json::json!([{
+        "id": "drive", "name": "Drive", "kind": "regional", "enabled": true,
+        "target": {"kind": "global", "unexpected": 1},
+        "amplitude_B_T": 0.001, "direction": [0.0, 1.0, 0.0],
+        "spatial_profile": {"kind": "uniform"},
+        "waveform": {"kind": "constant"}, "time_origin": "stage_local",
+        "activation": {"kind": "all_time_evolution"}
+    }]);
+    assert!(serde_json::from_value::<ProblemIR>(value).is_err());
+}
+
+#[test]
+fn regional_field_drive_validation_is_fail_closed() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "bad".into(),
+        name: "Bad".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Object { object_id: "missing".into() },
+        amplitude_b_t: -1.0,
+        direction: [0.0, 0.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 0.0, t0: -1.0, amplitude: 1.0 },
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::StageIds { stage_ids: vec!["missing-stage".into()] },
+        migration: None,
+    });
+    let errors = ir.validate().expect_err("invalid regional drive must fail");
+    for needle in ["amplitude_B_T", "direction", "target object", "cutoff_hz", "t0"] {
+        assert!(errors.iter().any(|error| error.contains(needle)), "missing {needle}: {errors:?}");
+    }
+}
+
+#[test]
+fn active_stage_id_controls_minimizer_drive_validation() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "study_pipeline".into(),
+        serde_json::json!({"version":"study_pipeline.v1","nodes":[
+            {"id":"relax","enabled":true}, {"id":"excite","enabled":true}
+        ]}),
+    );
+    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("relax"));
+    let sampling = ir.study.sampling().clone();
+    ir.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: None,
+            energy_tolerance_j: None,
+            max_steps: Some(2),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "excite-only".into(), name: "Excite only".into(), kind: FieldDriveKindIR::Regional,
+        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 20e9, t0: 50e-12, amplitude: 1.0 },
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::StageIds { stage_ids: vec!["excite".into()] }, migration: None,
+    });
+    ir.validate().expect("inactive dynamic drive must not invalidate relaxation stage");
+    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("missing"));
+    let errors = ir.validate().expect_err("unknown active stage must fail closed");
+    assert!(errors.iter().any(|error| error.contains("active_stage_id") && error.contains("missing")));
+}
+
+#[test]
+fn spin_wave_analysis_request_is_validated_against_source_locality() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "gamma".into(), name: "Gamma".into(), kind: FieldDriveKindIR::Regional,
+        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 20e9, t0: 50e-12, amplitude: 1.0 },
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::AllTimeEvolution {}, migration: None,
+    });
+    ir.problem_meta.runtime_metadata.insert("spin_wave_response".into(), serde_json::json!({
+        "schema_version":"spin_wave_response.request.v1", "analysis":"gamma", "response_component":"my"
+    }));
+    ir.validate().expect("global uniform source is valid for gamma analysis");
+    ir.problem_meta.runtime_metadata.insert("spin_wave_response".into(), serde_json::json!({
+        "schema_version":"spin_wave_response.request.v1", "analysis":"finite_k", "response_component":"my", "probe_count":2
+    }));
+    let errors = ir.validate().expect_err("finite-k must reject global source and too few probes");
+    assert!(errors.iter().any(|error| error.contains("probe_count")));
+    assert!(errors.iter().any(|error| error.contains("localized")));
 }
 
 #[test]
@@ -2286,6 +2465,7 @@ fn analytic_geometry_must_have_positive_dimensions() {
         name: "strip".to_string(),
         radius: -1.0,
         height: 5e-9,
+        axis: [0.0, 0.0, 1.0],
     };
 
     let errors = ir
@@ -2294,6 +2474,26 @@ fn analytic_geometry_must_have_positive_dimensions() {
     assert!(errors
         .iter()
         .any(|error| error.contains("cylinder geometry 'strip' radius must be positive")));
+}
+
+#[test]
+fn cylinder_axis_is_serialized_and_validated() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries[0] = GeometryEntryIR::Cylinder {
+        name: "tilted".to_string(),
+        radius: 5e-9,
+        height: 10e-9,
+        axis: [1.0, 1.0, 1.0],
+    };
+    let value = serde_json::to_value(&ir).expect("cylinder should serialize");
+    assert_eq!(value["geometry"]["entries"][0]["axis"], serde_json::json!([1.0, 1.0, 1.0]));
+
+    let mut invalid = ir.clone();
+    if let GeometryEntryIR::Cylinder { axis, .. } = &mut invalid.geometry.entries[0] {
+        *axis = [0.0, 0.0, 0.0];
+    }
+    let errors = invalid.validate().expect_err("zero cylinder axis must fail validation");
+    assert!(errors.iter().any(|error| error.contains("cylinder geometry 'tilted' axis must be non-zero")));
 }
 
 #[test]
@@ -3393,11 +3593,15 @@ fn problem_ir_validation_accepts_valid_mesh_semantics() {
                 effective_airbox_hmax: Some(8e-9),
                 effective_per_object_targets: HashMap::new(),
                 region_markers: Vec::new(),
+                object_region_markers: Vec::new(),
                 used_size_field_kinds: vec!["curvature".to_string()],
                 size_fields_realized: Vec::new(),
                 operation_statuses: Vec::new(),
                 thin_film_diagnostics: Vec::new(),
                 magnetic_submesh_signatures: Vec::new(),
+                selector_resolution: Vec::new(),
+                orphan_entities: Vec::new(),
+                rejected_element_types: Vec::new(),
                 degraded: false,
                 authored_regions_count: None,
                 realized_regions_count: None,

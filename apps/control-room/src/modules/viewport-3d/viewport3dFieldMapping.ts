@@ -38,6 +38,8 @@ export interface ScalarColorBuffer {
   phasorConvention?: string;
   quantityId?: string;
   range: ScalarRange;
+  sourceFieldBufferId?: string | null;
+  sourceResourceKey?: string | null;
   rangeDiagnostics?: ScalarRangeDiagnostics;
   degradedFaceCount?: number;
   faceCount?: number;
@@ -60,6 +62,33 @@ export interface ScalarColorBuffer {
   targetRevision?: string;
   topologyRevision?: string;
   vectorValues?: Float32Array;
+}
+
+const scalarColorBufferFallbackKeys = new WeakMap<ScalarColorBuffer, string>();
+let nextScalarColorBufferFallbackKey = 0;
+
+export function resolveViewport3DScalarColorBufferKey(
+  scalarBuffer: ScalarColorBuffer,
+): string;
+export function resolveViewport3DScalarColorBufferKey(
+  scalarBuffer: null | undefined,
+): null;
+export function resolveViewport3DScalarColorBufferKey(
+  scalarBuffer: ScalarColorBuffer | null | undefined,
+): string | null;
+export function resolveViewport3DScalarColorBufferKey(
+  scalarBuffer: ScalarColorBuffer | null | undefined,
+): string | null {
+  if (!scalarBuffer) return null;
+  if (scalarBuffer.buildKey !== undefined) return scalarBuffer.buildKey;
+
+  const existingKey = scalarColorBufferFallbackKeys.get(scalarBuffer);
+  if (existingKey) return existingKey;
+
+  nextScalarColorBufferFallbackKey += 1;
+  const key = `scalar-buffer:runtime:${nextScalarColorBufferFallbackKey}`;
+  scalarColorBufferFallbackKeys.set(scalarBuffer, key);
+  return key;
 }
 
 export interface ChunkedFieldTransformOptions {

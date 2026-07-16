@@ -130,6 +130,43 @@ pub(crate) fn validate_region_owned_planning(
             resolved_backend.as_str()
         ));
     }
+    if resolved_backend == BackendTarget::Fdm && runtime_requests_cuda(problem) {
+        let has_cuda_region_fields = problem
+            .material_parameter_fields
+            .iter()
+            .any(|assignment| {
+                let active = assignment.region_id.as_deref().is_none_or(|region_id| {
+                    problem
+                        .object_regions
+                        .iter()
+                        .any(|region| region.enabled && region.region_id == region_id)
+                });
+                active
+                    && matches!(
+                        assignment.parameter,
+                        fullmag_ir::MaterialParameterNameIR::Ms
+                            | fullmag_ir::MaterialParameterNameIR::Aex
+                            | fullmag_ir::MaterialParameterNameIR::Alpha
+                    )
+            })
+            || problem.object_regions.iter().any(|region| {
+                region.enabled
+                    && region.material_overrides.iter().any(|override_| {
+                        matches!(
+                            override_.parameter,
+                            fullmag_ir::MaterialParameterNameIR::Ms
+                                | fullmag_ir::MaterialParameterNameIR::Aex
+                                | fullmag_ir::MaterialParameterNameIR::Alpha
+                        )
+                    })
+            });
+        if has_cuda_region_fields {
+            errors.push(
+                "fdm_cuda_region_material_fields_unsupported: CUDA native does not yet support cellwise material fields (Ms/Aex/alpha); use FDM CPU reference or disable region material overrides"
+                    .to_string(),
+            );
+        }
+    }
     if resolved_backend != BackendTarget::Fdm
         && problem
             .object_regions
@@ -531,7 +568,9 @@ pub(crate) fn validate_executable_outputs(
     enable_h_dmi_bulk: bool,
     allow_h_dmi_bulk: bool,
     enable_magnetoelastic: bool,
+    enable_thermal: bool,
     enable_antenna_field: bool,
+    enable_regional_field_drive: bool,
     errors: &mut Vec<String>,
 ) {
     let allowed_fields = [
@@ -544,6 +583,7 @@ pub(crate) fn validate_executable_outputs(
         "H_ani",
         "H_dmi",
         "H_mel",
+        "H_therm",
     ];
     let allowed_scalars = [
         "E_ex",
@@ -577,12 +617,13 @@ pub(crate) fn validate_executable_outputs(
             OutputIR::Field { name, .. } => {
                 if !allowed_fields.contains(&name.as_str())
                     && !mechanical_fields.contains(&name.as_str())
-                    && !(enable_oersted && name == "H_OE")
+                    && !(enable_oersted && name == "H_oe")
                     && !(enable_antenna_field && name == "H_ant")
+                    && !(enable_regional_field_drive && name == "H_drive")
                     && !(allow_h_dmi_bulk && name == "H_dmi_bulk")
                 {
                     errors.push(format!(
-                        "field output '{}' is not executable in the current executable path; allowed fields are m, H_ex, H_demag, demag_phi, H_ext, H_OE, H_dmi, H_dmi_bulk, H_mel, and H_eff",
+                        "field output '{}' is not executable in the current executable path; allowed fields are m, H_ex, H_demag, demag_phi, H_ext, H_oe, H_dmi, H_dmi_bulk, H_mel, and H_eff",
                         name
                     ));
                 } else if name == "H_ex" && !enable_exchange {
@@ -597,16 +638,23 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("field output 'H_dmi' requires InterfacialDmi(...)".to_string());
                 } else if name == "H_dmi_bulk" && !enable_h_dmi_bulk {
                     errors.push("field output 'H_dmi_bulk' requires BulkDmi(...)".to_string());
-                } else if name == "H_OE" && !enable_oersted {
+                } else if name == "H_oe" && !enable_oersted {
                     errors.push(
-                        "field output 'H_OE' requires OerstedCylinder() or OerstedField(...)"
+                        "field output 'H_oe' requires OerstedCylinder() or OerstedField(...)"
                             .to_string(),
                     );
                 } else if name == "H_mel" && !enable_magnetoelastic {
                     errors.push("field output 'H_mel' requires Magnetoelastic(...)".to_string());
+                } else if name == "H_therm" && !enable_thermal {
+                    errors.push("field output 'H_therm' requires ThermalNoise(...)".to_string());
                 } else if name == "H_ant" && !enable_antenna_field {
                     errors.push(
                         "field output 'H_ant' requires at least one antenna current module"
+                            .to_string(),
+                    );
+                } else if name == "H_drive" && !enable_regional_field_drive {
+                    errors.push(
+                        "field output 'H_drive' requires at least one RegionalFieldDrive"
                             .to_string(),
                     );
                 } else if mechanical_fields.contains(&name.as_str()) {
@@ -624,6 +672,7 @@ pub(crate) fn validate_executable_outputs(
             OutputIR::Scalar { name, .. } => {
                 if !allowed_scalars.contains(&name.as_str())
                     && !mechanical_scalars.contains(&name.as_str())
+                    && !(enable_regional_field_drive && name == "E_drive")
                 {
                     errors.push(format!(
                         "scalar output '{}' is not executable in the current executable path; allowed scalars are E_ex, E_demag, E_ext, E_ani, E_dmi, E_mel, E_total, time, step, solver_dt, mx, my, mz, max_dm_dt, and max_h_eff",
@@ -635,6 +684,11 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("scalar output 'E_demag' requires Demag()".to_string());
                 } else if name == "E_ext" && !enable_zeeman {
                     errors.push("scalar output 'E_ext' requires Zeeman(...)".to_string());
+                } else if name == "E_drive" && !enable_regional_field_drive {
+                    errors.push(
+                        "scalar output 'E_drive' requires at least one RegionalFieldDrive"
+                            .to_string(),
+                    );
                 } else if name == "E_mel" && !enable_magnetoelastic {
                     errors.push("scalar output 'E_mel' requires Magnetoelastic(...)".to_string());
                 } else if mechanical_scalars.contains(&name.as_str()) {
@@ -654,12 +708,12 @@ pub(crate) fn validate_executable_outputs(
             } => {
                 if !allowed_fields.contains(&field.as_str())
                     && !mechanical_fields.contains(&field.as_str())
-                    && !(enable_oersted && field == "H_OE")
+                    && !(enable_oersted && field == "H_oe")
                     && !(enable_antenna_field && field == "H_ant")
                     && !(allow_h_dmi_bulk && field == "H_dmi_bulk")
                 {
                     errors.push(format!(
-                        "snapshot field '{}' is not executable in the current path; allowed fields are m, H_ex, H_demag, demag_phi, H_ext, H_OE, H_dmi, H_dmi_bulk, and H_eff",
+                        "snapshot field '{}' is not executable in the current path; allowed fields are m, H_ex, H_demag, demag_phi, H_ext, H_oe, H_dmi, H_dmi_bulk, and H_eff",
                         field
                     ));
                 } else if field == "H_ex" && !enable_exchange {
@@ -674,13 +728,15 @@ pub(crate) fn validate_executable_outputs(
                     errors.push("snapshot field 'H_dmi' requires InterfacialDmi(...)".to_string());
                 } else if field == "H_dmi_bulk" && !enable_h_dmi_bulk {
                     errors.push("snapshot field 'H_dmi_bulk' requires BulkDmi(...)".to_string());
-                } else if field == "H_OE" && !enable_oersted {
+                } else if field == "H_oe" && !enable_oersted {
                     errors.push(
-                        "snapshot field 'H_OE' requires OerstedCylinder() or OerstedField(...)"
+                        "snapshot field 'H_oe' requires OerstedCylinder() or OerstedField(...)"
                             .to_string(),
                     );
                 } else if field == "H_mel" && !enable_magnetoelastic {
                     errors.push("snapshot field 'H_mel' requires Magnetoelastic(...)".to_string());
+                } else if field == "H_therm" && !enable_thermal {
+                    errors.push("snapshot field 'H_therm' requires ThermalNoise(...)".to_string());
                 } else if field == "H_ant" && !enable_antenna_field {
                     errors.push(
                         "snapshot field 'H_ant' requires at least one antenna current module"

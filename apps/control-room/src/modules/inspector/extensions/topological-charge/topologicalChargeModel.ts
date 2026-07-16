@@ -40,7 +40,7 @@ const DISCRETE_EQUATION_LATEX =
 const METHOD_TERMS: TopologicalChargeMethodTerm[] = [
   {
     symbol: "\\Sigma",
-    meaning: "selected oriented 2D support: grid layer, FEM layer, surface, or plane cut",
+    meaning: "selected oriented 2D support: FDM grid plane or exact FEM P1 plane cut",
   },
   {
     symbol: "\\hat{\\mathbf m}",
@@ -52,7 +52,7 @@ const METHOD_TERMS: TopologicalChargeMethodTerm[] = [
   },
   {
     symbol: "s_i",
-    meaning: "layer or cut coordinate along the selected support normal",
+    meaning: "physical FDM-plane or FEM-cut coordinate along the selected support normal",
   },
   {
     symbol: "a, b, c",
@@ -82,23 +82,24 @@ function formatMaybeText(value: string | number | null | undefined): string {
     : "unavailable";
 }
 
-function formatSampling(resource: TopologicalChargeResource | null): string {
-  if (!resource) return "unavailable";
-  if (resource.sample_topology) {
-    const topology = resource.sample_topology;
-    return `${formatTopologyKind(topology.kind)}, ${topology.point_count} nodes, ${topology.triangle_count} triangles, ${resource.valid_sample_count}/${resource.sample_count} valid`;
-  }
-  if (!resource.sample_grid) return "unavailable";
-  const grid = resource.sample_grid;
-  return `${grid.plane} ${grid.nx} x ${grid.ny}, ${resource.valid_sample_count}/${resource.sample_count} valid`;
+function formatExecution(
+  execution: TopologicalChargeResource["provenance"]["requested_execution"] | null | undefined,
+): string {
+  if (!execution) return "unavailable";
+  const identity = [execution.backend, execution.device, execution.precision, execution.mode]
+    .filter((value) => value.length > 0)
+    .join(" / ");
+  return execution.lossy_fallback_used ? `${identity} (fallback)` : identity || "unavailable";
 }
 
-function formatTopologyKind(kind: string): string {
-  return kind.replace(/_/g, " ");
+function formatSampling(resource: TopologicalChargeResource | null): string {
+  if (!resource) return "unavailable";
+  const quality = resource.quality;
+  return `${quality.valid_vertex_count}/${quality.total_vertex_count} valid vertices, ${quality.valid_triangle_count}/${quality.total_triangle_count} valid triangles`;
 }
 
 function formatLayerProfile(resource: TopologicalChargeResource | null): string {
-  const layers = resource?.layer_samples ?? [];
+  const layers = resource?.profile ?? [];
   if (layers.length === 0) return "unavailable";
   const charges = layers
     .map((layer) => layer.charge)
@@ -106,7 +107,7 @@ function formatLayerProfile(resource: TopologicalChargeResource | null): string 
   if (charges.length === 0) return `${layers.length} layers, no valid layer charge`;
   if (layers.length === 1) {
     const layer = layers[0];
-    return `1 support, Q=${charges[0].toFixed(6)} at s=${layer.coordinate.toExponential(3)}`;
+    return `1 support, Q=${charges[0].toFixed(6)} at s=${layer.coordinate_m.toExponential(3)} m`;
   }
   const min = Math.min(...charges);
   const max = Math.max(...charges);
@@ -129,9 +130,10 @@ function formatStatusForSentence(status: string): string {
 }
 
 function formatSampleQuality(resource: TopologicalChargeResource | null): string {
-  if (!resource || resource.sample_count <= 0) return "unavailable";
-  const fraction = resource.valid_sample_count / resource.sample_count;
-  return `${resource.valid_sample_count}/${resource.sample_count} valid samples (${(fraction * 100).toFixed(2)}%)`;
+  if (!resource || resource.quality.total_triangle_count <= 0) return "unavailable";
+  const { valid_triangle_count, total_triangle_count } = resource.quality;
+  const fraction = valid_triangle_count / total_triangle_count;
+  return `${valid_triangle_count}/${total_triangle_count} valid triangles (${(fraction * 100).toFixed(2)}%)`;
 }
 
 function resolveMethodInfo(
@@ -140,7 +142,7 @@ function resolveMethodInfo(
   return {
     title: "Berg-Luescher topological charge",
     description:
-      "Computes skyrmion charge on an oriented 2D support from the current magnetization. 3D FDM and FEM films report a native layer profile Q(s); the scalar Q is the valid-layer average.",
+      "Computes skyrmion charge on an oriented 2D support from canonical magnetization m. A profile reports each physical cut and Q is present only when its requested support is valid.",
     continuumEquationLatex: CONTINUUM_EQUATION_LATEX,
     discreteEquationLatex: DISCRETE_EQUATION_LATEX,
     sampleQuality: formatSampleQuality(resource),
@@ -148,7 +150,7 @@ function resolveMethodInfo(
     notes: [
       "Q is dimensionless; integer-like values are meaningful only when the full texture and boundary state are resolved.",
       "Q is computed on an oriented 2D support; unordered 3D nodes are not summed into a skyrmion number.",
-      "For 3D FDM/FEM films, inspect Q(s) when the texture varies through thickness.",
+      "For 3D FDM/FEM films, inspect Q(s) and its physical integration weights when the texture varies through thickness.",
       "Zero, missing, or non-finite vectors are rejected before the solid-angle sum.",
     ],
   };
@@ -158,7 +160,7 @@ function resolveBanner(
   resource: TopologicalChargeResource | null,
 ): TopologicalChargePanelBanner | undefined {
   if (!resource) return undefined;
-  const firstWarning = resource.warnings[0];
+  const firstWarning = resource.warnings?.[0];
   if (firstWarning) {
     return {
       kind: "warning",
@@ -167,7 +169,7 @@ function resolveBanner(
   }
   if (resource.status !== "ready") {
     return {
-      kind: resource.status === "error" ? "error" : "warning",
+      kind: "warning",
       message: `Topological charge status: ${formatStatusForSentence(resource.status)}.`,
     };
   }
@@ -186,19 +188,23 @@ export function resolveTopologicalChargePanelModel(
       { label: "Object", value: data?.object_id ?? "none" },
       { label: "Fetch state", value: fetchStatus },
       { label: "Status", value: data?.status ?? fetchStatus },
-      { label: "Quantity", value: data?.quantity_id ?? "m" },
+      { label: "Schema", value: data?.schema_version ?? "unavailable" },
+      { label: "Quantity", value: data?.method.quantity_id ?? "m" },
       { label: "Q", value: formatMaybeNumber(data?.charge) },
       { label: "Nearest integer", value: formatMaybeInteger(data?.nearest_integer) },
       { label: "Integer error", value: formatMaybeNumber(data?.integer_error) },
-      { label: "Polarity", value: formatMaybeText(data?.polarity) },
-      { label: "Plane", value: formatMaybeText(data?.plane) },
+      { label: "Trust", value: formatMaybeText(data?.trust) },
+      { label: "Plane", value: formatMaybeText(data?.resolved_support.plane) },
+      { label: "Support", value: formatMaybeText(data?.resolved_support.support) },
       { label: "Sampling", value: formatSampling(data) },
       { label: "Support profile", value: formatLayerProfile(data) },
-      { label: "Method", value: formatMaybeText(data?.method) },
-      { label: "Field revision", value: formatMaybeInteger(data?.field_revision) },
-      { label: "Mesh revision", value: formatMaybeInteger(data?.mesh_revision) },
-      { label: "Domain generation", value: formatMaybeText(data?.domain_generation_id) },
-      { label: "Mesh generation", value: formatMaybeText(data?.mesh_generation_id) },
+      { label: "Method", value: formatMaybeText(data?.method.id) },
+      { label: "Field revision", value: formatMaybeText(data?.provenance.field_revision) },
+      { label: "Mesh revision", value: formatMaybeText(data?.provenance.mesh_revision) },
+      { label: "Domain generation", value: formatMaybeText(data?.provenance.domain_generation_id) },
+      { label: "Mesh generation", value: formatMaybeText(data?.provenance.mesh_generation_id) },
+      { label: "Requested execution", value: formatExecution(data?.provenance.requested_execution) },
+      { label: "Resolved execution", value: formatExecution(data?.provenance.resolved_execution) },
     ],
   };
 }

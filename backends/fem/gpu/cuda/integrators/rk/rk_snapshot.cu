@@ -79,6 +79,7 @@ bool gpu_rk_snapshot_current_state(
             gpu.rk.k[0],
             stream,
             n,
+            ctx.state.current_time,
             "launch GPU snapshot h_eff accumulation",
             reason)) {
         return false;

@@ -101,6 +101,8 @@ pub struct DisplaySelection {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct DomainSummary {
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub generation_id: u64,
     pub discretization: String,
     pub cell_count: u64,
@@ -116,6 +118,8 @@ pub struct ResourceRevisionMap {
     pub command_completion_revision: u64,
     pub fields_revision: u64,
     pub scalars_revision: u64,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub domain_generation_id: u64,
     pub artifacts_revision: u64,
     pub engine_log_revision: u64,
@@ -129,6 +133,10 @@ pub struct ResourceRevisionMap {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_revision: Option<u64>,
     pub visualization_state_revision: u64,
+    pub region_topology_revision: u64,
+    pub region_membership_revision: u64,
+    pub region_coefficients_revision: u64,
+    pub region_initial_state_revision: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

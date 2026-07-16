@@ -54,6 +54,104 @@ fn default_spatial_profile_window() -> String {
     "rectangular".to_string()
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldDriveKindIR {
+    Regional,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
+pub enum FieldTargetIR {
+    Global {},
+    Object { object_id: String },
+    Region { object_id: String, region_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
+pub enum FieldEnvelopeIR {
+    Uniform {},
+    Sinc {
+        axis: [f64; 3],
+        period_m: f64,
+        #[serde(default)]
+        center_m: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width_m: Option<f64>,
+        #[serde(default = "default_field_spatial_window")]
+        window: String,
+    },
+}
+
+fn default_field_spatial_window() -> String {
+    "none".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
+pub enum FieldSpatialProfileIR {
+    Uniform {},
+    Sinc {
+        axis: [f64; 3],
+        period_m: f64,
+        #[serde(default)]
+        center_m: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width_m: Option<f64>,
+        #[serde(default = "default_field_spatial_window")]
+        window: String,
+    },
+    GeometryMask {
+        object_id: String,
+        envelope: FieldEnvelopeIR,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldTimeOriginIR {
+    StageLocal,
+    Absolute,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
+pub enum DriveActivationIR {
+    AllTimeEvolution {},
+    StageIds { stage_ids: Vec<String> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FieldDriveMigrationIR {
+    pub migrated_from: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RegionalFieldDriveIR {
+    pub id: String,
+    pub name: String,
+    pub kind: FieldDriveKindIR,
+    #[serde(default = "default_field_drive_enabled")]
+    pub enabled: bool,
+    pub target: FieldTargetIR,
+    #[serde(rename = "amplitude_B_T")]
+    pub amplitude_b_t: f64,
+    pub direction: [f64; 3],
+    pub spatial_profile: FieldSpatialProfileIR,
+    pub waveform: TimeDependenceIR,
+    pub time_origin: FieldTimeOriginIR,
+    pub activation: DriveActivationIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration: Option<FieldDriveMigrationIR>,
+}
+
+fn default_field_drive_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AntennaIR {
@@ -207,6 +305,14 @@ pub struct ExcitationAnalysisIR {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EnergyTermIR {
     Exchange,
+    /// Brown thermal field configuration. The temperature is also retained on
+    /// `ProblemIR` for the native plan; the optional fixed seed is scoped to
+    /// the current stochastic runtime realization.
+    ThermalNoise {
+        temperature: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
+    },
     Demag {
         #[serde(default)]
         realization: RequestedFemDemagIR,

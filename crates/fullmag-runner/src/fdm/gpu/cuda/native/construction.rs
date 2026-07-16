@@ -5,6 +5,8 @@ use super::{ffi, NativeFdmBackend};
 #[cfg(feature = "cuda")]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
+use crate::fdm::{validate_multilayer_grid_budget, validate_single_grid_budget};
+#[cfg(feature = "cuda")]
 use crate::types::RunError;
 #[cfg(feature = "cuda")]
 use std::ffi::CStr;
@@ -41,6 +43,7 @@ struct NativeMultilayerTensorKernelHost {
 #[cfg(feature = "cuda")]
 impl NativeFdmBackend {
     pub fn create_multilayer_v2(plan: &fullmag_ir::FdmMultilayerPlanIR) -> Result<Self, RunError> {
+        validate_multilayer_grid_budget(plan)?;
         let precision = match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => {
                 ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE
@@ -277,6 +280,8 @@ impl NativeFdmBackend {
 
     /// Create a new backend from an FDM execution plan.
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
+        validate_single_grid_budget(plan)?;
+        let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
         let grid = ffi::fullmag_fdm_grid_desc {
             nx: plan.grid.cells[0],
             ny: plan.grid.cells[1],
@@ -342,10 +347,9 @@ impl NativeFdmBackend {
             Some(plan.region_mask.clone())
         };
         let demag_kernel_spectra = if plan.enable_demag {
-            if let Some(pbc) = plan.periodicity.as_ref().filter(|pbc| {
-                pbc.has_any_periodic()
-                    && pbc.demag == fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages
-            }) {
+            if let fullmag_engine::FdmDemagBoundary::PeriodicTruncatedImages { image_counts } =
+                resolved_demag_boundary
+            {
                 Some(fullmag_engine::compute_periodic_newell_kernel_spectra(
                     plan.grid.cells[0] as usize,
                     plan.grid.cells[1] as usize,
@@ -353,8 +357,13 @@ impl NativeFdmBackend {
                     plan.cell_size[0],
                     plan.cell_size[1],
                     plan.cell_size[2],
-                    [pbc.is_periodic(0), pbc.is_periodic(1), pbc.is_periodic(2)],
-                    pbc.image_counts.unwrap_or([10, 10, 10]),
+                    plan.periodicity
+                        .as_ref()
+                        .map(|pbc| {
+                            [pbc.is_periodic(0), pbc.is_periodic(1), pbc.is_periodic(2)]
+                        })
+                        .unwrap_or([false, false, false]),
+                    image_counts,
                 ))
             } else if plan.grid.cells[2] == 1 {
                 Some(fullmag_engine::compute_newell_kernel_spectra_thin_film_2d(

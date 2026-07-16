@@ -8,6 +8,7 @@ import type { AnalysisFieldOverlayController } from "../visualization/AnalysisFi
 import type { CameraRegistryController } from "../visualization/CameraRegistryController";
 import type { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
 import type { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
+import type { VisualizationTargetRef } from "../visualization/ObjectVisualizationController";
 import type { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 
@@ -37,6 +38,8 @@ export interface CommandContext {
   sourceDetail?: string;
   visualization?: ObjectVisualizationController;
   visualizationSync?: VisualizationRegistrySyncController;
+  /** Canonical target resolved by a UI surface with scene and mesh provenance. */
+  visualizationTarget?: VisualizationTargetRef | null;
 }
 
 export interface CommandResult {

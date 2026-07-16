@@ -17,6 +17,7 @@ type ObjectSelectionKind =
   | "object.region.material"
   | "object.region.texture"
   | "object.region.visualization"
+  | "object.region.visualization.debug"
   | "object.region.regions"
   | "object.region.diagnostics"
   | "object.region-magnetic-texture"
@@ -28,6 +29,7 @@ type ObjectSelectionKind =
   | "object.mesh"
   | "object.extension.topological-charge"
   | "object.visualization"
+  | "object.visualization.debug"
   | "object.mode_visualization"
   | "object.mode_visualization.group"
   | "object.mode_visualization.field"
@@ -35,6 +37,43 @@ type ObjectSelectionKind =
 
 type MeshQualitySelectionMetric = CrossSectionQualityMetric;
 export type RegionVisualizationTargetId = `region:${string}:${string}`;
+export interface VisualizationMeshPartLike {
+  geometry_id?: string | null;
+  id: string;
+  label?: string | null;
+  object_id?: string | null;
+  role?: string | null;
+}
+
+const AIRBOX_ROLES = new Set(["air", "airbox"]);
+const AIRBOX_IDS = new Set(["airbox", "__air__", "__airbox__"]);
+
+export function isVisualizationAirboxRole(role: string | null | undefined): boolean {
+  return AIRBOX_ROLES.has(role?.trim().toLowerCase() ?? "");
+}
+
+export function isVisualizationAirboxId(id: string | null | undefined): boolean {
+  let normalized = id?.trim().toLowerCase() ?? "";
+  while (normalized.startsWith("part:") || normalized.startsWith("object:")) {
+    normalized = normalized.slice(normalized.indexOf(":") + 1);
+  }
+  if (normalized.endsWith("_geom")) {
+    normalized = normalized.slice(0, -"_geom".length);
+  }
+  return AIRBOX_IDS.has(normalized);
+}
+
+export function isVisualizationAirboxIdentity(value: {
+  geometry_id?: string | null;
+  id?: string | null;
+  object_id?: string | null;
+  role?: string | null;
+}): boolean {
+  return (
+    isVisualizationAirboxRole(value.role) ||
+    [value.id, value.object_id, value.geometry_id].some(isVisualizationAirboxId)
+  );
+}
 
 export function visualizationTargetIdForSceneObject(
   objectId: string,
@@ -49,18 +88,30 @@ export function canonicalVisualizationSceneObjectId(objectId: string): string {
   return objectId.endsWith("_geom") ? objectId.slice(0, -5) : objectId;
 }
 
+export function canonicalVisualizationPartTargetId(partId: string): string {
+  return `part:${partId}`;
+}
+
+export function visualizationPartScopeIdFromTargetId(targetId: string): string {
+  return targetId.startsWith("part:")
+    ? targetId.slice("part:".length)
+    : targetId;
+}
+
 export function visualizationObjectIdForMeshPartLike(part: {
   geometry_id?: string | null;
   object_id?: string | null;
   role?: string | null;
 }): string | null {
-  if (part.role === "air" || part.role === "airbox") return null;
+  if (isVisualizationAirboxIdentity(part)) return null;
   const objectId = part.object_id ?? part.geometry_id;
   return objectId ? canonicalVisualizationSceneObjectId(objectId) : null;
 }
 
 export type SelectionRef =
   | {
+      boundaryFaceIndex?: number | null;
+      carrierPartId?: string;
       kind: ObjectSelectionKind;
       nodeId: string;
       objectId: string;
@@ -70,18 +121,30 @@ export type SelectionRef =
       visualizationTargetId: `object:${string}` | RegionVisualizationTargetId;
     }
   | {
-      kind: "airbox.mesh" | "airbox.mesh-quality" | "airbox.visualization";
+      boundaryFaceIndex?: number | null;
+      carrierPartId?: string;
+      kind:
+        | "airbox.root"
+        | "airbox.mesh"
+        | "airbox.mesh.parameters"
+        | "airbox.mesh.quality-gates"
+        | "airbox.mesh.statistics"
+        | "airbox.mesh.topology"
+        | "airbox.mesh.build"
+        | "airbox.visualization"
+        | "airbox.visualization.debug";
       nodeId: string;
       type: "airbox";
       visualizationTargetId: "airbox";
     }
   | {
       boundaryFaceIndex?: number | null;
+      carrierPartId?: string;
       kind: "mesh-part" | "mesh-part-airbox";
       nodeId: string;
       objectId: string | null;
       type: "mesh-part";
-      visualizationTargetId: `mesh-part:${string}`;
+      visualizationTargetId: string;
     }
   | {
       centroid: [number, number, number] | null;
@@ -118,6 +181,12 @@ export type SelectionRef =
       kind: "physics.coupling";
       nodeId: string;
       type: "physics-coupling";
+    }
+  | {
+      fieldDriveId: string;
+      kind: "physics.field-drive";
+      nodeId: string;
+      type: "physics-field-drive";
     }
   | {
       chartId: string;
@@ -303,6 +372,9 @@ export function selectionRefEquals(
         left.objectId === right.objectId &&
         nullableStringEquals(left.extensionId, right.extensionId) &&
         nullableStringEquals(left.regionId, right.regionId) &&
+        nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
+        (left.boundaryFaceIndex ?? null) ===
+          (right.boundaryFaceIndex ?? null) &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "airbox":
@@ -310,6 +382,9 @@ export function selectionRefEquals(
         right.type === "airbox" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
+        (left.boundaryFaceIndex ?? null) ===
+          (right.boundaryFaceIndex ?? null) &&
         left.visualizationTargetId === right.visualizationTargetId
       );
     case "mesh-part":
@@ -317,6 +392,7 @@ export function selectionRefEquals(
         right.type === "mesh-part" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        nullableStringEquals(left.carrierPartId, right.carrierPartId) &&
         nullableStringEquals(left.objectId, right.objectId) &&
         (left.boundaryFaceIndex ?? null) ===
           (right.boundaryFaceIndex ?? null) &&
@@ -362,6 +438,13 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.couplingId === right.couplingId
+      );
+    case "physics-field-drive":
+      return (
+        right.type === "physics-field-drive" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.fieldDriveId === right.fieldDriveId
       );
     case "analysis-chart":
       return (

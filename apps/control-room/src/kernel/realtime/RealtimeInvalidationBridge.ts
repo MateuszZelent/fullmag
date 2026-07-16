@@ -21,10 +21,12 @@ import {
   DATA_FIELDS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
+  MESHING_SEMANTICS_PATH,
   MESHING_OBJECT_QUALITY_PATH,
   MESHING_OBJECT_REPORT_PATH,
   MESHING_OBJECT_SIZE_FIELD_PATH,
   MESHING_OBJECT_TOPOLOGY_PATH,
+  MESHING_PERIODIC_PAIRS_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
@@ -49,6 +51,11 @@ import {
   VISUALIZATION_STATE_PATH,
 } from "../api/apiPaths";
 import { resolveCanonicalQuantityId } from "../api/quantityIds";
+import {
+  type CanonicalFieldVectorQuery,
+  canonicalFieldVectorQueriesEqual,
+  parseCanonicalFieldVectorResourceKey,
+} from "../api/fieldQueryIdentity";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 
 const SESSION_STATUS_RESOURCE_KEY = "session:status";
@@ -63,6 +70,7 @@ interface RealtimeResourceEvent {
 
 interface RealtimeBatchChange {
   broad?: boolean;
+  domain_generation_id?: string | null;
   quantity_ids?: string[];
   resource?: string;
   resource_id?: string;
@@ -105,6 +113,16 @@ interface RealtimeInvalidationBridgeOptions {
     resourceKey: string,
     revision: ResourceRevision,
   ) => boolean;
+}
+
+export interface FieldInvalidationTelemetry {
+  broadInvalidations: number;
+  exactInvalidations: number;
+  invalidatedResourceKeys: number;
+}
+
+function boundedIncrement(value: number, amount = 1): number {
+  return Math.min(Number.MAX_SAFE_INTEGER, value + amount);
 }
 
 function isRealtimeResourceEvent(event: unknown): event is RealtimeResourceEvent {
@@ -188,6 +206,7 @@ function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
 
   return {
     broad: record.broad === true,
+    domain_generation_id: realtimeDomainGenerationId(record.domain_generation_id),
     quantity_ids: Array.isArray(record.quantity_ids)
       ? record.quantity_ids.filter((value): value is string => typeof value === "string")
       : undefined,
@@ -200,6 +219,34 @@ function realtimeBatchChange(change: unknown): RealtimeBatchChange | null {
         : undefined,
     revision,
   };
+}
+
+function realtimeDomainGenerationId(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  return typeof value === "number" && Number.isSafeInteger(value)
+    ? String(value)
+    : null;
+}
+
+function fieldSamplesInvalidationRevision(change: RealtimeBatchChange): ResourceRevision {
+  return change.domain_generation_id === null || change.domain_generation_id === undefined
+    ? change.revision
+    : `generation:${change.domain_generation_id}:revision:${change.revision}`;
+}
+
+function exactFieldQueriesFromResourceKey(
+  resourceKey: string,
+): CanonicalFieldVectorQuery[] {
+  return resourceKey
+    .split("|")
+    .flatMap((segment) => {
+      const fieldPathIndex = segment.indexOf(`${DATA_FIELDS_PATH}/`);
+      if (fieldPathIndex < 0) return [];
+      const query = parseCanonicalFieldVectorResourceKey(
+        segment.slice(fieldPathIndex),
+      );
+      return query ? [query] : [];
+    });
 }
 
 function resourceFamilyPrefix(pathWithObjectId: string): string {
@@ -263,6 +310,7 @@ function escapeResourcePathTemplate(pathTemplate: string): string {
 }
 
 const SESSION_STATUS_RECOMMENDED_FETCHES = new Set<string>([
+  MODEL_SCENE_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGES_EXECUTION_PATH,
 ]);
@@ -312,16 +360,29 @@ export class RealtimeInvalidationBridge {
   private flushCancel: (() => void) | null = null;
   private pendingFetches = new Map<string, ResourceRevision>();
   private pendingMatchers: Array<{
+    fieldInvalidation?: "broad" | "exact";
     predicate: (resourceKey: string) => boolean;
     revision: ResourceRevision;
   }> = [];
-  private pendingPrefixes = new Map<string, ResourceRevision>();
+  private pendingPrefixes = new Map<
+    string,
+    { fieldInvalidation?: "broad" | "exact"; revision: ResourceRevision }
+  >();
   private pendingStatusRevision: ResourceRevision | null = null;
+  private fieldInvalidationTelemetry: FieldInvalidationTelemetry = {
+    broadInvalidations: 0,
+    exactInvalidations: 0,
+    invalidatedResourceKeys: 0,
+  };
 
   constructor(
     private readonly resources: ResourceInvalidationController,
     private readonly options: RealtimeInvalidationBridgeOptions = {},
   ) {}
+
+  getFieldInvalidationTelemetry(): FieldInvalidationTelemetry {
+    return { ...this.fieldInvalidationTelemetry };
+  }
 
   handleEvent(event: unknown): boolean {
     const sessionHandled = this.handleSessionEnvelope(event);
@@ -371,13 +432,32 @@ export class RealtimeInvalidationBridge {
           );
         }
         if (fieldSampleChange) {
-          if (change.broad || !change.quantity_ids?.length) {
-            this.queuePrefixInvalidation(DATA_FIELDS_PATH, change.revision);
+          const fieldSampleRevision = fieldSamplesInvalidationRevision(change);
+          const exactFieldResource = change.recommended_fetch
+            ? parseCanonicalFieldVectorResourceKey(change.recommended_fetch)
+            : null;
+          if (exactFieldResource) {
+            this.recordFieldInvalidation("exact");
+            this.queueExactFieldSampleInvalidation(
+              exactFieldResource,
+              fieldSampleRevision,
+            );
+            if (exactFieldResource.quantityId === "m") {
+              this.queueMagnetizationFieldDependents(fieldSampleRevision);
+            }
+          } else if (change.broad || !change.quantity_ids?.length) {
+            this.recordFieldInvalidation("broad");
+            this.queuePrefixInvalidation(
+              DATA_FIELDS_PATH,
+              fieldSampleRevision,
+              "broad",
+            );
           } else {
+            this.recordFieldInvalidation("broad");
             for (const quantityId of change.quantity_ids) {
               this.queueFieldSampleQuantityInvalidation(
                 quantityId,
-                change.revision,
+                fieldSampleRevision,
               );
             }
           }
@@ -482,14 +562,30 @@ export class RealtimeInvalidationBridge {
     );
   }
 
+  private recordFieldInvalidation(kind: "broad" | "exact"): void {
+    this.fieldInvalidationTelemetry = {
+      broadInvalidations:
+        kind === "broad"
+          ? boundedIncrement(this.fieldInvalidationTelemetry.broadInvalidations)
+          : this.fieldInvalidationTelemetry.broadInvalidations,
+      exactInvalidations:
+        kind === "exact"
+          ? boundedIncrement(this.fieldInvalidationTelemetry.exactInvalidations)
+          : this.fieldInvalidationTelemetry.exactInvalidations,
+      invalidatedResourceKeys: this.fieldInvalidationTelemetry.invalidatedResourceKeys,
+    };
+  }
+
   private queuePrefixInvalidation(
     resourceKey: string,
     revision: ResourceRevision,
+    fieldInvalidation?: "broad" | "exact",
   ): void {
-    this.pendingPrefixes.set(
-      resourceKey,
-      latestRevision(this.pendingPrefixes.get(resourceKey) ?? null, revision),
-    );
+    const pending = this.pendingPrefixes.get(resourceKey);
+    this.pendingPrefixes.set(resourceKey, {
+      fieldInvalidation: pending?.fieldInvalidation ?? fieldInvalidation,
+      revision: latestRevision(pending?.revision ?? null, revision),
+    });
   }
 
   private queueFieldSampleQuantityInvalidation(
@@ -501,20 +597,37 @@ export class RealtimeInvalidationBridge {
     this.queueMatchingInvalidation(
       (resourceKey) => resourceKey.includes(quantityPrefix),
       revision,
+      "broad",
     );
     if (canonicalQuantityId === "m") {
-      this.queuePrefixInvalidation(
-        resourceFamilyPrefix(ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH),
-        revision,
-      );
+      this.queueMagnetizationFieldDependents(revision);
     }
+  }
+
+  private queueMagnetizationFieldDependents(revision: ResourceRevision): void {
+    this.queuePrefixInvalidation(
+      resourceFamilyPrefix(ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH),
+      revision,
+    );
+  }
+
+  private queueExactFieldSampleInvalidation(
+    fieldQuery: CanonicalFieldVectorQuery,
+    revision: ResourceRevision,
+  ): void {
+    this.queueMatchingInvalidation((subscribedKey) => {
+      return exactFieldQueriesFromResourceKey(subscribedKey).some((candidate) =>
+        canonicalFieldVectorQueriesEqual(candidate, fieldQuery),
+      );
+    }, revision, "exact");
   }
 
   private queueMatchingInvalidation(
     predicate: (resourceKey: string) => boolean,
     revision: ResourceRevision,
+    fieldInvalidation?: "broad" | "exact",
   ): void {
-    this.pendingMatchers.push({ predicate, revision });
+    this.pendingMatchers.push({ fieldInvalidation, predicate, revision });
   }
 
   private scheduleFlush(): void {
@@ -535,7 +648,7 @@ export class RealtimeInvalidationBridge {
     const pendingMatchers = this.pendingMatchers;
     let statusRevision = this.pendingStatusRevision;
     this.pendingFetches = new Map<string, ResourceRevision>();
-    this.pendingPrefixes = new Map<string, ResourceRevision>();
+    this.pendingPrefixes = new Map();
     this.pendingMatchers = [];
     this.pendingStatusRevision = null;
 
@@ -551,11 +664,35 @@ export class RealtimeInvalidationBridge {
         statusRevision = latestRevision(statusRevision, dependentStatusRevision);
       }
     }
-    for (const [resourceKey, revision] of pendingPrefixes) {
-      this.resources.invalidatePrefix(resourceKey, revision);
+    for (const [resourceKey, pending] of pendingPrefixes) {
+      const invalidated = this.resources.invalidatePrefix(
+        resourceKey,
+        pending.revision,
+      );
+      if (pending.fieldInvalidation) {
+        this.fieldInvalidationTelemetry = {
+          ...this.fieldInvalidationTelemetry,
+          invalidatedResourceKeys: boundedIncrement(
+            this.fieldInvalidationTelemetry.invalidatedResourceKeys,
+            invalidated,
+          ),
+        };
+      }
     }
     for (const matcher of pendingMatchers) {
-      this.resources.invalidateMatching(matcher.predicate, matcher.revision);
+      const invalidated = this.resources.invalidateMatching(
+        matcher.predicate,
+        matcher.revision,
+      );
+      if (matcher.fieldInvalidation) {
+        this.fieldInvalidationTelemetry = {
+          ...this.fieldInvalidationTelemetry,
+          invalidatedResourceKeys: boundedIncrement(
+            this.fieldInvalidationTelemetry.invalidatedResourceKeys,
+            invalidated,
+          ),
+        };
+      }
     }
 
     if (statusRevision !== null) {
@@ -582,7 +719,9 @@ export class RealtimeInvalidationBridge {
     this.resources.invalidate(MODEL_SCENE_PATH, revision);
     this.resources.invalidate(MESHING_BUILDS_CURRENT_PATH, revision);
     this.resources.invalidate(MESHING_SUMMARY_PATH, revision);
+    this.resources.invalidate(MESHING_SEMANTICS_PATH, revision);
     this.resources.invalidate(MESHING_SHARED_DOMAIN_MANIFEST_PATH, revision);
+    this.resources.invalidate(MESHING_PERIODIC_PAIRS_PATH, revision);
     this.resources.invalidate(VISUALIZATION_STATE_PATH, revision);
     this.resources.invalidate(DATA_DOMAIN_META_PATH, revision);
     this.resources.invalidate(DATA_DOMAIN_TOPOLOGY_PATH, revision);

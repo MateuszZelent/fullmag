@@ -5,7 +5,7 @@ import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 export interface AntennaObjectPanelModel {
   amplitude: string;
   direction: string;
-  mode: "present" | "missing";
+  mode: "canonical" | "legacy" | "missing";
   objectId: string;
   source: string;
   spatialProfile: string;
@@ -24,6 +24,11 @@ export interface AntennaObjectDraft {
 export interface AntennaObjectDraftPatchResult {
   error: string | null;
   modules: JsonRecord[] | null;
+}
+
+export interface AntennaFieldDrivePatchResult {
+  drive: JsonRecord | null;
+  error: string | null;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -110,7 +115,12 @@ function antennaModules(scene: SceneResource | null): JsonRecord[] {
   });
 }
 
-function sourceForObject(
+function fieldDrives(scene: SceneResource | null): JsonRecord[] {
+  const drives = asRecord(asRecord(scene)?.field_drives)?.drives;
+  return Array.isArray(drives) ? drives.flatMap((drive) => asRecord(drive) ? [asRecord(drive)!] : []) : [];
+}
+
+function legacySourceForObject(
   scene: SceneResource | null,
   objectId: string | null,
 ): JsonRecord | null {
@@ -125,13 +135,28 @@ function sourceForObject(
   );
 }
 
+function canonicalSourceForObject(scene: SceneResource | null, objectId: string | null): JsonRecord | null {
+  if (!objectId) return null;
+  return fieldDrives(scene).find((drive) => {
+    const profile = asRecord(drive.spatial_profile);
+    return asString(drive.kind) === "regional" && asString(profile?.kind) === "geometry_mask" && asString(profile?.object_id) === objectId;
+  }) ?? null;
+}
+
+function sourceForObject(scene: SceneResource | null, objectId: string | null): { kind: "canonical" | "legacy"; source: JsonRecord } | null {
+  const canonical = canonicalSourceForObject(scene, objectId);
+  if (canonical) return { kind: "canonical", source: canonical };
+  const legacy = legacySourceForObject(scene, objectId);
+  return legacy ? { kind: "legacy", source: legacy } : null;
+}
+
 function sourceField(source: JsonRecord | null): {
   amplitudeB: unknown;
   direction: unknown;
 } {
   const field = asRecord(source?.field);
   return {
-    amplitudeB: source?.B ?? field?.amplitude_B_T,
+    amplitudeB: source?.amplitude_B_T ?? source?.B ?? field?.amplitude_B_T,
     direction: source?.direction ?? field?.direction,
   };
 }
@@ -148,7 +173,8 @@ export function resolveAntennaObjectDraft(
 ): AntennaObjectDraft {
   const objectId =
     selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId;
-  const source = sourceForObject(scene, objectId);
+  const resolved = sourceForObject(scene, objectId);
+  const source = resolved?.source ?? null;
   const field = sourceField(source);
   const waveform = asRecord(source?.waveform);
   const waveformKind = asString(waveform?.kind);
@@ -163,6 +189,45 @@ export function resolveAntennaObjectDraft(
     sincT0: compactNumber(waveform?.t0, "5e-11"),
     sinusoidalFrequencyHz: compactNumber(waveform?.frequency_hz, "10000000000"),
   };
+}
+
+export function buildAntennaCanonicalFieldDrive(
+  selection: Selection,
+  scene: SceneResource | null,
+  draft: AntennaObjectDraft,
+): AntennaFieldDrivePatchResult {
+  const objectId = selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId;
+  const existing = canonicalSourceForObject(scene, objectId);
+  if (!existing) return { drive: null, error: "Canonical field drive is not assigned to this antenna." };
+  const amplitude = parsePositive(draft.amplitudeB, "Amplitude B"); if (amplitude.error) return {drive:null,error:amplitude.error};
+  const direction = parseDirection(draft.direction); if (direction.error) return {drive:null,error:direction.error};
+  const waveform = draftWaveform(draft); if (waveform.error) return {drive:null,error:waveform.error};
+  return { error: null, drive: {...existing, amplitude_B_T: amplitude.value, direction: direction.value, waveform: waveform.value} };
+}
+
+export function buildAntennaLegacyMigrationPatch(
+  selection: Selection,
+  scene: SceneResource | null,
+  draft: AntennaObjectDraft,
+): { drives: JsonRecord[] | null; error: string | null; modules: JsonRecord[] | null } {
+  const objectId = selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId;
+  const legacy = legacySourceForObject(scene, objectId);
+  if (!legacy || !objectId) return {drives:null,error:"Legacy antenna source is not assigned.",modules:null};
+  const amplitude=parsePositive(draft.amplitudeB,"Amplitude B"); if(amplitude.error)return{drives:null,error:amplitude.error,modules:null};
+  const direction=parseDirection(draft.direction); if(direction.error)return{drives:null,error:direction.error,modules:null};
+  const waveform=draftWaveform(draft); if(waveform.error)return{drives:null,error:waveform.error,modules:null};
+  const id=asString(legacy.id) ?? `${objectId}:H_ant`;
+  return {
+    error:null,
+    drives:[...fieldDrives(scene), {id,name:asString(legacy.name) ?? id,kind:"regional",enabled:true,target:{kind:"global"},amplitude_B_T:amplitude.value,direction:direction.value,spatial_profile:{kind:"geometry_mask",object_id:objectId,envelope:asRecord(legacy.spatial_profile) ?? {kind:"uniform"}},waveform:waveform.value,time_origin:"stage_local",activation:{kind:"all_time_evolution"},migration:{migrated_from:"prescribed_zeeman_mask"}}],
+    modules:antennaModules(scene).filter((module)=>module!==legacy),
+  };
+}
+
+function draftWaveform(draft: AntennaObjectDraft): { error: string | null; value: JsonRecord } {
+  if (draft.waveformKind === "sinc_pulse") { const cutoff=parsePositive(draft.sincCutoffHz,"Sinc cutoff"); if(cutoff.error)return{error:cutoff.error,value:{}}; const t0=parseFinite(draft.sincT0,"Sinc t0"); if(t0.error)return{error:t0.error,value:{}}; return{error:null,value:{kind:"sinc_pulse",cutoff_hz:cutoff.value,t0:t0.value,amplitude:1}}; }
+  if (draft.waveformKind === "sinusoidal") { const frequency=parsePositive(draft.sinusoidalFrequencyHz,"Sinusoidal frequency"); return frequency.error ? {error:frequency.error,value:{}} : {error:null,value:{kind:"sinusoidal",frequency_hz:frequency.value,phase_rad:0,offset:0}}; }
+  return {error:null,value:{kind:"constant"}};
 }
 
 function parseFinite(value: string, label: string): { error: string | null; value: number } {
@@ -200,64 +265,14 @@ function parseDirection(value: string): { error: string | null; value: [number, 
   return { error: null, value: vector as [number, number, number] };
 }
 
-export function buildAntennaCurrentModulesPatch(
-  selection: Selection,
-  scene: SceneResource | null,
-  draft: AntennaObjectDraft,
-): AntennaObjectDraftPatchResult {
-  const objectId =
-    selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId;
-  const modules = antennaModules(scene);
-  const index = modules.findIndex(
-    (module) =>
-      asString(module.kind) === "antenna_field_source" &&
-      asString(module.model) === "prescribed_zeeman_mask" &&
-      asString(module.object) === objectId,
-  );
-  if (index < 0) {
-    return { error: "Antenna source is not assigned to this object.", modules: null };
-  }
-  const amplitude = parsePositive(draft.amplitudeB, "Amplitude B");
-  if (amplitude.error) return { error: amplitude.error, modules: null };
-  const direction = parseDirection(draft.direction);
-  if (direction.error) return { error: direction.error, modules: null };
-
-  let waveform: JsonRecord | undefined;
-  if (draft.waveformKind === "sinc_pulse") {
-    const cutoff = parsePositive(draft.sincCutoffHz, "Sinc cutoff");
-    if (cutoff.error) return { error: cutoff.error, modules: null };
-    const t0 = parseFinite(draft.sincT0, "Sinc t0");
-    if (t0.error) return { error: t0.error, modules: null };
-    waveform = { cutoff_hz: cutoff.value, kind: "sinc_pulse", t0: t0.value };
-  } else if (draft.waveformKind === "sinusoidal") {
-    const frequency = parsePositive(
-      draft.sinusoidalFrequencyHz,
-      "Sinusoidal frequency",
-    );
-    if (frequency.error) return { error: frequency.error, modules: null };
-    waveform = { frequency_hz: frequency.value, kind: "sinusoidal" };
-  }
-
-  const next = modules.map((module, moduleIndex) =>
-    moduleIndex === index
-      ? {
-          ...module,
-          B: amplitude.value,
-          direction: direction.value,
-          ...(waveform ? { waveform } : { waveform: null }),
-        }
-      : module,
-  );
-  return { error: null, modules: next };
-}
-
 export function resolveAntennaObjectPanelModel(
   selection: Selection,
   scene: SceneResource | null,
 ): AntennaObjectPanelModel {
   const objectId =
     selection.ref?.type === "scene-object" ? selection.ref.objectId : selection.objectId;
-  const source = sourceForObject(scene, objectId);
+  const resolved = sourceForObject(scene, objectId);
+  const source = resolved?.source ?? null;
   const field = sourceField(source);
 
   if (!objectId || !source) {
@@ -275,7 +290,7 @@ export function resolveAntennaObjectPanelModel(
   return {
     amplitude: formatTesla(field.amplitudeB),
     direction: formatVector(field.direction),
-    mode: "present",
+    mode: resolved?.kind ?? "missing",
     objectId,
     source: asString(source.name) ?? "antenna",
     spatialProfile: formatSpatialProfile(source.spatial_profile),

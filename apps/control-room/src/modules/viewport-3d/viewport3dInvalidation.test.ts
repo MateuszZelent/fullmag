@@ -34,4 +34,14 @@ describe("buildViewport3DResourceFrameKey", () => {
     expect(source).not.toContain("setTimeout(flushPendingInvalidates");
     expect(source).not.toContain("clearTimeout(pendingTimer)");
   });
+
+  it("subscribes only to the R3F invalidate function", () => {
+    const source = readFileSync(
+      new URL("./viewport3dBatchedInvalidate.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("useThree((state) => state.invalidate)");
+    expect(source).not.toContain("useThree()");
+  });
 });

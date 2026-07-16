@@ -4,6 +4,7 @@ import { Info, RotateCcw } from "lucide-react";
 import React, {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -20,11 +21,12 @@ import { useKernel } from "@/kernel/KernelContext";
 import {
   airboxLocalVisualizationPatchFromTargetPatch,
   airboxVisualizationStatePatchFromTargetPatch,
-  DEFAULT_AIRBOX_VISUALIZATION,
   displayLabelForVisualizationTarget,
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
+  persistentVisualizationTargetPatch,
   resolveTargetVisualization,
+  resetAirboxVisualizationState,
   resolveVisualizationTargetFromSelection,
   visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
@@ -66,8 +68,13 @@ import {
   useMeshRegionMembershipsResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
+import {
+  isVisualizationAirboxIdentity,
+  visualizationTargetIdForSceneObject,
+} from "@/kernel/selection/selectionTypes";
+import { visualizationSceneObjectIds } from "@/kernel/selection/visualizationTargetResolver";
 import { useLayoutSelector } from "@/kernel/layout/useLayout";
+import { manifestRenderableCarriers } from "@/modules/viewport-3d/public";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
@@ -77,17 +84,17 @@ import { InspectorSection } from "../primitives/InspectorSection";
 import {
   buildAirboxVectorDiagnostic,
   buildAirboxVisibilityDiagnostic,
-  buildVisualizationVectorBudgetDiagnostic,
   buildVisualizationPanelSections,
   colorPickerInputValue,
   displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
   formatScalarColorbarValueWithDisplayUnit,
   geometryScopeVectorBudgetPatch,
-  objectVisualizationTargetForMeshPart,
   resolveVisualizationVectorBudgetRange,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
+  resolveChildRegionOverrideTargetIds,
+  removeOwnerChildRegionVisualizationOverrides,
   resolveRegionVisualizationCarrier,
   resolveVisualizationRenderResolution,
   resolveSurfaceColorSourceItems,
@@ -104,6 +111,10 @@ import {
   surfaceColorSourceFieldMetaComponent,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
+  queueTargetVectorVisibilityPatch,
+  resolveObjectVisualizationPanelTarget,
+  resolveSelectedTargetVectorMeshPartRows,
+  resolveObjectVisualizationPanelSelectionTarget,
   regionVisualizationCarrierSupportsFieldMeta,
   regionVisualizationFieldWarning,
   renderModeDisplayPatch,
@@ -118,7 +129,11 @@ import {
   parseRegionVisualizationTargetId,
   type ScalarColorbarDisplayUnit,
 } from "./ObjectVisualizationPanelModel";
-import { formatCount } from "./MeshResourceView";
+import { VisualizationVectorAccountingRows } from "./VisualizationVectorAccountingRows";
+import {
+  nextVisualizationRadioValue,
+  visualizationSectionDisabledDescription,
+} from "./ObjectVisualizationPanelAccessibility";
 
 const RENDER_MODES: Array<{
   label: string;
@@ -187,23 +202,52 @@ function selectObjectVisualizationPanelSnapshot(
   targets: readonly VisualizationTargetRef[],
 ): ObjectVisualizationSnapshot {
   const defaults: ObjectVisualizationSnapshot["defaults"] = {};
+  const viewportPreferenceDefaults: NonNullable<
+    ObjectVisualizationSnapshot["viewportPreferenceDefaults"]
+  > = {};
+  const viewportPreferences: NonNullable<
+    ObjectVisualizationSnapshot["viewportPreferences"]
+  > = {};
   const overrides: ObjectVisualizationSnapshot["overrides"] = {};
+  const pendingOverrides: NonNullable<
+    ObjectVisualizationSnapshot["pendingOverrides"]
+  > = {};
 
   for (const target of targets) {
     const defaultPatch = snapshot.defaults[target.kind];
     if (defaultPatch) {
       defaults[target.kind] = defaultPatch;
     }
+    const viewportPreferenceDefault =
+      snapshot.viewportPreferenceDefaults?.[target.kind];
+    if (viewportPreferenceDefault) {
+      viewportPreferenceDefaults[target.kind] = viewportPreferenceDefault;
+    }
 
     const override = snapshot.overrides[visualizationTargetKey(target)];
     if (override) {
       overrides[visualizationTargetKey(target)] = override;
     }
+    const viewportPreference = snapshot.viewportPreferences?.[
+      visualizationTargetKey(target)
+    ];
+    if (viewportPreference) {
+      viewportPreferences[visualizationTargetKey(target)] = viewportPreference;
+    }
+    const pendingOverride = snapshot.pendingOverrides?.[
+      visualizationTargetKey(target)
+    ];
+    if (pendingOverride) {
+      pendingOverrides[visualizationTargetKey(target)] = pendingOverride;
+    }
   }
 
   return {
     defaults,
+    viewportPreferenceDefaults,
+    viewportPreferences,
     overrides,
+    pendingOverrides,
     version: snapshot.version,
   };
 }
@@ -216,6 +260,14 @@ function objectVisualizationPanelSnapshotEquals(
     if (!visualizationTargetPatchEquals(previous.defaults[kind], next.defaults[kind])) {
       return false;
     }
+    if (
+      !visualizationTargetPatchEquals(
+        previous.viewportPreferenceDefaults?.[kind],
+        next.viewportPreferenceDefaults?.[kind],
+      )
+    ) {
+      return false;
+    }
   }
 
   const overrideKeys = new Set([
@@ -224,6 +276,36 @@ function objectVisualizationPanelSnapshotEquals(
   ]);
   for (const key of overrideKeys) {
     if (!visualizationTargetPatchEquals(previous.overrides[key], next.overrides[key])) {
+      return false;
+    }
+  }
+
+  const viewportPreferenceKeys = new Set([
+    ...Object.keys(previous.viewportPreferences ?? {}),
+    ...Object.keys(next.viewportPreferences ?? {}),
+  ]);
+  for (const key of viewportPreferenceKeys) {
+    if (
+      !visualizationTargetPatchEquals(
+        previous.viewportPreferences?.[key],
+        next.viewportPreferences?.[key],
+      )
+    ) {
+      return false;
+    }
+  }
+
+  const pendingOverrideKeys = new Set([
+    ...Object.keys(previous.pendingOverrides ?? {}),
+    ...Object.keys(next.pendingOverrides ?? {}),
+  ]);
+  for (const key of pendingOverrideKeys) {
+    const previousPending = previous.pendingOverrides?.[key];
+    const nextPending = next.pendingOverrides?.[key];
+    if (
+      previousPending?.baseRevision !== nextPending?.baseRevision ||
+      !visualizationTargetPatchEquals(previousPending?.patch, nextPending?.patch)
+    ) {
       return false;
     }
   }
@@ -274,16 +356,29 @@ type SectionDisabled = (
   id: ReturnType<typeof buildVisualizationPanelSections>[number]["id"],
 ) => boolean;
 
-function remoteVisualizationTargetPatch(
+function viewportRenderingPreferencesPatch(
   patch: VisualizationTargetPatch,
-): VisualizationTargetPatch {
-  const remotePatch = { ...patch };
-  delete remotePatch.airboxSyntheticVectorsEnabled;
-  delete remotePatch.vectorCenteringEnabled;
-  delete remotePatch.vectorSurfaceOffsetEnabled;
-  delete remotePatch.vectorSurfaceOffsetScale;
-  delete remotePatch.primitiveVisible;
-  return remotePatch;
+): Pick<
+  VisualizationTargetPatch,
+  | "primitiveVisible"
+  | "vectorCenteringEnabled"
+  | "vectorSurfaceOffsetEnabled"
+  | "vectorSurfaceOffsetScale"
+> {
+  return {
+    ...(patch.primitiveVisible === undefined
+      ? {}
+      : { primitiveVisible: patch.primitiveVisible }),
+    ...(patch.vectorCenteringEnabled === undefined
+      ? {}
+      : { vectorCenteringEnabled: patch.vectorCenteringEnabled }),
+    ...(patch.vectorSurfaceOffsetEnabled === undefined
+      ? {}
+      : { vectorSurfaceOffsetEnabled: patch.vectorSurfaceOffsetEnabled }),
+    ...(patch.vectorSurfaceOffsetScale === undefined
+      ? {}
+      : { vectorSurfaceOffsetScale: patch.vectorSurfaceOffsetScale }),
+  };
 }
 
 function VisualizationDisplayPassesSection({
@@ -372,18 +467,76 @@ function VisualizationDisplayPassesSection({
         <ToggleButton
           active={displaySettings.visible}
           disabled={pending}
+          disabledDescription={pending ? "Saving display changes." : undefined}
           label="Visible"
           onClick={handleVisibleClick}
         />
-        <ToggleButton active={displaySettings.shaderVisible} disabled={passControlsDisabled} label="Surface" onClick={() => void patch(surfaceDisplayPassPatch(settings))} />
-        <ToggleButton active={displaySettings.wireframeVisible} disabled={passControlsDisabled} label="Wireframe" onClick={() => void patch(displayPassTogglePatch(settings, "wireframeVisible"))} />
-        <ToggleButton active={displaySettings.boundsVisible} disabled={passControlsDisabled} label="Frame" onClick={() => void patch(displayPassTogglePatch(settings, "boundsVisible"))} />
-        <ToggleButton active={displaySettings.pointsVisible} disabled={passControlsDisabled} label="Points" onClick={() => void patch(displayPassTogglePatch(settings, "pointsVisible"))} />
-        <ToggleButton active={displaySettings.vectorsVisible} disabled={passControlsDisabled} label="Vectors" onClick={() => void patch(displayPassTogglePatch(settings, "vectorsVisible"))} />
+        <ToggleButton
+          active={displaySettings.shaderVisible}
+          disabled={passControlsDisabled}
+          disabledDescription={displayControlDisabledDescription(
+            passControlsDisabled,
+            settings.visible,
+            pending,
+          )}
+          label="Surface"
+          onClick={() => void patch(surfaceDisplayPassPatch(settings))}
+        />
+        <ToggleButton
+          active={displaySettings.wireframeVisible}
+          disabled={passControlsDisabled}
+          disabledDescription={displayControlDisabledDescription(
+            passControlsDisabled,
+            settings.visible,
+            pending,
+          )}
+          label="Wireframe"
+          onClick={() =>
+            void patch(displayPassTogglePatch(settings, "wireframeVisible"))
+          }
+        />
+        <ToggleButton
+          active={displaySettings.boundsVisible}
+          disabled={passControlsDisabled}
+          disabledDescription={displayControlDisabledDescription(
+            passControlsDisabled,
+            settings.visible,
+            pending,
+          )}
+          label="Frame"
+          onClick={() => void patch(displayPassTogglePatch(settings, "boundsVisible"))}
+        />
+        <ToggleButton
+          active={displaySettings.pointsVisible}
+          disabled={passControlsDisabled}
+          disabledDescription={displayControlDisabledDescription(
+            passControlsDisabled,
+            settings.visible,
+            pending,
+          )}
+          label="Points"
+          onClick={() => void patch(displayPassTogglePatch(settings, "pointsVisible"))}
+        />
+        <ToggleButton
+          active={displaySettings.vectorsVisible}
+          disabled={passControlsDisabled}
+          disabledDescription={displayControlDisabledDescription(
+            passControlsDisabled,
+            settings.visible,
+            pending,
+          )}
+          label="Vectors"
+          onClick={() => void patch(displayPassTogglePatch(settings, "vectorsVisible"))}
+        />
         {primitiveDisplayToggleVisible ? (
           <ToggleButton
             active={Boolean(displaySettings.primitiveVisible)}
             disabled={passControlsDisabled}
+            disabledDescription={displayControlDisabledDescription(
+              passControlsDisabled,
+              settings.visible,
+              pending,
+            )}
             label="Primitive"
             onClick={() =>
               void patch(displayPassTogglePatch(settings, "primitiveVisible"))
@@ -391,6 +544,7 @@ function VisualizationDisplayPassesSection({
           />
         ) : null}
       </div>
+      {primitiveDisplayToggleVisible ? <ViewportPreferenceScopeNote /> : null}
       <Dialog
         open={
           airboxDiagnosticOpen &&
@@ -449,28 +603,24 @@ function VisualizationDisplayPassesSection({
 function VisualizationRenderModeSection({
   displaySettings,
   passControlsDisabled,
+  pending,
   patch,
 }: {
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
+  pending: boolean;
   patch: PatchVisualizationTarget;
 }) {
   return (
     <InspectorSection title="Render Mode">
-      <fieldset className="fm-visualization-segments" aria-label="Render mode">
-        {RENDER_MODES.map((mode) => (
-          <Button
-            key={mode.value}
-            size="sm"
-            type="button"
-            disabled={passControlsDisabled}
-            variant={displaySettings.visible && displaySettings.renderMode === mode.value ? "primary" : "secondary"}
-            onClick={() => void patch(renderModeDisplayPatch(mode.value))}
-          >
-            {mode.label}
-          </Button>
-        ))}
-      </fieldset>
+      <VisualizationRadioGroup
+        disabled={passControlsDisabled}
+        disabledDescription={displayControlDisabledDescription(passControlsDisabled, displaySettings.visible, pending)}
+        items={RENDER_MODES}
+        label="Render mode"
+        value={displaySettings.renderMode}
+        onValueChange={(value) => void patch(renderModeDisplayPatch(value))}
+      />
     </InspectorSection>
   );
 }
@@ -788,7 +938,7 @@ function VisualizationQuantitySection({
   return (
     <InspectorSection title="Quantity Source">
       <FormField
-        disabled={pending}
+        disabled={pending || !settings.visible}
         label="Quantity source"
         type="select"
         value={settings.activeQuantityId}
@@ -868,13 +1018,15 @@ function VisualizationVectorsSection({
   targetKind,
   vectorBudgetRange,
   vectorBudgetRanges,
+  vectorTopologyHash,
 }: {
   meshParts?: ReadonlyArray<{
+    actionTargetLabel: string;
     id: string;
     label: string;
     vectorsVisible: boolean;
   }>;
-  onTogglePartVectors?: (partId: string, visible: boolean) => void;
+  onTogglePartVectors?: (visible: boolean) => void;
   patch: PatchVisualizationTarget;
   patchColor: (field: "vectorMonoColor", value: string) => void;
   patchNumber: (
@@ -895,32 +1047,31 @@ function VisualizationVectorsSection({
     VisualizationGeometryScope,
     VisualizationVectorBudgetRange
   >;
+  vectorTopologyHash: string | null;
 }) {
   const vectorBudgetValue = Math.max(
     vectorBudgetRange.min,
     Math.min(vectorBudgetRange.max, settings.vectorBudget),
   );
-  const vectorBudgetDiagnostic = buildVisualizationVectorBudgetDiagnostic({
-    requestedBudget: vectorBudgetValue,
-    vectorBudgetRange,
-  });
+  const vectorsDisabled = pending || sectionDisabled("vectors");
 
   return (
     <InspectorSection title="Vectors">
-      <fieldset className="fm-visualization-segments" aria-label="Vector coloring">
-        {VISUALIZATION_COLOR_MODE_ITEMS.map((mode) => (
-          <Button
-            key={mode.value}
-            size="sm"
-            type="button"
-            disabled={pending || sectionDisabled("vectors")}
-            variant={settings.vectorColorMode === mode.value ? "primary" : "secondary"}
-            onClick={() => void patch({ vectorColorMode: mode.value })}
-          >
-            {mode.label}
-          </Button>
-        ))}
-      </fieldset>
+      <ViewportPreferenceScopeNote />
+      <VisualizationRadioGroup
+        disabled={vectorsDisabled}
+        disabledDescription={visualizationSectionDisabledDescription({
+          disabled: vectorsDisabled,
+          pending,
+          requiredPass: "Vectors",
+          requiredPassEnabled: settings.vectorsVisible,
+          targetVisible: settings.visible,
+        })}
+        items={VISUALIZATION_COLOR_MODE_ITEMS}
+        label="Vector coloring"
+        value={settings.vectorColorMode}
+        onValueChange={(value) => void patch({ vectorColorMode: value })}
+      />
       <ColorField disabled={pending || sectionDisabled("vectors")} label="Vector mono color" value={settings.vectorMonoColor} onChange={(value) => patchColor("vectorMonoColor", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector alpha" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
       <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
@@ -934,15 +1085,24 @@ function VisualizationVectorsSection({
         value={vectorBudgetValue}
         onChange={(value) => patchNumber("vectorBudget", value)}
       />
-      <FieldRow
-        label="Arrow samples"
-        value={`${formatCount(vectorBudgetDiagnostic.displayedGlyphCount)} / ${formatCount(vectorBudgetDiagnostic.availableNodeCount)}${vectorBudgetDiagnostic.exact ? "" : " est."}`}
+      <VisualizationVectorAccountingRows
+        availableNodeCount={vectorBudgetRange.availableNodeCount}
+        currentTopologyHash={vectorTopologyHash}
+        exact={vectorBudgetRange.exact}
+        targetKind={targetKind}
       />
       <div className="fm-visualization-toggle-grid">
         {targetKind === "airbox" ? (
           <ToggleButton
             active={settings.airboxSyntheticVectorsEnabled}
-            disabled={pending || sectionDisabled("vectors")}
+            disabled={vectorsDisabled}
+            disabledDescription={visualizationSectionDisabledDescription({
+              disabled: vectorsDisabled,
+              pending,
+              requiredPass: "Vectors",
+              requiredPassEnabled: settings.vectorsVisible,
+              targetVisible: settings.visible,
+            })}
             label="Dev fallback +Z"
             onClick={() =>
               void patch({
@@ -955,7 +1115,14 @@ function VisualizationVectorsSection({
         ) : null}
         <ToggleButton
           active={settings.vectorCenteringEnabled}
-          disabled={pending || sectionDisabled("vectors")}
+          disabled={vectorsDisabled}
+          disabledDescription={visualizationSectionDisabledDescription({
+            disabled: vectorsDisabled,
+            pending,
+            requiredPass: "Vectors",
+            requiredPassEnabled: settings.vectorsVisible,
+            targetVisible: settings.visible,
+          })}
           label="Centered arrows"
           onClick={() =>
             void patch({
@@ -965,7 +1132,14 @@ function VisualizationVectorsSection({
         />
         <ToggleButton
           active={settings.vectorSurfaceOffsetEnabled}
-          disabled={pending || sectionDisabled("vectors")}
+          disabled={vectorsDisabled}
+          disabledDescription={visualizationSectionDisabledDescription({
+            disabled: vectorsDisabled,
+            pending,
+            requiredPass: "Vectors",
+            requiredPassEnabled: settings.vectorsVisible,
+            targetVisible: settings.visible,
+          })}
           label="Lift above surface"
           onClick={() =>
             void patch({
@@ -978,31 +1152,30 @@ function VisualizationVectorsSection({
       {settings.vectorSurfaceOffsetEnabled ? (
         <NumberField disabled={pending || sectionDisabled("vectors")} label="Extra surface gap" max={1} min={0} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
       ) : null}
-      <fieldset className="fm-visualization-segments" aria-label="Arrow extent">
-        {GEOMETRY_SCOPES.map((scope) => (
-          <Button
-            key={scope.value}
-            size="sm"
-            type="button"
-            disabled={pending || sectionDisabled("vectors")}
-            variant={settings.geometryScope === scope.value ? "primary" : "secondary"}
-            onClick={() =>
-              void patch(
-                geometryScopeVectorBudgetPatch({
-                  currentRange:
-                    vectorBudgetRanges[settings.geometryScope] ??
-                    vectorBudgetRange,
-                  geometryScope: scope.value,
-                  nextRange: vectorBudgetRanges[scope.value],
-                  settings,
-                }),
-              )
-            }
-          >
-            {scope.label}
-          </Button>
-        ))}
-      </fieldset>
+      <VisualizationRadioGroup
+        disabled={vectorsDisabled}
+        disabledDescription={visualizationSectionDisabledDescription({
+          disabled: vectorsDisabled,
+          pending,
+          requiredPass: "Vectors",
+          requiredPassEnabled: settings.vectorsVisible,
+          targetVisible: settings.visible,
+        })}
+        items={GEOMETRY_SCOPES}
+        label="Arrow extent"
+        value={settings.geometryScope}
+        onValueChange={(value) =>
+          void patch(
+            geometryScopeVectorBudgetPatch({
+              currentRange:
+                vectorBudgetRanges[settings.geometryScope] ?? vectorBudgetRange,
+              geometryScope: value,
+              nextRange: vectorBudgetRanges[value],
+              settings,
+            }),
+          )
+        }
+      />
       {meshParts && meshParts.length > 1 && onTogglePartVectors && (
         <fieldset className="fm-visualization-part-toggles" aria-label="Object target vector visibility">
           <span className="fm-visualization-part-toggles__label">Object surfaces</span>
@@ -1012,9 +1185,12 @@ function VisualizationVectorsSection({
                 type="checkbox"
                 checked={part.vectorsVisible}
                 disabled={pending || sectionDisabled("vectors")}
-                onChange={(e) => onTogglePartVectors(part.id, e.target.checked)}
+                onChange={(e) => onTogglePartVectors(e.target.checked)}
               />
               <span>{part.label}</span>
+              <span className="fm-visualization-part-toggle__target">
+                {part.actionTargetLabel}
+              </span>
             </label>
           ))}
         </fieldset>
@@ -1023,14 +1199,24 @@ function VisualizationVectorsSection({
   );
 }
 
+function ViewportPreferenceScopeNote() {
+  return (
+    <p className="fm-visualization-scope-note" role="note">
+      This viewport only — not saved to the simulation or shared with other clients.
+    </p>
+  );
+}
+
 function VisualizationGeometryScopeSection({
   passControlsDisabled,
+  pending,
   patch,
   settings,
   vectorBudgetRange,
   vectorBudgetRanges,
 }: {
   passControlsDisabled: boolean;
+  pending: boolean;
   patch: PatchVisualizationTarget;
   settings: VisualizationTargetSettings;
   vectorBudgetRange: VisualizationVectorBudgetRange;
@@ -1041,32 +1227,25 @@ function VisualizationGeometryScopeSection({
 }) {
   return (
     <InspectorSection title="Geometry Scope">
-      <fieldset className="fm-visualization-segments" aria-label="Geometry scope">
-        {GEOMETRY_SCOPES.map((scope) => (
-          <Button
-            key={scope.value}
-            size="sm"
-            type="button"
-            disabled={passControlsDisabled}
-            variant={settings.visible && settings.geometryScope === scope.value ? "primary" : "secondary"}
-            onClick={() =>
-              void patch({
-                ...geometryScopeDisplayPatch(settings, scope.value),
-                ...geometryScopeVectorBudgetPatch({
-                  currentRange:
-                    vectorBudgetRanges[settings.geometryScope] ??
-                    vectorBudgetRange,
-                  geometryScope: scope.value,
-                  nextRange: vectorBudgetRanges[scope.value],
-                  settings,
-                }),
-              })
-            }
-          >
-            {scope.label}
-          </Button>
-        ))}
-      </fieldset>
+      <VisualizationRadioGroup
+        disabled={passControlsDisabled}
+        disabledDescription={displayControlDisabledDescription(passControlsDisabled, settings.visible, pending)}
+        items={GEOMETRY_SCOPES}
+        label="Geometry scope"
+        value={settings.geometryScope}
+        onValueChange={(value) =>
+          void patch({
+            ...geometryScopeDisplayPatch(settings, value),
+            ...geometryScopeVectorBudgetPatch({
+              currentRange:
+                vectorBudgetRanges[settings.geometryScope] ?? vectorBudgetRange,
+              geometryScope: value,
+              nextRange: vectorBudgetRanges[value],
+              settings,
+            }),
+          })
+        }
+      />
     </InspectorSection>
   );
 }
@@ -1081,7 +1260,7 @@ function VisualizationOpacitySection({
   return (
     <InspectorSection title="Opacity">
       <NumberField
-        disabled={false}
+        disabled={!settings.visible}
         label="Opacity"
         max={100}
         min={0}
@@ -1160,31 +1339,69 @@ function useObjectVisualizationPanelState(
   const manifest = useMeshSharedDomainManifestResource({
     enabled: shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus),
   });
+  const sceneObjectIds = useMemo(
+    () => visualizationSceneObjectIds(scene.data),
+    [scene.data],
+  );
+  const selectedMeshPart = useMemo(
+    () =>
+      selection.ref?.type === "mesh-part"
+        ? manifestRenderableCarriers(manifest.data).find(
+            (part) =>
+              part.id ===
+              (selection.ref?.type === "mesh-part"
+                ? selection.ref.carrierPartId ?? selection.ref.nodeId
+                : null),
+          ) ?? null
+        : null,
+    [manifest.data, selection.ref],
+  );
+  const resolvedTarget = useMemo(
+    () =>
+      resolveObjectVisualizationPanelSelectionTarget({
+        sceneObjectIds,
+        selectedMeshPart,
+        selection,
+        selectionTarget: target,
+        visualizationState: visualizationState.data,
+      }),
+    [
+      sceneObjectIds,
+      selectedMeshPart,
+      selection,
+      target,
+      visualizationState.data,
+    ],
+  );
+  const airboxPartIds =
+    manifest.data?.mesh_parts?.flatMap((part) =>
+      isVisualizationAirboxIdentity(part) ? [part.id] : [],
+    ) ?? [];
   const regionId = useMemo(() => {
-    if (target?.kind !== "region") return null;
-    const parsed = parseRegionVisualizationTargetId(target.id);
+    if (resolvedTarget?.kind !== "region") return null;
+    const parsed = parseRegionVisualizationTargetId(resolvedTarget.id);
     return parsed?.regionId ?? null;
-  }, [target]);
+  }, [resolvedTarget]);
   const regionMemberships = useMeshRegionMembershipsResource(
     regionId ? [regionId] : [],
     { enabled: Boolean(regionId) }
   );
   const childRegionTargets = useMemo(
     () =>
-      target?.kind === "object"
+      resolvedTarget?.kind === "object"
         ? resolveObjectChildRegionVisualizationTargets({
             manifestRegions: manifest.data?.regions,
             objectId: selection.objectId,
             scene: scene.data,
           })
         : [],
-    [manifest.data?.regions, scene.data, selection.objectId, target?.kind],
+    [manifest.data?.regions, resolvedTarget?.kind, scene.data, selection.objectId],
   );
   const visualizationTargets = useMemo(() => {
     const targets: VisualizationTargetRef[] = [];
-    if (target) {
-      targets.push(target);
-      if (target.kind === "region" && selection.objectId) {
+    if (resolvedTarget) {
+      targets.push(resolvedTarget);
+      if (resolvedTarget.kind === "region" && selection.objectId) {
         targets.push({
           id: visualizationTargetIdForSceneObject(selection.objectId),
           kind: "object",
@@ -1194,11 +1411,17 @@ function useObjectVisualizationPanelState(
     }
 
     for (const part of manifest.data?.mesh_parts ?? []) {
-      if (part.role === "air" || part.role === "airbox") continue;
-      targets.push(objectVisualizationTargetForMeshPart(part));
+      if (isVisualizationAirboxIdentity(part)) continue;
+      targets.push(
+        resolveObjectVisualizationPanelTarget({
+          part,
+          sceneObjectIds,
+          visualizationState: visualizationState.data,
+        }),
+      );
     }
 
-    if (target?.kind === "object") {
+    if (resolvedTarget?.kind === "object") {
       targets.push(...childRegionTargets);
     }
 
@@ -1206,9 +1429,11 @@ function useObjectVisualizationPanelState(
   }, [
     childRegionTargets,
     manifest.data?.mesh_parts,
+    sceneObjectIds,
     selection.label,
     selection.objectId,
-    target,
+    resolvedTarget,
+    visualizationState.data,
   ]);
   const selectPanelSnapshot = useCallback(
     (snapshot: ObjectVisualizationSnapshot) =>
@@ -1219,7 +1444,7 @@ function useObjectVisualizationPanelState(
     isEqual: objectVisualizationPanelSnapshotEquals,
   });
   const inheritedSettings =
-    target?.kind === "region" && selection.objectId
+    resolvedTarget?.kind === "region" && selection.objectId
       ? resolveTargetVisualization({
           snapshot,
           target: {
@@ -1230,42 +1455,43 @@ function useObjectVisualizationPanelState(
           visualizationState: visualizationState.data,
         }).settings
       : undefined;
-  const targetVisualization = target
+  const targetVisualization = resolvedTarget
     ? resolveTargetVisualization({
         inheritedSettings,
         snapshot,
-        target,
+        target: resolvedTarget,
         visualizationState: visualizationState.data,
       })
     : null;
   const settings = targetVisualization?.settings ?? null;
   const effectiveSettings = targetVisualization?.effectiveSettings ?? null;
   const hasTargetOverride = Boolean(targetVisualization?.override);
-  const childRegionOverrideCount = childRegionTargets.filter(
-    (childTarget) => snapshot.overrides[visualizationTargetKey(childTarget)],
-  ).length;
+  const childRegionOverrideCount = resolveChildRegionOverrideTargetIds({
+    backendOverrides: visualizationState.data?.overrides ?? [],
+    childTargets: childRegionTargets,
+    objectId: selection.objectId ?? "",
+    snapshot,
+  }).size;
   const panelSettings = settings;
-  const targetKey = target ? visualizationTargetKey(target) : null;
+  const targetKey = resolvedTarget
+    ? visualizationTargetKey(resolvedTarget)
+    : null;
   const fieldCatalogRequested =
     targetKey !== null && fieldCatalogRequestedTargetKey === targetKey;
   const fieldCatalog = useFieldCatalogResource({
     enabled: shouldLoadObjectVisualizationFieldCatalog({
       requested: fieldCatalogRequested,
       surfaceColorSource: settings?.surfaceColorSource,
-      targetActive: Boolean(target),
+      targetActive: Boolean(resolvedTarget),
       vectorsVisible: Boolean(settings?.vectorsVisible),
     }),
   });
-  const airboxPartIds =
-    manifest.data?.mesh_parts?.flatMap((part) =>
-      part.role === "air" || part.role === "airbox" ? [part.id] : [],
-    ) ?? [];
   const vectorDomain = visualizationState.data?.layers?.vectors?.domain ?? "auto";
-  const topologyFreshness = target
+  const topologyFreshness = resolvedTarget
     ? resolveObjectVisualizationPanelTopologyFreshness({
         manifest: manifest.data,
         scene: scene.data,
-        targetKind: target.kind,
+        targetKind: resolvedTarget.kind,
       })
     : null;
   const renderResolution = settings && effectiveSettings
@@ -1281,19 +1507,23 @@ function useObjectVisualizationPanelState(
         settings,
       })
     : [];
-  const passControlsDisabled = pending;
-  const primitiveDisplayToggleVisible = target
-    ? shouldShowPrimitiveDisplayToggle(activeModuleTab, target.kind, topologyFreshness)
+  const passControlsDisabled = pending || !settings?.visible;
+  const primitiveDisplayToggleVisible = resolvedTarget
+    ? shouldShowPrimitiveDisplayToggle(
+        activeModuleTab,
+        resolvedTarget.kind,
+        topologyFreshness,
+      )
     : false;
   const revision = targetVisualization?.revision ?? snapshot.version;
 
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
-    if (!target) return;
+    if (!resolvedTarget) return;
     const patchTargets =
-      target.kind === "object" && patchChildRegions && childRegionTargets.length > 0
-        ? [target, ...childRegionTargets]
-        : [target];
-    if (target.kind === "airbox") {
+      resolvedTarget.kind === "object" && patchChildRegions && childRegionTargets.length > 0
+        ? [resolvedTarget, ...childRegionTargets]
+        : [resolvedTarget];
+    if (resolvedTarget.kind === "airbox") {
       const localPatch =
         airboxLocalVisualizationPatchFromTargetPatch(patchValue);
       const statePatch = airboxVisualizationStatePatchFromTargetPatch(
@@ -1301,7 +1531,7 @@ function useObjectVisualizationPanelState(
         visualizationState.data?.overrides,
       );
       if (Object.keys(localPatch).length > 0) {
-        visualization.patchTarget(target, localPatch);
+        visualization.patchViewportPreferences(resolvedTarget, localPatch);
       }
       if (!hasVisualizationStatePatch(statePatch)) {
         setFeedback(null);
@@ -1309,18 +1539,39 @@ function useObjectVisualizationPanelState(
       }
 
       visualizationSync.queuePatch(statePatch);
+      visualization.patchTargetPending(
+        resolvedTarget,
+        persistentVisualizationTargetPatch(patchValue),
+        visualizationState.rawData?.revision ?? visualizationState.data?.revision ?? 0,
+      );
       setFeedback(null);
       return;
     }
 
     if (!visualizationState.data) {
+      const viewportPreferencesPatch = viewportRenderingPreferencesPatch(patchValue);
+      const persistentPatch = persistentVisualizationTargetPatch(patchValue);
       for (const patchTarget of patchTargets) {
-        visualization.patchTarget(patchTarget, patchValue);
+        if (Object.keys(viewportPreferencesPatch).length > 0) {
+          visualization.patchViewportPreferences(
+            patchTarget,
+            viewportPreferencesPatch,
+          );
+        }
+        if (Object.keys(persistentPatch).length > 0) {
+          visualization.patchTarget(patchTarget, persistentPatch);
+        }
       }
       return;
     }
 
-    const remotePatch = remoteVisualizationTargetPatch(patchValue);
+    const remotePatch = persistentVisualizationTargetPatch(patchValue);
+    const viewportPreferencesPatch = viewportRenderingPreferencesPatch(patchValue);
+    if (Object.keys(viewportPreferencesPatch).length > 0) {
+      for (const patchTarget of patchTargets) {
+        visualization.patchViewportPreferences(patchTarget, viewportPreferencesPatch);
+      }
+    }
     if (Object.keys(remotePatch).length > 0) {
       let overrides = visualizationState.data.overrides ?? [];
       for (const patchTarget of patchTargets) {
@@ -1333,44 +1584,46 @@ function useObjectVisualizationPanelState(
       visualizationSync.queuePatch({
         overrides,
       });
-    }
-    // Keep the patch locally for immediate inspector/ribbon feedback until the
-    // revision-driven resource refetch lands.
-    for (const patchTarget of patchTargets) {
-      visualization.patchTarget(patchTarget, patchValue);
+      // Keep the remote patch locally only until a newer visualization-state
+      // revision acknowledges the queued backend transaction.
+      for (const patchTarget of patchTargets) {
+        visualization.patchTargetPending(
+          patchTarget,
+          remotePatch,
+          visualizationState.rawData?.revision ?? visualizationState.data.revision,
+        );
+      }
     }
     setFeedback(null);
   }
 
   async function resetTarget(): Promise<void> {
-    if (!target) return;
-    if (target.kind === "airbox") {
+    if (!resolvedTarget) return;
+    if (resolvedTarget.kind === "airbox") {
       visualizationSync.queuePatch(
-        airboxVisualizationStatePatchFromTargetPatch(
-          DEFAULT_AIRBOX_VISUALIZATION,
-        ),
+        resetAirboxVisualizationState(visualizationState.data ?? { overrides: [] }),
       );
-      visualization.clearTarget(target);
+      visualization.clearTarget(resolvedTarget);
       setFeedback(null);
       return;
     }
 
     if (!visualizationState.data) {
-      visualization.clearTarget(target);
+      visualization.clearTarget(resolvedTarget);
       return;
     }
 
     visualizationSync.queuePatch({
       overrides: (visualizationState.data.overrides ?? []).filter(
-        (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
+        (entry) => !visualizationStateOverrideMatchesTarget(entry, resolvedTarget),
       ),
     });
-    visualization.clearTarget(target);
+    visualization.clearTarget(resolvedTarget);
     setFeedback(null);
   }
 
   async function resetChildRegionTargets(): Promise<void> {
-    if (childRegionTargets.length === 0) return;
+    if (childRegionOverrideCount === 0) return;
     if (!visualizationState.data) {
       for (const childTarget of childRegionTargets) {
         visualization.clearTarget(childTarget);
@@ -1379,12 +1632,10 @@ function useObjectVisualizationPanelState(
     }
 
     visualizationSync.queuePatch({
-      overrides: (visualizationState.data.overrides ?? []).filter(
-        (entry) =>
-          !childRegionTargets.some((childTarget) =>
-            visualizationStateOverrideMatchesTarget(entry, childTarget),
-          ),
-      ),
+      overrides: removeOwnerChildRegionVisualizationOverrides({
+        objectId: selection.objectId ?? "",
+        overrides: visualizationState.data.overrides ?? [],
+      }),
     });
     for (const childTarget of childRegionTargets) {
       visualization.clearTarget(childTarget);
@@ -1450,27 +1701,21 @@ function useObjectVisualizationPanelState(
     void patch({ wireframeOpacityPercent: value });
   }
 
-  // Build object-target arrow visibility rows from manifest parts.
+  // Build arrow visibility rows from carriers of the selected visualization target.
   const vectorMeshParts = (() => {
-    const parts = manifest.data?.mesh_parts;
-    if (!parts || parts.length === 0) return undefined;
-    // Filter to magnetic parts only (exclude airbox).
-    const magneticParts = parts.filter(
-      (p) => p.role !== "air" && p.role !== "airbox",
-    );
-    if (magneticParts.length <= 1) return undefined;
-    return magneticParts.map((p) => {
-      const partTarget = objectVisualizationTargetForMeshPart(p);
-      const partSettings = resolveTargetVisualization({
-        snapshot,
-        target: partTarget,
-        visualizationState: visualizationState.data,
-      }).settings;
+    if (!resolvedTarget) return undefined;
+    const scopedPartRows = resolveSelectedTargetVectorMeshPartRows({
+      manifestRegions: manifest.data?.regions,
+      meshParts: manifest.data?.mesh_parts,
+      sceneObjectIds,
+      target: resolvedTarget,
+      visualizationState: visualizationState.data,
+    });
+    if (scopedPartRows.length <= 1) return undefined;
+    return scopedPartRows.map((part) => {
       return {
-        id: p.id,
-        label: p.label,
-        objectId: p.object_id ?? null,
-        vectorsVisible: partSettings.vectorsVisible,
+        ...part,
+        vectorsVisible: settings?.vectorsVisible ?? false,
       };
     });
   })();
@@ -1481,7 +1726,7 @@ function useObjectVisualizationPanelState(
   const regionCarrier = resolveRegionVisualizationCarrier({
     manifestRegions: manifest.data?.regions,
     memberships: regionMemberships.data,
-    target,
+    target: resolvedTarget,
   });
   const vectorBudgetRanges = {
     full: resolveVisualizationVectorBudgetRange({
@@ -1489,14 +1734,14 @@ function useObjectVisualizationPanelState(
       manifestRegions: manifest.data?.regions,
       memberships: regionMemberships.data,
       meshParts: manifest.data?.mesh_parts,
-      target,
+      target: resolvedTarget,
     }),
     surface: resolveVisualizationVectorBudgetRange({
       geometryScope: "surface",
       manifestRegions: manifest.data?.regions,
       memberships: regionMemberships.data,
       meshParts: manifest.data?.mesh_parts,
-      target,
+      target: resolvedTarget,
     }),
   } satisfies Record<
     VisualizationGeometryScope,
@@ -1504,17 +1749,14 @@ function useObjectVisualizationPanelState(
   >;
   const vectorBudgetRange =
     vectorBudgetRanges[settings?.geometryScope ?? "full"];
-
-  function onTogglePartVectors(partId: string, visible: boolean) {
-    const part = manifest.data?.mesh_parts?.find((p) => p.id === partId);
-    if (!part || !visualizationState.data) return;
-    const partTarget = objectVisualizationTargetForMeshPart(part);
-    visualizationSync.queuePatch({
-      overrides: mergeVisualizationStateTargetOverride(
-        visualizationState.data.overrides ?? [],
-        partTarget,
-        { vectorsVisible: visible },
-      ),
+  function onTogglePartVectors(visible: boolean) {
+    if (!resolvedTarget || !visualizationState.data) return;
+    queueTargetVectorVisibilityPatch({
+      controller: visualization,
+      state: visualizationState.data,
+      sync: visualizationSync,
+      target: resolvedTarget,
+      visible,
     });
   }
 
@@ -1543,13 +1785,14 @@ function useObjectVisualizationPanelState(
     revision,
     sectionDisabled,
     settings: panelSettings,
-    target,
+    target: resolvedTarget,
     setPatchChildRegions,
     primitiveDisplayToggleVisible,
     vectorDomain,
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorMeshParts,
+    vectorTopologyHash: manifest.data?.topology_fingerprint ?? null,
   } as const;
 }
 
@@ -1622,6 +1865,7 @@ function ObjectVisualizationPanelView({
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorMeshParts,
+    vectorTopologyHash,
   } = panel;
 
   return (
@@ -1681,6 +1925,7 @@ function ObjectVisualizationPanelView({
       <VisualizationRenderModeSection
         displaySettings={displaySettings}
         passControlsDisabled={passControlsDisabled}
+        pending={pending}
         patch={patch}
       />
       <VisualizationQuantitySection
@@ -1726,9 +1971,11 @@ function ObjectVisualizationPanelView({
         targetKind={target.kind}
         vectorBudgetRange={vectorBudgetRange}
         vectorBudgetRanges={vectorBudgetRanges}
+        vectorTopologyHash={vectorTopologyHash}
       />
       <VisualizationGeometryScopeSection
         passControlsDisabled={passControlsDisabled}
+        pending={pending}
         patch={patch}
         settings={settings}
         vectorBudgetRange={vectorBudgetRange}
@@ -1737,7 +1984,7 @@ function ObjectVisualizationPanelView({
       <VisualizationOpacitySection patch={patch} settings={settings} />
       <VisualizationOverridesSection
         childRegionOverrideCount={childRegionOverrideCount}
-        childRegionTargets={childRegionTargets.length}
+        childRegionTargets={Math.max(childRegionTargets.length, childRegionOverrideCount)}
         feedback={feedback}
         onReset={() => void resetTarget()}
         onResetChildRegions={() => void resetChildRegionTargets()}
@@ -1748,7 +1995,7 @@ function ObjectVisualizationPanelView({
   );
 }
 
-function ColorField({
+export function ColorField({
   disabled,
   label,
   onChange,
@@ -1776,6 +2023,7 @@ function ColorField({
         <input
           className="fm-visualization-color-field__value"
           disabled={disabled}
+          aria-label={`${label} value`}
           type="text"
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -1886,28 +2134,122 @@ function NumberField({
   );
 }
 
-function ToggleButton({
+function displayControlDisabledDescription(
+  disabled: boolean,
+  visible: boolean,
+  pending = false,
+): string | undefined {
+  if (!disabled) return undefined;
+  if (pending) return "Saving display changes.";
+  if (!visible) return "Enable Visible to change display passes.";
+  return "This display control is currently unavailable.";
+}
+
+export function VisualizationToggleButton({
   active,
   disabled = false,
+  disabledDescription,
   label,
   onClick,
 }: {
   active: boolean;
   disabled?: boolean;
+  disabledDescription?: string;
   label: string;
   onClick: () => void;
 }) {
+  const descriptionId = useId();
   return (
-    <Button
-      className="fm-visualization-toggle"
-      data-active={active}
-      disabled={disabled}
-      size="sm"
-      type="button"
-      variant={active ? "primary" : "secondary"}
-      onClick={onClick}
+    <>
+      <Button
+        aria-describedby={disabledDescription ? descriptionId : undefined}
+        aria-pressed={active}
+        className="fm-visualization-toggle"
+        data-active={active}
+        disabled={disabled}
+        size="sm"
+        type="button"
+        variant={active ? "primary" : "secondary"}
+        onClick={onClick}
+      >
+        {label}
+      </Button>
+      {disabledDescription ? (
+        <span className="fm-visually-hidden" id={descriptionId}>
+          {disabledDescription}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+const ToggleButton = VisualizationToggleButton;
+
+type VisualizationRadioItem<T extends string> = {
+  label: string;
+  value: T;
+};
+
+export function VisualizationRadioGroup<T extends string>({
+  disabled = false,
+  disabledDescription,
+  items,
+  label,
+  onValueChange,
+  value,
+}: {
+  disabled?: boolean;
+  disabledDescription?: string;
+  items: readonly VisualizationRadioItem<T>[];
+  label: string;
+  onValueChange: (value: T) => void;
+  value: T;
+}) {
+  const descriptionId = useId();
+  const values = items.map((item) => item.value);
+
+  return (
+    <div
+      aria-describedby={disabledDescription ? descriptionId : undefined}
+      aria-label={label}
+      className="fm-visualization-segments"
+      role="radiogroup"
     >
-      {label}
-    </Button>
+      {items.map((item) => {
+        const checked = value === item.value;
+        return (
+          <Button
+            key={item.value}
+            aria-checked={checked}
+            aria-describedby={disabledDescription ? descriptionId : undefined}
+            disabled={disabled}
+            role="radio"
+            size="sm"
+            tabIndex={checked ? 0 : -1}
+            type="button"
+            variant={checked ? "primary" : "secondary"}
+            onClick={() => onValueChange(item.value)}
+            onKeyDown={(event) => {
+              const nextValue = nextVisualizationRadioValue(values, value, event.key);
+              if (nextValue === value) return;
+              event.preventDefault();
+              onValueChange(nextValue);
+              const nextRadio = event.currentTarget.parentElement?.querySelector<HTMLElement>(
+                `[role="radio"][data-visualization-radio-value="${nextValue}"]`,
+              );
+              nextRadio?.focus();
+            }}
+            data-visualization-radio-value={item.value}
+          >
+            {item.label}
+          </Button>
+        );
+      })}
+      {disabledDescription ? (
+        <span className="fm-visually-hidden" id={descriptionId}>
+          {disabledDescription}
+        </span>
+      ) : null}
+    </div>
   );
 }

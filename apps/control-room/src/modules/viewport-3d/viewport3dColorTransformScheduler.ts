@@ -157,13 +157,22 @@ function getColorTransformWorkerClient(): ColorTransformWorkerClient | null {
   return colorTransformWorkerClient;
 }
 
-export function disposeViewport3DColorTransformWorkerForTests(): void {
+export function disposeViewport3DColorTransformWorker(): void {
   colorTransformBuildJobScheduler?.dispose();
   colorTransformBuildJobScheduler = undefined;
   colorTransformWorkerClient?.dispose();
   colorTransformWorkerClient = undefined;
   colorTransformWorkerFallbackReason = undefined;
 }
+
+/** @deprecated Use disposeViewport3DColorTransformWorker. */
+export const disposeViewport3DColorTransformWorkerForTests =
+  disposeViewport3DColorTransformWorker;
+
+export function getViewport3DColorTransformWorkerRuntimeCounts(): { timers: number; workers: number } {
+  return colorTransformWorkerClient?.getRuntimeCounts() ?? { timers: 0, workers: 0 };
+}
+export function getViewport3DColorTransformPendingJobCount(): number { return colorTransformBuildJobScheduler?.getPendingJobCount() ?? 0; }
 
 function estimateFieldColorInputBytes(
   fieldVector: DecodedFieldVector,
@@ -348,6 +357,10 @@ class ColorTransformWorkerClient {
     if (colorTransformWorkerClient === this) {
       colorTransformWorkerClient = undefined;
     }
+  }
+
+  getRuntimeCounts(): { timers: number; workers: number } {
+    return { timers: this.idleTimeoutId === null ? 0 : 1, workers: this.disposed ? 0 : 1 };
   }
 
   private readonly handleMessage = (

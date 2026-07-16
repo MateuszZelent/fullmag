@@ -43,6 +43,7 @@ import {
 } from "three";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import type { PeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
 
 import type {
   FdmGridRenderDomain,
@@ -102,6 +103,7 @@ import {
   type RegionOverlaySelection,
 } from "./RegionOverlayLayer";
 import { RegionMeshOverlayLayer } from "./RegionMeshOverlayLayer";
+import { PeriodicPairsOverlayLayer } from "./PeriodicPairsOverlayLayer";
 import {
   useViewport3DRegionOverlayModels,
   type Viewport3DRegionOverlayBuildStatus,
@@ -109,6 +111,7 @@ import {
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
+import { VectorGlyphDerivedBufferCacheProvider } from "./vectorGlyphDerivedBufferRuntime";
 import { HysteresisReplayGlyphLayer } from "./HysteresisReplayGlyphLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
 import { ClipPlaneFramePreviewLayer, ClipPlaneLayer } from "./ClipPlaneLayer";
@@ -131,8 +134,10 @@ import {
 import { resolveViewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { clampNumber } from "../viewport3dMath";
 import { createViewport3DCameraGestureRef } from "./viewport3DCameraGesture";
+import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
 interface Viewport3DSceneProps {
+  adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   bounds: Viewport3DBounds | null;
   cameraOrthographicScale: number | null;
   cameraProjection: Viewport3DCameraProjection;
@@ -169,6 +174,7 @@ interface Viewport3DSceneProps {
   meshQualityOverlayVisible: boolean;
   meshRegionOverlayParts: readonly RegionMeshOverlayOwnerPart[];
   meshRegionOverlays: readonly RegionOverlayInput[];
+  periodicOverlayModel: PeriodicOverlayModel | null;
   meshSizeHighlightModel: Viewport3DMeshSizeHighlightModel | null;
   onCameraChange: (camera: Viewport3DCameraChange) => Promise<void> | void;
   onCameraInteractionEnd?: () => void;
@@ -746,6 +752,7 @@ function Viewport3DOverlayLayerStack({
 }
 
 function Viewport3DModelLayerStack({
+  adoptionRegistry,
   airboxSettings,
   bounds,
   colors,
@@ -769,6 +776,7 @@ function Viewport3DModelLayerStack({
   meshQualityOverlayVisible,
   meshRegionOverlayParts,
   meshRegionOverlays,
+  periodicOverlayModel,
   meshSizeHighlightModel,
   onInspectClear,
   onInspectSample,
@@ -791,6 +799,7 @@ function Viewport3DModelLayerStack({
   visualizationRevision,
 }: Pick<
   Viewport3DSceneProps,
+  | "adoptionRegistry"
   | "airboxSettings"
   | "bounds"
   | "colors"
@@ -811,6 +820,7 @@ function Viewport3DModelLayerStack({
   | "meshQualityOverlayVisible"
   | "meshRegionOverlayParts"
   | "meshRegionOverlays"
+  | "periodicOverlayModel"
   | "meshSizeHighlightModel"
   | "inspectEnabled"
   | "inspectQuantityId"
@@ -925,6 +935,7 @@ function Viewport3DModelLayerStack({
       {stageVisibility.baseGeometry &&
       viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
         <FdmCuboidLayer
+          adoptionRegistry={adoptionRegistry}
           colors={colors}
           fieldVector={stagedFieldVector}
           instanceModel={fdmInstanceModel}
@@ -949,6 +960,7 @@ function Viewport3DModelLayerStack({
       {stageVisibility.baseGeometry &&
       viewport3DAirboxLayerEnabledFromBrowserConfig() ? (
         <AirboxLayer
+          adoptionRegistry={adoptionRegistry}
           colors={colors}
           fieldModel={stagedFieldModel}
           materialProfile={materialProfile}
@@ -975,6 +987,7 @@ function Viewport3DModelLayerStack({
       {stageVisibility.baseGeometry &&
       viewport3DTopologyMeshLayerEnabledFromBrowserConfig() ? (
         <TopologyMeshLayer
+          adoptionRegistry={adoptionRegistry}
           colors={colors}
           fallbackSettings={fallbackSettings}
           femDomain={femDomain}
@@ -1002,6 +1015,7 @@ function Viewport3DModelLayerStack({
           tracker={tracker}
         />
       ) : null}
+      <PeriodicPairsOverlayLayer model={periodicOverlayModel} tracker={tracker} />
       {authoredRegionOverlaysVisible ? (
         <RegionOverlayLayer
           getRegionSettings={getRegionSettings}
@@ -1180,6 +1194,7 @@ function Viewport3DInteractionAndHudStack({
 }
 
 export function Viewport3DScene({
+  adoptionRegistry,
   bounds,
   cameraOrthographicScale,
   cameraProjection,
@@ -1211,6 +1226,7 @@ export function Viewport3DScene({
   meshQualityOverlayVisible,
   meshRegionOverlayParts,
   meshRegionOverlays,
+  periodicOverlayModel,
   meshSizeHighlightModel,
   onCameraChange,
   onCameraInteractionEnd,
@@ -1314,7 +1330,7 @@ export function Viewport3DScene({
   ]);
 
   return (
-    <>
+    <VectorGlyphDerivedBufferCacheProvider tracker={tracker}>
       <color attach="background" args={[colors.background]} />
       <Viewport3DLightingRig profileId={visualProfileId} />
       {viewport3DCanvasLifecycleProbeEnabledFromBrowserConfig() ? (
@@ -1354,6 +1370,7 @@ export function Viewport3DScene({
         tracker={tracker}
       />
       <Viewport3DModelLayerStack
+        adoptionRegistry={adoptionRegistry}
         airboxSettings={airboxSettings}
         bounds={bounds}
         colors={colors}
@@ -1377,6 +1394,7 @@ export function Viewport3DScene({
         meshQualityOverlayVisible={meshQualityOverlayVisible}
         meshRegionOverlayParts={meshRegionOverlayParts}
         meshRegionOverlays={meshRegionOverlays}
+        periodicOverlayModel={periodicOverlayModel}
         meshSizeHighlightModel={meshSizeHighlightModel}
         onInspectClear={onInspectClear}
         onInspectSample={onInspectSample}
@@ -1416,6 +1434,6 @@ export function Viewport3DScene({
         tracker={tracker}
         viewCubeVisible={viewCubeVisible}
       />
-    </>
+    </VectorGlyphDerivedBufferCacheProvider>
   );
 }

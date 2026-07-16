@@ -175,6 +175,9 @@ void material_plan_import_and_validation_contract() {
         ctx.material_fields.A_element_field == std::vector<double>({8e-12, 13e-12}),
         "A per-element coefficient copied from plan");
 
+    // Cross-coefficient Ms_node + A_element remains legal. Same-coefficient
+    // nodal/element conflicts are covered by the focused test below.
+    ctx.material_fields.Ms_element_field.clear();
     std::string error;
     check(
         fullmag::fem::validate_material_fields(ctx, error),
@@ -214,6 +217,85 @@ void material_plan_import_and_validation_contract() {
     check(
         error.find("gamma_mu0") != std::string::npos,
         "gamma validation error should mention gamma_mu0 convention");
+}
+
+void material_plan_import_rejects_conflicting_nodal_and_element_realizations() {
+    const double ms[] = {800e3, 1.0e6};
+    const double a[] = {8e-12, 13e-12};
+    const double ms_element[] = {700e3, 900e3};
+    const double a_element[] = {6e-12, 11e-12};
+
+    struct Case {
+        const char *coefficient;
+        const char *nodal_location;
+        const char *element_location;
+        const double *nodal_values;
+        const double *element_values;
+        bool ms;
+    };
+    const Case cases[] = {
+        {"Ms", "ms_field", "ms_element_field", ms, ms_element, true},
+        {"A", "a_field", "a_element_field", a, a_element, false},
+    };
+
+    for (const Case &test : cases) {
+        fullmag::fem::Context ctx;
+        ctx.mesh.n_nodes = 2;
+        ctx.mesh.n_elements = 2;
+        fullmag_fem_plan_desc plan = {};
+        plan.material.saturation_magnetisation = 800e3;
+        plan.material.exchange_stiffness = 13e-12;
+        plan.material.damping = 0.1;
+        plan.material.gyromagnetic_ratio = 2.211e5;
+        if (test.ms) {
+            plan.ms_field = test.nodal_values;
+            plan.ms_field_len = 2;
+            plan.ms_element_field = test.element_values;
+            plan.ms_element_field_len = 2;
+        } else {
+            plan.a_field = test.nodal_values;
+            plan.a_field_len = 2;
+            plan.a_element_field = test.element_values;
+            plan.a_element_field_len = 2;
+        }
+        fullmag::fem::initialize_material_plan_fields(ctx, plan);
+
+        std::string error;
+        check(
+            !fullmag::fem::validate_material_fields(ctx, error),
+            "native material import must reject conflicting nodal and element realizations");
+        check(
+            error.find(test.coefficient) != std::string::npos &&
+                error.find(test.nodal_location) != std::string::npos &&
+                error.find(test.element_location) != std::string::npos,
+            "native conflict diagnostic must name the coefficient and both ABI locations");
+    }
+}
+
+void native_dg0_ms_validation_uses_the_realized_magnetic_element_mask() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 6u;
+    ctx.mesh.n_elements = 3u;
+    ctx.mesh.magnetic_element_mask = {1u, 1u, 0u};
+    ctx.material_fields.material.saturation_magnetisation = 0.8e6;
+    ctx.material_fields.material.exchange_stiffness = 13e-12;
+    ctx.material_fields.material.damping = 0.1;
+    ctx.material_fields.material.gyromagnetic_ratio = 2.211e5;
+    ctx.material_fields.Ms_element_field = {0.7e6, 1.1e6, 0.0};
+
+    std::string error;
+    check(
+        fullmag::fem::validate_material_fields(ctx, error),
+        "native material validation must accept canonical zero DG0 Ms in inactive air");
+
+    ctx.material_fields.Ms_element_field[0u] = 0.0;
+    check(
+        !fullmag::fem::validate_material_fields(ctx, error),
+        "native material validation must reject zero DG0 Ms in an active element");
+    ctx.material_fields.Ms_element_field = {0.7e6, 1.1e6, -1.0};
+    check(
+        !fullmag::fem::validate_material_fields(ctx, error),
+        "native material validation must reject a negative DG0 Ms in inactive air");
 }
 
 void elementwise_material_runtime_support_distinguishes_a_from_ms() {
@@ -473,6 +555,8 @@ void elementwise_material_context_builder_fails_closed_before_backend_initializa
 int main() {
     material_field_helpers_are_owned_by_core_module();
     material_plan_import_and_validation_contract();
+    material_plan_import_rejects_conflicting_nodal_and_element_realizations();
+    native_dg0_ms_validation_uses_the_realized_magnetic_element_mask();
     elementwise_material_runtime_support_distinguishes_a_from_ms();
     elementwise_material_context_builder_fails_closed_before_backend_initialization();
     return 0;

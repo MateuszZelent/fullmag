@@ -111,13 +111,13 @@ export type MagneticResponseSweepResource = JsonObject & {
   schema_version: string;
 };
 export type TopologicalChargeResource =
-  components["schemas"]["TopologicalChargeResource"];
+  components["schemas"]["TopologicalChargeResourceV2"];
 export interface TopologicalChargeQuery {
-  method?: string;
   plane?: "auto" | "xy" | "xz" | "yz";
-  quantity_id?: string;
-  resolution?: "auto" | number | string;
+  support?: "midplane" | "layer_profile";
+  profile_samples?: "auto" | number;
   snapshot_id?: string | null;
+  stage_id?: string | null;
 }
 export type FrequencyDomainManifestResource =
   components["schemas"]["FrequencyDomainManifestResource"];
@@ -178,6 +178,8 @@ export type MeshObjectSizeFieldResource =
   components["schemas"]["MeshObjectSizeFieldResource"];
 export type MeshPeriodicPairsResource =
   components["schemas"]["MeshPeriodicPairsResource"];
+export type PeriodicValidationStatus =
+  components["schemas"]["PeriodicValidationStatus"];
 export type MeshQualityGatesResource =
   components["schemas"]["MeshQualityGatesResource"];
 export type MeshRealizedSizeFieldsResource =
@@ -186,6 +188,8 @@ export type MeshRegionMembershipListResource =
   components["schemas"]["MeshRegionMembershipListResource"];
 export type MeshRegionMembershipResource =
   components["schemas"]["MeshRegionMembershipResource"];
+export type FdmRegionMembershipResource =
+  components["schemas"]["FdmRegionMembershipResource"];
 export type MeshRegionQualityResource =
   components["schemas"]["MeshRegionQualityResource"];
 export type MeshSemanticsResource =
@@ -226,6 +230,20 @@ export type MeshSharedDomainManifestResource =
   components["schemas"]["MeshSharedDomainManifestResource"];
 export type CouplingListResource =
   components["schemas"]["CouplingListResource"];
+export type SpinWaveGammaResource =
+  components["schemas"]["SpinWaveGammaResource"];
+export type DynamicStructureFactorResource =
+  components["schemas"]["DynamicStructureFactorResource"];
+export type FieldDriveListResource =
+  components["schemas"]["FieldDriveListResource"];
+export type RegionalFieldDriveResource =
+  components["schemas"]["RegionalFieldDriveResource"];
+export type FieldDriveCreateRequest =
+  components["schemas"]["FieldDriveCreateRequest"];
+export type FieldDriveReplaceRequest =
+  components["schemas"]["FieldDriveReplaceRequest"];
+export type FieldDriveDeleteRequest =
+  components["schemas"]["FieldDriveDeleteRequest"];
 export type RegionListResource = components["schemas"]["RegionListResource"];
 export type RegionDiagnosticsResource =
   components["schemas"]["RegionDiagnosticsResource"];
@@ -522,14 +540,42 @@ export type HysteresisSaturationResource =
 export type HysteresisSettleTraceEntrySchema =
   components["schemas"]["HysteresisSettleTraceEntrySchema"];
 
-export type BinaryResourceResult<TData> =
-  | {
+export interface FieldVectorIdentityIssue {
+  field: string;
+  headerValue: number | string | null;
+  payloadValue: number | string | null;
+}
+
+export interface FieldVectorResponseMetadata {
+  component: string | null;
+  domainGenerationId: string | null;
+  encoding: string | null;
+  fieldIndexing: string | null;
+  fieldRevision: string | null;
+  identityIssues: FieldVectorIdentityIssue[];
+  meshTopologyHash: string | null;
+  nComp: number | null;
+  nodeIndexCount: number | null;
+  pointCount: number | null;
+  quantityId: string | null;
+  scopeId: string | null;
+  scopeKind: string | null;
+  snapshotId: string | null;
+  valueCount: number | null;
+}
+
+type ReadyBinaryResourceResult<TData, TMetadata> = {
       byteLength: number;
       contentRange?: string | null;
       data: TData;
       etag: string | null;
       status: "ready";
-    }
+    } & (unknown extends TMetadata
+      ? { responseMetadata?: TMetadata }
+      : { responseMetadata: TMetadata });
+
+export type BinaryResourceResult<TData, TMetadata = unknown> =
+  | ReadyBinaryResourceResult<TData, TMetadata>
   | {
       etag: string | null;
       status: "not-applicable";

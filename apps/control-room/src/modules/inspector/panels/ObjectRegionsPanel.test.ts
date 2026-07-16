@@ -3,6 +3,32 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("ObjectRegionsPanel physical scalar inputs", () => {
+  it("distinguishes the owner object from its authored subregion", () => {
+    const shared = readFileSync(
+      new URL("./region/shared.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(shared).toContain('title="Authored Subregion"');
+    expect(shared).toContain('label="Owner object ID"');
+    expect(shared).toContain('label="Subregion ID"');
+    expect(shared).not.toContain('<FieldRow label="Object ID" value={model.objectId} />');
+    expect(shared).not.toContain('<FieldRow label="Region ID" value={model.regionId} />');
+  });
+
+  it("does not render Radius for Box regions", () => {
+    const geometryPanel = readFileSync(
+      new URL("./region/ObjectRegionGeometryPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(geometryPanel).toContain('draft.shape.kind === "cylinder"');
+    expect(geometryPanel).toContain('draft.shape.kind === "sphere"');
+    expect(geometryPanel).not.toContain(
+      'draft.shape.kind === "box" || draft.shape.kind === "cylinder" || draft.shape.kind === "sphere"',
+    );
+  });
+
   it("buffers scientific notation text locally while editing SI values", () => {
     const source = readFileSync(
       new URL("./ObjectRegionsPanel.tsx", import.meta.url),
@@ -182,5 +208,28 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
     expect(source.slice(deleteRegionStart, subPropsStart)).toContain(
       "syncAuthoringScriptBestEffort(api)",
     );
+  });
+
+  it("keeps region mesh actions tied to realized lifecycle resources", () => {
+    const panel = readFileSync(
+      new URL("./region/ObjectRegionMeshPanel.tsx", import.meta.url),
+      "utf8",
+    );
+    const shared = readFileSync(
+      new URL("./region/shared.tsx", import.meta.url),
+      "utf8",
+    );
+    const parent = readFileSync(
+      new URL("./ObjectRegionsPanel.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(parent).toContain("useMeshRegionMembershipResource");
+    expect(parent).toContain("useMeshBuildCurrent");
+    expect(parent).toContain("resolveRegionMeshLifecycle");
+    expect(panel).toContain("regionMeshLifecycle={regionMeshLifecycle}");
+    expect(shared).toContain('label="Mesh realization"');
+    expect(shared).toContain("Apply & Build Mesh");
+    expect(shared).toContain('status === "unsupported"');
   });
 });

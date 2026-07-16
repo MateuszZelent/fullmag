@@ -126,6 +126,7 @@ interface RegistryInspectorDialogProps {
   syncSnapshot: VisualizationRegistrySyncSnapshot;
   visualizationState: VisualizationStateResource | null | undefined;
   onOpenChange: (open: boolean) => void;
+  onRetryMutation: () => void;
 }
 
 export function RegistryInspectorDialog({
@@ -134,6 +135,7 @@ export function RegistryInspectorDialog({
   syncSnapshot,
   visualizationState,
   onOpenChange,
+  onRetryMutation,
 }: RegistryInspectorDialogProps) {
   const [tab, setTab] = useState<"local" | "backend">("backend");
 
@@ -149,6 +151,7 @@ export function RegistryInspectorDialog({
       inflightPatch: syncSnapshot.inflightPatch as unknown as JsonValue,
       lastLocalChangedAt: syncSnapshot.lastLocalChangedAt,
       lastRemoteRevision: syncSnapshot.lastRemoteRevision,
+      mutation: syncSnapshot.mutation as unknown as JsonValue,
       pendingFingerprint: syncSnapshot.pendingFingerprint,
       pendingPatch: syncSnapshot.pendingPatch as unknown as JsonValue,
       version: syncSnapshot.version,
@@ -214,6 +217,19 @@ export function RegistryInspectorDialog({
         </div>
 
         <div className="fm-registry-inspector__body">
+          {syncSnapshot.mutation?.status === "rejected" ? (
+            <div className="fm-registry-inspector__mutation-error" role="alert">
+              <strong>Visualization update rejected</strong>
+              <span>Target: {syncSnapshot.mutation.targetId}</span>
+              <span>{syncSnapshot.mutation.error}</span>
+              {syncSnapshot.mutation.requestId ? (
+                <span>Request: {syncSnapshot.mutation.requestId}</span>
+              ) : null}
+              <button onClick={onRetryMutation} type="button">
+                Retry exact update
+              </button>
+            </div>
+          ) : null}
           <div className="fm-registry-tree" role="tabpanel">
             {tab === "local" ? (
               <JsonNode

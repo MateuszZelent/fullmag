@@ -18,6 +18,7 @@ fullmag-ir = { path = "../fullmag-ir" }
 fullmag-plan = { path = "../fullmag-plan" }
 fullmag-quantities = { path = "../fullmag-quantities" }
 rayon = "1.10"
+rustfft = "6.4"
 nalgebra = "0.33"
 num-complex = "0.4"
 serde = { workspace = true }

@@ -42,6 +42,8 @@ extern "C" {
 
 /* Maximum number of distinct exchange regions supported by the LUT. */
 #define FULLMAG_FDM_MAX_EXCHANGE_REGIONS 256
+/* Region id 0 is background; ids 1..MAX_REGION_ID address the LUT safely. */
+#define FULLMAG_FDM_MAX_REGION_ID (FULLMAG_FDM_MAX_EXCHANGE_REGIONS - 1)
 
 /* ── Enums ── */
 

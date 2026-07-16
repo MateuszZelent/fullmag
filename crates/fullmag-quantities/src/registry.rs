@@ -213,7 +213,7 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
 
     // Vector fields
     for id in [
-        M, HEx, HDemag, HExt, HAnt, HEff, Torque, HAni, HDmi, HMel, U, Eps, Sigma, HAniCubic,
+        M, HEx, HDemag, HExt, HAnt, HDrive, HEff, Torque, HAni, HDmi, HMel, U, Eps, Sigma, HAniCubic,
         HDmiBulk, HOe, HTherm, ModeReal, ModeImag, // Second wave (QB-17)
         DmDt, TorqueStt, TorqueSot,
     ] {
@@ -229,6 +229,7 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
         EdenDemag,
         DemagPhi,
         EdenExt,
+        EdenDrive,
         EdenAni,
         EdenDmi,
         EdenTotal,
@@ -246,6 +247,7 @@ pub fn register_standard_providers(registry: &mut QuantityRegistry) {
         (EEx, "e_ex"),
         (EDemag, "e_demag"),
         (EExt, "e_ext"),
+        (EDrive, "e_drive"),
         (EAni, "e_ani"),
         (EDmi, "e_dmi"),
         (EEl, "e_el"),
@@ -265,11 +267,11 @@ mod tests {
     use crate::GlobalQuantityRow;
 
     #[test]
-    fn standard_providers_register_all_45() {
+    fn standard_providers_register_all_48() {
         let mut reg = QuantityRegistry::new();
         register_standard_providers(&mut reg);
-        // 22 vector + 14 spatial-scalar + 9 global scalar providers = 45.
-        assert_eq!(reg.len(), 45);
+        // 23 vector + 15 spatial-scalar + 10 global scalar providers = 48.
+        assert_eq!(reg.len(), 48);
     }
 
     #[test]

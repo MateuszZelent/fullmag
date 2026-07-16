@@ -8848,7 +8848,7 @@ def test_gpu_rk_rhs_runtime_helpers_are_owned_by_rk_module():
     assert '#include "gpu/cuda/integrators/rk/rk_fsal_policy.hpp"' in fsal_source
     assert "gpu_rk_rhs_allows_fsal_reuse(" in fsal_source
     assert "ctx.thermal_brown.temperature > 0.0" in fsal_source
-    assert "ctx.oersted.time_dep_kind != 0u" in fsal_source
+    assert "ctx.oersted.time_dep_kind != 0u" not in fsal_source
     assert "GPU CUDA RK RHS runtime source contract" in rhs_source
     assert '#include "gpu/cuda/integrators/rk/rk_rhs_runtime.hpp"' in rhs_source
     assert '#include "gpu/cuda/integrators/rk/rk_exchange_dispatch.hpp"' in rhs_source
@@ -8897,7 +8897,7 @@ def test_gpu_rk_rhs_runtime_helpers_are_owned_by_rk_module():
     )
     assert '#include "gpu/cuda/integrators/rk/rk_effective_field.hpp"' in rhs_source
     assert (
-        "gpu_rk_accumulate_effective_field(ctx, stream, n, label, reason)"
+        "gpu_rk_accumulate_effective_field(ctx, stream, n, evaluation_time_s, label, reason)"
         in rhs_source
     )
     assert '#include "gpu/cuda/integrators/rk/rk_direct_torques.hpp"' in rhs_source
@@ -9147,7 +9147,10 @@ def test_gpu_rk_effective_field_is_owned_by_rk_module():
     assert "GPU CUDA RK effective field accumulation source contract" in effective_source
     assert '#include "gpu/cuda/integrators/rk/rk_effective_field.hpp"' in effective_source
     assert '#include "gpu/cuda/integrators/rk/rk_oersted_field.hpp"' in effective_source
-    assert "gpu_rk_accumulate_oersted_field(ctx, stream, n, reason)" in effective_source
+    assert (
+        "gpu_rk_accumulate_oersted_field(ctx, stream, n, evaluation_time_s, reason)"
+        in effective_source
+    )
     assert "GPU CUDA RK Oersted field accumulation module header" in oersted_header
     assert "gpu_rk_accumulate_oersted_field(" in oersted_header
     assert "GPU CUDA RK Oersted field accumulation source contract" in oersted_source
@@ -9463,7 +9466,10 @@ def test_gpu_rk_plan_supports_precomputed_oersted_field_on_device():
     assert "ctx.oersted.time_dep_kind" in oersted_source
     assert "fullmag_cuda_add_scaled_field_inplace(gpu.fields.h_oe.x" in oersted_source
     assert "launch GPU RK Oersted h_eff accumulation" in oersted_source
-    assert "gpu_rk_accumulate_oersted_field(ctx, stream, n, reason)" in effective_source
+    assert (
+        "gpu_rk_accumulate_oersted_field(ctx, stream, n, evaluation_time_s, reason)"
+        in effective_source
+    )
 
 
 def test_gpu_rk_plan_supports_magnetoelastic_field_and_energy_on_device():
@@ -9739,7 +9745,7 @@ def test_gpu_rk_reuses_fsal_stage_zero_without_host_sync():
     assert "cudaStreamSynchronize" not in function_source
 
 
-def test_gpu_rk_disables_fsal_reuse_for_stochastic_or_time_dependent_rhs():
+def test_gpu_rk_disables_fsal_for_stochastic_rhs_but_allows_endpoint_safe_oersted():
     cuda_source = GPU_RK_CU_PATH.read_text(encoding="utf-8")
     preflight_source = GPU_RK_STEP_PREFLIGHT_CU_PATH.read_text(encoding="utf-8")
     fsal_source = GPU_RK_FSAL_POLICY_CPP_PATH.read_text(encoding="utf-8")
@@ -9752,7 +9758,7 @@ def test_gpu_rk_disables_fsal_reuse_for_stochastic_or_time_dependent_rhs():
     step_source = cuda_source[step_start:step_end]
 
     assert "ctx.thermal_brown.temperature > 0.0" in helper_source
-    assert "ctx.oersted.time_dep_kind != 0u" in helper_source
+    assert "ctx.oersted.time_dep_kind != 0u" not in helper_source
     assert (
         "result.fsal_method = (result.is_rk23 || result.is_rk45) && "
         "gpu_rk_rhs_allows_fsal_reuse(ctx)"

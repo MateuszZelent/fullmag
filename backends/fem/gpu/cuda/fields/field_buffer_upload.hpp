@@ -42,6 +42,7 @@ bool gpu_field_buffers_upload_local_vector_fields_aos(
     const double *h_cubic_ani_xyz,
     const double *h_dmi_xyz,
     const double *h_bulk_dmi_xyz,
+    const double *h_oe_basis_per_ampere_xyz,
     const double *h_oe_xyz,
     const double *h_therm_xyz,
     const double *h_mel_xyz,

@@ -320,11 +320,11 @@ pub(crate) fn topological_charge_cache_key(
     mesh_generation_id: Option<&str>,
     scene_revision: u64,
     plane: &str,
-    resolution: &str,
+    request_scope: &str,
     method: &str,
 ) -> String {
     format!(
-        "analysis:topological-charge:{object_id}:{quantity_id}:field={field_revision}:mesh={mesh_revision}:mesh-gen={mesh_generation_id}:scene={scene_revision}:plane={plane}:resolution={resolution}:method={method}:v1",
+        "analysis:topological-charge:{object_id}:{quantity_id}:field={field_revision}:mesh={mesh_revision}:mesh-gen={mesh_generation_id}:scene={scene_revision}:plane={plane}:scope={request_scope}:method={method}:v2",
         mesh_generation_id = mesh_generation_id.unwrap_or("none"),
     )
 }
@@ -478,5 +478,26 @@ mod tests {
             20_000,
         );
         assert!(key.starts_with("fmvp-slice:m:7:42:xy:norm:"));
+    }
+
+    #[test]
+    fn topological_charge_cache_key_distinguishes_analysis_scope() {
+        let common = |scope| {
+            topological_charge_cache_key(
+                "magnet",
+                "m",
+                7,
+                0,
+                None,
+                4,
+                "xy",
+                scope,
+                "berg_luescher_oriented_triangles_v2",
+            )
+        };
+        assert_ne!(
+            common("resolution=auto:support=midplane:profile=None:snapshot=None:stage=None"),
+            common("resolution=auto:support=layer_profile:profile=Some(33):snapshot=None:stage=None"),
+        );
     }
 }

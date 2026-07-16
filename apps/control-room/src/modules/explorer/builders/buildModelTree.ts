@@ -5,6 +5,7 @@ import type {
   ModelTreeObjectSnapshot,
   ModelTreePhysicsInteractionSnapshot,
   ModelTreeCouplingSnapshot,
+  ModelTreeFieldDriveSnapshot,
   ModelTreeSnapshot,
 } from "../explorerTypes";
 
@@ -20,6 +21,7 @@ import {
 import { buildStudyNodes } from "./study/studyExplorerNodes";
 
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import { meshPipelineStatusIsActive } from "@/shared/domain/mesh/buildPipeline";
 import {
   buildEigenSpectrumChartModel,
@@ -127,6 +129,11 @@ function objectNodes(
           contextCommands: ["workspace.focus-selection"],
           children: compactExplorerNodes([
             modeVisualizationNode(`${parentId}:visualization`, object, resources),
+            visualizationDebugNode({
+              kind: "object.visualization.debug",
+              objectId,
+              parentId: `${parentId}:visualization`,
+            }),
           ]),
         },
       ],
@@ -203,6 +210,11 @@ function objectNodes(
         contextCommands: ["workspace.focus-selection"],
         children: compactExplorerNodes([
           modeVisualizationNode(`${parentId}:visualization`, object, resources),
+          visualizationDebugNode({
+            kind: "object.visualization.debug",
+            objectId,
+            parentId: `${parentId}:visualization`,
+          }),
         ]),
       },
       ...objectExtensionNodes(parentId, object),
@@ -214,6 +226,33 @@ function compactExplorerNodes(
   nodes: Array<ExplorerNode | null | undefined>,
 ): ExplorerNode[] {
   return nodes.filter((node): node is ExplorerNode => Boolean(node));
+}
+
+export function visualizationDebugNode({
+  kind,
+  parentId,
+  objectId,
+  regionId,
+}: {
+  kind:
+    | "airbox.visualization.debug"
+    | "object.visualization.debug"
+    | "object.region.visualization.debug";
+  parentId: string;
+  objectId?: string;
+  regionId?: string;
+}): ExplorerNode {
+  return {
+    id: `${parentId}:debug`,
+    kind,
+    label: "Debug",
+    parentId,
+    badge: "debug",
+    icon: "gauge",
+    ...(objectId ? { objectId } : {}),
+    ...(regionId ? { regionId } : {}),
+    status: "ready",
+  };
 }
 
 function modeVisualizationNode(
@@ -535,11 +574,12 @@ function authoredRegionNode(
         kind: "object.region.mesh",
         label: "Mesh",
         parentId: nodeId,
-        badge: region.meshPolicyActive ? "policy" : "inherits object",
+        badge: region.meshLifecycleStatus ??
+          (region.meshPolicyActive ? "configured" : "inherits object"),
         icon: "mesh",
         objectId: object.id,
         regionId: region.id,
-        status: region.meshPolicyActive ? "ready" : "degraded",
+        status: explorerStatusFromRegionMeshLifecycle(region),
         contextCommands: ["mesh.open-region-report", "mesh.open-regions"],
       },
       {
@@ -563,6 +603,14 @@ function authoredRegionNode(
         objectId: object.id,
         regionId: region.id,
         status,
+        children: [
+          visualizationDebugNode({
+            kind: "object.region.visualization.debug",
+            objectId: object.id,
+            parentId: `${nodeId}:visualization`,
+            regionId: region.id,
+          }),
+        ],
       },
       {
         id: `${nodeId}:regions`,
@@ -588,6 +636,27 @@ function authoredRegionNode(
       },
     ],
   };
+}
+
+function explorerStatusFromRegionMeshLifecycle(
+  region: NonNullable<ModelTreeObjectSnapshot["regions"]>[number],
+): ExplorerNodeStatus {
+  switch (region.meshLifecycleStatus) {
+    case "current":
+      return "mesh-ready";
+    case "pending":
+      return "mesh-building";
+    case "failed":
+      return "mesh-failed";
+    case "stale":
+    case "draft":
+      return "mesh-stale";
+    case "unsupported":
+      return "validation-blocked";
+    case "configured":
+    default:
+      return region.meshPolicyActive ? "stale" : "degraded";
+  }
 }
 
 function regionMaterialBadge(
@@ -794,6 +863,7 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
   const objectSegmentCount = mesh?.objectSegmentCount ?? 0;
   const regionCount = mesh?.regionCount ?? 0;
   const sizeFieldCount = mesh?.realizedSizeFieldCount ?? 0;
+  const visualizationPartFallbacks = mesh?.visualizationPartFallbacks ?? [];
 
   return {
     id: "model:mesh",
@@ -841,16 +911,6 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
         contextCommands: ["mesh.open-quality"],
       },
       {
-        id: "model:mesh:airbox-quality",
-        kind: "airbox.mesh-quality",
-        label: "Airbox Quality",
-        parentId: "model:mesh",
-        badge: "airbox",
-        icon: "gauge",
-        status,
-        contextCommands: ["mesh.open-quality"],
-      },
-      {
         id: "model:mesh:size-fields",
         kind: "mesh.size-fields",
         label: "Realized Size Fields",
@@ -870,6 +930,30 @@ function meshPolicyNodes(mesh: ModelTreeSnapshot["mesh"]): ExplorerNode {
         status: partCount > 0 || objectSegmentCount > 0 ? "ready" : "stale",
         contextCommands: ["mesh.open-regions"],
       },
+      ...(visualizationPartFallbacks.length > 0
+        ? [
+            {
+              id: "model:mesh:unassigned",
+              kind: "mesh.unassigned" as const,
+              label: "Unassigned mesh parts",
+              parentId: "model:mesh",
+              badge: `${visualizationPartFallbacks.length}`,
+              icon: "layers" as const,
+              status: "warning" as const,
+              children: visualizationPartFallbacks.map((part) => ({
+                id: `model:mesh:unassigned:${encodeURIComponent(part.id)}`,
+                kind: "mesh.unassigned.part" as const,
+                label: part.label,
+                meshPartId: part.id,
+                visualizationTargetId: part.visualizationTargetId,
+                parentId: "model:mesh:unassigned",
+                badge: "orphan",
+                icon: "mesh" as const,
+                status: "warning" as const,
+              })),
+            },
+          ]
+        : []),
     ],
   };
 }
@@ -903,6 +987,31 @@ function couplingNodes(couplings: readonly ModelTreeCouplingSnapshot[]): Explore
   };
 }
 
+function fieldDriveNodes(drives: readonly ModelTreeFieldDriveSnapshot[]): ExplorerNode | null {
+  if (drives.length === 0) return null;
+  return {
+    id: "model:physics:field-drives",
+    kind: "physics.field-drives",
+    label: "Field drives",
+    parentId: "model:session",
+    badge: `${drives.length}`,
+    icon: "wave",
+    status: "ready",
+    contextCommands: ["workspace.focus-selection"],
+    children: drives.map((drive) => ({
+      id: `model:physics:field-drives:${drive.id}`,
+      kind: "physics.field-drive" as const,
+      label: drive.label,
+      parentId: "model:physics:field-drives",
+      badge: `${drive.targetKind} · ${drive.waveformKind}`,
+      icon: "wave" as const,
+      fieldDriveId: drive.id,
+      status: drive.enabled ? "ready" as const : "degraded" as const,
+      contextCommands: ["workspace.focus-selection"],
+    })),
+  };
+}
+
 function couplingStatus(coupling: ModelTreeCouplingSnapshot): ExplorerNodeStatus {
   if (!coupling.enabled) return "degraded";
   if (coupling.realizationStatus?.includes("requires")) return "unsupported";
@@ -928,7 +1037,16 @@ export function buildModelTree(
     label: "Universe",
     size: [2e-6, 1e-6, 5e-8] as const,
   };
-  const objects = snapshot?.objects ?? [];
+  const objects = (snapshot?.objects ?? []).filter(
+    (object) => !isVisualizationAirboxIdentity({ id: object.id, role: object.objectRole }),
+  );
+  const boundaryFacesStatus: ExplorerNodeStatus =
+    (snapshot?.mesh?.outerBoundaryPartCount ?? 0) > 0
+      ? meshFreshnessStatus(
+          meshFreshnessState(snapshot?.mesh),
+          meshRootStatus(snapshot?.mesh),
+        )
+      : "unavailable";
   const sessionChildren: ExplorerNode[] = [
     {
       id: "model:universe",
@@ -940,24 +1058,97 @@ export function buildModelTree(
       status: "ready",
       children: [
         {
-          id: "model:airbox:mesh",
-          kind: "airbox.mesh",
-          label: "Airbox Mesh Policy",
+          id: "model:airbox",
+          kind: "airbox.root",
+          label: "Airbox",
           parentId: "model:universe",
-          badge: "mesh policy",
-          icon: "mesh",
+          badge: "domain",
+          icon: "shield",
           status: "ready",
-          contextCommands: ["workspace.focus-selection"],
+          children: [
+            {
+              id: "model:airbox:mesh",
+              kind: "airbox.mesh",
+              label: "Mesh",
+              parentId: "model:airbox",
+              badge: "mesh policy",
+              icon: "mesh",
+              status: "ready",
+              contextCommands: ["workspace.focus-selection"],
+              children: [
+                {
+                  id: "model:airbox:mesh:parameters",
+                  kind: "airbox.mesh.parameters",
+                  label: "Parameters",
+                  parentId: "model:airbox:mesh",
+                  icon: "settings",
+                  status: "ready",
+                },
+                {
+                  id: "model:airbox:mesh:quality-gates",
+                  kind: "airbox.mesh.quality-gates",
+                  label: "Quality Gates",
+                  parentId: "model:airbox:mesh",
+                  icon: "gauge",
+                  status: "ready",
+                },
+                {
+                  id: "model:airbox:mesh:statistics",
+                  kind: "airbox.mesh.statistics",
+                  label: "Statistics",
+                  parentId: "model:airbox:mesh",
+                  icon: "activity",
+                  status: "ready",
+                },
+                {
+                  id: "model:airbox:mesh:topology",
+                  kind: "airbox.mesh.topology",
+                  label: "Topology",
+                  parentId: "model:airbox:mesh",
+                  icon: "mesh",
+                  status: "ready",
+                },
+                {
+                  id: "model:airbox:mesh:build",
+                  kind: "airbox.mesh.build",
+                  label: "Build & Provenance",
+                  parentId: "model:airbox:mesh",
+                  icon: "activity",
+                  status: "ready",
+                },
+              ],
+            },
+            {
+              id: "model:airbox:visualization",
+              kind: "airbox.visualization",
+              label: "Visualization",
+              parentId: "model:airbox",
+              badge: "display",
+              icon: "sparkles",
+              status: "ready",
+              contextCommands: ["workspace.focus-selection"],
+              children: [
+                visualizationDebugNode({
+                  kind: "airbox.visualization.debug",
+                  parentId: "model:airbox:visualization",
+                }),
+              ],
+            },
+          ],
         },
         {
-          id: "model:airbox:visualization",
-          kind: "airbox.visualization",
-          label: "Airbox Visualization",
+          id: "model:boundary-faces",
+          kind: "boundary-faces.root",
+          label: "Boundary Faces",
           parentId: "model:universe",
-          badge: "display",
-          icon: "sparkles",
-          status: "ready",
-          contextCommands: ["workspace.focus-selection"],
+          badge:
+            boundaryFacesStatus === "mesh-ready"
+              ? "realized"
+              : boundaryFacesStatus === "unavailable"
+                ? "mesh required"
+                : meshStatusBadge(boundaryFacesStatus),
+          icon: "mesh",
+          status: boundaryFacesStatus,
         },
       ],
     },
@@ -983,6 +1174,10 @@ export function buildModelTree(
   const couplingBranch = couplingNodes(snapshot?.couplings ?? []);
   if (couplingBranch) {
     sessionChildren.push(couplingBranch);
+  }
+  const fieldDriveBranch = fieldDriveNodes(snapshot?.fieldDrives ?? []);
+  if (fieldDriveBranch) {
+    sessionChildren.push(fieldDriveBranch);
   }
 
   sessionChildren.push(
@@ -1130,21 +1325,39 @@ export function collectExplorerNodeIds(nodes: readonly ExplorerNode[]): string[]
   return flattenExplorerNodes(nodes).map((node) => node.id);
 }
 
+export function findExplorerNodePath(
+  nodes: readonly ExplorerNode[],
+  nodeId: string,
+): string[] | null {
+  for (const node of nodes) {
+    if (node.id === nodeId) return [node.id];
+    const childPath = findExplorerNodePath(node.children ?? [], nodeId);
+    if (childPath) return [node.id, ...childPath];
+  }
+  return null;
+}
+
 export function filterExplorerNodes(
   nodes: readonly ExplorerNode[],
   query: string,
+  pinnedNodeId?: string | null,
 ): ExplorerNode[] {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return [...nodes];
 
   return nodes.flatMap((node): ExplorerNode[] => {
-    const childMatches = filterExplorerNodes(node.children ?? [], normalizedQuery);
+    const childMatches = filterExplorerNodes(
+      node.children ?? [],
+      normalizedQuery,
+      pinnedNodeId,
+    );
     const selfMatches =
       node.label.toLowerCase().includes(normalizedQuery) ||
       node.kind.toLowerCase().includes(normalizedQuery) ||
       node.badge?.toLowerCase().includes(normalizedQuery);
+    const pinned = node.id === pinnedNodeId;
 
-    if (!selfMatches && childMatches.length === 0) return [];
+    if (!selfMatches && !pinned && childMatches.length === 0) return [];
     return [{ ...node, children: childMatches.length ? childMatches : node.children }];
   });
 }

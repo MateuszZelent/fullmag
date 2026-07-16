@@ -30,6 +30,7 @@ type ExplorerNodeKind =
   | "object.region.material"
   | "object.region.texture"
   | "object.region.visualization"
+  | "object.region.visualization.debug"
   | "object.region.regions"
   | "object.region.diagnostics"
   | "object.region-magnetic-texture"
@@ -41,25 +42,37 @@ type ExplorerNodeKind =
   | "object.mesh"
   | "object.extension.topological-charge"
   | "object.visualization"
+  | "object.visualization.debug"
   | "object.mode_visualization"
   | "object.mode_visualization.group"
   | "object.mode_visualization.field"
   | "object.mode_visualization.view"
+  | "airbox.root"
   | "airbox.mesh"
-  | "airbox.mesh-quality"
+  | "airbox.mesh.parameters"
+  | "airbox.mesh.quality-gates"
+  | "airbox.mesh.statistics"
+  | "airbox.mesh.topology"
+  | "airbox.mesh.build"
   | "airbox.visualization"
+  | "airbox.visualization.debug"
+  | "boundary-faces.root"
   | "mesh.root"
   | "mesh.shared-domain"
   | "mesh.builds"
   | "mesh.quality"
   | "mesh.size-fields"
   | "mesh.regions"
+  | "mesh.unassigned"
+  | "mesh.unassigned.part"
   | "visualizations-2d.root"
   | "visualizations-2d.draft"
   | "visualizations-2d.parameter"
   | "visualizations-2d.plot"
   | "physics.couplings"
   | "physics.coupling"
+  | "physics.field-drives"
+  | "physics.field-drive"
   | "study.root"
   | "study.execution"
   | "study.recovery"
@@ -199,6 +212,7 @@ export type ExplorerNodeStatus =
   | "failed"
   | "degraded"
   | "warning"
+  | "unavailable"
   | "unsupported";
 
 export type ExplorerIconToken =
@@ -253,10 +267,13 @@ export interface ExplorerNode {
   hysteresisSnapshotId?: string;
   measurementAxis?: string;
   meshIdentity?: string;
+  meshPartId?: string;
+  visualizationTargetId?: string;
   modeIndex?: number;
   objectId?: string;
   observableId?: string;
   couplingId?: string;
+  fieldDriveId?: string;
   regionId?: string;
   resourceRef?: string;
   sampleIndex?: number;
@@ -303,6 +320,14 @@ export interface ModelTreeObjectRegionSnapshot {
   materialFieldCount: number;
   materialOverrideCount: number;
   meshPolicyActive: boolean;
+  meshLifecycleStatus?:
+    | "configured"
+    | "draft"
+    | "pending"
+    | "current"
+    | "stale"
+    | "failed"
+    | "unsupported";
   priority?: number | null;
   realizationPolicy?: string | null;
   realizationStatus?: string | null;
@@ -344,8 +369,17 @@ export interface ModelTreeCouplingSnapshot {
   targetLabel: string;
 }
 
+export interface ModelTreeFieldDriveSnapshot {
+  enabled: boolean;
+  id: string;
+  label: string;
+  targetKind: string;
+  waveformKind: string;
+}
+
 export interface ModelTreeSnapshot {
   couplings?: readonly ModelTreeCouplingSnapshot[];
+  fieldDrives?: readonly ModelTreeFieldDriveSnapshot[];
   crossSections?: ModelTreeCrossSectionSnapshot | null;
   materials?: readonly ModelTreeMaterialSnapshot[];
   mesh?: ModelTreeMeshSnapshot | null;
@@ -456,9 +490,15 @@ export interface ModelTreeMeshSnapshot {
   meshName?: string | null;
   meshRevision?: number | string | null;
   objectSegmentCount?: number | null;
+  outerBoundaryPartCount?: number | null;
   partCount?: number | null;
   qualityStatus?: string | null;
   realizedSizeFieldCount?: number | null;
   regionCount?: number | null;
   sourceSceneRevision?: number | string | null;
+  visualizationPartFallbacks?: readonly {
+    id: string;
+    label: string;
+    visualizationTargetId: string;
+  }[];
 }

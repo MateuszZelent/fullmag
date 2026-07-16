@@ -19,6 +19,7 @@ chrono = { version = "0.4", features = ["serde"] }
 futures-core = "0.3"
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

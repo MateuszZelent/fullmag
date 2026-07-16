@@ -215,6 +215,7 @@ mod tests {
             per_domain_quality: HashMap::new(),
         };
         FemEigenPlanIR {
+            mesh_build_report: None,
             mesh_name: mesh.mesh_name.clone(),
             mesh_source: None,
             mesh,

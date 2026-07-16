@@ -47,6 +47,7 @@ describe("control-room design styles", () => {
         '@import "../src/design/styles/thread-manager.css";',
         '@import "../src/design/styles/diagnostic-recorder.css";',
         '@import "../src/design/styles/material-library.css";',
+        '@import "../src/design/styles/components/index.css";',
       ].join("\n"),
     );
   });

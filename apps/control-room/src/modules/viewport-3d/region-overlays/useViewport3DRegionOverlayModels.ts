@@ -36,7 +36,7 @@ export interface Viewport3DRegionOverlayIdentity {
   readonly renderedSurfacePartIds: unknown;
   readonly selectedObjectId: string | null;
   readonly selectedRegionId: string | null;
-  readonly settingsByRegionId: unknown;
+  readonly regionSignature: string;
   readonly theme: string;
   readonly topology: unknown;
 }
@@ -131,15 +131,10 @@ export function createViewport3DRegionOverlayBuildReference({
   domainId,
   regionSignature,
   sessionId,
-  targetVisualizationRevision,
   topologyRevision,
 }: Viewport3DRegionOverlayBuildReferenceInput): Viewport3DRegionOverlayBuildReference | null {
   if (!topologyRevision) return null;
 
-  const resolvedTargetRevision =
-    targetVisualizationRevision == null
-      ? "unknown"
-      : String(targetVisualizationRevision);
   const resolvedTopologyRevision = String(topologyRevision);
   const styleRevision = `regions=${regionSignature}`;
 
@@ -155,13 +150,12 @@ export function createViewport3DRegionOverlayBuildReference({
       scopeKind: null,
       sessionId,
       styleRevision,
-      targetVisualizationRevision: resolvedTargetRevision,
+      targetVisualizationRevision: "region-signature",
       topologyRevision: resolvedTopologyRevision,
     }),
     groupKey: `region-overlay:session=${sessionId}:domain=${domainId}`,
     revisionSummary: [
       `topology=${resolvedTopologyRevision}`,
-      `targets=${resolvedTargetRevision}`,
       styleRevision,
     ].join(" "),
   };
@@ -178,7 +172,7 @@ export function viewport3DRegionOverlayIdentityIsCompatible(
     previous.renderedSurfacePartIds === next.renderedSurfacePartIds &&
     previous.selectedObjectId === next.selectedObjectId &&
     previous.selectedRegionId === next.selectedRegionId &&
-    previous.settingsByRegionId === next.settingsByRegionId &&
+    previous.regionSignature === next.regionSignature &&
     previous.theme === next.theme
   );
 }
@@ -341,31 +335,6 @@ export function useViewport3DRegionOverlayModels({
   const activeBuildIdRef = useRef(0);
   const activeControllerRef = useRef<AbortController | null>(null);
   const activeTokenRef = useRef<object | null>(null);
-  const identity = useMemo<Viewport3DRegionOverlayIdentity | null>(
-    () =>
-      topology
-        ? {
-            magneticParts,
-            regions,
-            renderedSurfacePartIds: renderedSurfacePartIds ?? null,
-            selectedObjectId,
-            selectedRegionId,
-            settingsByRegionId: settingsByRegionId ?? null,
-            theme,
-            topology,
-          }
-        : null,
-    [
-      magneticParts,
-      regions,
-      renderedSurfacePartIds,
-      selectedObjectId,
-      selectedRegionId,
-      settingsByRegionId,
-      theme,
-      topology,
-    ],
-  );
   const regionSignature = useMemo(
     () =>
       createViewport3DRegionOverlaySignature({
@@ -383,6 +352,31 @@ export function useViewport3DRegionOverlayModels({
       selectedRegionId,
       settingsByRegionId,
       theme,
+    ],
+  );
+  const identity = useMemo<Viewport3DRegionOverlayIdentity | null>(
+    () =>
+      topology
+        ? {
+            magneticParts,
+            regions,
+            renderedSurfacePartIds: renderedSurfacePartIds ?? null,
+            selectedObjectId,
+            selectedRegionId,
+            regionSignature,
+            theme,
+            topology,
+          }
+        : null,
+    [
+      magneticParts,
+      regions,
+      renderedSurfacePartIds,
+      selectedObjectId,
+      selectedRegionId,
+      regionSignature,
+      theme,
+      topology,
     ],
   );
   const buildReference = useMemo(

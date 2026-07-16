@@ -16,9 +16,10 @@ struct Context;
  *
  *   E_d = -0.5 mu0 integral_Omega_m Ms m.H_demag dV.
  *
- * It also owns the cached-field energy helper that adds the frozen Robin
- * boundary term associated with the cached potential. It does not assemble,
- * solve, or recover the Poisson field.
+ * It also owns the cached-field energy helper, which matches the direct field
+ * energy for a frozen potential. The solved Robin field already contains the
+ * boundary contribution, so this helper does not add a separate Robin term.
+ * It does not assemble, solve, or recover the Poisson field.
  */
 double demag_poisson_energy_from_field(
     const Context &ctx,

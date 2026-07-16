@@ -1,0 +1,182 @@
+.fm-visualization-debug-panel {
+  display: grid;
+  gap: var(--fm-space-2);
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-visualization-debug-health,
+.fm-visualization-debug-state {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--fm-space-2);
+  min-height: 28px;
+  padding: var(--fm-space-1) var(--fm-space-2);
+  color: var(--fm-text-secondary);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-visualization-debug-health strong,
+.fm-visualization-debug-state strong {
+  color: var(--fm-text-primary);
+  text-transform: uppercase;
+}
+
+.fm-visualization-debug-health[data-disposition="ready"] strong {
+  color: var(--fm-success);
+}
+
+.fm-visualization-debug-health[data-disposition="degraded"] strong,
+.fm-visualization-debug-health[data-disposition="unknown"] strong {
+  color: var(--fm-warning);
+}
+
+.fm-visualization-debug-health[data-disposition="blocked"] strong {
+  color: var(--fm-danger);
+}
+
+.fm-visualization-debug-subsection {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  border-bottom: 1px solid var(--fm-border-subtle);
+  padding-block: var(--fm-space-1);
+}
+
+.fm-visualization-debug-subsection:last-child {
+  border-bottom: 0;
+}
+
+.fm-visualization-debug-subsection h4 {
+  margin: 0;
+  padding: 2px var(--fm-space-2);
+  color: var(--fm-text-secondary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.fm-visualization-debug-table-wrap {
+  max-width: 100%;
+  overflow: auto;
+}
+
+.fm-visualization-debug-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fm-visualization-debug-table th,
+.fm-visualization-debug-table td {
+  border-bottom: 1px solid var(--fm-border-subtle);
+  padding: var(--fm-space-1) var(--fm-space-2);
+  text-align: right;
+  vertical-align: top;
+}
+
+.fm-visualization-debug-table th:first-child,
+.fm-visualization-debug-table td:first-child,
+.fm-visualization-debug-table td:nth-child(2) {
+  max-width: 240px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+.fm-visualization-debug-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--fm-bg-chrome);
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-ui);
+  font-weight: 600;
+}
+
+.fm-visualization-debug-caption,
+.fm-visualization-debug-empty {
+  margin: 0;
+  padding: var(--fm-space-1) var(--fm-space-2);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.4;
+}
+
+.fm-visualization-debug-issues {
+  display: grid;
+  gap: var(--fm-space-1);
+  margin: 0;
+  padding: var(--fm-space-1);
+  list-style: none;
+}
+
+.fm-visualization-debug-issues li {
+  display: grid;
+  gap: 2px;
+  border-left: 3px solid var(--fm-border-strong);
+  background: var(--fm-bg-panel);
+  padding: var(--fm-space-1) var(--fm-space-2);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-visualization-debug-issues li[data-severity="error"] {
+  border-left-color: var(--fm-danger);
+}
+
+.fm-visualization-debug-issues li[data-severity="warning"] {
+  border-left-color: var(--fm-warning);
+}
+
+.fm-visualization-debug-issues li strong {
+  color: var(--fm-text-primary);
+  text-transform: uppercase;
+}
+
+.fm-visualization-debug-issues li span {
+  color: var(--fm-text-secondary);
+}
+
+.fm-visualization-debug-issues li code {
+  color: var(--fm-text-muted);
+  font-family: var(--fm-font-mono);
+  overflow-wrap: anywhere;
+}
+
+.fm-visualization-debug-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fm-space-1);
+  padding: var(--fm-space-1);
+}
+
+.fm-visualization-debug-action:focus-visible {
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-visualization-debug-json {
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  background: var(--fm-bg-panel);
+  color: var(--fm-text-secondary);
+  font-family: var(--fm-font-mono);
+  font-size: var(--fm-font-size-2xs);
+  line-height: 1.45;
+  padding: var(--fm-space-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-visualization-debug-action {
+    transition: none;
+  }
+}

@@ -3,6 +3,7 @@
 #include "cpu/mfem/interactions/zeeman_energy.hpp"
 #include "cpu/mfem/interactions/zeeman_field.hpp"
 #include "cpu/mfem/interactions/zeeman_uniform_field.hpp"
+#include "cpu/mfem/interactions/zeeman_regional_field.hpp"
 #include "fullmag_fem.h"
 
 #include <array>
@@ -24,6 +25,11 @@ struct ZeemanRuntimeState {
     bool has_external_field = false;
     std::array<double, 3> external_field_am{0.0, 0.0, 0.0};
     std::vector<double> h_ext_xyz;
+    std::vector<RegionalFieldDriveRuntime> regional_drives;
+    std::vector<double> h_drive_xyz;
+    double stage_start_time_s = 0.0;
+    double last_evaluation_time_s = 0.0;
+    uint64_t regional_drive_revision = 0;
 };
 
 /*

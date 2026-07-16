@@ -10,8 +10,12 @@ import {
   airboxVisualizationStatePatchFromTargetPatch,
   hasVisualizationStatePatch,
   mergeVisualizationStateTargetOverride,
+  persistentVisualizationTargetPatch,
+  removeTargetOverrideField,
   renderModePatch,
+  resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
+  viewportRenderingPreferencesFromTargetPatch,
   visualizationStateOverrideMatchesTarget,
   type SurfaceColorSource,
   type VisualizationColorMode,
@@ -22,6 +26,7 @@ import {
 } from "./ObjectVisualizationController";
 
 function selectedTarget(context: CommandContext) {
+  if (context.visualizationTarget) return context.visualizationTarget;
   const selection = context.selection?.get();
   return selection ? resolveVisualizationTargetFromSelection(selection) : null;
 }
@@ -34,6 +39,25 @@ function targetCommandDisabledReason(context: CommandContext): string | null {
   if (!context.visualization) return "Visualization registry is unavailable.";
   if (!selectedTarget(context)) return "Select an object, mesh part, or airbox.";
   return null;
+}
+
+function targetPassCommandEnabled(context: CommandContext): boolean {
+  const target = selectedTarget(context);
+  const visualization = context.visualization;
+  if (!target || !visualization) return false;
+  return resolveTargetVisualization({
+    snapshot: visualization.getSnapshot(),
+    target,
+    visualizationState: visualizationStateFromContext(context),
+  }).settings.visible;
+}
+
+function targetPassCommandDisabledReason(context: CommandContext): string | null {
+  const unavailableReason = targetCommandDisabledReason(context);
+  if (unavailableReason) return unavailableReason;
+  return targetPassCommandEnabled(context)
+    ? null
+    : "Show the selected target before changing its display passes or style.";
 }
 
 async function patchSelectedTarget(
@@ -50,8 +74,16 @@ async function patchSelectedTarget(
   }
 
   if (target.kind !== "airbox") {
-    if (!(await patchTargetOverrideResource(context, target, patch))) {
-      visualization.patchTarget(target, patch);
+    const viewportPreferences = viewportRenderingPreferencesFromTargetPatch(patch);
+    if (Object.keys(viewportPreferences).length > 0) {
+      visualization.patchViewportPreferences(target, viewportPreferences);
+    }
+    const persistentPatch = persistentVisualizationTargetPatch(patch);
+    if (
+      Object.keys(persistentPatch).length > 0 &&
+      !(await patchTargetOverrideResource(context, target, persistentPatch))
+    ) {
+      visualization.patchTarget(target, persistentPatch);
     }
     return { status: "completed" as const };
   }
@@ -63,7 +95,7 @@ async function patchSelectedTarget(
     state ? state.overrides ?? [] : undefined,
   );
   if (Object.keys(localPatch).length > 0) {
-    visualization.patchTarget(target, localPatch);
+    visualization.patchViewportPreferences(target, localPatch);
   }
   if (!hasVisualizationStatePatch(statePatch)) {
     return { status: "completed" as const };
@@ -114,6 +146,22 @@ async function clearTargetOverrideResource(
     overrides: (state.overrides ?? []).filter(
       (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
     ),
+  });
+  return true;
+}
+
+async function removeTargetOverrideFieldResource(
+  context: CommandContext,
+  target: VisualizationTargetRef,
+  field: keyof VisualizationTargetPatch,
+): Promise<boolean> {
+  const state = visualizationStateFromContext(context);
+  if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
+    return false;
+  }
+
+  await patchVisualizationState(context, {
+    overrides: removeTargetOverrideField(state.overrides ?? [], target, field),
   });
   return true;
 }
@@ -175,6 +223,7 @@ function boolPatchCommand(
     | "visible"
     | "wireframeVisible"
   >,
+  options: { passOnly?: boolean } = {},
 ): CommandContribution {
   return {
     id,
@@ -182,8 +231,10 @@ function boolPatchCommand(
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: options.passOnly
+      ? targetPassCommandDisabledReason
+      : targetCommandDisabledReason,
+    isEnabled: options.passOnly ? targetPassCommandEnabled : targetCommandEnabled,
     run: (context) => {
       const value = booleanPayload(context);
       return value === null
@@ -212,8 +263,8 @@ function numberPatchCommand(
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = numberPayload(context);
       return value === null
@@ -239,8 +290,8 @@ function stringPatchCommand(
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = stringPayload(context);
       return value === null
@@ -265,26 +316,31 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     "visualization.target.set-surface-visible",
     "Set selected target surface visibility",
     "shaderVisible",
+    { passOnly: true },
   ),
   boolPatchCommand(
     "visualization.target.set-vectors-visible",
     "Set selected target vector visibility",
     "vectorsVisible",
+    { passOnly: true },
   ),
   boolPatchCommand(
     "visualization.target.set-wireframe-visible",
     "Set selected target wireframe visibility",
     "wireframeVisible",
+    { passOnly: true },
   ),
   boolPatchCommand(
     "visualization.target.set-bounds-visible",
     "Set selected target frame visibility",
     "boundsVisible",
+    { passOnly: true },
   ),
   boolPatchCommand(
     "visualization.target.set-points-visible",
     "Set selected target point visibility",
     "pointsVisible",
+    { passOnly: true },
   ),
   numberPatchCommand(
     "visualization.target.set-opacity-percent",
@@ -332,12 +388,31 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
-    run: (context) => {
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
+    run: async (context) => {
       const value = stringPayload(context);
       if (!value) return invalidPayload("visualization.target.set-surface-color-source");
       if (value === "inherit") {
+        const target = selectedTarget(context);
+        const visualization = context.visualization;
+        if (!target || !visualization) {
+          return {
+            status: "failed" as const,
+            message: targetCommandDisabledReason(context) ?? "Target unavailable.",
+          };
+        }
+        if (
+          target.kind !== "airbox" &&
+          (await removeTargetOverrideFieldResource(
+            context,
+            target,
+            "surfaceColorSource",
+          ))
+        ) {
+          visualization.removeTargetOverrideField(target, "surfaceColorSource");
+          return { status: "completed" as const };
+        }
         return patchSelectedTarget(context, {
           shaderColorMode: undefined,
           surfaceColorSource: undefined,
@@ -354,8 +429,8 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = stringPayload(context);
       return value
@@ -371,8 +446,8 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = stringPayload(context);
       return value
@@ -389,8 +464,8 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
     group: "visualization",
     category: "visualization",
     scope: "selection",
-    disabledReason: targetCommandDisabledReason,
-    isEnabled: targetCommandEnabled,
+    disabledReason: targetPassCommandDisabledReason,
+    isEnabled: targetPassCommandEnabled,
     run: (context) => {
       const value = stringPayload(context);
       return value

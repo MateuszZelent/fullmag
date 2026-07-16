@@ -72,6 +72,19 @@ fn current_live_metadata(
     status: &str,
 ) -> serde_json::Value {
     let runtime_engine_info = fullmag_runner::resolve_planned_runtime_engine(problem, plan).ok();
+    let resolved_execution = fullmag_runner::resolve_session_runtime(problem)
+        .ok()
+        .map(|runtime| {
+            serde_json::json!({
+                "backend": runtime.resolved_backend,
+                "device": runtime.resolved_device,
+                "precision": runtime.resolved_precision,
+                "mode": runtime.resolved_mode,
+                "runtime_family": runtime.resolved_runtime_family,
+                "engine_id": runtime.resolved_engine_id,
+                "lossy_fallback_used": runtime.resolved_fallback.is_some(),
+            })
+        });
     let capabilities = fullmag_runner::resolve_planned_runtime_capabilities(problem, plan).ok();
     let live_preview_supported_quantities = capabilities
         .as_ref()
@@ -98,6 +111,7 @@ fn current_live_metadata(
         "problem_meta": &problem.problem_meta,
         "execution_plan": plan,
         "runtime_engine": runtime_engine,
+        "resolved_execution": resolved_execution,
         "capabilities": capabilities,
         "artifact_layout": current_artifact_layout(problem, plan),
         "meshing_capabilities": current_meshing_capabilities(plan),
@@ -147,6 +161,14 @@ fn requested_cpu_threads_from_problem(problem: &ProblemIR) -> Option<u32> {
 
 fn is_gpu_device_label(value: &str) -> bool {
     matches!(value.trim().to_ascii_lowercase().as_str(), "gpu" | "cuda")
+}
+
+fn requested_execution_device(runtime: &SessionRuntimeSelection) -> String {
+    match std::env::var("FULLMAG_FEM_EXECUTION") {
+        Ok(value) if matches!(value.as_str(), "gpu" | "cuda" | "all_in_gpu") => "gpu".to_string(),
+        Ok(value) if value == "cpu" => "cpu".to_string(),
+        _ => runtime.requested_device.replace("cuda", "gpu"),
+    }
 }
 
 fn fem_gpu_execution_requested(problem: &ProblemIR, runtime: &SessionRuntimeSelection) -> bool {
@@ -1505,6 +1527,161 @@ fn default_domain_region_markers(
         .collect()
 }
 
+fn shared_domain_object_region_mesh_specs(problem: &ProblemIR) -> Result<Vec<serde_json::Value>> {
+    let mut owner_geometry_by_object = std::collections::BTreeMap::<&str, &str>::new();
+    for magnet in &problem.magnets {
+        let geometry_name = problem
+            .regions
+            .iter()
+            .find(|region| region.name == magnet.region)
+            .map(|region| region.geometry.as_str())
+            .ok_or_else(|| {
+                anyhow!(
+                    "object-region remesh cannot resolve magnet '{}' region '{}'",
+                    magnet.name,
+                    magnet.region
+                )
+            })?;
+        if let Some(previous) = owner_geometry_by_object.insert(&magnet.name, geometry_name) {
+            if previous != geometry_name {
+                bail!(
+                    "object '{}' resolves to multiple owner geometries ('{}' and '{}')",
+                    magnet.name,
+                    previous,
+                    geometry_name
+                );
+            }
+        }
+    }
+
+    problem
+        .object_regions
+        .iter()
+        .map(|region| {
+            let owner_geometry_name = owner_geometry_by_object
+                .get(region.owner_object.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    anyhow!(
+                        "object-region '{}' references owner object '{}' without a current geometry",
+                        region.region_id,
+                        region.owner_object
+                    )
+                })?;
+            let mut payload = serde_json::to_value(region)
+                .context("failed to serialize object-region remesh payload")?;
+            let object = payload.as_object_mut().ok_or_else(|| {
+                anyhow!("serialized object-region '{}' is not a JSON object", region.region_id)
+            })?;
+            object.insert(
+                "owner_geometry_name".to_string(),
+                serde_json::Value::String(owner_geometry_name.to_string()),
+            );
+            Ok(payload)
+        })
+        .collect()
+}
+
+fn resolved_shared_domain_object_region_markers(
+    problem: &ProblemIR,
+    markers: &[fullmag_ir::FemDomainRegionMarkerIR],
+) -> Result<Vec<fullmag_ir::FemDomainRegionMarkerIR>> {
+    let expected = problem
+        .object_regions
+        .iter()
+        .filter(|region| {
+            region.enabled
+                && matches!(
+                    region.realization_policy,
+                    fullmag_ir::RegionRealizationPolicyIR::Conformal
+                )
+        })
+        .map(|region| region.region_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if markers.len() != expected.len() {
+        bail!(
+            "shared-domain remesh returned {} object-region markers, expected {} conformal enabled regions",
+            markers.len(),
+            expected.len()
+        );
+    }
+    let mut seen_ids = std::collections::BTreeSet::new();
+    let mut seen_markers = std::collections::BTreeSet::new();
+    for marker in markers {
+        if marker.geometry_name.trim().is_empty() || marker.marker == 0 {
+            bail!(
+                "shared-domain remesh returned an invalid object-region marker {:?}",
+                marker
+            );
+        }
+        if !expected.contains(marker.geometry_name.as_str()) {
+            bail!(
+                "shared-domain remesh returned unexpected object-region marker '{}'",
+                marker.geometry_name
+            );
+        }
+        if !seen_ids.insert(marker.geometry_name.as_str()) {
+            bail!(
+                "shared-domain remesh returned duplicate object-region marker '{}'",
+                marker.geometry_name
+            );
+        }
+        if !seen_markers.insert(marker.marker) {
+            bail!(
+                "shared-domain remesh returned duplicate object-region marker value {}",
+                marker.marker
+            );
+        }
+    }
+    Ok(markers.to_vec())
+}
+
+fn adaptive_remesh_legality_reason(problem: &ProblemIR) -> Option<&'static str> {
+    if problem.object_regions.iter().any(|region| {
+        region.enabled
+            && matches!(
+                region.realization_policy,
+                fullmag_ir::RegionRealizationPolicyIR::Conformal
+            )
+    }) {
+        return Some("adaptive_region_remesh_not_certified");
+    }
+    let has_periodic_mesh = problem
+        .geometry_assets
+        .as_ref()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+        .and_then(|asset| asset.mesh.as_ref())
+        .is_some_and(|mesh| !mesh.periodic_boundary_pairs.is_empty());
+    has_periodic_mesh.then_some("adaptive_periodic_remesh_not_certified")
+}
+
+fn validate_periodic_remesh_candidate(
+    previous: &fullmag_ir::MeshIR,
+    candidate: &fullmag_ir::MeshIR,
+) -> Result<()> {
+    if previous.periodic_boundary_pairs.is_empty() {
+        return Ok(());
+    }
+    if candidate.periodic_boundary_pairs.is_empty() || candidate.periodic_node_pairs.is_empty() {
+        bail!("periodic_remesh_requires_recertification");
+    }
+    let certificate = candidate
+        .periodic_mesh_certificate_v6()
+        .map_err(|errors| {
+            anyhow!(
+                "periodic_remesh_candidate_recertification_failed: {}",
+                errors.join("; ")
+            )
+        })?;
+    if certificate.certificate_status != "accepted" {
+        bail!(
+            "periodic_remesh_candidate_recertification_failed: status={}",
+            certificate.certificate_status
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct SceneProblemPatch {
     #[serde(default)]
@@ -1561,6 +1738,7 @@ fn apply_remeshed_problem_snapshot_to_stages(
     hmax: f64,
     shared_domain_remesh: bool,
     region_markers: &[fullmag_ir::FemDomainRegionMarkerIR],
+    object_region_markers: &[fullmag_ir::FemDomainRegionMarkerIR],
     adaptive_runtime_state: Option<&serde_json::Value>,
 ) -> Result<()> {
     for stage in stages {
@@ -1579,6 +1757,8 @@ fn apply_remeshed_problem_snapshot_to_stages(
             } else {
                 region_markers.to_vec()
             };
+            let resolved_object_region_markers =
+                resolved_shared_domain_object_region_markers(&stage.ir, object_region_markers)?;
             let domain_asset = stage
                 .ir
                 .geometry_assets
@@ -1590,6 +1770,7 @@ fn apply_remeshed_problem_snapshot_to_stages(
                     )
                 })?;
             domain_asset.region_markers = resolved_region_markers;
+            domain_asset.object_region_markers = resolved_object_region_markers;
         }
     }
     Ok(())
@@ -1624,6 +1805,55 @@ fn refresh_materialized_stage_execution_plans(
         *plan_slot = fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct PreparedRemeshStageTransaction {
+    stages: Vec<ResolvedScriptStage>,
+    stage_execution_plans: Vec<ExecutionPlanIR>,
+}
+
+/// Prepare every stage and its execution plan on private candidate snapshots.
+///
+/// Callers must publish the returned snapshots only after this function succeeds. This
+/// keeps a failure in marker validation, IR validation, or replanning from exposing a
+/// partially updated mesh generation.
+#[allow(clippy::too_many_arguments)]
+fn prepare_remesh_stage_transaction(
+    stages: &[ResolvedScriptStage],
+    stage_execution_plans: &[ExecutionPlanIR],
+    scene_problem_patch: Option<&SceneProblemPatch>,
+    mesh: &fullmag_ir::MeshIR,
+    hmax: f64,
+    shared_domain_remesh: bool,
+    region_markers: &[fullmag_ir::FemDomainRegionMarkerIR],
+    object_region_markers: &[fullmag_ir::FemDomainRegionMarkerIR],
+    adaptive_runtime_state: Option<&serde_json::Value>,
+    first_stage_plan: Option<ExecutionPlanIR>,
+) -> Result<PreparedRemeshStageTransaction> {
+    let mut candidate_stages = stages.to_vec();
+    apply_remeshed_problem_snapshot_to_stages(
+        &mut candidate_stages,
+        scene_problem_patch,
+        mesh,
+        hmax,
+        shared_domain_remesh,
+        region_markers,
+        object_region_markers,
+        adaptive_runtime_state,
+    )?;
+
+    let mut candidate_stage_execution_plans = stage_execution_plans.to_vec();
+    refresh_materialized_stage_execution_plans(
+        &candidate_stages,
+        &mut candidate_stage_execution_plans,
+        first_stage_plan,
+    )?;
+
+    Ok(PreparedRemeshStageTransaction {
+        stages: candidate_stages,
+        stage_execution_plans: candidate_stage_execution_plans,
+    })
 }
 
 fn current_fem_mesh_workspace(
@@ -1937,6 +2167,18 @@ fn mesh_geometry_realization_json(mesh_options: &serde_json::Value) -> Option<se
         .get("geometry_realization")
         .filter(|value| value.is_object())
         .cloned()
+}
+
+fn mesh_source_scene_revision(mesh_options: &serde_json::Value) -> Option<u64> {
+    mesh_options
+        .get("geometry_realization")
+        .and_then(|value| value.get("source_scene_revision"))
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            mesh_options
+                .get("source_scene_revision")
+                .and_then(serde_json::Value::as_u64)
+        })
 }
 
 fn mesh_build_intent_json(
@@ -2694,7 +2936,7 @@ fn adaptive_convergence_summary(
     tolerance: f64,
     previous: RelaxationSolveSummary,
     current: RelaxationSolveSummary,
-) -> AdaptiveConvergenceSummary {
+) -> Result<AdaptiveConvergenceSummary, &'static str> {
     let (resolved_metric, delta) = match metric {
         "energy_delta" => {
             let denom = previous.energy_total.abs().max(1e-30);
@@ -2717,27 +2959,22 @@ fn adaptive_convergence_summary(
                 (current.max_dm_dt - previous.max_dm_dt).abs() / denom,
             )
         }
-        "eigenfrequency_delta" => (
-            // FEM relaxation stages do not expose eigenfrequency deltas; use energy proxy.
-            "energy_delta".to_string(),
-            {
-                let denom = previous.energy_total.abs().max(1e-30);
-                (current.energy_total - previous.energy_total).abs() / denom
-            },
-        ),
-        _ => {
-            let denom = previous.energy_total.abs().max(1e-30);
-            (
-                "energy_delta".to_string(),
-                (current.energy_total - previous.energy_total).abs() / denom,
-            )
-        }
+        _ => return Err("unsupported_mesh_adaptivity_criterion"),
     };
-    AdaptiveConvergenceSummary {
+    Ok(AdaptiveConvergenceSummary {
         metric: resolved_metric,
         delta,
         tolerance,
         converged: delta <= tolerance,
+    })
+}
+
+fn resolve_adaptive_convergence_metric(metric: &str) -> Result<&'static str, &'static str> {
+    match metric {
+        "energy_delta" => Ok("energy_delta"),
+        "max_torque_delta" => Ok("max_torque_delta"),
+        "solution_change" => Ok("solution_change"),
+        _ => Err("unsupported_mesh_adaptivity_criterion"),
     }
 }
 
@@ -2802,6 +3039,37 @@ fn apply_current_fem_overrides(
     }
 }
 
+fn attach_region_realization_revisions(
+    problem: &mut ProblemIR,
+    precondition: Option<&RuntimeCommandPrecondition>,
+) {
+    let Some(precondition) = precondition else {
+        return;
+    };
+    let revisions = [
+        ("topology", precondition.region_topology_revision),
+        ("membership", precondition.region_membership_revision),
+        ("coefficients", precondition.region_coefficients_revision),
+        ("initial_state", precondition.region_initial_state_revision),
+    ];
+    if revisions.iter().all(|(_, revision)| revision.is_none()) {
+        return;
+    }
+    let complete = revisions.iter().all(|(_, revision)| revision.is_some());
+    let mut tuple = serde_json::Map::new();
+    tuple.insert("complete".to_string(), serde_json::Value::Bool(complete));
+    for (lane, revision) in revisions {
+        tuple.insert(
+            lane.to_string(),
+            revision.map_or(serde_json::Value::Null, serde_json::Value::from),
+        );
+    }
+    problem.problem_meta.runtime_metadata.insert(
+        "region_realization_revisions".to_string(),
+        serde_json::Value::Object(tuple),
+    );
+}
+
 fn renormalize_magnetization(values: &mut [[f64; 3]]) {
     for value in values {
         let norm = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
@@ -2855,6 +3123,15 @@ fn execute_manual_interactive_remesh(
     if let Some(patch) = scene_problem_patch.as_ref() {
         apply_scene_problem_patch(&mut remesh_problem_source, patch);
     }
+    if let Some(source_scene_revision) = mesh_source_scene_revision(&opts) {
+        remesh_problem_source
+            .problem_meta
+            .runtime_metadata
+            .insert(
+                "mesh_source_scene_revision".to_string(),
+                serde_json::json!(source_scene_revision),
+            );
+    }
     let mesh_reason = command
         .mesh_reason
         .as_deref()
@@ -2895,6 +3172,11 @@ fn execute_manual_interactive_remesh(
         BackendPlanIR::Fem(plan) => Some(plan),
         _ => None,
     };
+    let previous_periodic_mesh = remesh_problem_source
+        .geometry_assets
+        .as_ref()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+        .and_then(|asset| asset.mesh.clone());
 
     if let Some(plan) = fem_plan {
         let shared_domain_remesh = matches!(
@@ -3091,8 +3373,11 @@ fn execute_manual_interactive_remesh(
             })?;
             let declared_universe_value = serde_json::to_value(&declared_universe)
                 .context("failed to serialize declared universe for shared-domain remesh")?;
+            let object_region_mesh_specs =
+                shared_domain_object_region_mesh_specs(&remesh_problem_source)?;
             invoke_shared_domain_remesh_full(
                 &remesh_problem_source.geometry.entries,
+                &object_region_mesh_specs,
                 &declared_universe_value,
                 hmax,
                 plan.fe_order,
@@ -3110,6 +3395,9 @@ fn execute_manual_interactive_remesh(
             Ok(remesh_result) => {
                 let elapsed = mesh_start.elapsed();
                 let new_mesh = remesh_result.clone().into_mesh_ir();
+                if let Some(previous_mesh) = previous_periodic_mesh.as_ref() {
+                    validate_periodic_remesh_candidate(previous_mesh, &new_mesh)?;
+                }
                 let node_count = new_mesh.nodes.len();
                 let elem_count = new_mesh.elements.len();
                 let face_count = new_mesh.boundary_faces.len();
@@ -3132,7 +3420,11 @@ fn execute_manual_interactive_remesh(
                         } else {
                             remesh_result.region_markers.clone()
                         };
-                        remeshed_problem
+                        let object_region_markers = resolved_shared_domain_object_region_markers(
+                            &remeshed_problem,
+                            &remesh_result.object_region_markers,
+                        )?;
+                        let domain_asset = remeshed_problem
                             .geometry_assets
                             .as_mut()
                             .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
@@ -3140,8 +3432,9 @@ fn execute_manual_interactive_remesh(
                                 anyhow!(
                                     "shared-domain remesh produced a domain mesh but no fem_domain_mesh_asset is attached"
                                 )
-                            })?
-                            .region_markers = region_markers;
+                            })?;
+                        domain_asset.region_markers = region_markers;
+                        domain_asset.object_region_markers = object_region_markers;
                     }
                     let remeshed_plan = fullmag_plan::plan(&remeshed_problem)
                         .map_err(|error| anyhow!(error.to_string()))?;
@@ -3154,6 +3447,18 @@ fn execute_manual_interactive_remesh(
                             })?;
                     (mesh_payload, magnetization, remeshed_plan)
                 };
+                let prepared_remesh = prepare_remesh_stage_transaction(
+                    stages,
+                    stage_execution_plans,
+                    scene_problem_patch.as_ref(),
+                    &new_mesh,
+                    hmax,
+                    shared_domain_remesh,
+                    &remesh_result.region_markers,
+                    &remesh_result.object_region_markers,
+                    current_adaptive_runtime_state.as_ref(),
+                    Some(remeshed_plan.clone()),
+                )?;
                 live_workspace.push_log(
                     "success",
                     format!(
@@ -3197,6 +3502,8 @@ fn execute_manual_interactive_remesh(
                 *current_mesh_quality = remesh_result.quality.clone();
                 *current_fem_mesh_override = Some(new_mesh.clone());
                 *current_fem_hmax_override = Some(hmax);
+                stages.clone_from_slice(&prepared_remesh.stages);
+                stage_execution_plans.clone_from_slice(&prepared_remesh.stage_execution_plans);
                 current_mesh_history.push(serde_json::json!({
                     "mesh_name": new_mesh.mesh_name,
                     "generation_mode": remesh_result.generation_mode,
@@ -3215,21 +3522,6 @@ fn execute_manual_interactive_remesh(
                     "size_field_stats": remesh_result.size_field_stats.clone(),
                     "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
                 }));
-                apply_remeshed_problem_snapshot_to_stages(
-                    stages,
-                    scene_problem_patch.as_ref(),
-                    &new_mesh,
-                    hmax,
-                    shared_domain_remesh,
-                    &remesh_result.region_markers,
-                    current_adaptive_runtime_state.as_ref(),
-                )?;
-                refresh_materialized_stage_execution_plans(
-                    stages,
-                    stage_execution_plans,
-                    Some(remeshed_plan),
-                )?;
-
                 live_workspace.update(|state| {
                     state.live_state.latest_step.fem_mesh = Some(live_mesh_payload);
                     state.live_state.latest_step.magnetization =
@@ -3395,6 +3687,11 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
     if !settings.enabled || settings.policy != "auto" || settings.max_passes == 0 {
         return Ok(false);
     }
+    if let Some(reason) = adaptive_remesh_legality_reason(&stage.ir) {
+        return Err(anyhow!(
+            "{reason}: adaptive FEM remesh requires a certified region/PBC candidate transaction"
+        ));
+    }
     if !matches!(stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. }) {
         live_workspace.push_log(
             "warning",
@@ -3424,6 +3721,15 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         );
         return Ok(false);
     }
+    let resolved_convergence_metric = resolve_adaptive_convergence_metric(
+        &settings.convergence_metric,
+    )
+    .map_err(|reason| {
+        anyhow!(
+            "{reason}: no estimator is available for convergence metric '{}'",
+            settings.convergence_metric
+        )
+    })?;
 
     let geometry_entry = stage
         .ir
@@ -3470,12 +3776,14 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                 .zip(current_solve_summary)
                 .map(|(previous, current)| {
                     adaptive_convergence_summary(
-                        &settings.convergence_metric,
+                        resolved_convergence_metric,
                         settings.error_tolerance,
                         previous,
                         current,
                     )
-                });
+                })
+                .transpose()
+                .map_err(|reason| anyhow!("{reason}"))?;
         if let Some(summary) = convergence_summary.as_ref() {
             if summary.converged {
                 let current_runtime_state = serde_json::json!({
@@ -3693,24 +4001,6 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         renormalize_magnetization(&mut transferred_magnetization);
 
         remesh_pass_count += 1;
-        mutated = true;
-        *current_mesh_quality = remesh_result.quality.clone();
-        current_mesh_history.push(serde_json::json!({
-            "mesh_name": new_mesh.mesh_name,
-            "generation_mode": remesh_result.generation_mode,
-            "node_count": new_mesh.nodes.len(),
-            "element_count": new_mesh.elements.len(),
-            "boundary_face_count": new_mesh.boundary_faces.len(),
-            "kind": "adaptive_pass",
-            "adaptive_pass": remesh_pass_count,
-            "quality": remesh_result.quality.as_ref().map(|quality| serde_json::json!({
-                "sicn_p5": quality.sicn_p5,
-                "gamma_min": quality.gamma_min,
-                "avg_quality": quality.avg_quality,
-            })),
-            "mesh_provenance": remesh_result.mesh_provenance,
-            "size_field_stats": remesh_result.size_field_stats,
-        }));
         let remeshed_runtime_state = serde_json::json!({
             "pass_count": remesh_pass_count,
             "max_passes": settings.max_passes,
@@ -3746,21 +4036,46 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                 "converged": summary.converged,
             })),
         });
+        let mut candidate_stage = stage.clone();
+        apply_current_fem_overrides(
+            &mut candidate_stage.ir,
+            Some(&new_mesh),
+            Some(remesh_hmax),
+            Some(&remeshed_runtime_state),
+        );
+        apply_continuation_initial_state(&mut candidate_stage.ir, &transferred_magnetization)?;
+
+        let candidate_execution_plan =
+            fullmag_plan::plan(&candidate_stage.ir).map_err(|error| anyhow!(error.to_string()))?;
+        let mesh_payload = fem_mesh_payload_from_backend_plan(
+            &candidate_execution_plan.backend_plan,
+        )
+        .ok_or_else(|| anyhow!("adaptive FEM replan did not produce an exact FEM mesh payload"))?;
+
+        // Commit only after transfer, marker propagation, IR validation and replanning succeed.
+        *stage = candidate_stage;
+        *execution_plan = candidate_execution_plan;
+        mutated = true;
+        *current_mesh_quality = remesh_result.quality.clone();
         *current_fem_mesh_override = Some(new_mesh.clone());
         *current_fem_hmax_override = Some(remesh_hmax);
         *current_adaptive_runtime_state = Some(remeshed_runtime_state.clone());
-        apply_current_fem_overrides(
-            &mut stage.ir,
-            current_fem_mesh_override.as_ref(),
-            *current_fem_hmax_override,
-            current_adaptive_runtime_state.as_ref(),
-        );
-        apply_continuation_initial_state(&mut stage.ir, &transferred_magnetization)?;
-
-        *execution_plan =
-            fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
-        let mesh_payload = fem_mesh_payload_from_backend_plan(&execution_plan.backend_plan)
-            .expect("adaptive FEM replan should yield an exact FEM mesh payload");
+        current_mesh_history.push(serde_json::json!({
+            "mesh_name": new_mesh.mesh_name,
+            "generation_mode": remesh_result.generation_mode,
+            "node_count": new_mesh.nodes.len(),
+            "element_count": new_mesh.elements.len(),
+            "boundary_face_count": new_mesh.boundary_faces.len(),
+            "kind": "adaptive_pass",
+            "adaptive_pass": remesh_pass_count,
+            "quality": remesh_result.quality.as_ref().map(|quality| serde_json::json!({
+                "sicn_p5": quality.sicn_p5,
+                "gamma_min": quality.gamma_min,
+                "avg_quality": quality.avg_quality,
+            })),
+            "mesh_provenance": remesh_result.mesh_provenance,
+            "size_field_stats": remesh_result.size_field_stats,
+        }));
         live_workspace.update(|state| {
             state.metadata = Some(current_live_metadata(&stage.ir, execution_plan, "running"));
             state.live_state.latest_step.fem_mesh = Some(mesh_payload);
@@ -5730,8 +6045,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 serde_json::to_value(&declared_universe).context(
                                     "failed to serialize declared universe for shared-domain auto-coarsen",
                                 )?;
+                            let object_region_mesh_specs =
+                                shared_domain_object_region_mesh_specs(&stages[0].ir)?;
                             invoke_shared_domain_remesh_full(
                                 &stages[0].ir.geometry.entries,
+                                &object_region_mesh_specs,
                                 &declared_universe_value,
                                 current_hmax,
                                 fe_order,
@@ -5751,6 +6069,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         match remesh_attempt {
                             Ok(remesh_result) => {
                                 let new_mesh = remesh_result.clone().into_mesh_ir();
+                                if let Some(previous_mesh) = stages[0]
+                                    .ir
+                                    .geometry_assets
+                                    .as_ref()
+                                    .and_then(|assets| assets.fem_domain_mesh_asset.as_ref())
+                                    .and_then(|asset| asset.mesh.as_ref())
+                                {
+                                    validate_periodic_remesh_candidate(previous_mesh, &new_mesh)?;
+                                }
                                 let new_nodes = new_mesh.nodes.len();
                                 let new_ram = estimate_fem_dense_ram(new_nodes);
                                 eprintln!(
@@ -5758,22 +6085,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     new_nodes,
                                     new_ram as f64 / 1e9
                                 );
-
-                                current_mesh_quality = remesh_result.quality.clone();
-                                current_fem_mesh_override = Some(new_mesh.clone());
-                                current_fem_hmax_override = Some(current_hmax);
-                                current_mesh_history.push(serde_json::json!({
-                                    "mesh_name": new_mesh.mesh_name,
-                                    "generation_mode": remesh_result.generation_mode,
-                                    "node_count": new_nodes,
-                                    "element_count": new_mesh.elements.len(),
-                                    "boundary_face_count": new_mesh.boundary_faces.len(),
-                                    "kind": "auto_coarsen",
-                                    "mesh_target": "study_domain",
-                                    "mesh_reason": "auto_coarsen",
-                                    "mesh_provenance": remesh_result.mesh_provenance.clone(),
-                                    "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
-                                }));
 
                                 let (live_mesh_payload, remeshed_magnetization, remeshed_plan) = {
                                     let mut remeshed_problem = stages[0].ir.clone();
@@ -5804,6 +6115,23 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                                 )
                                             })?
                                             .region_markers = region_markers;
+                                        let object_region_markers =
+                                            resolved_shared_domain_object_region_markers(
+                                                &remeshed_problem,
+                                                &remesh_result.object_region_markers,
+                                            )?;
+                                        let domain_asset = remeshed_problem
+                                            .geometry_assets
+                                            .as_mut()
+                                            .and_then(|assets| {
+                                                assets.fem_domain_mesh_asset.as_mut()
+                                            })
+                                            .ok_or_else(|| {
+                                                anyhow!(
+                                                    "shared-domain auto-coarsen produced no attached fem_domain_mesh_asset"
+                                                )
+                                            })?;
+                                        domain_asset.object_region_markers = object_region_markers;
                                     }
                                     let remeshed_plan = fullmag_plan::plan(&remeshed_problem)
                                         .map_err(|error| anyhow!(error.to_string()))?;
@@ -5816,22 +6144,37 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                         )?;
                                     (mesh_payload, magnetization, remeshed_plan)
                                 };
-                                apply_remeshed_problem_snapshot_to_stages(
-                                    &mut stages,
+                                let prepared_remesh = prepare_remesh_stage_transaction(
+                                    &stages,
+                                    &stage_execution_plans,
                                     None,
                                     &new_mesh,
                                     current_hmax,
                                     shared_domain_remesh,
                                     &remesh_result.region_markers,
+                                    &remesh_result.object_region_markers,
                                     current_adaptive_runtime_state.as_ref(),
-                                )?;
-                                refresh_materialized_stage_execution_plans(
-                                    &stages,
-                                    &mut stage_execution_plans,
-                                    Some(remeshed_plan),
+                                    Some(remeshed_plan.clone()),
                                 )?;
 
                                 if new_ram <= ram_budget {
+                                    current_mesh_quality = remesh_result.quality.clone();
+                                    current_fem_mesh_override = Some(new_mesh.clone());
+                                    current_fem_hmax_override = Some(current_hmax);
+                                    stages = prepared_remesh.stages;
+                                    stage_execution_plans = prepared_remesh.stage_execution_plans;
+                                    current_mesh_history.push(serde_json::json!({
+                                        "mesh_name": new_mesh.mesh_name,
+                                        "generation_mode": remesh_result.generation_mode,
+                                        "node_count": new_nodes,
+                                        "element_count": new_mesh.elements.len(),
+                                        "boundary_face_count": new_mesh.boundary_faces.len(),
+                                        "kind": "auto_coarsen",
+                                        "mesh_target": "study_domain",
+                                        "mesh_reason": "auto_coarsen",
+                                        "mesh_provenance": remesh_result.mesh_provenance.clone(),
+                                        "quality_data_artifact": remesh_result.quality_data_artifact.clone(),
+                                    }));
                                     live_workspace.update(|state| {
                                         state.live_state.latest_step.fem_mesh =
                                             Some(live_mesh_payload);
@@ -7462,6 +7805,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 current_fem_hmax_override,
                 current_adaptive_runtime_state.as_ref(),
             );
+            attach_region_realization_revisions(&mut stage.ir, command.precondition.as_ref());
             if let Some(previous_final_magnetization) = continuation_magnetization.as_deref() {
                 ensure_frequency_response_relaxed_continuation_is_qualified(
                     &stage,
@@ -8435,6 +8779,17 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         backend: backend_target_name(final_requested_backend).to_string(),
         mode: execution_mode_name(final_execution_mode).to_string(),
         precision: execution_precision_name(final_precision).to_string(),
+        requested_execution: RequestedExecutionProvenance {
+            backend: final_session_runtime.requested_backend.clone(),
+            device: requested_execution_device(&final_session_runtime),
+            precision: final_session_runtime.requested_precision.clone(),
+            mode: final_session_runtime.requested_mode.clone(),
+            fallback_policy: if final_session_runtime.requested_mode == "strict" {
+                "forbidden".to_string()
+            } else {
+                "allowed".to_string()
+            },
+        },
         total_steps: aggregated_steps
             .last()
             .map(|step| step.step as usize)
@@ -8663,11 +9018,12 @@ pub(crate) fn prepare_live_workspace_for_ui(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_current_fem_overrides, apply_initial_magnetization_state_override,
-        apply_live_step_update_to_workspace_state, apply_remeshed_problem_snapshot_to_stages,
-        apply_stage_heartbeat_progress, attach_initial_magnetization_state_override_metadata,
-        classify_wait_for_solve_command, cumulative_rhs_evals, default_domain_region_markers,
-        discard_active_paused_stage_execution,
+        adaptive_remesh_legality_reason, apply_current_fem_overrides,
+        apply_initial_magnetization_state_override, apply_live_step_update_to_workspace_state,
+        apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
+        attach_initial_magnetization_state_override_metadata, classify_wait_for_solve_command,
+        attach_region_realization_revisions,
+        cumulative_rhs_evals, default_domain_region_markers, discard_active_paused_stage_execution,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
         fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
@@ -8676,13 +9032,100 @@ mod tests {
         initial_step_update, interactive_session_should_stay_alive,
         live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
         live_step_ingest_preview_len, mesh_build_pipeline_status_json,
-        scripted_stage_execution_state, stage_allows_sampled_continuation_initial_state,
+        mesh_source_scene_revision,
+        prepare_remesh_stage_transaction,
+        resolve_adaptive_convergence_metric,
+        resolved_shared_domain_object_region_markers, scripted_stage_execution_state,
+        shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
+        validate_periodic_remesh_candidate,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
         ActiveSequenceState, LiveProgressCadence, LoadedInitialMagnetizationState,
         SceneProblemPatch, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
-        LIVE_PROGRESS_PUBLISH_INTERVAL,
+        LIVE_PROGRESS_PUBLISH_INTERVAL, RuntimeCommandPrecondition,
     };
+
+    #[test]
+    fn mesh_source_scene_revision_reads_geometry_realization_contract() {
+        assert_eq!(
+            mesh_source_scene_revision(&serde_json::json!({
+                "geometry_realization": {"source_scene_revision": 46}
+            })),
+            Some(46)
+        );
+        assert_eq!(
+            mesh_source_scene_revision(&serde_json::json!({
+                "source_scene_revision": 47
+            })),
+            Some(47)
+        );
+        assert_eq!(mesh_source_scene_revision(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn adaptive_mesh_rejects_eigenfrequency_without_an_eigen_estimator() {
+        assert_eq!(
+            resolve_adaptive_convergence_metric("energy_delta"),
+            Ok("energy_delta")
+        );
+        assert_eq!(
+            resolve_adaptive_convergence_metric("eigenfrequency_delta"),
+            Err("unsupported_mesh_adaptivity_criterion")
+        );
+        assert_eq!(
+            resolve_adaptive_convergence_metric("not-a-criterion"),
+            Err("unsupported_mesh_adaptivity_criterion")
+        );
+    }
+
+    #[test]
+    fn attach_region_realization_revisions_persists_complete_consumed_tuple() {
+        let mut problem = ProblemIR::bootstrap_example();
+        attach_region_realization_revisions(
+            &mut problem,
+            Some(&RuntimeCommandPrecondition {
+                region_topology_revision: Some(11),
+                region_membership_revision: Some(12),
+                region_coefficients_revision: Some(13),
+                region_initial_state_revision: Some(14),
+                ..RuntimeCommandPrecondition::default()
+            }),
+        );
+
+        assert_eq!(
+            problem.problem_meta.runtime_metadata["region_realization_revisions"],
+            serde_json::json!({
+                "complete": true,
+                "topology": 11,
+                "membership": 12,
+                "coefficients": 13,
+                "initial_state": 14,
+            })
+        );
+    }
+
+    #[test]
+    fn attach_region_realization_revisions_marks_partial_tuple_incomplete() {
+        let mut problem = ProblemIR::bootstrap_example();
+        attach_region_realization_revisions(
+            &mut problem,
+            Some(&RuntimeCommandPrecondition {
+                region_membership_revision: Some(12),
+                ..RuntimeCommandPrecondition::default()
+            }),
+        );
+
+        assert_eq!(
+            problem.problem_meta.runtime_metadata["region_realization_revisions"],
+            serde_json::json!({
+                "complete": false,
+                "topology": null,
+                "membership": 12,
+                "coefficients": null,
+                "initial_state": null,
+            })
+        );
+    }
 
     #[test]
     fn cumulative_rhs_evals_sums_all_step_records() {
@@ -8699,6 +9142,205 @@ mod tests {
 
         assert_eq!(cumulative_rhs_evals(&steps), 12);
     }
+
+    #[test]
+    fn shared_domain_remesh_specs_bind_regions_to_current_owner_geometry() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.geometry.entries = vec![GeometryEntryIR::Box {
+            name: "film_geometry".to_string(),
+            size: [1.0, 1.0, 1.0],
+        }];
+        problem.regions = vec![RegionIR {
+            name: "film_region".to_string(),
+            geometry: "film_geometry".to_string(),
+        }];
+        problem.magnets = vec![MagnetIR {
+            name: "film".to_string(),
+            region: "film_region".to_string(),
+            material: "mat".to_string(),
+            initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                value: [1.0, 0.0, 0.0],
+            }),
+        }];
+        problem.object_regions = vec![ObjectRegionIR {
+            region_id: "film:core".to_string(),
+            owner_object: "film".to_string(),
+            name: "core".to_string(),
+            shape: RegionShapeIR::Box {
+                size: [0.5, 0.5, 0.5],
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: RegionFrameIR::Object,
+            enabled: true,
+            priority: 0,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            realization_policy: RegionRealizationPolicyIR::Conformal,
+            material_transition: None,
+        }];
+
+        let specs = shared_domain_object_region_mesh_specs(&problem)
+            .expect("remesh specs should resolve owner geometry");
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0]["region_id"], "film:core");
+        assert_eq!(specs[0]["owner_geometry_name"], "film_geometry");
+    }
+
+    #[test]
+    fn shared_domain_remesh_markers_require_exact_current_conformal_coverage() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.object_regions = vec![ObjectRegionIR {
+            region_id: "film:core".to_string(),
+            owner_object: "film".to_string(),
+            name: "core".to_string(),
+            shape: RegionShapeIR::Box {
+                size: [1.0, 1.0, 1.0],
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: RegionFrameIR::Object,
+            enabled: true,
+            priority: 0,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            realization_policy: RegionRealizationPolicyIR::Conformal,
+            material_transition: None,
+        }];
+        let valid = vec![fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "film:core".to_string(),
+            marker: 2,
+        }];
+        assert_eq!(
+            resolved_shared_domain_object_region_markers(&problem, &valid).unwrap(),
+            valid
+        );
+        let stale = vec![fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "old:core".to_string(),
+            marker: 2,
+        }];
+        assert!(resolved_shared_domain_object_region_markers(&problem, &stale).is_err());
+    }
+
+    #[test]
+    fn adaptive_remesh_fails_closed_for_uncertified_conformal_regions() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.object_regions = vec![ObjectRegionIR {
+            region_id: "owner:core".to_string(),
+            owner_object: "owner".to_string(),
+            name: "core".to_string(),
+            shape: RegionShapeIR::Box {
+                size: [1.0, 1.0, 1.0],
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: RegionFrameIR::Object,
+            enabled: true,
+            priority: 0,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            realization_policy: RegionRealizationPolicyIR::Conformal,
+            material_transition: None,
+        }];
+        assert_eq!(
+            adaptive_remesh_legality_reason(&problem),
+            Some("adaptive_region_remesh_not_certified")
+        );
+    }
+
+    #[test]
+    fn periodic_remesh_rejects_candidate_without_fresh_pairs() {
+        let previous = MeshIR {
+            mesh_name: "previous".to_string(),
+            nodes: Vec::new(),
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+                pair_id: "x".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 1,
+                marker_b: 2,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1.0e-9),
+                axis_hint: Some("x".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            }],
+            periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
+                pair_id: "x".to_string(),
+                node_a: 0,
+                node_b: 1,
+            }],
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+        let candidate = MeshIR {
+            mesh_name: "candidate".to_string(),
+            nodes: Vec::new(),
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: std::collections::HashMap::new(),
+        };
+
+        let error = validate_periodic_remesh_candidate(&previous, &candidate)
+            .expect_err("periodic remesh must not publish a candidate without recertified pairs");
+        assert!(error.to_string().contains("periodic_remesh_requires_recertification"));
+    }
+
+    #[test]
+    fn remesh_transaction_keeps_sources_unchanged_when_candidate_validation_fails() {
+        let stages = vec![ResolvedScriptStage::solver(
+            ProblemIR::bootstrap_example(),
+            0.0,
+            "test",
+        )];
+        let plans = Vec::new();
+        let stages_before = stages.clone();
+        let plans_before = plans.clone();
+        let candidate = MeshIR {
+            mesh_name: "candidate".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            elements: vec![[0, 1, 2, 3]],
+            element_markers: vec![1],
+            boundary_faces: vec![[0, 1, 2]],
+            boundary_markers: vec![1],
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: Default::default(),
+        };
+
+        let error = prepare_remesh_stage_transaction(
+            &stages,
+            &plans,
+            None,
+            &candidate,
+            1.0,
+            true,
+            &[],
+            &[],
+            None,
+            None,
+        )
+        .expect_err("a shared-domain candidate without a domain asset must fail before commit");
+
+        assert!(error
+            .to_string()
+            .contains("shared-domain remesh produced no fem_domain_mesh_asset"));
+        assert_eq!(stages[0].ir, stages_before[0].ir);
+        assert_eq!(plans, plans_before);
+    }
+
     use crate::args::ScriptCli;
     use crate::live_workspace::bootstrap_live_state;
     use crate::types::{
@@ -8715,8 +9357,8 @@ mod tests {
         FrequencyExcitationIR, FrequencyResponseNormalizationIR, FrequencySweepIR,
         GeometryAssetsIR, GeometryEntryIR, GeometryIR, GridDimensions, InitialMagnetizationIR,
         IntegratorChoice, MagnetIR, MagnetostaticBoundaryConditionIR, MaterialIR, MeshIR,
-        ProblemIR, ProblemMeta, RegionIR, SamplingIR, SpinWaveBoundaryConditionIR, StudyIR,
-        ValidationProfileIR,
+        ObjectRegionIR, ProblemIR, ProblemMeta, RegionFrameIR, RegionIR, RegionRealizationPolicyIR,
+        RegionShapeIR, SamplingIR, SpinWaveBoundaryConditionIR, StudyIR, ValidationProfileIR,
     };
     use fullmag_runner::{LivePreviewField, SequenceStage, StepStats, StepUpdate};
     use std::collections::BTreeMap;
@@ -9717,6 +10359,7 @@ mod tests {
             },
             object_segments: Vec::new(),
             mesh_parts: Vec::new(),
+            mesh_build_report: None,
             domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR::MergedMagneticMesh,
             domain_frame: None,
             fe_order: 1,
@@ -9756,6 +10399,9 @@ mod tests {
             enable_demag: true,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            field_drives: Vec::new(),
+            field_drive_geometry_masks: Vec::new(),
+            time_stage: Default::default(),
             current_modules: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -9851,6 +10497,7 @@ mod tests {
                 },
             ],
             mesh_parts: Vec::new(),
+            mesh_build_report: None,
             domain_mesh_mode: FemDomainMeshModeIR::SharedDomainMeshWithAir,
             domain_frame: None,
             fe_order: 1,
@@ -9890,6 +10537,9 @@ mod tests {
             enable_demag: true,
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
+            field_drives: Vec::new(),
+            field_drive_geometry_masks: Vec::new(),
+            time_stage: Default::default(),
             current_modules: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
@@ -10017,6 +10667,7 @@ mod tests {
             validation_profile: ValidationProfileIR {
                 execution_mode: ExecutionMode::Strict,
             },
+            field_drives: Vec::new(),
             current_modules: Vec::new(),
             spin_torque_modules: Vec::new(),
             excitation_analysis: None,
@@ -10765,6 +11416,7 @@ mod tests {
             &new_mesh,
             3.5,
             true,
+            &[],
             &[],
             None,
         )

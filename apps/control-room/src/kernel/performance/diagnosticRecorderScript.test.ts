@@ -77,4 +77,13 @@ describe("diagnostic recorder script", () => {
     expect(script).toContain("workerComputeMaxMs");
     expect(script).toContain("fallbackReasons");
   });
+
+  it("always writes a forensic artifact when failure happens before canvas mount", () => {
+    expect(script).toContain("createPartialFailureArtifact");
+    expect(script).toContain("collectFailureState");
+    expect(script).toContain('writeJson(path.join(artifactDir, "failure.json")');
+    expect(script).toContain("domExcerpt");
+    expect(script).toContain("isContextLost");
+    expect(script).toContain("if (runError) throw runError");
+  });
 });

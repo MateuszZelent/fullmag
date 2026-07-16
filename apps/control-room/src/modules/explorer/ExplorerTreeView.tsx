@@ -88,6 +88,31 @@ const EXPLORER_ROW_HEIGHT = 28;
 const EXPLORER_ROW_OVERSCAN = 8;
 const EXPLORER_VIRTUALIZATION_THRESHOLD = 200;
 
+export function resolveExplorerRevealScrollTop({
+  activeNodeId,
+  rowHeight,
+  rowIds,
+  scrollTop,
+  viewportHeight,
+}: {
+  activeNodeId: string | null;
+  rowHeight: number;
+  rowIds: readonly string[];
+  scrollTop: number;
+  viewportHeight: number;
+}): number | null {
+  if (!activeNodeId) return null;
+  const index = rowIds.indexOf(activeNodeId);
+  if (index < 0) return null;
+  const rowTop = index * rowHeight;
+  const rowBottom = rowTop + rowHeight;
+  if (rowTop < scrollTop) return rowTop;
+  if (rowBottom > scrollTop + viewportHeight) {
+    return Math.max(rowBottom - viewportHeight, 0);
+  }
+  return null;
+}
+
 function statusLabel(status: ExplorerNodeStatus | undefined): string {
   if (!status) return "ready";
   return status;
@@ -529,6 +554,25 @@ export function ExplorerTreeView({
         : { ...current, scrollTop: tree.scrollTop },
     );
   }, []);
+
+  useEffect(() => {
+    const tree = treeRef.current;
+    if (!tree) return;
+    const nextScrollTop = resolveExplorerRevealScrollTop({
+      activeNodeId,
+      rowHeight: EXPLORER_ROW_HEIGHT,
+      rowIds: rows.map((row) => row.node.id),
+      scrollTop: tree.scrollTop,
+      viewportHeight: tree.clientHeight || viewport.height,
+    });
+    if (nextScrollTop === null) return;
+    tree.scrollTop = nextScrollTop;
+    setViewport((current) =>
+      current.scrollTop === nextScrollTop
+        ? current
+        : { ...current, scrollTop: nextScrollTop },
+    );
+  }, [activeNodeId, rows, viewport.height]);
 
   return (
     <div

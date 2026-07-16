@@ -99,6 +99,8 @@ pub struct GlobalQuantityRow {
     pub e_ex: f64,
     pub e_demag: f64,
     pub e_ext: f64,
+    #[serde(default)]
+    pub e_drive: f64,
     pub e_ani: f64,
     pub e_dmi: f64,
     pub e_el: f64,
@@ -123,6 +125,7 @@ impl GlobalQuantityRow {
             "e_ex" => Some(self.e_ex),
             "e_demag" => Some(self.e_demag),
             "e_ext" => Some(self.e_ext),
+            "e_drive" => Some(self.e_drive),
             "e_ani" => Some(self.e_ani),
             "e_dmi" => Some(self.e_dmi),
             "e_el" => Some(self.e_el),

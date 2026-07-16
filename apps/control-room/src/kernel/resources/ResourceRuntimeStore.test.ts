@@ -449,6 +449,7 @@ describe("ResourceRuntimeStore", () => {
       listenerCount: 1,
       readyCount: 1,
     });
+    expect(store.listenerCounts()).toEqual({ "data/fields/m": 1 });
 
     unsubscribe();
 
@@ -464,6 +465,7 @@ describe("ResourceRuntimeStore", () => {
       pendingRequestCount: 0,
       readyCount: 0,
     });
+    expect(store.listenerCounts()).toEqual({});
   });
 
   it("aborts an in-flight load when the last subscriber leaves", async () => {

@@ -8,8 +8,10 @@ import {
   DEFAULT_OBJECT_VISUALIZATION,
   ObjectVisualizationController,
   mergeVisualizationStateTargetOverride,
+  removeTargetOverrideField,
   renderModePatch,
   resolveAirboxVisualizationSettingsFromState,
+  resetAirboxVisualizationState,
   resolveEffectiveVisualizationSettings,
   resolveGlobalObjectVisualizationSettings,
   resolveTargetVisualization,
@@ -88,7 +90,7 @@ describe("ObjectVisualizationController", () => {
       });
   });
 
-  it("inherits parent object display when a region only overrides quantity", () => {
+  it("inherits only quantity and color style when a region overrides quantity", () => {
     const controller = new ObjectVisualizationController();
     const objectTarget = {
       id: "object:film",
@@ -122,11 +124,11 @@ describe("ObjectVisualizationController", () => {
 
     expect(regionSettings).toMatchObject({
       activeQuantityId: "H_eff",
-      shaderVisible: true,
       surfaceColorSource: "component_x",
+      shaderVisible: false,
       vectorsVisible: false,
-      visible: true,
-      wireframeVisible: true,
+      visible: false,
+      wireframeVisible: false,
     });
   });
 
@@ -260,21 +262,80 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("keeps local-only airbox style fields out of backend visualization patches", () => {
+  it("serializes every backend-supported airbox property through one canonical patch", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
+        activeQuantityId: "h_eff",
+        boundsVisible: true,
+        geometryScope: "surface",
+        opacityPercent: 44,
         shaderColorMode: "monochrome",
         shaderMonoColor: "#ffffff",
         surfaceColorSource: "solid",
+        surfaceProjectionMode: "surface_faces",
+        viewportColorbarVisible: true,
+        pointsVisible: true,
         vectorAlphaPercent: 44,
+        vectorBudget: 256,
         vectorColorMode: "magnitude",
+        vectorLengthScale: 1.5,
+        vectorMonoColor: "#66aaff",
         vectorThickness: 2,
+        vectorsVisible: true,
         pointColor: "#66eeff",
+        scalarColorPalette: "inferno",
         wireframeColor: "#888888",
         wireframeOpacityPercent: 75,
-        airboxSyntheticVectorsEnabled: true,
-      }),
-    ).toEqual({});
+        wireframeVisible: true,
+        shaderVisible: true,
+        visible: true,
+      }, []),
+    ).toMatchObject({
+      layers: {
+        airbox: {
+          bounds: { visible: true },
+          opacity: 0.44,
+          points: { visible: true },
+          surface: { visible: true },
+          vectors: { density: 256, domain: "airbox_only", visible: true },
+          visible: true,
+          wireframe: { opacity: 0.75, visible: true },
+        },
+      },
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          display: {
+            bounds: { visible: true },
+            geometry_scope: "surface",
+            opacity: 0.44,
+            points: { visible: true },
+            surface: { visible: true },
+            vectors: { visible: true },
+            visible: true,
+            wireframe: { opacity: 0.75, visible: true },
+          },
+          quantity: { active_quantity_id: "H_eff" },
+          style: {
+            point_color: "#66eeff",
+            scalar_color_palette: "inferno",
+            surface_color_source: "solid",
+            surface_mono_color: "#ffffff",
+            surface_projection_mode: "surface_faces",
+            vector_alpha: 0.44,
+            vector_budget: 256,
+            vector_color_mode: "magnitude",
+            vector_length_scale: 1.5,
+            vector_mono_color: "#66aaff",
+            vector_thickness: 2,
+            viewport_colorbar_visible: true,
+            wireframe_color: "#888888",
+          },
+          visible: true,
+        },
+      ],
+    });
     expect(
       airboxLocalVisualizationPatchFromTargetPatch({
         shaderColorMode: "monochrome",
@@ -290,15 +351,52 @@ describe("ObjectVisualizationController", () => {
       }),
     ).toEqual({
       airboxSyntheticVectorsEnabled: true,
-      shaderColorMode: "monochrome",
-      shaderMonoColor: "#ffffff",
-      surfaceColorSource: "solid",
-      vectorAlphaPercent: 44,
-      vectorColorMode: "magnitude",
-      vectorThickness: 2,
-      pointColor: "#66eeff",
-      wireframeColor: "#888888",
-      wireframeOpacityPercent: 75,
+    });
+  });
+
+  it("resets airbox layers and removes its quantity and style override atomically", () => {
+    expect(
+      resetAirboxVisualizationState({
+        layers: {
+          airbox: {
+            bounds: { opacity: 0.2, visible: true },
+            points: { opacity: 0.3, visible: true },
+            surface: { opacity: 0.4, visible: false },
+          },
+        },
+        overrides: [
+          {
+            scope: "airbox",
+            scope_id: "airbox",
+            quantity: { active_quantity_id: "H_eff" },
+            style: { vector_alpha: 0.4 },
+          },
+          {
+            scope: "object",
+            scope_id: "film",
+            quantity: { active_quantity_id: "m" },
+          },
+        ],
+      } as never),
+    ).toMatchObject({
+      layers: {
+        airbox: {
+          bounds: { opacity: 1, visible: false },
+          opacity: 0.28,
+          points: { opacity: 1, visible: false },
+          surface: { opacity: 1, visible: true },
+          vectors: { density: 1200, domain: "airbox_only", visible: false },
+          visible: true,
+          wireframe: { opacity: 1, visible: false },
+        },
+      },
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "film",
+          quantity: { active_quantity_id: "m" },
+        },
+      ],
     });
   });
 
@@ -326,13 +424,14 @@ describe("ObjectVisualizationController", () => {
     expect(patch).not.toHaveProperty("vector_style");
   });
 
-  it("keeps airbox vector length in local optimistic patches", () => {
+  it("keeps only renderer-local airbox switches in local optimistic patches", () => {
     expect(
       airboxLocalVisualizationPatchFromTargetPatch({
         vectorLengthScale: 2,
+        vectorCenteringEnabled: false,
       }),
     ).toEqual({
-      vectorLengthScale: 2,
+      vectorCenteringEnabled: false,
     });
   });
 
@@ -401,7 +500,133 @@ describe("ObjectVisualizationController", () => {
       kind: "region",
       label: "Core region",
     });
+
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "mesh-part",
+        label: "Film mesh",
+        nodeId: "part-film",
+        objectId: "projection-film",
+        ref: {
+          kind: "mesh-part",
+          nodeId: "part-film",
+          objectId: "projection-film",
+          type: "mesh-part",
+          visualizationTargetId: "mesh-part:part-film",
+        },
+      }),
+    ).toEqual({
+      id: "object:projection-film",
+      kind: "object",
+      label: "Film mesh",
+    });
   });
+
+  it("keeps an orphan part target separate from its Explorer node address", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "mesh-part",
+        label: "Recovered volume",
+        nodeId: "model:mesh:unassigned:part%3Aorphan",
+        objectId: null,
+        ref: {
+          carrierPartId: "part:orphan",
+          kind: "mesh-part",
+          nodeId: "model:mesh:unassigned:part%3Aorphan",
+          objectId: null,
+          type: "mesh-part",
+          visualizationTargetId: "part:orphan",
+        },
+      }),
+    ).toEqual({
+      id: "part:orphan",
+      kind: "part",
+      label: "Recovered volume",
+    });
+  });
+
+  it("resolves visualization Debug selections without changing canonical targets", () => {
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "airbox.visualization.debug",
+        label: "Debug",
+        nodeId: "model:airbox:visualization:debug",
+        objectId: null,
+        ref: {
+          kind: "airbox.visualization.debug",
+          nodeId: "model:airbox:visualization:debug",
+          type: "airbox",
+          visualizationTargetId: "airbox",
+        },
+      }),
+    ).toEqual(AIRBOX_VISUALIZATION_TARGET);
+
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "object.visualization.debug",
+        label: "Debug",
+        nodeId: "model:object:free-layer_geom:visualization:debug",
+        objectId: "free-layer_geom",
+        ref: {
+          kind: "object.visualization.debug",
+          nodeId: "model:object:free-layer_geom:visualization:debug",
+          objectId: "free-layer_geom",
+          type: "scene-object",
+          visualizationTargetId: "object:free-layer",
+        },
+      }),
+    ).toEqual({ id: "object:free-layer", kind: "object", label: "Debug" });
+
+    expect(
+      resolveVisualizationTargetFromSelection({
+        kind: "object.region.visualization.debug",
+        label: "Debug",
+        nodeId: "model:object:free-layer:regions:core:visualization:debug",
+        objectId: "free-layer",
+        ref: {
+          kind: "object.region.visualization.debug",
+          nodeId: "model:object:free-layer:regions:core:visualization:debug",
+          objectId: "free-layer",
+          regionId: "core/shell:top",
+          type: "scene-object",
+          visualizationTargetId: "region:free-layer:core%2Fshell%3Atop",
+        },
+      }),
+    ).toEqual({
+      id: "region:free-layer:core%2Fshell%3Atop",
+      kind: "region",
+      label: "Debug",
+    });
+  });
+
+  it.each([
+    "airbox.root",
+    "airbox.mesh",
+    "airbox.mesh.parameters",
+    "airbox.mesh.quality-gates",
+    "airbox.mesh.statistics",
+    "airbox.mesh.topology",
+    "airbox.mesh.build",
+  ] as const)(
+    "does not resolve %s as a display-edit target",
+    (kind) => {
+      const nodeId = `model:${kind.replaceAll(".", ":")}`;
+      expect(
+        resolveVisualizationTargetFromSelection({
+          kind,
+          label: kind,
+          nodeId,
+          objectId: null,
+          ref: {
+            kind,
+            nodeId,
+            type: "airbox",
+            visualizationTargetId: "airbox",
+          },
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("patches and clears target overrides without storing resource data", () => {
     const controller = new ObjectVisualizationController();
@@ -458,7 +683,7 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("inherits owner visualization settings before applying region overrides", () => {
+  it("keeps region display passes independent from owner visualization settings", () => {
     const controller = new ObjectVisualizationController();
     const objectTarget = { id: "film", kind: "object" as const };
     const regionTarget = {
@@ -485,9 +710,67 @@ describe("ObjectVisualizationController", () => {
 
     expect(region.settings).toMatchObject({
       shaderVisible: false,
-      vectorsVisible: true,
+      vectorsVisible: false,
       wireframeVisible: false,
+      visible: false,
+    });
+  });
+
+  it("does not activate a region display pass when visible alone is enabled", () => {
+    const controller = new ObjectVisualizationController();
+    const target = {
+      id: "region:film:film%3Acore",
+      kind: "region" as const,
+    };
+
+    controller.patchTarget(target, { visible: true });
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+      }).effectiveSettings,
+    ).toMatchObject({
+      pointsVisible: false,
+      primitiveVisible: false,
+      shaderVisible: false,
+      vectorsVisible: false,
       visible: true,
+      wireframeVisible: false,
+    });
+  });
+
+  it("enables a region display pass independently when the owner is hidden", () => {
+    const controller = new ObjectVisualizationController();
+    const ownerTarget = { id: "object:film", kind: "object" as const };
+    const regionTarget = {
+      id: "region:film:film%3Acore",
+      kind: "region" as const,
+    };
+    controller.patchTarget(ownerTarget, {
+      shaderVisible: false,
+      visible: false,
+      wireframeVisible: false,
+    });
+    controller.patchTarget(regionTarget, {
+      shaderVisible: true,
+      visible: true,
+    });
+
+    const ownerSettings = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target: ownerTarget,
+    }).settings;
+    expect(
+      resolveTargetVisualization({
+        inheritedSettings: ownerSettings,
+        snapshot: controller.getSnapshot(),
+        target: regionTarget,
+      }).effectiveSettings,
+    ).toMatchObject({
+      shaderVisible: true,
+      visible: true,
+      wireframeVisible: false,
     });
   });
 
@@ -694,6 +977,268 @@ describe("ObjectVisualizationController", () => {
         vectorsVisible: false,
       },
     });
+  });
+
+  it("uses the effective object registry settings instead of global visualization defaults", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: {
+        revision: 14,
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            style: { surface_projection_mode: "raw_nodal" },
+          },
+        ],
+        targets: {
+          airbox: {} as never,
+          objects: [
+            {
+                label: "Free layer",
+                scope: "object",
+                scope_id: "free-layer",
+                settings: {
+                  active_quantity_id: "m",
+                  bounds_visible: false,
+                  geometry_scope: "surface",
+                  opacity: 1,
+                  point_color: "#ffffff",
+                  points_visible: false,
+                  render_mode: "surface",
+                  scalar_color_palette: "viridis",
+                  surface_color_source: "orientation",
+                  surface_mono_color: "#ffffff",
+                  surface_projection_mode: "thickness_average_z",
+                  surface_visible: true,
+                  vector_alpha: 1,
+                  vector_budget: 1200,
+                  vector_color_mode: "orientation",
+                  vector_length_scale: 1,
+                  vector_mono_color: "#ffffff",
+                  vector_thickness: 1,
+                  vectors_visible: false,
+                  viewport_colorbar_visible: false,
+                  visible: true,
+                  wireframe_color: "#ffffff",
+                  wireframe_opacity: 1,
+                  wireframe_visible: false,
+                },
+                source: "scene_object",
+            },
+          ],
+          parts: [],
+        },
+      } as never,
+    });
+
+    expect(resolved.effectiveSettings).toMatchObject({
+      surfaceProjectionMode: "thickness_average_z",
+      wireframeVisible: false,
+    });
+    expect(resolved.override).toMatchObject({
+      surfaceProjectionMode: "raw_nodal",
+    });
+  });
+
+  it("uses the effective mesh-part registry settings instead of object defaults", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "part:part-film", kind: "part" as const };
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: {
+          revision: 15,
+          targets: {
+            airbox: {} as never,
+            objects: [],
+            parts: [
+              {
+                label: "Film mesh part",
+                scope: "part",
+                scope_id: "part-film",
+                settings: {
+                  active_quantity_id: "m",
+                  bounds_visible: false,
+                  geometry_scope: "surface",
+                  opacity: 1,
+                  point_color: "#ffffff",
+                  points_visible: false,
+                  render_mode: "wireframe",
+                  scalar_color_palette: "viridis",
+                  surface_color_source: "orientation",
+                  surface_mono_color: "#ffffff",
+                  surface_projection_mode: "raw_nodal",
+                  surface_visible: false,
+                  vector_alpha: 1,
+                  vector_budget: 1200,
+                  vector_color_mode: "orientation",
+                  vector_length_scale: 1,
+                  vector_mono_color: "#ffffff",
+                  vector_thickness: 1,
+                  vectors_visible: false,
+                  viewport_colorbar_visible: false,
+                  visible: true,
+                  wireframe_color: "#ffffff",
+                  wireframe_opacity: 1,
+                  wireframe_visible: true,
+                },
+                source: "mesh_part",
+              },
+            ],
+          },
+        } as never,
+      }).effectiveSettings,
+    ).toMatchObject({
+      shaderVisible: false,
+      wireframeVisible: true,
+    });
+
+  });
+
+  it("preserves viewport colorbar visibility from the effective target registry", () => {
+    const controller = new ObjectVisualizationController();
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target: { id: "object:film", kind: "object" },
+        visualizationState: {
+          revision: 4,
+          targets: {
+            airbox: {} as never,
+            objects: [
+              {
+                scope: "object",
+                scope_id: "film",
+                settings: {
+                  viewport_colorbar_visible: true,
+                } as never,
+              },
+            ],
+            parts: [],
+          },
+        } as never,
+      }).effectiveSettings.viewportColorbarVisible,
+    ).toBe(true);
+  });
+
+  it("serializes a canonical part target back to the exact mesh carrier scope id", () => {
+    expect(
+      visualizationStateOverrideFromTargetPatch(
+        { id: "part:part-film", kind: "part" },
+        { visible: true },
+      ),
+    ).toMatchObject({
+      scope: "part",
+      scope_id: "part-film",
+      visible: true,
+    });
+  });
+
+  it("lets a pending target patch win only until a newer registry revision acknowledges it", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+    controller.patchDefaults("object", {
+      surfaceProjectionMode: "raw_nodal",
+      wireframeVisible: false,
+    });
+    controller.patchTarget(target, { wireframeVisible: false });
+    controller.patchTargetPending(target, { shaderVisible: false }, 14);
+
+    const stateAtPendingRevision = {
+      revision: 14,
+      targets: {
+        airbox: {} as never,
+        objects: [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            settings: {
+              surface_projection_mode: "thickness_average_z",
+              surface_visible: true,
+              wireframe_visible: true,
+            } as never,
+          },
+        ],
+        parts: [],
+      },
+    };
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: stateAtPendingRevision as never,
+      }).settings,
+    ).toMatchObject({
+      shaderVisible: false,
+      surfaceProjectionMode: "thickness_average_z",
+      wireframeVisible: true,
+    });
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+        visualizationState: {
+          ...stateAtPendingRevision,
+          revision: 15,
+        } as never,
+      }).settings,
+    ).toMatchObject({
+      shaderVisible: true,
+      surfaceProjectionMode: "thickness_average_z",
+      wireframeVisible: true,
+    });
+
+    controller.acknowledgePendingTargetPatches(15);
+    expect(controller.getSnapshot().pendingOverrides).toEqual({});
+  });
+
+  it("keeps client-only target rendering preferences outside pending registry patches", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "free-layer", kind: "object" as const };
+    controller.patchViewportPreferences(target, {
+      primitiveVisible: true,
+      vectorCenteringEnabled: false,
+    });
+
+    const resolved = resolveTargetVisualization({
+      snapshot: controller.getSnapshot(),
+      target,
+      visualizationState: {
+        revision: 20,
+        targets: {
+          airbox: {} as never,
+          objects: [
+            {
+              scope: "object",
+              scope_id: "free-layer",
+              settings: {
+                surface_projection_mode: "thickness_average_z",
+                surface_visible: true,
+              } as never,
+            },
+          ],
+          parts: [],
+        },
+      } as never,
+    });
+
+    expect(resolved.settings).toMatchObject({
+      primitiveVisible: true,
+      surfaceProjectionMode: "thickness_average_z",
+      shaderVisible: true,
+      vectorCenteringEnabled: false,
+    });
+    expect(controller.getSnapshot().pendingOverrides).toEqual({});
   });
 
   it("keeps primitive fallback disabled by default even when visualization state has a primitive layer", () => {
@@ -981,7 +1526,7 @@ describe("ObjectVisualizationController", () => {
       airboxVisualizationStatePatchFromTargetPatch({
         vectorBudget: 0,
       }),
-    ).toEqual({
+    ).toMatchObject({
       layers: {
         airbox: {
           vectors: {
@@ -1025,6 +1570,90 @@ describe("ObjectVisualizationController", () => {
           surface_color_source: "solid",
           surface_mono_color: "#00ffaa",
         },
+      },
+    ]);
+  });
+
+  it("removes an inherited surface color override and prunes the empty target entry", () => {
+    expect(
+      removeTargetOverrideField(
+        [
+          {
+            scope: "region",
+            scope_id: "region:free-layer:core",
+            style: { surface_color_source: "component_x" },
+          },
+        ],
+        { id: "region:free-layer:core", kind: "region" },
+        "surfaceColorSource",
+      ),
+    ).toEqual([]);
+  });
+
+  it("returns to the owner style after inherited deletion and a resource reload", () => {
+    const target = { id: "region:free-layer:core", kind: "region" as const };
+    const overrides = removeTargetOverrideField(
+      [
+        {
+          scope: "region",
+          scope_id: target.id,
+          style: { surface_color_source: "component_x" },
+        },
+      ],
+      target,
+      "surfaceColorSource",
+    );
+
+    expect(
+      resolveTargetVisualization({
+        inheritedSettings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          surfaceColorSource: "orientation",
+        },
+        snapshot: new ObjectVisualizationController().getSnapshot(),
+        target,
+        visualizationState: { overrides } as never,
+      }).settings.surfaceColorSource,
+    ).toBe("orientation");
+  });
+
+  it("removes only the inherited local field without clearing local render preferences", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:free-layer", kind: "object" as const };
+    controller.patchTarget(target, { surfaceColorSource: "component_x" });
+    controller.patchViewportPreferences(target, { primitiveVisible: true });
+
+    controller.removeTargetOverrideField(target, "surfaceColorSource");
+
+    expect(controller.getSnapshot().overrides).not.toHaveProperty("object:free-layer");
+    expect(controller.getSnapshot().viewportPreferences).toMatchObject({
+      "object:free-layer": { primitiveVisible: true },
+    });
+  });
+
+  it("removes only the inherited field and preserves other serialized override fields", () => {
+    expect(
+      removeTargetOverrideField(
+        [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            display: { wireframe: { visible: false } },
+            style: {
+              surface_color_source: "component_x",
+              surface_mono_color: "#ffffff",
+            },
+          },
+        ],
+        { id: "object:free-layer", kind: "object" },
+        "shaderColorMode",
+      ),
+    ).toEqual([
+      {
+        scope: "object",
+        scope_id: "free-layer",
+        display: { wireframe: { visible: false } },
+        style: { surface_mono_color: "#ffffff" },
       },
     ]);
   });
@@ -1203,14 +1832,12 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("keeps airbox quantity target patches addressable locally and remotely", () => {
+  it("keeps airbox quantity target patches remotely addressable", () => {
     expect(
       airboxLocalVisualizationPatchFromTargetPatch({
         activeQuantityId: "h_eff",
       }),
-    ).toEqual({
-      activeQuantityId: "h_eff",
-    });
+    ).toEqual({});
 
     expect(
       airboxVisualizationStatePatchFromTargetPatch(
@@ -1408,7 +2035,7 @@ describe("ObjectVisualizationController", () => {
         visible: false,
         wireframeVisible: false,
       }),
-    ).toEqual({
+    ).toMatchObject({
       layers: {
         airbox: {
           bounds: { visible: true },
@@ -1441,9 +2068,13 @@ describe("ObjectVisualizationController", () => {
       },
       overrides: [
         {
+          display: {
+            vectors: { visible: true },
+          },
           scope: "airbox",
           scope_id: "airbox",
           style: {
+            vector_budget: 64,
             vector_length_scale: 2.25,
             vector_thickness: 1.5,
           },
@@ -1457,7 +2088,7 @@ describe("ObjectVisualizationController", () => {
       airboxVisualizationStatePatchFromTargetPatch({
         visible: true,
       }),
-    ).toEqual({
+    ).toMatchObject({
       layers: {
         airbox: {
           surface: { visible: true },
@@ -1473,7 +2104,7 @@ describe("ObjectVisualizationController", () => {
         shaderVisible: true,
         visible: true,
       }),
-    ).toEqual({
+    ).toMatchObject({
       layers: {
         airbox: {
           surface: { visible: true },
@@ -1483,12 +2114,20 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("keeps only unsupported airbox target fields out of backend state patches", () => {
+  it("keeps only renderer-local airbox fields out of backend state patches", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
         geometryScope: "full",
       }),
-    ).toEqual({});
+    ).toMatchObject({
+      overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          display: { geometry_scope: "full" },
+        },
+      ],
+    });
     expect(
       airboxLocalVisualizationPatchFromTargetPatch({
         boundsVisible: true,
@@ -1498,7 +2137,78 @@ describe("ObjectVisualizationController", () => {
         visible: false,
         wireframeVisible: false,
       }),
-    ).toEqual({ geometryScope: "full", vectorLengthScale: 2 });
+    ).toEqual({});
+  });
+
+  it("owns renderer-only controls in viewport preferences without serializing them as target overrides", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:free-layer", kind: "object" as const };
+
+    controller.patchViewportPreferences(target, {
+      primitiveVisible: true,
+      vectorCenteringEnabled: false,
+      vectorSurfaceOffsetEnabled: true,
+      vectorSurfaceOffsetScale: 0.3,
+    });
+
+    expect(controller.getSnapshot()).toMatchObject({
+      overrides: {},
+      viewportPreferences: {
+        "object:free-layer": {
+          primitiveVisible: true,
+          vectorCenteringEnabled: false,
+          vectorSurfaceOffsetEnabled: true,
+          vectorSurfaceOffsetScale: 0.3,
+        },
+      },
+    });
+    expect(
+      resolveTargetVisualization({
+        snapshot: controller.getSnapshot(),
+        target,
+      }).settings,
+    ).toMatchObject({
+      primitiveVisible: true,
+      vectorCenteringEnabled: false,
+      vectorSurfaceOffsetEnabled: true,
+      vectorSurfaceOffsetScale: 0.3,
+    });
+  });
+
+  it("does not carry viewport preferences across controller reloads or clients while server settings remain shared", () => {
+    const target = { id: "object:free-layer", kind: "object" as const };
+    const firstViewport = new ObjectVisualizationController();
+    const secondViewport = new ObjectVisualizationController();
+    const serverState = {
+      revision: 7,
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "object:free-layer",
+          display: { visible: false },
+        },
+      ],
+    } as never;
+
+    firstViewport.patchViewportPreferences(target, {
+      primitiveVisible: true,
+      vectorCenteringEnabled: false,
+    });
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: firstViewport.getSnapshot(),
+        target,
+        visualizationState: serverState,
+      }).settings,
+    ).toMatchObject({ primitiveVisible: true, vectorCenteringEnabled: false, visible: false });
+    expect(
+      resolveTargetVisualization({
+        snapshot: secondViewport.getSnapshot(),
+        target,
+        visualizationState: serverState,
+      }).settings,
+    ).toMatchObject({ primitiveVisible: false, vectorCenteringEnabled: true, visible: false });
   });
 
   it("builds backend global visualization state patches from default target patches", () => {

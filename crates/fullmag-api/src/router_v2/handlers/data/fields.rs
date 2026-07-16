@@ -864,6 +864,7 @@ pub async fn get_field_meta(
         component: query.component.clone(),
         scope_kind: query.scope_kind.clone(),
         scope_id: query.scope_id.clone(),
+        geometry_scope: None,
         max_samples: None,
         snapshot_id: query.snapshot_id.clone(),
         stage_id: query.stage_id.clone(),
@@ -988,6 +989,31 @@ impl ResolvedFieldScope {
     }
 }
 
+fn resolve_field_geometry_scope(query: &FieldVectorQuery) -> Result<&str, ApiError> {
+    let geometry_scope = query
+        .geometry_scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("full");
+    if geometry_scope != "full" && geometry_scope != "surface" {
+        return Err(ApiError::bad_request(format!(
+            "unsupported field geometry_scope '{geometry_scope}'"
+        )));
+    }
+    let scope_kind = query
+        .scope_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if geometry_scope == "surface" && scope_kind != Some("airbox") {
+        return Err(ApiError::bad_request(
+            "field geometry_scope 'surface' currently requires scope_kind 'airbox'",
+        ));
+    }
+    Ok(geometry_scope)
+}
+
 fn resolve_field_scope(
     query: &FieldVectorQuery,
     snapshot: &SessionStateResponse,
@@ -995,6 +1021,7 @@ fn resolve_field_scope(
     raw_point_count: usize,
     quantity_id: &str,
 ) -> Result<Option<ResolvedFieldScope>, ApiError> {
+    let geometry_scope = resolve_field_geometry_scope(query)?;
     let Some(scope_kind) = query
         .scope_kind
         .as_deref()
@@ -1039,7 +1066,11 @@ fn resolve_field_scope(
                 domain: ResolvedFieldScopeDomain::Air,
                 kind: "airbox".to_string(),
                 id: Some(part.id.clone()),
-                node_indices: node_indices_for_airbox_part(mesh, part),
+                node_indices: node_indices_for_airbox_part(
+                    mesh,
+                    part,
+                    geometry_scope == "surface",
+                )?,
             }
         }
         "selection" => {
@@ -1167,14 +1198,26 @@ fn node_indices_for_part(part: &fullmag_runner::FemMeshPartPayload) -> Vec<usize
 fn node_indices_for_airbox_part(
     mesh: &FemMeshPayload,
     part: &fullmag_runner::FemMeshPartPayload,
-) -> Vec<usize> {
-    let mut node_indices = node_indices_for_part(part);
+    surface_only: bool,
+) -> Result<Vec<usize>, ApiError> {
+    let mut node_indices = if surface_only {
+        crate::router_v2::handlers::shared::mesh_part_surface_node_indices(mesh, part)
+            .map(|indices| indices.into_iter().map(|index| index as usize).collect())
+            .ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "airbox surface membership is unavailable for mesh part '{}'",
+                    part.id
+                ))
+            })?
+    } else {
+        node_indices_for_part(part)
+    };
     let magnetic_nodes = magnetic_node_index_set(mesh);
     if magnetic_nodes.is_empty() {
-        return node_indices;
+        return Ok(node_indices);
     }
     node_indices.retain(|index| !magnetic_nodes.contains(index));
-    node_indices
+    Ok(node_indices)
 }
 
 fn magnetic_node_index_set(mesh: &FemMeshPayload) -> BTreeSet<usize> {
@@ -1448,7 +1491,22 @@ fn sample_unscoped_field_values(
         FieldVectorQuery,
     ),
     responses(
-        (status = 200, description = "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads.", content_type = "application/octet-stream"),
+        (status = 200, description = "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads.", content_type = "application/octet-stream", headers(
+            ("x-fullmag-field-revision" = String, description = "Field revision"),
+            ("x-fullmag-domain-generation-id" = String, description = "Domain generation identity"),
+            ("x-fullmag-quantity-id" = String, description = "Canonical quantity identifier"),
+            ("x-fullmag-component" = String, description = "Resolved component projection"),
+            ("x-fullmag-encoding" = String, description = "FMVP encoding and version"),
+            ("x-fullmag-point-count" = usize, description = "Decoded point count"),
+            ("x-fullmag-value-count" = usize, description = "Scalar value count"),
+            ("x-fullmag-n-comp" = usize, description = "Components per point"),
+            ("x-fullmag-scope-kind" = String, description = "Resolved scope kind"),
+            ("x-fullmag-scope-id" = String, description = "Resolved optional scope identifier"),
+            ("x-fullmag-snapshot-id" = String, description = "Optional persisted snapshot identifier"),
+            ("x-fullmag-mesh-topology-hash" = String, description = "Optional FMVP v3 mesh topology hash"),
+            ("x-fullmag-field-indexing" = String, description = "Optional FMVP v3 field indexing"),
+            ("x-fullmag-node-index-count" = usize, description = "Optional FMVP v3 node-index count")
+        )),
         (status = 204, description = "Recognized field quantity is not available yet"),
         (status = 304, description = "Not modified — ETag matched"),
         (status = 400, description = "Invalid component or snapshot parameter"),
@@ -1465,6 +1523,7 @@ pub async fn get_field_vector(
 ) -> Result<axum::response::Response, ApiError> {
     let quantity_id = canonical_quantity_id(&quantity_id);
     let quantity_id = quantity_id.as_ref();
+    resolve_field_geometry_scope(&query)?;
     let workspace_selection = if query.scope_kind.as_deref() == Some("selection") {
         Some(state.current_workspace_selection.read().await.clone())
     } else {
@@ -1607,11 +1666,22 @@ pub async fn get_field_vector(
         .map(ResolvedFieldScope::cache_token)
         .unwrap_or_else(|| "full-domain".to_string());
     let sample_token = field_vector_sample_cache_token(sample_limit);
+    let geometry_scope_token = query
+        .geometry_scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "full")
+        .map(|value| format!(":geometry_scope={value}"))
+        .unwrap_or_default();
     let snapshot_token = requested_snapshot_id
         .map(|snapshot_id| format!(":snapshot={snapshot_id}"))
         .unwrap_or_default();
+    let topology_etag_token = topology_hash
+        .as_ref()
+        .map(|hash| format!(":topology_revision={topology_revision}:topology_hash={hash}"))
+        .unwrap_or_default();
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{}:{scope_token}{sample_token}{snapshot_token}",
+        "{}:{scope_token}{geometry_scope_token}{sample_token}{snapshot_token}{topology_etag_token}",
         component_etag_token(quantity_id, field_revision, gen_id, &component)
     ));
     let scoped_grid = resolved_scope
@@ -4822,6 +4892,7 @@ mod tests {
             domain_frame: None,
             generation_id: Some("multi-airbox-generation".to_string()),
             per_domain_quality: Default::default(),
+            build_report: None,
         };
         let request: CurrentLiveSnapshotRequest =
             serde_json::from_value(serde_json::json!({ "session_id": "scope-test" }))
@@ -4832,6 +4903,7 @@ mod tests {
         let scope = resolve_field_scope(
             &FieldVectorQuery {
                 component: Some("full".to_string()),
+                geometry_scope: None,
                 max_samples: None,
                 phase_rad: None,
                 scope_id: Some("airbox-b".to_string()),
@@ -5118,6 +5190,7 @@ mod tests {
             per_domain_quality: std::collections::HashMap::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
+            build_report: None,
         });
         let values = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 

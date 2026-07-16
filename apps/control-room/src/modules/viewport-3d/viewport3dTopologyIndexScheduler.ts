@@ -138,13 +138,22 @@ async function executeViewport3DTopologyIndexBuild(
   return buildViewport3DTopologyIndexBundle(request);
 }
 
-export function disposeViewport3DTopologyIndexWorkerForTests(): void {
+export function disposeViewport3DTopologyIndexWorker(): void {
   topologyIndexBuildJobScheduler?.dispose();
   topologyIndexBuildJobScheduler = undefined;
   topologyIndexWorkerClient?.dispose();
   topologyIndexWorkerClient = undefined;
   topologyIndexWorkerFallbackReason = undefined;
 }
+
+/** @deprecated Use disposeViewport3DTopologyIndexWorker. */
+export const disposeViewport3DTopologyIndexWorkerForTests =
+  disposeViewport3DTopologyIndexWorker;
+
+export function getViewport3DTopologyIndexWorkerRuntimeCounts(): { timers: number; workers: number } {
+  return topologyIndexWorkerClient?.getRuntimeCounts() ?? { timers: 0, workers: 0 };
+}
+export function getViewport3DTopologyIndexPendingJobCount(): number { return topologyIndexBuildJobScheduler?.getPendingJobCount() ?? 0; }
 
 function getTopologyIndexBuildJobScheduler(): ReturnType<
   typeof createViewport3DBuildScheduler
@@ -284,6 +293,10 @@ class TopologyIndexWorkerClient {
     if (topologyIndexWorkerClient === this) {
       topologyIndexWorkerClient = undefined;
     }
+  }
+
+  getRuntimeCounts(): { timers: number; workers: number } {
+    return { timers: this.idleTimeoutId === null ? 0 : 1, workers: this.disposed ? 0 : 1 };
   }
 
   private readonly handleMessage = (

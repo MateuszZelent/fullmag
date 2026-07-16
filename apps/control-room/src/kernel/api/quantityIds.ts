@@ -1,5 +1,6 @@
 const CANONICAL_QUANTITY_IDS: Record<string, string> = {
   M: "m",
+  B_drive: "B_drive",
   dm_dt: "dm_dt",
   eden_ani: "eden_ani",
   eden_demag: "eden_demag",
@@ -17,6 +18,7 @@ const CANONICAL_QUANTITY_IDS: Record<string, string> = {
   h_demag: "H_demag",
   h_dmi: "H_dmi",
   h_dmi_bulk: "H_dmi_bulk",
+  h_drive: "H_drive",
   h_eff: "H_eff",
   h_ex: "H_ex",
   h_ext: "H_ext",
@@ -46,6 +48,8 @@ const MAGNETIC_ONLY_QUANTITY_IDS = new Set([
   "H_mel",
   "H_ani_cubic",
   "H_ant",
+  "H_drive",
+  "B_drive",
   "H_dmi_bulk",
   "H_therm",
   "E_ex",
@@ -87,6 +91,7 @@ const SCALAR_SPATIAL_QUANTITY_IDS = new Set([
 ]);
 
 const QUANTITY_UNITS: Record<string, string> = {
+  B_drive: "T",
   E_ani: "J",
   E_demag: "J",
   E_dmi: "J",
@@ -96,6 +101,7 @@ const QUANTITY_UNITS: Record<string, string> = {
   H_ani: "A/m",
   H_ani_cubic: "A/m",
   H_ant: "A/m",
+  H_drive: "A/m",
   H_demag: "A/m",
   H_dmi: "A/m",
   H_dmi_bulk: "A/m",
@@ -120,6 +126,19 @@ const QUANTITY_UNITS: Record<string, string> = {
   mat_ms: "A/m",
   torque: "T",
 };
+
+export const VACUUM_PERMEABILITY_H_PER_M = 4e-7 * Math.PI;
+
+export function storedFieldQuantityId(quantityId: string): string {
+  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+  return canonicalQuantityId === "B_drive" ? "H_drive" : canonicalQuantityId;
+}
+
+export function fieldDisplayScale(quantityId: string): number {
+  return resolveCanonicalQuantityId(quantityId) === "B_drive"
+    ? VACUUM_PERMEABILITY_H_PER_M
+    : 1;
+}
 
 export function resolveCanonicalQuantityId(quantityId: string): string {
   const trimmed = quantityId.trim();

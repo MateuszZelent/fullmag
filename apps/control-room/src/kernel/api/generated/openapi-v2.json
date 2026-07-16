@@ -2617,9 +2617,7 @@
             ]
           },
           "generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "grid": {
             "oneOf": [
@@ -2670,9 +2668,7 @@
             "type": "number"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "etag": {
             "type": "string"
@@ -2769,9 +2765,7 @@
             "type": "string"
           },
           "generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           }
         },
         "required": [
@@ -2828,6 +2822,244 @@
         },
         "required": [
           "active_scope"
+        ],
+        "type": "object"
+      },
+      "DriveActivationResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "all_time_evolution"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage_ids"
+                ],
+                "type": "string"
+              },
+              "stage_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "stage_ids",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DynamicStructureFactorResource": {
+        "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
+          "bounded": {
+            "type": "boolean"
+          },
+          "component": {
+            "type": "string"
+          },
+          "excluded_absorber_ranges_m": {
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "frequency_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "frequency_hz": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "frequency_unit": {
+            "type": "string"
+          },
+          "invalid_probe_mask": {
+            "items": {
+              "type": "boolean"
+            },
+            "type": "array"
+          },
+          "k_rad_per_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "mesh_probe_signature": {
+            "type": "string"
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "original_frequency_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "original_wavevector_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "phase_convention": {
+            "type": "string"
+          },
+          "power": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "propagation_axis": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_observable": {
+            "type": "string"
+          },
+          "source_power": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_spectrum_imag": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_spectrum_real": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_unit": {
+            "type": "string"
+          },
+          "spatial_window": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "spatial_window_power_sum": {
+            "format": "double",
+            "type": "number"
+          },
+          "spectrum_imag": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "spectrum_real": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "temporal_window": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "temporal_window_power_sum": {
+            "format": "double",
+            "type": "number"
+          },
+          "time_s": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "wavevector_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wavevector_unit": {
+            "type": "string"
+          },
+          "x_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "artifact_ref",
+          "bounded",
+          "original_frequency_count",
+          "original_wavevector_count",
+          "wavevector_unit",
+          "frequency_unit",
+          "x_m",
+          "time_s",
+          "k_rad_per_m",
+          "frequency_hz",
+          "power",
+          "spectrum_real",
+          "spectrum_imag",
+          "source_power",
+          "source_spectrum_real",
+          "source_spectrum_imag",
+          "source_observable",
+          "source_unit",
+          "component",
+          "propagation_axis",
+          "phase_convention",
+          "normalization",
+          "spatial_window",
+          "temporal_window",
+          "spatial_window_power_sum",
+          "temporal_window_power_sum",
+          "mesh_probe_signature",
+          "invalid_probe_mask",
+          "excluded_absorber_ranges_m",
+          "frequency_count",
+          "wavevector_count"
         ],
         "type": "object"
       },
@@ -2938,6 +3170,116 @@
           "revision",
           "total",
           "entries"
+        ],
+        "type": "object"
+      },
+      "FdmRegionLegendEntryResource": {
+        "description": "Thin descriptor for realized FDM cell membership. The mask itself is kept\non the binary data plane under the companion FMRM resource.",
+        "properties": {
+          "numeric_id": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "priority": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "region_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "numeric_id",
+          "object_id",
+          "region_id",
+          "priority"
+        ],
+        "type": "object"
+      },
+      "FdmRegionMembershipResource": {
+        "properties": {
+          "binary_path": {
+            "type": "string"
+          },
+          "cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cell_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "counts": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "freshness": {
+            "type": "string"
+          },
+          "grid_fingerprint": {
+            "type": "string"
+          },
+          "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "region_legend": {
+            "items": {
+              "$ref": "#/components/schemas/FdmRegionLegendEntryResource"
+            },
+            "type": "array"
+          },
+          "region_legend_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "mesh_revision",
+          "region_membership_revision",
+          "freshness",
+          "binary_path",
+          "grid_fingerprint",
+          "origin_m",
+          "counts",
+          "cell_m",
+          "cell_count",
+          "region_legend",
+          "encoding"
         ],
         "type": "object"
       },
@@ -3340,9 +3682,7 @@
       "FieldCatalog": {
         "properties": {
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "quantities": {
             "items": {
@@ -3383,9 +3723,7 @@
             "type": "integer"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "field_revision": {
             "format": "int64",
@@ -3420,6 +3758,166 @@
           "available"
         ],
         "type": "object"
+      },
+      "FieldDriveCreateRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drive": {
+            "$ref": "#/components/schemas/RegionalFieldDriveResource"
+          }
+        },
+        "required": [
+          "drive"
+        ],
+        "type": "object"
+      },
+      "FieldDriveDeleteRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "FieldDriveKindResource": {
+        "enum": [
+          "regional"
+        ],
+        "type": "string"
+      },
+      "FieldDriveListResource": {
+        "properties": {
+          "drives": {
+            "items": {
+              "$ref": "#/components/schemas/RegionalFieldDriveResource"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "drives"
+        ],
+        "type": "object"
+      },
+      "FieldDriveListStateResource": {
+        "additionalProperties": false,
+        "properties": {
+          "drives": {
+            "items": {
+              "$ref": "#/components/schemas/RegionalFieldDriveResource"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "FieldDriveMigrationResource": {
+        "additionalProperties": false,
+        "properties": {
+          "migrated_from": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "migrated_from"
+        ],
+        "type": "object"
+      },
+      "FieldDriveReplaceRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drive": {
+            "$ref": "#/components/schemas/RegionalFieldDriveResource"
+          }
+        },
+        "required": [
+          "drive"
+        ],
+        "type": "object"
+      },
+      "FieldEnvelopeResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "uniform"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinc"
+                ],
+                "type": "string"
+              },
+              "period_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "width_m": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "window": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "axis",
+              "period_m",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "FieldMatrixResponse": {
         "properties": {
@@ -3582,9 +4080,7 @@
             "type": "integer"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "field_revision": {
             "format": "int64",
@@ -3674,9 +4170,7 @@
             "type": "string"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "empty_count": {
             "format": "int32",
@@ -3795,9 +4289,7 @@
             "type": "string"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "field_revision": {
             "format": "int64",
@@ -4047,9 +4539,7 @@
             ]
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "etag": {
             "description": "Stable fingerprint covering all resolved parameters (ETag for the meta resource).",
@@ -4111,6 +4601,87 @@
           "arrows"
         ],
         "type": "object"
+      },
+      "FieldSpatialProfileResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "uniform"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinc"
+                ],
+                "type": "string"
+              },
+              "period_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "width_m": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "window": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "axis",
+              "period_m",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "envelope": {
+                "$ref": "#/components/schemas/FieldEnvelopeResource"
+              },
+              "kind": {
+                "enum": [
+                  "geometry_mask"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "envelope",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "FieldStateExportRequest": {
         "properties": {
@@ -4356,11 +4927,83 @@
         ],
         "type": "object"
       },
+      "FieldTargetResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "global"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FieldTimeOriginResource": {
+        "enum": [
+          "stage_local",
+          "absolute"
+        ],
+        "type": "string"
+      },
       "FieldVectorQuery": {
         "description": "Query parameters for the `/fields/{quantity_id}/vector` endpoint.",
         "properties": {
           "component": {
             "description": "Component to return.\n\nAccepted values: `full` (default), `magnitude`, `x`, `y`, `z`, `c0`, `c1`, …, `cN-1`.\n\n- `full` → full interleaved vector (nComp unchanged)\n- `magnitude` → per-point L2 norm (nComp=1)\n- `x`/`y`/`z`/`cN` → single component by index (nComp=1)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "geometry_scope": {
+            "description": "Optional geometric subset for scoped vector samples.\n\nAccepted values: `full` (default) and `surface`. `surface` is currently\nsupported for `airbox` scope and is resolved from the selected mesh\npart's canonical surface-node membership before `max_samples` is applied.",
             "type": [
               "string",
               "null"
@@ -8004,6 +8647,14 @@
             "additionalProperties": true,
             "type": "object"
           },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "scene_revision": {
             "format": "int64",
             "minimum": 0,
@@ -8023,6 +8674,14 @@
               "$ref": "#/components/schemas/MaterialParameterFieldDataSummaryResource"
             },
             "type": "array"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "scene_revision": {
             "format": "int64",
@@ -8136,6 +8795,14 @@
           },
           "realization_status": {
             "type": "string"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "sample_count": {
             "format": "int64",
@@ -8254,6 +8921,14 @@
               "$ref": "#/components/schemas/MaterialParameterFieldResource"
             },
             "type": "array"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "scene_revision": {
             "format": "int64",
@@ -8532,6 +9207,14 @@
               "$ref": "#/components/schemas/MaterialReferenceResource"
             },
             "type": "array"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
@@ -9605,6 +10288,17 @@
               "type": "array"
             },
             "type": "array"
+          },
+          "surface_node_indices": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
           }
         },
         "required": [
@@ -9721,6 +10415,15 @@
       },
       "MeshPeriodicBoundaryFacePairResource": {
         "properties": {
+          "area_residual_m2": {
+            "format": "double",
+            "type": "number"
+          },
+          "destination_marker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "face_a": {
             "format": "int32",
             "minimum": 0,
@@ -9741,10 +10444,30 @@
           "orientation": {
             "type": "string"
           },
+          "source_marker": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "translation_m": {
             "items": {
               "format": "double",
               "type": "number"
+            },
+            "type": "array"
+          },
+          "translation_residual_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "vertex_pairs": {
+            "items": {
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
             },
             "type": "array"
           }
@@ -9827,6 +10550,22 @@
               "null"
             ]
           },
+          "mixed_domain_node_pair_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node_pairs": {
+            "items": {
+              "items": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
           "pair_id": {
             "type": "string"
           },
@@ -9851,7 +10590,17 @@
           "status": {
             "type": "string"
           },
+          "unpaired_destination_face_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "unpaired_destination_node_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unpaired_source_face_count": {
             "format": "int32",
             "minimum": 0,
             "type": "integer"
@@ -9875,6 +10624,26 @@
       },
       "MeshPeriodicPairsResource": {
         "properties": {
+          "certificate_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "certificate_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "pairs": {
             "items": {
               "$ref": "#/components/schemas/MeshPeriodicPairResource"
@@ -9888,6 +10657,30 @@
           },
           "schema_version": {
             "type": "string"
+          },
+          "source_scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/PeriodicValidationStatus",
+            "description": "Aggregate certificate/resource status. `valid` is reserved for a\ncurrent accepted v6 certificate with complete pair diagnostics."
+          },
+          "status_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "topology_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -10050,6 +10843,16 @@
             },
             "type": "array"
           },
+          "freshness": {
+            "description": "`current` applies only to certified mesh membership; `preview` is analytic projection.",
+            "type": "string"
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "mesh_id": {
             "type": "string"
           },
@@ -10072,6 +10875,9 @@
             },
             "type": "array"
           },
+          "realization": {
+            "type": "string"
+          },
           "realization_method": {
             "type": [
               "string",
@@ -10087,13 +10893,29 @@
           "region_id": {
             "type": "string"
           },
+          "region_membership_revision": {
+            "description": "Independent region-membership realization revision, not the scene journal revision.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "source": {
             "type": "string"
+          },
+          "topology_fingerprint": {
+            "description": "Stable identity of the mesh topology used for this membership.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "mesh_id",
           "mesh_revision",
+          "region_membership_revision",
+          "freshness",
+          "realization",
           "region_id",
           "source",
           "mesh_part_ids",
@@ -10309,9 +11131,21 @@
             },
             "type": "array"
           },
+          "object_region_markers": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
           "operation_statuses": {
             "items": {
               "$ref": "#/components/schemas/MeshOperationStatusResource"
+            },
+            "type": "array"
+          },
+          "orphan_entities": {
+            "items": {
+              "type": "object"
             },
             "type": "array"
           },
@@ -10326,6 +11160,18 @@
           "region_markers": {
             "items": {
               "$ref": "#/components/schemas/MeshDomainRegionMarkerResource"
+            },
+            "type": "array"
+          },
+          "rejected_element_types": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "selector_resolution": {
+            "items": {
+              "type": "object"
             },
             "type": "array"
           },
@@ -10485,6 +11331,17 @@
       },
       "MeshSolverMeshResource": {
         "properties": {
+          "build_report": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshSharedDomainBuildReportResource",
+                "description": "Immutable requested-vs-realized report for this mesh build revision."
+              }
+            ]
+          },
           "domain_mesh_mode": {
             "type": [
               "string",
@@ -11167,6 +12024,15 @@
         ],
         "type": "object"
       },
+      "PeriodicValidationStatus": {
+        "enum": [
+          "valid",
+          "invalid",
+          "stale",
+          "unavailable"
+        ],
+        "type": "string"
+      },
       "PrimitiveGeometryCapability": {
         "properties": {
           "boolean": {
@@ -11799,6 +12665,38 @@
             },
             "type": "array"
           },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "scene_revision": {
             "format": "int64",
             "minimum": 0,
@@ -11817,6 +12715,38 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "regions": {
             "items": {
@@ -11864,6 +12794,26 @@
             "minimum": 0,
             "type": "integer"
           },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_topology_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "scene_revision": {
             "format": "int64",
             "minimum": 0,
@@ -11872,6 +12822,10 @@
         },
         "required": [
           "scene_revision",
+          "region_topology_revision",
+          "region_membership_revision",
+          "region_coefficients_revision",
+          "region_initial_state_revision",
           "authored_region_count",
           "material_parameter_field_count",
           "coupling_count",
@@ -12069,6 +13023,72 @@
         ],
         "type": "object"
       },
+      "RegionalFieldDriveResource": {
+        "additionalProperties": false,
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/DriveActivationResource"
+          },
+          "amplitude_B_T": {
+            "format": "double",
+            "type": "number"
+          },
+          "direction": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FieldDriveKindResource"
+          },
+          "migration": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FieldDriveMigrationResource"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "spatial_profile": {
+            "$ref": "#/components/schemas/FieldSpatialProfileResource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          },
+          "time_origin": {
+            "$ref": "#/components/schemas/FieldTimeOriginResource"
+          },
+          "waveform": {
+            "$ref": "#/components/schemas/TimeDependenceResource"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "target",
+          "amplitude_B_T",
+          "direction",
+          "spatial_profile",
+          "waveform",
+          "time_origin",
+          "activation"
+        ],
+        "type": "object"
+      },
       "RelaxationAlgorithm": {
         "enum": [
           "llg_overdamped",
@@ -12133,9 +13153,7 @@
             "type": "integer"
           },
           "domain_generation_id": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "engine_log_revision": {
             "format": "int64",
@@ -12163,6 +13181,26 @@
             "type": "integer"
           },
           "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "region_topology_revision": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -12230,7 +13268,11 @@
           "mesh_build_revision",
           "commands_revision",
           "stages_revision",
-          "visualization_state_revision"
+          "visualization_state_revision",
+          "region_topology_revision",
+          "region_membership_revision",
+          "region_coefficients_revision",
+          "region_initial_state_revision"
         ],
         "type": "object"
       },
@@ -12360,6 +13402,38 @@
             ]
           },
           "mesh_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_coefficients_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_initial_state_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "region_topology_revision": {
             "format": "int64",
             "minimum": 0,
             "type": [
@@ -13896,6 +14970,9 @@
               "object",
               "null"
             ]
+          },
+          "field_drives": {
+            "$ref": "#/components/schemas/FieldDriveListStateResource"
           },
           "magnetization_assets": {
             "items": {
@@ -15540,6 +16617,252 @@
         ],
         "type": "object"
       },
+      "SpinWaveGammaResource": {
+        "properties": {
+          "detrend": {
+            "type": "string"
+          },
+          "frequency_hz": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "frequency_unit": {
+            "type": "string"
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "nyquist_hz": {
+            "format": "double",
+            "type": "number"
+          },
+          "peaks": {
+            "items": {
+              "$ref": "#/components/schemas/SpinWavePeakResource"
+            },
+            "type": "array"
+          },
+          "primary_response_psd": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "reference_m0": {
+            "format": "double",
+            "type": "number"
+          },
+          "reference_m0_secondary": {
+            "format": "double",
+            "type": "number"
+          },
+          "response_component": {
+            "type": "string"
+          },
+          "response_psd": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "response_spectrum_imag": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "response_spectrum_real": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "response_trace": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "secondary_response_psd": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "secondary_response_spectrum_imag": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "secondary_response_spectrum_real": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "secondary_response_trace": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_psd": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_spectrum_imag": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_spectrum_real": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_trace": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_unit": {
+            "type": "string"
+          },
+          "susceptibility_abs": {
+            "items": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "type": "array"
+          },
+          "susceptibility_unit": {
+            "type": "string"
+          },
+          "time_s": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "time_unit": {
+            "type": "string"
+          },
+          "trace_unit": {
+            "type": "string"
+          },
+          "transverse_components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "weighting": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          },
+          "window_power_sum": {
+            "format": "double",
+            "type": "number"
+          },
+          "window_values": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "time_unit",
+          "frequency_unit",
+          "trace_unit",
+          "source_unit",
+          "susceptibility_unit",
+          "weighting",
+          "detrend",
+          "window",
+          "normalization",
+          "reference_m0",
+          "reference_m0_secondary",
+          "response_component",
+          "transverse_components",
+          "time_s",
+          "response_trace",
+          "secondary_response_trace",
+          "source_trace",
+          "frequency_hz",
+          "response_psd",
+          "primary_response_psd",
+          "secondary_response_psd",
+          "source_psd",
+          "response_spectrum_real",
+          "response_spectrum_imag",
+          "secondary_response_spectrum_real",
+          "secondary_response_spectrum_imag",
+          "source_spectrum_real",
+          "source_spectrum_imag",
+          "window_values",
+          "window_power_sum",
+          "nyquist_hz",
+          "susceptibility_abs",
+          "peaks"
+        ],
+        "type": "object"
+      },
+      "SpinWavePeakResource": {
+        "properties": {
+          "frequency_hz": {
+            "format": "double",
+            "type": "number"
+          },
+          "index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "power": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "index",
+          "frequency_hz",
+          "power"
+        ],
+        "type": "object"
+      },
       "StageExecutionRecordResource": {
         "properties": {
           "action": {
@@ -16689,6 +18012,166 @@
         ],
         "type": "object"
       },
+      "TimeDependenceResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "constant"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "frequency_hz": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinusoidal"
+                ],
+                "type": "string"
+              },
+              "offset": {
+                "format": "double",
+                "type": "number"
+              },
+              "phase_rad": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "frequency_hz",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "pulse"
+                ],
+                "type": "string"
+              },
+              "t_off": {
+                "format": "double",
+                "type": "number"
+              },
+              "t_on": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "t_on",
+              "t_off",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "piecewise_linear"
+                ],
+                "type": "string"
+              },
+              "points": {
+                "items": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "points",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "amplitude": {
+                "format": "double",
+                "type": "number"
+              },
+              "cutoff_hz": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinc_pulse"
+                ],
+                "type": "string"
+              },
+              "t0": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "cutoff_hz",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "TopologicalChargeExecutionProvenance": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "engine_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lossy_fallback_used": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "precision": {
+            "type": "string"
+          },
+          "runtime_family": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "backend",
+          "device",
+          "precision",
+          "mode",
+          "lossy_fallback_used"
+        ],
+        "type": "object"
+      },
       "TopologicalChargeLayerSample": {
         "properties": {
           "charge": {
@@ -16698,48 +18181,167 @@
               "null"
             ]
           },
-          "coordinate": {
+          "coordinate_m": {
             "format": "double",
             "type": "number"
           },
           "index": {
+            "format": "int32",
             "minimum": 0,
             "type": "integer"
           },
-          "sample_count": {
+          "integration_weight_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TopologicalChargeStatus"
+          },
+          "total_triangle_count": {
+            "format": "int64",
             "minimum": 0,
             "type": "integer"
           },
-          "triangle_count": {
-            "minimum": 0,
-            "type": "integer"
+          "trust": {
+            "$ref": "#/components/schemas/TopologicalChargeTrust"
           },
-          "valid_sample_count": {
+          "valid_triangle_count": {
+            "format": "int64",
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
           "index",
-          "coordinate",
-          "sample_count",
-          "valid_sample_count",
-          "triangle_count"
+          "coordinate_m",
+          "integration_weight_m",
+          "status",
+          "trust",
+          "valid_triangle_count",
+          "total_triangle_count"
         ],
         "type": "object"
       },
-      "TopologicalChargeQuery": {
+      "TopologicalChargeMethod": {
+        "description": "The single production discretization method for schema v2.",
+        "enum": [
+          "berg_luescher_oriented_triangles_v2"
+        ],
+        "type": "string"
+      },
+      "TopologicalChargeMethodDescriptor": {
         "properties": {
-          "method": {
-            "type": "string"
-          },
-          "plane": {
-            "type": "string"
+          "id": {
+            "$ref": "#/components/schemas/TopologicalChargeMethod"
           },
           "quantity_id": {
             "type": "string"
           },
-          "resolution": {
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "quantity_id"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargePlane": {
+        "description": "The ordered support plane.  The canonical `(u, v, n)` frame is published in\nthe response because `xz` has normal `-y`, not `+y`.",
+        "enum": [
+          "auto",
+          "xy",
+          "xz",
+          "yz"
+        ],
+        "type": "string"
+      },
+      "TopologicalChargeProfileSamples": {
+        "description": "A bounded request for exact profile cuts.\n\nQuery parameters are strings, so deserialization accepts `auto` and decimal\nintegers only.  The numeric bounds are enforced at the public boundary.",
+        "oneOf": [
+          {
+            "enum": [
+              "auto"
+            ],
+            "type": "string"
+          },
+          {
+            "properties": {
+              "count": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "count"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "TopologicalChargeProvenance": {
+        "properties": {
+          "cache_key_digest": {
+            "type": "string"
+          },
+          "discretization": {
+            "type": "string"
+          },
+          "domain_generation_id": {
+            "type": "string"
+          },
+          "fe_order": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "field_id": {
+            "type": "string"
+          },
+          "field_node_mapping_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "field_revision": {
+            "type": "string"
+          },
+          "field_storage_domain": {
+            "type": "string"
+          },
+          "mesh_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mesh_revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requested_execution": {
+            "$ref": "#/components/schemas/TopologicalChargeExecutionProvenance"
+          },
+          "resolved_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TopologicalChargeExecutionProvenance"
+              }
+            ]
+          },
+          "scene_revision": {
             "type": "string"
           },
           "snapshot_id": {
@@ -16747,11 +18349,223 @@
               "string",
               "null"
             ]
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "source_kind",
+          "field_id",
+          "field_revision",
+          "field_storage_domain",
+          "scene_revision",
+          "domain_generation_id",
+          "discretization",
+          "requested_execution",
+          "cache_key_digest"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeQuality": {
+        "properties": {
+          "boundary_edge_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "boundary_loop_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "boundary_max_deviation_rad": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "connected_component_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "euler_characteristic": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "exceptional_triangle_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "invalid_triangle_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_edge_angle_rad": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "min_abs_solid_angle_denominator": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "total_triangle_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_vertex_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "valid_triangle_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "valid_vertex_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_vertex_count",
+          "valid_vertex_count",
+          "total_triangle_count",
+          "valid_triangle_count",
+          "invalid_triangle_count",
+          "exceptional_triangle_count",
+          "connected_component_count",
+          "boundary_edge_count",
+          "boundary_loop_count"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeQueryV2": {
+        "description": "Typed query for the v2 analysis resource.",
+        "properties": {
+          "method": {
+            "$ref": "#/components/schemas/TopologicalChargeMethod"
+          },
+          "plane": {
+            "$ref": "#/components/schemas/TopologicalChargePlane"
+          },
+          "profile_samples": {
+            "example": "auto",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "support": {
+            "$ref": "#/components/schemas/TopologicalChargeSupportMode"
           }
         },
         "type": "object"
       },
-      "TopologicalChargeResource": {
+      "TopologicalChargeRequestEcho": {
+        "properties": {
+          "requested_plane": {
+            "$ref": "#/components/schemas/TopologicalChargePlane"
+          },
+          "requested_profile_samples": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TopologicalChargeProfileSamples"
+              }
+            ]
+          },
+          "requested_support": {
+            "$ref": "#/components/schemas/TopologicalChargeSupportMode"
+          },
+          "snapshot_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stage_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "requested_plane",
+          "requested_support"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeResolvedSupport": {
+        "properties": {
+          "coordinate_m": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "plane": {
+            "$ref": "#/components/schemas/TopologicalChargePlane"
+          },
+          "profile_sample_count": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "support": {
+            "$ref": "#/components/schemas/TopologicalChargeSupportMode"
+          }
+        },
+        "required": [
+          "plane",
+          "support",
+          "source_kind"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeResourceV2": {
+        "description": "Versioned resource published by the topological-charge endpoint.",
         "properties": {
           "charge": {
             "format": "double",
@@ -16765,20 +18579,6 @@
             "minimum": 0,
             "type": "integer"
           },
-          "domain_generation_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "field_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
           "integer_error": {
             "format": "double",
             "type": [
@@ -16786,28 +18586,8 @@
               "null"
             ]
           },
-          "layer_samples": {
-            "items": {
-              "$ref": "#/components/schemas/TopologicalChargeLayerSample"
-            },
-            "type": "array"
-          },
-          "mesh_generation_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "mesh_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
           "method": {
-            "type": "string"
+            "$ref": "#/components/schemas/TopologicalChargeMethodDescriptor"
           },
           "nearest_integer": {
             "format": "int64",
@@ -16819,53 +18599,39 @@
           "object_id": {
             "type": "string"
           },
-          "plane": {
+          "profile": {
+            "items": {
+              "$ref": "#/components/schemas/TopologicalChargeLayerSample"
+            },
+            "type": "array"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/TopologicalChargeProvenance"
+          },
+          "quality": {
+            "$ref": "#/components/schemas/TopologicalChargeQuality"
+          },
+          "request": {
+            "$ref": "#/components/schemas/TopologicalChargeRequestEcho"
+          },
+          "resolved_support": {
+            "$ref": "#/components/schemas/TopologicalChargeResolvedSupport"
+          },
+          "resource_revision": {
             "type": "string"
           },
-          "polarity": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "quantity_id": {
+          "schema_version": {
+            "example": "topological_charge.v2",
             "type": "string"
-          },
-          "revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "sample_count": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "sample_grid": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/TopologicalChargeSampleGrid"
-              }
-            ]
-          },
-          "sample_topology": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/TopologicalChargeSampleTopology"
-              }
-            ]
           },
           "status": {
             "$ref": "#/components/schemas/TopologicalChargeStatus"
           },
-          "valid_sample_count": {
-            "minimum": 0,
-            "type": "integer"
+          "support_frame": {
+            "$ref": "#/components/schemas/TopologicalChargeSupportFrame"
+          },
+          "trust": {
+            "$ref": "#/components/schemas/TopologicalChargeTrust"
           },
           "warnings": {
             "items": {
@@ -16875,65 +18641,23 @@
           }
         },
         "required": [
+          "schema_version",
+          "resource_revision",
           "object_id",
-          "quantity_id",
-          "revision",
           "status",
+          "trust",
+          "request",
+          "resolved_support",
+          "support_frame",
+          "quality",
+          "provenance",
           "method",
-          "plane",
-          "layer_samples",
-          "sample_count",
-          "valid_sample_count",
-          "computed_at_unix_ms",
-          "warnings"
-        ],
-        "type": "object"
-      },
-      "TopologicalChargeSampleGrid": {
-        "properties": {
-          "nx": {
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "ny": {
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "plane": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "nx",
-          "ny",
-          "plane"
-        ],
-        "type": "object"
-      },
-      "TopologicalChargeSampleTopology": {
-        "properties": {
-          "kind": {
-            "type": "string"
-          },
-          "point_count": {
-            "minimum": 0,
-            "type": "integer"
-          },
-          "triangle_count": {
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "kind",
-          "point_count",
-          "triangle_count"
+          "computed_at_unix_ms"
         ],
         "type": "object"
       },
       "TopologicalChargeStatus": {
+        "description": "Expected scientific computation states.  Transport lifecycle is intentionally\nabsent: `idle`, `loading`, `stale`, and `error` belong to the resource hook.",
         "enum": [
           "ready",
           "no_current_magnetization",
@@ -16941,9 +18665,58 @@
           "invalid_magnetization",
           "degenerate_support",
           "under_resolved",
-          "stale",
           "unsupported_geometry",
-          "error"
+          "unsupported_discretization"
+        ],
+        "type": "string"
+      },
+      "TopologicalChargeSupportFrame": {
+        "properties": {
+          "normal_axis": {
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "u_axis": {
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "v_axis": {
+            "items": {
+              "format": "int32",
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "u_axis",
+          "v_axis",
+          "normal_axis"
+        ],
+        "type": "object"
+      },
+      "TopologicalChargeSupportMode": {
+        "description": "Whether the result represents one exact midplane or a thickness profile.",
+        "enum": [
+          "midplane",
+          "layer_profile"
+        ],
+        "type": "string"
+      },
+      "TopologicalChargeTrust": {
+        "description": "Scientific trust is intentionally distinct from whether computation produced\na finite diagnostic integral.",
+        "enum": [
+          "qualified",
+          "diagnostic_boundary",
+          "diagnostic_resolution",
+          "diagnostic_topology",
+          "unavailable"
         ],
         "type": "string"
       },
@@ -16954,10 +18727,14 @@
           },
           "message": {
             "type": "string"
+          },
+          "severity": {
+            "type": "string"
           }
         },
         "required": [
           "code",
+          "severity",
           "message"
         ],
         "type": "object"
@@ -19192,7 +20969,7 @@
         "operationId": "analysis_get_sessions_current_analysis_extensions_objects_object_id_topological_charge",
         "parameters": [
           {
-            "description": "Canonical scene object id",
+            "description": "Object id",
             "in": "path",
             "name": "object_id",
             "required": true,
@@ -19202,26 +20979,26 @@
           },
           {
             "in": "query",
-            "name": "quantity_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
             "name": "plane",
             "required": false,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/TopologicalChargePlane"
             }
           },
           {
             "in": "query",
-            "name": "resolution",
+            "name": "support",
             "required": false,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/TopologicalChargeSupportMode"
+            }
+          },
+          {
+            "in": "query",
+            "name": "profile_samples",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TopologicalChargeProfileSamples"
             }
           },
           {
@@ -19229,10 +21006,15 @@
             "name": "snapshot_id",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -19240,7 +21022,7 @@
             "name": "method",
             "required": false,
             "schema": {
-              "type": "string"
+              "$ref": "#/components/schemas/TopologicalChargeMethod"
             }
           }
         ],
@@ -19249,14 +21031,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TopologicalChargeResource"
+                  "$ref": "#/components/schemas/TopologicalChargeResourceV2"
                 }
               }
             },
-            "description": "Object-scoped topological charge analysis resource"
-          },
-          "404": {
-            "description": "Object or workspace not found"
+            "description": "Versioned topological charge resource"
           }
         },
         "tags": [
@@ -20080,6 +21859,52 @@
         ]
       }
     },
+    "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_spin_wave_dynamic_structure_factor_v1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DynamicStructureFactorResource"
+                }
+              }
+            },
+            "description": "Finite-k dynamic structure factor"
+          },
+          "404": {
+            "description": "No finite-k spin-wave artifact"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/spin-wave/gamma.v1": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_spin_wave_gamma_v1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpinWaveGammaResource"
+                }
+              }
+            },
+            "description": "Moment-weighted Γ time trace and spectrum"
+          },
+          "404": {
+            "description": "No Γ spin-wave response artifact"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
     "/v2/sessions/current/data/artifacts": {
       "get": {
         "operationId": "data_get_sessions_current_data_artifacts",
@@ -20272,6 +22097,152 @@
           },
           "416": {
             "description": "Requested topology byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fdm-region-membership": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fdm_region_membership",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous FMRM response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for the FMRM payload",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Binary realized FDM cell membership (FMRM)"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial FMRM payload"
+          },
+          "304": {
+            "description": "FMRM payload not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No realized FDM region membership artifact"
+          },
+          "416": {
+            "description": "Requested FMRM byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fdm-region-membership/{region_id}": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fdm_region_membership_region_id",
+        "parameters": [
+          {
+            "description": "Canonical authored region ID",
+            "in": "path",
+            "name": "region_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous scoped FMRM response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for the FMRM payload",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Scoped binary realized FDM cell membership (FMRM)"
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial scoped FMRM payload"
+          },
+          "304": {
+            "description": "Scoped FMRM payload not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No realized FDM membership or unknown region ID"
+          },
+          "416": {
+            "description": "Requested FMRM byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fdm-region-memberships": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fdm_region_memberships",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FdmRegionMembershipResource"
+                }
+              }
+            },
+            "description": "Thin descriptor for realized FDM cell membership"
+          },
+          "404": {
+            "description": "No realized FDM region membership artifact"
           }
         },
         "tags": [
@@ -22358,6 +24329,18 @@
             }
           },
           {
+            "description": "Optional geometric subset for scoped vector samples.\n\nAccepted values: `full` (default) and `surface`. `surface` is currently\nsupported for `airbox` scope and is resolved from the selected mesh\npart's canonical surface-node membership before `max_samples` is applied.",
+            "in": "query",
+            "name": "geometry_scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses are valid for vector glyph placement only; surface\nshader coloring requires either full-domain data or an explicit complete\nnode-index mapping for the target surface.",
             "in": "query",
             "name": "max_samples",
@@ -22426,7 +24409,97 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads."
+            "description": "Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads.",
+            "headers": {
+              "x-fullmag-component": {
+                "description": "Resolved component projection",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-domain-generation-id": {
+                "description": "Domain generation identity",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-encoding": {
+                "description": "FMVP encoding and version",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-field-indexing": {
+                "description": "Optional FMVP v3 field indexing",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-field-revision": {
+                "description": "Field revision",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-mesh-topology-hash": {
+                "description": "Optional FMVP v3 mesh topology hash",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-n-comp": {
+                "description": "Components per point",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "x-fullmag-node-index-count": {
+                "description": "Optional FMVP v3 node-index count",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "x-fullmag-point-count": {
+                "description": "Decoded point count",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "x-fullmag-quantity-id": {
+                "description": "Canonical quantity identifier",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-scope-id": {
+                "description": "Resolved optional scope identifier",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-scope-kind": {
+                "description": "Resolved scope kind",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-snapshot-id": {
+                "description": "Optional persisted snapshot identifier",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-value-count": {
+                "description": "Scalar value count",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
           },
           "204": {
             "description": "Recognized field quantity is not available yet"
@@ -23297,6 +25370,66 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "meshing"
+        ]
+      }
+    },
+    "/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin": {
+      "get": {
+        "operationId": "meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1_bin",
+        "parameters": [
+          {
+            "description": "Strong ETag from a previous periodic-pairs binary response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for chunked FMPP reads",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/vnd.fullmag.periodic-pairs.v1": {}
+            },
+            "description": "Versioned binary FEM periodic node/face pairs"
+          },
+          "204": {
+            "description": "No FEM mesh available"
+          },
+          "206": {
+            "content": {
+              "application/vnd.fullmag.periodic-pairs.v1": {}
+            },
+            "description": "Partial binary FEM periodic node/face pairs"
+          },
+          "304": {
+            "description": "Periodic mesh-pair binary not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "No active workspace"
+          },
+          "416": {
+            "description": "Requested byte range is not satisfiable"
           }
         },
         "tags": [
@@ -24698,6 +26831,158 @@
           },
           "404": {
             "description": "Coupling not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/field-drives": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_field_drives",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldDriveListResource"
+                }
+              }
+            },
+            "description": "Canonical regional field drives"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "post": {
+        "operationId": "model_post_sessions_current_model_field_drives",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldDriveCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Created a regional field drive"
+          },
+          "400": {
+            "description": "Invalid field drive"
+          },
+          "409": {
+            "description": "Revision conflict or duplicate field drive"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/field-drives/{drive_id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_field_drives_drive_id",
+        "parameters": [
+          {
+            "description": "Stable field drive id",
+            "in": "path",
+            "name": "drive_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldDriveDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Deleted a regional field drive"
+          },
+          "404": {
+            "description": "Field drive not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "put": {
+        "operationId": "model_put_sessions_current_model_field_drives_drive_id",
+        "parameters": [
+          {
+            "description": "Stable field drive id",
+            "in": "path",
+            "name": "drive_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldDriveReplaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Replaced a regional field drive"
+          },
+          "400": {
+            "description": "Invalid field drive"
+          },
+          "404": {
+            "description": "Field drive not found"
           },
           "409": {
             "description": "Revision conflict"

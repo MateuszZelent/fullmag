@@ -19,6 +19,40 @@ const viewport3dPrimitiveModelSource = readFileSync(
 );
 
 describe("viewport3dPrimitiveModel", () => {
+  it("never creates a parallel primitive or pick target for synthetic __air__", () => {
+    const model = buildViewport3DPrimitiveRenderModel(
+      {
+        revision: 1,
+        objects: [
+          {
+            id: "__air__",
+            name: "Synthetic air",
+            geometry: { geometry_kind: "box", size: [10, 10, 10] },
+          },
+          {
+            id: "__airbox__",
+            name: "Legacy synthetic airbox",
+            geometry: { geometry_kind: "box", size: [10, 10, 10] },
+          },
+          {
+            id: "compat-air",
+            name: "Legacy Airbox",
+            role: "airbox",
+            geometry: { geometry_kind: "box", size: [10, 10, 10] },
+          },
+          {
+            id: "film",
+            name: "Film",
+            geometry: { geometry_kind: "box", size: [1, 1, 1] },
+          },
+        ],
+      } as never,
+      null,
+    );
+
+    expect(model.objects.map((object) => object.objectId)).toEqual(["film"]);
+  });
+
   it("keeps JSON stringify out of primitive geometry key generation", () => {
     expect(viewport3dPrimitiveModelSource).not.toContain("JSON.stringify");
   });

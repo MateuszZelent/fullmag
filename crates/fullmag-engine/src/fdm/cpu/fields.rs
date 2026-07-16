@@ -1331,7 +1331,27 @@ impl ExchangeLlgProblem {
         ws: &mut FftWorkspace,
         h_eff: &mut VectorFieldSoA,
     ) {
+        self.effective_field_into_soa_ws_at(magnetization, 0.0, ws, h_eff);
+    }
+
+    pub fn effective_field_into_soa_ws_at(
+        &self,
+        magnetization: &VectorFieldSoA,
+        evaluation_time_s: f64,
+        ws: &mut FftWorkspace,
+        h_eff: &mut VectorFieldSoA,
+    ) {
         self.effective_field_into_soa_fft_backend(magnetization, ws, h_eff);
+        for drive in self.regional_field_drives.iter().filter(|drive| drive.enabled) {
+            let multiplier = drive.multiplier_at(evaluation_time_s);
+            for (index, basis) in drive.basis_field.iter().enumerate().take(h_eff.len()) {
+                if self.is_active(index) {
+                    h_eff.x[index] += multiplier * basis[0];
+                    h_eff.y[index] += multiplier * basis[1];
+                    h_eff.z[index] += multiplier * basis[2];
+                }
+            }
+        }
     }
 
     pub(crate) fn effective_field_into_soa_fft_backend(
@@ -1978,6 +1998,16 @@ impl ExchangeLlgProblem {
         ws: &mut FftWorkspace,
         h_eff: &mut [Vector3],
     ) {
+        self.effective_field_into_ws_at(magnetization, 0.0, ws, h_eff);
+    }
+
+    pub(crate) fn effective_field_into_ws_at(
+        &self,
+        magnetization: &[Vector3],
+        evaluation_time_s: f64,
+        ws: &mut FftWorkspace,
+        h_eff: &mut [Vector3],
+    ) {
         for h in h_eff.iter_mut() {
             *h = [0.0, 0.0, 0.0];
         }
@@ -2002,6 +2032,17 @@ impl ExchangeLlgProblem {
 
         // Oersted field from cylindrical conductor (STNO / MTJ)
         self.oersted_field_add_into(h_eff);
+
+        for drive in self.regional_field_drives.iter().filter(|drive| drive.enabled) {
+            let multiplier = drive.multiplier_at(evaluation_time_s);
+            for (index, (total, basis)) in h_eff.iter_mut().zip(&drive.basis_field).enumerate() {
+                if self.is_active(index) {
+                    total[0] += multiplier * basis[0];
+                    total[1] += multiplier * basis[1];
+                    total[2] += multiplier * basis[2];
+                }
+            }
+        }
     }
 
     /// Effective field accumulation with telemetry instrumentation.

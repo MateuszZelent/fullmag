@@ -26,6 +26,43 @@ export interface Viewport3DMeshHistogramSelection {
   elementIndices: readonly number[];
 }
 
+export function retainViewport3DMeshSizeHighlight(
+  current: MeshSizeHistogramHighlight | null,
+  next: MeshSizeHistogramHighlight | null,
+): MeshSizeHistogramHighlight | null {
+  if (current === next) return current;
+  if (!current || !next) return next;
+  return meshSizeHistogramHighlightKey(current) === meshSizeHistogramHighlightKey(next)
+    ? current
+    : next;
+}
+
+function meshSizeHistogramHighlightKey(highlight: MeshSizeHistogramHighlight): string {
+  const resource = highlight.resource
+    ? [
+        highlight.resource.meshId,
+        highlight.resource.partId,
+        highlight.resource.metric,
+        highlight.resource.binIndex,
+      ].join(":")
+    : "";
+  const scope =
+    highlight.scope.kind === "object"
+      ? `object:${highlight.scope.objectId}`
+      : highlight.scope.kind === "region"
+        ? `region:${highlight.scope.objectId}:${highlight.scope.regionId}:${highlight.scope.meshPartIds.join(",")}`
+        : highlight.scope.kind;
+  return [
+    highlight.distributionId,
+    highlight.binLabel,
+    highlight.count,
+    highlight.lo ?? "",
+    highlight.hi ?? "",
+    scope,
+    resource,
+  ].join("|");
+}
+
 interface ElementRange {
   end: number;
   start: number;

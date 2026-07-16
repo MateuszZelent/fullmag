@@ -56,4 +56,19 @@ describe("viewport3dSurfaceEdges", () => {
     expect(geometry?.getIndex()?.array).toBe(lineIndices);
     expect(geometry?.getAttribute("position").count).toBe(3);
   });
+
+  it("shares topology positions across independent wireframe passes", () => {
+    const positions = new Float32Array([
+      0, 0, 0,
+      1, 0, 0,
+      0, 1, 0,
+    ]);
+    const first = buildLineIndexGeometry(positions, new Uint32Array([0, 1]));
+    const second = buildLineIndexGeometry(positions, new Uint32Array([1, 2]));
+
+    expect(first?.getAttribute("position")).toBe(second?.getAttribute("position"));
+
+    first?.dispose();
+    second?.dispose();
+  });
 });

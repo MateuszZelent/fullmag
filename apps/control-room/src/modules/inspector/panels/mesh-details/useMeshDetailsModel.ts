@@ -36,6 +36,10 @@ import {
   type MeshPolicyDiffRow,
   diffMeshPolicies,
 } from "@/shared/domain/mesh/meshPolicyDiff";
+import {
+  resolveMeshEditorCapabilities,
+  type MeshEditorCapabilityModel,
+} from "@/shared/domain/mesh/meshEditorCapabilityModel";
 import { resolveMeshQualityRefinementState } from "@/shared/domain/mesh/meshQualityRefinement";
 import {
   type MeshQualityMetric,
@@ -70,10 +74,12 @@ export interface MeshDetailsModel {
   buildMode: unknown;
   buildStatus: string;
   capabilitiesData: unknown;
+  editorCapabilities: MeshEditorCapabilityModel;
   capabilitiesStatus: string;
   fallbacks: readonly string[] | null | undefined;
   gateRows: Array<{ id: string; status: string; value: string }>;
   latestBuildJson: unknown;
+  meshBuildReport: unknown;
   latestSuccessAvailable: boolean;
   lastBuildError: unknown;
   manifest: {
@@ -436,10 +442,12 @@ export function useMeshDetailsModel(
     buildMode: activeBuild.data?.shared_domain_build_report?.build_mode,
     buildStatus,
     capabilitiesData: capabilities.data,
+    editorCapabilities: resolveMeshEditorCapabilities(capabilities.data),
     capabilitiesStatus: capabilities.status,
     fallbacks: activeBuild.data?.shared_domain_build_report?.fallbacks_triggered,
     gateRows: qualityGateRows(gates),
     latestBuildJson: lastBuildSummary,
+    meshBuildReport: semantics.data?.solver_mesh?.build_report,
     latestSuccessAvailable: Boolean(latestBuild.data?.last_success),
     lastBuildError:
       activeBuild.data?.last_build_error ?? latestBuild.data?.last_build_error,

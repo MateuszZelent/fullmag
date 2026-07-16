@@ -8,6 +8,7 @@ import {
   resolveNodeSelectionIndex,
   type Viewport3DNodeSelection,
 } from "./viewport3dRenderModel";
+import { attachViewport3DSharedTopologyPosition } from "./viewport3dSharedTopologyPositions";
 
 export interface Viewport3DPointPositionSource {
   nodeCount: number;
@@ -61,13 +62,13 @@ export function createViewport3DIndexedPointGeometry(
   if (pointCount <= 0) return null;
 
   const geometry = new BufferGeometry();
-  geometry.setAttribute(
-    "position",
-    new BufferAttribute(ensureFloat32PositionArray(source.positions), 3),
+  attachViewport3DSharedTopologyPosition(
+    geometry,
+    ensureFloat32PositionArray(source.positions),
   );
 
   const explicitIndices = selection?.nodeIndices ?? selection?.node_indices;
-  if (explicitIndices?.length) {
+  if (explicitIndices !== undefined) {
     geometry.setIndex(new BufferAttribute(ensureUint32IndexArray(explicitIndices), 1));
   } else {
     geometry.setDrawRange(resolveIndexedPointSelectionStart(selection), pointCount);
@@ -90,8 +91,8 @@ function resolveIndexedPointSelectionCount(
   selection: Viewport3DIndexedPointSelection | null | undefined,
   topology: Pick<Viewport3DPointPositionSource, "nodeCount">,
 ): number {
-  if (selection?.nodeIndices?.length) return selection.nodeIndices.length;
-  if (selection?.node_indices?.length) return selection.node_indices.length;
+  const explicitIndices = selection?.nodeIndices ?? selection?.node_indices;
+  if (explicitIndices !== undefined) return explicitIndices.length;
 
   const start = resolveIndexedPointSelectionStart(selection);
   if (start >= topology.nodeCount) return 0;

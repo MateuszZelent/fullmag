@@ -7,7 +7,61 @@
 **Charakter pracy:** audyt nie modyfikował kodu aplikacji; wyniki zapisano w
 plikach raportu, a `.gitignore` dostał wąski wyjątek dla tego katalogu
 
-## Werdykt
+## Aktualizacja dla najnowszej wersji — 2026-07-14
+
+Audyt został ponowiony na `master` przy rewizji
+`9f0c64f5bd14d0b47e84727179b817bd6f1d1830` oraz na bieżącym, współdzielonym
+worktree. Historyczny dokument `09-remediation-completion.md` nie jest już
+dowodem, że obecny frontend 3D jest zamknięty produkcyjnie.
+
+Aktualny wynik bazowy:
+
+- **26/28** historycznych findings pozostaje naprawionych w pierwotnie
+  zdefiniowanym zakresie;
+- **F3D-003 i F3D-013** są tylko częściowo zamknięte;
+- historyczne **F3D-026 i F3D-028 pozostają zamknięte**; brak reprezentatywnego
+  gate'a CoFeB oraz niepełny artifact pre-canvas są nowym zakresem F3D-031, a
+  nie unieważnieniem ich pierwotnych kryteriów;
+- dodano **F3D-029–F3D-032** dla awarii rzeczywistego, dużego FEM CoFeB oraz
+  rozjazdu renderer ↔ Explorer;
+- aktualny scenariusz `permalloy_layer_cofeb_rings_relax_300nm.py` ma również
+  niezależną blokadę materializacji mesha, opisaną poza bilansem błędów
+  frontendu.
+
+Najważniejszy werdykt: małe fixture FDM i syntetyczny FEM przechodzą, ale nie
+dowodzą działania rzeczywistej sceny FEM. Profil CoFeB z około 833 tys.
+komórek wykazał `surface-colors-unavailable`, `vector-segments-unavailable`,
+48,4 s pracy workera `field-color`, 47,7 s pojedynczego long tasku i timeout
+screenshotu. Po wyłączeniu wektorów surface wracał do `ready`.
+
+Drugi krytyczny rozjazd dotyczy tożsamości sceny: carrier FEM
+`part:__air__` może zostać wybrany jako osobny obiekt mimo istnienia
+kanonicznego węzła `Airbox`. Pozwala to utrzymywać równoległe override'y i
+nakładać passy. F3D-032 ustanawia twardą regułę: każdy semantyczny, pickowalny
+cel renderera musi mieć dokładnie jeden kanoniczny węzeł Explorera, a kliknięcie
+w viewport musi ten węzeł ujawnić, rozwinąć, przewinąć i podświetlić.
+
+Świeża weryfikacja bieżącego dirty worktree:
+
+- typecheck — pass;
+- lint z `--max-warnings=0` — pass;
+- pełny Vitest — **325 plików / 3015 testów**, pass;
+- browser memory-churn — pass, 120 przełączeń, geometrie `5 -> 5`, heap
+  `17,9 -> 19,8 MB`;
+- browser FEM topology uploads — pass, 12 przypadków, positions około
+  `162,2–164,0 KB`;
+- trzy nowe testy API normalizacji Airboxa — pass;
+- mimo zielonych bramek nadal brak testu viewport click → istniejący węzeł
+  Explorera oraz reprezentatywnego CoFeB surface/vector proof. Zielone wyniki
+  nie zamykają F3D-029, F3D-030, F3D-031 ani F3D-032.
+
+Aktualne dokumenty:
+
+- [10-reaudyt-najnowszej-wersji-2026-07-14.md](10-reaudyt-najnowszej-wersji-2026-07-14.md) — pełna macierz 28 findings i dowody;
+- [11-regresje-renderera-fem-shaderow-i-wektorow.md](11-regresje-renderera-fem-shaderow-i-wektorow.md) — otwarte problemy correctness/renderera;
+- [12-bramki-diagnostyka-i-blokady-runtime.md](12-bramki-diagnostyka-i-blokady-runtime.md) — luki gate'ów i blokada end-to-end.
+
+## Werdykt audytu bazowego z 2026-07-10
 
 Frontend ma solidny fundament: jeden aktywny Canvas 3D, `frameloop="demand"`,
 rozdzielone modele topologii i pola, zasobo-centryczne API v2, prawidłowy pełny

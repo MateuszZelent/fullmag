@@ -1,8 +1,19 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import nextConfig from "./next.config";
 
 describe("control-room Next dev proxy config", () => {
+  it("isolates production browser-audit artifacts from the shared dev build", () => {
+    const configSource = readFileSync(
+      new URL("./next.config.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(configSource).toContain('distDir: auditBuild ? ".next-audit" : ".next"');
+  });
+
   it("allows the public Traefik origin used by the HMR websocket", () => {
     expect(nextConfig.allowedDevOrigins).toContain(
       "fullmag.amucontainers.orion.zfns.eu.org",

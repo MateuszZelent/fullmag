@@ -39,9 +39,10 @@ pub use fdm::{
     compute_periodic_newell_kernel_spectra, run_reference_exchange_demo, AbmHistory, AbmHistorySoA,
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, DemagKernelSpectra,
     EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
-    ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FftWorkspace,
+    ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy,
+    FdmDemagBoundary, FftWorkspace, ResolvedFdmPeriodicWorkspace,
     GridShape, IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
-    OerstedCylinderConfig, ReferenceDemoReport, Result, RhsEvaluation, SlonczewskiSttConfig,
+    OerstedCylinderConfig, ReferenceDemoReport, RegionalFieldDriveTerm, Result, RhsEvaluation, SlonczewskiSttConfig,
     SolverSession, SotConfig, StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA,
     ZhangLiSttConfig,
 };

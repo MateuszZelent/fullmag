@@ -75,6 +75,7 @@ bool gpu_rk_prepare_stage_attempt(
                 gpu.rk.k[0],
                 stream,
                 n,
+                ctx.state.current_time,
                 "launch GPU RK stage-0 h_eff accumulation",
                 reason)) {
             gpu.rk.fsal_valid = false;
@@ -101,6 +102,7 @@ bool gpu_rk_prepare_stage_attempt(
             gpu.rk.k[1],
             stream,
             n,
+            ctx.state.current_time + (is_heun ? 1.0 : (is_rk45 ? 0.2 : 0.5)) * active_dt,
             "launch GPU RK stage-1 h_eff accumulation",
             reason)) {
         gpu.rk.fsal_valid = false;

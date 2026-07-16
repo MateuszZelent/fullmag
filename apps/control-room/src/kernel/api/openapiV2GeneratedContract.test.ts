@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { createOpenApiV2Transport } from "./generated/openapi-v2-client";
@@ -9,6 +10,36 @@ import {
 import * as apiPaths from "./apiPaths";
 
 describe("generated OpenAPI v2 transport", () => {
+  it("documents every field-vector response header with its generated schema type", () => {
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    const headers =
+      document.paths[
+        "/v2/sessions/current/data/fields/{quantity_id}/samples/vector"
+      ].get.responses["200"].headers;
+    const expected = {
+      "x-fullmag-component": "string",
+      "x-fullmag-domain-generation-id": "string",
+      "x-fullmag-encoding": "string",
+      "x-fullmag-field-indexing": "string",
+      "x-fullmag-field-revision": "string",
+      "x-fullmag-mesh-topology-hash": "string",
+      "x-fullmag-n-comp": "integer",
+      "x-fullmag-node-index-count": "integer",
+      "x-fullmag-point-count": "integer",
+      "x-fullmag-quantity-id": "string",
+      "x-fullmag-scope-id": "string",
+      "x-fullmag-scope-kind": "string",
+      "x-fullmag-snapshot-id": "string",
+      "x-fullmag-value-count": "integer",
+    } as const;
+    expect(Object.keys(headers).sort()).toEqual(Object.keys(expected).sort());
+    for (const [name, type] of Object.entries(expected)) {
+      expect(headers[name].schema.type, name).toBe(type);
+    }
+  });
+
   it("is generated from the backend v2 resource tree", () => {
     expect(openApiV2PathLiterals).toContain("/v2/sessions/current/status");
     expect(openApiV2PathLiterals).toContain("/v2/sessions/current/model/scene");

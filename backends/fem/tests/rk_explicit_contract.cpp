@@ -3,14 +3,19 @@
  */
 
 #include "context.hpp"
+#include "cpu/mfem/integrators/llg_rhs.hpp"
 #include "cpu/mfem/integrators/rk_explicit.hpp"
+#include "cpu/mfem/integrators/rk_explicit_step.hpp"
+#include "cpu/mfem/runtime/state_io.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -18,6 +23,41 @@ void check(bool condition, const char *msg) {
     if (!condition) {
         std::fprintf(stderr, "FAIL: %s\n", msg);
         std::exit(1);
+    }
+}
+
+void check_near(double actual, double expected, double tolerance, const char *msg) {
+    if (std::fabs(actual - expected) > tolerance) {
+        std::fprintf(
+            stderr,
+            "FAIL: %s: expected %.17g, got %.17g (tol %.3g)\n",
+            msg,
+            expected,
+            actual,
+            tolerance);
+        std::exit(1);
+    }
+}
+
+void check_vector_near(
+    const std::vector<double> &actual,
+    const std::vector<double> &expected,
+    double tolerance,
+    const char *msg)
+{
+    check(actual.size() == expected.size(), "vector comparison size mismatch");
+    for (size_t i = 0; i < actual.size(); ++i) {
+        if (std::fabs(actual[i] - expected[i]) > tolerance) {
+            std::fprintf(
+                stderr,
+                "FAIL: %s[%zu]: expected %.17g, got %.17g (tol %.3g)\n",
+                msg,
+                i,
+                expected[i],
+                actual[i],
+                tolerance);
+            std::exit(1);
+        }
     }
 }
 
@@ -42,7 +82,7 @@ std::filesystem::path fem_source_root() {
 
 std::filesystem::path repo_root() {
     const std::filesystem::path fem_root = fem_source_root();
-    return fem_root.parent_path().parent_path().parent_path();
+    return fem_root.parent_path().parent_path();
 }
 
 void rk_workspace_is_owned_by_integrator_module() {
@@ -301,7 +341,7 @@ void workspace_allocates_common_buffers() {
     check(ws.err.size() == 9u, "adaptive error buffer allocated");
 }
 
-void fsal_reuse_requires_autonomous_rhs() {
+void fsal_reuse_requires_matching_source_state() {
     const std::filesystem::path root = fem_source_root();
     const std::string rk_explicit_step =
         read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit_step.cpp");
@@ -317,15 +357,15 @@ void fsal_reuse_requires_autonomous_rhs() {
     check(
         rk_explicit_step.find("bool rk_rhs_allows_fsal_reuse(const fullmag::fem::Context &ctx)") !=
             std::string::npos,
-        "CPU RK stepper must centralize the autonomous-RHS FSAL reuse gate");
+        "CPU RK stepper must centralize the FSAL reuse gate");
     check(
         rk_explicit_step.find("ctx.thermal_brown.temperature > 0.0") !=
             std::string::npos,
         "CPU RK FSAL reuse gate must reject stochastic Brown thermal RHS");
     check(
-        rk_explicit_step.find("ctx.oersted.time_dep_kind != 0u") !=
+        rk_explicit_step.find("ctx.oersted.time_dep_kind != 0u") ==
             std::string::npos,
-        "CPU RK FSAL reuse gate must reject time-dependent Oersted RHS");
+        "CPU RK FSAL must permit deterministic time-dependent Oersted at the matching endpoint");
     check(
         gpu_rk_fsal.find("bool gpu_rk_rhs_allows_fsal_reuse(const Context &ctx)") !=
             std::string::npos,
@@ -335,16 +375,333 @@ void fsal_reuse_requires_autonomous_rhs() {
             std::string::npos,
         "GPU RK FSAL reuse gate must reject stochastic Brown thermal RHS");
     check(
-        gpu_rk_fsal.find("ctx.oersted.time_dep_kind != 0u") !=
+        gpu_rk_fsal.find("ctx.oersted.time_dep_kind != 0u") ==
             std::string::npos,
-        "GPU RK FSAL reuse gate must reject time-dependent Oersted RHS");
+        "GPU RK FSAL must permit deterministic time-dependent Oersted at the matching endpoint");
     check(
         gpu_rk_rhs.find("bool gpu_rk_rhs_allows_fsal_reuse(") == std::string::npos,
         "GPU RK RHS runtime must not own FSAL reuse policy after extraction");
     check(
-        integrator_note.find("FSAL reuse is disabled for stochastic Brown thermal fields and time-dependent Oersted fields") !=
+        integrator_note.find("FSAL reuse is disabled for stochastic Brown thermal fields, and time-dependent Oersted fields reuse it only when the accepted endpoint source state matches the next first stage") !=
             std::string::npos,
-        "integrator physics note must document non-autonomous RHS FSAL disablement");
+        "integrator physics note must document the Oersted FSAL endpoint condition");
+}
+
+void rk_rhs_passes_explicit_stage_and_endpoint_times() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string cpu_stage =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_stage_rhs.cpp");
+    const std::string cpu_step =
+        read_text_file(root / "cpu" / "mfem" / "integrators" / "rk_explicit_step.cpp");
+    const std::string cpu_effective =
+        read_text_file(root / "cpu" / "mfem" / "interactions" / "effective_field.cpp");
+    const std::string gpu_oersted =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_oersted_field.cu");
+    const std::string gpu_final =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_final_refresh.cu");
+
+    check(
+        cpu_stage.find("double evaluation_time_s") != std::string::npos,
+        "CPU RK stage RHS must accept an explicit evaluation time");
+    check(
+        cpu_step.find("ctx.state.current_time + tab.c[s] * dt") != std::string::npos,
+        "CPU RK stages must use their tableau c_j times");
+    check(
+        cpu_step.find("ctx.state.current_time + dt") != std::string::npos,
+        "CPU final effective-field refresh must use accepted endpoint time");
+    check(
+        cpu_effective.find("double evaluation_time_s") != std::string::npos,
+        "CPU effective-field assembly must carry explicit evaluation time");
+    check(
+        gpu_oersted.find("double evaluation_time_s") != std::string::npos,
+        "GPU Oersted accumulation must accept explicit evaluation time");
+    check(
+        gpu_final.find("ctx.state.current_time + active_dt") != std::string::npos,
+        "GPU final refresh must use accepted endpoint time before commit");
+}
+
+#if FULLMAG_HAS_MFEM_STACK
+constexpr double kPi = 3.141592653589793238462643383279502884;
+
+fullmag::fem::Context make_oersted_only_rk_context(fullmag_fem_integrator integrator) {
+    fullmag::fem::Context ctx;
+    ctx.mfem_context.ready = true;
+    ctx.mesh.n_nodes = 1;
+    ctx.mesh.magnetic_node_mask = {1u};
+    ctx.state.m_xyz = {1.0, 0.2, -0.1};
+    fullmag::fem::normalize_aos_field(ctx.state.m_xyz);
+    ctx.state.current_time = 0.071;
+    ctx.base_plan.integrator = integrator;
+    ctx.base_plan.precession_enabled = true;
+    ctx.exchange.enabled = false;
+    ctx.demag.enabled = false;
+    ctx.material_fields.material.gyromagnetic_ratio = 1.7;
+    ctx.material_fields.material.damping = 0.13;
+
+    ctx.oersted.has_cylinder = true;
+    ctx.oersted.current = 2.3;
+    ctx.oersted.time_dep_kind = 1;
+    ctx.oersted.time_dep_freq = 0.83;
+    ctx.oersted.time_dep_phase = 0.37;
+    ctx.oersted.time_dep_offset = 0.21;
+    ctx.oersted.h_basis_per_ampere_xyz = {0.0, 0.0, 1.0};
+
+    ctx.zeeman.h_ext_xyz.assign(3u, 0.0);
+    ctx.anisotropy.h_uniaxial_xyz.assign(3u, 0.0);
+    ctx.anisotropy.h_cubic_xyz.assign(3u, 0.0);
+    ctx.dmi.h_interfacial_xyz.assign(3u, 0.0);
+    return ctx;
+}
+
+double reference_oersted_scale(const fullmag::fem::Context &ctx, double time_s) {
+    return ctx.oersted.current *
+        (std::sin(
+             2.0 * kPi * ctx.oersted.time_dep_freq * time_s +
+             ctx.oersted.time_dep_phase) +
+         ctx.oersted.time_dep_offset);
+}
+
+std::vector<double> reference_oersted_rhs(
+    const fullmag::fem::Context &ctx,
+    const std::vector<double> &m,
+    double time_s)
+{
+    const double scale = reference_oersted_scale(ctx, time_s);
+    const std::vector<double> h = {0.0, 0.0, scale};
+    std::vector<double> rhs;
+    double max_rhs = 0.0;
+    fullmag::fem::llg_rhs_aos(
+        m,
+        h,
+        ctx.material_fields.material.gyromagnetic_ratio,
+        ctx.material_fields.material.damping,
+        nullptr,
+        ctx.base_plan.precession_enabled,
+        rhs,
+        max_rhs);
+    return rhs;
+}
+
+std::vector<double> reference_oersted_rk_step(
+    const fullmag::fem::Context &ctx,
+    const fullmag::fem::ExplicitTableau &tableau,
+    const std::vector<double> &m_initial,
+    double time_initial,
+    double dt)
+{
+    std::vector<std::vector<double>> stages(
+        static_cast<size_t>(tableau.stages),
+        std::vector<double>(m_initial.size(), 0.0));
+    for (int stage = 0; stage < tableau.stages; ++stage) {
+        std::vector<double> m_stage = m_initial;
+        if (stage > 0) {
+            for (size_t i = 0; i < m_stage.size(); ++i) {
+                double increment = 0.0;
+                for (int prior = 0; prior < stage; ++prior) {
+                    increment += tableau.a[stage][prior] * stages[prior][i];
+                }
+                m_stage[i] += dt * increment;
+            }
+            fullmag::fem::normalize_aos_field(m_stage);
+        }
+        stages[stage] = reference_oersted_rhs(
+            ctx,
+            m_stage,
+            time_initial + tableau.c[stage] * dt);
+    }
+
+    std::vector<double> accepted = m_initial;
+    for (size_t i = 0; i < accepted.size(); ++i) {
+        double increment = 0.0;
+        for (int stage = 0; stage < tableau.stages; ++stage) {
+            increment += tableau.b_hi[stage] * stages[stage][i];
+        }
+        accepted[i] += dt * increment;
+    }
+    fullmag::fem::normalize_aos_field(accepted);
+    return accepted;
+}
+
+void executed_cpu_rk_steps_sample_all_stage_times_and_publish_endpoint_field() {
+    for (const auto integrator : {
+             FULLMAG_FEM_INTEGRATOR_HEUN,
+             FULLMAG_FEM_INTEGRATOR_RK4,
+             FULLMAG_FEM_INTEGRATOR_RK23_BS,
+             FULLMAG_FEM_INTEGRATOR_RK45_DP54,
+         }) {
+        auto ctx = make_oersted_only_rk_context(integrator);
+        const auto &tableau = fullmag::fem::tableau_for_integrator(integrator);
+        const double dt = 0.19;
+        const double initial_time = ctx.state.current_time;
+        const auto expected_m = reference_oersted_rk_step(
+            ctx, tableau, ctx.state.m_xyz, initial_time, dt);
+
+        fullmag_fem_step_stats stats{};
+        std::string error;
+        check(
+            fullmag::fem::context_step_explicit_rk_mfem(ctx, tableau, dt, stats, error),
+            error.c_str());
+        check_vector_near(
+            ctx.state.m_xyz,
+            expected_m,
+            2e-13,
+            "executed CPU RK state must use every tableau evaluation time");
+        const double accepted_time = initial_time + dt;
+        check_near(ctx.state.current_time, accepted_time, 0.0, "accepted CPU RK time");
+        check_near(stats.time_seconds, accepted_time, 0.0, "CPU RK stats accepted time");
+        check(stats.step == 1u && ctx.state.step_count == 1u, "CPU RK accepted step count");
+        check_near(
+            ctx.effective_field.h_xyz[2],
+            reference_oersted_scale(ctx, accepted_time),
+            2e-14,
+            "final H_eff must use the same accepted endpoint time as stats");
+        const uint32_t expected_rhs =
+            integrator == FULLMAG_FEM_INTEGRATOR_HEUN ? 3u :
+            integrator == FULLMAG_FEM_INTEGRATOR_RK4 ? 5u :
+            integrator == FULLMAG_FEM_INTEGRATOR_RK23_BS ? 4u : 7u;
+        check(stats.rhs_evaluations == expected_rhs, "CPU RK first-step RHS count");
+        check(stats.fsal_reused == 0u, "CPU RK first step cannot reuse FSAL");
+    }
+}
+
+void deterministic_oersted_fsal_requires_an_identical_next_source_state() {
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    const auto &tableau = fullmag::fem::tableau_for_integrator(
+        FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    const double dt = 0.11;
+    fullmag_fem_step_stats stats{};
+    std::string error;
+    check(
+        fullmag::fem::context_step_explicit_rk_mfem(ctx, tableau, dt, stats, error),
+        error.c_str());
+
+    const double second_time = ctx.state.current_time;
+    const auto expected_second = reference_oersted_rk_step(
+        ctx, tableau, ctx.state.m_xyz, second_time, dt);
+    check(
+        fullmag::fem::context_step_explicit_rk_mfem(ctx, tableau, dt, stats, error),
+        error.c_str());
+    check(stats.fsal_reused == 1u, "deterministic Oersted endpoint may be reused by FSAL");
+    check_vector_near(ctx.state.m_xyz, expected_second, 2e-13, "FSAL Oersted second step");
+
+    std::vector<double> uploaded = ctx.state.m_xyz;
+    check(
+        fullmag::fem::context_upload_magnetization_f64(
+            ctx, uploaded.data(), static_cast<uint64_t>(uploaded.size()), error) ==
+            FULLMAG_FEM_OK,
+        error.c_str());
+    check(!ctx.stepper.workspace.fsal_valid, "magnetization upload invalidates CPU FSAL source state");
+    check(
+        fullmag::fem::context_step_explicit_rk_mfem(ctx, tableau, dt, stats, error),
+        error.c_str());
+    check(stats.fsal_reused == 0u, "source-state mismatch must not report FSAL reuse");
+}
+
+void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    const auto &tableau = fullmag::fem::tableau_for_integrator(
+        FULLMAG_FEM_INTEGRATOR_RK23_BS);
+    fullmag_fem_step_stats stats{};
+    std::string error;
+    check(
+        fullmag::fem::context_step_explicit_rk_mfem(ctx, tableau, 0.05, stats, error),
+        error.c_str());
+    check(ctx.stepper.workspace.fsal_valid, "accepted RK23 step seeds CPU FSAL cache");
+
+    ctx.adaptive_dt.enabled = true;
+    ctx.adaptive_dt.atol = 1e-10;
+    ctx.adaptive_dt.rtol = 1e-10;
+    ctx.adaptive_dt.dt_min = 1e-9;
+    ctx.adaptive_dt.dt_max = 1.0;
+    ctx.adaptive_dt.safety_factor = 0.8;
+    ctx.adaptive_dt.dt_grow_max = 2.0;
+    ctx.adaptive_dt.dt_shrink_min = 0.2;
+    ctx.adaptive_dt.max_reject = 30;
+    ctx.adaptive_dt.prev_error_norm = 1.0;
+    const double proposed_dt = 0.8;
+    ctx.base_plan.dt_seconds = proposed_dt;
+
+    const std::vector<double> m_before = ctx.state.m_xyz;
+    const double time_before = ctx.state.current_time;
+    const uint64_t step_before = ctx.state.step_count;
+    check(
+        fullmag::fem::context_step_explicit_rk_mfem(
+            ctx, tableau, proposed_dt, stats, error),
+        error.c_str());
+    check(stats.rejected_attempts > 0u, "adaptive CPU RK fixture must reject its first attempt");
+    check(
+        stats.fsal_reused == 0u,
+        "accepted retry must not report FSAL reused by the rejected attempt");
+    check(ctx.state.step_count == step_before + 1u, "rejected attempts must not advance step count");
+    check_near(
+        ctx.state.current_time,
+        time_before + stats.dt_seconds,
+        2e-16,
+        "rejected attempts must not advance committed time");
+    check_near(
+        stats.time_seconds,
+        ctx.state.current_time,
+        0.0,
+        "accepted retry stats time must match committed state time");
+    const auto expected_m = reference_oersted_rk_step(
+        ctx, tableau, m_before, time_before, stats.dt_seconds);
+    check_vector_near(
+        ctx.state.m_xyz,
+        expected_m,
+        2e-12,
+        "accepted retry must start from the pre-attempt magnetization");
+}
+#endif
+
+void gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal() {
+    const auto root = fem_source_root() / "gpu" / "cuda" / "integrators" / "rk";
+    const std::string setup = read_text_file(root / "rk_attempt_setup.cu");
+    const std::string rk4 = read_text_file(root / "rk4_stage_sequence.cu");
+    const std::string rk23 = read_text_file(root / "rk23_stage_sequence.cu");
+    const std::string rk23_k3 = read_text_file(root / "rk23_adaptive_k3.cu");
+    const std::string rk45 = read_text_file(root / "rk45_stage_sequence.cu");
+    const std::string attempt_loop = read_text_file(root / "rk_attempt_loop.cu");
+    const std::string adaptive = read_text_file(root / "rk_adaptive_runtime.cu");
+    const std::string final_refresh = read_text_file(root / "rk_final_refresh.cu");
+
+    check(setup.find("ctx.state.current_time,") != std::string::npos,
+          "GPU RK stage 0 must use t_n");
+    check(
+        setup.find("ctx.state.current_time + (is_heun ? 1.0 : (is_rk45 ? 0.2 : 0.5)) * active_dt") !=
+            std::string::npos,
+        "GPU Heun/RK4/RK23/RK45 common stage 1 must use its exact c_1");
+    check(rk4.find("ctx.state.current_time + 0.5 * active_dt") != std::string::npos,
+          "GPU RK4 stage 2 must use c=1/2");
+    check(rk4.find("ctx.state.current_time + active_dt") != std::string::npos,
+          "GPU RK4 stage 3 must use c=1");
+    check(rk23.find("ctx.state.current_time + 0.75 * active_dt") != std::string::npos,
+          "GPU RK23 stage 2 must use c=3/4");
+    check(
+        attempt_loop.find("ctx.adaptive_dt.current_dt = active_dt") != std::string::npos &&
+            rk23_k3.find("ctx.state.current_time + ctx.adaptive_dt.current_dt") !=
+                std::string::npos,
+        "GPU adaptive RK23 endpoint/error stage must use the active retry endpoint");
+    for (const char *time_expression : {
+             "ctx.state.current_time + 0.3 * active_dt",
+             "ctx.state.current_time + 0.8 * active_dt",
+             "ctx.state.current_time + (8.0 / 9.0) * active_dt",
+         }) {
+        check(rk45.find(time_expression) != std::string::npos,
+              "GPU RK45 internal stage must use its exact tableau abscissa");
+    }
+    check(
+        rk45.find("ctx.state.current_time + active_dt") != std::string::npos &&
+            rk45.find("ctx.state.current_time + active_dt", rk45.find("ctx.state.current_time + active_dt") + 1u) !=
+                std::string::npos,
+        "GPU RK45 must evaluate both c=1 endpoint stages at t_n+dt");
+    check(
+        final_refresh.find("ctx.state.current_time + active_dt") != std::string::npos,
+        "GPU final H_eff refresh must precede accepted-time commit at t_n+dt");
+    check(
+        attempt_loop.find("gpu_rk_restore_adaptive_reject_magnetization_device") !=
+                std::string::npos &&
+            adaptive.find("gpu.rk.fsal_valid = false") != std::string::npos,
+        "GPU adaptive rejection must restore m and invalidate FSAL before retry");
 }
 
 void progress_report_marks_integrator_split_contract_covered() {
@@ -373,7 +730,14 @@ int main() {
     workspace_reallocates_when_stage_count_grows();
     workspace_invalidates_fsal_when_stage_count_shrinks();
     workspace_allocates_common_buffers();
-    fsal_reuse_requires_autonomous_rhs();
+    fsal_reuse_requires_matching_source_state();
+    rk_rhs_passes_explicit_stage_and_endpoint_times();
+    gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal();
+#if FULLMAG_HAS_MFEM_STACK
+    executed_cpu_rk_steps_sample_all_stage_times_and_publish_endpoint_field();
+    deterministic_oersted_fsal_requires_an_identical_next_source_state();
+    rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal();
+#endif
     progress_report_marks_integrator_split_contract_covered();
     return 0;
 }

@@ -15,12 +15,18 @@ from fullmag.init.state_io import infer_magnetization_state_format
 from fullmag.model.antenna import (
     AntennaFieldSource,
     CPWAntenna,
+    DriveActivation,
+    FieldTarget,
+    GeometryMaskFieldProfile,
     MicrostripAntenna,
+    RegionalFieldDrive,
     RfDrive,
+    SincFieldProfile,
     SpinWaveExcitationAnalysis,
+    UniformFieldProfile,
 )
 from fullmag.model.current_transport import CurrentTransport
-from fullmag.model.discretization import FDM, FEM, FemLinearSolverPolicy
+from fullmag.model.discretization import FDM, FEM, FDMDemag, FemLinearSolverPolicy
 from fullmag.model.spin_torque import (
     DriftDiffusionSpinTorque,
     InterfaceCppSTT,
@@ -30,7 +36,7 @@ from fullmag.model.spin_torque import (
 )
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds as shared_geometry_bounds
 from fullmag.model.dynamics import DEFAULT_GAMMA, LLG
-from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, Pulse, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, Pulse, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.eigen import serialize_k_sampling
 from fullmag.model.geometry import (
     ArchWaveguide,
@@ -124,7 +130,10 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "mesh": _export_global_mesh_state(base_problem),
         "universe": _export_universe(base_problem),
         "domain_frame": _export_domain_frame(base_problem, source_root=source_root),
-        "stages": [_export_stage_draft(stage) for stage in _builder_stage_sequence(loaded)],
+        "stages": [
+            _export_stage_draft_with_identity(stage)
+            for stage in _builder_stage_sequence(loaded)
+        ],
         "study_pipeline": export_study_pipeline_document(loaded),
         "table_autosave": _export_table_autosave(base_problem),
         "initial_state": _export_initial_state(base_problem),
@@ -146,6 +155,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "current_modules": [
             _export_current_module_entry(module) for module in base_problem.current_modules
         ],
+        "field_drives": [drive.to_ir() for drive in base_problem.field_drives],
         "spin_torques": [
             _export_spin_torque_entry(module) for module in base_problem.spin_torques
         ],
@@ -255,6 +265,11 @@ def render_loaded_problem_as_script(
     if current_module_lines:
         lines.append("")
         lines.extend(current_module_lines)
+
+    field_drive_lines = _render_field_drives(base_problem, surface=surface)
+    if field_drive_lines:
+        lines.append("")
+        lines.extend(field_drive_lines)
 
     spin_torque_lines = _render_spin_torques(base_problem, surface=surface)
     if spin_torque_lines:
@@ -372,11 +387,20 @@ def export_study_pipeline_document(loaded: LoadedProblem) -> dict[str, object] |
     }
 
 
+def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
+    payload = _export_stage_draft(stage)
+    if stage.stage_id is not None:
+        payload["stage_id"] = stage.stage_id
+    if stage.output_every_seconds is not None:
+        payload["output_every_seconds"] = stage.output_every_seconds
+    return payload
+
+
 def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, object]:
-    draft = _export_stage_draft(stage)
+    draft = _export_stage_draft_with_identity(stage)
     stage_kind = _infer_pipeline_stage_kind(draft)
     return {
-        "id": f"stage_{index + 1}_{stage_kind}",
+        "id": stage.stage_id or f"stage_{index + 1}_{stage_kind}",
         "label": _study_pipeline_stage_label(draft, stage_kind=stage_kind, index=index),
         "enabled": True,
         "source": "script_imported",
@@ -632,6 +656,29 @@ def _render_runtime(
         lines.append(f"{_surface_call(surface, 'device')}({_py_repr(device_spec)})")
     if cpu_threads is not None:
         lines.append(f"{_surface_call(surface, 'threads')}({cpu_threads})")
+
+    # PBC is part of the canonical physical problem, not an implicit backend
+    # mesh option. Keep the authored axes and demag realization explicit in the
+    # exported script so UI/Python round-trips cannot silently drop it.
+    pbc = problem.pbc
+    if pbc is not None:
+        raw_axes = getattr(pbc, "axes", pbc)
+        axes = tuple(bool(value) for value in raw_axes)
+        if len(axes) != 3:
+            raise ValueError("canonical rewrite requires exactly three PBC axes")
+        pbc_kwargs = [
+            f"{axis}=True"
+            for axis, enabled in zip(("x", "y", "z"), axes)
+            if enabled
+        ]
+        demag = str(getattr(pbc, "demag", "open") or "open")
+        if demag != "open":
+            pbc_kwargs.append(f"demag={_py_repr(demag)}")
+        image_counts = getattr(pbc, "image_counts", None)
+        if image_counts is not None:
+            pbc_kwargs.append(f"images={_py_tuple3(tuple(image_counts))}")
+        lines.append(f"{_surface_call(surface, 'pbc')}({', '.join(pbc_kwargs)})")
+
     fem = problem.discretization.fem if problem.discretization is not None else None
     if isinstance(fem, FEM) and fem.demag_solver_policy is not None:
         lines.append(
@@ -645,14 +692,57 @@ def _render_runtime(
         )
 
     fdm = problem.discretization.fdm if problem.discretization is not None else None
-    if isinstance(fdm, FDM) and fdm.default_cell is not None:
-        lines.append(
-            f"{_surface_call(surface, 'cell')}({_py_number(fdm.default_cell[0])}, {_py_number(fdm.default_cell[1])}, {_py_number(fdm.default_cell[2])})"
+    if isinstance(fdm, FDM):
+        has_extended_policy = (
+            fdm.demag is not None
+            or fdm.boundary_phi_floor is not None
+            or fdm.boundary_delta_min is not None
         )
-        if fdm.boundary_correction is not None:
+        if fdm.per_magnet or has_extended_policy:
+            fdm_kwargs: list[str] = []
+            if fdm.default_cell is not None:
+                fdm_kwargs.append(f"default_cell={_py_tuple3(fdm.default_cell)}")
+            if fdm.per_magnet:
+                per_magnet = ", ".join(
+                    f"{_py_repr(name)}: fm.FDMGrid(cell={_py_tuple3(grid.cell)})"
+                    for name, grid in sorted(fdm.per_magnet.items())
+                )
+                fdm_kwargs.append(f"per_magnet={{{per_magnet}}}")
+            if isinstance(fdm.demag, FDMDemag):
+                demag_kwargs = [
+                    f"strategy={_py_repr(fdm.demag.strategy)}",
+                    f"mode={_py_repr(fdm.demag.mode)}",
+                    f"allow_single_grid_fallback={fdm.demag.allow_single_grid_fallback!r}",
+                    f"explain={fdm.demag.explain!r}",
+                ]
+                if fdm.demag.common_cells is not None:
+                    demag_kwargs.append(f"common_cells={fdm.demag.common_cells!r}")
+                if fdm.demag.common_cells_xy is not None:
+                    demag_kwargs.append(
+                        f"common_cells_xy={fdm.demag.common_cells_xy!r}"
+                    )
+                fdm_kwargs.append(f"demag=fm.FDMDemag({', '.join(demag_kwargs)})")
+            if fdm.boundary_correction is not None:
+                fdm_kwargs.append(
+                    f"boundary_correction={_py_repr(fdm.boundary_correction)}"
+                )
+            if fdm.boundary_phi_floor is not None:
+                fdm_kwargs.append(
+                    f"boundary_phi_floor={_py_number(fdm.boundary_phi_floor)}"
+                )
+            if fdm.boundary_delta_min is not None:
+                fdm_kwargs.append(
+                    f"boundary_delta_min={_py_number(fdm.boundary_delta_min)}"
+                )
+            lines.append(f"{_surface_call(surface, 'fdm')}({', '.join(fdm_kwargs)})")
+        elif fdm.default_cell is not None:
             lines.append(
-                f"{_surface_call(surface, 'boundary_correction')}({_py_repr(fdm.boundary_correction)})"
+                f"{_surface_call(surface, 'cell')}({_py_number(fdm.default_cell[0])}, {_py_number(fdm.default_cell[1])}, {_py_number(fdm.default_cell[2])})"
             )
+            if fdm.boundary_correction is not None:
+                lines.append(
+                    f"{_surface_call(surface, 'boundary_correction')}({_py_repr(fdm.boundary_correction)})"
+                )
 
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
     if surface == "study":
@@ -1685,6 +1775,79 @@ def _render_current_modules(
         raise ValueError(
             f"canonical flat-script rewrite does not yet support current module {type(module).__name__}"
         )
+    return lines
+
+
+def _render_field_target_expr(target: FieldTarget) -> str:
+    if target.kind == "global":
+        return "fm.FieldTarget.global_domain()"
+    if target.kind == "object":
+        return f"fm.FieldTarget.object({_py_repr(target.object_id)})"
+    return (
+        "fm.FieldTarget.region("
+        f"{_py_repr(target.object_id)}, {_py_repr(target.region_id)})"
+    )
+
+
+def _render_spatial_profile_expr(profile: object) -> str:
+    if isinstance(profile, UniformFieldProfile):
+        return "fm.UniformFieldProfile()"
+    if isinstance(profile, SincFieldProfile):
+        kwargs = [
+            f"axis={_py_tuple3(profile.axis)}",
+            f"period_m={_py_number(profile.period_m)}",
+        ]
+        if abs(profile.center_m) > 0.0:
+            kwargs.append(f"center_m={_py_number(profile.center_m)}")
+        if profile.width_m is not None:
+            kwargs.append(f"width_m={_py_number(profile.width_m)}")
+        if profile.window != "none":
+            kwargs.append(f"window={_py_repr(profile.window)}")
+        return f"fm.SincFieldProfile({', '.join(kwargs)})"
+    if isinstance(profile, GeometryMaskFieldProfile):
+        return (
+            "fm.GeometryMaskFieldProfile("
+            f"object_id={_py_repr(profile.object_id)}, "
+            f"envelope={_render_spatial_profile_expr(profile.envelope)})"
+        )
+    raise TypeError(f"unsupported field profile {type(profile).__name__}")
+
+
+def _render_drive_activation_expr(activation: DriveActivation) -> str:
+    if activation.kind == "all_time_evolution":
+        return "fm.DriveActivation.all_time_evolution()"
+    return f"fm.DriveActivation.stage_ids({_py_literal(list(activation.stage_ids_value))})"
+
+
+def _render_regional_field_drive_expr(drive: RegionalFieldDrive) -> str:
+    kwargs = [
+        f"id={_py_repr(drive.id)}",
+        f"name={_py_repr(drive.name)}",
+        f"target={_render_field_target_expr(drive.target)}",
+        f"amplitude_B_T={_py_number(drive.amplitude_B_T)}",
+        f"direction={_py_tuple3(drive.direction)}",
+        f"spatial_profile={_render_spatial_profile_expr(drive.spatial_profile)}",
+        f"waveform={_render_time_dependence_expr(drive.waveform)}",
+        f"time_origin={_py_repr(drive.time_origin)}",
+        f"activation={_render_drive_activation_expr(drive.activation)}",
+    ]
+    if not drive.enabled:
+        kwargs.append("enabled=False")
+    if drive.migration is not None:
+        kwargs.append(f"migration={_py_literal(drive.migration)}")
+    return f"fm.RegionalFieldDrive({', '.join(kwargs)})"
+
+
+def _render_field_drives(problem: Problem, *, surface: str) -> list[str]:
+    if not problem.field_drives:
+        return []
+    lines = ["# Regional field drives"]
+    for drive in problem.field_drives:
+        expression = _render_regional_field_drive_expr(drive)
+        if surface == "study":
+            lines.append(f"study.field_drives.add({expression})")
+        else:
+            lines.append(f"fm.field_drive({expression})")
     return lines
 
 
@@ -2939,6 +3102,8 @@ def _render_stages(
                 ),
             )
             call_parts = [f"algorithm={_py_repr(algorithm)}"]
+            if stage.stage_id is not None:
+                call_parts.insert(0, f"stage_id={_py_repr(stage.stage_id)}")
             needs_stop_object = (
                 torque_tolerance is None
                 or max_steps is None
@@ -3000,7 +3165,15 @@ def _render_stages(
                 "canonical rewrite requires DEFAULT_UNTIL for time-evolution scripts"
             )
         if is_study_surface:
-            lines.append(f"study.stages.add_run({_py_number(until_seconds)})")
+            run_parts: list[str] = []
+            if stage.stage_id is not None:
+                run_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+            run_parts.append(f"until={_py_number(until_seconds)}")
+            if stage.output_every_seconds is not None:
+                run_parts.append(
+                    f"output_every={_py_number(stage.output_every_seconds)}"
+                )
+            lines.append(f"study.stages.add_run({', '.join(run_parts)})")
         else:
             lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
     return lines
@@ -3369,6 +3542,8 @@ def _render_drive_expr(drive: RfDrive) -> str:
 
 
 def _render_time_dependence_expr(waveform: object) -> str:
+    if isinstance(waveform, Constant):
+        return "fm.Constant()"
     if isinstance(waveform, Sinusoidal):
         kwargs = [f"frequency_hz={_py_number(waveform.frequency_hz)}"]
         if abs(waveform.phase_rad) > 1e-15:
@@ -3388,6 +3563,8 @@ def _render_time_dependence_expr(waveform: object) -> str:
         if abs(waveform.amplitude - 1.0) > 1e-15:
             kwargs.append(f"amplitude={_py_number(waveform.amplitude)}")
         return f"fm.SincPulse({', '.join(kwargs)})"
+    if isinstance(waveform, PiecewiseLinear):
+        return f"fm.PiecewiseLinear({_py_literal([list(point) for point in waveform.points])})"
     return f"fm.{type(waveform).__name__}()"
 
 

@@ -591,14 +591,14 @@ minimizers. Canonical `RelaxStopIR` defaults are `1e-4 A/m` and `50000` steps.
 
 ### 4.3 Planner and capability-matrix impact
 
-The planner gate (`fullmag-plan/src/lib.rs`) allows:
+The single-grid FDM planner gate allows:
 - `LlgOverdamped` → all FDM backends
-- `ProjectedGradientBb` → all FDM backends
-- `NonlinearCg` → all FDM backends
+- `ProjectedGradientBb` → single-grid FDM CPU/reference and CUDA
+- `NonlinearCg` → single-grid FDM CPU/reference and CUDA
 - `TangentPlaneImplicit` → rejected on every FDM lane; extended FEM may resolve
   only to the CPU/MFEM development lane, while strict and forced GPU reject
 
-The runner (`fullmag-runner/src/fdm/cpu/reference.rs`) dispatches:
+The single-grid runner (`fullmag-runner/src/fdm/cpu/reference.rs`) dispatches:
 - LLG overdamped → existing Heun time-stepping loop
 - BB / NCG → direct minimization path (bypasses time stepping)
 
@@ -606,6 +606,16 @@ CPU FDM run provenance records direct minimization explicitly. BB and NCG runs p
 `requested_energy_minimizer`, `resolved_energy_minimizer`, and
 `energy_minimizer_realization = "cpu_soa_tangent_gradient"`; LLG time-integration
 relaxation leaves those fields unset and reports the resolved integrator instead.
+
+### 4.4 Multilayer FDM status
+
+`FdmMultilayerPlanIR` carries the same relaxation control, but its current
+public runner executes only `llg_overdamped`.  PG-BB and NCG are intentionally
+rejected by the multilayer planner until the trial evaluator can recompute the
+global demag energy and effective field for every Armijo backtrack on CPU,
+CUDA double, CUDA single, and compatible native-stacked CUDA paths.  The
+implementation design and qualification matrix are documented in
+`docs/superpowers/specs/2026-07-12-fdm-multilayer-direct-minimizer-design.md`.
 
 ## 5. Validation strategy
 
@@ -676,11 +686,15 @@ torque tolerance $\epsilon_\tau = 10^{-4}$).
 
 - [x] Python API (`fm.Relaxation(algorithm=...)`)
 - [x] ProblemIR (`RelaxationAlgorithmIR` enum)
-- [x] Planner (gate allows BB and NCG)
-- [x] Capability matrix (FDM: all 3 algorithms)
+- [x] Planner (single-grid FDM gate allows BB and NCG)
+- [ ] Planner (multilayer FDM gate allows BB and NCG)
+- [x] Capability matrix (single-grid FDM: all 3 algorithms)
+- [ ] Capability matrix (multilayer FDM: PG-BB and NCG)
 - [x] FDM backend — LLG overdamped
-- [x] FDM backend — Projected Gradient BB
-- [x] FDM backend — Nonlinear CG
+- [x] FDM single-grid backend — Projected Gradient BB
+- [x] FDM single-grid backend — Nonlinear CG
+- [ ] FDM multilayer backend — Projected Gradient BB
+- [ ] FDM multilayer backend — Nonlinear CG
 - [ ] FEM backend
 - [ ] Hybrid backend
 - [x] Outputs / observables (energy, torque, magnetization)
@@ -698,12 +712,9 @@ torque tolerance $\epsilon_\tau = 10^{-4}$).
    $c_1$, restart interval are not exposed via IR.
 5. **Retraction via normalization** — Cayley transform deferred to GPU
    implementation.
-6. **Single-material only** — multi-region relaxation requires spatially
-   varying $M_s$ support.
-7. **No GPU implementation** — BB and NCG currently run on CPU only.
-8. **No intermediate output recording** — BB/NCG report only final state,
-   not per-iteration traces.
-9. **NCG line search is Armijo only** — cubic interpolation would reduce
+6. **Multilayer PG-BB/NCG pending** — only overdamped LLG is currently
+   executable for public multilayer FDM.
+7. **NCG line search is Armijo only** — cubic interpolation would reduce
    iteration count.
 
 ## 8. References

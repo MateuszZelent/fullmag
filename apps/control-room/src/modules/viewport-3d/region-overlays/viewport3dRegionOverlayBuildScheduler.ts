@@ -107,13 +107,22 @@ async function executeViewport3DRegionOverlayBuild(
   return buildViewport3DRegionOverlayModels(request);
 }
 
-export function disposeViewport3DRegionOverlayBuildWorkerForTests(): void {
+export function disposeViewport3DRegionOverlayBuildWorker(): void {
   regionOverlayBuildJobScheduler?.dispose();
   regionOverlayBuildJobScheduler = undefined;
   regionOverlayWorkerClient?.dispose();
   regionOverlayWorkerClient = undefined;
   regionOverlayWorkerFallbackReason = undefined;
 }
+
+/** @deprecated Use disposeViewport3DRegionOverlayBuildWorker. */
+export const disposeViewport3DRegionOverlayBuildWorkerForTests =
+  disposeViewport3DRegionOverlayBuildWorker;
+
+export function getViewport3DRegionOverlayWorkerRuntimeCounts(): { timers: number; workers: number } {
+  return regionOverlayWorkerClient?.getRuntimeCounts() ?? { timers: 0, workers: 0 };
+}
+export function getViewport3DRegionOverlayPendingJobCount(): number { return regionOverlayBuildJobScheduler?.getPendingJobCount() ?? 0; }
 
 function getRegionOverlayBuildJobScheduler(): ReturnType<
   typeof createViewport3DBuildScheduler
@@ -231,6 +240,10 @@ class RegionOverlayWorkerClient {
     if (regionOverlayWorkerClient === this) {
       regionOverlayWorkerClient = undefined;
     }
+  }
+
+  getRuntimeCounts(): { timers: number; workers: number } {
+    return { timers: this.idleTimeoutId === null ? 0 : 1, workers: this.disposed ? 0 : 1 };
   }
 
   private readonly handleMessage = (

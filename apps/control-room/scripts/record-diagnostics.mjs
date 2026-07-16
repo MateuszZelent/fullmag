@@ -191,6 +191,7 @@ page.on("response", (response) => {
   }
 });
 
+let runError = null;
 try {
   await page.goto(withDiagnosticQuery(url), {
     timeout: timeoutMs,
@@ -228,13 +229,37 @@ try {
   console.log(`Diagnostic artifact: ${artifactDir}`);
   console.log(topSuspectsText(artifact));
 } catch (error) {
+  runError = error;
   await page.screenshot({
     path: path.join(screenshotsDir, "999-failure.png"),
   }).catch(() => undefined);
-  throw error;
 } finally {
+  if (runError) {
+    await collectBrowserMetrics(cdp, browserMetricRecords).catch(() => undefined);
+    const artifact =
+      (await exportInPageArtifact(page).catch(() => null)) ??
+      createPartialFailureArtifact({
+        error: runError,
+        pageUrl: page.url(),
+        scenario,
+      });
+    mergePlaywrightStreams(artifact, {
+      browserMetricRecords,
+      consoleRecords,
+      requestRecords,
+    });
+    const failure = await collectFailureState(page, runError, scenario);
+    await writeJson(path.join(artifactDir, "failure.json"), failure);
+    await writeArtifactDirectory(artifact, {
+      artifactDir,
+      traceEvents,
+    });
+    console.error(`Diagnostic artifact: ${artifactDir}`);
+  }
   await browser.close();
 }
+
+if (runError) throw runError;
 
 async function runScenario(page, scenarioName) {
   if (scenarioName === "interactive") return;
@@ -282,6 +307,75 @@ async function exportInPageArtifact(page) {
     throw new Error("The page did not expose a diagnostic artifact.");
   }
   return artifact;
+}
+
+function createPartialFailureArtifact({ error, pageUrl, scenario }) {
+  const message = error instanceof Error ? error.message : String(error);
+  const timestampMs = Date.now();
+  return {
+    manifest: {
+      capturedAt: new Date(timestampMs).toISOString(),
+      pageUrl,
+      partial: true,
+      scenario,
+    },
+    summary: {
+      criticalCount: 1,
+      droppedCount: 0,
+      recordCount: 1,
+      warningCount: 0,
+    },
+    streams: {
+      browserMetrics: [],
+      console: [],
+      memory: [],
+      performance: [],
+      react: [],
+      requests: [],
+      resources: [],
+      timeline: [],
+      viewport3d: [],
+      viewport3dBuild: [],
+      viewport3dWorkerPools: [],
+    },
+    suspectReport: {
+      suspects: [{ reason: message, severity: "critical" }],
+      text: `# Diagnostic failure\n\n${message}\n`,
+    },
+  };
+}
+
+async function collectFailureState(page, error, scenarioName) {
+  const pageState = await page.evaluate(() => {
+    const canvas = document.querySelector(".fm-viewport-3d canvas");
+    const htmlCanvas = canvas instanceof HTMLCanvasElement ? canvas : null;
+    const gl = htmlCanvas
+      ? htmlCanvas.getContext("webgl2") ?? htmlCanvas.getContext("webgl")
+      : null;
+    return {
+      canvas: htmlCanvas
+        ? {
+            drawingBufferHeight: gl?.drawingBufferHeight ?? 0,
+            drawingBufferWidth: gl?.drawingBufferWidth ?? 0,
+            isContextLost: gl?.isContextLost() ?? null,
+            visible: Boolean(htmlCanvas.offsetWidth && htmlCanvas.offsetHeight),
+          }
+        : null,
+      domExcerpt: document.body?.innerText?.slice(0, 12_000) ?? "",
+      title: document.title,
+    };
+  }).catch(() => ({ canvas: null, domExcerpt: "", title: "" }));
+  return {
+    ...pageState,
+    capturedAt: new Date().toISOString(),
+    error: {
+      message: error instanceof Error ? error.message : String(error),
+      name: error instanceof Error ? error.name : "Error",
+      stack: error instanceof Error ? error.stack ?? null : null,
+    },
+    scenario: scenarioName,
+    url: page.url(),
+  };
 }
 
 async function waitForCanvasReady(page) {

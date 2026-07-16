@@ -1,11 +1,23 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  viewportSelectionForMeshPart,
+  viewportSelectionForDomain,
   viewportSelectionForObject,
   viewportSelectionForRegion,
 } from "./viewport3dSelection";
 
 describe("viewport3dSelection", () => {
+  it("maps a domain pick to the visible Universe Explorer node", () => {
+    expect(viewportSelectionForDomain("fdm-domain")).toEqual({
+      kind: "universe.root",
+      label: "fdm-domain",
+      nodeId: "model:universe",
+      objectId: null,
+      ref: null,
+    });
+  });
+
   it("maps viewport object picks to canonical explorer object selections", () => {
     expect(
       viewportSelectionForObject({
@@ -45,6 +57,96 @@ describe("viewport3dSelection", () => {
         regionId: "region:free-layer",
         type: "scene-object",
         visualizationTargetId: "region:free-layer:region%3Afree-layer",
+      },
+    });
+  });
+
+  it("maps an Airbox carrier pick to the canonical Airbox Explorer node", () => {
+    expect(
+      viewportSelectionForMeshPart(
+        {
+          carrierIds: ["part:__air__"],
+          explorerNodeId: "model:airbox",
+          explorerTabId: "model",
+          label: "Airbox",
+          targetId: "airbox",
+          targetKind: "airbox",
+        },
+        {
+          boundaryFaceIndex: 12,
+          carrierPartId: "part:__air__",
+          label: "Exterior air",
+        },
+      ),
+    ).toEqual({
+      kind: "airbox.root",
+      label: "Airbox",
+      nodeId: "model:airbox",
+      objectId: null,
+      ref: {
+        boundaryFaceIndex: 12,
+        carrierPartId: "part:__air__",
+        kind: "airbox.root",
+        nodeId: "model:airbox",
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    });
+  });
+
+  it("maps an owned FEM carrier pick to its authored object Explorer node", () => {
+    expect(
+      viewportSelectionForMeshPart(
+        {
+          carrierIds: ["part:film"],
+          explorerNodeId: "model:object:film",
+          explorerTabId: "model",
+          label: "film",
+          targetId: "object:film",
+          targetKind: "object",
+        },
+        {
+          boundaryFaceIndex: 3,
+          carrierPartId: "part:film",
+          label: "Film volume",
+        },
+      ),
+    ).toMatchObject({
+      kind: "object.root",
+      nodeId: "model:object:film",
+      objectId: "film",
+      ref: {
+        carrierPartId: "part:film",
+        type: "scene-object",
+        visualizationTargetId: "object:film",
+      },
+    });
+  });
+
+  it("maps an orphan FEM carrier pick to its explicit fallback Explorer node", () => {
+    expect(
+      viewportSelectionForMeshPart(
+        {
+          carrierIds: ["part:orphan"],
+          explorerNodeId: "model:mesh:unassigned:part%3Aorphan",
+          explorerTabId: "model",
+          label: "Orphan",
+          targetId: "part:orphan",
+          targetKind: "part",
+        },
+        {
+          boundaryFaceIndex: null,
+          carrierPartId: "part:orphan",
+          label: "Orphan",
+        },
+      ),
+    ).toMatchObject({
+      kind: "mesh-part",
+      nodeId: "model:mesh:unassigned:part%3Aorphan",
+      ref: {
+        carrierPartId: "part:orphan",
+        type: "mesh-part",
+        visualizationTargetId: "part:orphan",
       },
     });
   });

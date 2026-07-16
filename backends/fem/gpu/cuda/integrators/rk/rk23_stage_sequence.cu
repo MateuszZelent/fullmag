@@ -70,6 +70,7 @@ bool gpu_rk_run_rk23_stage_sequence(
             gpu.rk.k[2],
             stream,
             n,
+            ctx.state.current_time + 0.75 * active_dt,
             "launch GPU RK stage-2 h_eff accumulation",
             reason)) {
         gpu.rk.fsal_valid = false;

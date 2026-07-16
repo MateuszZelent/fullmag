@@ -365,15 +365,24 @@ void mfem_context_uses_elementwise_material_coefficients_when_present() {
         read_text_file(root / "cpu" / "mfem" / "interactions" / "exchange_operator.hpp");
 
     check(
-        runtime.find("class ElementwiseScalarCoefficient") != std::string::npos,
-        "MFEM context must define an elementwise material coefficient adapter");
+        runtime.find("class AdapterBackedElementwiseCoefficient") != std::string::npos,
+        "MFEM context must define an adapter-owned DG0 material coefficient");
     check(
         runtime.find("ctx.material_fields.A_element_field.empty()") != std::string::npos &&
-            runtime.find("new ElementwiseScalarCoefficient(") != std::string::npos,
-        "MFEM context must select elementwise A coefficient when A_element_field is present");
+            runtime.find("new AdapterBackedElementwiseCoefficient(") != std::string::npos,
+        "MFEM context must select adapter-owned DG0 A when A_element_field is present");
     check(
         runtime.find("ctx.material_fields.Ms_element_field.empty()") != std::string::npos,
-        "MFEM context must select elementwise Ms coefficient when Ms_element_field is present");
+        "MFEM context must select adapter-owned DG0 Ms when Ms_element_field is present");
+    check(
+        runtime.find("ctx.material_fields.runtime") != std::string::npos &&
+            runtime.find("realization.a_j_per_m") != std::string::npos &&
+            runtime.find("realization.ms_a_per_m") != std::string::npos &&
+            runtime.find("return 0.0;") != std::string::npos,
+        "MFEM DG0 coefficient must read checked adapter accessors and exclude inactive air");
+    check(
+        runtime.find("class ElementwiseScalarCoefficient") == std::string::npos,
+        "MFEM DG0 coefficient must not retain a loose raw-vector fallback");
     check(
         runtime.find("per-element Ms coefficient requires consistent-mass exchange projection") !=
             std::string::npos,

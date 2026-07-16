@@ -1,10 +1,223 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { ControlRoomApi } from "./ControlRoomApi";
-import type { AuthoringTransactionRequest, LiveStatusResource } from "./apiTypes";
+import {
+  collectFieldVectorIdentityIssues,
+  ControlRoomApi,
+  parseFieldVectorResponseMetadata,
+  transformFieldMetaForDisplay,
+  transformFieldVectorForDisplay,
+  withDerivedDriveFluxDensity,
+} from "./ControlRoomApi";
+import type {
+  AuthoringTransactionRequest,
+  BinaryResourceResult,
+  FieldVectorResponseMetadata,
+  LiveStatusResource,
+} from "./apiTypes";
+import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 
 const contractHeaders = { "x-api-contract-version": "1.0.0" };
+
+describe("derived B_drive display quantity", () => {
+  it("adds B_drive to a catalog only when H_drive exists", () => {
+    const catalog = withDerivedDriveFluxDensity({
+      domain_generation_id: "domain-1",
+      revision: 7,
+      quantities: [{ available: true, components: 3, domain_generation_id: "domain-1", field_revision: 4, kind: "vector", label: "Drive field", location: "node", quantity_id: "H_drive", unit: "A/m" }],
+    });
+    expect(catalog.quantities.at(-1)).toMatchObject({
+      label: "Drive flux density",
+      quantity_id: "B_drive",
+      unit: "T",
+    });
+  });
+
+  it("converts H_drive metadata and values by mu0 without changing stored data", () => {
+    const meta = transformFieldMetaForDisplay("B_drive", {
+      components: 3,
+      domain_generation_id: "domain-1",
+      field_revision: 4,
+      kind: "vector",
+      label: "Drive field",
+      location: "node",
+      quantity_id: "H_drive",
+      stats: { min: -2, mean: 0, max: 3 },
+      unit: "A/m",
+    });
+    expect(meta.quantity_id).toBe("B_drive");
+    expect(meta.unit).toBe("T");
+    expect(meta.stats?.max).toBeCloseTo(3 * 4e-7 * Math.PI, 15);
+
+    const sourceValues = new Float64Array([1, -2, 3]);
+    const converted = transformFieldVectorForDisplay("B_drive", {
+      byteLength: sourceValues.byteLength,
+      data: { dtype: "float64", grid: [1, 1, 1], nComp: 3, pointCount: 1, quantityId: "H_drive", valueCount: 3, values: sourceValues },
+      etag: "drive-4",
+      responseMetadata: { component: "full", domainGenerationId: "domain-1", encoding: "FMVP;version=3", fieldIndexing: "full_domain", fieldRevision: "4", identityIssues: [], meshTopologyHash: "mesh", nComp: 3, nodeIndexCount: 0, pointCount: 1, quantityId: "H_drive", scopeId: null, scopeKind: "magnetic_only", snapshotId: null, valueCount: 3 },
+      status: "ready",
+    });
+    expect(converted.status).toBe("ready");
+    if (converted.status !== "ready") throw new Error("expected ready result");
+    expect(converted.data.quantityId).toBe("B_drive");
+    expect(converted.data.values[1]).toBeCloseTo(-2 * 4e-7 * Math.PI, 15);
+    expect(sourceValues[1]).toBe(-2);
+    expect(converted.responseMetadata.quantityId).toBe("B_drive");
+  });
+});
+
+describe("field vector response metadata", () => {
+  it("requires response metadata for ready typed field-vector results", () => {
+    type Ready = Extract<
+      BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>,
+      { status: "ready" }
+    >;
+    expectTypeOf<Ready["responseMetadata"]>().toEqualTypeOf<
+      FieldVectorResponseMetadata
+    >();
+    expectTypeOf<Ready["responseMetadata"]["identityIssues"]>().toEqualTypeOf<
+      FieldVectorResponseMetadata["identityIssues"]
+    >();
+  });
+
+  it("parses every documented response header and reports invalid numbers", () => {
+    const headers = new Headers({
+      "x-fullmag-component": "full",
+      "x-fullmag-domain-generation-id": "12",
+      "x-fullmag-encoding": "FMVP;version=3",
+      "x-fullmag-field-indexing": "explicit_node_indices",
+      "x-fullmag-field-revision": "7",
+      "x-fullmag-mesh-topology-hash": "abc",
+      "x-fullmag-n-comp": "3",
+      "x-fullmag-node-index-count": "2",
+      "x-fullmag-point-count": "2",
+      "x-fullmag-quantity-id": "m",
+      "x-fullmag-scope-id": "body",
+      "x-fullmag-scope-kind": "object",
+      "x-fullmag-snapshot-id": "point-1",
+      "x-fullmag-value-count": "not-a-number",
+    });
+    expect(parseFieldVectorResponseMetadata(headers)).toMatchObject({
+      component: "full",
+      domainGenerationId: "12",
+      encoding: "FMVP;version=3",
+      fieldIndexing: "explicit_node_indices",
+      fieldRevision: "7",
+      meshTopologyHash: "abc",
+      nComp: 3,
+      nodeIndexCount: 2,
+      pointCount: 2,
+      quantityId: "m",
+      scopeId: "body",
+      scopeKind: "object",
+      snapshotId: "point-1",
+      valueCount: null,
+    });
+    expect(parseFieldVectorResponseMetadata(new Headers())).toMatchObject({
+      pointCount: null,
+      quantityId: null,
+    });
+  });
+
+  it("returns null independently for every absent response header", () => {
+    const mappings = [
+      ["x-fullmag-component", "component"],
+      ["x-fullmag-domain-generation-id", "domainGenerationId"],
+      ["x-fullmag-encoding", "encoding"],
+      ["x-fullmag-field-indexing", "fieldIndexing"],
+      ["x-fullmag-field-revision", "fieldRevision"],
+      ["x-fullmag-mesh-topology-hash", "meshTopologyHash"],
+      ["x-fullmag-n-comp", "nComp"],
+      ["x-fullmag-node-index-count", "nodeIndexCount"],
+      ["x-fullmag-point-count", "pointCount"],
+      ["x-fullmag-quantity-id", "quantityId"],
+      ["x-fullmag-scope-id", "scopeId"],
+      ["x-fullmag-scope-kind", "scopeKind"],
+      ["x-fullmag-snapshot-id", "snapshotId"],
+      ["x-fullmag-value-count", "valueCount"],
+    ] as const;
+    for (const [header, property] of mappings) {
+      const headers = new Headers(
+        Object.fromEntries(mappings.map(([name]) => [name, "1"])),
+      );
+      headers.delete(header);
+      expect(parseFieldVectorResponseMetadata(headers)[property], header).toBeNull();
+    }
+  });
+
+  it("returns null independently for every invalid numeric response header", () => {
+    const mappings = [
+      ["x-fullmag-n-comp", "nComp"],
+      ["x-fullmag-node-index-count", "nodeIndexCount"],
+      ["x-fullmag-point-count", "pointCount"],
+      ["x-fullmag-value-count", "valueCount"],
+    ] as const;
+    for (const invalid of ["NaN", "1.5", "-1", "", "9007199254740992"]) {
+      for (const [header, property] of mappings) {
+        expect(
+          parseFieldVectorResponseMetadata(new Headers({ [header]: invalid }))[
+            property
+          ],
+          `${header}=${invalid}`,
+        ).toBeNull();
+      }
+    }
+  });
+
+  it("reports header versus FMVP identity mismatches without rejecting legacy v2", () => {
+    const decoded = {
+      dtype: "float64" as const,
+      formatVersion: 3 as const,
+      grid: [1, 1, 1] as [number, number, number],
+      indexing: "full_domain" as const,
+      meshTopologyHash: "payload-hash",
+      nComp: 3,
+      nodeIndices: null,
+      pointCount: 1,
+      quantityId: "m",
+      scopeId: "body",
+      scopeKind: "object" as const,
+      valueCount: 3,
+      values: new Float64Array(3),
+    };
+    const issues = collectFieldVectorIdentityIssues(decoded, {
+      component: null,
+      domainGenerationId: null,
+      encoding: null,
+      identityIssues: [],
+      fieldIndexing: "explicit_node_indices",
+      fieldRevision: null,
+      meshTopologyHash: "header-hash",
+      nComp: 1,
+      nodeIndexCount: 2,
+      pointCount: 2,
+      quantityId: "H_demag",
+      scopeId: "air",
+      scopeKind: "airbox",
+      snapshotId: null,
+      valueCount: 2,
+    });
+    expect(issues.map((issue) => issue.field)).toEqual(
+      expect.arrayContaining([
+        "quantityId",
+        "pointCount",
+        "valueCount",
+        "nComp",
+        "scopeKind",
+        "scopeId",
+        "meshTopologyHash",
+        "fieldIndexing",
+        "nodeIndexCount",
+      ]),
+    );
+    expect(
+      collectFieldVectorIdentityIssues(
+        { ...decoded, formatVersion: 2, indexing: "legacy_count_only" },
+        parseFieldVectorResponseMetadata(new Headers()),
+      ),
+    ).toEqual([]);
+  });
+});
 
 const resourceRevisions: LiveStatusResource["resources"] = {
   artifact_revision: 0,
@@ -12,13 +225,17 @@ const resourceRevisions: LiveStatusResource["resources"] = {
   command_completion_revision: 0,
   commands_revision: 0,
   display_revision: 0,
-  domain_generation_id: 0,
+  domain_generation_id: "0",
   engine_log_revision: 0,
   field_catalog_revision: 0,
   field_revision: 0,
   fields_revision: 0,
   mesh_build_revision: 0,
   mesh_revision: 0,
+  region_coefficients_revision: 0,
+  region_initial_state_revision: 0,
+  region_membership_revision: 0,
+  region_topology_revision: 0,
   scalars_revision: 0,
   scene_revision: null,
   slice_revision: 0,
@@ -66,7 +283,7 @@ function liveStatusFixture(
     domain: {
       cell_count: 1,
       discretization: "fdm",
-      generation_id: 0,
+      generation_id: "0",
     },
     energies: {},
     metrics: {
@@ -198,6 +415,47 @@ function makeTopologyBuffer(): ArrayBuffer {
   new Uint32Array(buffer, offset, 1).set([10]);
   offset += Uint32Array.BYTES_PER_ELEMENT;
   new Uint32Array(buffer, offset, 1).set([20]);
+  return buffer;
+}
+
+function makePeriodicPairsBuffer(): ArrayBuffer {
+  const pairId = new TextEncoder().encode("x-minus");
+  const byteLength = 20 + 4 + pairId.byteLength + 9 * 4 + 2 * 8;
+  const buffer = new ArrayBuffer(byteLength);
+  const bytes = new Uint8Array(buffer);
+  bytes.set([70, 77, 80, 80], 0);
+  const view = new DataView(buffer);
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setBigUint64(8, BigInt(41), true);
+  view.setUint32(16, 1, true);
+
+  let offset = 20;
+  view.setUint32(offset, pairId.byteLength, true);
+  offset += 4;
+  bytes.set(pairId, offset);
+  offset += pairId.byteLength;
+  view.setUint32(offset, 10, true);
+  offset += 4;
+  view.setUint32(offset, 20, true);
+  offset += 4;
+  view.setUint32(offset, 1, true);
+  offset += 4;
+  view.setUint32(offset, 1, true);
+  offset += 4;
+  view.setUint32(offset, 7, true);
+  offset += 4;
+  view.setUint32(offset, 17, true);
+  offset += 4;
+  view.setBigUint64(offset, BigInt(101), true);
+  offset += 8;
+  view.setBigUint64(offset, BigInt(202), true);
+  offset += 8;
+  view.setUint32(offset, 1, true);
+  offset += 4;
+  view.setUint32(offset, 7, true);
+  offset += 4;
+  view.setUint32(offset, 17, true);
   return buffer;
 }
 
@@ -542,7 +800,7 @@ describe("ControlRoomApi", () => {
 
     const resource = await api.analysis.extensions.objects.topologicalCharge(
       "permalloy_layer",
-      { plane: "xy", quantity_id: "m", resolution: "auto" },
+      { plane: "xy", support: "layer_profile", profile_samples: 17 },
     );
 
     expect(resource.status).toBe("no_current_magnetization");
@@ -553,8 +811,8 @@ describe("ControlRoomApi", () => {
     );
     expect(Object.fromEntries(observed.searchParams.entries())).toEqual({
       plane: "xy",
-      quantity_id: "m",
-      resolution: "auto",
+      support: "layer_profile",
+      profile_samples: "17",
     });
     expect(observedInit?.method).toBe("GET");
     expect(new Headers(observedInit?.headers).get("x-request-id")).toBe(
@@ -1990,6 +2248,38 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
+  it("uses three total attempts for retryable GET failures", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("temporary", { headers: contractHeaders, status: 503 }))
+      .mockResolvedValueOnce(new Response("temporary", { headers: contractHeaders, status: 503 }))
+      .mockResolvedValueOnce(jsonResponse(liveStatusFixture({ fields_revision: 11 })));
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      retryDelayMs: 0,
+    });
+
+    await expect(api.sessions.current.status()).resolves.toMatchObject({
+      resources: { fields_revision: 11 },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("never retries a GET 404", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ error: "missing" }, { status: 404 }),
+    );
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      retryDelayMs: 0,
+    });
+
+    await expect(api.sessions.current.status()).rejects.toMatchObject({ status: 404 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry mutating commands and records rejected command diagnostics", async () => {
     const diagnostics = new RequestDiagnosticsController();
     const fetchImpl = vi.fn(
@@ -2417,6 +2707,49 @@ describe("ControlRoomApi", () => {
     expect(Array.from(result.data.gamma ?? [])).toEqual([0.25]);
   });
 
+  it("loads periodic face and node pairs through the v2 binary facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return binaryResponse(makePeriodicPairsBuffer(), {
+          headers: {
+            etag: '"periodic-pairs-41"',
+            "x-fullmag-periodic-pairs-format": "FMPP.v1",
+            ...contractHeaders,
+          },
+        });
+      },
+    });
+
+    const result = await api.meshing.periodicPairsBinary();
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error(`Expected ready periodic pairs, received ${result.status}`);
+    }
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin",
+    );
+    expect(result.etag).toBe('"periodic-pairs-41"');
+    expect(result.data).toEqual({
+      pairs: [
+        {
+          facePairs: [
+            { faceA: 101, faceB: 202, vertexPairs: [[7, 17]] },
+          ],
+          markerA: 10,
+          markerB: 20,
+          nodePairs: [[7, 17]],
+          pairId: "x-minus",
+        },
+      ],
+      revision: 41,
+      status: "valid",
+    });
+  });
+
   it("loads mesh histogram-bin element selections through the v2 facade", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({
@@ -2765,6 +3098,41 @@ describe("ControlRoomApi", () => {
 
     await expect(api.data.fields.vector("H_demag")).rejects.toThrow(
       "Request failed with status 404"
+    );
+  });
+
+  it("records an exact terminal diagnostic when a successful binary response fails decoding", async () => {
+    const diagnostics = new RequestDiagnosticsController();
+    const invalid = makeFieldVectorBuffer();
+    new Uint8Array(invalid)[0] = "X".charCodeAt(0);
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      diagnostics,
+      fetchImpl: async () =>
+        binaryResponse(invalid, {
+          headers: { etag: '"bad-field"', ...contractHeaders },
+        }),
+      requestIdFactory: () => "req-decode-error",
+    });
+
+    await expect(api.data.fields.vector("m")).rejects.toThrow(
+      /Invalid FMVP magic/,
+    );
+
+    expect(diagnostics.list()).toContainEqual(
+      expect.objectContaining({
+        byteLength: invalid.byteLength,
+        detail: "binary decode failed",
+        direction: "rx",
+        outcome: "error",
+        path: "/v2/sessions/current/data/fields/m/samples/vector",
+        requestId: "binary-payload",
+        resourceKey: "/v2/sessions/current/data/fields/m/samples/vector",
+        status: 200,
+      }),
+    );
+    expect(JSON.stringify(diagnostics.list())).not.toContain(
+      "Invalid FMVP magic",
     );
   });
 
@@ -3320,6 +3688,48 @@ describe("ControlRoomApi", () => {
         method: "GET",
         url: "http://127.0.0.1:8765/v2/sessions/current/data/mesh-region-memberships",
       },
+    ]);
+  });
+
+  it("loads realized FDM membership descriptor and scoped binary bytes", async () => {
+    const requests: string[] = [];
+    const binary = new Uint8Array(68);
+    binary.set([..."FMRM"].map((value) => value.charCodeAt(0)), 0);
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push(`${init?.method ?? "GET"} ${String(url)}`);
+        if (String(url).endsWith("fdm-region-memberships")) {
+          return jsonResponse({
+            binary_path: "mesh/fdm_region_membership.v1.bin",
+            cell_count: 1,
+            cell_m: [1e-9, 1e-9, 1e-9],
+            counts: [1, 1, 1],
+            encoding: "FMRM:u32_le",
+            freshness: "current",
+            grid_fingerprint: "0".repeat(64),
+            mesh_revision: 9,
+            origin_m: [0, 0, 0],
+            region_legend: [
+              { numeric_id: 1, object_id: "body", region_id: "body:core", priority: 0 },
+            ],
+            region_membership_revision: 4,
+            schema_version: "fdm_region_membership.v1",
+          });
+        }
+        return binaryResponse(binary.buffer, { headers: { etag: '"fdm-membership"' } });
+      },
+    });
+
+    const descriptor = await api.data.fdmRegionMemberships();
+    const membership = await api.data.fdmRegionMembershipRegionBytes("body:core");
+
+    expect(descriptor.region_legend[0]?.numeric_id).toBe(1);
+    expect(membership.status).toBe("ready");
+    expect(membership.status === "ready" ? membership.data.byteLength : 0).toBe(68);
+    expect(requests).toEqual([
+      "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-memberships",
+      "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-membership/body%3Acore",
     ]);
   });
 

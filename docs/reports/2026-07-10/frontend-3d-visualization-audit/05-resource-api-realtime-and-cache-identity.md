@@ -1,5 +1,11 @@
 # 05. Resource-first API, realtime i tożsamość cache
 
+## Stan reaudytu 2026-07-14
+
+F3D-018 pozostaje **naprawione** dla canonical query identity i invalidation.
+Niezależna utrata precyzji `domain_generation_id` w JSON/OpenAPI pozostaje
+niezamkniętą częścią F3D-003.
+
 ## F3D-018 — invalidation pola jest zbyt szerokie, a query identity niespójne
 
 **Priorytet:** P2 — średni
@@ -51,6 +57,17 @@ invalidation ma pierwszeństwo przed quantity-wide fallbackiem.
    wystarczającej tożsamości.
 5. Dodać telemetry counter exact/broad invalidations oraz liczbę refetches na
    event, aby wykrywać regresje.
+
+### Decyzja implementacyjna
+
+Aktualny backend nie publikuje dokładnego `recommended_fetch` dla zmian
+`fields/samples`; frontend nie rozszerza z tego powodu schematu ani AsyncAPI.
+Jeżeli przyszły publisher poda canonical URL zasobu
+`/data/fields/{quantity_id}/samples/vector`, bridge traktuje go jako
+forward-compatible exact hint i unieważnia wyłącznie zgodne zasoby oraz ich
+kolekcje. Każdy inny lub nieobecny hint zachowuje obecny quantity-wide fallback.
+Diagnostyka zlicza faktycznie unieważnione subskrybowane klucze po flushu, nie
+domniemane żądania HTTP.
 
 ### Test regresyjny i kryterium akceptacji
 

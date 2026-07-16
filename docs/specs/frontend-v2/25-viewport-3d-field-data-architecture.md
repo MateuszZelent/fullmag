@@ -398,6 +398,29 @@ Frontend code must call this only through the typed API facade and resource hook
 
 ## 15. Diagnostics
 
+Diagnostics preserve four evidence domains and never collapse them into one
+ambiguous state:
+
+| Evidence domain | Contents | Owner/source |
+|---|---|---|
+| requested query | quantity, component, scope kind/id, sample budget, snapshot/stage/view, planner request id and resource key | pass/fetch planner and typed resource hook |
+| decoded payload | FMVP version, dtype, grid, component/point/value counts, indexing, node indices, decoded byte lengths and bounded samples | the exact decoded buffer adopted by the target render model |
+| rendered derived data | adopted buffer/build keys, scalar range diagnostics, vector segment counts/bytes, degradation, render-pass and frame-commit identity | render model and mounted viewport layers |
+| backend meta | scoped field identity, unit/location/components, revisions and backend min/max/mean | exact matching HTTP v2 field-meta resource |
+
+Values from these domains may be compared only when quantity, component,
+scope, snapshot/stage/view and revision semantics are compatible. Every
+statistic names its evidence source; missing or incomparable evidence is
+`unknown`, not zero or pass. An all-zero decoded field is an observation, not by
+itself a physics error.
+
+The viewport publishes only a bounded immutable summary of the buffer it
+actually adopted. It never publishes typed field/topology arrays, Three.js
+objects, materials, response bodies, or transferable buffers to React state or
+the kernel. Debug sampling and scans reuse that adopted decoded payload and do
+not issue a second field-vector request. Server snapshots remain owned by HTTP
+v2 resources, and WebSocket events only invalidate those resources.
+
 Viewport diagnostics must expose:
 
 - pass demand list by target;

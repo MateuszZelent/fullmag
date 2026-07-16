@@ -71,25 +71,43 @@ void debug_checkpoint(const char *stage)
     std::fflush(stderr);
 }
 
-class ElementwiseScalarCoefficient final : public mfem::Coefficient {
+enum class AdapterCoefficientKind {
+    saturation_magnetisation,
+    exchange_stiffness,
+};
+
+class AdapterBackedElementwiseCoefficient final : public mfem::Coefficient {
 public:
-    ElementwiseScalarCoefficient(const std::vector<double> &values, double fallback)
-        : values_(values), fallback_(fallback)
+    AdapterBackedElementwiseCoefficient(
+        const FemMaterialRuntimeAdapter &runtime,
+        AdapterCoefficientKind kind)
+        : runtime_(runtime), kind_(kind)
     {
     }
 
     double Eval(mfem::ElementTransformation &T, const mfem::IntegrationPoint &) override
     {
         const int element = T.ElementNo;
-        if (element >= 0 && static_cast<size_t>(element) < values_.size()) {
-            return values_[static_cast<size_t>(element)];
+        if (element < 0) {
+            throw std::out_of_range("MFEM element ordinal is negative");
         }
-        return fallback_;
+        const std::size_t ordinal = static_cast<std::size_t>(element);
+        const auto &realization = runtime_.realization();
+        if (ordinal >= realization.element_count()) {
+            throw std::out_of_range("MFEM element ordinal exceeds material realization");
+        }
+        const auto &active = realization.active_element_ordinals();
+        if (std::find(active.begin(), active.end(), ordinal) == active.end()) {
+            return 0.0;
+        }
+        return kind_ == AdapterCoefficientKind::exchange_stiffness
+            ? realization.a_j_per_m(ordinal)
+            : realization.ms_a_per_m(ordinal);
     }
 
 private:
-    const std::vector<double> &values_;
-    double fallback_;
+    const FemMaterialRuntimeAdapter &runtime_;
+    AdapterCoefficientKind kind_;
 };
 
 struct MfemBoundaryTriangle {
@@ -369,16 +387,45 @@ bool context_initialize_mfem(Context &ctx, std::string &error)
             return false;
         }
 
-        mfem::Coefficient *a_coeff = ctx.material_fields.A_element_field.empty()
-            ? static_cast<mfem::Coefficient *>(new mfem::GridFunctionCoefficient(gf_a))
-            : static_cast<mfem::Coefficient *>(new ElementwiseScalarCoefficient(
-                  ctx.material_fields.A_element_field,
-                  ctx.material_fields.material.exchange_stiffness));
-        mfem::Coefficient *ms_coeff = ctx.material_fields.Ms_element_field.empty()
-            ? static_cast<mfem::Coefficient *>(new mfem::GridFunctionCoefficient(gf_ms))
-            : static_cast<mfem::Coefficient *>(new ElementwiseScalarCoefficient(
-                  ctx.material_fields.Ms_element_field,
-                  ctx.material_fields.material.saturation_magnetisation));
+        const auto *runtime = ctx.material_fields.runtime
+            ? &*ctx.material_fields.runtime
+            : nullptr;
+        const bool use_dg0_a = !ctx.material_fields.A_element_field.empty();
+        const bool use_dg0_ms = !ctx.material_fields.Ms_element_field.empty();
+        if ((use_dg0_a || use_dg0_ms) && runtime == nullptr) {
+            error = "elementwise material coefficient requires initialized material runtime";
+            delete gf_ms;
+            delete gf_a;
+            delete gf_mx;
+            delete gf_my;
+            delete gf_mz;
+            delete fes;
+            delete fec;
+            delete mesh;
+            return false;
+        }
+        if ((use_dg0_a && runtime->realization().a_location() != MaterialCoefficientLocation::element_dg0) ||
+            (use_dg0_ms && runtime->realization().ms_location() != MaterialCoefficientLocation::element_dg0)) {
+            error = "elementwise material payload does not match DG0 material realization";
+            delete gf_ms;
+            delete gf_a;
+            delete gf_mx;
+            delete gf_my;
+            delete gf_mz;
+            delete fes;
+            delete fec;
+            delete mesh;
+            return false;
+        }
+
+        mfem::Coefficient *a_coeff = use_dg0_a
+            ? static_cast<mfem::Coefficient *>(new AdapterBackedElementwiseCoefficient(
+                  *runtime, AdapterCoefficientKind::exchange_stiffness))
+            : static_cast<mfem::Coefficient *>(new mfem::GridFunctionCoefficient(gf_a));
+        mfem::Coefficient *ms_coeff = use_dg0_ms
+            ? static_cast<mfem::Coefficient *>(new AdapterBackedElementwiseCoefficient(
+                  *runtime, AdapterCoefficientKind::saturation_magnetisation))
+            : static_cast<mfem::Coefficient *>(new mfem::GridFunctionCoefficient(gf_ms));
 
         if (!initialize_exchange_operator_mfem(
                 ctx, *mesh, *fes, *a_coeff, *ms_coeff, error)) {

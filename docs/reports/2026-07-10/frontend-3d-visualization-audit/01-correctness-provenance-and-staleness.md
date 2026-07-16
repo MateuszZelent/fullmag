@@ -1,5 +1,16 @@
 # 01. Poprawność naukowa, provenance i staleness
 
+## Stan reaudytu 2026-07-14
+
+- F3D-001 — **naprawione**;
+- F3D-002 — **naprawione**;
+- F3D-003 — **częściowo naprawione**: FMVP v3 zachowuje
+  pełne `u64`, ale status, katalog pól i część wygenerowanego OpenAPI nadal
+  wystawia identyfikator jako JSON `number`, który traci precyzję w JavaScript;
+- F3D-004 — **naprawione**.
+
+Pełny dowód bieżącego stanu: `10-reaudyt-najnowszej-wersji-2026-07-14.md`.
+
 Ta kategoria ma najwyższy priorytet. Wszystkie cztery problemy mogą spowodować,
 że poprawnie wyglądająca geometria, kolor lub glyph nie odpowiada bieżącej scenie,
 domenie albo polu.

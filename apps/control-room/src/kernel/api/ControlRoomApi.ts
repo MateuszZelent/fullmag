@@ -13,6 +13,8 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
   ANALYSIS_EIGEN_MODE_V2_PATH,
   ANALYSIS_FREQUENCY_RESPONSE_MAGNETIC_SWEEP_V1_PATH,
+  ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH,
+  ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
   ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH,
   ANALYSIS_HYSTERESIS_POINTS_PATH,
   ANALYSIS_HYSTERESIS_METRICS_PATH,
@@ -32,6 +34,9 @@ import {
   DATA_ARTIFACT_PATH,
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
+  DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
+  DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
@@ -53,6 +58,7 @@ import {
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_HISTOGRAM_BIN_ELEMENTS_PATH,
   MESHING_PERIODIC_PAIRS_PATH,
+  MESHING_PERIODIC_PAIRS_BINARY_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_QUALITY_PATH,
@@ -83,6 +89,8 @@ import {
   MODEL_GEOMETRY_REALIZATIONS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_COUPLINGS_PATH,
+  MODEL_FIELD_DRIVE_PATH,
+  MODEL_FIELD_DRIVES_PATH,
   MODEL_MAGNETIZATION_ASSET_PATH,
   MODEL_MATERIAL_FIELDS_PATH,
   MODEL_MATERIAL_PATH,
@@ -134,7 +142,15 @@ import {
   VISUALIZATION_CLIENT_ACKS_PATH,
   VISUALIZATION_STATE_PATH,
 } from "./apiPaths";
-import { resolveCanonicalQuantityId } from "./quantityIds";
+import {
+  canonicalFieldVectorQuery,
+  canonicalFieldVectorQueryParams,
+} from "./fieldQueryIdentity";
+import {
+  fieldDisplayScale,
+  resolveCanonicalQuantityId,
+  storedFieldQuantityId,
+} from "./quantityIds";
 import type {
   BinaryRequestOptions,
   BinaryResourceResult,
@@ -150,6 +166,12 @@ import type {
   CommandQueueStatusResource,
   CommandResponse,
   CouplingListResource,
+  DynamicStructureFactorResource,
+  FieldDriveCreateRequest,
+  FieldDriveDeleteRequest,
+  FieldDriveListResource,
+  FieldDriveReplaceRequest,
+  SpinWaveGammaResource,
   CpuTelemetryResource,
   CrossSectionImageQuery,
   CrossSectionQuery,
@@ -158,6 +180,8 @@ import type {
   DomainMetaResource,
   EngineLogResource,
   FieldCatalogResource,
+  FieldVectorIdentityIssue,
+  FieldVectorResponseMetadata,
   FieldMetaResource,
   FieldMetaQuery,
   FieldStateExportRequest,
@@ -225,6 +249,7 @@ import type {
   MeshRealizedSizeFieldsResource,
   MeshRegionMembershipListResource,
   MeshRegionMembershipResource,
+  FdmRegionMembershipResource,
   MeshRegionQualityResource,
   MeshSemanticsResource,
   MeshSharedDomainConfigReplaceRequest,
@@ -289,11 +314,147 @@ import type {
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "./apiTypes";
+
+function optionalIntegerHeader(headers: Headers, name: string): number | null {
+  const raw = headers.get(name);
+  if (raw === null || raw.trim() === "") return null;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+export function parseFieldVectorResponseMetadata(
+  headers: Headers,
+): FieldVectorResponseMetadata {
+  return {
+    component: headers.get("x-fullmag-component"),
+    domainGenerationId: headers.get("x-fullmag-domain-generation-id"),
+    encoding: headers.get("x-fullmag-encoding"),
+    fieldIndexing: headers.get("x-fullmag-field-indexing"),
+    fieldRevision: headers.get("x-fullmag-field-revision"),
+    identityIssues: [],
+    meshTopologyHash: headers.get("x-fullmag-mesh-topology-hash"),
+    nComp: optionalIntegerHeader(headers, "x-fullmag-n-comp"),
+    nodeIndexCount: optionalIntegerHeader(headers, "x-fullmag-node-index-count"),
+    pointCount: optionalIntegerHeader(headers, "x-fullmag-point-count"),
+    quantityId: headers.get("x-fullmag-quantity-id"),
+    scopeId: headers.get("x-fullmag-scope-id"),
+    scopeKind: headers.get("x-fullmag-scope-kind"),
+    snapshotId: headers.get("x-fullmag-snapshot-id"),
+    valueCount: optionalIntegerHeader(headers, "x-fullmag-value-count"),
+  };
+}
+
+export function collectFieldVectorIdentityIssues(
+  payload: DecodedFieldVector,
+  metadata: FieldVectorResponseMetadata,
+): FieldVectorIdentityIssue[] {
+  const issues: FieldVectorIdentityIssue[] = [];
+  const compare = (
+    field: string,
+    headerValue: number | string | null,
+    payloadValue: number | string | null,
+  ) => {
+    if (headerValue !== null && String(headerValue) !== String(payloadValue)) {
+      issues.push({ field, headerValue, payloadValue });
+    }
+  };
+  compare("quantityId", metadata.quantityId, payload.quantityId);
+  compare("pointCount", metadata.pointCount, payload.pointCount);
+  compare("valueCount", metadata.valueCount, payload.valueCount);
+  compare("nComp", metadata.nComp, payload.nComp);
+  compare("scopeKind", metadata.scopeKind, payload.scopeKind ?? null);
+  compare("scopeId", metadata.scopeId, payload.scopeId ?? null);
+  compare(
+    "meshTopologyHash",
+    metadata.meshTopologyHash,
+    payload.meshTopologyHash ?? null,
+  );
+  compare("fieldIndexing", metadata.fieldIndexing, payload.indexing ?? null);
+  compare(
+    "nodeIndexCount",
+    metadata.nodeIndexCount,
+    payload.nodeIndices?.length ?? 0,
+  );
+  compare(
+    "domainGenerationId",
+    metadata.domainGenerationId,
+    payload.domainGenerationId ?? null,
+  );
+  return issues;
+}
+
+export function withDerivedDriveFluxDensity(
+  catalog: FieldCatalogResource,
+): FieldCatalogResource {
+  if (catalog.quantities.some((quantity) => quantity.quantity_id === "B_drive")) {
+    return catalog;
+  }
+  const source = catalog.quantities.find(
+    (quantity) => quantity.quantity_id === "H_drive",
+  );
+  if (!source) return catalog;
+  return {
+    ...catalog,
+    quantities: [
+      ...catalog.quantities,
+      {
+        ...source,
+        label: "Drive flux density",
+        quantity_id: "B_drive",
+        unit: "T",
+      },
+    ],
+  };
+}
+
+export function transformFieldMetaForDisplay(
+  requestedQuantityId: string,
+  meta: FieldMetaResource,
+): FieldMetaResource {
+  const scale = fieldDisplayScale(requestedQuantityId);
+  if (scale === 1) return meta;
+  return {
+    ...meta,
+    label: "Drive flux density",
+    quantity_id: requestedQuantityId,
+    stats: meta.stats
+      ? {
+          max: meta.stats.max * scale,
+          mean: meta.stats.mean * scale,
+          min: meta.stats.min * scale,
+        }
+      : meta.stats,
+    unit: "T",
+  };
+}
+
+export function transformFieldVectorForDisplay(
+  requestedQuantityId: string,
+  result: BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>,
+): BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata> {
+  const scale = fieldDisplayScale(requestedQuantityId);
+  if (scale === 1 || result.status !== "ready") return result;
+  const values = Float64Array.from(result.data.values, (value) => value * scale);
+  return {
+    ...result,
+    data: {
+      ...result.data,
+      quantityId: requestedQuantityId,
+      values,
+    },
+    responseMetadata: {
+      ...result.responseMetadata,
+      identityIssues: [],
+      quantityId: requestedQuantityId,
+    },
+  };
+}
 import {
   decodeCrossSection,
   decodeCrossSectionQuality,
   decodeFieldVector,
   decodeMeshQualityData,
+  decodePeriodicPairs,
   decodeTableRows,
   decodeTopology,
   decodeTopologyHeader,
@@ -403,6 +564,7 @@ interface ControlRoomApiOptions {
   diagnostics?: RequestDiagnosticsController;
   fetchImpl?: FetchLike;
   maxGetRetries?: number;
+  retryDelayMs?: number;
   requestIdFactory?: () => string;
 }
 
@@ -410,6 +572,7 @@ export class ControlRoomApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly requestId: string | null = null,
   ) {
     super(message);
     this.name = "ControlRoomApiError";
@@ -422,6 +585,7 @@ export class ControlRoomApi {
   private readonly requestDiagnostics: RequestDiagnosticsController | null;
   private readonly fetchImpl: FetchLike;
   private readonly maxGetRetries: number;
+  private readonly retryDelayMs: number;
   private readonly requestIdFactory: () => string;
   private readonly transport: OpenApiV2Transport;
   private readonly fieldMaterializationRequests = new Map<string, Promise<void>>();
@@ -470,6 +634,18 @@ export class ControlRoomApi {
   };
 
   readonly analysis = {
+    spinWave: {
+      gamma: (options?: RequestOptions) =>
+        this.requestJson<SpinWaveGammaResource>(
+          ANALYSIS_SPIN_WAVE_GAMMA_V1_PATH,
+          options,
+        ),
+      dynamicStructureFactor: (options?: RequestOptions) =>
+        this.requestJson<DynamicStructureFactorResource>(
+          ANALYSIS_DYNAMIC_STRUCTURE_FACTOR_V1_PATH,
+          options,
+        ),
+    },
     eigen: {
       eigenBranchesV2: (options?: RequestOptions) =>
         this.requestJson<FrequencyDomainJsonArtifactResource>(
@@ -724,33 +900,41 @@ export class ControlRoomApi {
     },
     fields: {
       catalog: (options?: RequestOptions) =>
-        this.requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options),
+        this.requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options).then(
+          withDerivedDriveFluxDensity,
+        ),
       meta: (
         quantityId: string,
         query: FieldMetaQuery = {},
         options?: RequestOptions,
-      ) =>
-        this.requestFieldMeta(
-          resolveCanonicalQuantityId(quantityId),
+      ) => {
+        const requestedQuantityId = resolveCanonicalQuantityId(quantityId);
+        const storedQuantityId = storedFieldQuantityId(requestedQuantityId);
+        return this.requestFieldMeta(
+          storedQuantityId,
           DATA_FIELD_META_PATH,
           {
-            path: { quantity_id: resolveCanonicalQuantityId(quantityId) },
+            path: { quantity_id: storedQuantityId },
             query: fieldMetaQueryParams(query),
           },
           options,
-        ),
+        ).then((meta) => transformFieldMetaForDisplay(requestedQuantityId, meta));
+      },
       vector: (
         quantityId: string,
         query: FieldVectorQuery = {},
         options?: BinaryRequestOptions,
-      ) =>
-        this.requestFieldVectorOnDemand(
-          resolveCanonicalQuantityId(quantityId),
+      ) => {
+        const requestedQuantityId = resolveCanonicalQuantityId(quantityId);
+        const storedQuantityId = storedFieldQuantityId(requestedQuantityId);
+        return this.requestFieldVectorOnDemand(
+          storedQuantityId,
           DATA_FIELD_VECTOR_PATH,
-          { quantity_id: resolveCanonicalQuantityId(quantityId) },
+          { quantity_id: storedQuantityId },
           fieldVectorQueryParams(query),
           options,
-        ),
+        ).then((result) => transformFieldVectorForDisplay(requestedQuantityId, result));
+      },
     },
     meshRegionMembership: (regionId: string, options?: RequestOptions) =>
       this.requestJson<MeshRegionMembershipResource>(
@@ -762,6 +946,22 @@ export class ControlRoomApi {
       this.requestJson<MeshRegionMembershipListResource>(
         DATA_MESH_REGION_MEMBERSHIPS_PATH,
         options,
+      ),
+    fdmRegionMemberships: (options?: RequestOptions) =>
+      this.requestJson<FdmRegionMembershipResource>(
+        DATA_FDM_REGION_MEMBERSHIPS_PATH,
+        options,
+      ),
+    fdmRegionMembershipBytes: (options?: BinaryRequestOptions) =>
+      this.requestBinaryBytes(DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH, options),
+    fdmRegionMembershipRegionBytes: (
+      regionId: string,
+      options?: BinaryRequestOptions,
+    ) =>
+      this.requestBinaryBytes(
+        DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
+        options,
+        { region_id: regionId },
       ),
     scalars: {
       window: (
@@ -846,6 +1046,13 @@ export class ControlRoomApi {
     periodicPairs: (options?: RequestOptions) =>
       this.requestJson<MeshPeriodicPairsResource>(
         MESHING_PERIODIC_PAIRS_PATH,
+        options,
+      ),
+    periodicPairsBinary: (options?: BinaryRequestOptions) =>
+      this.requestBinaryResource(
+        MESHING_PERIODIC_PAIRS_BINARY_PATH,
+        "periodic-pairs",
+        decodePeriodicPairs,
         options,
       ),
     builds: {
@@ -1302,6 +1509,39 @@ export class ControlRoomApi {
       ),
     couplings: (options?: RequestOptions) =>
       this.requestJson<CouplingListResource>(MODEL_COUPLINGS_PATH, options),
+    fieldDrives: (options?: RequestOptions) =>
+      this.requestJson<FieldDriveListResource>(MODEL_FIELD_DRIVES_PATH, options),
+    createFieldDrive: (
+      request: FieldDriveCreateRequest,
+      options?: RequestOptions,
+    ) =>
+      this.postJson<AuthoringTransactionResponse, FieldDriveCreateRequest>(
+        MODEL_FIELD_DRIVES_PATH,
+        request,
+        options,
+      ),
+    replaceFieldDrive: (
+      driveId: string,
+      request: FieldDriveReplaceRequest,
+      options?: RequestOptions,
+    ) =>
+      this.putJson<AuthoringTransactionResponse, FieldDriveReplaceRequest>(
+        MODEL_FIELD_DRIVE_PATH,
+        request,
+        options,
+        { path: { drive_id: driveId } },
+      ),
+    deleteFieldDrive: (
+      driveId: string,
+      request: FieldDriveDeleteRequest,
+      options?: RequestOptions,
+    ) =>
+      this.deleteJsonWithBody<AuthoringTransactionResponse, FieldDriveDeleteRequest>(
+        MODEL_FIELD_DRIVE_PATH,
+        request,
+        options,
+        { path: { drive_id: driveId } },
+      ),
     createObjectRegion: (
       objectId: string,
       region: components["schemas"]["SceneObjectRegion"],
@@ -1662,7 +1902,8 @@ export class ControlRoomApi {
     binaryDecodeScheduler = createBinaryDecodeScheduler(),
     diagnostics,
     fetchImpl,
-    maxGetRetries = 1,
+    maxGetRetries = 2,
+    retryDelayMs = 100,
     requestIdFactory = () => crypto.randomUUID(),
   }: ControlRoomApiOptions = {}) {
     this.baseUrl = resolveBaseUrl(baseUrl);
@@ -1670,6 +1911,7 @@ export class ControlRoomApi {
     this.requestDiagnostics = diagnostics ?? null;
     this.fetchImpl = fetchImpl ?? resolveDefaultFetch();
     this.maxGetRetries = maxGetRetries;
+    this.retryDelayMs = retryDelayMs;
     this.requestIdFactory = requestIdFactory;
     this.transport = createOpenApiV2Transport({
       baseUrl: this.baseUrl,
@@ -1780,6 +2022,21 @@ export class ControlRoomApi {
     params?: Record<string, unknown>,
   ): Promise<TResponse> {
     const result = await this.transport.DELETE(path as never, {
+      cache: "no-store",
+      params,
+      signal: options.signal,
+    } as never);
+    return readOpenApiResult<TResponse>(result);
+  }
+
+  private async deleteJsonWithBody<TResponse, TBody>(
+    path: OpenApiV2Path,
+    body: TBody,
+    options: RequestOptions = {},
+    params?: Record<string, unknown>,
+  ): Promise<TResponse> {
+    const result = await this.transport.DELETE(path as never, {
+      body,
       cache: "no-store",
       params,
       signal: options.signal,
@@ -2056,7 +2313,7 @@ export class ControlRoomApi {
     pathParams: PathParams,
     query: QueryParams,
     options: BinaryRequestOptions = {},
-  ): Promise<BinaryResourceResult<DecodedFieldVector>> {
+  ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
     return this.requestBinaryResource(
       path,
       "field-vector",
@@ -2064,6 +2321,13 @@ export class ControlRoomApi {
       options,
       pathParams,
       query,
+      (response, data) => {
+        const metadata = parseFieldVectorResponseMetadata(response.headers);
+        return {
+          ...metadata,
+          identityIssues: collectFieldVectorIdentityIssues(data, metadata),
+        };
+      },
     );
   }
 
@@ -2073,7 +2337,7 @@ export class ControlRoomApi {
     pathParams: PathParams,
     query: QueryParams,
     options: BinaryRequestOptions = {},
-  ): Promise<BinaryResourceResult<DecodedFieldVector>> {
+  ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
     const result = await this.requestFieldVector(path, pathParams, query, options);
     if (result.status !== "not-applicable") {
       return result;
@@ -2153,9 +2417,9 @@ export class ControlRoomApi {
     pathParams: PathParams,
     query: QueryParams,
     options: BinaryRequestOptions,
-  ): Promise<BinaryResourceResult<DecodedFieldVector>> {
+  ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
     const deadline = Date.now() + FIELD_MATERIALIZATION_TIMEOUT_MS;
-    let lastResult: BinaryResourceResult<DecodedFieldVector> | null = null;
+    let lastResult: BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata> | null = null;
     while (Date.now() <= deadline) {
       throwIfAborted(options.signal);
       await delay(FIELD_MATERIALIZATION_RETRY_MS, options.signal);
@@ -2174,14 +2438,15 @@ export class ControlRoomApi {
     );
   }
 
-  private async requestBinaryResource<TData>(
+  private async requestBinaryResource<TData, TMetadata = undefined>(
     path: OpenApiV2Path,
     decoderKind: BinaryDecoderKind,
     decode: (buffer: ArrayBuffer) => TData,
     options: BinaryRequestOptions = {},
     pathParams?: PathParams,
     query?: QueryParams,
-  ): Promise<BinaryResourceResult<TData>> {
+    responseMetadata?: (response: Response, data: TData) => TMetadata,
+  ): Promise<BinaryResourceResult<TData, TMetadata>> {
     const measureBase = `fullmag.api.requestBinaryResource.${decoderKind}`;
     return measureControlRoomApiPerformance(
       measureBase,
@@ -2264,18 +2529,39 @@ export class ControlRoomApi {
         const byteLength = buffer.byteLength;
 
         const decodeStartedAt = nowMs();
-        const data = await measureControlRoomApiPerformance(
-          `${measureBase}.decode`,
-          async () =>
-            decoderKind === "raw-bytes"
-              ? decode(buffer)
-              : await this.binaryDecodeScheduler({
-                  buffer,
-                  decodeInline: decode,
-                  kind: decoderKind,
-                  path: requestState.lastRequestPath,
-                }),
-        );
+        let data: TData;
+        try {
+          data = await measureControlRoomApiPerformance(
+            `${measureBase}.decode`,
+            async () =>
+              decoderKind === "raw-bytes"
+                ? decode(buffer)
+                : await this.binaryDecodeScheduler({
+                    buffer,
+                    decodeInline: decode,
+                    kind: decoderKind,
+                    path: requestState.lastRequestPath,
+                  }),
+          );
+        } catch (error) {
+          this.requestDiagnostics?.record({
+            byteLength,
+            channel: "http",
+            contentType: response.headers.get("content-type"),
+            detail: "binary decode failed",
+            direction: "rx",
+            durationMs: Math.max(0, nowMs() - decodeStartedAt),
+            etag,
+            method: "GET",
+            outcome: "error",
+            path: requestState.lastRequestPath,
+            requestId:
+              response.headers.get("x-request-id") ?? "binary-payload",
+            resourceKey: requestState.lastRequestPath,
+            status: response.status,
+          });
+          throw error;
+        }
         const decodeDurationMs = Math.max(0, nowMs() - decodeStartedAt);
 
         this.requestDiagnostics?.record({
@@ -2299,8 +2585,11 @@ export class ControlRoomApi {
           contentRange: response.headers.get("content-range"),
           data,
           etag,
+          ...(responseMetadata
+            ? { responseMetadata: responseMetadata(response, data) }
+            : {}),
           status: "ready",
-        };
+        } as BinaryResourceResult<TData, TMetadata>;
       },
     );
   }
@@ -2397,7 +2686,8 @@ export class ControlRoomApi {
           status: response.status,
         });
 
-        if (attempt < maxAttempts && response.status >= 500) {
+        if (attempt < maxAttempts && retryableGetStatus(method, response.status)) {
+          await delayRetry(this.retryDelayMs, init.signal);
           continue;
         }
 
@@ -2416,6 +2706,7 @@ export class ControlRoomApi {
           attempt < maxAttempts &&
           !(error instanceof DOMException && error.name === "AbortError")
         ) {
+          await delayRetry(this.retryDelayMs, init.signal);
           continue;
         }
       }
@@ -2442,6 +2733,35 @@ export class ControlRoomApi {
 
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
+}
+
+function retryableGetStatus(method: string, status: number): boolean {
+  return (
+    method === "GET" &&
+    (status === 408 ||
+      status === 429 ||
+      status === 502 ||
+      status === 503 ||
+      status === 504)
+  );
+}
+
+async function delayRetry(
+  delayMs: number,
+  signal: AbortSignal | null | undefined,
+): Promise<void> {
+  if (delayMs <= 0) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = globalThis.setTimeout(resolve, delayMs);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        globalThis.clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true },
+    );
+  });
 }
 
 function resolveBaseUrl(baseUrl: string | undefined): string {
@@ -2543,30 +2863,21 @@ function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
 }
 
 function fieldVectorQueryParams(query: FieldVectorQuery): QueryParams {
-  return {
-    component: query.component ?? undefined,
-    max_samples: query.max_samples ?? undefined,
-    phase_rad: query.phase_rad ?? undefined,
-    scope_id: normalizeFieldMetaScopeId(
-      query.scope_kind,
-      query.scope_id,
-    ) ?? undefined,
-    scope_kind: query.scope_kind ?? undefined,
-    snapshot_id: query.snapshot_id ?? undefined,
-    stage_id: query.stage_id ?? undefined,
-    view: query.view ?? undefined,
-  };
+  return canonicalFieldVectorQueryParams(canonicalFieldVectorQuery("m", query));
 }
 
 function topologicalChargeQueryParams(
   query: TopologicalChargeQuery,
 ): QueryParams {
   return {
-    method: query.method,
     plane: query.plane,
-    quantity_id: query.quantity_id,
-    resolution: query.resolution,
+    support: query.support,
+    profile_samples:
+      typeof query.profile_samples === "number"
+        ? String(query.profile_samples)
+        : query.profile_samples,
     snapshot_id: query.snapshot_id ?? undefined,
+    stage_id: query.stage_id ?? undefined,
   };
 }
 
@@ -2755,6 +3066,7 @@ function readOpenApiResult<T>(result: {
     throw new ControlRoomApiError(
       formatOpenApiError(result.error),
       response.status,
+      response.headers.get("x-request-id"),
     );
   }
 

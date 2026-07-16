@@ -37,9 +37,13 @@ import {
   useViewport3DScalarColorUpload,
   useViewport3DScalarShaderColorUpload,
 } from "../hooks/useViewport3DScalarColorUpload";
-import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
+import {
+  resolveViewport3DScalarColorBufferKey,
+  type ScalarColorBuffer,
+} from "../viewport3dFieldMapping";
 import type { Viewport3DMagnetizationTexturePreview } from "../viewport3dPrimitiveModel";
 import { createViewport3DIndexedPointGeometry } from "../viewport3dPointGeometry";
+import { attachViewport3DSharedTopologyPosition } from "../viewport3dSharedTopologyPositions";
 import {
   canApplyScalarShaderColorBuffer,
   createScalarSurfaceShaderMaterial,
@@ -47,6 +51,7 @@ import {
 } from "../viewport3dScalarSurfaceShader";
 import type {
   Viewport3DFieldRenderModel,
+  Viewport3DNodeSelection,
   Viewport3DTopologyPartRenderModel,
   Viewport3DTopologyRenderModel,
 } from "../viewport3dRenderModel";
@@ -69,8 +74,14 @@ import {
 } from "./viewport3DLayerSettings";
 import {
   resolveViewport3DTargetSurfaceLayerInput,
+  resolveViewport3DTargetLayerRequestedSourceIdentity,
   resolveViewport3DTargetVectorLayerInput,
 } from "./viewport3DLayerPassInputs";
+import { VIEWPORT_3D_PICK_PRIORITY } from "./viewport3DPickPriority";
+import type {
+  Viewport3DRenderAdoptionReceipt,
+  Viewport3DRenderAdoptionRegistry,
+} from "../model/viewport3DRenderAdoptionRegistry";
 
 const MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
 
@@ -129,7 +140,7 @@ export function createMeshPartSurfaceGeometry({
   if (!surfaceIndices?.length) return null;
   const next = new BufferGeometry();
   if (!expandSurfaceFaces) {
-    next.setAttribute("position", new BufferAttribute(positions, 3));
+    attachViewport3DSharedTopologyPosition(next, positions);
     next.setIndex(new BufferAttribute(surfaceIndices, 1));
     return next;
   }
@@ -324,6 +335,7 @@ function scalarColorBufferMatchesRetainedSettings(
 }
 
 export const MeshPartLayer = memo(function MeshPartLayer({
+  adoptionRegistry,
   colors,
   vectorColorMode,
   fieldModel,
@@ -337,6 +349,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   tracker,
   vectorStyle,
 }: {
+  adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
   vectorColorMode: string;
   fieldModel: Viewport3DFieldRenderModel | null;
@@ -408,10 +421,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const createEdgeGeometry = useCallback(() => {
     if (!topologyModel || !edgeIndices) return null;
     const next = new BufferGeometry();
-    next.setAttribute(
-      "position",
-      new BufferAttribute(topologyModel.positions, 3),
-    );
+    attachViewport3DSharedTopologyPosition(next, topologyModel.positions);
     next.setIndex(new BufferAttribute(edgeIndices, 1));
     return next;
   }, [edgeIndices, topologyModel]);
@@ -430,10 +440,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     uploadManager: topologyUploadManager,
   });
 
-  const nodeSelection =
-    renderSettings.geometryScope === "full"
-      ? partModel.part
-      : partModel.surfaceNodeSelection ?? partModel.part;
+  const nodeSelection = resolveMeshPartPointNodeSelection(
+    renderSettings.geometryScope,
+    partModel,
+  );
   const nodeSelectionIndices = meshPartPointSelectionIndices(nodeSelection);
   const createPointGeometry = useCallback(() => {
     if (!renderSettings.pointsVisible) return null;
@@ -600,6 +610,39 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     vertexColorsEnabled,
     vertexCount: surfaceVertexCount,
   });
+  const adoptedScalarColors = visibleShaderScalarColors ?? visibleScalarColors;
+  const requestedFieldBufferId = resolveViewport3DTargetLayerRequestedSourceIdentity({
+    fieldModel,
+    partId: part.id,
+  }).fieldBufferId;
+  useEffect(() => {
+    if (!adoptionRegistry || meshQualityColors || !adoptedScalarColors) return;
+    let adoption = recordMeshPartSurfaceAdoption({
+      carrierId: part.id,
+      fieldBufferId: requestedFieldBufferId,
+      registry: adoptionRegistry,
+      scalarBuffer: adoptedScalarColors,
+    });
+    const replay = () => {
+      adoption = recordMeshPartSurfaceAdoption({
+        carrierId: part.id,
+        fieldBufferId: requestedFieldBufferId,
+        registry: adoptionRegistry,
+        scalarBuffer: adoptedScalarColors,
+      });
+    };
+    const unregister = adoptionRegistry.registerCarrierAdoptionReplay(part.id, replay);
+    return () => {
+      unregister();
+      adoptionRegistry.clearAdoption(adoption);
+    };
+  }, [
+    adoptedScalarColors,
+    adoptionRegistry,
+    meshQualityColors,
+    part.id,
+    requestedFieldBufferId,
+  ]);
 
   const materialRef = useRef<MeshBasicMaterial>(null);
   const { hasScalarColors } = resolveMeshPartVisibleScalarColorState({
@@ -691,7 +734,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   };
 
   return (
-    <group onPointerDown={handlePointerDown}>
+    <group
+      onPointerDown={handlePointerDown}
+      userData={{ viewportSemanticPickPriority: VIEWPORT_3D_PICK_PRIORITY.meshPart }}
+    >
       {renderSettings.shaderVisible && geometry ? (
         <mesh
           geometry={geometry}
@@ -752,12 +798,15 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
       renderSettings.vectorsVisible ? (
         <VectorFieldLayer
+          adoptionRegistry={adoptionRegistry}
           buildReference={vectorLayerInput.buildReference}
+          carrierId={part.id}
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
           opacity={surfaceOpacity}
           segments={vectorLayerInput.segments}
+          fieldBufferId={requestedFieldBufferId}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}
         />
@@ -765,6 +814,43 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     </group>
   );
 });
+
+export function resolveMeshPartPointNodeSelection(
+  geometryScope: "full" | "surface",
+  partModel: Viewport3DTopologyPartRenderModel<Viewport3DMeshPart>,
+): Viewport3DNodeSelection {
+  return geometryScope === "full"
+    ? partModel.fullNodeSelection
+    : partModel.surfaceNodeSelection ?? { nodeIndices: [] };
+}
+
+export function recordMeshPartSurfaceAdoption({
+  carrierId,
+  fieldBufferId,
+  registry,
+  scalarBuffer,
+}: {
+  carrierId: string;
+  fieldBufferId: string | null;
+  registry: Viewport3DRenderAdoptionRegistry;
+  scalarBuffer: ScalarColorBuffer;
+}): Omit<Viewport3DRenderAdoptionReceipt, "byteLength" | "targetId"> {
+  const adoption = {
+    carrierId,
+    fieldBufferId: scalarBuffer.sourceFieldBufferId ?? fieldBufferId,
+    kind: "surface" as const,
+    resourceKey: scalarBuffer.sourceResourceKey ?? null,
+    scalarBufferKey: resolveViewport3DScalarColorBufferKey(scalarBuffer),
+    vectorBuildKey: null,
+  };
+  registry.recordSurfaceAdoption({
+    byteLength:
+      scalarBuffer.colors.byteLength +
+      (scalarBuffer.scalarValues?.byteLength ?? 0),
+    ...adoption,
+  });
+  return adoption;
+}
 
 function meshPartPointSelectionRevision(
   selection: Viewport3DMeshPart | NonNullable<

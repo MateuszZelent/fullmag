@@ -25,6 +25,7 @@ import {
   type Viewport3DTargetFieldBuffer,
 } from "../model/viewport3DTargetFieldBuffer";
 import type { Viewport3DTargetRenderPlan } from "../model/viewport3DFieldDataPlan";
+import { resolveViewport3DFieldDomainCompatibility } from "../model/viewport3DFieldDomainCompatibility";
 import { summarizeViewport3DTargetDiagnostics } from "../model/viewport3DTargetDiagnostics";
 import type {
   Viewport3DFieldRenderModel,
@@ -88,6 +89,7 @@ export interface Viewport3DFieldColorBuildReferenceInput {
   colorPalette: string;
   colorRangeRevision?: string | number | null;
   domainId: string;
+  domainGenerationId?: string | null;
   fieldRevision: string | number | null;
   quantityId: string | null | undefined;
   samplingRevision?: string | number | null;
@@ -132,6 +134,7 @@ export function createViewport3DFieldColorBuildReference({
   colorPalette,
   colorRangeRevision,
   domainId,
+  domainGenerationId,
   fieldRevision,
   quantityId,
   samplingRevision,
@@ -158,6 +161,7 @@ export function createViewport3DFieldColorBuildReference({
     algorithmVersion: 1,
     component: colorMode,
     domainId,
+    domainGenerationId,
     fieldRevision: resolvedFieldRevision,
     quantityId,
     samplingRevision: resolvedSamplingRevision,
@@ -202,11 +206,19 @@ export function createViewport3DFieldColorBuildReference({
 export function attachViewport3DFieldColorBuildReference(
   colors: ScalarColorBuffer | null,
   reference: Viewport3DFieldColorBuildReference | null,
+  sourceIdentity?: {
+    fieldBufferId: string | null;
+    resourceKey: string | null;
+  },
 ): ScalarColorBuffer | null {
   if (!colors || !reference) return colors;
   return {
     ...colors,
     buildKey: reference.buildKey,
+    sourceFieldBufferId:
+      colors.sourceFieldBufferId ?? sourceIdentity?.fieldBufferId ?? null,
+    sourceResourceKey:
+      colors.sourceResourceKey ?? sourceIdentity?.resourceKey ?? null,
     targetRevision: reference.targetRevision,
     topologyRevision: reference.topologyRevision,
   };
@@ -527,11 +539,13 @@ export function useViewport3DChunkedScalarColors({
   const partBuildSpecs = useMemo(() => {
     if (!topology || !partScalarColorModes) return [];
     const specs: Array<{
+      fieldBufferId: string | null;
       fieldVector: DecodedFieldVector;
       mode: string;
       partId: string;
       palette: string;
       scalarRange: ScalarRange | null | undefined;
+      resourceKey: string | null;
       target: Viewport3DFieldColorBuildTarget;
       targetProjectionMode: Viewport3DChunkedProjectionMode;
     }> = [];
@@ -605,11 +619,15 @@ export function useViewport3DChunkedScalarColors({
             );
       if (!target) continue;
       specs.push({
+        fieldBufferId:
+          explicitPartFieldBuffer?.bufferId ??
+          `decoded:${partFieldVector.quantityId}:${partFieldVector.pointCount}:${partFieldVector.values.byteLength}`,
         fieldVector: partFieldVector,
         mode,
         partId,
         palette,
         scalarRange,
+        resourceKey: explicitPartFieldBuffer?.resourceKey ?? null,
         target,
         targetProjectionMode,
       });
@@ -846,6 +864,8 @@ export function useViewport3DChunkedScalarColors({
                     buildDomainId ??
                     topology.meshGenerationId ??
                     "viewport-3d",
+                  domainGenerationId:
+                    fieldVector.domainGenerationId ?? topology.meshGenerationId,
                   fieldRevision: fieldRevision ?? null,
                   quantityId: fieldVector.quantityId,
                   sessionId: buildSessionId ?? "current",
@@ -854,6 +874,12 @@ export function useViewport3DChunkedScalarColors({
                   topologyRevision:
                     topologyRevision ?? topology.meshRevision ?? null,
                 });
+              if (
+                fieldColorBuildReference &&
+                entries.get(mode)?.buildKey === fieldColorBuildReference.buildKey
+              ) {
+                return;
+              }
               const colors = await buildVertexScalarColorsOffMainThread(
                 fieldVector,
                 {
@@ -875,6 +901,10 @@ export function useViewport3DChunkedScalarColors({
                 attachViewport3DFieldColorBuildReference(
                   colors,
                   fieldColorBuildReference,
+                  {
+                    fieldBufferId: `decoded:${fieldVector.quantityId}:${fieldVector.pointCount}:${fieldVector.values.byteLength}`,
+                    resourceKey: null,
+                  },
                 ),
               ] as const;
               if (entry[1] !== null) {
@@ -886,11 +916,13 @@ export function useViewport3DChunkedScalarColors({
           : [];
       const partJobs = partBuildSpecs.map(
         async ({
+          fieldBufferId,
           fieldVector,
           mode,
           palette,
           partId,
           scalarRange,
+          resourceKey,
           target,
         }) => {
           const fieldColorBuildReference =
@@ -902,6 +934,8 @@ export function useViewport3DChunkedScalarColors({
                 buildDomainId ??
                 topology.meshGenerationId ??
                 "viewport-3d",
+              domainGenerationId:
+                fieldVector.domainGenerationId ?? topology.meshGenerationId,
               fieldRevision:
                 chunkedFieldVectorObjectId(fieldVector),
               samplingRevision: `target=${target.kind}`,
@@ -915,6 +949,13 @@ export function useViewport3DChunkedScalarColors({
               topologyRevision:
                 topologyRevision ?? topology.meshRevision ?? null,
             });
+          if (
+            fieldColorBuildReference &&
+            partEntries.get(partId)?.get(mode)?.buildKey ===
+              fieldColorBuildReference.buildKey
+          ) {
+            return;
+          }
           const colors = await buildVertexScalarColorsOffMainThread(
             fieldVector,
             {
@@ -934,6 +975,7 @@ export function useViewport3DChunkedScalarColors({
           const entry = attachViewport3DFieldColorBuildReference(
             colors,
             fieldColorBuildReference,
+            { fieldBufferId, resourceKey },
           );
           if (entry !== null) {
             builtAnyEntry = true;
@@ -1209,26 +1251,15 @@ function chunkedFieldVectorMatchesTopology(
   fieldVector: DecodedFieldVector,
   topology: Viewport3DTopologyRenderModel<Viewport3DRenderablePart>,
 ): boolean {
-  const fieldHash = fieldVector.meshTopologyHash ?? null;
-  if (
-    fieldHash !== null &&
-    topology.meshTopologyHash !== null &&
-    fieldHash !== topology.meshTopologyHash
-  ) {
-    return false;
-  }
-
-  const fieldTopologyRevision = fieldVector.meshTopologyRevision ?? null;
-  const topologyRevision = revisionToString(topology.meshRevision);
-  if (
-    fieldTopologyRevision !== null &&
-    topologyRevision !== null &&
-    fieldTopologyRevision !== topologyRevision
-  ) {
-    return false;
-  }
-
-  return true;
+  return resolveViewport3DFieldDomainCompatibility({
+    domain: {
+      domainGenerationId: topology.meshGenerationId,
+      meshTopologyHash: topology.meshTopologyHash,
+      meshTopologyRevision: revisionToString(topology.meshRevision),
+      pointCount: topology.nodeCount,
+    },
+    field: fieldVector,
+  }).status !== "mismatch";
 }
 
 function resolveChunkedFieldVectorNodeIndices(

@@ -111,6 +111,9 @@ function useObjectRegionMagneticParametersPanelView({
   model,
   draft,
   pending,
+  draftDirty,
+  buildRegion,
+  regionMeshLifecycle,
   canWriteRegion,
   couplingDependencies,
   updateMaterialOverride,
@@ -629,6 +632,9 @@ function useObjectRegionMagneticParametersPanelView({
 
       <ObjectRegionActionsSection
         pending={pending}
+        draftDirty={draftDirty}
+        buildRegion={buildRegion}
+        regionMeshLifecycle={regionMeshLifecycle}
         canWriteRegion={canWriteRegion}
         couplingDependencies={couplingDependencies}
         applyRegion={applyRegion}

@@ -1,5 +1,14 @@
 # 02. Renderer, shadery, pola i passy
 
+## Stan reaudytu 2026-07-14
+
+F3D-005–F3D-008 pozostają **naprawione w swoim pierwotnym zakresie**. Nie
+zamykają jednak nowej awarii dużego FEM: poprawny target i dostępny payload nie
+gwarantują ukończenia surface colors ani vector segments. Ten przypadek jest
+opisany jako F3D-029. Osobny F3D-032 obejmuje sytuację, w której renderer
+publikuje lub wybiera carrier bez odpowiadającego mu kanonicznego węzła
+Explorera, co może uruchomić równoległe passy dla tego samego obiektu fizycznego.
+
 ## F3D-005 — part projection override może zostać skierowany do object targetu
 
 **Priorytet:** P1 — wysoki

@@ -130,7 +130,7 @@
           "command_completion_revision": { "type": "integer", "minimum": 0 },
           "fields_revision": { "type": "integer", "minimum": 0 },
           "scalars_revision": { "type": "integer", "minimum": 0 },
-          "domain_generation_id": { "type": "integer", "minimum": 0 },
+          "domain_generation_id": { "type": "string", "pattern": "^[0-9]+$" },
           "artifacts_revision": { "type": "integer", "minimum": 0 },
           "engine_log_revision": { "type": "integer", "minimum": 0 },
           "solver_profile_revision": { "type": "integer", "minimum": 0 },
@@ -179,7 +179,7 @@
             "type": "boolean",
             "description": "True when clients must treat the change as a broad family invalidation even if quantity IDs are absent or partial."
           },
-          "domain_generation_id": { "type": ["integer", "null"], "minimum": 0 },
+          "domain_generation_id": { "type": ["string", "null"], "pattern": "^[0-9]+$" },
           "recommended_fetch": { "type": ["string", "null"] }
         }
       },

@@ -527,6 +527,14 @@ malformed, non-positive in active material, has inconsistent extent, or has a
 digest mismatch is rejected fail-closed; scalar and supplied nodal payload
 compatibility is unchanged.
 
+For each coefficient independently, planning resolves exactly one realization:
+uniform scalar, nodal P1, or element DG0. Supplying both nodal and element
+payloads for the same coefficient is malformed and must fail before native
+creation; element DG0 must not silently discard a nodal payload. This makes
+the resolved material realization and its provenance unambiguous. Different
+coefficients may use different legal locations, including exchange-only
+`A_e` with scalar or nodal `Ms`.
+
 When executable, resolved provenance must state
 `material_realization=element_quadrature`, quadrature/mass order, element-map
 digest, resolved CPU/GPU lane, and every consuming owner. Older artifacts lack

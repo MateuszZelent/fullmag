@@ -1,8 +1,53 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveVisualizationTopologyFreshness } from "./visualizationDisplayResolution";
+import {
+  resolveManifestRenderableCarrierKind,
+  resolveVisualizationRenderResolution,
+  resolveVisualizationTopologyFreshness,
+} from "./visualizationDisplayResolution";
+import type { VisualizationTargetSettings } from "./ObjectVisualizationController";
+
+const visibleShaderVectorSettings = {
+  geometryScope: "full",
+  opacityPercent: 80,
+  pointsVisible: true,
+  renderMode: "surface",
+  shaderVisible: true,
+  vectorAlphaPercent: 100,
+  vectorsVisible: true,
+  visible: true,
+  wireframeOpacityPercent: 30,
+  wireframeVisible: false,
+} as VisualizationTargetSettings;
 
 describe("resolveVisualizationTopologyFreshness", () => {
+  it("constrains stale topology to a wireframe-only ghost view", () => {
+    const resolution = resolveVisualizationRenderResolution({
+      effectiveSettings: visibleShaderVectorSettings,
+      settings: visibleShaderVectorSettings,
+      topologyFreshness: "stale",
+    });
+
+    expect(resolution.degradedReasons).toContainEqual(
+      expect.objectContaining({ code: "topology-stale" }),
+    );
+    expect(resolution.finalSettings).toMatchObject({
+      shaderVisible: false,
+      pointsVisible: false,
+      vectorsVisible: false,
+      wireframeVisible: true,
+    });
+  });
+
+  it("treats explicit manifest provenance mismatch as stale before coverage heuristics", () => {
+    expect(
+      resolveVisualizationTopologyFreshness(
+        { revision: 12, objects: [{ id: "film", tags: ["mesh:ready"] }] },
+        { source_scene_revision: 11, mesh_parts: [{ object_id: "film" }] },
+      ),
+    ).toBe("stale");
+  });
+
   it("treats primitive-only scenes without manifest coverage as unknown topology", () => {
     expect(
       resolveVisualizationTopologyFreshness(
@@ -29,6 +74,55 @@ describe("resolveVisualizationTopologyFreshness", () => {
           revision: 1,
           mesh_parts: [{ id: "part-1", object_id: "film" }],
         },
+      ),
+    ).toBe("current");
+  });
+
+  it("recognizes object segments as explicit degraded manifest carriers", () => {
+    expect(
+      resolveManifestRenderableCarrierKind({
+        meshPartCount: 0,
+        objectSegmentCount: 1,
+      }),
+    ).toBe("object-segments");
+    expect(
+      resolveVisualizationTopologyFreshness(
+        { revision: 3, objects: [{ id: "film", visible: true }] },
+        { revision: 1, object_segments: [{ object_id: "film" }] },
+      ),
+    ).toBe("current");
+  });
+
+  it("does not classify a segment duplicated by a mesh part as mixed", () => {
+    expect(
+      resolveManifestRenderableCarrierKind({
+        meshParts: [{ geometry_id: "film_geom" }],
+        objectSegments: [{ object_id: "film" }],
+      }),
+    ).toBe("mesh-parts");
+  });
+
+  it("does not classify the production Airbox mesh part and segment pair as mixed", () => {
+    expect(
+      resolveManifestRenderableCarrierKind({
+        meshParts: [
+          {
+            geometry_id: null,
+            id: "part:__air__",
+            object_id: null,
+            role: "air",
+          },
+        ],
+        objectSegments: [{ geometry_id: null, object_id: "__air__" }],
+      }),
+    ).toBe("mesh-parts");
+  });
+
+  it("covers a visible object through a mesh-part geometry alias", () => {
+    expect(
+      resolveVisualizationTopologyFreshness(
+        { revision: 3, objects: [{ id: "film", visible: true }] },
+        { revision: 1, mesh_parts: [{ geometry_id: "film_geom" }] },
       ),
     ).toBe("current");
   });

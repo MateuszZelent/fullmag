@@ -143,7 +143,7 @@ describe("sameViewport3DFieldRenderOptions", () => {
     expect(viewport3DAirboxVectorsVisible(true, true, false, "all")).toBe(false);
   });
 
-  it("caps pathological per-target vector budgets before render-model builds", () => {
+  it("does not reduce an explicit Airbox target budget to the session fallback", () => {
     const limited = limitViewport3DFieldRenderVectorBudgets(
       {
         fullVectorBudget: 0,
@@ -167,8 +167,85 @@ describe("sameViewport3DFieldRenderOptions", () => {
     );
 
     expect(limited.partVectorBudgets).toEqual(
-      new Map([["part:__air__", 2048]]),
+      new Map([["part:__air__", 48_461]]),
     );
+  });
+
+  it("keeps the full effective Airbox budget while sharing the fallback across magnetic targets", () => {
+    const airOnlyNodeIndices = Array.from(
+      { length: 10_604 },
+      (_, index) => index + 9_595,
+    );
+    const limited = limitViewport3DFieldRenderVectorBudgets(
+      {
+        fullVectorBudget: 0,
+        partVectorBudgets: new Map([
+          ["part:film", 10_604],
+          ["part:__air__", 10_604],
+        ]),
+        partVectorScopes: new Map([
+          ["part:film", "surface"],
+          ["part:__air__", "full"],
+        ]),
+      },
+      {
+        airboxParts: [
+          {
+            fullNodeSelection: { nodeIndices: airOnlyNodeIndices },
+            part: {
+              id: "part:__air__",
+              node_count: 16_959,
+              role: "air",
+            },
+            surfaceNodeSelection: null,
+          },
+        ],
+        magneticParts: [
+          {
+            fullNodeSelection: { nodeCount: 7_903, nodeStart: 0 },
+            part: {
+              id: "part:film",
+              node_count: 7_903,
+              object_id: "film",
+              role: "magnetic_object",
+            },
+            surfaceNodeSelection: {
+              nodeIndices: Array.from({ length: 6_099 }, (_, index) => index),
+            },
+          },
+        ],
+        nodeCount: 20_199,
+      } as never,
+      16_384,
+    );
+
+    expect(limited.partVectorBudgets?.get("part:__air__")).toBe(10_604);
+    expect(limited.partVectorBudgets?.get("part:film")).toBe(6_099);
+  });
+
+  it("does not allocate a Surface Airbox budget without surface membership", () => {
+    const limited = limitViewport3DFieldRenderVectorBudgets(
+      {
+        partVectorBudgets: new Map([["part:__air__", 10_586]]),
+        partVectorScopes: new Map([["part:__air__", "surface"]]),
+      },
+      {
+        airboxParts: [
+          {
+            fullNodeSelection: {
+              nodeIndices: Array.from({ length: 10_586 }, (_, index) => index),
+            },
+            part: { id: "part:__air__", role: "air" },
+            surfaceNodeSelection: null,
+          },
+        ],
+        magneticParts: [],
+        nodeCount: 10_586,
+      } as never,
+      16_384,
+    );
+
+    expect(limited.partVectorBudgets).toEqual(new Map());
   });
 
   it("keeps small requested vector budgets below the interactive cap", () => {

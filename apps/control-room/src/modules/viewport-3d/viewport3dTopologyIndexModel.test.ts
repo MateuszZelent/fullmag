@@ -44,6 +44,7 @@ describe("viewport3dTopologyIndexModel", () => {
       boundary_face_count: 1,
       boundary_face_start: 1,
       id: "airbox",
+      surface_node_indices: [0, 3],
     };
 
     const bundle = buildViewport3DTopologyIndexBundle({
@@ -94,5 +95,11 @@ describe("viewport3dTopologyIndexModel", () => {
     ).toEqual([0, 1, 2, 3]);
     expect(Array.from(bundle.airboxPartsById.get("airbox")?.surfaceIndices ?? []))
       .toEqual([1, 2, 3]);
+    expect(
+      Array.from(bundle.airboxPartsById.get("airbox")?.surfaceNodeIndices ?? []),
+    ).toEqual([0, 3]);
+    expect(bundle.airboxPartsById.get("airbox")?.surfaceNodeSelection).toEqual({
+      nodeIndices: [0, 3],
+    });
   });
 });

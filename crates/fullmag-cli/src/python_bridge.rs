@@ -96,6 +96,8 @@ pub(crate) struct RemeshCliResponse {
     pub periodic_boundary_pairs: Vec<fullmag_ir::MeshPeriodicBoundaryPairIR>,
     #[serde(default)]
     pub periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
+    #[serde(default)]
+    pub periodic_mesh_certificate: Option<serde_json::Value>,
     pub quality: Option<RemeshQualitySummary>,
     #[serde(default)]
     pub generation_mode: Option<String>,
@@ -107,6 +109,8 @@ pub(crate) struct RemeshCliResponse {
     pub size_field_stats: Option<serde_json::Value>,
     #[serde(default)]
     pub region_markers: Vec<fullmag_ir::FemDomainRegionMarkerIR>,
+    #[serde(default)]
+    pub object_region_markers: Vec<fullmag_ir::FemDomainRegionMarkerIR>,
     /// Per-domain element quality, keyed by domain marker string (from Python).
     #[serde(default)]
     pub per_domain_quality: HashMap<String, RemeshPerDomainQuality>,
@@ -132,6 +136,8 @@ struct RemeshTopologyArtifactPayload {
     periodic_boundary_pairs: Vec<fullmag_ir::MeshPeriodicBoundaryPairIR>,
     #[serde(default)]
     periodic_node_pairs: Vec<fullmag_ir::MeshPeriodicNodePairIR>,
+    #[serde(default)]
+    periodic_mesh_certificate: Option<serde_json::Value>,
 }
 
 impl RemeshCliResponse {
@@ -159,7 +165,20 @@ impl RemeshCliResponse {
         self.boundary_markers = topology.boundary_markers;
         self.periodic_boundary_pairs = topology.periodic_boundary_pairs;
         self.periodic_node_pairs = topology.periodic_node_pairs;
+        self.periodic_mesh_certificate = topology.periodic_mesh_certificate;
         Ok(self)
+    }
+
+    fn retain_periodic_certificate_in_provenance(&mut self) {
+        let Some(certificate) = self.periodic_mesh_certificate.clone() else {
+            return;
+        };
+        let provenance = self
+            .mesh_provenance
+            .get_or_insert_with(|| serde_json::json!({}));
+        if let Some(object) = provenance.as_object_mut() {
+            object.insert("periodic_mesh_certificate".to_string(), certificate);
+        }
     }
 
     pub(crate) fn into_mesh_ir(self) -> fullmag_ir::MeshIR {
@@ -323,6 +342,7 @@ fn parse_fem_surface_preview_mesh(
         domain_mesh_mode: None,
         domain_frame: None,
         generation_id: None,
+        build_report: None,
         per_domain_quality: HashMap::new(),
     })
 }
@@ -490,7 +510,9 @@ fn parse_remesh_cli_response(stdout: &[u8], output_label: &str) -> Result<Remesh
             &stdout_text[..stdout_text.len().min(2000)]
         )
     })?;
-    mesh.hydrate_topology_artifact()
+    let mut mesh = mesh.hydrate_topology_artifact()?;
+    mesh.retain_periodic_certificate_in_provenance();
+    Ok(mesh)
 }
 
 pub(crate) fn run_python_helper(args: &[String]) -> Result<std::process::Output> {
@@ -958,6 +980,7 @@ pub(crate) fn invoke_remesh_full(
 
 pub(crate) fn invoke_shared_domain_remesh_full(
     geometry_entries: &[fullmag_ir::GeometryEntryIR],
+    object_regions: &[serde_json::Value],
     declared_universe: &serde_json::Value,
     hmax: f64,
     fe_order: u32,
@@ -967,6 +990,7 @@ pub(crate) fn invoke_shared_domain_remesh_full(
     let payload = serde_json::json!({
         "mode": "shared_domain_manual_remesh",
         "geometries": geometry_entries,
+        "object_regions": object_regions,
         "declared_universe": declared_universe,
         "hmax": hmax,
         "order": fe_order,
@@ -1180,7 +1204,12 @@ mod tests {
                 "boundary_faces": [[0, 1, 2]],
                 "boundary_markers": [11],
                 "periodic_boundary_pairs": [],
-                "periodic_node_pairs": []
+                "periodic_node_pairs": [],
+                "periodic_mesh_certificate": {
+                    "schema_version": "periodic_mesh_certificate.v6",
+                    "certificate_status": "accepted",
+                    "topology_fingerprint": "sha256:test"
+                }
             })
             .to_string(),
         )
@@ -1206,6 +1235,13 @@ mod tests {
         assert_eq!(parsed.element_markers, vec![7]);
         assert_eq!(parsed.boundary_faces, vec![[0, 1, 2]]);
         assert_eq!(parsed.boundary_markers, vec![11]);
+        assert_eq!(
+            parsed
+                .periodic_mesh_certificate
+                .as_ref()
+                .and_then(|value| value.get("topology_fingerprint")),
+            Some(&serde_json::json!("sha256:test"))
+        );
         let _ = std::fs::remove_file(artifact_path);
     }
 
@@ -1238,5 +1274,29 @@ mod tests {
         assert_eq!(artifact.kind, "fmmq.v1");
         assert_eq!(artifact.element_count, 1);
         assert_eq!(artifact.metrics, vec!["sicn", "gamma", "volume"]);
+    }
+
+    #[test]
+    fn parse_remesh_cli_response_preserves_fresh_object_region_markers() {
+        let stdout = serde_json::json!({
+            "mesh_name": "shared_mesh",
+            "nodes": [],
+            "elements": [],
+            "element_markers": [],
+            "boundary_faces": [],
+            "boundary_markers": [],
+            "quality": null,
+            "object_region_markers": [{"geometry_name": "film:core", "marker": 2}]
+        })
+        .to_string();
+
+        let parsed = parse_remesh_cli_response(stdout.as_bytes(), "test remesh output").unwrap();
+        assert_eq!(
+            parsed.object_region_markers,
+            vec![fullmag_ir::FemDomainRegionMarkerIR {
+                geometry_name: "film:core".to_string(),
+                marker: 2,
+            }]
+        );
     }
 }

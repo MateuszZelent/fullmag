@@ -8,8 +8,7 @@ namespace fullmag::fem {
  * The returned value is an H-field amplitude in A/m:
  *
  *   sigma_i = sqrt(2 alpha_i kB T /
- *                  (gamma0_i mu0 Ms_i V_i dt)),
- *   gamma0_i = gamma_mu0 (1 + alpha_i^2).
+ *                  (gamma_mu0 mu0 Ms_i V_i dt)).
  *
  * The gyromagnetic_ratio argument is the bare gamma_mu0 used by the LLG RHS,
  * not gamma_bar = gamma_mu0 / (1 + alpha_i^2).

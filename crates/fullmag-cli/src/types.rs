@@ -47,7 +47,24 @@ pub(crate) struct RuntimeCommandPrecondition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh_revision: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_topology_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_membership_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_coefficients_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region_initial_state_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_revision: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct RequestedExecutionProvenance {
+    pub backend: String,
+    pub device: String,
+    pub precision: String,
+    pub mode: String,
+    pub fallback_policy: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,6 +77,7 @@ pub(crate) struct ScriptRunSummary {
     pub backend: String,
     pub mode: String,
     pub precision: String,
+    pub requested_execution: RequestedExecutionProvenance,
     pub total_steps: usize,
     pub final_time: Option<f64>,
     pub final_e_ex: Option<f64>,

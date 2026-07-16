@@ -58,10 +58,17 @@ def require_list(value: Any, name: str) -> list[Any]:
 
 
 def finite_number(value: Any, name: str) -> float:
-    require(isinstance(value, (int, float)), f"{name} must be numeric")
+    require(
+        isinstance(value, (int, float)) and not isinstance(value, bool),
+        f"{name} must be numeric",
+    )
     number = float(value)
     require(math.isfinite(number), f"{name} must be finite")
     return number
+
+
+def json_integer(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def relative_error(actual: float, expected: float) -> float:
@@ -90,6 +97,42 @@ def initial_magnetization_state_override(root: Path) -> dict[str, Any] | None:
     if not isinstance(override, dict):
         return None
     return override
+
+
+def artifact_provenance(root: Path) -> dict[str, Any]:
+    fixture_path = root / "diagnostics" / "fem_static_pbc_tiled_supercell_fixture.v1.json"
+    periodic_pairs = load_json(root / "mesh" / "periodic_pairs.v1.json")
+    certificate_status = periodic_pairs.get("certificate_status")
+    diagnostic_identity = periodic_pairs.get("diagnostic_fixture_identity")
+    has_diagnostic_identity = isinstance(diagnostic_identity, dict)
+    diagnostic_fixture = fixture_path.is_file() or certificate_status == "diagnostic_tiled_fixture" or has_diagnostic_identity
+    provenance: dict[str, Any] = {
+        "runtime_solve": not diagnostic_fixture,
+        "diagnostic_fixture": diagnostic_fixture,
+        "not_a_runtime_solve": diagnostic_fixture,
+        "periodic_pairs_certificate_status": certificate_status,
+    }
+    if has_diagnostic_identity:
+        identity = require_object(diagnostic_identity, f"{root}/mesh/periodic_pairs.v1.json.diagnostic_fixture_identity")
+        digest = identity.get("sha256")
+        require(
+            isinstance(digest, str)
+            and len(digest) == 64
+            and all(character in "0123456789abcdef" for character in digest),
+            f"{root}/mesh/periodic_pairs.v1.json.diagnostic_fixture_identity.sha256 must be lowercase SHA-256",
+        )
+        provenance["diagnostic_fixture_identity"] = identity
+    if fixture_path.is_file():
+        fixture = load_json(fixture_path)
+        require(
+            fixture.get("schema_version") == "fem_static_pbc_tiled_supercell_fixture.v1",
+            f"{fixture_path}.schema_version must be fem_static_pbc_tiled_supercell_fixture.v1",
+        )
+        require(fixture.get("status") == "diagnostic_fixture", f"{fixture_path}.status must be diagnostic_fixture")
+        require(fixture.get("not_a_runtime_solve") is True, f"{fixture_path}.not_a_runtime_solve must be true")
+        provenance["fixture_schema_version"] = fixture["schema_version"]
+        provenance["fixture_status"] = fixture["status"]
+    return provenance
 
 
 def qualification(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -169,7 +212,7 @@ def metadata_contract(root: Path) -> dict[str, Any]:
 def m_final_step(root: Path) -> int:
     payload = load_json(root / "m_final.json")
     step = payload.get("step")
-    require(isinstance(step, int) and step >= 0, f"{root}/m_final.json.step must be non-negative integer")
+    require(json_integer(step) and step >= 0, f"{root}/m_final.json.step must be non-negative integer")
     return step
 
 
@@ -220,13 +263,13 @@ def require_periodic_pairs_artifact(root: Path, metadata: dict[str, Any]) -> Non
     mesh = require_object(metadata.get("mesh"), f"{root}/metadata.mesh")
     mesh_node_count = mesh.get("periodic_node_pair_count")
     require(
-        isinstance(mesh_node_count, int) and mesh_node_count > 0,
-        f"{root}/metadata.mesh.periodic_node_pair_count must be positive",
+        json_integer(mesh_node_count) and mesh_node_count > 0,
+        f"{root}/metadata.mesh.periodic_node_pair_count must be positive integer",
     )
     mesh_boundary_count = mesh.get("periodic_boundary_pair_count")
     require(
-        isinstance(mesh_boundary_count, int) and mesh_boundary_count > 0,
-        f"{root}/metadata.mesh.periodic_boundary_pair_count must be positive",
+        json_integer(mesh_boundary_count) and mesh_boundary_count > 0,
+        f"{root}/metadata.mesh.periodic_boundary_pair_count must be positive integer",
     )
     mesh_node_counts = require_object(
         mesh.get("periodic_node_pair_counts_by_id"),
@@ -236,12 +279,38 @@ def require_periodic_pairs_artifact(root: Path, metadata: dict[str, Any]) -> Non
         mesh.get("periodic_boundary_pair_counts_by_id"),
         f"{root}/metadata.mesh.periodic_boundary_pair_counts_by_id",
     )
+
+    topology_node_count: int | None = None
+    topology_boundary_face_count: int | None = None
+    execution_plan = metadata.get("execution_plan")
+    if isinstance(execution_plan, dict):
+        backend_plan = require_object(execution_plan.get("backend_plan"), f"{root}/metadata.execution_plan.backend_plan")
+        topology = require_object(backend_plan.get("mesh"), f"{root}/metadata.execution_plan.backend_plan.mesh")
+        topology_node_count = len(
+            require_list(topology.get("nodes"), f"{root}/metadata.execution_plan.backend_plan.mesh.nodes")
+        )
+        if "boundary_faces" in topology:
+            topology_boundary_face_count = len(
+                require_list(
+                    topology.get("boundary_faces"),
+                    f"{root}/metadata.execution_plan.backend_plan.mesh.boundary_faces",
+                )
+            )
+
     pairs = require_list(payload.get("pairs"), f"{path}.pairs")
-    require(payload.get("pair_count") == len(pairs), f"{path}.pair_count must match pairs length")
-    require(payload.get("paired_node_count") == mesh_node_count, f"{path}.paired_node_count must match metadata.mesh")
+    pair_count = payload.get("pair_count")
+    require(json_integer(pair_count), f"{path}.pair_count must be an integer")
+    require(pair_count == len(pairs), f"{path}.pair_count must match pairs length")
+    require(
+        len(pairs) == mesh_boundary_count,
+        f"{path}.pair_count must match metadata.mesh periodic boundary-pair definitions",
+    )
     pair_ids: set[str] = set()
-    paired_node_sum = 0
-    boundary_pair_sum = 0
+    artifact_paired_node_sum = 0
+    observed_node_sets_by_id: dict[str, set[tuple[int, int]]] = {}
+    observed_boundary_definition_counts: dict[str, int] = {}
+    fragmented_node_sets: dict[tuple[str, tuple[tuple[float, float, float], ...]], set[tuple[int, int]]] = {}
+    fragmented_domain_counts: dict[tuple[str, tuple[tuple[float, float, float], ...]], tuple[int, int]] = {}
     for index, raw_pair in enumerate(pairs):
         pair = require_object(raw_pair, f"{path}.pairs[{index}]")
         pair_id = pair.get("pair_id")
@@ -249,21 +318,23 @@ def require_periodic_pairs_artifact(root: Path, metadata: dict[str, Any]) -> Non
         pair_ids.add(pair_id)
         require(pair.get("status") == "valid", f"{path}.{pair_id}.status must be valid")
         paired_node_count = pair.get("paired_node_count")
+        require(json_integer(paired_node_count) and paired_node_count > 0, f"{path}.{pair_id}.paired_node_count must be positive integer")
         mesh_pair_node_count = mesh_node_counts.get(pair_id)
         require(
-            isinstance(mesh_pair_node_count, int) and mesh_pair_node_count > 0,
-            f"{root}/metadata.mesh.periodic_node_pair_counts_by_id.{pair_id} must be positive",
+            json_integer(mesh_pair_node_count) and mesh_pair_node_count > 0,
+            f"{root}/metadata.mesh.periodic_node_pair_counts_by_id.{pair_id} must be positive integer",
         )
         require(
             paired_node_count == mesh_pair_node_count,
             f"{path}.{pair_id}.paired_node_count must match metadata.mesh",
         )
-        paired_node_sum += mesh_pair_node_count
+        artifact_paired_node_sum += mesh_pair_node_count
+        observed_boundary_definition_counts[pair_id] = observed_boundary_definition_counts.get(pair_id, 0) + 1
         domain_counts = require_object(pair.get("domain_node_pair_counts"), f"{path}.{pair_id}.domain_node_pair_counts")
         magnetic_count = domain_counts.get("magnetic")
         airbox_count = domain_counts.get("airbox")
-        require(isinstance(magnetic_count, int) and magnetic_count >= 0, f"{path}.{pair_id}.domain_node_pair_counts.magnetic must be non-negative")
-        require(isinstance(airbox_count, int) and airbox_count > 0, f"{path}.{pair_id}.domain_node_pair_counts.airbox must be positive")
+        require(json_integer(magnetic_count) and magnetic_count >= 0, f"{path}.{pair_id}.domain_node_pair_counts.magnetic must be non-negative integer")
+        require(json_integer(airbox_count) and airbox_count > 0, f"{path}.{pair_id}.domain_node_pair_counts.airbox must be positive integer")
         require(
             magnetic_count + airbox_count == paired_node_count,
             f"{path}.{pair_id}.domain_node_pair_counts must sum to paired_node_count",
@@ -273,47 +344,59 @@ def require_periodic_pairs_artifact(root: Path, metadata: dict[str, Any]) -> Non
             len(node_pairs) == paired_node_count,
             f"{path}.{pair_id}.node_pairs must contain {paired_node_count} entries",
         )
+        canonical_node_pairs: set[tuple[int, int]] = set()
         for node_pair_index, raw_node_pair in enumerate(node_pairs):
-            node_pair = require_object(
-                raw_node_pair,
-                f"{path}.{pair_id}.node_pairs[{node_pair_index}]",
-            )
+            node_pair = require_object(raw_node_pair, f"{path}.{pair_id}.node_pairs[{node_pair_index}]")
             node_a = node_pair.get("node_a")
             node_b = node_pair.get("node_b")
             require(
-                isinstance(node_a, int) and node_a >= 0,
+                json_integer(node_a) and node_a >= 0,
                 f"{path}.{pair_id}.node_pairs[{node_pair_index}].node_a must be non-negative integer",
             )
             require(
-                isinstance(node_b, int) and node_b >= 0,
+                json_integer(node_b) and node_b >= 0,
                 f"{path}.{pair_id}.node_pairs[{node_pair_index}].node_b must be non-negative integer",
             )
+            if topology_node_count is not None:
+                require(
+                    node_a < topology_node_count,
+                    f"{path}.{pair_id}.node_pairs[{node_pair_index}].node_a must be less than mesh node count {topology_node_count}",
+                )
+                require(
+                    node_b < topology_node_count,
+                    f"{path}.{pair_id}.node_pairs[{node_pair_index}].node_b must be less than mesh node count {topology_node_count}",
+                )
+            canonical_node_pairs.add((node_a, node_b))
+        require(
+            len(canonical_node_pairs) == paired_node_count,
+            f"{path}.{pair_id}.node_pairs must not contain duplicate mappings",
+        )
+        observed_node_sets_by_id.setdefault(pair_id, set()).update(canonical_node_pairs)
+
         boundary_face_pairs = require_list(pair.get("boundary_face_pairs"), f"{path}.{pair_id}.boundary_face_pairs")
         require(boundary_face_pairs, f"{path}.{pair_id}.boundary_face_pairs must be non-empty")
-        mesh_pair_boundary_count = mesh_boundary_counts.get(pair_id)
-        require(
-            isinstance(mesh_pair_boundary_count, int) and mesh_pair_boundary_count > 0,
-            f"{root}/metadata.mesh.periodic_boundary_pair_counts_by_id.{pair_id} must be positive",
-        )
-        require(
-            len(boundary_face_pairs) == mesh_pair_boundary_count,
-            f"{path}.{pair_id}.boundary_face_pairs length must match metadata.mesh",
-        )
+        translations: set[tuple[float, float, float]] = set()
         for face_pair_index, raw_face_pair in enumerate(boundary_face_pairs):
-            face_pair = require_object(
-                raw_face_pair,
-                f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}]",
-            )
+            face_pair = require_object(raw_face_pair, f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}]")
             face_a = face_pair.get("face_a")
             face_b = face_pair.get("face_b")
             require(
-                isinstance(face_a, int) and face_a >= 0,
+                json_integer(face_a) and face_a >= 0,
                 f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].face_a must be non-negative integer",
             )
             require(
-                isinstance(face_b, int) and face_b >= 0,
+                json_integer(face_b) and face_b >= 0,
                 f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].face_b must be non-negative integer",
             )
+            if topology_boundary_face_count is not None:
+                require(
+                    face_a < topology_boundary_face_count,
+                    f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].face_a must be less than mesh boundary face count {topology_boundary_face_count}",
+                )
+                require(
+                    face_b < topology_boundary_face_count,
+                    f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].face_b must be less than mesh boundary face count {topology_boundary_face_count}",
+                )
             translation = require_list(
                 face_pair.get("translation_m"),
                 f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].translation_m",
@@ -322,11 +405,13 @@ def require_periodic_pairs_artifact(root: Path, metadata: dict[str, Any]) -> Non
                 len(translation) == 3,
                 f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].translation_m must be a 3-vector",
             )
-            for component_index, component in enumerate(translation):
+            translations.add(tuple(
                 finite_number(
                     component,
                     f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].translation_m[{component_index}]",
                 )
+                for component_index, component in enumerate(translation)
+            ))
             require(
                 face_pair.get("orientation") == "opposed_normals",
                 f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].orientation must be opposed_normals",
@@ -339,11 +424,50 @@ def require_periodic_pairs_artifact(root: Path, metadata: dict[str, Any]) -> Non
                 normal_dot <= -0.999,
                 f"{path}.{pair_id}.boundary_face_pairs[{face_pair_index}].normal_dot must be <= -0.999",
             )
-        boundary_pair_sum += mesh_pair_boundary_count
+        definition_key = (pair_id, tuple(sorted(translations)))
+        previous_node_pairs = fragmented_node_sets.get(definition_key)
+        if previous_node_pairs is None:
+            fragmented_node_sets[definition_key] = canonical_node_pairs
+            fragmented_domain_counts[definition_key] = (magnetic_count, airbox_count)
+        else:
+            require(
+                canonical_node_pairs == previous_node_pairs,
+                f"{path}.{pair_id}.node_pairs must match every fragmented definition for the same translation",
+            )
+            require(
+                fragmented_domain_counts[definition_key] == (magnetic_count, airbox_count),
+                f"{path}.{pair_id}.domain_node_pair_counts must match every fragmented definition for the same translation",
+            )
     for pair_id in ("x_faces", "y_faces"):
         require(pair_id in pair_ids, f"{path} missing pair {pair_id}")
-    require(paired_node_sum == mesh_node_count, f"{path}.paired_node_count must match per-pair-id sum")
-    require(boundary_pair_sum == mesh_boundary_count, f"{path}.boundary_face_pairs length must match metadata.mesh aggregate")
+    aggregate_paired_node_count = payload.get("paired_node_count")
+    require(json_integer(aggregate_paired_node_count), f"{path}.paired_node_count must be an integer")
+    require(
+        aggregate_paired_node_count == artifact_paired_node_sum,
+        f"{path}.paired_node_count must match the sum across pair definitions",
+    )
+    require(
+        sum(len(node_pairs) for node_pairs in observed_node_sets_by_id.values()) == mesh_node_count,
+        f"{path}.paired_node_count must match unique per-pair-id metadata sum",
+    )
+    for pair_id in pair_ids:
+        require(
+            len(observed_node_sets_by_id[pair_id]) == mesh_node_counts[pair_id],
+            f"{path}.{pair_id}.unique node-pair mappings must match metadata.mesh",
+        )
+        expected_definition_count = mesh_boundary_counts.get(pair_id)
+        require(
+            json_integer(expected_definition_count) and expected_definition_count > 0,
+            f"{root}/metadata.mesh.periodic_boundary_pair_counts_by_id.{pair_id} must be positive integer",
+        )
+        require(
+            observed_boundary_definition_counts[pair_id] == expected_definition_count,
+            f"{path}.{pair_id} definition count must match metadata.mesh",
+        )
+    require(
+        sum(observed_boundary_definition_counts.values()) == mesh_boundary_count,
+        f"{path}.pair_count must match metadata.mesh aggregate",
+    )
 
 
 def require_static_pbc_demag_runtime_contract(root: Path, metadata: dict[str, Any]) -> None:
@@ -381,12 +505,12 @@ def require_static_pbc_demag_runtime_contract(root: Path, metadata: dict[str, An
     mesh = require_object(metadata.get("mesh"), f"{root}/metadata.mesh")
     mesh_node_count = mesh.get("periodic_node_pair_count")
     require(
-        isinstance(mesh_node_count, int) and mesh_node_count > 0,
+        json_integer(mesh_node_count) and mesh_node_count > 0,
         f"{root}/metadata.mesh.periodic_node_pair_count must be positive",
     )
     mesh_boundary_count = mesh.get("periodic_boundary_pair_count")
     require(
-        isinstance(mesh_boundary_count, int) and mesh_boundary_count > 0,
+        json_integer(mesh_boundary_count) and mesh_boundary_count > 0,
         f"{root}/metadata.mesh.periodic_boundary_pair_count must be positive",
     )
     mesh_node_counts = require_object(
@@ -412,7 +536,7 @@ def require_static_pbc_demag_runtime_contract(root: Path, metadata: dict[str, An
     for pair_id in ("x_faces", "y_faces"):
         mesh_pair_node_count = mesh_node_counts.get(pair_id)
         require(
-            isinstance(mesh_pair_node_count, int) and mesh_pair_node_count > 0,
+            json_integer(mesh_pair_node_count) and mesh_pair_node_count > 0,
             f"{root}/metadata.mesh.periodic_node_pair_counts_by_id.{pair_id} must be positive",
         )
         node_sum += mesh_pair_node_count
@@ -425,7 +549,7 @@ def require_static_pbc_demag_runtime_contract(root: Path, metadata: dict[str, An
         )
         mesh_pair_boundary_count = mesh_boundary_counts.get(pair_id)
         require(
-            isinstance(mesh_pair_boundary_count, int) and mesh_pair_boundary_count > 0,
+            json_integer(mesh_pair_boundary_count) and mesh_pair_boundary_count > 0,
             f"{root}/metadata.mesh.periodic_boundary_pair_counts_by_id.{pair_id} must be positive",
         )
         boundary_sum += mesh_pair_boundary_count
@@ -622,7 +746,7 @@ def metadata_magnetic_node_indices(root: Path, node_count: int) -> list[int]:
         element = require_list(raw_element, f"metadata.execution_plan.backend_plan.mesh.elements[{element_index}]")
         require(len(element) == 4, f"metadata mesh element {element_index} must be a tetrahedron")
         for raw_node in element:
-            require(isinstance(raw_node, int), f"metadata mesh element {element_index} node index must be integer")
+            require(json_integer(raw_node), f"metadata mesh element {element_index} node index must be integer")
             require(0 <= raw_node < node_count, f"metadata mesh element {element_index} node index out of range")
             magnetic.add(raw_node)
     require(magnetic, "metadata mesh magnetic node selection must not be empty")
@@ -650,7 +774,7 @@ def metadata_mesh(root: Path) -> tuple[list[list[float]], list[list[int]], list[
         require(len(element) == 4, f"metadata mesh element {element_index} must be a tetrahedron")
         parsed: list[int] = []
         for local_index, raw_node in enumerate(element):
-            require(isinstance(raw_node, int), f"metadata mesh element {element_index}[{local_index}] must be integer")
+            require(json_integer(raw_node), f"metadata mesh element {element_index}[{local_index}] must be integer")
             require(0 <= raw_node < len(nodes), f"metadata mesh element {element_index}[{local_index}] out of node range")
             parsed.append(raw_node)
         elements.append(parsed)
@@ -661,7 +785,7 @@ def metadata_mesh(root: Path) -> tuple[list[list[float]], list[list[int]], list[
         require(len(marker_values) == len(elements), "metadata mesh element_markers length must match elements")
         markers = []
         for index, marker in enumerate(marker_values):
-            require(isinstance(marker, int), f"metadata mesh element_markers[{index}] must be integer")
+            require(json_integer(marker), f"metadata mesh element_markers[{index}] must be integer")
             markers.append(marker)
     return nodes, elements, markers
 
@@ -1232,9 +1356,9 @@ def load_zarr_values(root: Path, observable: str, *, state: str = STATE_FINAL) -
     shape = require_list(array.get("shape"), f"{observable}.shape")
     require(
         len(shape) == 3
-        and isinstance(shape[0], int)
-        and isinstance(shape[1], int)
-        and isinstance(shape[2], int),
+        and json_integer(shape[0])
+        and json_integer(shape[1])
+        and json_integer(shape[2]),
         f"{observable}.shape must be [samples, components, cells]",
     )
     sample_count = int(shape[0])
@@ -1267,7 +1391,7 @@ def require_index_list(value: Any, name: str, upper_bound: int) -> list[int]:
     indices: list[int] = []
     seen: set[int] = set()
     for position, raw in enumerate(raw_values):
-        require(isinstance(raw, int), f"{name}[{position}] must be an integer")
+        require(json_integer(raw), f"{name}[{position}] must be an integer")
         require(0 <= raw < upper_bound, f"{name}[{position}] must be in [0, {upper_bound})")
         require(raw not in seen, f"{name}[{position}] duplicates index {raw}")
         seen.add(raw)
@@ -1362,7 +1486,7 @@ def load_supercell_central_cell_extraction(
     central_index = require_list(payload.get("central_cell_index"), "supercell central-cell extraction central_cell_index")
     require(len(central_index) == 2, "supercell central-cell extraction central_cell_index must be a 2-vector")
     for axis, (value, repeat) in enumerate(zip(central_index, [repeat_x, repeat_y])):
-        require(isinstance(value, int), f"supercell central-cell extraction central_cell_index[{axis}] must be an integer")
+        require(json_integer(value), f"supercell central-cell extraction central_cell_index[{axis}] must be an integer")
         require(0 <= value < repeat, f"supercell central-cell extraction central_cell_index[{axis}] must be in [0, {repeat})")
     energy = finite_number(
         payload.get("central_cell_demag_energy_j"),
@@ -1712,14 +1836,27 @@ def compare_supercell(args: argparse.Namespace) -> dict[str, Any]:
         args.supercell,
         "unit-cell and supercell artifact roots must be different",
     )
+    unit_state = args.unit_state or args.state
+    supercell_state = args.supercell_state or args.state
+    provenance = {
+        "unit_cell": artifact_provenance(args.unit_cell),
+        "supercell": artifact_provenance(args.supercell),
+    }
+    if unit_state == STATE_FINAL and supercell_state == STATE_FINAL:
+        require(
+            not provenance["unit_cell"]["diagnostic_fixture"],
+            "diagnostic tiled unit-cell fixture cannot produce physical convergence evidence",
+        )
+        require(
+            not provenance["supercell"]["diagnostic_fixture"],
+            "diagnostic tiled supercell fixture cannot produce physical convergence evidence",
+        )
     workload = require_supercell_workload(
         args.unit_cell,
         args.supercell,
         repeat_x=args.repeat_x,
         repeat_y=args.repeat_y,
     )
-    unit_state = args.unit_state or args.state
-    supercell_state = args.supercell_state or args.state
     comparison_state = unit_state if unit_state == supercell_state else f"{unit_state}_to_{supercell_state}"
     cell_count = args.repeat_x * args.repeat_y
     extraction = load_supercell_central_cell_extraction(
@@ -1888,6 +2025,7 @@ def compare_supercell(args: argparse.Namespace) -> dict[str, Any]:
             unit_state=unit_state,
             supercell_state=supercell_state,
         ),
+        "artifact_provenance": provenance,
         "unit_cell_artifacts": str(args.unit_cell),
         "supercell_artifacts": str(args.supercell),
         "repeat_x": args.repeat_x,

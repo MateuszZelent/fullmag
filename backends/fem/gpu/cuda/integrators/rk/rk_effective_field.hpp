@@ -19,6 +19,7 @@ bool gpu_rk_accumulate_effective_field(
     Context &ctx,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     const char *base_label,
     std::string &reason);
 

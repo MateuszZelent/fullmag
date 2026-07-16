@@ -692,6 +692,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_spin_wave_dynamic_structure_factor_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/spin-wave/gamma.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_spin_wave_gamma_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/artifacts": {
         parameters: {
             query?: never;
@@ -764,6 +796,54 @@ export interface paths {
             cookie?: never;
         };
         get: operations["data_get_sessions_current_data_domain_topology"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fdm-region-membership": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fdm_region_membership"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fdm-region-membership/{region_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fdm_region_membership_region_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/fdm-region-memberships": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_fdm_region_memberships"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1348,6 +1428,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/meshing/mesh/periodic_pairs.v1.bin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1_bin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/meshing/meshes/interfaces/{interface_id}/quality": {
         parameters: {
             query?: never;
@@ -1810,6 +1906,38 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["model_patch_sessions_current_model_couplings_coupling_id"];
+        trace?: never;
+    };
+    "/v2/sessions/current/model/field-drives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_field_drives"];
+        put?: never;
+        post: operations["model_post_sessions_current_model_field_drives"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/field-drives/{drive_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["model_put_sessions_current_model_field_drives_drive_id"];
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_field_drives_drive_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v2/sessions/current/model/geometry/capabilities": {
@@ -3440,8 +3568,7 @@ export interface components {
             discretization: string;
             domain_id: string;
             element_type?: string | null;
-            /** Format: int64 */
-            generation_id: number;
+            generation_id: string;
             grid?: null | components["schemas"]["StructuredGridDescriptor"];
             units: {
                 [key: string]: string;
@@ -3454,8 +3581,7 @@ export interface components {
             cut_norm: number;
             /** Format: double */
             cut_world: number;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             etag: string;
             normal_axis: string;
             plane: components["schemas"]["SlicePlane"];
@@ -3477,8 +3603,7 @@ export interface components {
             /** Format: int64 */
             cell_count: number;
             discretization: string;
-            /** Format: int64 */
-            generation_id: number;
+            generation_id: string;
         };
         DomainVisualizationPatch: {
             active_scope?: null | components["schemas"]["VisualizationScopeKind"];
@@ -3489,6 +3614,50 @@ export interface components {
             active_scope: components["schemas"]["VisualizationScopeKind"];
             object_id?: string | null;
             part_id?: string | null;
+        };
+        DriveActivationResource: {
+            /** @enum {string} */
+            kind: "all_time_evolution";
+        } | {
+            /** @enum {string} */
+            kind: "stage_ids";
+            stage_ids: string[];
+        };
+        DynamicStructureFactorResource: {
+            artifact_ref: string;
+            bounded: boolean;
+            component: string;
+            excluded_absorber_ranges_m: number[][];
+            frequency_count: number;
+            frequency_hz: number[];
+            frequency_unit: string;
+            invalid_probe_mask: boolean[];
+            k_rad_per_m: number[];
+            mesh_probe_signature: string;
+            normalization: string;
+            original_frequency_count: number;
+            original_wavevector_count: number;
+            phase_convention: string;
+            power: number[];
+            propagation_axis: string;
+            schema_version: string;
+            source_observable: string;
+            source_power: number[];
+            source_spectrum_imag: number[];
+            source_spectrum_real: number[];
+            source_unit: string;
+            spatial_window: number[];
+            /** Format: double */
+            spatial_window_power_sum: number;
+            spectrum_imag: number[];
+            spectrum_real: number[];
+            temporal_window: number[];
+            /** Format: double */
+            temporal_window_power_sum: number;
+            time_s: number[];
+            wavevector_count: number;
+            wavevector_unit: string;
+            x_m: number[];
         };
         EnergySummary: {
             /** Format: double */
@@ -3517,6 +3686,36 @@ export interface components {
             /** Format: int64 */
             revision: number;
             total: number;
+        };
+        /**
+         * @description Thin descriptor for realized FDM cell membership. The mask itself is kept
+         *     on the binary data plane under the companion FMRM resource.
+         */
+        FdmRegionLegendEntryResource: {
+            /** Format: int32 */
+            numeric_id: number;
+            object_id: string;
+            /** Format: int32 */
+            priority: number;
+            region_id: string;
+        };
+        FdmRegionMembershipResource: {
+            binary_path: string;
+            /** Format: int64 */
+            cell_count: number;
+            cell_m: number[];
+            counts: number[];
+            encoding: string;
+            freshness: string;
+            grid_fingerprint: string;
+            /** Format: int64 */
+            mesh_revision: number;
+            origin_m: number[];
+            region_legend: components["schemas"]["FdmRegionLegendEntryResource"][];
+            region_legend_fingerprint?: string | null;
+            /** Format: int64 */
+            region_membership_revision: number;
+            schema_version: string;
         };
         FdmVisualizationPatch: {
             /** Format: int32 */
@@ -3622,8 +3821,7 @@ export interface components {
         /** @enum {string} */
         FerromagnetVisibilityMode: "hide" | "ghost";
         FieldCatalog: {
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             quantities: components["schemas"]["FieldDescriptor"][];
             /** Format: int64 */
             revision: number;
@@ -3634,8 +3832,7 @@ export interface components {
             available: boolean;
             /** Format: int32 */
             components: number;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** Format: int64 */
             field_revision: number;
             kind: string;
@@ -3643,6 +3840,48 @@ export interface components {
             location: string;
             quantity_id: string;
             unit: string;
+        };
+        FieldDriveCreateRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            drive: components["schemas"]["RegionalFieldDriveResource"];
+        };
+        FieldDriveDeleteRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+        };
+        /** @enum {string} */
+        FieldDriveKindResource: "regional";
+        FieldDriveListResource: {
+            drives: components["schemas"]["RegionalFieldDriveResource"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        FieldDriveListStateResource: {
+            drives?: components["schemas"]["RegionalFieldDriveResource"][];
+        };
+        FieldDriveMigrationResource: {
+            migrated_from: string;
+        };
+        FieldDriveReplaceRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            drive: components["schemas"]["RegionalFieldDriveResource"];
+        };
+        FieldEnvelopeResource: {
+            /** @enum {string} */
+            kind: "uniform";
+        } | {
+            axis: number[];
+            /** Format: double */
+            center_m?: number;
+            /** @enum {string} */
+            kind: "sinc";
+            /** Format: double */
+            period_m: number;
+            /** Format: double */
+            width_m?: number | null;
+            window?: string;
         };
         FieldMatrixResponse: {
             aggregation?: string | null;
@@ -3678,8 +3917,7 @@ export interface components {
         FieldMeta: {
             /** Format: int32 */
             components: number;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** Format: int64 */
             field_revision: number;
             kind: string;
@@ -3699,8 +3937,7 @@ export interface components {
         FieldProjectionMeta: {
             bounds?: null | components["schemas"]["FieldSliceBounds"];
             component: string;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** Format: int32 */
             empty_count: number;
             empty_mask: components["schemas"]["FieldProjectionMaskDescriptor"];
@@ -3732,8 +3969,7 @@ export interface components {
         FieldProjectionProfile: {
             bounds?: null | components["schemas"]["FieldSliceBounds"];
             component: string;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** Format: int64 */
             field_revision: number;
             /** Format: int32 */
@@ -3816,8 +4052,7 @@ export interface components {
              * @description Resolved cut in world coordinates (m), if domain bounds are known.
              */
             cut_world?: number | null;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** @description Stable fingerprint covering all resolved parameters (ETag for the meta resource). */
             etag: string;
             /** Format: int64 */
@@ -3844,6 +4079,26 @@ export interface components {
              * @description Pixel height of the slice grid.
              */
             y_pixels: number;
+        };
+        FieldSpatialProfileResource: {
+            /** @enum {string} */
+            kind: "uniform";
+        } | {
+            axis: number[];
+            /** Format: double */
+            center_m?: number;
+            /** @enum {string} */
+            kind: "sinc";
+            /** Format: double */
+            period_m: number;
+            /** Format: double */
+            width_m?: number | null;
+            window?: string;
+        } | {
+            envelope: components["schemas"]["FieldEnvelopeResource"];
+            /** @enum {string} */
+            kind: "geometry_mask";
+            object_id: string;
         };
         FieldStateExportRequest: {
             file_name?: string | null;
@@ -3911,6 +4166,21 @@ export interface components {
             /** Format: double */
             min: number;
         };
+        FieldTargetResource: {
+            /** @enum {string} */
+            kind: "global";
+        } | {
+            /** @enum {string} */
+            kind: "object";
+            object_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "region";
+            object_id: string;
+            region_id: string;
+        };
+        /** @enum {string} */
+        FieldTimeOriginResource: "stage_local" | "absolute";
         /** @description Query parameters for the `/fields/{quantity_id}/vector` endpoint. */
         FieldVectorQuery: {
             /**
@@ -3923,6 +4193,14 @@ export interface components {
              *     - `x`/`y`/`z`/`cN` → single component by index (nComp=1)
              */
             component?: string | null;
+            /**
+             * @description Optional geometric subset for scoped vector samples.
+             *
+             *     Accepted values: `full` (default) and `surface`. `surface` is currently
+             *     supported for `airbox` scope and is resolved from the selected mesh
+             *     part's canonical surface-node membership before `max_samples` is applied.
+             */
+            geometry_scope?: string | null;
             /**
              * Format: int32
              * @description Optional hard cap for vector samples returned by the binary payload.
@@ -4872,10 +5150,14 @@ export interface components {
                 [key: string]: unknown;
             };
             /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
             scene_revision: number;
         };
         MaterialParameterFieldDataListResource: {
             fields: components["schemas"]["MaterialParameterFieldDataSummaryResource"][];
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
             /** Format: int64 */
             scene_revision: number;
         };
@@ -4904,6 +5186,8 @@ export interface components {
             priority?: number | null;
             realization_status: string;
             /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
             sample_count: number;
             /** Format: int64 */
             scene_revision: number;
@@ -4929,6 +5213,8 @@ export interface components {
         };
         MaterialParameterFieldListResource: {
             fields: components["schemas"]["MaterialParameterFieldResource"][];
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
             /** Format: int64 */
             scene_revision: number;
         };
@@ -4990,6 +5276,8 @@ export interface components {
             name: string;
             properties: components["schemas"]["MaterialPropertiesResource"];
             references?: components["schemas"]["MaterialReferenceResource"][];
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
         };
         MeshActiveBuildResource: {
             /** @description Current active build descriptor and progress metadata. */
@@ -5258,6 +5546,7 @@ export interface components {
             object_id?: string | null;
             role: string;
             surface_faces?: number[][];
+            surface_node_indices?: number[] | null;
         };
         MeshPerObjectTargetResource: {
             /** Format: double */
@@ -5288,6 +5577,10 @@ export interface components {
             transition_realization?: string | null;
         };
         MeshPeriodicBoundaryFacePairResource: {
+            /** Format: double */
+            area_residual_m2?: number;
+            /** Format: int32 */
+            destination_marker?: number;
             /** Format: int32 */
             face_a: number;
             /** Format: int32 */
@@ -5295,7 +5588,12 @@ export interface components {
             /** Format: double */
             normal_dot?: number | null;
             orientation: string;
+            /** Format: int32 */
+            source_marker?: number;
             translation_m: number[];
+            /** Format: double */
+            translation_residual_m?: number;
+            vertex_pairs?: number[][];
         };
         MeshPeriodicDomainNodePairCountsResource: {
             /** Format: int32 */
@@ -5314,6 +5612,9 @@ export interface components {
             marker_b: number;
             /** Format: double */
             max_residual_m?: number | null;
+            /** Format: int32 */
+            mixed_domain_node_pair_count?: number;
+            node_pairs?: number[][];
             pair_id: string;
             /** Format: int32 */
             paired_node_count: number;
@@ -5322,15 +5623,32 @@ export interface components {
             source_marker?: string | null;
             status: string;
             /** Format: int32 */
+            unpaired_destination_face_count?: number;
+            /** Format: int32 */
             unpaired_destination_node_count: number;
+            /** Format: int32 */
+            unpaired_source_face_count?: number;
             /** Format: int32 */
             unpaired_source_node_count: number;
         };
         MeshPeriodicPairsResource: {
+            certificate_fingerprint?: string | null;
+            /** Format: int64 */
+            certificate_revision?: number | null;
+            mesh_generation_id?: string | null;
             pairs: components["schemas"]["MeshPeriodicPairResource"][];
             /** Format: int64 */
             revision: number;
             schema_version: string;
+            /** Format: int64 */
+            source_scene_revision?: number | null;
+            /**
+             * @description Aggregate certificate/resource status. `valid` is reserved for a
+             *     current accepted v6 certificate with complete pair diagnostics.
+             */
+            status?: components["schemas"]["PeriodicValidationStatus"];
+            status_reasons?: string[];
+            topology_fingerprint?: string | null;
         };
         MeshQualityGatesResource: {
             gates?: Record<string, never> | null;
@@ -5367,15 +5685,26 @@ export interface components {
         MeshRegionMembershipResource: {
             boundary_face_indices: number[];
             element_indices: number[];
+            /** @description `current` applies only to certified mesh membership; `preview` is analytic projection. */
+            freshness: string;
+            mesh_generation_id?: string | null;
             mesh_id: string;
             mesh_part_ids: string[];
             /** Format: int64 */
             mesh_revision: number;
             node_indices: number[];
+            realization: string;
             realization_method?: string | null;
             realization_warnings?: string[];
             region_id: string;
+            /**
+             * Format: int64
+             * @description Independent region-membership realization revision, not the scene journal revision.
+             */
+            region_membership_revision: number;
             source: string;
+            /** @description Stable identity of the mesh topology used for this membership. */
+            topology_fingerprint?: string | null;
         };
         MeshRegionQualityResource: {
             quality?: Record<string, never> | null;
@@ -5422,10 +5751,14 @@ export interface components {
                 [key: string]: components["schemas"]["MeshPerObjectTargetResource"];
             };
             fallbacks_triggered?: string[];
+            object_region_markers?: Record<string, never>[];
             operation_statuses?: components["schemas"]["MeshOperationStatusResource"][];
+            orphan_entities?: Record<string, never>[];
             /** Format: int32 */
             realized_regions_count?: number | null;
             region_markers?: components["schemas"]["MeshDomainRegionMarkerResource"][];
+            rejected_element_types?: Record<string, never>[];
+            selector_resolution?: Record<string, never>[];
             size_fields_realized?: components["schemas"]["MeshRealizedSizeFieldResource"][];
             thin_film_diagnostics?: components["schemas"]["MeshThinFilmDiagnosticResource"][];
             used_size_field_kinds?: string[];
@@ -5469,6 +5802,7 @@ export interface components {
             revision: number;
         };
         MeshSolverMeshResource: {
+            build_report?: null | components["schemas"]["MeshSharedDomainBuildReportResource"];
             domain_mesh_mode?: string | null;
             generation_id?: string | null;
             mesh_id: string;
@@ -5649,6 +5983,8 @@ export interface components {
             base_revision?: number | null;
             region_ids: string[];
         };
+        /** @enum {string} */
+        PeriodicValidationStatus: "valid" | "invalid" | "stale" | "unavailable";
         PrimitiveGeometryCapability: {
             boolean: boolean;
             category: string;
@@ -5807,11 +6143,27 @@ export interface components {
         RegionDiagnosticsResource: {
             diagnostics: components["schemas"]["RegionDiagnosticResource"][];
             /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
+            region_membership_revision?: number | null;
+            /** Format: int64 */
+            region_topology_revision?: number | null;
+            /** Format: int64 */
             scene_revision: number;
         };
         RegionListResource: {
             /** Format: int64 */
             geometry_realization_revision: number;
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
+            region_membership_revision?: number | null;
+            /** Format: int64 */
+            region_topology_revision?: number | null;
             regions: components["schemas"]["RegionResource"][];
             /** Format: int64 */
             scene_revision: number;
@@ -5827,6 +6179,14 @@ export interface components {
             deferred_diagnostic_count: number;
             /** Format: int64 */
             material_parameter_field_count: number;
+            /** Format: int64 */
+            region_coefficients_revision: number;
+            /** Format: int64 */
+            region_initial_state_revision: number;
+            /** Format: int64 */
+            region_membership_revision: number;
+            /** Format: int64 */
+            region_topology_revision: number;
             /** Format: int64 */
             scene_revision: number;
         };
@@ -5862,6 +6222,21 @@ export interface components {
             source_object_ids: string[];
             texture_override?: null | components["schemas"]["SceneTextureOverride"];
         };
+        RegionalFieldDriveResource: {
+            activation: components["schemas"]["DriveActivationResource"];
+            /** Format: double */
+            amplitude_B_T: number;
+            direction: number[];
+            enabled?: boolean;
+            id: string;
+            kind: components["schemas"]["FieldDriveKindResource"];
+            migration?: null | components["schemas"]["FieldDriveMigrationResource"];
+            name: string;
+            spatial_profile: components["schemas"]["FieldSpatialProfileResource"];
+            target: components["schemas"]["FieldTargetResource"];
+            time_origin: components["schemas"]["FieldTimeOriginResource"];
+            waveform: components["schemas"]["TimeDependenceResource"];
+        };
         /** @enum {string} */
         RelaxationAlgorithm: "llg_overdamped" | "projected_gradient_bb" | "nonlinear_cg" | "tangent_plane_implicit";
         ResolvedFallbackResource: {
@@ -5882,8 +6257,7 @@ export interface components {
             commands_revision: number;
             /** Format: int64 */
             display_revision: number;
-            /** Format: int64 */
-            domain_generation_id: number;
+            domain_generation_id: string;
             /** Format: int64 */
             engine_log_revision: number;
             /** Format: int64 */
@@ -5896,6 +6270,14 @@ export interface components {
             mesh_build_revision: number;
             /** Format: int64 */
             mesh_revision: number;
+            /** Format: int64 */
+            region_coefficients_revision: number;
+            /** Format: int64 */
+            region_initial_state_revision: number;
+            /** Format: int64 */
+            region_membership_revision: number;
+            /** Format: int64 */
+            region_topology_revision: number;
             /** Format: int64 */
             scalars_revision: number;
             /** Format: int64 */
@@ -5948,6 +6330,14 @@ export interface components {
             command_revision?: number | null;
             /** Format: int64 */
             mesh_revision?: number | null;
+            /** Format: int64 */
+            region_coefficients_revision?: number | null;
+            /** Format: int64 */
+            region_initial_state_revision?: number | null;
+            /** Format: int64 */
+            region_membership_revision?: number | null;
+            /** Format: int64 */
+            region_topology_revision?: number | null;
             runtime_state?: string | null;
             /** Format: int64 */
             scene_revision?: number | null;
@@ -6307,6 +6697,7 @@ export interface components {
             editor?: {
                 [key: string]: unknown;
             } | null;
+            field_drives?: components["schemas"]["FieldDriveListStateResource"];
             magnetization_assets?: {
                 [key: string]: unknown;
             }[];
@@ -6763,6 +7154,53 @@ export interface components {
             /** @description idle | running | paused | finished | error */
             state: string;
         };
+        SpinWaveGammaResource: {
+            detrend: string;
+            frequency_hz: number[];
+            frequency_unit: string;
+            normalization: string;
+            /** Format: double */
+            nyquist_hz: number;
+            peaks: components["schemas"]["SpinWavePeakResource"][];
+            primary_response_psd: number[];
+            /** Format: double */
+            reference_m0: number;
+            /** Format: double */
+            reference_m0_secondary: number;
+            response_component: string;
+            response_psd: number[];
+            response_spectrum_imag: number[];
+            response_spectrum_real: number[];
+            response_trace: number[];
+            schema_version: string;
+            secondary_response_psd: number[];
+            secondary_response_spectrum_imag: number[];
+            secondary_response_spectrum_real: number[];
+            secondary_response_trace: number[];
+            source_psd: number[];
+            source_spectrum_imag: number[];
+            source_spectrum_real: number[];
+            source_trace: number[];
+            source_unit: string;
+            susceptibility_abs: (number | null)[];
+            susceptibility_unit: string;
+            time_s: number[];
+            time_unit: string;
+            trace_unit: string;
+            transverse_components: string[];
+            weighting: string;
+            window: string;
+            /** Format: double */
+            window_power_sum: number;
+            window_values: number[];
+        };
+        SpinWavePeakResource: {
+            /** Format: double */
+            frequency_hz: number;
+            index: number;
+            /** Format: double */
+            power: number;
+        };
         StageExecutionRecordResource: {
             action?: string | null;
             artifact_refs?: string[];
@@ -7001,70 +7439,214 @@ export interface components {
             /** Format: int64 */
             total_rows: number;
         };
+        TimeDependenceResource: {
+            /** @enum {string} */
+            kind: "constant";
+        } | {
+            /** Format: double */
+            frequency_hz: number;
+            /** @enum {string} */
+            kind: "sinusoidal";
+            /** Format: double */
+            offset?: number;
+            /** Format: double */
+            phase_rad?: number;
+        } | {
+            /** @enum {string} */
+            kind: "pulse";
+            /** Format: double */
+            t_off: number;
+            /** Format: double */
+            t_on: number;
+        } | {
+            /** @enum {string} */
+            kind: "piecewise_linear";
+            points: number[][];
+        } | {
+            /** Format: double */
+            amplitude?: number;
+            /** Format: double */
+            cutoff_hz: number;
+            /** @enum {string} */
+            kind: "sinc_pulse";
+            /** Format: double */
+            t0?: number;
+        };
+        TopologicalChargeExecutionProvenance: {
+            backend: string;
+            device: string;
+            engine_id?: string | null;
+            lossy_fallback_used: boolean;
+            mode: string;
+            precision: string;
+            runtime_family?: string | null;
+        };
         TopologicalChargeLayerSample: {
             /** Format: double */
             charge?: number | null;
             /** Format: double */
-            coordinate: number;
+            coordinate_m: number;
+            /** Format: int32 */
             index: number;
-            sample_count: number;
-            triangle_count: number;
-            valid_sample_count: number;
+            /** Format: double */
+            integration_weight_m: number;
+            status: components["schemas"]["TopologicalChargeStatus"];
+            /** Format: int64 */
+            total_triangle_count: number;
+            trust: components["schemas"]["TopologicalChargeTrust"];
+            /** Format: int64 */
+            valid_triangle_count: number;
         };
-        TopologicalChargeQuery: {
-            method?: string;
-            plane?: string;
-            quantity_id?: string;
-            resolution?: string;
+        /**
+         * @description The single production discretization method for schema v2.
+         * @enum {string}
+         */
+        TopologicalChargeMethod: "berg_luescher_oriented_triangles_v2";
+        TopologicalChargeMethodDescriptor: {
+            id: components["schemas"]["TopologicalChargeMethod"];
+            quantity_id: string;
+            version: string;
+        };
+        /**
+         * @description The ordered support plane.  The canonical `(u, v, n)` frame is published in
+         *     the response because `xz` has normal `-y`, not `+y`.
+         * @enum {string}
+         */
+        TopologicalChargePlane: "auto" | "xy" | "xz" | "yz";
+        /**
+         * @description A bounded request for exact profile cuts.
+         *
+         *     Query parameters are strings, so deserialization accepts `auto` and decimal
+         *     integers only.  The numeric bounds are enforced at the public boundary.
+         */
+        TopologicalChargeProfileSamples: "auto" | {
+            /** Format: int32 */
+            count: number;
+        };
+        TopologicalChargeProvenance: {
+            cache_key_digest: string;
+            discretization: string;
+            domain_generation_id: string;
+            /** Format: int32 */
+            fe_order?: number | null;
+            field_id: string;
+            field_node_mapping_id?: string | null;
+            field_revision: string;
+            field_storage_domain: string;
+            mesh_generation_id?: string | null;
+            mesh_revision?: string | null;
+            requested_execution: components["schemas"]["TopologicalChargeExecutionProvenance"];
+            resolved_execution?: null | components["schemas"]["TopologicalChargeExecutionProvenance"];
+            scene_revision: string;
             snapshot_id?: string | null;
+            source_kind: string;
+            stage_id?: string | null;
         };
-        TopologicalChargeResource: {
+        TopologicalChargeQuality: {
+            /** Format: int64 */
+            boundary_edge_count: number;
+            /** Format: int32 */
+            boundary_loop_count: number;
+            /** Format: double */
+            boundary_max_deviation_rad?: number | null;
+            /** Format: int32 */
+            connected_component_count: number;
+            /** Format: int64 */
+            euler_characteristic?: number | null;
+            /** Format: int64 */
+            exceptional_triangle_count: number;
+            /** Format: int64 */
+            invalid_triangle_count: number;
+            /** Format: double */
+            max_edge_angle_rad?: number | null;
+            /** Format: double */
+            min_abs_solid_angle_denominator?: number | null;
+            /** Format: int64 */
+            total_triangle_count: number;
+            /** Format: int64 */
+            total_vertex_count: number;
+            /** Format: int64 */
+            valid_triangle_count: number;
+            /** Format: int64 */
+            valid_vertex_count: number;
+        };
+        /** @description Typed query for the v2 analysis resource. */
+        TopologicalChargeQueryV2: {
+            method?: components["schemas"]["TopologicalChargeMethod"];
+            plane?: components["schemas"]["TopologicalChargePlane"];
+            /** @example auto */
+            profile_samples?: string;
+            snapshot_id?: string | null;
+            stage_id?: string | null;
+            support?: components["schemas"]["TopologicalChargeSupportMode"];
+        };
+        TopologicalChargeRequestEcho: {
+            requested_plane: components["schemas"]["TopologicalChargePlane"];
+            requested_profile_samples?: null | components["schemas"]["TopologicalChargeProfileSamples"];
+            requested_support: components["schemas"]["TopologicalChargeSupportMode"];
+            snapshot_id?: string | null;
+            stage_id?: string | null;
+        };
+        TopologicalChargeResolvedSupport: {
+            /** Format: double */
+            coordinate_m?: number | null;
+            plane: components["schemas"]["TopologicalChargePlane"];
+            /** Format: int32 */
+            profile_sample_count?: number | null;
+            source_kind: string;
+            support: components["schemas"]["TopologicalChargeSupportMode"];
+        };
+        /** @description Versioned resource published by the topological-charge endpoint. */
+        TopologicalChargeResourceV2: {
             /** Format: double */
             charge?: number | null;
             /** Format: int64 */
             computed_at_unix_ms: number;
-            domain_generation_id?: string | null;
-            /** Format: int64 */
-            field_revision?: number | null;
             /** Format: double */
             integer_error?: number | null;
-            layer_samples: components["schemas"]["TopologicalChargeLayerSample"][];
-            mesh_generation_id?: string | null;
-            /** Format: int64 */
-            mesh_revision?: number | null;
-            method: string;
+            method: components["schemas"]["TopologicalChargeMethodDescriptor"];
             /** Format: int64 */
             nearest_integer?: number | null;
             object_id: string;
-            plane: string;
-            polarity?: string | null;
-            quantity_id: string;
-            /** Format: int64 */
-            revision: number;
-            sample_count: number;
-            sample_grid?: null | components["schemas"]["TopologicalChargeSampleGrid"];
-            sample_topology?: null | components["schemas"]["TopologicalChargeSampleTopology"];
+            profile?: components["schemas"]["TopologicalChargeLayerSample"][];
+            provenance: components["schemas"]["TopologicalChargeProvenance"];
+            quality: components["schemas"]["TopologicalChargeQuality"];
+            request: components["schemas"]["TopologicalChargeRequestEcho"];
+            resolved_support: components["schemas"]["TopologicalChargeResolvedSupport"];
+            resource_revision: string;
+            /** @example topological_charge.v2 */
+            schema_version: string;
             status: components["schemas"]["TopologicalChargeStatus"];
-            valid_sample_count: number;
-            warnings: components["schemas"]["TopologicalChargeWarning"][];
+            support_frame: components["schemas"]["TopologicalChargeSupportFrame"];
+            trust: components["schemas"]["TopologicalChargeTrust"];
+            warnings?: components["schemas"]["TopologicalChargeWarning"][];
         };
-        TopologicalChargeSampleGrid: {
-            /** Format: int32 */
-            nx: number;
-            /** Format: int32 */
-            ny: number;
-            plane: string;
+        /**
+         * @description Expected scientific computation states.  Transport lifecycle is intentionally
+         *     absent: `idle`, `loading`, `stale`, and `error` belong to the resource hook.
+         * @enum {string}
+         */
+        TopologicalChargeStatus: "ready" | "no_current_magnetization" | "empty_support" | "invalid_magnetization" | "degenerate_support" | "under_resolved" | "unsupported_geometry" | "unsupported_discretization";
+        TopologicalChargeSupportFrame: {
+            normal_axis: number[];
+            u_axis: number[];
+            v_axis: number[];
         };
-        TopologicalChargeSampleTopology: {
-            kind: string;
-            point_count: number;
-            triangle_count: number;
-        };
-        /** @enum {string} */
-        TopologicalChargeStatus: "ready" | "no_current_magnetization" | "empty_support" | "invalid_magnetization" | "degenerate_support" | "under_resolved" | "stale" | "unsupported_geometry" | "error";
+        /**
+         * @description Whether the result represents one exact midplane or a thickness profile.
+         * @enum {string}
+         */
+        TopologicalChargeSupportMode: "midplane" | "layer_profile";
+        /**
+         * @description Scientific trust is intentionally distinct from whether computation produced
+         *     a finite diagnostic integral.
+         * @enum {string}
+         */
+        TopologicalChargeTrust: "qualified" | "diagnostic_boundary" | "diagnostic_resolution" | "diagnostic_topology" | "unavailable";
         TopologicalChargeWarning: {
             code: string;
             message: string;
+            severity: string;
         };
         TrimAxisVisualizationAxes: {
             x: components["schemas"]["TrimAxisVisualizationState"];
@@ -7930,36 +8512,30 @@ export interface operations {
     analysis_get_sessions_current_analysis_extensions_objects_object_id_topological_charge: {
         parameters: {
             query?: {
-                quantity_id?: string;
-                plane?: string;
-                resolution?: string;
-                snapshot_id?: string | null;
-                method?: string;
+                plane?: components["schemas"]["TopologicalChargePlane"];
+                support?: components["schemas"]["TopologicalChargeSupportMode"];
+                profile_samples?: components["schemas"]["TopologicalChargeProfileSamples"];
+                snapshot_id?: string;
+                stage_id?: string;
+                method?: components["schemas"]["TopologicalChargeMethod"];
             };
             header?: never;
             path: {
-                /** @description Canonical scene object id */
+                /** @description Object id */
                 object_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Object-scoped topological charge analysis resource */
+            /** @description Versioned topological charge resource */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TopologicalChargeResource"];
+                    "application/json": components["schemas"]["TopologicalChargeResourceV2"];
                 };
-            };
-            /** @description Object or workspace not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };
@@ -8648,6 +9224,60 @@ export interface operations {
             };
         };
     };
+    analysis_get_sessions_current_analysis_spin_wave_dynamic_structure_factor_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Finite-k dynamic structure factor */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicStructureFactorResource"];
+                };
+            };
+            /** @description No finite-k spin-wave artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_spin_wave_gamma_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Moment-weighted Γ time trace and spectrum */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpinWaveGammaResource"];
+                };
+            };
+            /** @description No Γ spin-wave response artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     data_get_sessions_current_data_artifacts: {
         parameters: {
             query?: never;
@@ -8844,6 +9474,146 @@ export interface operations {
             };
             /** @description Requested topology byte range is not satisfiable */
             416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fdm_region_membership: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous FMRM response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for the FMRM payload */
+                Range?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Binary realized FDM cell membership (FMRM) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial FMRM payload */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description FMRM payload not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No realized FDM region membership artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested FMRM byte range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fdm_region_membership_region_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous scoped FMRM response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for the FMRM payload */
+                Range?: string | null;
+            };
+            path: {
+                /** @description Canonical authored region ID */
+                region_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scoped binary realized FDM cell membership (FMRM) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial scoped FMRM payload */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Scoped FMRM payload not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No realized FDM membership or unknown region ID */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested FMRM byte range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_fdm_region_memberships: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thin descriptor for realized FDM cell membership */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FdmRegionMembershipResource"];
+                };
+            };
+            /** @description No realized FDM region membership artifact */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9727,6 +10497,14 @@ export interface operations {
                 /** @description Scope identifier for `object` and `part` scopes. */
                 scope_id?: string | null;
                 /**
+                 * @description Optional geometric subset for scoped vector samples.
+                 *
+                 *     Accepted values: `full` (default) and `surface`. `surface` is currently
+                 *     supported for `airbox` scope and is resolved from the selected mesh
+                 *     part's canonical surface-node membership before `max_samples` is applied.
+                 */
+                geometry_scope?: string | null;
+                /**
                  * @description Optional hard cap for vector samples returned by the binary payload.
                  *
                  *     FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
@@ -9773,6 +10551,34 @@ export interface operations {
             /** @description Binary FMVP field vector. FEM payloads use FMVP v3 metadata with domain_generation_id, mesh topology revision/hash, scope kind/id, indexing, and optional node_indices. FMVP v2 remains accepted for legacy full-domain payloads. */
             200: {
                 headers: {
+                    /** @description Resolved component projection */
+                    "x-fullmag-component"?: string;
+                    /** @description Domain generation identity */
+                    "x-fullmag-domain-generation-id"?: string;
+                    /** @description FMVP encoding and version */
+                    "x-fullmag-encoding"?: string;
+                    /** @description Optional FMVP v3 field indexing */
+                    "x-fullmag-field-indexing"?: string;
+                    /** @description Field revision */
+                    "x-fullmag-field-revision"?: string;
+                    /** @description Optional FMVP v3 mesh topology hash */
+                    "x-fullmag-mesh-topology-hash"?: string;
+                    /** @description Components per point */
+                    "x-fullmag-n-comp"?: number;
+                    /** @description Optional FMVP v3 node-index count */
+                    "x-fullmag-node-index-count"?: number;
+                    /** @description Decoded point count */
+                    "x-fullmag-point-count"?: number;
+                    /** @description Canonical quantity identifier */
+                    "x-fullmag-quantity-id"?: string;
+                    /** @description Resolved optional scope identifier */
+                    "x-fullmag-scope-id"?: string;
+                    /** @description Resolved scope kind */
+                    "x-fullmag-scope-kind"?: string;
+                    /** @description Optional persisted snapshot identifier */
+                    "x-fullmag-snapshot-id"?: string;
+                    /** @description Scalar value count */
+                    "x-fullmag-value-count"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -10516,6 +11322,68 @@ export interface operations {
             };
             /** @description No active workspace */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    meshing_get_sessions_current_meshing_mesh_periodic_pairs_v1_bin: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous periodic-pairs binary response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for chunked FMPP reads */
+                Range?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versioned binary FEM periodic node/face pairs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.fullmag.periodic-pairs.v1": unknown;
+                };
+            };
+            /** @description No FEM mesh available */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Partial binary FEM periodic node/face pairs */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.fullmag.periodic-pairs.v1": unknown;
+                };
+            };
+            /** @description Periodic mesh-pair binary not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested byte range is not satisfiable */
+            416: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11837,6 +12705,160 @@ export interface operations {
                 content?: never;
             };
             /** @description Coupling not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_field_drives: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical regional field drives */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldDriveListResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_post_sessions_current_model_field_drives: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldDriveCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created a regional field drive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Invalid field drive */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict or duplicate field drive */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_put_sessions_current_model_field_drives_drive_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable field drive id */
+                drive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldDriveReplaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Replaced a regional field drive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Invalid field drive */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field drive not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_field_drives_drive_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable field drive id */
+                drive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldDriveDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Deleted a regional field drive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Field drive not found */
             404: {
                 headers: {
                     [name: string]: unknown;

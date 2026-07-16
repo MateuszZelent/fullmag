@@ -2,7 +2,10 @@ import type {
   MeshSharedDomainManifestResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
-import type { Selection } from "@/kernel/selection/selectionTypes";
+import {
+  isVisualizationAirboxIdentity,
+  type Selection,
+} from "@/kernel/selection/selectionTypes";
 
 import { magnetizationHslRgb } from "./orientation/magnetizationColor";
 import type { Viewport3DBounds } from "./viewport3dRenderModel";
@@ -462,8 +465,16 @@ export function buildViewport3DPrimitiveRenderModel(
   const objects = sceneRecord.objects.flatMap((value): Viewport3DPrimitiveObject[] => {
     const object = asRecord(value);
     const objectId = asString(object?.id);
+    const objectRole = asString(object?.role);
     const geometry = asRecord(object?.geometry);
-    if (!object || !objectId || !geometry) return [];
+    if (
+      !object ||
+      !objectId ||
+      isVisualizationAirboxIdentity({ id: objectId, role: objectRole }) ||
+      !geometry
+    ) {
+      return [];
+    }
 
     const state = objectMeshState(objectId, sceneRevision, manifest, object);
     const transform = asRecord(object.transform);

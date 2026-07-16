@@ -14,6 +14,8 @@ extern "C" {
 #define FULLMAG_FEM_ERR_INTERNAL -3
 #define FULLMAG_FEM_ERR_INTERRUPTED -4
 
+#define FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION 1u
+
 typedef enum {
     FULLMAG_FEM_PRECISION_SINGLE = 1,
     FULLMAG_FEM_PRECISION_DOUBLE = 2,
@@ -54,7 +56,150 @@ typedef enum {
     FULLMAG_FEM_OBSERVABLE_H_THERM = 12,
     FULLMAG_FEM_OBSERVABLE_TORQUE = 13,
     FULLMAG_FEM_OBSERVABLE_DEMAG_PHI = 14,
+    FULLMAG_FEM_OBSERVABLE_H_DRIVE = 15,
 } fullmag_fem_observable;
+
+typedef enum {
+    FULLMAG_FEM_TIME_CONSTANT = 0,
+    FULLMAG_FEM_TIME_SINUSOIDAL = 1,
+    FULLMAG_FEM_TIME_PULSE = 2,
+    FULLMAG_FEM_TIME_PIECEWISE_LINEAR = 3,
+    FULLMAG_FEM_TIME_SINC_PULSE = 4,
+} fullmag_fem_time_dependence_kind;
+
+typedef enum {
+    FULLMAG_FEM_TIME_STAGE_LOCAL = 0,
+    FULLMAG_FEM_TIME_ABSOLUTE = 1,
+} fullmag_fem_time_origin;
+
+typedef enum {
+    FULLMAG_FEM_FIELD_TARGET_GLOBAL = 0,
+    FULLMAG_FEM_FIELD_TARGET_ELEMENT_MARKERS = 1,
+} fullmag_fem_field_target_kind;
+
+typedef enum {
+    FULLMAG_FEM_SPATIAL_PROFILE_UNIFORM = 0,
+    FULLMAG_FEM_SPATIAL_PROFILE_SINC = 1,
+    FULLMAG_FEM_SPATIAL_PROFILE_GEOMETRY_MASK = 2,
+} fullmag_fem_spatial_profile_kind;
+
+typedef enum {
+    FULLMAG_FEM_SPATIAL_WINDOW_NONE = 0,
+    FULLMAG_FEM_SPATIAL_WINDOW_HANN = 1,
+} fullmag_fem_spatial_window_kind;
+
+typedef enum {
+    FULLMAG_FEM_GEOMETRY_BOX = 1,
+    FULLMAG_FEM_GEOMETRY_CYLINDER = 2,
+    FULLMAG_FEM_GEOMETRY_TRANSLATE = 3,
+    FULLMAG_FEM_GEOMETRY_DIFFERENCE = 4,
+    FULLMAG_FEM_GEOMETRY_UNION = 5,
+    FULLMAG_FEM_GEOMETRY_INTERSECTION = 6,
+} fullmag_fem_geometry_mask_kind;
+
+typedef struct {
+    double time_s;
+    double value;
+} fullmag_fem_time_point;
+
+typedef struct {
+    double frequency_hz;
+    double phase_rad;
+    double offset;
+} fullmag_fem_sinusoidal_time_desc;
+
+typedef struct {
+    double t_on_s;
+    double t_off_s;
+} fullmag_fem_pulse_time_desc;
+
+typedef struct {
+    double cutoff_hz;
+    double t0_s;
+    double amplitude;
+} fullmag_fem_sinc_pulse_time_desc;
+
+typedef union {
+    fullmag_fem_sinusoidal_time_desc sinusoidal;
+    fullmag_fem_pulse_time_desc pulse;
+    fullmag_fem_sinc_pulse_time_desc sinc_pulse;
+} fullmag_fem_time_dependence_parameters;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t kind;
+    fullmag_fem_time_dependence_parameters parameters;
+    const fullmag_fem_time_point *points;
+    uint64_t point_count;
+} fullmag_fem_time_dependence_desc;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t kind;
+    const uint32_t *element_markers;
+    uint64_t element_marker_count;
+} fullmag_fem_field_target_desc;
+
+typedef struct {
+    uint32_t kind;
+    uint32_t child_a;
+    uint32_t child_b;
+    double center_m[3];
+    double size_m[3];
+    double axis[3];
+    double radius_m;
+    double height_m;
+    double translation_m[3];
+} fullmag_fem_geometry_mask_node;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    const fullmag_fem_geometry_mask_node *nodes;
+    uint64_t node_count;
+    uint32_t root_index;
+} fullmag_fem_geometry_mask_desc;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t kind;
+    double sinc_axis[3];
+    double sinc_period_m;
+    double sinc_center_m;
+    double sinc_width_m;
+    uint32_t sinc_window;
+    const fullmag_fem_geometry_mask_desc *geometry_mask;
+} fullmag_fem_spatial_profile_desc;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t stable_id_hash;
+    fullmag_fem_field_target_desc target;
+    fullmag_fem_spatial_profile_desc spatial_profile;
+    double amplitude_b_t;
+    double direction[3];
+    fullmag_fem_time_dependence_desc waveform;
+    uint32_t time_origin;
+} fullmag_fem_regional_field_drive_desc;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint64_t time_dependence_desc_size;
+    uint64_t field_target_desc_size;
+    uint64_t spatial_profile_desc_size;
+    uint64_t regional_field_drive_desc_size;
+    uint64_t plan_desc_size;
+    uint64_t plan_regional_field_drives_offset;
+    uint64_t plan_regional_field_drive_count_offset;
+    uint64_t plan_stage_start_time_s_offset;
+    uint64_t step_stats_size;
+    uint64_t step_stats_drive_energy_joules_offset;
+} fullmag_fem_regional_field_drive_abi_layout;
 
 typedef enum {
     FULLMAG_FEM_LINEAR_SOLVER_CG = 1,
@@ -282,6 +427,9 @@ typedef struct {
        precession_enabled=1 = full Gilbert LLG, 0 = pure damping relaxation. */
     int                        has_precession_enabled;
     int                        precession_enabled;
+    const fullmag_fem_regional_field_drive_desc *regional_field_drives;
+    uint64_t                   regional_field_drive_count;
+    double                     stage_start_time_s;
 } fullmag_fem_plan_desc;
 
 typedef struct {
@@ -294,6 +442,7 @@ typedef struct {
     double exchange_energy_joules;
     double demag_energy_joules;
     double external_energy_joules;
+    double drive_energy_joules;
     double anisotropy_energy_joules;
     double dmi_energy_joules;
     double total_energy_joules;
@@ -986,6 +1135,24 @@ void fullmag_fem_frequency_domain_result_destroy(
 fullmag_fem_backend *fullmag_fem_backend_create(
     const fullmag_fem_plan_desc *plan
 );
+
+int fullmag_fem_get_regional_field_drive_abi_layout(
+    fullmag_fem_regional_field_drive_abi_layout *out_layout
+);
+
+int fullmag_fem_backend_begin_stage(
+    fullmag_fem_backend *handle,
+    double stage_start_time_s
+);
+
+int fullmag_fem_backend_reconfigure_regional_field_drives(
+    fullmag_fem_backend *handle,
+    const fullmag_fem_regional_field_drive_desc *drives,
+    uint64_t drive_count,
+    double stage_start_time_s
+);
+
+int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle);
 
 int fullmag_fem_backend_step(
     fullmag_fem_backend *handle,

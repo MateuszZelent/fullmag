@@ -8,6 +8,15 @@ import {
   ObjectRegionTexturePanel,
   ObjectRegionVisualizationPanel,
 } from "./panels/ObjectRegionsPanel";
+import { AirboxOverviewPanel } from "./panels/airbox/AirboxOverviewPanel";
+import { AirboxMeshBuildPanel } from "./panels/airbox/AirboxMeshBuildPanel";
+import { AirboxMeshOverviewPanel } from "./panels/airbox/AirboxMeshOverviewPanel";
+import { AirboxMeshParametersPanel } from "./panels/airbox/AirboxMeshParametersPanel";
+import { AirboxMeshQualityGatesPanel } from "./panels/airbox/AirboxMeshQualityGatesPanel";
+import { AirboxMeshStatisticsPanel } from "./panels/airbox/AirboxMeshStatisticsPanel";
+import { AirboxMeshTopologyPanel } from "./panels/airbox/AirboxMeshTopologyPanel";
+import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
+import { VisualizationDebugPanel } from "./panels/visualization-debug/VisualizationDebugPanel";
 import {
   EigenModeInspectorPanel,
   EigenBranchInspectorPanel,
@@ -221,24 +230,77 @@ describe("inspectorRegistry", () => {
   });
 
   it("resolves object and airbox visualization selections to the visualization panel", () => {
-    expect(resolveInspectorPanel({ kind: "object.visualization" })?.id).toBe(
-      "object-visualization",
+    for (const kind of [
+      "object.visualization",
+      "airbox.visualization",
+    ] as const) {
+      const panel = resolveInspectorPanel({ kind });
+      expect(panel?.id).toBe("object-visualization");
+      expect(panel?.component).toBe(ObjectVisualizationPanel);
+      expect(panel?.component).not.toBe(VisualizationDebugPanel);
+    }
+  });
+
+  it("gives every Airbox mesh branch a distinct single-purpose panel", () => {
+    const expected = [
+      ["airbox.root", "airbox-overview", AirboxOverviewPanel],
+      ["airbox.mesh", "airbox-mesh-overview", AirboxMeshOverviewPanel],
+      [
+        "airbox.mesh.parameters",
+        "airbox-mesh-parameters",
+        AirboxMeshParametersPanel,
+      ],
+      [
+        "airbox.mesh.quality-gates",
+        "airbox-mesh-quality-gates",
+        AirboxMeshQualityGatesPanel,
+      ],
+      [
+        "airbox.mesh.statistics",
+        "airbox-mesh-statistics",
+        AirboxMeshStatisticsPanel,
+      ],
+      ["airbox.mesh.topology", "airbox-mesh-topology", AirboxMeshTopologyPanel],
+      ["airbox.mesh.build", "airbox-mesh-build", AirboxMeshBuildPanel],
+    ] as const;
+
+    for (const [kind, panelId, component] of expected) {
+      const panel = resolveInspectorPanel({ kind });
+      expect(panel?.id).toBe(panelId);
+      expect(panel?.component).toBe(component);
+    }
+    expect(new Set(expected.map(([, panelId]) => panelId)).size).toBe(
+      expected.length,
     );
     expect(resolveInspectorPanel({ kind: "airbox.visualization" })?.id).toBe(
       "object-visualization",
     );
   });
 
-  it("resolves Airbox mesh policy selections to the Airbox mesh policy panel", () => {
-    expect(resolveInspectorPanel({ kind: "airbox.mesh" })?.id).toBe(
-      "airbox-mesh-policy",
+  it("routes the Universe Boundary Faces node to its dedicated overview", () => {
+    expect(resolveInspectorPanel({ kind: "boundary-faces.root" })?.id).toBe(
+      "boundary-faces-overview",
     );
   });
 
-  it("resolves Airbox mesh quality selections to the Airbox mesh quality panel", () => {
-    expect(resolveInspectorPanel({ kind: "airbox.mesh-quality" })?.id).toBe(
-      "airbox-mesh-quality",
-    );
+  it("uses one production Debug panel for three distinct visualization selection kinds", () => {
+    const kinds = [
+      "airbox.visualization.debug",
+      "object.visualization.debug",
+      "object.region.visualization.debug",
+    ] as const;
+
+    const panels = kinds.map((kind) => resolveInspectorPanel({ kind }));
+
+    expect(panels.map((panel) => panel?.id)).toEqual([
+      "visualization-debug",
+      "visualization-debug",
+      "visualization-debug",
+    ]);
+    expect(
+      panels.every((panel) => panel?.component === VisualizationDebugPanel),
+    ).toBe(true);
+    expect(new Set(kinds).size).toBe(3);
   });
 
   it("resolves cross-section selections to the cross-section inspector", () => {

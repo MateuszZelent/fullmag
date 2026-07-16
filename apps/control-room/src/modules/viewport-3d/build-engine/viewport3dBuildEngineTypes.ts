@@ -25,6 +25,7 @@ export interface Viewport3DBuildJobKeyParts {
   readonly algorithmVersion: number;
   readonly component: string | null;
   readonly domainId: string;
+  readonly domainGenerationId?: string | null;
   readonly fieldRevision: string | null;
   readonly quantityId: string | null;
   readonly samplingRevision: string;

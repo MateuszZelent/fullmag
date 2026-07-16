@@ -4,6 +4,7 @@ import type {
   Viewport3DGpuUploadDiagnosticRecord,
   Viewport3DGpuUploadManager,
   Viewport3DGpuUploadPolicy,
+  Viewport3DGpuUploadStatus,
   Viewport3DGpuUploadTicketInput,
 } from "./viewport3dGpuUploadTypes";
 import type { Viewport3DBuildJobKey } from "../viewport3dBuildEngineTypes";
@@ -45,6 +46,7 @@ interface PendingViewport3DGpuUploadTicket {
   uploadBytes: number;
   uploadChunks: number;
   uploadFrames: number;
+  uploadedChunksForRollback: Viewport3DGpuUploadChunk[];
 }
 
 interface Viewport3DGpuUploadFrameHost {
@@ -106,6 +108,7 @@ export function createViewport3DGpuUploadManager({
       uploadBytes: 0,
       uploadChunks: 0,
       uploadFrames: 0,
+      uploadedChunksForRollback: [],
     };
     if (input.signal) {
       ticket.abortListener = () => {
@@ -136,7 +139,7 @@ export function createViewport3DGpuUploadManager({
     for (const ticket of queue.splice(0)) {
       ticket.aborted = true;
       cleanupTicket(ticket);
-      recordTerminal(ticket, true);
+      recordTerminal(ticket, "aborted");
     }
   }
 
@@ -155,10 +158,7 @@ export function createViewport3DGpuUploadManager({
     const ticket = queue[0];
     if (!ticket) return;
     if (ticket.aborted || ticket.signal?.aborted) {
-      queue.shift();
-      cleanupTicket(ticket);
-      recordTerminal(ticket, true);
-      schedule();
+      settleTicket(ticket, "aborted");
       return;
     }
 
@@ -192,7 +192,13 @@ export function createViewport3DGpuUploadManager({
       }
 
       const chunkStartMs = now();
-      chunk.upload();
+      ticket.uploadedChunksForRollback.push(chunk);
+      try {
+        chunk.upload();
+      } catch (error) {
+        settleTicket(ticket, "failed", error);
+        return;
+      }
       const chunkMs = Math.max(0, now() - chunkStartMs);
       ticket.maxChunkMs = Math.max(ticket.maxChunkMs, chunkMs);
       ticket.index += 1;
@@ -224,30 +230,73 @@ export function createViewport3DGpuUploadManager({
     }
 
     if (ticket.aborted || ticket.signal?.aborted) {
-      queue.shift();
-      cleanupTicket(ticket);
-      recordTerminal(ticket, true);
+      settleTicket(ticket, "aborted");
       return;
     }
 
     if (ticket.index >= ticket.chunks.length) {
-      queue.shift();
+      removeTicket(ticket);
       cleanupTicket(ticket);
-      ticket.onVisible();
-      recordTerminal(ticket, false);
+      try {
+        ticket.onVisible();
+      } catch (error) {
+        settleTicket(ticket, "failed", error, false);
+        return;
+      }
+      recordTerminal(ticket, "ready");
+      schedule();
       return;
+    }
+  }
+
+  function settleTicket(
+    ticket: PendingViewport3DGpuUploadTicket,
+    status: Exclude<Viewport3DGpuUploadStatus, "ready">,
+    error?: unknown,
+    removeFromQueue = true,
+  ): void {
+    if (removeFromQueue) {
+      removeTicket(ticket);
+    }
+    try {
+      if (status === "failed") {
+        rollbackTicket(ticket);
+      }
+    } finally {
+      cleanupTicket(ticket);
+      recordTerminal(ticket, status, error);
+      schedule();
+    }
+  }
+
+  function removeTicket(ticket: PendingViewport3DGpuUploadTicket): void {
+    const index = queue.indexOf(ticket);
+    if (index >= 0) {
+      queue.splice(index, 1);
+    }
+  }
+
+  function rollbackTicket(ticket: PendingViewport3DGpuUploadTicket): void {
+    for (const chunk of ticket.uploadedChunksForRollback) {
+      try {
+        chunk.rollback?.();
+      } catch {
+        // A rollback must not prevent disposal of later partial resources.
+      }
     }
   }
 
   function recordTerminal(
     ticket: PendingViewport3DGpuUploadTicket,
-    aborted: boolean,
+    status: Viewport3DGpuUploadStatus,
+    error?: unknown,
   ): void {
     const completedAtMs = now();
     const record: Viewport3DGpuUploadDiagnosticRecord = {
-      aborted,
+      aborted: status === "aborted",
       budgetExceeded: ticket.budgetExceeded,
       completedAtMs,
+      error: status === "failed" ? describeUploadError(error) : null,
       key: ticket.key,
       kind: "viewport-3d-gpu-upload",
       lane: ticket.lane,
@@ -256,13 +305,22 @@ export function createViewport3DGpuUploadManager({
       maxFrameUploadMs: ticket.maxFrameUploadMs,
       queuedAtMs: ticket.queuedAtMs,
       targetRevision: ticket.targetRevision,
+      status,
       totalWallMs: Math.max(0, completedAtMs - ticket.queuedAtMs),
       uploadBytes: ticket.uploadBytes,
       uploadChunks: ticket.uploadChunks,
       uploadFrames: ticket.uploadFrames,
     };
-    onDiagnosticRecord?.(record);
-    recordViewport3DGpuUploadDiagnostic(record);
+    try {
+      onDiagnosticRecord?.(record);
+    } catch {
+      // Diagnostics must not abort a shared GPU upload frame.
+    }
+    try {
+      recordViewport3DGpuUploadDiagnostic(record);
+    } catch {
+      // Diagnostics must not abort a shared GPU upload frame.
+    }
   }
 
   return {
@@ -377,6 +435,12 @@ function cleanupTicket(ticket: PendingViewport3DGpuUploadTicket): void {
     ticket.signal.removeEventListener("abort", ticket.abortListener);
     ticket.abortListener = null;
   }
+}
+
+function describeUploadError(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error) return error;
+  return "Unknown GPU upload failure";
 }
 
 function defaultScheduleFrame(callback: () => void): unknown {

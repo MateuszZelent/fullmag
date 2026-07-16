@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildViewport3DVectorGlyphsOffMainThread,
-  disposeVectorGlyphBuildWorkerForTests,
+  disposeVectorGlyphBuildWorker,
 } from "./vectorGlyphBuildScheduler";
 import type { Viewport3DBuildDiagnosticRecord } from "../build-engine/viewport3dBuildEngineTypes";
 
@@ -48,7 +48,7 @@ function installPendingWorkerStub(): {
 
 describe("vectorGlyphBuildScheduler", () => {
   afterEach(() => {
-    disposeVectorGlyphBuildWorkerForTests();
+    disposeVectorGlyphBuildWorker();
     vi.unstubAllGlobals();
   });
 
@@ -237,8 +237,16 @@ describe("vectorGlyphBuildScheduler", () => {
     expect(pendingWorker.instances).toHaveLength(1);
     expect(pendingWorker.instances[0].postMessage).toHaveBeenCalledTimes(1);
 
-    disposeVectorGlyphBuildWorkerForTests();
-    await Promise.all([first, second]);
+    disposeVectorGlyphBuildWorker();
+    const results = await Promise.all([first, second]);
+
+    expect(results.every((result) => result instanceof Error && result.name === "AbortError")).toBe(true);
+    expect(pendingWorker.instances[0].terminate).toHaveBeenCalledTimes(1);
+    expect(
+      Array.from(pendingWorker.instances[0].listeners.values()).every(
+        (listeners) => listeners.size === 0,
+      ),
+    ).toBe(true);
   });
 
   it("uses two vector workers for two different concurrent build-engine jobs", async () => {
@@ -266,7 +274,7 @@ describe("vectorGlyphBuildScheduler", () => {
     expect(pendingWorker.instances[0].postMessage).toHaveBeenCalledTimes(1);
     expect(pendingWorker.instances[1].postMessage).toHaveBeenCalledTimes(1);
 
-    disposeVectorGlyphBuildWorkerForTests();
+    disposeVectorGlyphBuildWorker();
     await Promise.all([first, second]);
   });
 
@@ -303,7 +311,7 @@ describe("vectorGlyphBuildScheduler", () => {
       ),
     ).toBe(2);
 
-    disposeVectorGlyphBuildWorkerForTests();
+    disposeVectorGlyphBuildWorker();
     await Promise.all([first, second, third]);
   });
 });

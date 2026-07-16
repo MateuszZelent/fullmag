@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
+import {
+  canonicalFieldVectorQuery,
+  serializeCanonicalFieldVectorResourceKey,
+} from "@/kernel/api/fieldQueryIdentity";
 
 import {
   buildViewport3DTargetRenderPlan,
@@ -29,8 +33,25 @@ import {
   resolveViewport3DVectorSegmentScale,
   viewport3DFieldRenderOptionsNeedFieldData,
 } from "./viewport3dRenderModel";
-import { buildViewport3DTargetFieldBuffer } from "./model/viewport3DTargetFieldBuffer";
+import {
+  buildViewport3DTargetFieldBuffer as buildViewport3DTargetFieldBufferWithResourceKey,
+} from "./model/viewport3DTargetFieldBuffer";
 import { magnitudeColorRgb } from "./viewport3dVectorColoring";
+
+type TargetFieldBufferOptions = Parameters<
+  typeof buildViewport3DTargetFieldBufferWithResourceKey
+>[0];
+
+function buildViewport3DTargetFieldBuffer(
+  options: Omit<TargetFieldBufferOptions, "resourceKey">,
+) {
+  return buildViewport3DTargetFieldBufferWithResourceKey({
+    ...options,
+    resourceKey: serializeCanonicalFieldVectorResourceKey(
+      canonicalFieldVectorQuery(options.fieldVector.quantityId, options.query),
+    ),
+  });
+}
 
 const viewport3dRenderModelSource = readFileSync(
   join(process.cwd(), "src/modules/viewport-3d/viewport3dRenderModel.ts"),
@@ -448,6 +469,33 @@ describe("viewport3dRenderModel", () => {
     expect(topologyModel?.magneticParts[0]?.volumeEdgeIndices).toBeNull();
   });
 
+  it("uses canonical surface membership while topology indices are pending", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part:__air__",
+          node_indices: [0, 1, 2, 3],
+          role: "air",
+          surface_node_indices: [0, 1, 2],
+        },
+      ],
+      undefined,
+      {},
+      { topologyIndexState: "pending" },
+    );
+
+    expect(
+      topologyModel?.airboxParts[0]?.surfaceNodeSelection?.nodeIndices,
+    ).toEqual([0, 1, 2]);
+    expect(topologyModel?.airboxParts[0]?.surfaceNodeIndices).toEqual(
+      new Uint32Array([0, 1, 2]),
+    );
+  });
+
   it("builds sampled normalized vector line segments", () => {
     const segments = buildVectorLineSegments(
       topologyFixture(),
@@ -460,6 +508,25 @@ describe("viewport3dRenderModel", () => {
       -0.25, 0, 0, 0.25, 0, 0, 1,
       0, 1, -0.25, 0, 1, 0.25, 1,
     ]);
+  });
+
+  it("compacts zero-magnitude samples out of the logical glyph buffer", () => {
+    const field = fieldVectorFixture();
+    field.values = new Float64Array([
+      1, 0, 0,
+      0, 0, 0,
+      0, 0, 1,
+      0, 0, 0,
+    ]);
+    const segments = buildVectorLineSegmentsForNodeSelection(
+      topologyFixture(),
+      field,
+      { nodeIndices: [0, 1, 2, 3] },
+      0.5,
+      4,
+    );
+
+    expect(segments?.length).toBe(14);
   });
 
   it("can anchor vector line segments by their tail for comparison with centered arrows", () => {
@@ -1573,6 +1640,56 @@ describe("viewport3dRenderModel", () => {
     expect(model?.partVectorSegments.get("part-a")).toBeNull();
   });
 
+  it.each([
+    ["missing", undefined],
+    ["mismatched", "generation-8"],
+  ] as const)(
+    "rejects %s FMVP v3 part fields before scalar and vector rendering",
+    (_kind, domainGenerationId) => {
+      const topologyModel = buildViewport3DTopologyRenderModel(
+        topologyFixture(),
+        [
+          {
+            boundary_face_count: 1,
+            boundary_face_start: 0,
+            id: "part-a",
+            label: "Part A",
+            nodeCount: 4,
+            nodeStart: 0,
+          },
+        ],
+        [],
+        undefined,
+        {
+          meshGenerationId: "generation-7",
+          meshRevision: "mesh-1",
+          meshTopologyHash: "topology-hash",
+        },
+      );
+      const model = buildViewport3DFieldRenderModel(topologyModel, null, 0.5, {
+        partFieldVectors: new Map([
+          [
+            "part-a",
+            {
+              ...fieldVectorFixture(),
+              domainGenerationId,
+              formatVersion: 3,
+              indexing: "full_domain",
+              meshTopologyHash: "topology-hash",
+              meshTopologyRevision: "mesh-1",
+            },
+          ],
+        ]),
+        partScalarColorModes: new Map([["part-a", "x"]]),
+        partVectorBudgets: new Map([["part-a", 4]]),
+        scalarColorsVisible: true,
+      });
+
+      expect(model?.scalarColorsByPartAndMode.get("part-a")?.get("x")).toBeNull();
+      expect(model?.partVectorSegments.get("part-a")).toBeNull();
+    },
+  );
+
   it("builds per-part scalar colors from target-specific quantity vectors", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),
@@ -1739,6 +1856,7 @@ describe("viewport3dRenderModel", () => {
     );
     const fieldVector = fieldVectorFixture();
     const targetBuffer = buildViewport3DTargetFieldBuffer({
+      fieldRevision: "field-1",
       fieldVector,
       query: {
         component: "full",
@@ -1773,15 +1891,23 @@ describe("viewport3dRenderModel", () => {
     );
 
     const targetPass = model?.targetPasses.get("part-a");
+    expect(targetPass?.fieldBuffer).toMatchObject({
+      requestId: targetBuffer.requestId,
+      resourceKey: targetBuffer.resourceKey,
+    });
     expect(targetPass?.surface.scalarColorMode).toBe("x");
     expect(targetPass?.surface.projectionMode).toBe("surface_faces");
     expect(targetPass?.surface.scalarColors).toMatchObject({
       colors: expect.objectContaining({ length: 9 }),
       geometryRole: "face_expanded_surface",
       projectionMode: "surface_faces",
+      sourceFieldBufferId: targetBuffer.bufferId,
+      sourceResourceKey: targetBuffer.resourceKey,
     });
     expect(targetPass?.vectors.segments?.length).toBeGreaterThan(0);
     expect(targetPass?.vectors.buildReference).toMatchObject({
+      fieldBufferId: targetBuffer.bufferId,
+      resourceKey: targetBuffer.resourceKey,
       revisionSummary: expect.stringContaining("scope=full:part-a"),
     });
     expect(model?.targetDiagnostics).toContainEqual(
@@ -1790,6 +1916,111 @@ describe("viewport3dRenderModel", () => {
         targetId: "part-a",
       }),
     );
+  });
+
+  it("preserves the exact decoded FMVP payload on target render-pass field sources", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const nodeIndices = new Uint32Array([0, 1, 2, 3]);
+    const values = new Float64Array(12);
+    const decodedFieldVector: DecodedFieldVector = {
+      domainGenerationId: "decoded-domain",
+      dtype: "float64",
+      formatVersion: 3,
+      grid: [4, 1, 1],
+      indexing: "explicit_node_indices",
+      meshTopologyHash: "decoded-topology-hash",
+      meshTopologyRevision: "decoded-topology-revision",
+      nComp: 3,
+      nodeIndices,
+      pointCount: 4,
+      quantityId: "H_demag",
+      scopeId: "part-a",
+      scopeKind: "part",
+      valueCount: 12,
+      values,
+    };
+    const targetBuffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: decodedFieldVector,
+      query: {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+      targetIds: ["part-a"],
+    });
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      {
+        partTargetFieldBuffers: new Map([["part-a", targetBuffer]]),
+        partVectorBudgets: new Map([["part-a", 0]]),
+        scalarColorsVisible: false,
+      },
+    );
+
+    const source = model?.targetPasses.get("part-a")?.fieldBuffer;
+    expect(source?.decodedFieldVector).toBe(decodedFieldVector);
+    expect(source?.decodedFieldVector?.nodeIndices).toBe(nodeIndices);
+    expect(source?.decodedFieldVector?.values).toBe(values);
+  });
+
+  it("does not expose synthetic render vectors as decoded FMVP payloads", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "part-a",
+          label: "Part A",
+          nodeCount: 4,
+          nodeStart: 0,
+        },
+      ],
+      [],
+    );
+    const syntheticVector: DecodedFieldVector = {
+      dtype: "float64",
+      grid: [4, 1, 1],
+      nComp: 3,
+      pointCount: 4,
+      quantityId: "synthetic_airbox",
+      valueCount: 12,
+      values: new Float64Array(12),
+    };
+    const targetBuffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: syntheticVector,
+      query: {
+        component: "full",
+        scope_id: "part-a",
+        scope_kind: "airbox",
+      },
+      synthetic: true,
+      targetIds: ["part-a"],
+    });
+
+    const model = buildViewport3DFieldRenderModel(topologyModel, null, 0.5, {
+      partTargetFieldBuffers: new Map([["part-a", targetBuffer]]),
+      partVectorBudgets: new Map([["part-a", 0]]),
+      scalarColorsVisible: false,
+    });
+
+    expect(model?.targetPasses.get("part-a")?.fieldBuffer?.decodedFieldVector).toBeNull();
   });
 
   it("builds face-expanded scalar colors for surface face projection plans", () => {
@@ -2856,6 +3087,10 @@ describe("viewport3dRenderModel", () => {
       ],
     );
 
+    expect(
+      topologyModel?.airboxParts[0]?.fullNodeSelection.nodeIndices,
+    ).toEqual([4]);
+
     const fieldModel = buildViewport3DFieldRenderModel(
       topologyModel,
       null,
@@ -2886,12 +3121,58 @@ describe("viewport3dRenderModel", () => {
       },
     );
 
-    const segments = fieldModel?.partVectorSegments.get("airbox");
-    expect(segments?.length).toBe(7);
-    expect(segments?.[0]).toBeCloseTo(-0.25);
-    expect(segments?.[2]).toBeCloseTo(-1);
-    expect(segments?.[3]).toBeCloseTo(0.25);
-    expect(segments?.[5]).toBeCloseTo(-1);
+    expect(fieldModel?.partVectorSegments.get("airbox")).toBeNull();
+  });
+
+  it("rejects a scoped payload larger than the active air-only surface carrier", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "magnetic-part",
+          node_indices: [0],
+        },
+      ],
+      [
+        {
+          boundary_face_count: 1,
+          boundary_face_start: 0,
+          id: "airbox",
+          node_indices: [0, 1, 2, 3],
+          role: "air",
+        },
+      ],
+    );
+    const field = {
+      ...fieldVectorFixture(),
+      grid: [3, 1, 1] as [number, number, number],
+      nodeIndices: new Uint32Array([1, 2, 3]),
+      pointCount: 3,
+      valueCount: 9,
+      values: new Float64Array([1, 0, 0, 0, 1, 0, 0, 0, 1]),
+    };
+
+    const fieldModel = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      {
+        partFieldVectors: new Map([["airbox", field]]),
+        partVectorBudgets: new Map([["airbox", 3]]),
+        partVectorScopes: new Map([["airbox", "surface"]]),
+        scalarColorsVisible: false,
+      },
+    );
+
+    expect(topologyModel?.airboxParts[0]?.fullNodeSelection.nodeIndices).toEqual([
+      1, 2, 3,
+    ]);
+    expect(
+      topologyModel?.airboxParts[0]?.surfaceNodeSelection?.nodeIndices,
+    ).toEqual([1, 2]);
+    expect(fieldModel?.partVectorSegments.get("airbox")).toBeNull();
   });
 
   it("builds airbox vector glyphs from scoped field data at global topology positions", () => {
@@ -3189,6 +3470,95 @@ describe("viewport3dRenderModel", () => {
     expect(segments?.[10]).toBeCloseTo(9.5);
   });
 
+  it("renders sampled airbox vectors from the canonical target field buffer", () => {
+    const positions: number[] = [];
+    for (let node = 0; node < 12; node += 1) {
+      positions.push(node, 0, 0);
+    }
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      {
+        boundaryFaceCount: 0,
+        boundaryFaces: new Uint32Array(),
+        boundaryMarkers: new Uint32Array(),
+        elementCount: 0,
+        elementMarkers: new Uint32Array(),
+        indices: new Uint32Array(),
+        nodeCount: 12,
+        positions: new Float64Array(positions),
+      },
+      [],
+      [
+        {
+          boundary_face_count: 0,
+          boundary_face_start: 0,
+          id: "airbox",
+          label: "Airbox",
+          node_indices: Array.from({ length: 12 }, (_, index) => index),
+          role: "air",
+        },
+      ],
+      undefined,
+      {
+        meshGenerationId: "generation-1",
+        meshRevision: 7,
+        meshTopologyHash: "topology-hash-1",
+      },
+    );
+    const fieldVector: DecodedFieldVector = {
+      domainGenerationId: "generation-1",
+      dtype: "float64",
+      grid: [2, 1, 1],
+      indexing: "sampled_node_indices",
+      meshTopologyHash: "topology-hash-1",
+      nComp: 3,
+      nodeIndices: new Uint32Array([6, 9]),
+      pointCount: 2,
+      quantityId: "H_demag",
+      valueCount: 6,
+      values: new Float64Array([1, 0, 0, 1, 0, 0]),
+    };
+    const targetBuffer = buildViewport3DTargetFieldBuffer({
+      domain: {
+        domainGenerationId: "generation-1",
+        meshTopologyHash: "topology-hash-1",
+        meshTopologyRevision: "7",
+        pointCount: 12,
+      },
+      fieldRevision: "H_demag-37",
+      fieldVector,
+      query: {
+        component: "full",
+        max_samples: 2,
+        scope_id: "part:__air__",
+        scope_kind: "airbox",
+      },
+      targetIds: ["airbox"],
+      topologyRevision: "7",
+    });
+
+    const fieldModel = buildViewport3DFieldRenderModel(topologyModel, null, 1, {
+      fieldRevision: "m-332",
+      partQuantityIds: new Map([["airbox", "H_demag"]]),
+      partTargetFieldBuffers: new Map([["airbox", targetBuffer]]),
+      partVectorBudgets: new Map([["airbox", 2]]),
+      scalarColorsVisible: false,
+      topologyRevision: "7",
+    });
+
+    expect(targetBuffer.capability).toBe("full-vector-sampled");
+    expect(fieldModel?.partVectorSegments.get("airbox")?.length).toBe(14);
+    expect(fieldModel?.targetPasses.get("airbox")?.vectors.degradation).toBeNull();
+    expect(
+      fieldModel?.targetPasses.get("airbox")?.vectors.buildReference,
+    ).toMatchObject({ fieldRevision: "H_demag-37" });
+    expect(
+      fieldModel?.targetPasses.get("airbox")?.vectors.buildReference?.buildKey,
+    ).toContain("H_demag-37");
+    expect(
+      fieldModel?.targetPasses.get("airbox")?.vectors.buildReference?.buildKey,
+    ).not.toContain("m-332");
+  });
+
   it("builds sampled magnetic part vectors at matching global topology positions", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       {
@@ -3329,5 +3699,11 @@ describe("viewport3dRenderModel", () => {
         { nodeCount: 10 },
       ),
     ).toBe(6);
+    expect(
+      resolveNodeSelectionCount(
+        { node_indices: [] },
+        { nodeCount: 10 },
+      ),
+    ).toBe(0);
   });
 });

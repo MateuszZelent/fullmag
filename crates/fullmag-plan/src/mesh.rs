@@ -1,5 +1,6 @@
 use fullmag_ir::{
-    AirBoxConfigIR, ExecutionMode, FemDomainMeshAssetIR, FemDomainMeshModeIR,
+    validate_mesh_for_execution, AirBoxConfigIR, FemDomainMeshAssetIR,
+    FemDomainMeshModeIR,
     FemDomainRegionMarkerIR, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
     FemObjectSegmentIR, InitialMagnetizationIR, MeshIR, MeshQualityIR, ProblemIR,
 };
@@ -14,8 +15,6 @@ use crate::util::{generate_random_unit_vectors, study_universe_metadata, StudyUn
 
 pub(crate) const AIR_OBJECT_SEGMENT_ID: &str = "__air__";
 pub(crate) const AIR_REGION_MARKER: u32 = 0;
-pub(crate) const OUTER_BOUNDARY_MARKER: u32 = 99;
-pub(crate) const MAG_AIR_INTERFACE_MARKER: u32 = 10;
 
 // FEM-014 fix: centralised air-box heuristic defaults.
 // All magic numbers for the air-box are gathered in one place so they can be
@@ -23,7 +22,6 @@ pub(crate) const MAG_AIR_INTERFACE_MARKER: u32 = 10;
 /// Default mesh grading factor for air-box elements.
 const AIRBOX_DEFAULT_GRADING: f64 = 1.4;
 /// Preferred boundary marker value for the air-box outer surface.
-const AIRBOX_DEFAULT_BOUNDARY_MARKER: u32 = OUTER_BOUNDARY_MARKER;
 /// Default air-box shape.
 const AIRBOX_DEFAULT_SHAPE: &str = "bbox";
 /// Default Robin beta mode (dipole approximation).
@@ -220,6 +218,7 @@ pub(crate) struct ResolvedFemDomainMeshAsset {
     pub mesh_source: Option<String>,
     pub object_segments: Vec<FemObjectSegmentIR>,
     pub mesh_parts: Vec<FemMeshPartIR>,
+    pub build_report: Option<fullmag_ir::FemSharedDomainBuildReportIR>,
 }
 
 #[derive(Debug, Clone)]
@@ -368,7 +367,16 @@ fn coordinate_key(point: [f64; 3]) -> [u64; 3] {
 
 pub(crate) fn load_fem_domain_mesh_asset(asset: &FemDomainMeshAssetIR) -> Result<MeshIR, String> {
     match (&asset.mesh, &asset.mesh_source) {
-        (Some(mesh), _) => Ok(mesh.clone()),
+        (Some(mesh), _) => {
+            validate_mesh_for_execution(mesh).map_err(|errors| {
+                format!(
+                    "inline FEM domain mesh '{}' is invalid: {}",
+                    mesh.mesh_name,
+                    errors.join("; ")
+                )
+            })?;
+            Ok(mesh.clone())
+        }
         (None, Some(source)) => load_mesh_from_source(source),
         (None, None) => {
             Err("fem_domain_mesh_asset requires an inline mesh or mesh_source".to_string())
@@ -836,7 +844,7 @@ pub(crate) fn pack_mesh_by_analysis(
         // Marker values are preserved during reorder — carry the quality map through.
         per_domain_quality: mesh.per_domain_quality.clone(),
     };
-    reordered_mesh.validate().map_err(|errors| {
+    validate_mesh_for_execution(&reordered_mesh).map_err(|errors| {
         format!(
             "shared-domain FEM mesh '{}' is invalid after segmentation: {}",
             mesh.mesh_name,
@@ -863,13 +871,32 @@ pub(crate) fn pack_mesh_by_analysis(
         part.node_indices = node_indices;
     }
 
-    let (outer_boundary_marker, _marker_source) = select_airbox_boundary_marker(&reordered_mesh);
+    // Boundary-role certification is required by airbox demag configuration,
+    // but shared-domain segmentation is also used by non-demag studies.  Do
+    // not make those studies fail merely because their mesh has no certified
+    // outer boundary; materialize the outer-boundary part whenever the role is
+    // available and let build_air_box_config enforce the strict contract for
+    // demag paths.
     let outer_boundary_face_indices = reordered_mesh
-        .boundary_markers
-        .iter()
-        .enumerate()
-        .filter_map(|(index, marker)| (*marker == outer_boundary_marker).then_some(index as u32))
-        .collect::<Vec<_>>();
+        .certify_airbox_boundary_roles()
+        .ok()
+        .and_then(|roles| {
+            roles
+                .iter()
+                .find(|entry| entry.role == fullmag_ir::BoundaryRole::GammaOut)
+                .and_then(|entry| u32::try_from(entry.marker).ok())
+        })
+        .map(|outer_boundary_marker| {
+            reordered_mesh
+                .boundary_markers
+                .iter()
+                .enumerate()
+                .filter_map(|(index, marker)| {
+                    (*marker == outer_boundary_marker).then_some(index as u32)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     if !outer_boundary_face_indices.is_empty() {
         let node_indices =
             collect_boundary_face_node_indices(&reordered_mesh, &outer_boundary_face_indices);
@@ -1069,6 +1096,75 @@ fn shared_domain_region_entries_for_problem(
     entries
 }
 
+fn validate_domain_object_region_identity(
+    mesh: &MeshIR,
+    problem: &ProblemIR,
+    asset: &FemDomainMeshAssetIR,
+) -> Result<(), String> {
+    let expected = problem
+        .object_regions
+        .iter()
+        .filter(|region| {
+            region.enabled
+                && matches!(
+                    region.realization_policy,
+                    fullmag_ir::RegionRealizationPolicyIR::Conformal
+                )
+        })
+        .map(|region| region.region_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let known_regions = problem
+        .object_regions
+        .iter()
+        .filter(|region| region.enabled)
+        .flat_map(|region| [region.region_id.as_str(), region.name.as_str()])
+        .collect::<BTreeSet<_>>();
+    let mut seen_ids = BTreeSet::new();
+    let mut seen_markers = BTreeSet::new();
+    for marker in &asset.object_region_markers {
+        if !known_regions.contains(marker.geometry_name.as_str()) {
+            return Err(format!(
+                "FEM object-region marker '{}' is not an enabled object region in the current ProblemIR",
+                marker.geometry_name
+            ));
+        }
+        if !seen_ids.insert(marker.geometry_name.as_str()) {
+            return Err(format!(
+                "FEM object-region marker '{}' is duplicated",
+                marker.geometry_name
+            ));
+        }
+        if !seen_markers.insert(marker.marker) {
+            return Err(format!(
+                "FEM object-region marker value {} is duplicated",
+                marker.marker
+            ));
+        }
+        if !mesh.element_markers.contains(&marker.marker) {
+            return Err(format!(
+                "FEM object-region marker '{}'={} is absent from the current mesh topology",
+                marker.geometry_name, marker.marker
+            ));
+        }
+    }
+    if !expected.is_empty() && seen_ids.len() != expected.len() {
+        return Err(format!(
+            "FEM object-region marker coverage is incomplete: realized={} expected={} enabled conformal regions",
+            seen_ids.len(),
+            expected.len()
+        ));
+    }
+    if let Some(report) = asset.build_report.as_ref() {
+        if report.object_region_markers != asset.object_region_markers {
+            return Err(
+                "FEM object-region marker map disagrees with the current shared-domain build report"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn resolve_fem_domain_mesh_asset(
     problem: &ProblemIR,
     solver_supports_conformal: bool,
@@ -1081,6 +1177,7 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
         return Ok(None);
     };
     let mesh = load_fem_domain_mesh_asset(asset)?;
+    validate_domain_object_region_identity(&mesh, problem, asset)?;
     let region_entries = shared_domain_region_entries_for_problem(&mesh, problem, asset);
     let analysis = analyze_shared_domain_mesh_with_entries(&mesh, region_entries)?;
     validate_packing_constraints(&analysis, &mesh.mesh_name, solver_supports_conformal)?;
@@ -1090,6 +1187,7 @@ pub(crate) fn resolve_fem_domain_mesh_asset(
         mesh_source: asset.mesh_source.clone(),
         object_segments,
         mesh_parts,
+        build_report: asset.build_report.clone(),
     }))
 }
 
@@ -1165,25 +1263,26 @@ fn extent_from_bounds(bounds: ([f64; 3], [f64; 3])) -> [f64; 3] {
     ]
 }
 
-fn select_airbox_boundary_marker(mesh: &MeshIR) -> (u32, &'static str) {
-    if mesh
-        .boundary_markers
+fn certified_airbox_boundary_marker(mesh: &MeshIR) -> Result<(u32, &'static str), String> {
+    let roles = mesh
+        .certify_airbox_boundary_roles()
+        .map_err(|errors| errors.join("; "))?;
+    let outer = roles
         .iter()
-        .any(|&marker| marker == AIRBOX_DEFAULT_BOUNDARY_MARKER)
-    {
-        (AIRBOX_DEFAULT_BOUNDARY_MARKER, "mesh_marker_99")
-    } else {
-        let max = mesh
-            .boundary_markers
-            .iter()
-            .copied()
-            .filter(|&marker| marker > 0 && marker != MAG_AIR_INTERFACE_MARKER)
-            .max();
-        match max {
-            Some(m) => (m, "mesh_max_marker"),
-            None => (AIRBOX_DEFAULT_BOUNDARY_MARKER, "fallback_99"),
-        }
-    }
+        .find(|entry| entry.role == fullmag_ir::BoundaryRole::GammaOut)
+        .ok_or_else(|| {
+            format!(
+                "FEM airbox mesh '{}' has no certified Gamma_out boundary marker",
+                mesh.mesh_name
+            )
+        })?;
+    let marker = u32::try_from(outer.marker).map_err(|_| {
+        format!(
+            "FEM airbox mesh '{}' has invalid certified Gamma_out marker {}",
+            mesh.mesh_name, outer.marker
+        )
+    })?;
+    Ok((marker, "certified_gamma_out"))
 }
 
 fn derive_air_box_factor(mesh: &MeshIR, study_universe: Option<&StudyUniverseMetadata>) -> f64 {
@@ -1262,34 +1361,20 @@ pub(crate) fn build_air_box_config(
         "mesh_auto"
     };
 
+    let (certified_marker, _certified_source) = certified_airbox_boundary_marker(mesh)?;
     let explicit_policy_marker = policy.and_then(|p| p.boundary_marker);
-    let (boundary_marker, boundary_marker_source): (u32, &'static str) = if let Some(marker) =
-        explicit_policy_marker
-    {
-        if !mesh.boundary_markers.iter().any(|&value| value == marker) {
-            return Err(format!(
-                    "air_box_policy.boundary_marker={} is not present in mesh '{}' boundary markers; provide a marker that exists on outer air-box faces",
-                    marker,
-                    mesh.mesh_name
+    let (boundary_marker, boundary_marker_source): (u32, &'static str) =
+        if let Some(marker) = explicit_policy_marker {
+            if marker != certified_marker {
+                return Err(format!(
+                    "air_box_policy.boundary_marker={} does not match certified Gamma_out marker {} in mesh '{}'",
+                    marker, certified_marker, mesh.mesh_name
                 ));
-        }
-        (marker, "user_policy")
-    } else if problem.validation_profile.execution_mode == ExecutionMode::Strict {
-        // In strict mode, allow auto-detection only when the well-known
-        // boundary marker 99 is explicitly present (set by the mesh
-        // generator for the outer air-box surface). Any other heuristic
-        // is rejected — the user must provide an explicit policy marker.
-        let (detected_marker, detected_source) = select_airbox_boundary_marker(mesh);
-        if detected_source == "mesh_marker_99" {
-            (detected_marker, detected_source)
+            }
+            (marker, "user_policy")
         } else {
-            return Err(
-                "strict execution mode requires an explicit air_box_policy.boundary_marker for FEM air-box demag; planner no longer guesses boundary markers".to_string()
-            );
-        }
-    } else {
-        select_airbox_boundary_marker(mesh)
-    };
+            (certified_marker, "certified_gamma_out")
+        };
 
     let grading = policy
         .and_then(|p| p.grading)
@@ -1332,24 +1417,29 @@ pub(crate) fn build_air_box_config(
 
 pub(crate) fn study_universe_planner_note(
     problem: &ProblemIR,
-    _mesh: &MeshIR,
+    mesh: &MeshIR,
     _resolved_demag_realization: Option<fullmag_ir::ResolvedFemDemagIR>,
     air_box_config: Option<&AirBoxConfigIR>,
 ) -> Option<String> {
     let study_universe = study_universe_metadata(problem)?;
     if let Some(config) = air_box_config {
+        let certificate = mesh
+            .airbox_boundary_certificate_sha256()
+            .map(|digest| format!(", boundary_role_certificate={digest}"))
+            .unwrap_or_else(|_| ", boundary_role_certificate=unavailable".to_string());
         let airbox_hmax_note = study_universe
             .airbox_hmax
             .map(|value| format!(", airbox_hmax={value:.3e}"))
             .unwrap_or_default();
         return Some(format!(
-            "study_universe lowered to FEM air-box configuration (mode={}, center=[{:.3e}, {:.3e}, {:.3e}], factor={:.3}, boundary_marker={}{})",
+            "study_universe lowered to FEM air-box configuration (mode={}, center=[{:.3e}, {:.3e}, {:.3e}], factor={:.3}, boundary_marker={}{}{})",
             study_universe.mode,
             study_universe.center[0],
             study_universe.center[1],
             study_universe.center[2],
             config.factor,
             config.boundary_marker,
+            certificate,
             airbox_hmax_note,
         ));
     }
@@ -1381,7 +1471,7 @@ pub(crate) fn load_mesh_from_source(source: &str) -> Result<MeshIR, String> {
                 .map_err(|err| format!("failed to read FEM mesh_source '{}': {}", source, err))?;
             let mesh: MeshIR = serde_json::from_str(&payload)
                 .map_err(|err| format!("failed to parse FEM mesh_source '{}': {}", source, err))?;
-            mesh.validate().map_err(|errors| {
+            validate_mesh_for_execution(&mesh).map_err(|errors| {
                 format!(
                     "mesh_source '{}' is invalid: {}",
                     source,
@@ -1528,7 +1618,7 @@ pub(crate) fn merge_fem_meshes(
         periodic_node_pairs: Vec::new(),
         per_domain_quality: merged_quality,
     };
-    merged.validate().map_err(|errors| {
+    validate_mesh_for_execution(&merged).map_err(|errors| {
         format!(
             "merged multi-body FEM mesh is invalid: {}",
             errors.join("; ")
@@ -1586,5 +1676,59 @@ mod tests {
         let once_key = format!("preset-texture-log-dedup-test-{}", std::process::id());
         assert!(should_log_preset_texture_sample_once(once_key.clone()));
         assert!(!should_log_preset_texture_sample_once(once_key));
+    }
+
+    #[test]
+    fn domain_object_region_identity_rejects_stale_marker_map() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.object_regions = vec![fullmag_ir::ObjectRegionIR {
+            region_id: "body:core".to_string(),
+            owner_object: "body".to_string(),
+            name: "core".to_string(),
+            shape: fullmag_ir::RegionShapeIR::Box {
+                size: [0.5, 0.5, 0.5],
+                center: [0.0, 0.0, 0.0],
+            },
+            frame: fullmag_ir::RegionFrameIR::Object,
+            enabled: true,
+            priority: 0,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
+            material_transition: None,
+        }];
+        let mesh = MeshIR {
+            mesh_name: "current".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            elements: vec![[0, 1, 2, 3]],
+            element_markers: vec![2],
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: Default::default(),
+        };
+        let mut asset = FemDomainMeshAssetIR {
+            mesh_source: None,
+            mesh: Some(mesh.clone()),
+            region_markers: Vec::new(),
+            object_region_markers: vec![FemDomainRegionMarkerIR {
+                geometry_name: "body:core".to_string(),
+                marker: 7,
+            }],
+            build_report: None,
+        };
+        let error = validate_domain_object_region_identity(&mesh, &problem, &asset)
+            .expect_err("marker from the previous topology must be rejected");
+        assert!(error.contains("absent from the current mesh topology"));
+
+        asset.object_region_markers[0].marker = 2;
+        assert!(validate_domain_object_region_identity(&mesh, &problem, &asset).is_ok());
     }
 }

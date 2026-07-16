@@ -1,6 +1,7 @@
 use crate::{SceneDocument, StudyPipelineDocument, StudyPipelineNode};
 use fullmag_ir::{
     CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, ExchangeCouplingModeIR,
+    DriveActivationIR, FieldSpatialProfileIR, FieldTargetIR,
     MaterialParameterAssignmentIR, MaterialParameterFieldIR, MaterialParameterNameIR,
     MaterialTransitionSpecIR, ObjectRegionIR, RegionFrameIR, RegionMeshPolicyIR, RegionShapeIR,
 };
@@ -124,7 +125,107 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
     if let Some(document) = &scene.study.study_pipeline {
         validate_study_pipeline_document(document)?;
     }
+    validate_scene_field_drives(scene, &object_ids)?;
 
+    Ok(())
+}
+
+fn collect_stage_ids(nodes: &[StudyPipelineNode], ids: &mut BTreeSet<String>) {
+    for node in nodes {
+        match node {
+            StudyPipelineNode::Primitive(node) => {
+                ids.insert(node.id.clone());
+            }
+            StudyPipelineNode::Macro(node) => {
+                ids.insert(node.id.clone());
+            }
+            StudyPipelineNode::Group(node) => {
+                ids.insert(node.id.clone());
+                collect_stage_ids(&node.children, ids);
+            }
+        }
+    }
+}
+
+fn validate_scene_field_drives(
+    scene: &SceneDocument,
+    object_ids: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    let mut drive_ids = BTreeSet::new();
+    let mut stage_ids = BTreeSet::new();
+    if let Some(pipeline) = &scene.study.study_pipeline {
+        collect_stage_ids(&pipeline.nodes, &mut stage_ids);
+    }
+
+    for drive in &scene.field_drives.drives {
+        if drive.id.trim().is_empty() || !drive_ids.insert(drive.id.clone()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "regional field drive id '{}' must be non-empty and unique",
+                drive.id
+            )));
+        }
+        if !drive.amplitude_b_t.is_finite() || drive.amplitude_b_t < 0.0 {
+            return Err(SceneDocumentValidationError::new(format!(
+                "regional field drive '{}' amplitude_B_T must be finite and >= 0",
+                drive.id
+            )));
+        }
+        let norm_sq: f64 = drive.direction.iter().map(|value| value * value).sum();
+        if drive.direction.iter().any(|value| !value.is_finite())
+            || (norm_sq.sqrt() - 1.0).abs() > 1e-12
+        {
+            return Err(SceneDocumentValidationError::new(format!(
+                "regional field drive '{}' direction must be a normalized finite vector",
+                drive.id
+            )));
+        }
+
+        let require_object = |object_id: &str| {
+            if object_ids.contains(object_id) {
+                Ok(())
+            } else {
+                Err(SceneDocumentValidationError::new(format!(
+                    "regional field drive '{}' references missing object '{}'",
+                    drive.id, object_id
+                )))
+            }
+        };
+        match &drive.target {
+            FieldTargetIR::Global {} => {}
+            FieldTargetIR::Object { object_id } => require_object(object_id)?,
+            FieldTargetIR::Region {
+                object_id,
+                region_id,
+            } => {
+                require_object(object_id)?;
+                let object = scene.objects.iter().find(|object| object.id == *object_id).unwrap();
+                let exists = object.allocated_region_ids.iter().any(|id| id == region_id)
+                    || object.regions.iter().any(|region| region.region_id == *region_id);
+                if !exists {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "regional field drive '{}' references missing region '{}' on object '{}'",
+                        drive.id, region_id, object_id
+                    )));
+                }
+            }
+        }
+        if let FieldSpatialProfileIR::GeometryMask { object_id, .. } = &drive.spatial_profile {
+            require_object(object_id)?;
+        }
+        if let DriveActivationIR::StageIds {
+            stage_ids: requested,
+        } = &drive.activation
+        {
+            for stage_id in requested {
+                if !stage_ids.contains(stage_id) {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "regional field drive '{}' references missing stage '{}'",
+                        drive.id, stage_id
+                    )));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -244,6 +345,44 @@ fn validate_study_pipeline_nodes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regional_field_drive_rejects_missing_scene_target() {
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "field_drives": { "drives": [{
+                "id": "pulse", "name": "Pulse", "kind": "regional",
+                "target": { "kind": "object", "object_id": "missing" },
+                "amplitude_B_T": 0.001, "direction": [0.0, 1.0, 0.0],
+                "spatial_profile": { "kind": "uniform" },
+                "waveform": { "kind": "constant", "value": 1.0 },
+                "time_origin": "stage_local",
+                "activation": { "kind": "all_time_evolution" }
+            }]}
+        })).expect("scene fixture should deserialize");
+
+        let error = validate_scene_document(&scene).expect_err("missing target must fail closed");
+        assert!(error.message.contains("missing object 'missing'"), "{}", error.message);
+    }
+
+    #[test]
+    fn regional_field_drive_rejects_missing_activation_stage() {
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "field_drives": { "drives": [{
+                "id": "pulse", "name": "Pulse", "kind": "regional",
+                "target": { "kind": "global" },
+                "amplitude_B_T": 0.001, "direction": [0.0, 1.0, 0.0],
+                "spatial_profile": { "kind": "uniform" },
+                "waveform": { "kind": "constant", "value": 1.0 },
+                "time_origin": "stage_local",
+                "activation": { "kind": "stage_ids", "stage_ids": ["missing-stage"] }
+            }]}
+        })).expect("scene fixture should deserialize");
+
+        let error = validate_scene_document(&scene).expect_err("missing stage must fail closed");
+        assert!(error.message.contains("missing stage 'missing-stage'"), "{}", error.message);
+    }
 
     fn region_owned_scene() -> SceneDocument {
         serde_json::from_value(serde_json::json!({

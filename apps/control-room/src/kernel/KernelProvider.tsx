@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
-import { SESSION_EVENTS_WS_PATH } from "./api/apiPaths";
+import { SESSION_EVENTS_WS_PATH, VISUALIZATION_STATE_PATH } from "./api/apiPaths";
+import type {
+  ResourceRevision,
+  VisualizationStatePatch,
+  VisualizationStateResource,
+} from "./api/apiTypes";
 import {
   createBinaryDecodeScheduler,
   type BinaryDecodeDiagnosticEvent,
@@ -47,6 +52,11 @@ import { RealtimeClient } from "./realtime/RealtimeClient";
 import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import { useSimulationStartupOverlayVisibility } from "./layout/SimulationStartupOverlay";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
+import { sharedResourceRuntimeStore } from "./resources/ResourceRuntimeStore";
+import {
+  acquireViewport3DWorkerRuntime,
+  getViewport3DWorkerRuntimeSnapshot,
+} from "@/modules/viewport-3d/public";
 import {
   createViewport3DInactiveResourcePauseController,
 } from "./resources/inactiveViewportResourcePolicy";
@@ -58,6 +68,7 @@ import { CameraRegistryController } from "./visualization/CameraRegistryControll
 import { AnalysisFieldOverlayController } from "./visualization/AnalysisFieldOverlayController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOverlayCommandContributions";
 import { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
+import { VisualizationDebugController } from "./visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualization/visualizationCommandContributions";
 import { resolveControlRoomModules } from "@/modules";
@@ -105,6 +116,7 @@ function createKernel(): KernelApi {
   });
   const analysisFieldOverlay = new AnalysisFieldOverlayController();
   const visualization = new ObjectVisualizationController();
+  const visualizationDebug = new VisualizationDebugController();
   const visualizationSync = new VisualizationRegistrySyncController({
     api: api.visualization,
     resources,
@@ -163,6 +175,7 @@ function createKernel(): KernelApi {
     resources,
     selection,
     visualization,
+    visualizationDebug,
     visualizationSync,
   };
 }
@@ -323,7 +336,10 @@ function CameraRegistrySyncConnector({ kernel }: { kernel: KernelApi }) {
 
 function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
   useEffect(() => {
-    if (process.env.NODE_ENV === "production") return;
+    // The browser driver is compiled only into the explicitly named audit
+    // artifact. Ordinary production bundles never install this mutable hook.
+    const auditBuild = process.env.NEXT_PUBLIC_AUDIT_BUILD === "1";
+    if (process.env.NODE_ENV === "production" && !auditBuild) return;
     const auditWindow = window as Window & {
       __FULLMAG_CONFIG__?: {
         allowMissingSessionSmoke?: boolean;
@@ -345,6 +361,25 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
           stageId?: string | null;
         }) => Promise<void>;
         setGlobalQuantity: (quantityId: string) => Promise<void>;
+        queueGlobalQuantity: (quantityId: string) => void;
+        flushVisualization: () => Promise<void>;
+        setActiveViewportModule: (moduleId: "viewport-2d" | "viewport-3d") => void;
+        patchVisualization: (patch: VisualizationStatePatch) => Promise<void>;
+        publishVisualizationState: (state: VisualizationStateResource) => void;
+        readViewportAuditRuntime: () => {
+          listenerCounts: ReturnType<typeof sharedResourceRuntimeStore.listenerCounts>;
+          resources: ReturnType<typeof sharedResourceRuntimeStore.stats>;
+          visualizationRevision: ResourceRevision | null;
+          workers: ReturnType<typeof getViewport3DWorkerRuntimeSnapshot>;
+        };
+        readViewportAuditResource: (resourceKey: string) => {
+          data: unknown;
+          error: string | null;
+          revision: ResourceRevision | null;
+          status: string;
+        };
+        injectViewportAuditListenerLeak: () => void;
+        injectViewportAuditWorkerLeak: () => void;
       };
     };
     const browserConfig = auditWindow.__FULLMAG_CONFIG__;
@@ -411,12 +446,56 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         );
       },
       setGlobalQuantity: async (quantityId: string) => {
+        auditApi.queueGlobalQuantity(quantityId);
+        await kernel.visualizationSync.flushNow();
+      },
+      queueGlobalQuantity: (quantityId: string) => {
         const activeQuantityId = normalizeQuantityIdOrDefault(quantityId);
         kernel.visualizationSync.queuePatch({
           active_quantity_id: activeQuantityId,
           quantity: { active_quantity_id: activeQuantityId },
         });
+      },
+      flushVisualization: () => kernel.visualizationSync.flushNow(),
+      setActiveViewportModule: (moduleId: "viewport-2d" | "viewport-3d") => {
+        kernel.layout.setActiveViewportMainModule(moduleId);
+        kernel.layout.setFocusedSlot("viewport-main");
+      },
+      patchVisualization: async (patch: VisualizationStatePatch) => {
+        kernel.visualizationSync.queuePatch(patch);
         await kernel.visualizationSync.flushNow();
+      },
+      publishVisualizationState: (state: VisualizationStateResource) => {
+        sharedResourceRuntimeStore.updateData(
+          VISUALIZATION_STATE_PATH,
+          state,
+          state.revision,
+        );
+      },
+      readViewportAuditRuntime: () => ({
+        listenerCounts: sharedResourceRuntimeStore.listenerCounts(),
+        resources: sharedResourceRuntimeStore.stats(),
+        visualizationRevision: sharedResourceRuntimeStore.getSnapshot(
+          VISUALIZATION_STATE_PATH,
+        ).revision,
+        workers: getViewport3DWorkerRuntimeSnapshot(),
+      }),
+      readViewportAuditResource: (resourceKey: string) => {
+        const snapshot = sharedResourceRuntimeStore.getSnapshot(resourceKey);
+        return {
+          data: snapshot.data,
+          error: snapshot.error?.message ?? null,
+          revision: snapshot.revision,
+          status: snapshot.status,
+        };
+      },
+      injectViewportAuditListenerLeak: () => {
+        // Deliberately retained only when an audit asks for a negative control.
+        sharedResourceRuntimeStore.subscribe(VISUALIZATION_STATE_PATH, () => {});
+      },
+      injectViewportAuditWorkerLeak: () => {
+        // Deliberately retained only when an audit asks for a negative control.
+        acquireViewport3DWorkerRuntime();
       },
     };
     auditWindow.__FULLMAG_CONTROL_ROOM_AUDIT__ = auditApi;

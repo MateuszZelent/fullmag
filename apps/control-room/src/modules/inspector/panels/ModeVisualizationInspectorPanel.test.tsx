@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { KernelContext } from "@/kernel/KernelContext";
 import type { KernelApi } from "@/kernel/types";
+import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import type { FrequencyDomainFieldResource } from "@/kernel/api/apiTypes";
 
 import {
@@ -41,6 +42,7 @@ const mockKernel = {
     subscribe: () => () => {},
     getSnapshot: () => ({ version: 1, defaults: {}, overrides: {} }),
   },
+  visualizationDebug: new VisualizationDebugController(),
 } as unknown as KernelApi;
 
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({

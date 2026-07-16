@@ -1,5 +1,8 @@
 #[allow(unused_imports)]
-use crate::{FemDomainMeshModeIR, FemLinearSolverPolicy, MeshIR, MeshQualityIR};
+use crate::{
+    validate_mesh_for_execution, FemDomainMeshModeIR, FemLinearSolverPolicy, MeshIR,
+    MeshQualityIR,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
@@ -11,6 +14,44 @@ fn vec3_from_value(value: &Value) -> Option<[f64; 3]> {
         return None;
     }
     Some([array[0].as_f64()?, array[1].as_f64()?, array[2].as_f64()?])
+}
+
+#[cfg(test)]
+mod mesh_asset_validation_tests {
+    use super::*;
+
+    fn inverted_mesh() -> MeshIR {
+        MeshIR {
+            mesh_name: "inverted".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            elements: vec![[0, 1, 3, 2]],
+            element_markers: vec![1],
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn fem_mesh_asset_requires_strict_mesh_validation() {
+        let asset = FemMeshAssetIR {
+            geometry_name: "body".to_string(),
+            mesh_source: None,
+            mesh: Some(inverted_mesh()),
+        };
+
+        let errors = asset.validate().expect_err("inverted inline mesh must fail");
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("negative tetra orientation")));
+    }
 }
 
 fn normalized_bounds_pair(bounds_min: ([f64; 3], [f64; 3])) -> Option<([f64; 3], [f64; 3])> {
@@ -128,7 +169,7 @@ impl FemMeshAssetIR {
             );
         }
         if let Some(mesh) = &self.mesh {
-            if let Err(mesh_errors) = mesh.validate() {
+            if let Err(mesh_errors) = validate_mesh_for_execution(mesh) {
                 errors.extend(
                     mesh_errors
                         .into_iter()
@@ -326,6 +367,8 @@ pub struct FemSharedDomainBuildReportIR {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub region_markers: Vec<FemDomainRegionMarkerIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_region_markers: Vec<FemDomainRegionMarkerIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub used_size_field_kinds: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub size_fields_realized: Vec<Value>,
@@ -335,6 +378,12 @@ pub struct FemSharedDomainBuildReportIR {
     pub thin_film_diagnostics: Vec<FemThinFilmDiagnosticIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub magnetic_submesh_signatures: Vec<FemMagneticSubmeshSignatureIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selector_resolution: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orphan_entities: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rejected_element_types: Vec<Value>,
     /// ``true`` when the mesh was built via a degraded path (fallback, simplified
     /// size fields, or lost component identity).
     #[serde(default)]
@@ -369,7 +418,7 @@ impl FemDomainMeshAssetIR {
             );
         }
         if let Some(mesh) = &self.mesh {
-            if let Err(mesh_errors) = mesh.validate() {
+            if let Err(mesh_errors) = validate_mesh_for_execution(mesh) {
                 errors.extend(
                     mesh_errors
                         .into_iter()

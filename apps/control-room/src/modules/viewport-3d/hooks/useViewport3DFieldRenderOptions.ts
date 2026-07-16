@@ -6,6 +6,7 @@ import {
   surfaceColorSourceToColorMode,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 
 import type { Viewport3DMeshPart } from "../viewport3dDomainAdapter";
 import {
@@ -282,6 +283,7 @@ export function limitViewport3DFieldRenderVectorBudgets(
     ),
   );
   const requestedByPartId = new Map<string, number>();
+  const explicitAirboxBudgets = new Map<string, number>();
   const budgetTargets: Viewport3DVectorBudgetTarget[] = [];
 
   for (const [partId, requestedBudget] of requestedBudgets) {
@@ -293,15 +295,20 @@ export function limitViewport3DFieldRenderVectorBudgets(
     const availableNodeCount = partModel
       ? resolveNodeSelectionCount(
           vectorScope === "surface"
-            ? partModel.surfaceNodeSelection ?? partModel.part
-            : partModel.part,
+            ? partModel.surfaceNodeSelection ?? { nodeIndices: [] }
+            : partModel.fullNodeSelection,
           topologyRenderModel,
         )
       : requested;
     const targetNodeCount = Math.min(requested, availableNodeCount);
     if (targetNodeCount <= 0) continue;
 
-    requestedByPartId.set(partId, requested);
+    if (partModel && isVisualizationAirboxIdentity(partModel.part)) {
+      explicitAirboxBudgets.set(partId, targetNodeCount);
+      continue;
+    }
+
+    requestedByPartId.set(partId, targetNodeCount);
     budgetTargets.push({
       id: partId,
       nodeCount: targetNodeCount,
@@ -314,6 +321,9 @@ export function limitViewport3DFieldRenderVectorBudgets(
     maxGlyphs,
   );
   const partVectorBudgets = new Map<string, number>();
+  for (const [partId, budget] of explicitAirboxBudgets) {
+    partVectorBudgets.set(partId, budget);
+  }
   for (const [partId, requested] of requestedByPartId) {
     const budget = distributedBudgets.get(partId) ?? 0;
     if (budget > 0) {

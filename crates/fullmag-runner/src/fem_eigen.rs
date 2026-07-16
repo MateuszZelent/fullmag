@@ -7274,6 +7274,7 @@ mod tests {
 
     fn minimal_native_modal_plan() -> FemEigenPlanIR {
         FemEigenPlanIR {
+            mesh_build_report: None,
             mesh_name: "native_modal_mesh".to_string(),
             mesh_source: None,
             mesh: fullmag_ir::MeshIR {

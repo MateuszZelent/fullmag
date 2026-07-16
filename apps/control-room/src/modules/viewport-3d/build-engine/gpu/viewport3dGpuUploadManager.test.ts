@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { createDiagnosticRecordFromViewport3DGpuUploadDiagnostic } from "./viewport3dGpuUploadDiagnostics";
+import {
+  createDiagnosticRecordFromViewport3DGpuUploadDiagnostic,
+  subscribeViewport3DGpuUploadDiagnostics,
+} from "./viewport3dGpuUploadDiagnostics";
 import { createViewport3DGpuUploadManager } from "./viewport3dGpuUploadManager";
 
 describe("viewport3dGpuUploadManager", () => {
@@ -9,6 +12,7 @@ describe("viewport3dGpuUploadManager", () => {
       aborted: false,
       budgetExceeded: true,
       completedAtMs: 250,
+      error: null,
       key: "vector-glyph-upload",
       kind: "viewport-3d-gpu-upload",
       lane: "vector-glyph",
@@ -17,6 +21,7 @@ describe("viewport3dGpuUploadManager", () => {
       maxFrameUploadMs: 18,
       queuedAtMs: 100,
       targetRevision: "field=f1",
+      status: "ready",
       totalWallMs: 150,
       uploadBytes: 2048,
       uploadChunks: 8,
@@ -340,6 +345,202 @@ describe("viewport3dGpuUploadManager", () => {
         targetRevision: "target=v1",
         uploadChunks: 1,
         uploadFrames: 1,
+      }),
+    ]);
+  });
+
+  it("fails one ticket without blocking another manager and rolls back uploaded chunks", () => {
+    const scheduled: Array<() => void> = [];
+    const diagnostics: unknown[] = [];
+    const rolledBack: string[] = [];
+    const uploaded: string[] = [];
+    const firstManager = createViewport3DGpuUploadManager({
+      onDiagnosticRecord: (record) => diagnostics.push(record),
+      scheduleFrame: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+      cancelFrame: () => {},
+    });
+    const secondManager = createViewport3DGpuUploadManager({
+      scheduleFrame: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+      cancelFrame: () => {},
+    });
+    const signal = new AbortController().signal;
+    const removeAbortListener = vi.spyOn(signal, "removeEventListener");
+
+    firstManager.enqueue({
+      chunks: [
+        {
+          estimatedBytes: 8,
+          itemCount: 1,
+          upload: () => uploaded.push("first-complete"),
+          rollback: () => rolledBack.push("first-complete"),
+        },
+        {
+          estimatedBytes: 8,
+          itemCount: 1,
+          upload: () => {
+            uploaded.push("first-throws");
+            throw new Error("upload failed");
+          },
+          rollback: () => rolledBack.push("first-throws"),
+        },
+      ],
+      estimatedBytes: 16,
+      key: "failed-upload",
+      lane: "field-color",
+      onVisible: () => uploaded.push("should-not-be-visible"),
+      signal,
+      targetRevision: "field=f1",
+    });
+    secondManager.enqueue({
+      chunks: [
+        {
+          estimatedBytes: 8,
+          itemCount: 1,
+          upload: () => uploaded.push("second-complete"),
+        },
+      ],
+      estimatedBytes: 8,
+      key: "second-upload",
+      lane: "vector-glyph",
+      onVisible: () => uploaded.push("second-visible"),
+      targetRevision: "field=f1",
+    });
+
+    scheduled.shift()?.();
+
+    expect(uploaded).toEqual([
+      "first-complete",
+      "first-throws",
+      "second-complete",
+      "second-visible",
+    ]);
+    expect(rolledBack).toEqual(["first-complete", "first-throws"]);
+    expect(removeAbortListener).toHaveBeenCalledOnce();
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        aborted: false,
+        error: "upload failed",
+        key: "failed-upload",
+        lane: "field-color",
+        status: "failed",
+        uploadChunks: 1,
+      }),
+    ]);
+  });
+
+  it("fails an onVisible callback without retaining the ticket or blocking the next ticket", () => {
+    const scheduled: Array<() => void> = [];
+    const diagnostics: unknown[] = [];
+    const rolledBack: string[] = [];
+    const visible: string[] = [];
+    const manager = createViewport3DGpuUploadManager({
+      onDiagnosticRecord: (record) => diagnostics.push(record),
+      scheduleFrame: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+      cancelFrame: () => {},
+    });
+
+    manager.enqueue({
+      chunks: [
+        {
+          estimatedBytes: 8,
+          itemCount: 1,
+          upload: () => {},
+          rollback: () => rolledBack.push("failed-visible"),
+        },
+      ],
+      estimatedBytes: 8,
+      key: "failed-visible",
+      lane: "region-overlay",
+      onVisible: () => {
+        throw new Error("visibility failed");
+      },
+      targetRevision: "topology=t1",
+    });
+    manager.enqueue({
+      chunks: [
+        {
+          estimatedBytes: 8,
+          itemCount: 1,
+          upload: () => {},
+        },
+      ],
+      estimatedBytes: 8,
+      key: "after-visible-failure",
+      lane: "region-overlay",
+      onVisible: () => visible.push("next"),
+      targetRevision: "topology=t1",
+    });
+
+    scheduled.shift()?.();
+    scheduled.shift()?.();
+
+    expect(visible).toEqual(["next"]);
+    expect(rolledBack).toEqual(["failed-visible"]);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        error: "visibility failed",
+        key: "failed-visible",
+        status: "failed",
+      }),
+      expect.objectContaining({
+        key: "after-visible-failure",
+        status: "ready",
+      }),
+    ]);
+  });
+
+  it("still publishes a failed diagnostic when a local diagnostic callback throws", () => {
+    const scheduled: Array<() => void> = [];
+    const published: unknown[] = [];
+    const unsubscribe = subscribeViewport3DGpuUploadDiagnostics((record) => {
+      if (record.key === "failed-with-throwing-observer") {
+        published.push(record);
+      }
+    });
+    const manager = createViewport3DGpuUploadManager({
+      onDiagnosticRecord: () => {
+        throw new Error("local diagnostics failed");
+      },
+      scheduleFrame: (callback) => {
+        scheduled.push(callback);
+        return scheduled.length;
+      },
+      cancelFrame: () => {},
+    });
+
+    manager.enqueue({
+      chunks: [
+        {
+          estimatedBytes: 8,
+          itemCount: 1,
+          upload: () => {
+            throw new Error("upload failed");
+          },
+        },
+      ],
+      estimatedBytes: 8,
+      key: "failed-with-throwing-observer",
+      lane: "field-color",
+      onVisible: () => {},
+      targetRevision: "field=f1",
+    });
+
+    scheduled.shift()?.();
+    unsubscribe();
+
+    expect(published).toEqual([
+      expect.objectContaining({
+        error: "upload failed",
+        status: "failed",
       }),
     ]);
   });

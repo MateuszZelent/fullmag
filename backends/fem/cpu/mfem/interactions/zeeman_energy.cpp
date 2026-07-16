@@ -24,6 +24,12 @@ double zeeman_energy_from_field(
         return 0.0;
     }
 
+    if (!ctx.material_fields.Ms_element_field.empty() &&
+        ctx.material_fields.runtime.has_value()) {
+        return -kMu0 * ctx.material_fields.runtime->ms_weighted_aos3_mass_bilinear(
+            m_xyz, ctx.zeeman.h_ext_xyz);
+    }
+
     const size_t n = std::min(ctx.integration_weights.mfem_lumped_mass.size(), m_xyz.size() / 3u);
     double energy = 0.0;
     for (size_t i = 0; i < n; ++i) {
@@ -55,7 +61,25 @@ relaxation::EnergyDifference zeeman_energy_difference_from_field(
         return result;
     }
     const size_t nodes = current_m_xyz.size() / 3u;
-    if (ctx.integration_weights.mfem_lumped_mass.size() < nodes || !ctx.zeeman.has_external_field) {
+    if (!ctx.zeeman.has_external_field) {
+        return result;
+    }
+    if (!ctx.material_fields.Ms_element_field.empty() &&
+        ctx.material_fields.runtime.has_value()) {
+        std::vector<double> delta(trial_m_xyz.size());
+        for (size_t index = 0; index < delta.size(); ++index) {
+            delta[index] = trial_m_xyz[index] - current_m_xyz[index];
+        }
+        const Aos3MassBilinearTermwiseResult termwise =
+            ctx.material_fields.runtime->ms_weighted_aos3_mass_bilinear_termwise(
+                delta, ctx.zeeman.h_ext_xyz);
+        result.delta_joules = -kMu0 * termwise.value;
+        result.absolute_term_sum_joules = kMu0 * termwise.absolute_term_sum;
+        result.roundoff_bound_joules = relaxation::reduction_roundoff_bound(
+            termwise.scalar_term_count) * result.absolute_term_sum_joules;
+        return result;
+    }
+    if (ctx.integration_weights.mfem_lumped_mass.size() < nodes) {
         return result;
     }
     for (size_t node = 0; node < nodes; ++node) {

@@ -61,6 +61,11 @@ pub(crate) fn finalize_native_fem_relaxation(
     let mut finalization_field_copy_bytes = 0_u64;
     let mut diagnostic_field_snapshots = Vec::<FieldSnapshot>::new();
 
+    // Refresh device-resident component fields at the accepted final state
+    // before any synchronous or asynchronous field snapshot selects H_eff.
+    // This is required for strict GPU runs without device Poisson demag too.
+    let _refreshed_final_snapshot_stats = backend.snapshot_step_stats(node_count)?;
+
     // Flush a final cached-preview update so H_demag/H_eff land in preview_cache
     // regardless of whether the last loop iteration had preview_due = true.
     if let Some(live) = live.as_mut() {

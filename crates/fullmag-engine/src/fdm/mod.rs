@@ -26,9 +26,11 @@ pub use shared::VectorFieldSoA;
 
 pub use shared::terms::{
     CubicAnisotropyConfig, EffectiveFieldTerms, MagnetoelasticTermConfig, OerstedCylinderConfig,
-    SlonczewskiSttConfig, SotConfig, UniaxialAnisotropyConfig, ZhangLiSttConfig,
+    RegionalFieldDriveTerm, SlonczewskiSttConfig, SotConfig, UniaxialAnisotropyConfig,
+    ZhangLiSttConfig,
 };
 pub use shared::types::{
     neighbor_index, AdaptiveStepConfig, AxisBoundary, CellSize, EngineError, EvaluationRequest,
-    FdmBoundaryPolicy, GridShape, LlgConfig, MaterialParameters, Result, TimeIntegrator,
+    FdmBoundaryPolicy, FdmDemagBoundary, GridShape, LlgConfig, MaterialParameters, Result,
+    ResolvedFdmPeriodicWorkspace, TimeIntegrator,
 };

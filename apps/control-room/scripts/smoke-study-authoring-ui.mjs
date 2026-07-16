@@ -254,14 +254,16 @@ try {
   if ((await tpiOption.count()) > 0 && !(await tpiOption.isDisabled())) {
     throw new Error("TPI must be unavailable for the strict-mode fixture.");
   }
-  if (!k0Only) {
-    const pgbbOption = algorithm.locator('option[value="projected_gradient_bb"]');
-    if (!(await pgbbOption.isDisabled())) {
-      throw new Error("FEM demag projected-gradient BB must be unavailable.");
-    }
-    if (!(await pgbbOption.textContent())?.includes("not qualified for FEM demag")) {
-      throw new Error("FEM demag projected-gradient BB must explain its quarantine.");
-    }
+  const pgbbOption = algorithm.locator('option[value="projected_gradient_bb"]');
+  if (await pgbbOption.isDisabled()) {
+    throw new Error(
+      "FEM demag projected-gradient BB must be available when advertised by runtime capabilities.",
+    );
+  }
+  if ((await pgbbOption.textContent())?.includes("not qualified for FEM demag")) {
+    throw new Error(
+      "FEM demag projected-gradient BB must not retain a stale quarantine reason when available.",
+    );
   }
   for (const directAlgorithm of ["nonlinear_cg"]) {
     await algorithm.selectOption(directAlgorithm);

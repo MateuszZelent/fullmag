@@ -4,12 +4,17 @@ import type {
   FieldMetaQuery,
   MeshSharedDomainManifestResource,
   MeshRegionMembershipResource,
+  VisualizationStatePatch,
+  VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import {
   canonicalVisualizationSceneObjectId,
-  visualizationObjectIdForMeshPartLike,
+  isVisualizationAirboxIdentity,
   visualizationTargetIdForSceneObject,
+  type Selection,
 } from "@/kernel/selection/selectionTypes";
+import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visualizationTargetResolver";
+import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 import {
   isAnalysisFieldQuantityId,
   isMagneticOnlyQuantityId,
@@ -24,8 +29,16 @@ import {
   hasDisplayUnitOptions,
 } from "@/shared/domain/physics/displayUnits";
 import {
+  buildAirOnlyVisualizationNodeSelection,
+  countVisualizationNodeSelection,
+} from "@/shared/domain/mesh/visualizationNodeSelection";
+import {
+  mergeVisualizationStateTargetOverride,
+  visualizationTargetKey,
+  type ObjectVisualizationSnapshot,
   renderModePatch,
   surfaceColorSourceToColorMode,
+  type ObjectVisualizationController,
   type SurfaceFieldProjectionMode,
   type SurfaceColorSource,
   type VisualizationGeometryScope,
@@ -217,21 +230,168 @@ export function fieldMetaScopeQueryForVisualizationTarget(
   }
 }
 
-export function objectVisualizationTargetForMeshPart(
-  part: NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number],
-): VisualizationTargetRef {
-  const objectId = visualizationObjectIdForMeshPartLike(part);
-  return objectId
-    ? {
-        id: visualizationTargetIdForSceneObject(objectId),
-        kind: "object",
-        label: part.label,
-      }
-    : {
-        id: part.id,
-        kind: "part",
-        label: part.label,
-      };
+export function resolveObjectVisualizationPanelTarget({
+  part,
+  sceneObjectIds,
+  visualizationState,
+}: {
+  part: NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
+  sceneObjectIds: ReadonlySet<string>;
+  visualizationState: VisualizationStateResource | null | undefined;
+}): VisualizationTargetRef {
+  return resolveVisualizationTargetForMeshPart({
+    part,
+    sceneObjectIds,
+    targetRegistry: visualizationState?.targets,
+  });
+}
+
+export function queuePartVectorVisibilityPatch({
+  controller,
+  part,
+  sceneObjectIds,
+  state,
+  sync,
+  visible,
+}: {
+  controller: Pick<ObjectVisualizationController, "patchTargetPending">;
+  part: NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
+  sceneObjectIds: ReadonlySet<string>;
+  state: VisualizationStateResource;
+  sync: Pick<{ queuePatch: (patch: VisualizationStatePatch) => void }, "queuePatch">;
+  visible: boolean;
+}): VisualizationTargetRef {
+  const target = resolveObjectVisualizationPanelTarget({
+    part,
+    sceneObjectIds,
+    visualizationState: state,
+  });
+  return queueTargetVectorVisibilityPatch({
+    controller,
+    state,
+    sync,
+    target,
+    visible,
+  });
+}
+
+export function queueTargetVectorVisibilityPatch({
+  controller,
+  state,
+  sync,
+  target,
+  visible,
+}: {
+  controller: Pick<ObjectVisualizationController, "patchTargetPending">;
+  state: VisualizationStateResource;
+  sync: Pick<{ queuePatch: (patch: VisualizationStatePatch) => void }, "queuePatch">;
+  target: VisualizationTargetRef;
+  visible: boolean;
+}): VisualizationTargetRef {
+  const patch = { vectorsVisible: visible } satisfies VisualizationTargetPatch;
+  sync.queuePatch({
+    overrides: mergeVisualizationStateTargetOverride(
+      state.overrides ?? [],
+      target,
+      patch,
+    ),
+  });
+  controller.patchTargetPending(target, patch, state.revision);
+  return target;
+}
+
+export function resolveSelectedTargetVectorMeshParts({
+  manifestRegions,
+  meshParts,
+  sceneObjectIds,
+  target,
+  visualizationState,
+}: {
+  manifestRegions: readonly MeshRegion[] | null | undefined;
+  meshParts: readonly MeshPart[] | null | undefined;
+  sceneObjectIds: ReadonlySet<string>;
+  target: VisualizationTargetRef | null | undefined;
+  visualizationState: VisualizationStateResource | null | undefined;
+}): MeshPart[] {
+  if (!target || !meshParts?.length) return [];
+
+  if (target.kind === "airbox") {
+    return meshParts.filter(isVisualizationAirboxIdentity);
+  }
+
+  if (target.kind === "region") {
+    const carrier = resolveRegionVisualizationCarrier({
+      manifestRegions,
+      target,
+    });
+    if (carrier?.kind !== "mesh-parts") return [];
+    const carrierIds = new Set(carrier.partIds);
+    return meshParts.filter((part) => carrierIds.has(part.id));
+  }
+
+  return meshParts.filter((part) => {
+    if (isVisualizationAirboxIdentity(part)) return false;
+    const partTarget = resolveObjectVisualizationPanelTarget({
+      part,
+      sceneObjectIds,
+      visualizationState,
+    });
+    return partTarget.kind === target.kind && partTarget.id === target.id;
+  });
+}
+
+export function visualizationVectorSurfaceActionTargetLabel(
+  target: VisualizationTargetRef,
+): string {
+  return `Target: ${target.id}`;
+}
+
+export function resolveSelectedTargetVectorMeshPartRows(input: {
+  manifestRegions: readonly MeshRegion[] | null | undefined;
+  meshParts: readonly MeshPart[] | null | undefined;
+  sceneObjectIds: ReadonlySet<string>;
+  target: VisualizationTargetRef | null | undefined;
+  visualizationState: VisualizationStateResource | null | undefined;
+}): Array<{ actionTargetLabel: string; id: string; label: string }> {
+  if (!input.target) return [];
+  const actionTargetLabel = visualizationVectorSurfaceActionTargetLabel(input.target);
+  return resolveSelectedTargetVectorMeshParts(input).map((part) => ({
+    actionTargetLabel,
+    id: part.id,
+    label: input.target?.kind === "airbox" ? "Airbox" : part.label,
+  }));
+}
+
+export function resolveObjectVisualizationPanelSelectionTarget({
+  sceneObjectIds,
+  selectedMeshPart,
+  selection,
+  selectionTarget,
+  visualizationState,
+}: {
+  sceneObjectIds: ReadonlySet<string>;
+  selectedMeshPart:
+    | NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number]
+    | null;
+  selection: Selection;
+  selectionTarget: VisualizationTargetRef | null;
+  visualizationState: VisualizationStateResource | null | undefined;
+}): VisualizationTargetRef | null {
+  if (selection.ref?.type !== "mesh-part") return selectionTarget;
+  if (selectedMeshPart) {
+    return resolveObjectVisualizationPanelTarget({
+      part: selectedMeshPart,
+      sceneObjectIds,
+      visualizationState,
+    });
+  }
+  return {
+    id: selection.ref.carrierPartId
+      ? selection.ref.visualizationTargetId
+      : selection.ref.nodeId,
+    kind: "part",
+    label: selection.label,
+  };
 }
 
 const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {
@@ -272,15 +432,11 @@ const SCALAR_COLOR_PALETTE_STOPS: Record<string, [number, number, number][]> = {
 export function resolveObjectVisualizationPanelTopologyFreshness({
   manifest,
   scene,
-  targetKind,
 }: {
   manifest: unknown;
   scene: unknown;
   targetKind: VisualizationTargetKind;
 }): VisualizationTopologyFreshness | null {
-  if (targetKind === "region") {
-    return null;
-  }
   return scene && manifest
     ? resolveVisualizationTopologyFreshness(scene, manifest)
     : null;
@@ -405,11 +561,76 @@ export interface VisualizationVectorBudgetRange {
   step: 1;
 }
 
-export interface VisualizationVectorBudgetDiagnostic {
-  availableNodeCount: number;
-  displayedGlyphCount: number;
-  exact: boolean;
-  requestedBudget: number;
+export interface VisualizationVectorAccounting {
+  adoptedGlyphCount: number | null;
+  availableNodeCount: number | null;
+  decodedSampleCount: number | null;
+}
+
+export function resolveVisualizationVectorAccounting({
+  availableNodeCount,
+  currentTopologyHash,
+  snapshots,
+}: {
+  availableNodeCount: number | null;
+  currentTopologyHash?: string | null;
+  snapshots: readonly VisualizationDebugSnapshot[];
+}): VisualizationVectorAccounting {
+  const available =
+    availableNodeCount === null
+      ? null
+      : Math.max(0, Math.floor(availableNodeCount));
+  const snapshot = [...snapshots].sort(
+    (left, right) => right.capturedAtMs - left.capturedAtMs,
+  )[0];
+  if (
+    !snapshot ||
+    available === null ||
+    snapshot.disposition === "blocked"
+  ) {
+    return {
+      adoptedGlyphCount: null,
+      availableNodeCount: available,
+      decodedSampleCount: null,
+    };
+  }
+
+  let adoptedGlyphCount = 0;
+  let decodedSampleCount = 0;
+  let adoptedComplete = snapshot.carriers.length > 0;
+  let decodedComplete = snapshot.carriers.length > 0;
+  for (const carrier of snapshot.carriers) {
+    const topologyMatches =
+      !currentTopologyHash ||
+      carrier.revisions.meshTopologyHash === currentTopologyHash;
+    const payload = topologyMatches ? carrier.payload : null;
+    if (!payload) decodedComplete = false;
+    else decodedSampleCount += payload.pointCount;
+
+    const adoption = carrier.render.adoption;
+    const adoptionMatches = Boolean(
+      topologyMatches &&
+        adoption.adoptedVectorItemCount != null &&
+        carrier.render.requestedFieldBufferId &&
+        carrier.request.resourceKey &&
+        carrier.render.vectors.buildKey &&
+        adoption.adoptedFieldBufferId === carrier.render.requestedFieldBufferId &&
+        adoption.adoptedResourceKey === carrier.request.resourceKey &&
+        adoption.adoptedVectorBuildKey === carrier.render.vectors.buildKey,
+    );
+    if (!adoptionMatches) adoptedComplete = false;
+    else adoptedGlyphCount += adoption.adoptedVectorItemCount ?? 0;
+  }
+
+  if (decodedComplete && decodedSampleCount > available) {
+    decodedComplete = false;
+    adoptedComplete = false;
+  }
+  return {
+    adoptedGlyphCount: adoptedComplete ? adoptedGlyphCount : null,
+    availableNodeCount: available,
+    decodedSampleCount: decodedComplete ? decodedSampleCount : null,
+  };
 }
 
 export function resolveVisualizationVectorBudgetRange({
@@ -466,14 +687,65 @@ export function resolveVisualizationVectorBudgetRange({
       ? carrierPartIds.has(part.id)
       : meshPartMatchesVisualizationTarget(part, target),
   );
+  const topologyNodeCount = inferManifestTopologyNodeCount(meshParts);
+  const canonicalMagneticParts = meshParts.filter(
+    (part) => part.role === "magnetic_object",
+  );
+  const magneticParts =
+    canonicalMagneticParts.length > 0
+      ? canonicalMagneticParts
+      : meshParts.filter(
+          (part) =>
+            !isVisualizationAirboxIdentity(part) &&
+            part.role !== "interface" &&
+            Boolean(
+              part.object_id ||
+                part.role === "magnetic" ||
+                part.role === "object",
+            ),
+        );
   let exact = true;
   const max = matchingParts.reduce((total, part) => {
+    if (target.kind === "airbox") {
+      if (
+        geometryScope === "surface" &&
+        part.surface_node_indices == null
+      ) {
+        exact = false;
+        return total;
+      }
+      const airSelection =
+        geometryScope === "surface"
+          ? { nodeIndices: part.surface_node_indices ?? [] }
+          : part;
+      const selection = buildAirOnlyVisualizationNodeSelection({
+        airSelection,
+        magneticSelections: magneticParts,
+        nodeCount: topologyNodeCount,
+      });
+      return (
+        total + countVisualizationNodeSelection(selection, topologyNodeCount)
+      );
+    }
     const count = meshPartVectorNodeCount(part, geometryScope);
     if (!count.exact) exact = false;
     return total + count.nodeCount;
   }, 0);
 
+  if (target.kind === "airbox" && geometryScope === "surface" && !exact) {
+    return fallbackVisualizationVectorBudgetRange();
+  }
+
   if (max <= 0) {
+    if (target.kind === "airbox" && matchingParts.length > 0) {
+      return {
+        availableNodeCount: 0,
+        exact: true,
+        max: 0,
+        min: 0,
+        step: 1,
+      };
+    }
     return fallbackVisualizationVectorBudgetRange();
   }
 
@@ -484,6 +756,19 @@ export function resolveVisualizationVectorBudgetRange({
     min: 0,
     step: 1,
   };
+}
+
+function inferManifestTopologyNodeCount(meshParts: readonly MeshPart[]): number {
+  let nodeCount = 0;
+  for (const part of meshParts) {
+    for (const nodeIndex of part.node_indices ?? []) {
+      if (Number.isInteger(nodeIndex) && nodeIndex >= 0) {
+        nodeCount = Math.max(nodeCount, nodeIndex + 1);
+      }
+    }
+    nodeCount = Math.max(nodeCount, part.node_start + part.node_count);
+  }
+  return nodeCount;
 }
 
 export function resolveRegionVisualizationCarrier({
@@ -556,23 +841,6 @@ export function resolveRegionVisualizationCarrier({
   return {
     kind: "unavailable",
     reason: "Region is not present in the mesh manifest or region memberships.",
-  };
-}
-
-export function buildVisualizationVectorBudgetDiagnostic({
-  requestedBudget,
-  vectorBudgetRange,
-}: {
-  requestedBudget: number;
-  vectorBudgetRange: VisualizationVectorBudgetRange;
-}): VisualizationVectorBudgetDiagnostic {
-  const safeBudget = Math.max(0, Math.floor(requestedBudget));
-  const availableNodeCount = Math.max(0, vectorBudgetRange.availableNodeCount);
-  return {
-    availableNodeCount,
-    displayedGlyphCount: Math.min(safeBudget, availableNodeCount),
-    exact: vectorBudgetRange.exact,
-    requestedBudget: safeBudget,
   };
 }
 
@@ -716,7 +984,6 @@ export function surfaceDisplayPassPatch(
 
   return {
     ...renderModePatch("surface"),
-    visible: true,
   };
 }
 
@@ -725,7 +992,6 @@ export function renderModeDisplayPatch(
 ): VisualizationTargetPatch {
   return {
     ...renderModePatch(renderMode),
-    visible: true,
   };
 }
 
@@ -738,10 +1004,8 @@ export function displayPassTogglePatch(
     | "vectorsVisible"
     | "wireframeVisible",
 ): VisualizationTargetPatch {
-  const nextVisible = !settings[field];
   return {
-    [field]: nextVisible,
-    ...(nextVisible ? { visible: true } : {}),
+    [field]: !settings[field],
   };
 }
 
@@ -760,7 +1024,6 @@ export function geometryScopeDisplayPatch(
   return {
     ...renderModePatch("surface+edges"),
     geometryScope,
-    visible: true,
   };
 }
 
@@ -812,7 +1075,7 @@ function meshPartMatchesVisualizationTarget(
   target: VisualizationTargetRef,
 ): boolean {
   if (target.kind === "airbox") {
-    return part.role === "air" || part.role === "airbox";
+    return isVisualizationAirboxIdentity(part);
   }
 
   if (target.kind === "region") {
@@ -908,6 +1171,74 @@ export function resolveObjectChildRegionVisualizationTargets({
   }
 
   return targets;
+}
+
+/** The Inspector must combine canonical backend state with only live local overlays. */
+export function resolveChildRegionOverrideTargetIds({
+  backendOverrides,
+  childTargets,
+  objectId,
+  snapshot,
+}: {
+  backendOverrides: readonly VisualizationStateResource["overrides"][number][];
+  childTargets: readonly VisualizationTargetRef[];
+  objectId: string;
+  snapshot: Pick<ObjectVisualizationSnapshot, "overrides"> &
+    Partial<Pick<ObjectVisualizationSnapshot, "pendingOverrides">>;
+}): Set<string> {
+  const ids = new Set<string>();
+  const canonicalOwner = canonicalVisualizationSceneObjectId(objectId);
+  const isCurrentOwnerRegion = (targetId: string): boolean => {
+    const parsed = parseRegionVisualizationTargetId(targetId);
+    return Boolean(
+      parsed &&
+        canonicalVisualizationSceneObjectId(parsed.objectId) === canonicalOwner,
+    );
+  };
+
+  for (const entry of backendOverrides) {
+    if (entry.scope === "region" && isCurrentOwnerRegion(entry.scope_id)) {
+      ids.add(entry.scope_id);
+    }
+  }
+  for (const target of childTargets) {
+    if (!isCurrentOwnerRegion(target.id)) continue;
+    if (
+      Boolean(snapshot.overrides[visualizationTargetKey(target)]) ||
+      Boolean(snapshot.pendingOverrides?.[visualizationTargetKey(target)])
+    ) {
+      ids.add(target.id);
+    }
+  }
+  for (const key of [
+    ...Object.keys(snapshot.overrides),
+    ...Object.keys(snapshot.pendingOverrides ?? {}),
+  ]) {
+    if (isCurrentOwnerRegion(key)) ids.add(key);
+  }
+  return ids;
+}
+
+/**
+ * A reset is one replacement list. Restrict deletion by the encoded owner id
+ * rather than by whichever region list happened to be loaded in this render.
+ */
+export function removeOwnerChildRegionVisualizationOverrides({
+  objectId,
+  overrides,
+}: {
+  objectId: string;
+  overrides: readonly VisualizationStateResource["overrides"][number][];
+}): VisualizationStateResource["overrides"] {
+  const canonicalOwner = canonicalVisualizationSceneObjectId(objectId);
+  return overrides.filter((entry) => {
+    if (entry.scope !== "region") return true;
+    const parsed = parseRegionVisualizationTargetId(entry.scope_id);
+    return (
+      !parsed ||
+      canonicalVisualizationSceneObjectId(parsed.objectId) !== canonicalOwner
+    );
+  });
 }
 
 function decodeSafe(value: string): string {
@@ -1235,7 +1566,7 @@ export function buildVisualizationPanelSections({
 
   return [
     {
-      disabled: false,
+      disabled: passDisabled,
       fields: [
         { id: "visible", kind: "toggle", label: "Visible" },
         { id: "shaderVisible", kind: "toggle", label: "Surface" },
@@ -1248,7 +1579,7 @@ export function buildVisualizationPanelSections({
       title: "Display Passes",
     },
     {
-      disabled: false,
+      disabled: passDisabled,
       fields: [
         { id: "activeQuantityId", kind: "mode", label: "Quantity source" },
       ],
@@ -1307,7 +1638,7 @@ export function buildVisualizationPanelSections({
       title: "Geometry Scope",
     },
     {
-      disabled: false,
+      disabled: passDisabled,
       fields: [{ id: "opacityPercent", kind: "number", label: "Opacity" }],
       id: "opacity",
       title: "Opacity",

@@ -19,6 +19,18 @@
   ],
   "features": [
     {
+      "id": "fdm_periodic_demag_boundary_semantics",
+      "label": "FDM periodic demagnetization boundary semantics",
+      "lanes": {
+        "fdm_cpu_reference": "reference_executable",
+        "fdm_gpu_production": "production_executable",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "Periodic local exchange/DMI with demag='open' is illegal and rejected before allocation. Legal periodic demag resolves to the shared truncated-images realization on CPU and CUDA; requested and resolved policies are retained in artifacts. Fully open demag remains the default when no periodic axis is requested."
+    },
+    {
       "id": "fdm_multilayer_fixed_explicit_rk",
       "label": "FDM multilayer fixed-step explicit RK",
       "lanes": {

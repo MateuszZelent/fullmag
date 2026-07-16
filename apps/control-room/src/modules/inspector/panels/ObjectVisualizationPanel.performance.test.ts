@@ -46,6 +46,31 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).not.toContain("useObjectVisualizationRegistry()");
   });
 
+  it("keeps ordinary visualization controls independent from opt-in Debug demand", () => {
+    expect(panelSource).not.toContain("useVisualizationDebugSnapshots");
+    expect(panelSource).not.toContain("kernel.visualizationDebug.request");
+    expect(panelSource).not.toContain("VisualizationDebugSnapshot");
+  });
+
+  it("uses a revision-bounded local target patch while remote visualization state is pending", () => {
+    expect(panelSource).toContain("visualization.patchTargetPending(");
+    expect(panelSource).toContain("visualizationState.rawData?.revision");
+  });
+
+  it("labels and keeps viewport-only rendering preferences out of pending backend transactions", () => {
+    expect(panelSource).toContain("visualization.patchViewportPreferences(");
+    expect(panelSource).toContain("viewportPreferencesPatch");
+    expect(panelSource).toContain("This viewport only");
+  });
+
+  it("disables every pass control while a target is hidden but preserves Visible and reset", () => {
+    expect(panelSource).toContain("const passControlsDisabled = pending || !settings?.visible;");
+    expect(panelSource).toContain("label=\"Visible\"");
+    expect(panelSource).toContain("disabled={pending}");
+    expect(panelSource).toContain("resetLabel={visualizationResetActionLabel(target.kind)}");
+    expect(panelSource).toContain("disabled={pending}");
+  });
+
   it("renders target quantity selection inside the visualization inspector", () => {
     expect(panelSource).toContain("VisualizationQuantitySection");
     expect(panelSource).toContain('label="Quantity source"');
@@ -71,13 +96,19 @@ describe("ObjectVisualizationPanel performance contracts", () => {
   it("renders the airbox synthetic vector developer toggle locally", () => {
     expect(panelSource).toContain('label="Dev fallback +Z"');
     expect(panelSource).toContain("airboxSyntheticVectorsEnabled");
-    expect(panelSource).toContain("delete remotePatch.airboxSyntheticVectorsEnabled");
+    expect(panelSource).toContain("visualization.patchViewportPreferences(resolvedTarget, localPatch)");
   });
 
   it("does not promise per-part persistence for object-owned surface vector toggles", () => {
     expect(panelSource).toContain('aria-label="Object target vector visibility"');
     expect(panelSource).toContain(">Object surfaces<");
     expect(panelSource).not.toContain("Per-part vector visibility");
+  });
+
+  it("shows the canonical selected target beside every surface-vector action", () => {
+    expect(panelSource).toContain("resolveSelectedTargetVectorMeshPartRows");
+    expect(panelSource).toContain("fm-visualization-part-toggle__target");
+    expect(panelSource).toContain("part.actionTargetLabel");
   });
 
   it("renders scalar colormap controls in the visualization inspector", () => {

@@ -84,6 +84,18 @@ function modeVisualizationTargetId(
 }
 
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+  if (node.kind === "mesh.unassigned.part" && node.meshPartId) {
+    return {
+      carrierPartId: node.meshPartId,
+      kind: "mesh-part",
+      nodeId: node.id,
+      objectId: null,
+      type: "mesh-part",
+      visualizationTargetId:
+        node.visualizationTargetId ?? node.meshPartId,
+    };
+  }
+
   if (isFrequencyDomainSelectionNode(node)) {
     return {
       ...(node.analysisRunId ? { analysisRunId: node.analysisRunId } : {}),
@@ -157,6 +169,7 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.region.material" ||
       node.kind === "object.region.texture" ||
       node.kind === "object.region.visualization" ||
+      node.kind === "object.region.visualization.debug" ||
       node.kind === "object.region.regions" ||
       node.kind === "object.region.diagnostics" ||
       node.kind === "object.region-magnetic-texture" ||
@@ -167,7 +180,8 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       node.kind === "object.magnetic-texture.transform" ||
       node.kind === "object.mesh" ||
       node.kind === "object.extension.topological-charge" ||
-      node.kind === "object.visualization")
+      node.kind === "object.visualization" ||
+      node.kind === "object.visualization.debug")
   ) {
     const extensionId = extensionIdFromNode(node);
     return {
@@ -185,9 +199,15 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   }
 
   if (
+    node.kind === "airbox.root" ||
     node.kind === "airbox.mesh" ||
-    node.kind === "airbox.mesh-quality" ||
-    node.kind === "airbox.visualization"
+    node.kind === "airbox.mesh.parameters" ||
+    node.kind === "airbox.mesh.quality-gates" ||
+    node.kind === "airbox.mesh.statistics" ||
+    node.kind === "airbox.mesh.topology" ||
+    node.kind === "airbox.mesh.build" ||
+    node.kind === "airbox.visualization" ||
+    node.kind === "airbox.visualization.debug"
   ) {
     return {
       kind: node.kind,
@@ -298,6 +318,15 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
+  if (node.kind === "physics.field-drive" && node.fieldDriveId) {
+    return {
+      fieldDriveId: node.fieldDriveId,
+      kind: "physics.field-drive",
+      nodeId: node.id,
+      type: "physics-field-drive",
+    };
+  }
+
   return null;
 }
 
@@ -328,7 +357,8 @@ export function selectExplorerNode(
     {
       kind:
         ref?.type === "cross-section-draft" ||
-        ref?.type === "cross-section-plot"
+        ref?.type === "cross-section-plot" ||
+        ref?.type === "mesh-part"
           ? ref.kind
           : node.kind,
       label: node.label,

@@ -86,6 +86,11 @@ it("lets diagnostics bypass airbox field-color buffer application", () => {
   );
 });
 
+it("clears the exact Airbox surface adoption when it is no longer visible", () => {
+  expect(boundsLayersSource).toContain("adoptionRegistry.clearAdoption(adoption)");
+  expect(boundsLayersSource).toContain("unregister();");
+});
+
 it("does not build airbox point geometry when points are hidden", () => {
   expect(boundsLayersSource).toContain("if (!renderSettings.pointsVisible) return null;");
 });
@@ -138,6 +143,7 @@ function airboxTopology(): Viewport3DTopologyRenderModel<Viewport3DMeshPart> {
     airboxParts: [
       {
         edgeIndices: null,
+        fullNodeSelection: part,
         part,
         surfaceIndices: null,
         surfaceNodeIndices: null,

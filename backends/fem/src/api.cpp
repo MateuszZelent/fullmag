@@ -32,6 +32,7 @@
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
+#include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/component_transfer.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
@@ -40,6 +41,7 @@
 #include <cuda_runtime.h>
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -2431,6 +2433,104 @@ fullmag_fem_backend *fullmag_fem_backend_create(const fullmag_fem_plan_desc *pla
     handle->last_error.clear();
     fullmag_fem_clear_global_error();
     return handle;
+}
+
+int fullmag_fem_get_regional_field_drive_abi_layout(
+    fullmag_fem_regional_field_drive_abi_layout *out_layout)
+{
+    if (out_layout == nullptr) return FULLMAG_FEM_ERR_INVALID;
+    *out_layout = {};
+    out_layout->abi_version = FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION;
+    out_layout->struct_size = sizeof(*out_layout);
+    out_layout->time_dependence_desc_size = sizeof(fullmag_fem_time_dependence_desc);
+    out_layout->field_target_desc_size = sizeof(fullmag_fem_field_target_desc);
+    out_layout->spatial_profile_desc_size = sizeof(fullmag_fem_spatial_profile_desc);
+    out_layout->regional_field_drive_desc_size = sizeof(fullmag_fem_regional_field_drive_desc);
+    out_layout->plan_desc_size = sizeof(fullmag_fem_plan_desc);
+    out_layout->plan_regional_field_drives_offset = offsetof(fullmag_fem_plan_desc, regional_field_drives);
+    out_layout->plan_regional_field_drive_count_offset = offsetof(fullmag_fem_plan_desc, regional_field_drive_count);
+    out_layout->plan_stage_start_time_s_offset = offsetof(fullmag_fem_plan_desc, stage_start_time_s);
+    out_layout->step_stats_size = sizeof(fullmag_fem_step_stats);
+    out_layout->step_stats_drive_energy_joules_offset = offsetof(fullmag_fem_step_stats, drive_energy_joules);
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_begin_stage(
+    fullmag_fem_backend *handle,
+    double stage_start_time_s)
+{
+    if (handle == nullptr || !std::isfinite(stage_start_time_s)) {
+        fullmag_fem_set_handle_error(handle, "begin_stage requires a non-null handle and finite stage start time");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    auto &ctx = handle->context;
+    const double tolerance = 64.0 * std::numeric_limits<double>::epsilon() *
+        std::max({1.0, std::abs(ctx.state.current_time), std::abs(stage_start_time_s)});
+    if (std::abs(ctx.state.current_time - stage_start_time_s) > tolerance) {
+        fullmag_fem_set_handle_error(handle,
+            "begin_stage start time must equal the backend's current absolute time");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    ctx.zeeman.stage_start_time_s = stage_start_time_s;
+    ctx.zeeman.regional_drive_revision += 1;
+    ctx.stepper.workspace.fsal_valid = false;
+    ctx.adaptive_dt.prev_error_norm = 1.0;
+    std::fill(ctx.zeeman.h_drive_xyz.begin(), ctx.zeeman.h_drive_xyz.end(), 0.0);
+    std::fill(ctx.effective_field.h_xyz.begin(), ctx.effective_field.h_xyz.end(), 0.0);
+    handle->last_error.clear();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_reconfigure_regional_field_drives(
+    fullmag_fem_backend *handle,
+    const fullmag_fem_regional_field_drive_desc *drives,
+    uint64_t drive_count,
+    double stage_start_time_s)
+{
+    if (handle == nullptr || !std::isfinite(stage_start_time_s) ||
+        ((drive_count == 0) != (drives == nullptr))) {
+        fullmag_fem_set_handle_error(handle, "regional drive reconfigure requires valid handle, time, and null/count pair");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    auto &ctx = handle->context;
+    fullmag_fem_plan_desc plan{};
+    plan.regional_field_drives = drives;
+    plan.regional_field_drive_count = drive_count;
+    plan.stage_start_time_s = stage_start_time_s;
+    std::string error;
+    if (!fullmag::fem::copy_regional_field_drive_plan(ctx, plan, error) ||
+        !fullmag::fem::project_regional_field_drive_bases(ctx, error)) {
+        fullmag_fem_set_handle_error(handle, error);
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (ctx.gpu_state.device.lifecycle.allocated &&
+        !fullmag::fem::gpu_regional_field_drive_upload(ctx, error)) {
+        fullmag_fem_set_handle_error(handle, error);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+#endif
+    ctx.zeeman.regional_drive_revision += 1;
+    ctx.stepper.workspace.fsal_valid = false;
+    ctx.adaptive_dt.prev_error_norm = 1.0;
+    std::fill(ctx.effective_field.h_xyz.begin(), ctx.effective_field.h_xyz.end(), 0.0);
+    handle->last_error.clear();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle)
+{
+    if (handle == nullptr) {
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    auto &ctx = handle->context;
+    ctx.stepper.workspace.fsal_valid = false;
+#if FULLMAG_HAS_CUDA_RUNTIME
+    ctx.gpu_state.device.rk.fsal_valid = false;
+#endif
+    ctx.adaptive_dt.prev_error_norm = 1.0;
+    handle->last_error.clear();
+    return FULLMAG_FEM_OK;
 }
 
 int fullmag_fem_backend_step(

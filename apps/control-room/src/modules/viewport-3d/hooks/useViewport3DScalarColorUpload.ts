@@ -279,6 +279,11 @@ export function createViewport3DScalarColorUploadPlan(
   const source = colorBuffer.colors;
   const safeBatchSize = Math.max(1, Math.floor(batchSize));
   const chunks: Viewport3DGpuUploadChunk[] = [];
+  const rollback = () => {
+    if (!existingAttribute && geometry.getAttribute("color") === attribute) {
+      geometry.deleteAttribute("color");
+    }
+  };
 
   attribute.clearUpdateRanges();
   for (let start = 0; start < vertexCount; start += safeBatchSize) {
@@ -290,6 +295,7 @@ export function createViewport3DScalarColorUploadPlan(
         target.set(source.subarray(start * 3, end * 3), start * 3);
         attribute.addUpdateRange(start * 3, (end - start) * 3);
       },
+      rollback,
     });
   }
 
@@ -361,7 +367,6 @@ export function useViewport3DScalarShaderColorUpload({
       })) {
         return;
       }
-      deleteViewport3DScalarShaderAttributes(geometry);
       store.publish(null, geometry, null);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
@@ -374,7 +379,6 @@ export function useViewport3DScalarShaderColorUpload({
       vertexCount,
     );
     if (!uploadPlan) {
-      deleteViewport3DScalarShaderAttributes(geometry);
       store.publish(null, geometry, null);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
@@ -471,6 +475,17 @@ export function createViewport3DScalarShaderColorUploadPlan(
 
   if (attributes.length === 0) return null;
 
+  const rollback = () => {
+    for (const entry of attributes) {
+      if (
+        !entry.wasAttached &&
+        geometry.getAttribute(entry.name) === entry.attribute
+      ) {
+        geometry.deleteAttribute(entry.name);
+      }
+    }
+  };
+
   for (const entry of attributes) {
     entry.attribute.clearUpdateRanges();
     for (let start = 0; start < vertexCount; start += safeBatchSize) {
@@ -489,6 +504,7 @@ export function createViewport3DScalarShaderColorUploadPlan(
           );
           entry.attribute.addUpdateRange(sourceStart, sourceEnd - sourceStart);
         },
+        rollback,
       });
     }
   }
@@ -500,33 +516,12 @@ export function createViewport3DScalarShaderColorUploadPlan(
       0,
     ),
     onVisible: () => {
-      const visibleNames = new Set(attributes.map((entry) => entry.name));
       for (const entry of attributes) {
         if (!entry.wasAttached) {
           geometry.setAttribute(entry.name, entry.attribute);
         }
         entry.attribute.needsUpdate = true;
       }
-      deleteShaderAttributeIfAbsent(
-        geometry,
-        visibleNames,
-        VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
-      );
-      deleteShaderAttributeIfAbsent(
-        geometry,
-        visibleNames,
-        VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
-      );
-      deleteShaderAttributeIfAbsent(
-        geometry,
-        visibleNames,
-        VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE,
-      );
-      deleteShaderAttributeIfAbsent(
-        geometry,
-        visibleNames,
-        VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE,
-      );
     },
   };
 }
@@ -601,21 +596,4 @@ function createViewport3DScalarShaderUploadStore():
       };
     },
   };
-}
-
-function deleteViewport3DScalarShaderAttributes(geometry: BufferGeometry): void {
-  geometry.deleteAttribute(VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE);
-  geometry.deleteAttribute(VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE);
-  geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE);
-  geometry.deleteAttribute(VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE);
-}
-
-function deleteShaderAttributeIfAbsent(
-  geometry: BufferGeometry,
-  visibleNames: ReadonlySet<string>,
-  name: string,
-): void {
-  if (!visibleNames.has(name)) {
-    geometry.deleteAttribute(name);
-  }
 }

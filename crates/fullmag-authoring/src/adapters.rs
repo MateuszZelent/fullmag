@@ -58,6 +58,9 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         couplings: Vec::new(),
         materials,
         magnetization_assets,
+        field_drives: crate::SceneFieldDrivesState {
+            drives: builder.field_drives.clone(),
+        },
         current_modules: SceneCurrentModulesState {
             modules: builder.current_modules.clone(),
             excitation_analysis: builder.excitation_analysis.clone(),
@@ -145,6 +148,14 @@ pub fn scene_document_to_script_builder(
                         magnetization_ref, object.id
                     ))
                 })?;
+            if !is_identity_quaternion(object.transform.rotation_quat)
+                || !is_identity_scale(object.transform.scale)
+            {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "owner_transform_rotation_scale_unsupported: object '{}' uses rotation or scale that is not represented by the canonical FDM owner-frame lowering",
+                    object.id
+                )));
+            }
             let material_dind = material.dind;
             let material_dbulk = material.dbulk;
 
@@ -206,6 +217,7 @@ pub fn scene_document_to_script_builder(
             .iter()
             .map(builder_mesh_interface_from_scene)
             .collect(),
+        field_drives: normalized_scene.field_drives.drives.clone(),
         current_modules: normalized_scene.current_modules.modules.clone(),
         excitation_analysis: normalized_scene.current_modules.excitation_analysis.clone(),
     })
@@ -1325,6 +1337,19 @@ fn is_zero_vec3(value: [f64; 3]) -> bool {
         .all(|component| component.abs() <= f64::EPSILON)
 }
 
+fn is_identity_quaternion(value: [f64; 4]) -> bool {
+    value[0].abs() <= f64::EPSILON
+        && value[1].abs() <= f64::EPSILON
+        && value[2].abs() <= f64::EPSILON
+        && (value[3].abs() - 1.0).abs() <= f64::EPSILON
+}
+
+fn is_identity_scale(value: [f64; 3]) -> bool {
+    value
+        .iter()
+        .all(|component| (*component - 1.0).abs() <= f64::EPSILON)
+}
+
 fn string_or_null(value: &str) -> Value {
     if value.trim().is_empty() {
         Value::Null
@@ -1765,6 +1790,32 @@ mod tests {
         StudyPipelineNodeSource, StudyPrimitiveStageKind,
     };
 
+    #[test]
+    fn scene_document_round_trips_typed_regional_field_drives() {
+        let value = serde_json::json!({
+            "version": "scene.v2",
+            "field_drives": {
+                "drives": [{
+                    "kind": "regional",
+                    "id": "pulse",
+                    "name": "Pulse",
+                    "target": { "kind": "global" },
+                    "spatial_profile": { "kind": "uniform" },
+                    "amplitude_B_T": 0.001,
+                    "direction": [0.0, 1.0, 0.0],
+                    "waveform": { "kind": "constant", "value": 1.0 },
+                    "time_origin": "stage_local",
+                    "activation": { "kind": "stage_ids", "stage_ids": ["run-1"] }
+                }]
+            }
+        });
+
+        let scene: SceneDocument = serde_json::from_value(value).expect("typed scene should parse");
+        assert_eq!(scene.field_drives.drives[0].id, "pulse");
+        let encoded = serde_json::to_value(scene).expect("typed scene should serialize");
+        assert_eq!(encoded["field_drives"]["drives"][0]["target"]["kind"], "global");
+    }
+
     fn sample_builder() -> ScriptBuilderState {
         ScriptBuilderState {
             revision: 7,
@@ -2087,6 +2138,7 @@ mod tests {
                     build_requested: false,
                 },
             }],
+            field_drives: Vec::new(),
             current_modules: vec![ScriptBuilderCurrentModuleState {
                 kind: "antenna_field_source".to_string(),
                 name: "cpw_1".to_string(),
@@ -2196,6 +2248,16 @@ mod tests {
         assert!(error
             .message
             .contains("must reference a magnetization asset"));
+    }
+
+    #[test]
+    fn scene_document_validation_rejects_owner_rotation_and_scale_until_fdm_support_exists() {
+        let mut scene = scene_document_from_script_builder(&sample_builder());
+        scene.objects[0].transform.rotation_quat = [0.0, 0.0, 0.7071067811865476, 0.7071067811865476];
+        scene.objects[0].transform.scale = [2.0, 1.0, 1.0];
+        let error = scene_document_to_script_builder(&scene)
+            .expect_err("owner rotation/scale must not be silently dropped");
+        assert!(error.message.contains("owner_transform_rotation_scale_unsupported"));
     }
 
     #[test]

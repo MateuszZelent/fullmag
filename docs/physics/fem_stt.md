@@ -181,8 +181,8 @@ Current gate:
   That native contract uses explicit Euler followed by per-node renormalization
   on both sides; it tests the Zhang-Li operators, not the public integrator.
   The separately named managed fixture is the public fixed-step Heun workload;
-  its frozen CPU/GPU comparison uses `rtol=2e-9` and `atol=1e-11`, established
-  before validating that ten-step run. A separately versioned, managed
+  its CPU/GPU comparison uses frozen `rtol=2e-9` and `atol=1e-11`, established
+  before validation. A separately versioned, managed
   CPU three-level Richardson study at fixed final physical time records
   observed orders `p_dt=2.0000679517167614` and
   `p_mesh=1.8064680026687565`; its conservative frozen acceptance floors are
@@ -190,6 +190,10 @@ Current gate:
   thresholds from the workload under test. See
   `docs/validation/fem-zhang-li-skew-tetra-convergence-study-v1.json` and
   `docs/validation/fem-zhang-li-skew-tetra-runtime-v1.json`.
+- Provenance/migration: an artifact without `requested_execution` metadata is
+  legacy and unverified for requested-versus-resolved execution intent; no
+  backward migration is inferred, and it cannot satisfy the named
+  `FEM-TD-PHY-STT-001` Zhang-Li validation gate.
 
 Required before production qualification:
 

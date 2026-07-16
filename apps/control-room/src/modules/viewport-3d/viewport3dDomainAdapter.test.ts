@@ -24,7 +24,7 @@ function fdmMeta(cells: number): DomainMetaResource {
     dimension: 3,
     discretization: "fdm",
     domain_id: "domain",
-    generation_id: 4,
+    generation_id: "4",
     grid: {
       origin: [0, 0, 0],
       shape: [100, 100, 1],
@@ -144,6 +144,150 @@ describe("viewport3dDomainAdapter", () => {
     expect(domain.objectPartIds.get("object-1_geom")).toEqual(["part-magnet"]);
   });
 
+  it("normalizes segment-only manifests into degraded render carriers", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts = [];
+    manifest.object_segments = [
+      {
+        boundary_face_count: 4,
+        boundary_face_start: 2,
+        element_count: 12,
+        element_start: 8,
+        geometry_id: "object-1_geom",
+        node_count: 8,
+        node_start: 6,
+        object_id: "object-1",
+      },
+    ];
+
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.magneticParts).toMatchObject([
+      {
+        carrierKind: "object-segment",
+        fieldCapable: false,
+        id: "segment:object-1:0",
+        object_id: "object-1",
+        role: "magnetic",
+      },
+    ]);
+    expect(domain.objectPartIds.get("object-1")).toEqual([
+      "segment:object-1:0",
+    ]);
+    expect(domain.partsById.get("segment:object-1:0")).toMatchObject({
+      carrierKind: "object-segment",
+      fieldCapable: false,
+    });
+  });
+
+  it("prefers mesh parts over duplicate object-segment fallback carriers", () => {
+    const manifest = manifestFixture();
+    manifest.object_segments = [
+      {
+        boundary_face_count: 4,
+        boundary_face_start: 2,
+        element_count: 12,
+        element_start: 8,
+        geometry_id: "object-1_geom",
+        node_count: 8,
+        node_start: 6,
+        object_id: "object-1",
+      },
+    ];
+
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.magneticParts.map((part) => part.id)).toEqual(["part-magnet"]);
+    expect(domain.objectPartIds.get("object-1")).toEqual(["part-magnet"]);
+    expect(domain.renderCarrierDiagnostics).toEqual({
+      degradedCarrierCount: 0,
+      kind: "mesh-parts",
+      rejectedCarrierCount: 0,
+      renderableCarrierCount: 2,
+    });
+  });
+
+  it("collapses the production Airbox mesh part and segment into one carrier", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts = [
+      {
+        ...manifest.mesh_parts![0]!,
+        geometry_id: null,
+        id: "part:__air__",
+        object_id: null,
+        role: "air",
+      },
+    ];
+    manifest.object_segments = [
+      {
+        boundary_face_count: 60,
+        boundary_face_start: 0,
+        element_count: 175,
+        element_start: 0,
+        geometry_id: null,
+        node_count: 32,
+        node_start: 0,
+        object_id: "__air__",
+      },
+    ];
+
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect([...domain.partsById.keys()]).toEqual(["part:__air__"]);
+    expect(domain.airboxParts).toMatchObject([
+      {
+        carrierKind: "mesh-part",
+        fieldCapable: true,
+        id: "part:__air__",
+        role: "air",
+      },
+    ]);
+    expect(domain.magneticParts).toEqual([]);
+    expect(domain.objectPartIds.has("__air__")).toBe(false);
+    expect(domain.renderCarrierDiagnostics).toEqual({
+      degradedCarrierCount: 0,
+      kind: "mesh-parts",
+      rejectedCarrierCount: 0,
+      renderableCarrierCount: 1,
+    });
+  });
+
+  it("keeps a segment-only Airbox as a degraded Airbox without object ownership", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts = [];
+    manifest.object_segments = [
+      {
+        boundary_face_count: 60,
+        boundary_face_start: 0,
+        element_count: 175,
+        element_start: 0,
+        geometry_id: null,
+        node_count: 32,
+        node_start: 0,
+        object_id: "__air__",
+      },
+    ];
+
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.airboxParts).toMatchObject([
+      {
+        carrierKind: "object-segment",
+        fieldCapable: false,
+        label: "Airbox",
+        object_id: "__air__",
+        role: "air",
+      },
+    ]);
+    expect(domain.magneticParts).toEqual([]);
+    expect(domain.objectPartIds.has("__air__")).toBe(false);
+    expect(selectionForMeshPart(domain.airboxParts[0]!)).toMatchObject({
+      kind: "mesh-part-airbox",
+      label: "Airbox",
+      objectId: null,
+    });
+  });
+
   it("keeps helper boundary parts out of renderable FEM part lists", () => {
     const domain = adaptFemSharedDomainManifest(manifestFixture());
 
@@ -159,7 +303,9 @@ describe("viewport3dDomainAdapter", () => {
   });
 
   it("assigns air-magnetic interface surfaces to the owning magnetic part", () => {
-    const domain = adaptFemSharedDomainManifest(manifestFixture());
+    const manifest = manifestFixture();
+    manifest.mesh_parts![3]!.object_id = "object-1";
+    const domain = adaptFemSharedDomainManifest(manifest);
 
     expect(domain.partsById.get("part-interface")?.role).toBe("interface");
     expect(domain.magneticParts.map((part) => part.id)).toEqual(["part-magnet"]);
@@ -171,15 +317,15 @@ describe("viewport3dDomainAdapter", () => {
     const domain = adaptFemSharedDomainManifest(manifestFixture());
 
     expect(resolveFemPartSelectionByBoundaryFace(domain, 30)).toMatchObject({
+      carrierPartId: "part-air",
       kind: "mesh-part-airbox",
       label: "Airbox",
-      nodeId: "part-air",
       objectId: null,
     });
     expect(resolveFemPartSelectionByBoundaryFace(domain, 3)).toMatchObject({
+      carrierPartId: "part-magnet",
       kind: "mesh-part",
       label: "Magnet",
-      nodeId: "part-magnet",
       objectId: "object-1",
     });
     expect(resolveFemPartSelectionByBoundaryFace(domain, 999)).toBeNull();
@@ -189,11 +335,53 @@ describe("viewport3dDomainAdapter", () => {
     const domain = adaptFemSharedDomainManifest(manifestFixture());
 
     expect(selectionForMeshPart(domain.airboxParts[0])).toMatchObject({
+      carrierPartId: "part-air",
       kind: "mesh-part-airbox",
       label: "Airbox",
-      nodeId: "part-air",
       objectId: null,
     });
+  });
+
+  it("treats the legacy airbox role as the canonical Airbox carrier", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts![0]!.role = "airbox";
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.airboxParts.map((part) => part.id)).toContain("part-air");
+    expect(selectionForMeshPart(domain.airboxParts[0])).toMatchObject({
+      carrierPartId: "part-air",
+      kind: "mesh-part-airbox",
+    });
+  });
+
+  it("keeps part:__air__ on the Airbox path when its role is degraded", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts![0]!.id = "part:__air__";
+    manifest.mesh_parts![0]!.role = "carrier";
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.airboxParts.map((part) => part.id)).toEqual(["part:__air__"]);
+    expect(domain.magneticParts.map((part) => part.id)).not.toContain("part:__air__");
+    expect(selectionForMeshPart(domain.airboxParts[0])).toMatchObject({
+      carrierPartId: "part:__air__",
+      kind: "mesh-part-airbox",
+      objectId: null,
+    });
+  });
+
+  it("rejects blank and duplicate carrier identities before render or picking", () => {
+    const manifest = manifestFixture();
+    manifest.mesh_parts!.push({ ...manifest.mesh_parts![1]! });
+    manifest.mesh_parts!.push({
+      ...manifest.mesh_parts![1]!,
+      id: "",
+      label: "Missing identity",
+    });
+    const domain = adaptFemSharedDomainManifest(manifest);
+
+    expect(domain.magneticParts.filter((part) => part.id === "part-magnet")).toHaveLength(1);
+    expect(domain.partsById.has("")).toBe(false);
+    expect(domain.renderCarrierDiagnostics?.rejectedCarrierCount).toBe(2);
   });
 
   it("preserves geometry-only object ownership in mesh part selections", () => {
@@ -206,8 +394,8 @@ describe("viewport3dDomainAdapter", () => {
         role: "magnetic",
       } as Parameters<typeof selectionForMeshPart>[0]),
     ).toMatchObject({
+      carrierPartId: "part:free-layer",
       kind: "mesh-part",
-      nodeId: "part:free-layer",
       objectId: "free-layer",
     });
   });

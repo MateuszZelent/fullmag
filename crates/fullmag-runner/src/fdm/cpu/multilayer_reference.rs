@@ -12,7 +12,7 @@ use fullmag_engine::{
     ExchangeLlgState, FdmBoundaryPolicy, GridShape, LlgConfig, MaterialParameters,
     UniaxialAnisotropyConfig, MU0,
 };
-use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel};
+use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy};
 use fullmag_ir::{ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR};
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
@@ -41,6 +41,7 @@ struct LayerContext {
     convolution_grid: [usize; 3],
     convolution_cell_size: [f64; 3],
     needs_transfer: bool,
+    transfer_boundary_policy: TransferBoundaryPolicy,
     problem: ExchangeLlgProblem,
 }
 
@@ -51,6 +52,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::fdm::validate_multilayer_grid_budget(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -444,6 +446,12 @@ fn build_contexts_and_states(
                 problem.demag_image_counts = ic;
             }
         }
+        problem.set_demag_boundary(
+            crate::fdm::resolve_fdm_demag_boundary_for_periodicity(
+                plan.periodicity.as_ref(),
+                plan.enable_demag,
+            )?,
+        );
         let state = problem
             .new_state(layer.initial_magnetization.clone())
             .map_err(|error| RunError {
@@ -463,6 +471,16 @@ fn build_contexts_and_states(
             ],
             convolution_cell_size: layer.convolution_cell_size,
             needs_transfer: layer.transfer_kind != "identity",
+            transfer_boundary_policy: TransferBoundaryPolicy::from_periodic_axes(
+                plan.periodicity
+                    .as_ref()
+                    .map(|periodicity| {
+                        periodicity.axes.map(|axis| {
+                            matches!(axis, fullmag_ir::AxisBoundary::Periodic)
+                        })
+                    })
+                    .unwrap_or([false; 3]),
+            ),
             problem,
         });
     }
@@ -647,6 +665,7 @@ fn observe_multilayer(
         demag_field,
         external_field,
         antenna_field: vec![[0.0, 0.0, 0.0]; effective_field.len()],
+        drive_field: vec![[0.0, 0.0, 0.0]; effective_field.len()],
         effective_field,
         anisotropy_field,
         dmi_field,
@@ -658,6 +677,7 @@ fn observe_multilayer(
         exchange_energy,
         demag_energy,
         external_energy,
+        drive_energy: 0.0,
         anisotropy_energy,
         dmi_energy,
         total_energy: exchange_energy
@@ -788,6 +808,7 @@ fn compute_demag_fields(
             conv_grid: context.convolution_grid,
             conv_cell_size: context.convolution_cell_size,
             needs_transfer: context.needs_transfer,
+            transfer_boundary_policy: context.transfer_boundary_policy,
         })
         .collect::<Vec<_>>();
     runtime.compute_demag_fields(&mut layers);
@@ -914,10 +935,7 @@ mod tests {
     };
 
     fn make_plan(enable_demag: bool) -> FdmMultilayerPlanIR {
-        FdmMultilayerPlanIR {
-            mode: "two_d_stack".to_string(),
-            common_cells: [4, 4, 1],
-            layers: vec![
+        let layers = vec![
                 FdmLayerPlanIR {
                     magnet_name: "free".to_string(),
                     native_grid: [4, 4, 1],
@@ -956,7 +974,13 @@ mod tests {
                     convolution_origin: [-4e-9, -4e-9, 3e-9],
                     transfer_kind: "identity".to_string(),
                 },
-            ],
+            ];
+        let mut plan = FdmMultilayerPlanIR {
+            mode: "two_d_stack".to_string(),
+            common_cells: [4, 4, 1],
+            grid_certificate: None,
+            resolved_periodic_images: None,
+            layers,
             enable_exchange: true,
             enable_demag,
             external_field: None,
@@ -984,10 +1008,24 @@ mod tests {
                 eligibility: "eligible".to_string(),
                 estimated_pair_kernels: 4,
                 estimated_unique_kernels: 3,
-                estimated_kernel_bytes: 0,
+                estimated_kernel_bytes: 36_864,
                 warnings: Vec::new(),
             },
-        }
+        };
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.layers);
+        plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+                [-4e-9, -4e-9, 0.0],
+                [4, 4, 1],
+                [2e-9, 2e-9, 1e-9],
+                16,
+                16 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                None,
+                &topology_tokens,
+            )
+            .expect("test certificate should be valid"),
+        );
+        plan
     }
 
     #[test]

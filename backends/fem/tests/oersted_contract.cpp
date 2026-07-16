@@ -8,7 +8,9 @@
  */
 
 #include "context.hpp"
+#include "cpu/mfem/integrators/rk_explicit.hpp"
 #include "cpu/mfem/interactions/oersted.hpp"
+#include "cpu/mfem/runtime/state_io.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -329,31 +331,31 @@ void analytical_cylinder_is_precomputed_for_unit_current() {
         fullmag::fem::initialize_oersted_cylinder_field(ctx, error),
         "Oersted cylinder initialization succeeds");
 
-    check(ctx.oersted.h_xyz.size() == 12u, "Oersted field buffer size");
+    check(ctx.oersted.h_basis_per_ampere_xyz.size() == 12u, "Oersted basis buffer size");
     check_near(ctx.oersted.axis[2], 1.0, 0.0, "Oersted axis normalized");
 
-    check_near(ctx.oersted.h_xyz[0], 0.0, 0.0, "axis node Hx");
-    check_near(ctx.oersted.h_xyz[1], 0.0, 0.0, "axis node Hy");
-    check_near(ctx.oersted.h_xyz[2], 0.0, 0.0, "axis node Hz");
+    check_near(ctx.oersted.h_basis_per_ampere_xyz[0], 0.0, 0.0, "axis node Hx");
+    check_near(ctx.oersted.h_basis_per_ampere_xyz[1], 0.0, 0.0, "axis node Hy");
+    check_near(ctx.oersted.h_basis_per_ampere_xyz[2], 0.0, 0.0, "axis node Hz");
 
     check_near(
-        ctx.oersted.h_xyz[4],
+        ctx.oersted.h_basis_per_ampere_xyz[4],
         1.0 / (4.0 * kPiTest),
         1e-15,
         "inside cylinder unit-current Hy");
     check_near(
-        ctx.oersted.h_xyz[7],
+        ctx.oersted.h_basis_per_ampere_xyz[7],
         1.0 / (4.0 * kPiTest),
         1e-15,
         "outside cylinder unit-current Hy");
     check_near(
-        ctx.oersted.h_xyz[9],
+        ctx.oersted.h_basis_per_ampere_xyz[9],
         -1.0 / (2.0 * kPiTest),
         1e-15,
         "outside cylinder unit-current Hx");
 
     std::vector<double> h_eff(12u, 0.0);
-    fullmag::fem::add_oersted_field(ctx, h_eff);
+    fullmag::fem::add_oersted_field(ctx, ctx.state.current_time, h_eff);
     check_near(
         h_eff[4],
         3.0 / (4.0 * kPiTest),
@@ -381,7 +383,7 @@ void time_modulation_scales_cylinder_current() {
     ctx.oersted.time_dep_offset = 0.5;
     ctx.state.current_time = 0.25;
     check_near(
-        fullmag::fem::oersted_current_scale(ctx),
+        fullmag::fem::oersted_current_scale(ctx, ctx.state.current_time),
         4.5,
         1e-15,
         "sinusoidal Oersted current scale");
@@ -391,17 +393,111 @@ void time_modulation_scales_cylinder_current() {
     ctx.oersted.time_dep_t_off = 0.3;
     ctx.state.current_time = 0.2;
     check_near(
-        fullmag::fem::oersted_current_scale(ctx),
+        fullmag::fem::oersted_current_scale(ctx, ctx.state.current_time),
         3.0,
         0.0,
         "pulse Oersted scale inside window");
 
     ctx.state.current_time = 0.3;
     check_near(
-        fullmag::fem::oersted_current_scale(ctx),
+        fullmag::fem::oersted_current_scale(ctx, ctx.state.current_time),
         0.0,
         0.0,
         "pulse Oersted scale excludes t_off");
+}
+
+void time_modulation_uses_explicit_evaluation_time() {
+    auto ctx = make_cylinder_context();
+    ctx.oersted.time_dep_kind = 1;
+    ctx.oersted.time_dep_freq = 1.0;
+    ctx.oersted.time_dep_phase = 0.0;
+    ctx.oersted.time_dep_offset = 0.0;
+    ctx.state.current_time = 0.0;
+
+    // One sinusoidal period is 4*dt.  The RK stage samples must therefore
+    // distinguish t_n, t_n + dt/2, and t_n + dt rather than read current_time.
+    const double dt = 0.25;
+    check_near(
+        fullmag::fem::oersted_current_scale(ctx, 0.0),
+        0.0,
+        1e-14,
+        "sinusoidal Oersted scale at RK stage c=0");
+    check_near(
+        fullmag::fem::oersted_current_scale(ctx, 0.5 * dt),
+        3.0 / std::sqrt(2.0),
+        1e-14,
+        "sinusoidal Oersted scale at RK midpoint");
+    check_near(
+        fullmag::fem::oersted_current_scale(ctx, dt),
+        3.0,
+        1e-14,
+        "sinusoidal Oersted scale at accepted endpoint");
+
+    ctx.oersted.time_dep_kind = 2;
+    ctx.oersted.time_dep_t_on = 0.125;
+    ctx.oersted.time_dep_t_off = 0.25;
+    check_near(
+        fullmag::fem::oersted_current_scale(ctx, 0.124999999999),
+        0.0,
+        0.0,
+        "pulse Oersted is left-zero before its edge");
+    check_near(
+        fullmag::fem::oersted_current_scale(ctx, 0.125),
+        3.0,
+        0.0,
+        "pulse Oersted is right-continuous at t_on");
+    check_near(
+        fullmag::fem::oersted_current_scale(ctx, 0.25),
+        0.0,
+        0.0,
+        "pulse Oersted is left-continuous at t_off");
+}
+
+void rk_tableau_time_samples_cover_sinus_and_pulse_edge() {
+    auto ctx = make_cylinder_context();
+    ctx.oersted.time_dep_kind = 1;
+    ctx.oersted.time_dep_freq = 1.0;
+    ctx.oersted.time_dep_phase = 0.0;
+    ctx.oersted.time_dep_offset = 0.0;
+    ctx.state.current_time = 0.0;
+    const double dt = 0.25; // period = 4*dt
+
+    for (const auto integrator : {
+             FULLMAG_FEM_INTEGRATOR_HEUN,
+             FULLMAG_FEM_INTEGRATOR_RK4,
+             FULLMAG_FEM_INTEGRATOR_RK23_BS,
+             FULLMAG_FEM_INTEGRATOR_RK45_DP54,
+         }) {
+        const auto &tab = fullmag::fem::tableau_for_integrator(integrator);
+        for (int stage = 0; stage < tab.stages; ++stage) {
+            const double time = ctx.state.current_time + tab.c[stage] * dt;
+            const double expected = ctx.oersted.current * std::sin(2.0 * kPiTest * time);
+            check_near(
+                fullmag::fem::oersted_current_scale(ctx, time), expected, 1e-14,
+                "executed RK stage-time spy must sample sinus at tableau c_j");
+        }
+        check_near(
+            fullmag::fem::oersted_current_scale(ctx, ctx.state.current_time + dt),
+            ctx.oersted.current,
+            1e-14,
+            "executed RK final refresh must sample sinus at accepted endpoint");
+    }
+
+    ctx.oersted.time_dep_kind = 2;
+    ctx.oersted.time_dep_t_on = 0.125;
+    ctx.oersted.time_dep_t_off = 0.25;
+    check_near(fullmag::fem::oersted_current_scale(ctx, 0.125), ctx.oersted.current, 0.0,
+               "pulse edge is included at t_on");
+    check_near(fullmag::fem::oersted_current_scale(ctx, 0.25), 0.0, 0.0,
+               "pulse edge is excluded at t_off");
+}
+
+void oersted_physics_note_freezes_half_open_pulse_convention() {
+    const auto root = fem_source_root();
+    const auto note = read_text_file(root.parent_path().parent_path() / "docs" / "physics" / "fem_oersted.md");
+    check(
+        note.find("half-open interval `[t_on, t_off)`") != std::string::npos,
+        "physics note must freeze the half-open Oersted pulse convention");
 }
 
 void explicit_oersted_field_is_added_unscaled() {
@@ -413,11 +509,94 @@ void explicit_oersted_field_is_added_unscaled() {
     ctx.oersted.h_xyz = {1.0, 2.0, 3.0};
 
     std::vector<double> h_eff = {10.0, 20.0, 30.0};
-    fullmag::fem::add_oersted_field(ctx, h_eff);
+    fullmag::fem::add_oersted_field(ctx, ctx.state.current_time, h_eff);
 
     check_near(h_eff[0], 11.0, 0.0, "explicit Oersted Hx added unscaled");
     check_near(h_eff[1], 22.0, 0.0, "explicit Oersted Hy added unscaled");
     check_near(h_eff[2], 33.0, 0.0, "explicit Oersted Hz added unscaled");
+}
+
+void public_oersted_field_materializes_cylinder_at_explicit_time() {
+    auto ctx = make_cylinder_context();
+    std::string error;
+    check(fullmag::fem::normalize_oersted_cylinder_axis(ctx, error), error.c_str());
+    check(fullmag::fem::initialize_oersted_cylinder_field(ctx, error), error.c_str());
+    ctx.oersted.current = 2.0;
+    ctx.oersted.time_dep_kind = 1;
+    ctx.oersted.time_dep_freq = 1.0;
+    ctx.oersted.time_dep_phase = 0.0;
+    ctx.oersted.time_dep_offset = 0.5;
+
+    const auto &at_zero = fullmag::fem::materialize_oersted_field(ctx, 0.0);
+    check_near(
+        at_zero[4],
+        1.0 / (4.0 * kPiTest),
+        1e-15,
+        "public cylinder H_oe applies I=2 A and the non-unit envelope at t=0");
+
+    const auto &at_quarter = fullmag::fem::materialize_oersted_field(ctx, 0.25);
+    check_near(
+        at_quarter[4],
+        3.0 / (4.0 * kPiTest),
+        1e-15,
+        "public cylinder H_oe applies I=2 A and the non-unit envelope at t=T/4");
+
+    std::vector<double> h_eff_without(at_quarter.size(), 7.0);
+    std::vector<double> h_eff_with = h_eff_without;
+    fullmag::fem::add_oersted_field(ctx, 0.25, h_eff_with);
+    for (size_t i = 0; i < at_quarter.size(); ++i) {
+        check_near(
+            h_eff_with[i] - h_eff_without[i], at_quarter[i], 1e-15,
+            "CPU H_oe equals H_eff(with Oersted)-H_eff(without Oersted)");
+    }
+
+    ctx.state.current_time = 0.25;
+    std::vector<double> copied(at_quarter.size(), 0.0);
+    check(
+        fullmag::fem::context_copy_field_f64(
+            ctx,
+            FULLMAG_FEM_OBSERVABLE_H_OE,
+            copied.data(),
+            static_cast<uint64_t>(copied.size()),
+            error) == FULLMAG_FEM_OK,
+        "CPU public H_oe copy must succeed at accepted time");
+    for (size_t i = 0; i < copied.size(); ++i) {
+        check_near(
+            copied[i], h_eff_with[i] - h_eff_without[i], 1e-15,
+            "CPU context_copy H_oe equals accepted H_eff Oersted contribution");
+    }
+}
+
+void gpu_public_oersted_sync_and_async_snapshot_select_realized_buffer() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string state_io =
+        read_text_file(root / "cpu" / "mfem" / "runtime" / "state_io.cpp");
+    const std::string api = read_text_file(root / "src" / "api.cpp");
+    const std::string gpu_oersted =
+        read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_oersted_field.cu");
+
+    check(
+        state_io.find("case FULLMAG_FEM_OBSERVABLE_H_OE:\n                gpu_field = &ctx.gpu_state.device.fields.h_oe;") != std::string::npos,
+        "GPU synchronous H_oe copy must download the realized device H_oe buffer");
+    check(
+        api.find("case FULLMAG_FEM_OBSERVABLE_H_OE:\n        return &context.gpu_state.device.fields.h_oe;") != std::string::npos,
+        "GPU asynchronous H_oe snapshot must stage the realized device H_oe buffer");
+    check(
+        gpu_oersted.find("h_oe_basis_per_ampere.x, gpu.fields.h_oe.x, scale") != std::string::npos &&
+            gpu_oersted.find("gpu.fields.h_oe.x, gpu.fields.h_eff.x, 1.0") != std::string::npos,
+        "GPU RHS must materialize the basis into H_oe then add that realized field once");
+}
+
+void public_oersted_field_leaves_explicit_nodal_input_unscaled() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 1;
+    ctx.oersted.has_explicit_field = true;
+    ctx.oersted.current = -12.0;
+    ctx.oersted.time_dep_kind = 1;
+    ctx.oersted.h_xyz = {1.0, -2.0, 3.0};
+    const auto &realized = fullmag::fem::materialize_oersted_field(ctx, 0.25);
+    check(realized == std::vector<double>({1.0, -2.0, 3.0}),
+          "explicit nodal Oersted input remains final unscaled H_oe");
 }
 
 void oersted_plan_import_validates_exclusive_realizations_and_copies_field() {
@@ -464,7 +643,13 @@ int main() {
     analytical_cylinder_is_precomputed_for_unit_current();
     invalid_axis_is_rejected();
     time_modulation_scales_cylinder_current();
+    time_modulation_uses_explicit_evaluation_time();
+    rk_tableau_time_samples_cover_sinus_and_pulse_edge();
+    oersted_physics_note_freezes_half_open_pulse_convention();
     explicit_oersted_field_is_added_unscaled();
+    public_oersted_field_materializes_cylinder_at_explicit_time();
+    gpu_public_oersted_sync_and_async_snapshot_select_realized_buffer();
+    public_oersted_field_leaves_explicit_nodal_input_unscaled();
     oersted_plan_import_validates_exclusive_realizations_and_copies_field();
     return 0;
 }

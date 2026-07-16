@@ -2,15 +2,19 @@ import type {
   CouplingListResource,
   HysteresisExecutionTreeResource,
   MaterialParameterFieldListResource,
+  MeshRegionMembershipResource,
   RegionListResource,
   SceneResource,
   StageExecutionResource,
 } from "@/kernel/api/apiTypes";
+import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
+import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
 
 import type {
   ExplorerNodeStatus,
   ModelTreeCouplingSnapshot,
+  ModelTreeFieldDriveSnapshot,
   ModelTreeMaterialSnapshot,
   ModelTreeHysteresisSettleStepSnapshot,
   ModelTreeMaterialFieldSnapshot,
@@ -23,6 +27,7 @@ import type {
 interface SceneLike {
   [key: string]: unknown;
   current_modules?: unknown;
+  field_drives?: unknown;
   magnetization_assets?: unknown;
   materials?: unknown;
   objects?: SceneResource["objects"] | unknown;
@@ -39,6 +44,7 @@ interface ModelTreeResourceInputs {
   couplings?: CouplingListResource | null;
   materialFields?: MaterialParameterFieldListResource | null;
   regions?: RegionListResource | null;
+  regionMemberships?: readonly MeshRegionMembershipResource[] | null;
 }
 
 export function modelTreeSnapshotFromScene(
@@ -63,12 +69,15 @@ export function modelTreeSnapshotFromScene(
     resources.regions,
     scene?.objects,
     materialFieldsByObject,
+    resources.regionMemberships,
   );
   return {
     couplings: couplingSnapshots(resources.couplings, scene),
+    fieldDrives: fieldDriveSnapshots(scene?.field_drives),
     materials,
     objects: Array.isArray(scene?.objects)
       ? scene.objects.reduce<ModelTreeObjectSnapshot[]>((objects, object) => {
+          if (isSyntheticAirboxSceneObject(object)) return objects;
           const snapshot = sceneObjectSnapshot(
             object,
             materialById,
@@ -86,6 +95,32 @@ export function modelTreeSnapshotFromScene(
     study: sceneStudySnapshot(scene?.study),
     universe: sceneUniverseSnapshot(scene?.universe),
   };
+}
+
+function fieldDriveSnapshots(value: unknown): ModelTreeFieldDriveSnapshot[] {
+  const state = recordValue(value);
+  const drives = Array.isArray(state?.drives) ? state.drives : [];
+  return drives.flatMap((candidate) => {
+    const drive = recordValue(candidate);
+    const id = stringValue(drive?.id);
+    if (!drive || !id) return [];
+    return [{
+      enabled: drive.enabled !== false,
+      id,
+      label: stringValue(drive.name) ?? id,
+      targetKind: stringValue(recordValue(drive.target)?.kind) ?? "unresolved",
+      waveformKind: stringValue(recordValue(drive.waveform)?.kind) ?? "unresolved",
+    }];
+  });
+}
+
+function isSyntheticAirboxSceneObject(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const object = value as Record<string, unknown>;
+  return isVisualizationAirboxIdentity({
+    id: stringValue(object.id),
+    role: stringValue(object.role),
+  });
 }
 
 export function modelTreeSnapshotWithStageExecution(
@@ -374,8 +409,12 @@ function authoredRegionsByOwner(
   resource: RegionListResource | null | undefined,
   sceneObjects: unknown,
   materialFieldsByObject: ReadonlyMap<string, ModelTreeMaterialFieldSnapshot[]>,
+  memberships: readonly MeshRegionMembershipResource[] | null | undefined,
 ): Map<string, ModelTreeObjectRegionSnapshot[]> {
   const byObject = new Map<string, ModelTreeObjectRegionSnapshot[]>();
+  const membershipByRegionId = new Map(
+    (memberships ?? []).map((membership) => [membership.region_id, membership]),
+  );
   if (resource?.regions?.length) {
     for (const region of resource.regions) {
       if (region.source !== "authored_object_region") continue;
@@ -395,6 +434,13 @@ function authoredRegionsByOwner(
           ),
           materialOverrideCount: region.material_overrides?.length ?? 0,
           meshPolicyActive: Boolean(region.mesh_policy),
+          meshLifecycleStatus: resolveRegionMeshLifecycle({
+            build: null,
+            draftDirty: false,
+            membership: membershipByRegionId.get(region.region_id),
+            policyEnabled: Boolean(region.mesh_policy),
+            supported: true,
+          }).status,
           priority: region.priority ?? null,
           realizationPolicy: region.realization_policy ?? null,
           realizationStatus: region.realization_status ?? null,
@@ -424,6 +470,13 @@ function authoredRegionsByOwner(
         materialFieldCount: fields.filter((field) => field.regionId === id).length,
         materialOverrideCount: arrayLength(region?.material_overrides),
         meshPolicyActive: Boolean(region?.mesh_policy),
+        meshLifecycleStatus: resolveRegionMeshLifecycle({
+          build: null,
+          draftDirty: false,
+          membership: membershipByRegionId.get(id),
+          policyEnabled: Boolean(region?.mesh_policy),
+          supported: true,
+        }).status,
         priority: numberValue(region?.priority),
         realizationPolicy: stringValue(region?.realization_policy),
         realizationStatus: null,

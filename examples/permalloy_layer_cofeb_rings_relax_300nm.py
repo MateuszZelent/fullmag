@@ -75,7 +75,15 @@ layer.alpha = 0.001
 layer.Ku1 = 1e5
 layer.anisU = (0,0,1)
 layer.m = fm.texture.uniform(-1.0, 0.0, 0.0)
-layer.mesh(maximum_element_size=8 * NM, minimum_element_size=2 * NM, order=1)
+layer.mesh(
+    maximum_element_size=20 * NM,
+    minimum_element_size=1.6 * NM,
+    order=1,
+    mesh_strategy="swept_prism",
+    through_thickness_elements=1,
+    through_thickness_distribution="fixed",
+    sweep_face_meshing="triangular",
+)
 
 top_ring = study.geometry(
     ring_geometry("cofeb_top_ring", RING_CENTER_Z),
@@ -111,8 +119,9 @@ study.objects.mesh.defaults(
     algorithm_3d=10,
     size_factor=1,
     size_from_curvature=0,
-    smoothing_steps=1,
-    optimize_iterations=1,
+    smoothing_steps=4,
+    optimize="Gmsh",
+    optimize_iterations=4,
     narrow_regions=0,
     compute_quality=True,
     per_element_quality=True,
@@ -127,16 +136,16 @@ study.tableautosave(1e-16, quantities=["t", "step", "mx", "my", "mz", "E_total"]
 
 study.stages.add_minimize(
     method="bb",
-    max_steps=2000,
+    max_steps=10,
     tol=1e-4,
 )
 
-study.stages.add_relax(
-    algorithm="llg_overdamped",
-    solver="rk23",
-    max_error=1e-6,
-    dt_min=1e-17,
-    dt_max=1e-13,
-    max_steps=100,
-    tol=1e-4,
-)
+# study.stages.add_relax(
+#     algorithm="llg_overdamped",
+#     solver="rk23",
+#     max_error=1e-6,
+#     dt_min=1e-17,
+#     dt_max=1e-13,
+#     max_steps=100,
+#     tol=1e-4,
+# )

@@ -99,6 +99,19 @@ describe("KernelProvider performance contracts", () => {
     );
   });
 
+  it("constructs one visualization debug controller in the immutable kernel", () => {
+    expect(kernelProviderSource).toContain(
+      'import { VisualizationDebugController } from "./visualization/VisualizationDebugController";',
+    );
+    expect(kernelProviderSource).toContain(
+      "const visualizationDebug = new VisualizationDebugController();",
+    );
+    expect(kernelProviderSource.match(/new VisualizationDebugController\(\)/g)).toHaveLength(
+      1,
+    );
+    expect(kernelProviderSource).toContain("visualizationDebug,\n    visualizationSync,");
+  });
+
   it("allows controlled browser audits to disable realtime websocket coupling", () => {
     expect(kernelProviderSource).toContain("disableRealtime");
     expect(kernelProviderSource).toContain(
@@ -115,6 +128,12 @@ describe("KernelProvider performance contracts", () => {
     expect(kernelProviderSource).toContain('targetKind: "hysteresis-step"');
     expect(kernelProviderSource).toContain("kernel.layout.setActiveViewportMainModule(\"viewport-3d\")");
     expect(kernelProviderSource).toContain("kernel.layout.setFocusedSlot(\"viewport-main\")");
+  });
+
+  it("keeps the browser audit hook out of ordinary production builds", () => {
+    expect(kernelProviderSource).toContain("NEXT_PUBLIC_AUDIT_BUILD");
+    expect(kernelProviderSource).toContain("process.env.NODE_ENV === \"production\" && !auditBuild");
+    expect(kernelProviderSource).toContain("setActiveViewportMainModule");
   });
 
   it("pauses viewport-3d-only resource hooks when a non-3D center tab is active", () => {

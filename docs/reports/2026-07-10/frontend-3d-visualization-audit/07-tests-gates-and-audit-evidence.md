@@ -1,5 +1,34 @@
 # 07. Testy, bramki i materiał dowodowy
 
+## Stan reaudytu 2026-07-14
+
+F3D-026–F3D-028 pozostają **naprawione według pierwotnych kryteriów**. Prawdziwy
+R3F/WebGL jest montowany, audit build sam posiada runtime i zapisuje evidence,
+a API-hygiene gate jest semantyczny. Reaudyt ujawnił jednak nowy, szerszy brak:
+gate'y używają małych fixture, nie pokrywają produkcyjnej sceny FEM CoFeB, a
+recorder przy awarii przed canvasem nie zapisuje pełnego JSON/console/pageerror.
+Ten nowy zakres jest częścią F3D-031, nie ponownym otwarciem F3D-026/F3D-028.
+
+Aktualne szczegóły: `12-bramki-diagnostyka-i-blokady-runtime.md`.
+
+### Świeża weryfikacja bieżącego worktree — 2026-07-14
+
+- `pnpm --dir apps/control-room typecheck` — pass;
+- `pnpm --dir apps/control-room lint` — pass, zero warnings;
+- `env TMPDIR=/tmp pnpm --dir apps/control-room test` — pass: 325 plików,
+  3015 testów;
+- pięć skupionych suite selection/Explorer/viewport — pass: 144 testy;
+- trzy skupione testy API canonical Airbox/legacy overrides — pass;
+- `audit:viewport-3d-memory-churn` — pass: 120 przełączeń, heap
+  17,9 -> 19,8 MB, geometrie 5 -> 5, zero field refetchy;
+- `audit:viewport-3d-fem-topology-uploads` — pass: 12 przypadków,
+  `ARRAY_BUFFER` positions 162,2–164,0 KB.
+
+Pierwsza sandboxowa próba browser gate'a zakończyła się `listen EPERM` na
+`127.0.0.1`; ten sam gate poza ograniczeniem sandboxa przeszedł. Nie jest to
+błąd frontendu. Istotny wynik audytu jest odwrotny: komplet zielonych testów i
+małych gate'ów nie wykrywa udowodnionych luk F3D-029–F3D-032.
+
 ## F3D-026 — zielone idle/memory testy nie montują realnego lifecycle renderera
 
 **Priorytet:** P2 — średni

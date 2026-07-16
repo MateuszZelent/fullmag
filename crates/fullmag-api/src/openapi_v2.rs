@@ -19,6 +19,9 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::data::material_fields::get_material_field_data,
         crate::router_v2::handlers::data::mesh_region_membership::get_mesh_region_memberships,
         crate::router_v2::handlers::data::mesh_region_membership::get_mesh_region_membership,
+        crate::router_v2::handlers::data::fdm_region_membership::get_fdm_region_memberships,
+        crate::router_v2::handlers::data::fdm_region_membership::get_fdm_region_membership_binary,
+        crate::router_v2::handlers::data::fdm_region_membership::get_fdm_region_membership_binary_scoped,
         crate::router_v2::handlers::data::quantities::get_quantities_catalog,
         crate::router_v2::handlers::data::fields::get_field_catalog,
         crate::router_v2::handlers::data::fields::get_field_meta,
@@ -77,6 +80,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::meshing::mesh::get_mesh_realized_size_fields,
         crate::router_v2::handlers::meshing::mesh::get_mesh_quality_gates,
         crate::router_v2::handlers::meshing::mesh::get_mesh_periodic_pairs,
+        crate::router_v2::handlers::meshing::mesh::get_mesh_periodic_pairs_binary,
         crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_manifest,
         crate::router_v2::handlers::meshing::mesh::get_mesh_shared_domain_topology,
         crate::router_v2::handlers::meshing::mesh::get_mesh_object_config,
@@ -118,6 +122,10 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::model::authoring::create_authoring_coupling,
         crate::router_v2::handlers::model::authoring::patch_authoring_coupling,
         crate::router_v2::handlers::model::authoring::delete_authoring_coupling,
+        crate::router_v2::handlers::model::authoring::get_authoring_field_drives,
+        crate::router_v2::handlers::model::authoring::create_authoring_field_drive,
+        crate::router_v2::handlers::model::authoring::replace_authoring_field_drive,
+        crate::router_v2::handlers::model::authoring::delete_authoring_field_drive,
         crate::router_v2::handlers::model::authoring::patch_authoring_region,
         crate::router_v2::handlers::model::authoring::commit_authoring_transaction,
         crate::router_v2::handlers::model::authoring::get_authoring_study_runtime,
@@ -174,6 +182,8 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_frequency_point,
         crate::router_v2::handlers::analysis::frequency_domain::get_frequency_domain_response_field_meta,
         crate::router_v2::handlers::analysis::response::get_magnetic_response_sweep_v1,
+        crate::router_v2::handlers::analysis::spin_wave_response::get_spin_wave_gamma,
+        crate::router_v2::handlers::analysis::spin_wave_response::get_dynamic_structure_factor,
         crate::router_v2::handlers::analysis::extensions::get_object_topological_charge,
         crate::router_v2::handlers::analysis::hysteresis::get_points,
         crate::router_v2::handlers::analysis::hysteresis::get_metrics,
@@ -332,6 +342,8 @@ use utoipa::OpenApi;
         crate::schemas::mesh::MeshPartResource,
         crate::schemas::mesh::MeshRegionMembershipListResource,
         crate::schemas::mesh::MeshRegionMembershipResource,
+        crate::schemas::mesh::FdmRegionLegendEntryResource,
+        crate::schemas::mesh::FdmRegionMembershipResource,
         crate::schemas::mesh::MeshSharedDomainManifestResource,
         crate::schemas::mesh::MeshObjectConfigResource,
         crate::schemas::mesh::MeshObjectConfigReplaceRequest,
@@ -511,13 +523,22 @@ use utoipa::OpenApi;
         crate::schemas::hysteresis::HysteresisSaturationResource,
         crate::schemas::hysteresis::HysteresisReversalFieldsResource,
         crate::schemas::hysteresis::HysteresisAdaptiveRefinementResource,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeQuery,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeLayerSample,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeResource,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeSampleGrid,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeSampleTopology,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeStatus,
-        crate::router_v2::handlers::analysis::extensions::TopologicalChargeWarning,
+        crate::schemas::analysis_extensions::TopologicalChargePlane,
+        crate::schemas::analysis_extensions::TopologicalChargeSupportMode,
+        crate::schemas::analysis_extensions::TopologicalChargeProfileSamples,
+        crate::schemas::analysis_extensions::TopologicalChargeMethod,
+        crate::schemas::analysis_extensions::TopologicalChargeStatus,
+        crate::schemas::analysis_extensions::TopologicalChargeTrust,
+        crate::schemas::analysis_extensions::TopologicalChargeQueryV2,
+        crate::schemas::analysis_extensions::TopologicalChargeRequestEcho,
+        crate::schemas::analysis_extensions::TopologicalChargeResolvedSupport,
+        crate::schemas::analysis_extensions::TopologicalChargeSupportFrame,
+        crate::schemas::analysis_extensions::TopologicalChargeLayerSample,
+        crate::schemas::analysis_extensions::TopologicalChargeQuality,
+        crate::schemas::analysis_extensions::TopologicalChargeProvenance,
+        crate::schemas::analysis_extensions::TopologicalChargeMethodDescriptor,
+        crate::schemas::analysis_extensions::TopologicalChargeWarning,
+        crate::schemas::analysis_extensions::TopologicalChargeResourceV2,
     )),
     tags(
         (name = "platform", description = "Server-level health, capabilities, and API documents"),
@@ -681,7 +702,12 @@ mod tests {
             .expect("topological-charge plane parameter");
 
         assert_eq!(
-            plane["schema"]["enum"],
+            plane["schema"]["$ref"],
+            serde_json::json!("#/components/schemas/TopologicalChargePlane")
+        );
+        let plane_schema = &document["components"]["schemas"]["TopologicalChargePlane"];
+        assert_eq!(
+            plane_schema["enum"],
             serde_json::json!(["auto", "xy", "xz", "yz"])
         );
         assert!(

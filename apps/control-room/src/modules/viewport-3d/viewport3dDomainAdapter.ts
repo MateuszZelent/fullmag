@@ -2,7 +2,17 @@ import type {
   DomainMetaResource,
   MeshSharedDomainManifestResource,
 } from "@/kernel/api/apiTypes";
-import { visualizationObjectIdForMeshPartLike } from "@/kernel/selection/selectionTypes";
+import {
+  normalizeManifestRenderableCarriers,
+  type ManifestCarrierSourceKind,
+  type ManifestRenderableCarrierDiagnostics,
+  type NormalizedManifestObjectSegmentCarrier,
+  type NormalizedManifestRenderableCarrier,
+} from "@/kernel/selection/manifestRenderableCarriers";
+import {
+  isVisualizationAirboxIdentity,
+  visualizationObjectIdForMeshPartLike,
+} from "@/kernel/selection/selectionTypes";
 
 import {
   resolveDomainBounds,
@@ -13,7 +23,22 @@ type MeshPart = NonNullable<
   MeshSharedDomainManifestResource["mesh_parts"]
 >[number];
 
-export type Viewport3DMeshPart = MeshPart;
+export type ManifestRenderableCarrierSourceKind = ManifestCarrierSourceKind;
+
+export type Viewport3DMeshPart =
+  | (MeshPart & {
+      carrierKind?: ManifestRenderableCarrierSourceKind;
+      fieldCapable?: boolean;
+    })
+  | Viewport3DObjectSegmentCarrier;
+
+export type Viewport3DObjectSegmentCarrier =
+  NormalizedManifestObjectSegmentCarrier;
+
+export type Viewport3DManifestRenderableCarrier =
+  NormalizedManifestRenderableCarrier;
+
+export type { ManifestRenderableCarrierDiagnostics };
 
 export interface FdmGridRenderDomain {
   bounds: Viewport3DBounds | null;
@@ -28,20 +53,23 @@ export interface FdmGridRenderDomain {
 }
 
 export interface FemManifestRenderDomain {
-  airboxParts: MeshPart[];
-  magneticParts: MeshPart[];
-  magneticSurfacePartsByPartId: Map<string, MeshPart[]>;
+  airboxParts: Viewport3DMeshPart[];
+  fieldCapableAirboxParts?: Viewport3DMeshPart[];
+  fieldCapableMagneticParts?: Viewport3DMeshPart[];
+  magneticParts: Viewport3DMeshPart[];
+  magneticSurfacePartsByPartId: Map<string, Viewport3DMeshPart[]>;
   objectPartIds: Map<string, string[]>;
-  partsById: Map<string, MeshPart>;
+  partsById: Map<string, Viewport3DMeshPart>;
+  renderCarrierDiagnostics?: ManifestRenderableCarrierDiagnostics;
 }
 
 export interface Viewport3DPartSelection {
   boundaryFaceIndex?: number | null;
+  carrierPartId: string;
   kind: "mesh-part" | "mesh-part-airbox";
   label: string;
-  nodeId: string;
   objectId: string | null;
-  part: MeshPart;
+  part: Viewport3DMeshPart;
 }
 
 export function adaptFdmDomainMeta(
@@ -102,28 +130,31 @@ export function adaptFdmDomainMeta(
 export function adaptFemSharedDomainManifest(
   manifest: MeshSharedDomainManifestResource | null | undefined,
 ): FemManifestRenderDomain {
-  const parts = manifest?.mesh_parts ?? [];
+  const carriers = manifestRenderableCarriers(manifest);
   const objectPartIds = new Map<string, string[]>();
-  const partsById = new Map<string, MeshPart>();
-  const airboxParts: MeshPart[] = [];
-  const magneticParts: MeshPart[] = [];
-  const interfaceParts: MeshPart[] = [];
+  const partsById = new Map<string, Viewport3DMeshPart>();
+  const airboxParts: Viewport3DMeshPart[] = [];
+  const magneticParts: Viewport3DMeshPart[] = [];
+  const interfaceParts: Viewport3DMeshPart[] = [];
   const magneticPartIdsByAlias = new Map<string, Set<string>>();
-  const magneticSurfacePartsByPartId = new Map<string, MeshPart[]>();
+  const magneticSurfacePartsByPartId = new Map<string, Viewport3DMeshPart[]>();
 
-  for (const part of parts) {
+  for (const part of carriers) {
     partsById.set(part.id, part);
-    if (part.role === "air") {
+    const isAirbox = isVisualizationAirboxIdentity(part);
+    if (isAirbox) {
       airboxParts.push(part);
+    } else if (isInterfaceSurfacePart(part)) {
+      interfaceParts.push(part);
     } else if (isMagneticRenderablePart(part)) {
       magneticParts.push(part);
       addMagneticPartAliases(magneticPartIdsByAlias, part);
-    } else if (isInterfaceSurfacePart(part)) {
-      interfaceParts.push(part);
     }
 
-    addObjectPartAlias(objectPartIds, part.object_id, part.id);
-    addObjectPartAlias(objectPartIds, part.geometry_id, part.id);
+    if (!isAirbox) {
+      addObjectPartAlias(objectPartIds, part.object_id, part.id);
+      addObjectPartAlias(objectPartIds, part.geometry_id, part.id);
+    }
   }
 
   for (const part of interfaceParts) {
@@ -139,11 +170,30 @@ export function adaptFemSharedDomainManifest(
 
   return {
     airboxParts,
+    fieldCapableAirboxParts: airboxParts.filter(isFieldCapableManifestRenderCarrier),
+    fieldCapableMagneticParts: magneticParts.filter(
+      isFieldCapableManifestRenderCarrier,
+    ),
     magneticParts,
     magneticSurfacePartsByPartId,
     objectPartIds,
     partsById,
+    renderCarrierDiagnostics: carriers.diagnostics,
   };
+}
+
+export function manifestRenderableCarriers(
+  manifest: MeshSharedDomainManifestResource | null | undefined,
+): Viewport3DManifestRenderableCarrier[] & {
+  diagnostics: ManifestRenderableCarrierDiagnostics;
+} {
+  return normalizeManifestRenderableCarriers(manifest);
+}
+
+export function isFieldCapableManifestRenderCarrier(
+  part: Viewport3DMeshPart,
+): boolean {
+  return part.fieldCapable !== false;
 }
 
 function addObjectPartAlias(
@@ -172,7 +222,7 @@ function addObjectPartId(
   objectPartIds.set(objectId, ids);
 }
 
-function isMagneticRenderablePart(part: MeshPart): boolean {
+function isMagneticRenderablePart(part: Viewport3DMeshPart): boolean {
   return Boolean(
     part.object_id ||
       part.role === "magnetic" ||
@@ -180,7 +230,7 @@ function isMagneticRenderablePart(part: MeshPart): boolean {
   );
 }
 
-function isInterfaceSurfacePart(part: MeshPart): boolean {
+function isInterfaceSurfacePart(part: Viewport3DMeshPart): boolean {
   return Boolean(
     part.role === "interface" &&
       ((part.surface_faces?.length ?? 0) > 0 ||
@@ -191,7 +241,7 @@ function isInterfaceSurfacePart(part: MeshPart): boolean {
 
 function addMagneticPartAliases(
   index: Map<string, Set<string>>,
-  part: MeshPart,
+  part: Viewport3DMeshPart,
 ): void {
   addMagneticPartAlias(index, part.object_id, part.id);
   addMagneticPartAlias(index, part.geometry_id, part.id);
@@ -215,7 +265,7 @@ function addMagneticPartAlias(
 }
 
 function resolveMagneticInterfaceOwnerPartId(
-  part: MeshPart,
+  part: Viewport3DMeshPart,
   magneticPartIdsByAlias: ReadonlyMap<string, ReadonlySet<string>>,
 ): string | null {
   const direct =
@@ -276,22 +326,25 @@ export function resolveFemPartSelectionByBoundaryFace(
 }
 
 export function selectionForMeshPart(
-  part: MeshPart,
+  part: Viewport3DMeshPart,
   boundaryFaceIndex: number | null = null,
 ): Viewport3DPartSelection {
   const objectId = visualizationObjectIdForMeshPartLike(part);
   return {
     boundaryFaceIndex,
-    kind: part.role === "air" ? "mesh-part-airbox" : "mesh-part",
+    carrierPartId: part.id,
+    kind:
+      isVisualizationAirboxIdentity(part)
+        ? "mesh-part-airbox"
+        : "mesh-part",
     label: part.label,
-    nodeId: part.id,
     objectId,
     part,
   };
 }
 
 export function resolveMeshPartBounds(
-  part: MeshPart | null | undefined,
+  part: Viewport3DMeshPart | null | undefined,
 ): Viewport3DBounds | null {
   const min = part?.bounds_min;
   const max = part?.bounds_max;
@@ -316,7 +369,10 @@ export function resolveMeshPartBounds(
   };
 }
 
-function partIncludesBoundaryFace(part: MeshPart, faceIndex: number): boolean {
+function partIncludesBoundaryFace(
+  part: Viewport3DMeshPart,
+  faceIndex: number,
+): boolean {
   if (part.boundary_face_indices?.includes(faceIndex)) {
     return true;
   }

@@ -37,7 +37,7 @@ bool cuda_launch_ok(const char *operation, std::string &reason)
     return cuda_ok(cudaPeekAtLastError(), operation, reason);
 }
 
-double gpu_rk_oersted_scale(const Context &ctx)
+double gpu_rk_oersted_scale(const Context &ctx, double evaluation_time_s)
 {
     if (!ctx.oersted.has_cylinder) {
         return 1.0;
@@ -46,13 +46,13 @@ double gpu_rk_oersted_scale(const Context &ctx)
     switch (ctx.oersted.time_dep_kind) {
         case 1:
             scale *= std::sin(
-                         2.0 * kPi * ctx.oersted.time_dep_freq * ctx.state.current_time +
+                         2.0 * kPi * ctx.oersted.time_dep_freq * evaluation_time_s +
                          ctx.oersted.time_dep_phase) +
                      ctx.oersted.time_dep_offset;
             break;
         case 2:
-            scale *= (ctx.state.current_time >= ctx.oersted.time_dep_t_on &&
-                      ctx.state.current_time < ctx.oersted.time_dep_t_off)
+            scale *= (evaluation_time_s >= ctx.oersted.time_dep_t_on &&
+                      evaluation_time_s < ctx.oersted.time_dep_t_off)
                          ? 1.0
                          : 0.0;
             break;
@@ -68,6 +68,7 @@ bool gpu_rk_accumulate_oersted_field(
     Context &ctx,
     cudaStream_t stream,
     int n,
+    double evaluation_time_s,
     std::string &reason)
 {
     if (!ctx.oersted.has_cylinder && !ctx.oersted.has_explicit_field) {
@@ -79,10 +80,18 @@ bool gpu_rk_accumulate_oersted_field(
         reason = "GPU RK Oersted field requires device-resident H_oe buffers";
         return false;
     }
-    const double scale = gpu_rk_oersted_scale(ctx);
-    fullmag_cuda_add_scaled_field_inplace(gpu.fields.h_oe.x, gpu.fields.h_eff.x, scale, n, stream);
-    fullmag_cuda_add_scaled_field_inplace(gpu.fields.h_oe.y, gpu.fields.h_eff.y, scale, n, stream);
-    fullmag_cuda_add_scaled_field_inplace(gpu.fields.h_oe.z, gpu.fields.h_eff.z, scale, n, stream);
+    if (ctx.oersted.has_cylinder) {
+        const double scale = gpu_rk_oersted_scale(ctx, evaluation_time_s);
+        fullmag_cuda_scale_field(
+            gpu.fields.h_oe_basis_per_ampere.x, gpu.fields.h_oe.x, scale, n, stream);
+        fullmag_cuda_scale_field(
+            gpu.fields.h_oe_basis_per_ampere.y, gpu.fields.h_oe.y, scale, n, stream);
+        fullmag_cuda_scale_field(
+            gpu.fields.h_oe_basis_per_ampere.z, gpu.fields.h_oe.z, scale, n, stream);
+    }
+    fullmag_cuda_add_scaled_field_inplace(gpu.fields.h_oe.x, gpu.fields.h_eff.x, 1.0, n, stream);
+    fullmag_cuda_add_scaled_field_inplace(gpu.fields.h_oe.y, gpu.fields.h_eff.y, 1.0, n, stream);
+    fullmag_cuda_add_scaled_field_inplace(gpu.fields.h_oe.z, gpu.fields.h_eff.z, 1.0, n, stream);
     return cuda_launch_ok("launch GPU RK Oersted h_eff accumulation", reason);
 }
 

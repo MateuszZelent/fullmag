@@ -227,6 +227,15 @@ pub fn table_column_meta(column: &str) -> Option<TableColumnMeta> {
             "float",
         ),
         "e_ext" => ("e_ext", "E ext", "J", "energy", None, Some("sum"), "float"),
+        "e_drive" => (
+            "e_drive",
+            "E drive",
+            "J",
+            "energy",
+            None,
+            Some("sum"),
+            "float",
+        ),
         "e_ani" => ("e_ani", "E ani", "J", "energy", None, Some("sum"), "float"),
         "e_dmi" => ("e_dmi", "E dmi", "J", "energy", None, Some("sum"), "float"),
         "e_total" => (
@@ -308,6 +317,7 @@ pub fn table_column_value(stats: &StepStats, column: &str) -> Result<f64, String
         "e_ex" => stats.e_ex,
         "e_demag" => stats.e_demag,
         "e_ext" => stats.e_ext,
+        "e_drive" => stats.e_drive,
         "e_ani" => stats.e_ani,
         "e_dmi" => stats.e_dmi,
         "e_total" => stats.e_total,
@@ -444,6 +454,21 @@ mod tests {
             window.rows[1].sample_policy.as_deref(),
             Some("coalesced_to_step")
         );
+    }
+
+    #[test]
+    fn regional_drive_energy_is_a_supported_table_quantity() {
+        let config = TableAutosaveConfig::from_ir(&fullmag_ir::TableAutosaveIR {
+            kind: "table_autosave".to_string(),
+            table_id: DEFAULT_TABLE_ID.to_string(),
+            sample_period_s: 1e-12,
+            quantities: vec!["e_drive".to_string()],
+        })
+        .expect("regional drive energy should be accepted");
+        assert_eq!(config.columns[0].quantity_id, "e_drive");
+        let mut step = stats(1, 1e-12);
+        step.e_drive = -7.5e-20;
+        assert_eq!(table_column_value(&step, "e_drive").unwrap(), -7.5e-20);
     }
 
     #[test]

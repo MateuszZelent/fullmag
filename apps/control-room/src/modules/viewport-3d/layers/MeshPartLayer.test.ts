@@ -10,9 +10,88 @@ import {
   resolveMeshPartScalarColors,
   resolveMeshPartVectorLayerInput,
   resolveMeshPartWireframeEdgeIndices,
+  resolveMeshPartPointNodeSelection,
+  recordMeshPartSurfaceAdoption,
 } from "./MeshPartLayer";
+import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
+import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
 
 describe("MeshPartLayer", () => {
+  it("uses the effective full node selection for the points pass", () => {
+    const fullNodeSelection = { nodeIndices: [4, 5, 6] };
+    expect(
+      resolveMeshPartPointNodeSelection("full", {
+        fullNodeSelection,
+        part: { node_indices: [0, 1, 2, 3, 4, 5, 6] },
+        surfaceNodeSelection: { nodeIndices: [4, 5] },
+      } as never),
+    ).toBe(fullNodeSelection);
+  });
+
+  it("keeps Surface points empty while canonical surface membership is unavailable", () => {
+    expect(
+      resolveMeshPartPointNodeSelection("surface", {
+        fullNodeSelection: { nodeIndices: [4, 5, 6] },
+        part: { node_indices: [0, 1, 2, 3, 4, 5, 6] },
+        surfaceNodeSelection: null,
+      } as never),
+    ).toEqual({ nodeIndices: [] });
+  });
+  it("records the actually visible retained scalar buffer, not merely the requested candidate", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([["part:a", ["object:a"]]]));
+    registry.retainDemand("object:a");
+
+    recordMeshPartSurfaceAdoption({
+      carrierId: "part:a",
+      fieldBufferId: "field-requested-new",
+      registry,
+      scalarBuffer: {
+        buildKey: "scalar-retained",
+        colors: new Float32Array(9),
+        range: { max: 1, min: 0 },
+        sourceFieldBufferId: "field-retained-old",
+        sourceResourceKey: "resource-retained-old",
+      },
+    });
+
+    expect(registry.snapshot("object:a")[0]).toMatchObject({
+      fieldBufferId: "field-retained-old",
+      resourceKey: "resource-retained-old",
+      scalarBufferKey: "scalar-retained",
+    });
+  });
+  it("records a canonical scalar key when synchronous colors have no build key", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([["part:a", ["object:a"]]]));
+    registry.retainDemand("object:a");
+    const scalarBuffer = {
+      colors: new Float32Array(6),
+      colorMode: "x",
+      quantityId: "H_demag",
+      range: { max: 1, min: 0 },
+    };
+
+    recordMeshPartSurfaceAdoption({
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      registry,
+      scalarBuffer,
+    });
+
+    expect(registry.snapshot("object:a")[0]?.scalarBufferKey).toBe(
+      resolveViewport3DScalarColorBufferKey(scalarBuffer),
+    );
+  });
+  it("clears only its exact surface receipt when the adopted buffer is hidden or unmounted", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("adoptionRegistry.clearAdoption(adoption)");
+    expect(source).toContain("unregister();");
+  });
   it("uses the scalar shader material when large scalar buffers skip CPU RGB colors", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
@@ -171,6 +250,7 @@ describe("MeshPartLayer", () => {
     expect(uploadEffect).toContain("clearCurrentGeometry();");
     expect(uploadSource).toContain("if (store.getSnapshot().geometry !== uploadedGeometry)");
     expect(uploadSource).not.toContain("if (store.getSnapshot().geometry === uploadedGeometry)");
+    expect(uploadSource).toContain("try {\n              store.publish(previousGeometry);\n            } finally {\n              releaseGeometry(uploadedGeometry);");
     expect(uploadEffect).not.toContain("useEffect(() => {\n    store.publish(null);");
   });
 

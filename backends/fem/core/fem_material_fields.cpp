@@ -85,6 +85,35 @@ bool validate_field_values(
     return true;
 }
 
+bool validate_elementwise_ms_values(const Context &ctx, std::string &error)
+{
+    const std::vector<double> &field = ctx.material_fields.Ms_element_field;
+    if (field.empty()) {
+        return true;
+    }
+    const std::vector<uint8_t> &magnetic_mask = ctx.mesh.magnetic_element_mask;
+    if (!magnetic_mask.empty() && magnetic_mask.size() != field.size()) {
+        error = "FEM mesh magnetic element mask does not match Ms_element_field extent";
+        return false;
+    }
+    for (size_t i = 0; i < field.size(); ++i) {
+        const double value = field[i];
+        if (!std::isfinite(value)) {
+            error = std::string("material field 'Ms_element_field'") +
+                    " contains NaN/Inf at index " + std::to_string(i);
+            return false;
+        }
+        const bool active = magnetic_mask.empty() || magnetic_mask[i] != 0u;
+        if ((active && value <= 0.0) || (!active && value < 0.0)) {
+            error = std::string("material field 'Ms_element_field'") +
+                    " contains invalid value " + std::to_string(value) +
+                    " at index " + std::to_string(i);
+            return false;
+        }
+    }
+    return true;
+}
+
 const char *first_elementwise_ms_cpu_owner(const Context &ctx)
 {
     // Keep this order aligned with the plan import order and the effective
@@ -178,6 +207,16 @@ bool validate_material_fields(const Context &ctx, std::string &error) {
             error)) {
         return false;
     }
+    if (!ctx.material_fields.Ms_field.empty() &&
+        !ctx.material_fields.Ms_element_field.empty()) {
+        error = "FEM material coefficient 'Ms' has conflicting nodal P1 'ms_field' and element DG0 'ms_element_field' realizations";
+        return false;
+    }
+    if (!ctx.material_fields.A_field.empty() &&
+        !ctx.material_fields.A_element_field.empty()) {
+        error = "FEM material coefficient 'A' has conflicting nodal P1 'a_field' and element DG0 'a_element_field' realizations";
+        return false;
+    }
     if (!validate_field_values(ctx.material_fields.Ms_field, "Ms_field", true, false, error) ||
         !validate_field_values(ctx.material_fields.A_field, "A_field", true, true, error) ||
         !validate_field_values(ctx.material_fields.alpha_field, "alpha_field", true, true, error) ||
@@ -188,12 +227,7 @@ bool validate_material_fields(const Context &ctx, std::string &error) {
         !validate_field_values(ctx.material_fields.Kc1_field, "Kc1_field", false, true, error) ||
         !validate_field_values(ctx.material_fields.Kc2_field, "Kc2_field", false, true, error) ||
         !validate_field_values(ctx.material_fields.Kc3_field, "Kc3_field", false, true, error) ||
-        !validate_field_values(
-            ctx.material_fields.Ms_element_field,
-            "Ms_element_field",
-            true,
-            false,
-            error) ||
+        !validate_elementwise_ms_values(ctx, error) ||
         !validate_field_values(
             ctx.material_fields.A_element_field,
             "A_element_field",

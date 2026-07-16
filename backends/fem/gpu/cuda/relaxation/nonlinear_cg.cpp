@@ -238,6 +238,7 @@ bool gpu_relax_compute_effective_field_and_energy(
             gpu.magnetization.m,
             stream,
             n,
+            ctx.state.current_time,
             "launch GPU nonlinear-CG h_eff accumulation",
             reason)) {
         return false;
@@ -337,6 +338,7 @@ bool gpu_relax_compute_effective_field_energy_gradient_and_direction(
             gpu.magnetization.m,
             stream,
             n,
+            ctx.state.current_time,
             "launch GPU nonlinear-CG h_eff accumulation",
             reason) ||
         !gpu_rk_reduce_final_energy_terms(ctx, stream, n, blocks, reason)) {

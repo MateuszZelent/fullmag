@@ -10,6 +10,7 @@ export interface Viewport3DTopologySurfacePartInput {
   node_indices?: readonly number[];
   node_start?: number;
   nodeCount?: number;
+  surface_node_indices?: readonly number[] | null;
   surface_faces?: readonly (readonly number[])[];
 }
 
@@ -117,9 +118,11 @@ function buildPreparedPartTopologyIndices({
     topology,
     supplementalSurfaceParts,
   );
-  const surfaceNodeIndices = surfaceIndices
-    ? uniqueSortedIndices(surfaceIndices)
-    : null;
+  const surfaceNodeIndices = part.surface_node_indices != null
+    ? uniqueSortedIndices(Uint32Array.from(part.surface_node_indices))
+    : surfaceIndices
+      ? uniqueSortedIndices(surfaceIndices)
+      : null;
   return {
     edgeIndices: buildSurfaceEdgeIndices(surfaceIndices),
     surfaceIndices,

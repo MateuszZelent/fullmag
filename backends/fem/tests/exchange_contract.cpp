@@ -7,6 +7,7 @@
  */
 
 #include "context.hpp"
+#include "core/fem_material_runtime.hpp"
 #include "cpu/mfem/interactions/exchange.hpp"
 #include "cpu/mfem/interactions/exchange_mass_projection.hpp"
 
@@ -501,6 +502,40 @@ private:
     const std::vector<double> &values_;
 };
 
+enum class AdapterCoefficientKind {
+    ms,
+    a,
+};
+
+class TestAdapterBackedElementwiseCoefficient final : public mfem::Coefficient {
+public:
+    TestAdapterBackedElementwiseCoefficient(
+        const fullmag::fem::FemMaterialRuntimeAdapter &runtime,
+        AdapterCoefficientKind kind)
+        : runtime_(runtime), kind_(kind)
+    {
+    }
+
+    double Eval(mfem::ElementTransformation &T, const mfem::IntegrationPoint &) override
+    {
+        const int element = T.ElementNo;
+        check(element >= 0, "adapter-backed test coefficient requires an element ordinal");
+        const std::size_t ordinal = static_cast<std::size_t>(element);
+        const auto &realization = runtime_.realization();
+        const auto &active = realization.active_element_ordinals();
+        if (std::find(active.begin(), active.end(), ordinal) == active.end()) {
+            return 0.0;
+        }
+        return kind_ == AdapterCoefficientKind::a
+            ? realization.a_j_per_m(ordinal)
+            : realization.ms_a_per_m(ordinal);
+    }
+
+private:
+    const fullmag::fem::FemMaterialRuntimeAdapter &runtime_;
+    AdapterCoefficientKind kind_;
+};
+
 double exchange_energy(
     mfem::BilinearForm &exchange_form,
     const mfem::GridFunction &magnetization)
@@ -730,6 +765,139 @@ void sharp_element_a_and_ms_exchange_pass_directional_derivative() {
         std::abs(energy - exchange_energy(exchange_form, magnetization)) < 1.0e-24,
         "sharp element exchange projection must report the same spatial-A energy used by the field");
 }
+
+mfem::Mesh two_active_plus_air_tet_mesh() {
+    mfem::Mesh mesh(3, 12, 3, 0, 3);
+    const double vertices[][3] = {
+        {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0},
+        {2.0, 0.0, 0.0}, {3.0, 0.0, 0.0}, {2.0, 1.0, 0.0}, {2.0, 0.0, 1.0},
+        {4.0, 0.0, 0.0}, {5.0, 0.0, 0.0}, {4.0, 1.0, 0.0}, {4.0, 0.0, 1.0},
+    };
+    for (const auto &vertex : vertices) {
+        mesh.AddVertex(vertex);
+    }
+    const int tet0[] = {0, 1, 2, 3};
+    const int tet1[] = {4, 5, 6, 7};
+    const int air[] = {8, 9, 10, 11};
+    mesh.AddTet(tet0, 1);
+    mesh.AddTet(tet1, 1);
+    mesh.AddTet(air, 1);
+    mesh.FinalizeTopology();
+    mesh.Finalize(false, true);
+    return mesh;
+}
+
+void adapter_backed_sharp_material_exchange_excludes_air_and_preserves_identity() {
+    constexpr double mu0 = 1.2566370614359172953850573533118e-6;
+    mfem::Mesh mesh = two_active_plus_air_tet_mesh();
+    check(
+        mesh.GetAttribute(2) == mesh.GetAttribute(0),
+        "air tetrahedron must share the active MFEM attribute so exclusion is ordinal-based");
+    mfem::H1_FECollection fec(1, 3);
+    mfem::FiniteElementSpace fes(&mesh, &fec);
+    const std::vector<fullmag::fem::P1TetrahedronMaterialTopology> topology = {
+        {{{0, 1, 2, 3}}, 1.0 / 6.0},
+        {{{4, 5, 6, 7}}, 1.0 / 6.0},
+        {{{8, 9, 10, 11}}, 1.0 / 6.0},
+    };
+    const fullmag::fem::FemMaterialRuntimeAdapter runtime(
+        fullmag::fem::P1TetrahedralMaterialRealization(
+            12u,
+            topology,
+            {0u, 1u},
+            {fullmag::fem::MaterialCoefficientLocation::element_dg0, {8.0e5, 7.0e5, 9.0e5}},
+            {fullmag::fem::MaterialCoefficientLocation::element_dg0, {13.0e-12, 5.0e-12, 101.0e-12}}));
+    TestAdapterBackedElementwiseCoefficient a_coeff(runtime, AdapterCoefficientKind::a);
+    TestAdapterBackedElementwiseCoefficient ms_coeff(runtime, AdapterCoefficientKind::ms);
+
+    mfem::GridFunction ms_dummy(&fes);
+    mfem::GridFunction magnetization(&fes);
+    mfem::GridFunction perturbation(&fes);
+    mfem::FunctionCoefficient ms_scalar([](const mfem::Vector &) { return 8.0e5; });
+    mfem::FunctionCoefficient m_function(
+        [](const mfem::Vector &x) { return 0.2 + 0.17 * x[0] - 0.08 * x[1] + 0.12 * x[2]; });
+    mfem::FunctionCoefficient direction_function(
+        [](const mfem::Vector &x) { return -0.1 + 0.13 * x[0] + 0.07 * x[1] - 0.03 * x[2]; });
+    ms_dummy.ProjectCoefficient(ms_scalar);
+    magnetization.ProjectCoefficient(m_function);
+    perturbation.ProjectCoefficient(direction_function);
+
+    mfem::BilinearForm exchange_form(&fes);
+    exchange_form.AddDomainIntegrator(new mfem::DiffusionIntegrator(a_coeff));
+    exchange_form.Assemble();
+    exchange_form.Finalize();
+    mfem::BilinearForm volume_mass_form(&fes);
+    volume_mass_form.AddDomainIntegrator(new mfem::MassIntegrator());
+    volume_mass_form.Assemble();
+    volume_mass_form.Finalize();
+    mfem::BilinearForm ms_mass_form(&fes);
+    ms_mass_form.AddDomainIntegrator(new mfem::MassIntegrator(ms_coeff));
+    ms_mass_form.Assemble();
+    ms_mass_form.Finalize();
+
+    mfem::Vector ones;
+    mfem::Vector lumped;
+    mfem::Vector inv_lumped;
+    std::vector<double> host_lumped;
+    fullmag::fem::prepare_exchange_mass_lumping(
+        volume_mass_form, ones, lumped, inv_lumped, host_lumped);
+    mfem::Vector residual(fes.GetNDofs());
+    mfem::Vector h_component(fes.GetNDofs());
+    std::vector<double> h_host;
+    double energy = 0.0;
+    check(
+        fullmag::fem::apply_exchange_component_mass_projection(
+            nullptr, false, exchange_form, magnetization, ms_dummy, inv_lumped, ms_mass_form,
+            true, residual, h_component, h_host, &energy),
+        "adapter-backed sharp-material exchange projection must succeed");
+    constexpr double epsilon = 1.0e-6;
+    mfem::GridFunction plus(magnetization);
+    mfem::GridFunction minus(magnetization);
+    plus.Add(epsilon, perturbation);
+    minus.Add(-epsilon, perturbation);
+    const double finite_difference =
+        (exchange_energy(exchange_form, plus) - exchange_energy(exchange_form, minus)) /
+        (2.0 * epsilon);
+    mfem::Vector weighted_h(h_component.Size());
+    ms_mass_form.Mult(h_component, weighted_h);
+    const double field_derivative = -mu0 * (perturbation * weighted_h);
+    check(
+        std::abs(finite_difference - field_derivative) /
+                std::max(1.0e-30, std::max(std::abs(finite_difference), std::abs(field_derivative))) <
+            1.0e-8,
+        "adapter-backed DG0 A/Ms exchange field must match directional identity");
+
+    const fullmag::fem::FemMaterialRuntimeAdapter all_element_runtime(
+        fullmag::fem::P1TetrahedralMaterialRealization(
+            12u,
+            topology,
+            {0u, 1u, 2u},
+            {fullmag::fem::MaterialCoefficientLocation::element_dg0, {8.0e5, 7.0e5, 9.0e5}},
+            {fullmag::fem::MaterialCoefficientLocation::element_dg0, {13.0e-12, 5.0e-12, 101.0e-12}}));
+    TestAdapterBackedElementwiseCoefficient all_a_coeff(all_element_runtime, AdapterCoefficientKind::a);
+    TestAdapterBackedElementwiseCoefficient all_ms_coeff(all_element_runtime, AdapterCoefficientKind::ms);
+    mfem::BilinearForm all_exchange_form(&fes);
+    all_exchange_form.AddDomainIntegrator(new mfem::DiffusionIntegrator(all_a_coeff));
+    all_exchange_form.Assemble();
+    all_exchange_form.Finalize();
+    check(
+        std::abs(exchange_energy(all_exchange_form, magnetization) - energy) > 1.0e-16,
+        "including air in DG0 exchange stiffness must be observably wrong");
+    mfem::BilinearForm all_ms_mass_form(&fes);
+    all_ms_mass_form.AddDomainIntegrator(new mfem::MassIntegrator(all_ms_coeff));
+    all_ms_mass_form.Assemble();
+    all_ms_mass_form.Finalize();
+    mfem::Vector constant(fes.GetNDofs());
+    constant = 1.0;
+    mfem::Vector active_ms_mass(fes.GetNDofs());
+    mfem::Vector all_ms_mass(fes.GetNDofs());
+    ms_mass_form.Mult(constant, active_ms_mass);
+    all_ms_mass_form.Mult(constant, all_ms_mass);
+    all_ms_mass -= active_ms_mass;
+    check(
+        all_ms_mass.Norml2() > 1.0e-12,
+        "including air in DG0 Ms mass must be observably wrong");
+}
 #endif
 
 #if !FULLMAG_HAS_MFEM_STACK
@@ -790,6 +958,7 @@ int main() {
     spatial_a_and_ms_exchange_pass_directional_derivative();
     exchange_mass_projection_header_documents_ms_weighted_consistent_projection();
     sharp_element_a_and_ms_exchange_pass_directional_derivative();
+    adapter_backed_sharp_material_exchange_excludes_air_and_preserves_identity();
 #endif
 #if !FULLMAG_HAS_MFEM_STACK
     disabled_exchange_is_zero_without_mfem_stack();

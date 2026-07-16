@@ -51,18 +51,42 @@ bool initialize_oersted_plan_fields(
         ctx.oersted.h_xyz.assign(
             plan.oersted_field_xyz,
             plan.oersted_field_xyz + static_cast<size_t>(plan.oersted_field_len));
+        ctx.oersted.h_basis_per_ampere_xyz.clear();
         return true;
     }
-    return initialize_oersted_cylinder_field(ctx, error);
+    if (!initialize_oersted_cylinder_field(ctx, error)) {
+        return false;
+    }
+    materialize_oersted_field(ctx, ctx.state.current_time);
+    return true;
 }
 
-void add_oersted_field(const Context &ctx, std::vector<double> &h_eff_xyz)
+const std::vector<double> &materialize_oersted_field(
+    Context &ctx,
+    double evaluation_time_s)
 {
-    if (ctx.oersted.has_cylinder) {
-        add_oersted_cylinder_field(ctx, h_eff_xyz);
-        return;
+    if (!ctx.oersted.has_cylinder) {
+        return ctx.oersted.h_xyz;
     }
-    add_explicit_oersted_field(ctx, h_eff_xyz);
+    const double scale = oersted_current_scale(ctx, evaluation_time_s);
+    ctx.oersted.h_xyz.resize(ctx.oersted.h_basis_per_ampere_xyz.size());
+    for (size_t i = 0; i < ctx.oersted.h_xyz.size(); ++i) {
+        ctx.oersted.h_xyz[i] = scale * ctx.oersted.h_basis_per_ampere_xyz[i];
+    }
+    return ctx.oersted.h_xyz;
+}
+
+void add_oersted_field(
+    const Context &ctx,
+    double evaluation_time_s,
+    std::vector<double> &h_eff_xyz)
+{
+    const auto &h_oe_xyz = materialize_oersted_field(
+        const_cast<Context &>(ctx), evaluation_time_s);
+    const size_t count = std::min(h_eff_xyz.size(), h_oe_xyz.size());
+    for (size_t i = 0; i < count; ++i) {
+        h_eff_xyz[i] += h_oe_xyz[i];
+    }
 }
 
 } // namespace fullmag::fem

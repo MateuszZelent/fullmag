@@ -26,16 +26,18 @@ void fullmag_cuda_field_metric_blocks(
     int N,
     cudaStream_t stream = nullptr);
 
-/// Per-block sums of magnetization components and magnetic node count.
+/// Per-block Ms-times-lumped-volume weighted magnetization sums and total weight.
 void fullmag_cuda_magnetization_sum_blocks(
     const double *mx,
     const double *my,
     const double *mz,
     const uint8_t *magnetic_node_mask,
+    const double *node_volumes,
+    const double *ms,
     double *block_sum_x,
     double *block_sum_y,
     double *block_sum_z,
-    double *block_count,
+    double *block_weight,
     int N,
     cudaStream_t stream = nullptr);
 

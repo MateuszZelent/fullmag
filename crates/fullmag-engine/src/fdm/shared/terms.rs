@@ -2,6 +2,54 @@
 
 use crate::magnetoelastic;
 use crate::Vector3;
+use fullmag_ir::TimeDependenceIR;
+
+/// Immutable cell-wise spatial basis plus a time envelope for one canonical
+/// regional magnetic drive. The planner/runner owns target realization;
+/// integrators only evaluate this basis at their exact RK stage time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegionalFieldDriveTerm {
+    pub basis_field: Vec<Vector3>,
+    pub waveform: TimeDependenceIR,
+    /// Absolute time subtracted before waveform evaluation for stage-local drives.
+    pub time_offset_s: f64,
+    pub enabled: bool,
+}
+
+impl RegionalFieldDriveTerm {
+    pub fn multiplier_at(&self, absolute_time_s: f64) -> f64 {
+        let time = absolute_time_s - self.time_offset_s;
+        match &self.waveform {
+            TimeDependenceIR::Constant => 1.0,
+            TimeDependenceIR::Sinusoidal { frequency_hz, phase_rad, offset } => {
+                (2.0 * std::f64::consts::PI * frequency_hz * time + phase_rad).sin() + offset
+            }
+            TimeDependenceIR::Pulse { t_on, t_off } => {
+                if time >= *t_on && time < *t_off { 1.0 } else { 0.0 }
+            }
+            TimeDependenceIR::PiecewiseLinear { points } => {
+                let Some(first) = points.first() else { return 0.0 };
+                if time <= first[0] { return first[1] }
+                let last = points.last().expect("non-empty points");
+                if time >= last[0] { return last[1] }
+                let upper = points.partition_point(|point| point[0] < time);
+                let [t0, v0] = points[upper - 1];
+                let [t1, v1] = points[upper];
+                v0 + (time - t0) / (t1 - t0) * (v1 - v0)
+            }
+            TimeDependenceIR::SincPulse { cutoff_hz, t0, amplitude } => {
+                let x = std::f64::consts::PI * 2.0 * cutoff_hz * (time - t0);
+                let sinc = if x.abs() <= 1e-4 {
+                    let x2 = x * x;
+                    1.0 - x2 / 6.0 + x2 * x2 / 120.0
+                } else {
+                    x.sin() / x
+                };
+                amplitude * sinc
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectiveFieldTerms {

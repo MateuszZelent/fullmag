@@ -1,8 +1,9 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, EnergyTermIR,
     ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR, ExecutionPrecision,
-    FdmDemagPeriodicityIR, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
-    FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
+    FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
+    FdmGridCertificateIR, FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions,
+    InitialMagnetizationIR,
     IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
     RelaxationAlgorithmIR, TimeDependenceIR, IR_VERSION,
 };
@@ -12,11 +13,13 @@ use crate::antenna_zeeman::{has_prescribed_zeeman_mask_source, resolve_prescribe
 use crate::current_transport::{resolve_current_transports, CurrentTransportExecutableLane};
 use crate::error::PlanError;
 use crate::geometry::{
-    cell_for_magnet, extract_multilayer_geometry, fdm_default_cell, ir_to_shape,
-    validate_realized_grid, voxelize_shape, GeometryShape, LoweredBody,
+    cell_for_magnet, checked_fdm_grid_cost, extract_multilayer_geometry, fdm_default_cell,
+    ir_to_shape, validate_realized_grid, voxelize_shape, GeometryShape, LoweredBody,
+    FDM_GRID_ESTIMATED_BYTES_PER_CELL,
 };
 use crate::magnetization_textures::{sample_preset_texture, TextureSamplePoint};
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
+use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
 use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
@@ -29,12 +32,17 @@ fn grid_sample_points(
     grid_cells: [u32; 3],
     cell_size: [f64; 3],
     origin: [f64; 3],
+    owner_translation: [f64; 3],
     active_mask: Option<&Vec<bool>>,
 ) -> Vec<TextureSamplePoint> {
     let nx = grid_cells[0] as usize;
     let ny = grid_cells[1] as usize;
     let nz = grid_cells[2] as usize;
-    let mut points = Vec::with_capacity(nx * ny * nz);
+    let capacity = checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)
+        .ok()
+        .and_then(|cost| usize::try_from(cost.cells).ok())
+        .unwrap_or(0);
+    let mut points = Vec::with_capacity(capacity);
     for z in 0..nz {
         for y in 0..ny {
             for x in 0..nx {
@@ -44,9 +52,14 @@ fn grid_sample_points(
                     origin[1] + (y as f64 + 0.5) * cell_size[1],
                     origin[2] + (z as f64 + 0.5) * cell_size[2],
                 ];
+                let object = [
+                    world[0] - owner_translation[0],
+                    world[1] - owner_translation[1],
+                    world[2] - owner_translation[2],
+                ];
                 points.push(TextureSamplePoint {
                     position_world: world,
-                    position_object: world,
+                    position_object: object,
                     active: active_mask.map(|mask| mask[idx]).unwrap_or(true),
                 });
             }
@@ -113,10 +126,26 @@ fn materialize_object_region_mask(
     grid_cells: [u32; 3],
     cell_size: [f64; 3],
     origin: [f64; 3],
+    owner_translation: [f64; 3],
     active_mask: Option<&Vec<bool>>,
     errors: &mut Vec<String>,
 ) -> (Vec<u32>, BTreeMap<String, u32>) {
-    let n_cells = (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize;
+    let n_cells = match checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL) {
+        Ok(cost) => match usize::try_from(cost.cells) {
+            Ok(cells) => cells,
+            Err(_) => {
+                errors.push(format!(
+                    "fdm_grid_cell_count_not_addressable: cells={} requested_counts={:?}",
+                    cost.cells, grid_cells
+                ));
+                return (Vec::new(), BTreeMap::new());
+            }
+        },
+        Err(error) => {
+            errors.extend(error.reasons);
+            return (Vec::new(), BTreeMap::new());
+        }
+    };
     let mut mask = vec![0u32; n_cells];
     let mut regions = problem
         .object_regions
@@ -126,35 +155,77 @@ fn materialize_object_region_mask(
     regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
 
     let mut region_ids = BTreeMap::new();
-    for (index, region) in regions.iter().enumerate() {
+    if regions.len() > fullmag_ir::MAX_FDM_REGION_IDS as usize {
+        errors.push(format!(
+            "fdm_region_lut_capacity_exceeded: requested_region_count={} supported_region_ids={}",
+            regions.len(),
+            fullmag_ir::MAX_FDM_REGION_IDS
+        ));
+        return (mask, region_ids);
+    }
+    let points = grid_sample_points(
+        grid_cells,
+        cell_size,
+        origin,
+        owner_translation,
+        active_mask,
+    );
+    let mut assigned_counts = vec![0usize; regions.len()];
+    for region in &regions {
         if region.frame != RegionFrameIR::Object {
             errors.push(format!(
                 "object_region '{}' uses frame={:?}; FDM region mask materialization currently supports object frame only",
                 region.region_id, region.frame
             ));
+        }
+    }
+    for (index, region) in regions.iter().enumerate() {
+        let region_index = (index + 1) as u32;
+        debug_assert!(region_index <= fullmag_ir::MAX_FDM_REGION_IDS);
+        region_ids.insert(region.region_id.clone(), region_index);
+    }
+    for (flat_index, point) in points.iter().enumerate() {
+        if !point.active {
             continue;
         }
-        let region_index = (index + 1) as u32;
-        region_ids.insert(region.region_id.clone(), region_index);
-        let mut assigned = 0usize;
-        let points = grid_sample_points(grid_cells, cell_size, origin, active_mask);
-        for (flat_index, point) in points.iter().enumerate() {
-            if !point.active {
-                continue;
-            }
+        let mut matches = Vec::new();
+        for (index, region) in regions.iter().enumerate() {
             match point_in_region_shape(point.position_object, &region.shape) {
-                Ok(true) => {
-                    mask[flat_index] = region_index;
-                    assigned += 1;
-                }
+                Ok(true) => matches.push(index),
                 Ok(false) => {}
-                Err(message) => {
-                    errors.push(format!("object_region '{}': {message}", region.region_id));
-                    break;
-                }
+                Err(message) => errors.push(format!("object_region '{}': {message}", region.region_id)),
             }
         }
-        if assigned == 0 {
+        if matches.is_empty() {
+            continue;
+        }
+        let candidates = matches
+            .iter()
+            .map(|index| RegionConflictCandidate {
+                region_id: regions[*index].region_id.clone(),
+                priority: regions[*index].priority,
+                policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            })
+            .collect::<Vec<_>>();
+        let resolution = match resolve_region_conflict(&candidates) {
+            Ok(resolution) => resolution,
+            Err(message) => {
+                errors.push(message);
+                continue;
+            }
+        };
+        let winner = matches
+            .iter()
+            .copied()
+            .find(|index| regions[*index].region_id == resolution.winner_region_id)
+            .expect("resolver winner must be one of the candidates");
+        mask[flat_index] = (winner + 1) as u32;
+        for index in matches {
+            assigned_counts[index] += 1;
+        }
+    }
+    for (index, region) in regions.iter().enumerate() {
+        if assigned_counts[index] == 0 {
             errors.push(format!(
                 "object_region '{}' did not cover any active FDM cells",
                 region.region_id
@@ -163,6 +234,35 @@ fn materialize_object_region_mask(
     }
 
     (mask, region_ids)
+}
+
+fn build_fdm_region_legend(
+    problem: &ProblemIR,
+    owner_names: &[&str],
+    region_index_by_id: &BTreeMap<String, u32>,
+) -> Vec<fullmag_ir::FdmRegionLegendEntryIR> {
+    let mut regions = problem
+        .object_regions
+        .iter()
+        .filter(|region| {
+            region.enabled && owner_names.contains(&region.owner_object.as_str())
+        })
+        .collect::<Vec<_>>();
+    regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
+    regions
+        .into_iter()
+        .filter_map(|region| {
+            region_index_by_id
+                .get(&region.region_id)
+                .copied()
+                .map(|numeric_id| fullmag_ir::FdmRegionLegendEntryIR {
+                    numeric_id,
+                    object_id: region.owner_object.clone(),
+                    region_id: region.region_id.clone(),
+                    priority: region.priority,
+                })
+        })
+        .collect()
 }
 
 fn materialize_region_exchange_couplings(
@@ -237,6 +337,7 @@ fn apply_region_texture_overrides(
     grid_cells: [u32; 3],
     cell_size: [f64; 3],
     origin: [f64; 3],
+    owner_translation: [f64; 3],
     active_mask: Option<&Vec<bool>>,
     initial_magnetization: &mut [[f64; 3]],
     errors: &mut Vec<String>,
@@ -248,7 +349,13 @@ fn apply_region_texture_overrides(
         .collect::<Vec<_>>();
     regions.sort_by_key(|region| (region.priority, region.region_id.as_str()));
 
-    let points = grid_sample_points(grid_cells, cell_size, origin, active_mask);
+    let points = grid_sample_points(
+        grid_cells,
+        cell_size,
+        origin,
+        owner_translation,
+        active_mask,
+    );
     for region in regions {
         let Some(&region_index) = region_index_by_id.get(&region.region_id) else {
             errors.push(format!(
@@ -307,6 +414,26 @@ fn apply_region_texture_overrides(
     }
 }
 
+fn finite_cylinder_sdf_for_shape(
+    shape: &GeometryShape,
+    center: [f64; 3],
+) -> Option<Box<dyn Fn(f64, f64, f64) -> f64>> {
+    match shape {
+        GeometryShape::Cylinder {
+            radius,
+            height,
+            axis,
+        } => Some(Box::new(crate::boundary_geometry::finite_cylinder_sdf(
+            *radius, *height, center, *axis,
+        ))),
+        GeometryShape::Translate { child, by } => finite_cylinder_sdf_for_shape(
+            child,
+            [center[0] + by[0], center[1] + by[1], center[2] + by[2]],
+        ),
+        _ => None,
+    }
+}
+
 pub(crate) fn plan_fdm(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
@@ -362,16 +489,33 @@ pub(crate) fn plan_fdm(
                 .to_string(),
         );
     }
-    if problem
-        .pbc
-        .as_ref()
-        .is_some_and(|pbc| pbc.demag == FdmDemagPeriodicityIR::PeriodicAirboxK0)
-    {
-        errors.push(
-            "pbc.demag='periodic_airbox_k0' is FEM static/time-domain airbox demag PBC; \
-             FDM supports demag='open' or demag='truncated_images'"
-                .to_string(),
-        );
+    if let Some(pbc) = problem.pbc.as_ref() {
+        if let Err(reason) = pbc.resolve_demag_boundary(enable_demag) {
+            errors.push(reason);
+        }
+        if problem.backend_policy.execution_precision == ExecutionPrecision::Single
+            && runtime_requests_cuda(problem)
+            && pbc.has_any_periodic()
+        {
+            errors.push(
+                "FDM execution_precision='single' with CUDA and periodic axes is capability-gated until FP32 seam exchange parity is qualified; use execution_precision='double'"
+                    .to_string(),
+            );
+        }
+        let boundary_correction = problem
+            .backend_policy
+            .discretization_hints
+            .as_ref()
+            .and_then(|hints| hints.fdm.as_ref())
+            .and_then(|fdm| fdm.boundary_correction.as_deref());
+        if pbc.has_any_periodic()
+            && boundary_correction.is_some_and(|value| value != "none")
+        {
+            errors.push(format!(
+                "FDM boundary_correction='{correction}' with periodic axes is capability-gated until seam-aware T0/T1 exchange parity is qualified; use boundary_correction='none'",
+                correction = boundary_correction.unwrap_or("?"),
+            ));
+        }
     }
 
     if problem.magnets.len() != 1 {
@@ -415,9 +559,27 @@ pub(crate) fn plan_fdm(
             return Err(PlanError { reasons: errors });
         }
     };
+    // Keep the asset-origin path aligned with multilayer lowering: an asset
+    // stores coordinates in the untransformed geometry frame, while a
+    // top-level Translate moves the realized grid in world space.
+    let top_level_translation = match extract_multilayer_geometry(geometry) {
+        Ok(placed) => placed.translation,
+        Err(e) => {
+            errors.push(e);
+            return Err(PlanError { reasons: errors });
+        }
+    };
 
     let cell_size = match &problem.backend_policy.discretization_hints {
-        Some(DiscretizationHintsIR { fdm: Some(fdm), .. }) => fdm.cell,
+        Some(DiscretizationHintsIR { fdm: Some(fdm), .. }) => {
+            match cell_for_magnet(fdm, magnet.name.as_str()) {
+                Ok(cell) => cell,
+                Err(reason) => {
+                    errors.push(reason);
+                    [1e-9, 1e-9, 1e-9]
+                }
+            }
+        }
         _ => {
             errors.push(
                 "FDM discretization hints (cell size) are required for Phase 1 execution"
@@ -442,7 +604,9 @@ pub(crate) fn plan_fdm(
         false,
         false,
         false,
+        problem.energy_terms.iter().any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
+        !problem.field_drives.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double
@@ -464,6 +628,9 @@ pub(crate) fn plan_fdm(
     let (bounding_size, active_mask, grid_cells, native_origin, used_precomputed_asset) =
         if let Some(asset) = provided_grid_asset {
             validate_grid_asset_cell_size(asset, cell_size, &mut errors);
+            let origin = std::array::from_fn(|axis| {
+                asset.origin[axis] + top_level_translation[axis]
+            });
             (
                 [
                     asset.cells[0] as f64 * asset.cell_size[0],
@@ -472,7 +639,7 @@ pub(crate) fn plan_fdm(
                 ],
                 Some(asset.active_mask.clone()),
                 asset.cells,
-                asset.origin,
+                origin,
                 true,
             )
         } else {
@@ -491,6 +658,20 @@ pub(crate) fn plan_fdm(
         );
     }
 
+    let resolved_periodic_images = match problem.pbc.as_ref() {
+        Some(pbc) => match pbc.resolve_periodic_images(
+            grid_cells,
+            problem.backend_policy.execution_precision,
+        ) {
+            Ok(resolved) => resolved,
+            Err(reason) => {
+                errors.push(reason);
+                None
+            }
+        },
+        None => None,
+    };
+
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
@@ -508,7 +689,13 @@ pub(crate) fn plan_fdm(
         .find(|m| m.name == magnet.material)
         .expect("validation should have caught missing material");
 
-    let n_cells = (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize;
+    let grid_cost = checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
+    let n_cells = usize::try_from(grid_cost.cells).map_err(|_| PlanError {
+        reasons: vec![format!(
+            "fdm_grid_cell_count_not_addressable: cells={} requested_counts={:?}",
+            grid_cost.cells, grid_cells
+        )],
+    })?;
     let mut initial_magnetization = match &magnet.initial_magnetization {
         Some(InitialMagnetizationIR::Uniform { value }) => {
             if let Some(ref mask) = active_mask {
@@ -557,7 +744,13 @@ pub(crate) fn plan_fdm(
                 texture_transform.scale[2],
             );
             let points =
-                grid_sample_points(grid_cells, cell_size, native_origin, active_mask.as_ref());
+                grid_sample_points(
+                    grid_cells,
+                    cell_size,
+                    native_origin,
+                    top_level_translation,
+                    active_mask.as_ref(),
+                );
             match sample_preset_texture(
                 preset_kind,
                 &preset_params,
@@ -592,6 +785,22 @@ pub(crate) fn plan_fdm(
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
     let integrator = controls.integrator;
+    if !problem.field_drives.is_empty() && integrator == Some(IntegratorChoice::Abm3) {
+        errors.push(
+            "RegionalFieldDrive is not executable with ABM3 because the multistep history has no qualified discontinuity/event restart contract; use heun, rk4, rk23, or rk45"
+                .to_string(),
+        );
+    }
+    if runtime_requests_cuda(problem)
+        && problem.field_drives.iter().any(|drive| {
+            crate::util::field_drive_is_active(drive, crate::util::active_stage_id(problem))
+        })
+    {
+        errors.push(
+            "fdm_cuda_regional_field_drive_unsupported: regional time-domain field drives are implemented only by the FDM CPU reference lane; request device='cpu' or use FEM CUDA double"
+                .to_string(),
+        );
+    }
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
     let relaxation = controls.relaxation;
@@ -612,6 +821,7 @@ pub(crate) fn plan_fdm(
         grid_cells,
         cell_size,
         native_origin,
+        top_level_translation,
         active_mask.as_ref(),
         &mut errors,
     );
@@ -625,6 +835,7 @@ pub(crate) fn plan_fdm(
         grid_cells,
         cell_size,
         native_origin,
+        top_level_translation,
         active_mask.as_ref(),
         &mut initial_magnetization,
         &mut errors,
@@ -642,8 +853,13 @@ pub(crate) fn plan_fdm(
         return Err(PlanError { reasons: errors });
     }
 
-    let sample_points =
-        grid_sample_points(grid_cells, cell_size, native_origin, active_mask.as_ref());
+    let sample_points = grid_sample_points(
+        grid_cells,
+        cell_size,
+        native_origin,
+        [0.0; 3],
+        active_mask.as_ref(),
+    );
     let point_coords: Vec<[f64; 3]> = sample_points.iter().map(|p| p.position_world).collect();
     let antenna_zeeman_masks =
         resolve_prescribed_zeeman_masks(problem, &point_coords, active_mask.as_deref())?;
@@ -767,6 +983,10 @@ pub(crate) fn plan_fdm(
             "CSG Difference voxelized to {}x{}x{} grid, {}/{} active cells",
             grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
+        GeometryShape::Translate { .. } => format!(
+            "Translated geometry voxelized to {}x{}x{} grid, {}/{} active cells",
+            grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
     };
 
     let realized_size = [
@@ -774,10 +994,38 @@ pub(crate) fn plan_fdm(
         grid_cells[1] as f64 * cell_size[1],
         grid_cells[2] as f64 * cell_size[2],
     ];
+    let grid_legend = build_fdm_region_legend(problem, &owner_names, &region_index_by_id);
+    let grid_certificate = FdmGridCertificateIR::new_with_masks(
+        native_origin,
+        grid_cells,
+        cell_size,
+        active_count as u64,
+        grid_cost.estimated_bytes,
+        active_mask.as_deref(),
+        &region_mask,
+    )
+    .map_err(|message| PlanError {
+        reasons: vec![format!("invalid resolved FDM grid certificate: {message}")],
+    })?
+    .with_region_legend(grid_legend);
+    let active_field_drives: Vec<_> = problem.field_drives.iter()
+        .filter(|drive| crate::util::field_drive_is_active(drive, crate::util::active_stage_id(problem)))
+        .cloned().collect();
+    let regional_field_drive_bases = crate::regional_field_drive::resolve_fdm_regional_field_drives(
+        &active_field_drives,
+        &point_coords,
+        active_mask.as_deref(),
+        &region_mask,
+        Some(&grid_certificate),
+        cell_size,
+        &problem.geometry.entries,
+    )?;
 
     let mut fdm_plan = FdmPlanIR {
+        origin_m: native_origin,
         grid: GridDimensions { cells: grid_cells },
         cell_size,
+        grid_certificate: Some(grid_certificate),
         region_mask,
         active_mask: active_mask.clone(),
         initial_magnetization,
@@ -802,11 +1050,15 @@ pub(crate) fn plan_fdm(
         enable_demag,
         external_field,
         antenna_zeeman_masks,
+        field_drives: active_field_drives,
+        regional_field_drive_bases,
+        time_stage: crate::util::time_stage_context(problem),
         inter_region_exchange,
         gyromagnetic_ratio,
         precision: problem.backend_policy.execution_precision,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         periodicity: problem.pbc.clone(),
+        resolved_periodic_images,
         integrator,
         fixed_timestep,
         adaptive_timestep,
@@ -956,43 +1208,30 @@ pub(crate) fn plan_fdm(
         // boundary_geometry remains `None`; the backend will run the
         // chosen correction level but without per-cell φ/δ data, which
         // means the correction has no geometric effect.
-        let sdf_opt: Option<Box<dyn Fn(f64, f64, f64) -> f64>> = match &shape {
-            GeometryShape::Cylinder { radius, .. } => {
-                let cx = grid_cells[0] as f64 * cell_size[0] * 0.5;
-                let cy = grid_cells[1] as f64 * cell_size[1] * 0.5;
-                let r = *radius;
-                Some(Box::new(move |x, y, _z| {
-                    let dx = x - cx;
-                    let dy = y - cy;
-                    (dx * dx + dy * dy).sqrt() - r
-                }))
+        let local_sdf: Option<Box<dyn Fn(f64, f64, f64) -> f64>> = match &shape {
+            GeometryShape::Cylinder { .. } | GeometryShape::Translate { .. } => {
+                finite_cylinder_sdf_for_shape(&shape, [0.0, 0.0, 0.0])
             }
             GeometryShape::Difference { base, tool } => {
-                let cx = grid_cells[0] as f64 * cell_size[0] * 0.5;
-                let cy = grid_cells[1] as f64 * cell_size[1] * 0.5;
-                if let (
-                    GeometryShape::Cylinder { radius: base_r, .. },
-                    GeometryShape::Cylinder { radius: tool_r, .. },
-                ) = (base.as_ref(), tool.as_ref())
-                {
-                    let br = *base_r;
-                    let tr = *tool_r;
-                    Some(Box::new(move |x, y, _z| {
-                        let dx = x - cx;
-                        let dy = y - cy;
-                        let d = (dx * dx + dy * dy).sqrt();
-                        (d - br).max(-(d - tr))
-                    }))
-                } else {
-                    None
+                let base_sdf = finite_cylinder_sdf_for_shape(base, [0.0, 0.0, 0.0]);
+                let tool_sdf = finite_cylinder_sdf_for_shape(tool, [0.0, 0.0, 0.0]);
+                match (base_sdf, tool_sdf) {
+                    (Some(base_sdf), Some(tool_sdf)) => Some(Box::new(move |x, y, z| {
+                        base_sdf(x, y, z).max(-tool_sdf(x, y, z))
+                    })),
+                    _ => None,
                 }
             }
             _ => None,
         };
 
-        if let Some(sdf) = sdf_opt {
+        if let Some(local_sdf) = local_sdf {
+            let origin = native_origin;
+            let sdf = move |x: f64, y: f64, z: f64| {
+                local_sdf(x + origin[0], y + origin[1], z + origin[2])
+            };
             fdm_plan.boundary_geometry = Some(crate::boundary_geometry::compute_boundary_geometry(
-                &*sdf,
+                &sdf,
                 grid_cells[0],
                 grid_cells[1],
                 grid_cells[2],
@@ -1066,6 +1305,105 @@ pub(crate) fn plan_fdm(
             ],
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn region(index: usize) -> fullmag_ir::ObjectRegionIR {
+        fullmag_ir::ObjectRegionIR {
+            region_id: format!("strip:r{index}"),
+            owner_object: "strip".to_string(),
+            name: format!("r{index}"),
+            shape: fullmag_ir::RegionShapeIR::Box {
+                size: [1.0e-6; 3],
+                center: [0.0; 3],
+            },
+            frame: fullmag_ir::RegionFrameIR::Object,
+            enabled: true,
+            priority: index as i32,
+            mesh_policy: None,
+            material_overrides: Vec::new(),
+            texture_override: None,
+            realization_policy: fullmag_ir::RegionRealizationPolicyIR::Inherit,
+            material_transition: None,
+        }
+    }
+
+    #[test]
+    fn fdm_region_mask_accepts_255_active_regions() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.object_regions = (0..fullmag_ir::MAX_FDM_REGION_IDS as usize)
+            .map(region)
+            .collect();
+        let mut errors = Vec::new();
+        let active_mask = vec![true];
+        let (mask, ids) = materialize_object_region_mask(
+            &problem,
+            &["strip"],
+            [1, 1, 1],
+            [1.0e-9; 3],
+            [0.0; 3],
+            [0.0; 3],
+            Some(&active_mask),
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(ids.len(), fullmag_ir::MAX_FDM_REGION_IDS as usize);
+        assert_eq!(mask, vec![fullmag_ir::MAX_FDM_REGION_IDS]);
+    }
+
+    #[test]
+    fn fdm_region_mask_rejects_256_active_regions_before_sampling() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.object_regions = (0..=fullmag_ir::MAX_FDM_REGION_IDS as usize)
+            .map(region)
+            .collect();
+        let mut errors = Vec::new();
+        let active_mask = vec![true];
+        let (mask, ids) = materialize_object_region_mask(
+            &problem,
+            &["strip"],
+            [1, 1, 1],
+            [1.0e-9; 3],
+            [0.0; 3],
+            [0.0; 3],
+            Some(&active_mask),
+            &mut errors,
+        );
+        assert!(ids.is_empty());
+        assert_eq!(mask, vec![0]);
+        assert!(errors.iter().any(|error| {
+            error.contains("fdm_region_lut_capacity_exceeded")
+                && error.contains("requested_region_count=256")
+        }));
+    }
+
+    #[test]
+    fn fdm_object_region_uses_inverse_owner_translation_for_membership() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        let mut translated_region = region(0);
+        translated_region.shape = fullmag_ir::RegionShapeIR::Box {
+            size: [2.0e-6; 3],
+            center: [0.0; 3],
+        };
+        problem.object_regions = vec![translated_region];
+        let mut errors = Vec::new();
+        let active_mask = vec![true];
+        let (mask, _) = materialize_object_region_mask(
+            &problem,
+            &["strip"],
+            [1, 1, 1],
+            [1.0e-6; 3],
+            [1.0e-6; 3],
+            [1.0e-6; 3],
+            Some(&active_mask),
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(mask, vec![1], "translated owner must be sampled in object coordinates");
+    }
 }
 
 fn reject_fdm_spatial_material_fields(problem: &ProblemIR, lane: &str, errors: &mut Vec<String>) {
@@ -1150,10 +1488,22 @@ fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) ->
         }
         global_grid[axis] = rounded as usize;
     }
-    let Some(total_cells) = global_grid
+    let global_grid_u32 = match global_grid
         .iter()
-        .try_fold(1usize, |acc, cells| acc.checked_mul(*cells))
-    else {
+        .copied()
+        .map(u32::try_from)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(values) if values.len() == 3 => [values[0], values[1], values[2]],
+        _ => return false,
+    };
+    let Ok(global_cost) = checked_fdm_grid_cost(
+        global_grid_u32,
+        FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+    ) else {
+        return false;
+    };
+    let Ok(total_cells) = usize::try_from(global_cost.cells) else {
         return false;
     };
     let mut active_mask = vec![false; total_cells];
@@ -1245,17 +1595,6 @@ pub(crate) fn plan_fdm_multilayer(
         );
     }
     reject_fdm_spatial_material_fields(problem, "multilayer FDM", &mut errors);
-    if problem
-        .pbc
-        .as_ref()
-        .is_some_and(|pbc| pbc.demag == FdmDemagPeriodicityIR::PeriodicAirboxK0)
-    {
-        errors.push(
-            "pbc.demag='periodic_airbox_k0' is FEM static/time-domain airbox demag PBC; \
-             multilayer FDM supports demag='open' or demag='truncated_images'"
-                .to_string(),
-        );
-    }
     if problem.current_density.is_some()
         || problem.stt_degree.is_some()
         || problem.stt_beta.is_some()
@@ -1324,6 +1663,26 @@ pub(crate) fn plan_fdm_multilayer(
             }
         }
     }
+    if let Some(pbc) = problem.pbc.as_ref() {
+        if let Err(reason) = pbc.resolve_demag_boundary(enable_demag) {
+            errors.push(reason);
+        }
+        if pbc.has_any_periodic() {
+            errors.push(
+                "FDM multilayer periodic axes are capability-gated until exchange seams and self/shifted demag kernels are qualified across every layer; use open boundaries or a qualified single-grid plan"
+                    .to_string(),
+            );
+        }
+        if problem.backend_policy.execution_precision == ExecutionPrecision::Single
+            && runtime_requests_cuda(problem)
+            && pbc.has_any_periodic()
+        {
+            errors.push(
+                "FDM multilayer execution_precision='single' with CUDA and periodic axes is capability-gated until FP32 seam exchange parity is qualified; use execution_precision='double'"
+                    .to_string(),
+            );
+        }
+    }
     if !(enable_exchange || enable_demag || external_field.is_some()) {
         errors.push(
             "the current executable multilayer FDM path requires at least one of Exchange, Demag, or Zeeman"
@@ -1346,6 +1705,8 @@ pub(crate) fn plan_fdm_multilayer(
         false,
         false,
         false,
+        false,
+        !problem.field_drives.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double
@@ -1394,7 +1755,13 @@ pub(crate) fn plan_fdm_multilayer(
             }
         };
 
-        let cell_size = cell_for_magnet(fdm_hints, magnet.name.as_str());
+        let cell_size = match cell_for_magnet(fdm_hints, magnet.name.as_str()) {
+            Ok(cell) => cell,
+            Err(reason) => {
+                errors.push(reason);
+                continue;
+            }
+        };
         let provided_grid_asset = problem.geometry_assets.as_ref().and_then(|assets| {
             assets
                 .fdm_grid_assets
@@ -1445,7 +1812,23 @@ pub(crate) fn plan_fdm_multilayer(
             continue;
         };
 
-        let n_cells = (grid_cells[0] * grid_cells[1] * grid_cells[2]) as usize;
+        let grid_cost = match checked_fdm_grid_cost(grid_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL) {
+            Ok(cost) => cost,
+            Err(error) => {
+                errors.extend(error.reasons);
+                continue;
+            }
+        };
+        let n_cells = match usize::try_from(grid_cost.cells) {
+            Ok(cells) => cells,
+            Err(_) => {
+                errors.push(format!(
+                    "fdm_grid_cell_count_not_addressable: cells={} requested_counts={:?}",
+                    grid_cost.cells, grid_cells
+                ));
+                continue;
+            }
+        };
         let initial_magnetization = match &magnet.initial_magnetization {
             Some(InitialMagnetizationIR::Uniform { value }) => {
                 if let Some(ref mask) = active_mask {
@@ -1485,7 +1868,13 @@ pub(crate) fn plan_fdm_multilayer(
                 texture_transform,
             }) => {
                 let points =
-                    grid_sample_points(grid_cells, cell_size, native_origin, active_mask.as_ref());
+                    grid_sample_points(
+                        grid_cells,
+                        cell_size,
+                        native_origin,
+                        placed.translation,
+                        active_mask.as_ref(),
+                    );
                 match sample_preset_texture(
                     preset_kind,
                     &preset_params,
@@ -1637,25 +2026,36 @@ pub(crate) fn plan_fdm_multilayer(
         .iter()
         .map(|body| body.bounding_size[2])
         .fold(0.0_f64, f64::max);
-    let base_cell = fdm_default_cell(fdm_hints);
     let common_cells = if let Some(policy) = demag_hints {
         if let Some(cells) = policy.common_cells {
             cells
         } else if let Some(cells_xy) = policy.common_cells_xy {
             [cells_xy[0], cells_xy[1], max_native_z_cells.max(1)]
         } else {
-            [
+            match fdm_default_cell(fdm_hints) {
+                Ok(base_cell) => [
+                    (reference_xy[0] / base_cell[0]).round().max(1.0) as u32,
+                    (reference_xy[1] / base_cell[1]).round().max(1.0) as u32,
+                    (max_native_z_size / base_cell[2]).round().max(1.0) as u32,
+                ],
+                Err(reason) => {
+                    errors.push(reason);
+                    [1, 1, max_native_z_cells.max(1)]
+                }
+            }
+        }
+    } else {
+        match fdm_default_cell(fdm_hints) {
+            Ok(base_cell) => [
                 (reference_xy[0] / base_cell[0]).round().max(1.0) as u32,
                 (reference_xy[1] / base_cell[1]).round().max(1.0) as u32,
                 (max_native_z_size / base_cell[2]).round().max(1.0) as u32,
-            ]
+            ],
+            Err(reason) => {
+                errors.push(reason);
+                [1, 1, max_native_z_cells.max(1)]
+            }
         }
-    } else {
-        [
-            (reference_xy[0] / base_cell[0]).round().max(1.0) as u32,
-            (reference_xy[1] / base_cell[1]).round().max(1.0) as u32,
-            (max_native_z_size / base_cell[2]).round().max(1.0) as u32,
-        ]
     };
     let convolution_cell_size = [
         reference_xy[0] / common_cells[0] as f64,
@@ -1675,9 +2075,40 @@ pub(crate) fn plan_fdm_multilayer(
 
     let estimated_unique_kernels = unique_shifts.len() as u32;
     let estimated_pair_kernels = (lowered_bodies.len() * lowered_bodies.len()) as u32;
-    let padded_len =
-        (common_cells[0] * 2) as u64 * (common_cells[1] * 2) as u64 * (common_cells[2] * 2) as u64;
-    let estimated_kernel_bytes = padded_len * 6 * 16 * estimated_unique_kernels as u64;
+    let padded_len = common_cells
+        .iter()
+        .try_fold(1u64, |acc, cells| {
+            acc.checked_mul((*cells as u64).checked_mul(2)?)
+        });
+    let estimated_kernel_bytes = padded_len
+        .and_then(|cells| cells.checked_mul(6))
+        .and_then(|bytes| bytes.checked_mul(16))
+        .and_then(|bytes| bytes.checked_mul(estimated_unique_kernels as u64));
+    let estimated_kernel_bytes = match (padded_len, estimated_kernel_bytes) {
+        (Some(_padded_len), Some(estimated_kernel_bytes)) => estimated_kernel_bytes,
+        _ => {
+            errors.push(
+                "multilayer_convolution kernel size overflow: resolved common_cells or kernel count exceeds u64"
+                    .to_string(),
+            );
+            0
+        }
+    };
+    let common_grid_cost = checked_fdm_grid_cost(common_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
+
+    let resolved_periodic_images = match problem.pbc.as_ref() {
+        Some(pbc) => match pbc.resolve_periodic_images(
+            common_cells,
+            problem.backend_policy.execution_precision,
+        ) {
+            Ok(resolved) => resolved,
+            Err(reason) => {
+                errors.push(reason);
+                None
+            }
+        },
+        None => None,
+    };
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
     let mut integrator = controls.integrator;
@@ -1700,6 +2131,14 @@ pub(crate) fn plan_fdm_multilayer(
         return Err(PlanError { reasons: errors });
     }
 
+    let common_origin = lowered_bodies
+        .iter()
+        .fold([f64::INFINITY; 3], |mut origin, body| {
+            for axis in 0..3 {
+                origin[axis] = origin[axis].min(body.native_origin[axis]);
+            }
+            origin
+        });
     let layers = lowered_bodies
         .into_iter()
         .map(|body| FdmLayerPlanIR {
@@ -1722,6 +2161,8 @@ pub(crate) fn plan_fdm_multilayer(
             },
         })
         .collect::<Vec<_>>();
+    let multilayer_topology_tokens =
+        fullmag_ir::fdm_multilayer_topology_tokens(&layers);
     let native_cuda_lane =
         runtime_requests_cuda(problem) && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
     let requested_auto_integrator = problem.study.optional_dynamics().is_some_and(|dynamics| {
@@ -1756,9 +2197,23 @@ pub(crate) fn plan_fdm_multilayer(
         return Err(PlanError { reasons: errors });
     }
 
+    let grid_certificate = FdmGridCertificateIR::new_with_topology_tokens(
+        common_origin,
+        common_cells,
+        convolution_cell_size,
+        common_grid_cost.cells,
+        common_grid_cost.estimated_bytes,
+        None,
+        &multilayer_topology_tokens,
+    )
+    .map_err(|message| PlanError {
+        reasons: vec![format!("invalid resolved multilayer FDM grid certificate: {message}")],
+    })?;
+
     let plan = FdmMultilayerPlanIR {
         mode: selected_mode.clone(),
         common_cells,
+        grid_certificate: Some(grid_certificate),
         layers,
         enable_exchange,
         enable_demag,
@@ -1769,6 +2224,7 @@ pub(crate) fn plan_fdm_multilayer(
         precision: problem.backend_policy.execution_precision,
         exchange_bc: ExchangeBoundaryCondition::Neumann,
         periodicity: problem.pbc.clone(),
+        resolved_periodic_images,
         integrator: integrator.expect("validated multilayer FDM studies require LLG dynamics"),
         fixed_timestep,
         field_refresh,

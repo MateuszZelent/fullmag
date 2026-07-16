@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  awaitMeshCommandTerminal,
   commitObjectTransformTransaction,
   createObjectTransaction,
   deleteObjectTransaction,
@@ -86,5 +87,124 @@ describe("geometry lifecycle command adapters", () => {
       mesh_reason: "user-selected-object",
       mesh_target: { kind: "object_mesh", object_id: "box" },
     });
+  });
+
+  it("does not report success until the command is terminal and publishes a new mesh revision", async () => {
+    const detail = vi
+      .fn()
+      .mockResolvedValueOnce({
+        command_id: "cmd-1",
+        status: "running",
+        completion_status: null,
+        resource_invalidations: [],
+      })
+      .mockResolvedValueOnce({
+        command_id: "cmd-1",
+        status: "completed",
+        completion_status: "completed",
+        resource_invalidations: [
+          {
+            resource_key: "meshing/shared-domain/manifest",
+            revision: 8,
+          },
+        ],
+      });
+
+    const result = await awaitMeshCommandTerminal(
+      { detail } as never,
+      "cmd-1",
+      { baseMeshRevision: 7, pollDelaysMs: [0, 0] },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.detail.command_id).toBe("cmd-1");
+    expect(detail).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when a terminal command has no new mesh revision", async () => {
+    const detail = vi.fn().mockResolvedValue({
+      command_id: "cmd-2",
+      status: "completed",
+      completion_status: "completed",
+      resource_invalidations: [],
+    });
+
+    const result = await awaitMeshCommandTerminal(
+      { detail } as never,
+      "cmd-2",
+      { baseMeshRevision: 7, pollDelaysMs: [0] },
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.message).toContain("mesh revision");
+  });
+
+  it("fails when the authoritative command resource reports failure", async () => {
+    const detail = vi.fn().mockResolvedValue({
+      command_id: "cmd-failed",
+      status: "failed",
+      completion_status: "failed",
+      error: "mesh generator rejected the domain",
+      resource_invalidations: [],
+    });
+
+    const result = await awaitMeshCommandTerminal(
+      { detail } as never,
+      "cmd-failed",
+      { pollDelaysMs: [0] },
+    );
+
+    expect(result).toEqual({
+      detail: expect.objectContaining({ command_id: "cmd-failed" }),
+      message: "mesh generator rejected the domain",
+      status: "failed",
+    });
+  });
+
+  it("preserves cancellation as a terminal command outcome", async () => {
+    const detail = vi.fn().mockResolvedValue({
+      command_id: "cmd-cancelled",
+      status: "cancelled",
+      completion_status: "cancelled",
+      reason: "cancelled by user",
+      resource_invalidations: [],
+    });
+
+    const result = await awaitMeshCommandTerminal(
+      { detail } as never,
+      "cmd-cancelled",
+      { pollDelaysMs: [0] },
+    );
+
+    expect(result.status).toBe("cancelled");
+    expect(result.message).toBe("cancelled by user");
+  });
+
+  it("treats lifecycle status as authoritative over a stale completion status", async () => {
+    const detail = vi
+      .fn()
+      .mockResolvedValueOnce({
+        command_id: "cmd-running",
+        status: "running",
+        completion_status: "completed",
+        resource_invalidations: [],
+      })
+      .mockResolvedValueOnce({
+        command_id: "cmd-running",
+        status: "completed",
+        completion_status: "completed",
+        resource_invalidations: [
+          { resource_key: "data/domain/topology", revision: 9 },
+        ],
+      });
+
+    const result = await awaitMeshCommandTerminal(
+      { detail } as never,
+      "cmd-running",
+      { pollDelaysMs: [0, 0] },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(detail).toHaveBeenCalledTimes(2);
   });
 });

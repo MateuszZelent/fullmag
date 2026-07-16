@@ -33,6 +33,7 @@ bool has_any_field_or_direct_torque_term(const Context &ctx)
     return ctx.exchange.enabled
         || ctx.demag.enabled
         || ctx.zeeman.has_external_field
+        || !ctx.zeeman.regional_drives.empty()
         || ctx.anisotropy.uniaxial_enabled
         || ctx.dmi.interfacial_enabled
         || ctx.dmi.bulk_enabled
@@ -63,6 +64,7 @@ bool refresh_initial_effective_field_from_plan(
 bool compute_effective_fields_for_magnetization(
     Context &ctx,
     const std::vector<double> &m_xyz,
+    double evaluation_time_s,
     std::vector<double> &h_ex_xyz,
     std::vector<double> &h_demag_xyz,
     std::vector<double> &h_eff_xyz,
@@ -165,6 +167,10 @@ bool compute_effective_fields_for_magnetization(
                            ctx.anisotropy.h_cubic_xyz[i];
         }
         add_zeeman_field(ctx, h_eff_xyz);
+        materialize_regional_field_drive(ctx, evaluation_time_s);
+        for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
+            h_eff_xyz[i] += ctx.zeeman.h_drive_xyz[i];
+        }
 
         if (ctx.dmi.bulk_enabled && !ctx.dmi.h_bulk_xyz.empty()) {
             for (size_t i = 0; i < h_eff_xyz.size(); ++i) {
@@ -172,7 +178,7 @@ bool compute_effective_fields_for_magnetization(
             }
         }
 
-        add_oersted_field(ctx, h_eff_xyz);
+        add_oersted_field(ctx, evaluation_time_s, h_eff_xyz);
 
         if (ctx.thermal_brown.temperature > 0.0) {
             refresh_thermal_brown_field(ctx);

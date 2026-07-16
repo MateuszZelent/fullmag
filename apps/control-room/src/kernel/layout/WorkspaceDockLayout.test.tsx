@@ -17,6 +17,7 @@ import type { KernelApi } from "../types";
 import { AnalysisFieldOverlayController } from "../visualization/AnalysisFieldOverlayController";
 import { CameraRegistryController } from "../visualization/CameraRegistryController";
 import { ObjectVisualizationController } from "../visualization/ObjectVisualizationController";
+import { VisualizationDebugController } from "../visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "../visualization/VisualizationRegistrySyncController";
 
 import { LayoutController } from "./LayoutController";
@@ -47,6 +48,7 @@ function makeKernel(): KernelApi {
     resources,
     selection: new SelectionController(bus),
     visualization: new ObjectVisualizationController(),
+    visualizationDebug: new VisualizationDebugController(),
     visualizationSync: new VisualizationRegistrySyncController({
       api: api.visualization,
       resources,

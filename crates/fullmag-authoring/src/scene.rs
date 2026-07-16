@@ -27,6 +27,8 @@ pub struct SceneDocument {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub magnetization_assets: Vec<MagnetizationAsset>,
     #[serde(default)]
+    pub field_drives: SceneFieldDrivesState,
+    #[serde(default)]
     pub current_modules: SceneCurrentModulesState,
     #[serde(default)]
     pub study: SceneStudyState,
@@ -34,6 +36,13 @@ pub struct SceneDocument {
     pub outputs: SceneOutputsState,
     #[serde(default)]
     pub editor: SceneEditorState,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SceneFieldDrivesState {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drives: Vec<fullmag_ir::RegionalFieldDriveIR>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]

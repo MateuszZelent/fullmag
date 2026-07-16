@@ -373,6 +373,13 @@ def _merge_frozen_magnetic_submesh_with_air_mesh(
         boundary_faces.append(remapped_face.astype(np.int32, copy=False))
         boundary_markers.append(int(marker))
 
+    # Preserve the shared magnetic-air interface as an explicit certified
+    # boundary role.  It is not an exterior air face, but the planner needs
+    # the physical interface marker to prove role disjointness and coverage.
+    for face in np.asarray(frozen.interface_boundary_faces, dtype=np.int32):
+        boundary_faces.append(np.asarray(face, dtype=np.int32))
+        boundary_markers.append(10)
+
     periodic_boundary_pairs = [dict(pair) for pair in air_mesh.periodic_boundary_pairs]
     if not periodic_boundary_pairs:
         periodic_boundary_pairs = [
@@ -610,6 +617,79 @@ def _validate_domain_mesh_workflow(
     return _load_frozen_magnetic_submesh_source(
         mesh_workflow.get("frozen_magnetic_submesh_source")
     )
+
+
+def _validate_declared_mesh_operations(
+    mesh_workflow: Mapping[str, object] | None,
+) -> None:
+    """Reject authored operations that have no realized shared-mesh executor.
+
+    Operations are part of the public authoring contract, but the shared-domain
+    pipeline currently realizes sizing/algorithm options rather than a mutable
+    post-mesh operation sequence.  Accepting these records would silently turn
+    ``refine``, ``smooth`` or ``optimize`` into no-ops, so fail closed before any
+    mesh or artifact is created.
+    """
+    if not isinstance(mesh_workflow, Mapping):
+        return
+
+    declared: list[tuple[str, str]] = []
+
+    def collect(raw: object, scope: str) -> None:
+        if raw is None:
+            return
+        if not isinstance(raw, list):
+            raise ValueError(
+                f"mesh operation executor unavailable: operations for scope {scope!r} "
+                "must be a list"
+            )
+        for index, entry in enumerate(raw):
+            if not isinstance(entry, Mapping):
+                raise ValueError(
+                    "mesh operation executor unavailable: operation entry "
+                    f"{scope!r}[{index}] must be an object"
+                )
+            kind = entry.get("kind")
+            if not isinstance(kind, str) or not kind.strip():
+                raise ValueError(
+                    "mesh operation executor unavailable: operation kind must be a non-empty string"
+                )
+            entry_scope = entry.get("geometry")
+            declared.append(
+                (
+                    str(entry_scope).strip()
+                    if isinstance(entry_scope, str) and entry_scope.strip()
+                    else scope,
+                    kind.strip(),
+                )
+            )
+
+    collect(mesh_workflow.get("operations"), "global")
+    collect(
+        mesh_workflow.get("default_mesh", {}).get("operations")
+        if isinstance(mesh_workflow.get("default_mesh"), Mapping)
+        else None,
+        "global",
+    )
+    raw_per_geometry = mesh_workflow.get("per_geometry")
+    if isinstance(raw_per_geometry, list):
+        for entry in raw_per_geometry:
+            if not isinstance(entry, Mapping):
+                continue
+            scope = str(entry.get("geometry") or "<unknown>")
+            collect(entry.get("operations"), scope)
+    elif raw_per_geometry is not None:
+        raise ValueError(
+            "mesh operation executor unavailable: per_geometry must be a list"
+        )
+
+    if declared:
+        scope, kind = declared[0]
+        raise ValueError(
+            "mesh operation executor unavailable: "
+            f"kind={kind!r} scope={scope!r}; shared-domain realization has no "
+            "validated executor for authored operations"
+        )
 
 
 def _frozen_magnetic_submesh_air_mesh_source(
@@ -1956,6 +2036,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
     """
     if not geometries:
         raise ValueError("shared FEM domain mesh requires at least one geometry")
+    _validate_declared_mesh_operations(mesh_workflow)
     frozen_payload = _validate_domain_mesh_workflow(mesh_workflow)
 
     airbox = _study_universe_airbox_options(geometries, study_universe)
@@ -2285,26 +2366,6 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                                 )
                                 break
                             except ValueError as exc:
-                                if "degenerate tetra volume" in str(exc):
-                                    cleanup_fallbacks = list(fallbacks_triggered)
-                                    try:
-                                        cleaned_mesh = _drop_degenerate_tetrahedra(
-                                            result.mesh,
-                                            context="Conformal OCC mesh",
-                                            fallbacks_triggered=cleanup_fallbacks,
-                                        )
-                                        if cleaned_mesh is not result.mesh:
-                                            cleaned_mesh.validate_strict(
-                                                require_positive_orientation=True
-                                            )
-                                            result = _dc_replace(
-                                                result,
-                                                mesh=cleaned_mesh,
-                                            )
-                                            fallbacks_triggered[:] = cleanup_fallbacks
-                                            break
-                                    except ValueError:
-                                        pass
                                 retry = (
                                     _conformal_occ_degenerate_retry(
                                         mesh_options,
@@ -2482,6 +2543,10 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                     "effective_per_object_targets": effective_per_object_targets,
                     "used_size_field_kinds": used_size_field_kinds,
                     "fallbacks_triggered": fallbacks_triggered,
+                    "rejected_element_types": [
+                        dict(element)
+                        for element in getattr(exc, "rejected_element_types", [])
+                    ],
                     "operation_statuses": [
                         status.to_dict()
                         for status in _build_mesh_operation_statuses(
@@ -2499,11 +2564,12 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             )
             raise
 
-    mesh = _drop_degenerate_tetrahedra(
-        mesh,
-        context=f"{build_mode} shared-domain mesh",
-        fallbacks_triggered=fallbacks_triggered,
-    )
+    if build_mode != "conformal_occ":
+        mesh = _drop_degenerate_tetrahedra(
+            mesh,
+            context=f"{build_mode} shared-domain mesh",
+            fallbacks_triggered=fallbacks_triggered,
+        )
 
     # Classify elements back to geometries
     source_markers = np.asarray(mesh.element_markers, dtype=np.int32)

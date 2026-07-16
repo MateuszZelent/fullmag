@@ -59,7 +59,7 @@ bool initialize_oersted_cylinder_field(Context &ctx, std::string &error)
     const double ay = ctx.oersted.axis[1];
     const double az = ctx.oersted.axis[2];
 
-    ctx.oersted.h_xyz.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 3u, 0.0);
+    ctx.oersted.h_basis_per_ampere_xyz.assign(static_cast<size_t>(ctx.mesh.n_nodes) * 3u, 0.0);
     const size_t available_nodes = std::min(
         static_cast<size_t>(ctx.mesh.n_nodes),
         ctx.mesh.nodes_xyz.size() / 3u);
@@ -88,15 +88,15 @@ bool initialize_oersted_cylinder_field(Context &ctx, std::string &error)
         const double ry_hat = ry * inv_r;
         const double rz_hat = rz * inv_r;
 
-        ctx.oersted.h_xyz[base + 0] = h_mag * (ay * rz_hat - az * ry_hat);
-        ctx.oersted.h_xyz[base + 1] = h_mag * (az * rx_hat - ax * rz_hat);
-        ctx.oersted.h_xyz[base + 2] = h_mag * (ax * ry_hat - ay * rx_hat);
+        ctx.oersted.h_basis_per_ampere_xyz[base + 0] = h_mag * (ay * rz_hat - az * ry_hat);
+        ctx.oersted.h_basis_per_ampere_xyz[base + 1] = h_mag * (az * rx_hat - ax * rz_hat);
+        ctx.oersted.h_basis_per_ampere_xyz[base + 2] = h_mag * (ax * ry_hat - ay * rx_hat);
     }
 
     return true;
 }
 
-double oersted_current_scale(const Context &ctx)
+double oersted_current_scale(const Context &ctx, double evaluation_time_s)
 {
     if (!ctx.oersted.has_cylinder) {
         return 1.0;
@@ -106,13 +106,13 @@ double oersted_current_scale(const Context &ctx)
     switch (ctx.oersted.time_dep_kind) {
         case 1:
             scale *= std::sin(
-                         2.0 * kPi * ctx.oersted.time_dep_freq * ctx.state.current_time +
+                         2.0 * kPi * ctx.oersted.time_dep_freq * evaluation_time_s +
                          ctx.oersted.time_dep_phase) +
                      ctx.oersted.time_dep_offset;
             break;
         case 2:
-            scale *= (ctx.state.current_time >= ctx.oersted.time_dep_t_on &&
-                      ctx.state.current_time < ctx.oersted.time_dep_t_off)
+            scale *= (evaluation_time_s >= ctx.oersted.time_dep_t_on &&
+                      evaluation_time_s < ctx.oersted.time_dep_t_off)
                          ? 1.0
                          : 0.0;
             break;
@@ -122,16 +122,19 @@ double oersted_current_scale(const Context &ctx)
     return scale;
 }
 
-void add_oersted_cylinder_field(const Context &ctx, std::vector<double> &h_eff_xyz)
+void add_oersted_cylinder_field(
+    const Context &ctx,
+    double evaluation_time_s,
+    std::vector<double> &h_eff_xyz)
 {
-    if (!ctx.oersted.has_cylinder || ctx.oersted.h_xyz.empty()) {
+    if (!ctx.oersted.has_cylinder || ctx.oersted.h_basis_per_ampere_xyz.empty()) {
         return;
     }
 
-    const double scale = oersted_current_scale(ctx);
-    const size_t count = std::min(h_eff_xyz.size(), ctx.oersted.h_xyz.size());
+    const double scale = oersted_current_scale(ctx, evaluation_time_s);
+    const size_t count = std::min(h_eff_xyz.size(), ctx.oersted.h_basis_per_ampere_xyz.size());
     for (size_t i = 0; i < count; ++i) {
-        h_eff_xyz[i] += scale * ctx.oersted.h_xyz[i];
+        h_eff_xyz[i] += scale * ctx.oersted.h_basis_per_ampere_xyz[i];
     }
 }
 

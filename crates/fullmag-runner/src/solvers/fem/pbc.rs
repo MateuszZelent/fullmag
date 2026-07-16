@@ -158,6 +158,27 @@ pub(crate) fn fem_static_periodic_decision(plan: &FemPlanIR) -> FemStaticPbcDeci
     FemStaticPbcDecision::native(FemStaticPbcLane::NativeExchangeOnly)
 }
 
+/// Revalidate mirrored region/material evidence immediately before native FEM
+/// allocation.  Planning and artifact publication are not sufficient because
+/// a caller may deserialize or transform a plan after planning; the native
+/// lane must fail closed on the exact payload it is about to assemble.
+pub(crate) fn validate_periodic_region_material_certificate(
+    plan: &FemPlanIR,
+) -> Result<Option<fullmag_ir::PeriodicMeshCertificateV6IR>, String> {
+    if plan.mesh.periodic_node_pairs.is_empty() {
+        return Ok(None);
+    }
+    plan.mesh
+        .periodic_mesh_certificate_v6_with_material_and_nodal_fields(
+            plan.ms_element_field.as_deref(),
+            plan.a_element_field.as_deref(),
+            plan.material.ms_field.as_deref(),
+            plan.material.a_field.as_deref(),
+        )
+        .map(Some)
+        .map_err(|errors| errors.join("; "))
+}
+
 /// Legacy helper used at call sites that only need a binary native-path answer.
 #[allow(dead_code)]
 pub(crate) fn fem_static_periodic_native_exchange_supported(plan: &FemPlanIR) -> bool {

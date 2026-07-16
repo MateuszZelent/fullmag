@@ -47,6 +47,12 @@ export function summarizeViewport3DTargetDiagnostics({
   }).toSorted((left, right) => left.targetId.localeCompare(right.targetId));
 }
 
+export function resolveViewport3DTargetDiagnosticResourceKeys(
+  pass: Viewport3DTargetRenderPassModel,
+): readonly string[] {
+  return pass.fieldBuffer?.resourceKey ? [pass.fieldBuffer.resourceKey] : [];
+}
+
 function summarizeTargetPasses(
   pass: Viewport3DTargetRenderPassModel,
 ): string[] {

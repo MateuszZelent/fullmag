@@ -13,6 +13,12 @@ from numpy.typing import NDArray
 FEM_TOPOLOGY_DETERMINANT_EPS = 1.0e-30
 FEM_TOPOLOGY_VOLUME_EPS = FEM_TOPOLOGY_DETERMINANT_EPS / 6.0
 
+# The native FEM MeshData contract is linear tetrahedra with triangular
+# boundary faces.  Keep this dispatch table keyed by Gmsh's element type
+# instead of accepting a compatible-looking prefix of arbitrary connectivity.
+SUPPORTED_VOLUME_ELEMENTS: dict[int, tuple[str, int]] = {4: ("tet4", 4)}
+SUPPORTED_BOUNDARY_ELEMENTS: dict[int, tuple[str, int]] = {2: ("tri3", 3)}
+
 
 @dataclass(frozen=True, slots=True)
 class MeshQualityReport:
@@ -463,6 +469,7 @@ class MeshData:
     boundary_markers: NDArray[np.int32]
     periodic_boundary_pairs: list[dict[str, object]] = field(default_factory=list)
     periodic_node_pairs: list[dict[str, object]] = field(default_factory=list)
+    periodic_mesh_certificate: dict[str, object] | None = None
     quality: MeshQualityReport | None = None
     per_domain_quality: dict[int, MeshQualityReport] | None = None
 
@@ -482,6 +489,13 @@ class MeshData:
             "periodic_node_pairs",
             [dict(pair) for pair in self.periodic_node_pairs],
         )
+        if self.periodic_mesh_certificate is not None:
+            certificate = dict(self.periodic_mesh_certificate)
+            if certificate.get("schema_version") != "periodic_mesh_certificate.v6":
+                raise ValueError("periodic_mesh_certificate must use schema periodic_mesh_certificate.v6")
+            if certificate.get("certificate_status") != "accepted":
+                raise ValueError("periodic_mesh_certificate must be accepted")
+            object.__setattr__(self, "periodic_mesh_certificate", certificate)
         self.validate()
 
     @property
@@ -593,6 +607,11 @@ class MeshData:
             boundary_markers=np.array(self.boundary_markers, copy=True),
             periodic_boundary_pairs=[dict(pair) for pair in self.periodic_boundary_pairs],
             periodic_node_pairs=[dict(pair) for pair in self.periodic_node_pairs],
+            periodic_mesh_certificate=(
+                dict(self.periodic_mesh_certificate)
+                if self.periodic_mesh_certificate is not None
+                else None
+            ),
             quality=self.quality,
             per_domain_quality=self.per_domain_quality,
         )
@@ -612,6 +631,7 @@ class MeshData:
                         "boundary_markers": self.boundary_markers.tolist(),
                         "periodic_boundary_pairs": self.periodic_boundary_pairs,
                         "periodic_node_pairs": self.periodic_node_pairs,
+                        "periodic_mesh_certificate": self.periodic_mesh_certificate,
                     },
                     indent=2,
                 ),
@@ -630,6 +650,9 @@ class MeshData:
             ),
             periodic_node_pairs_json=np.asarray(
                 json.dumps(self.periodic_node_pairs),
+            ),
+            periodic_mesh_certificate_json=np.asarray(
+                json.dumps(self.periodic_mesh_certificate),
             ),
         )
 
@@ -723,6 +746,7 @@ class MeshData:
                 boundary_markers=np.asarray(payload["boundary_markers"], dtype=np.int32),
                 periodic_boundary_pairs=[dict(pair) for pair in payload.get("periodic_boundary_pairs", [])],
                 periodic_node_pairs=[dict(pair) for pair in payload.get("periodic_node_pairs", [])],
+                periodic_mesh_certificate=payload.get("periodic_mesh_certificate"),
             )
 
         data = np.load(source)
@@ -738,6 +762,9 @@ class MeshData:
                 dict(pair)
                 for pair in json.loads(str(data["periodic_node_pairs_json"]))
             ]
+        periodic_mesh_certificate = None
+        if "periodic_mesh_certificate_json" in data.files:
+            periodic_mesh_certificate = json.loads(str(data["periodic_mesh_certificate_json"]))
         return cls(
             nodes=data["nodes"],
             elements=data["elements"],
@@ -746,6 +773,7 @@ class MeshData:
             boundary_markers=data["boundary_markers"],
             periodic_boundary_pairs=periodic_boundary_pairs,
             periodic_node_pairs=periodic_node_pairs,
+            periodic_mesh_certificate=periodic_mesh_certificate,
         )
 
     def to_ir(self, mesh_name: str) -> dict[str, object]:
@@ -765,6 +793,8 @@ class MeshData:
             ir["periodic_boundary_pairs"] = periodic_boundary_pairs
         if periodic_node_pairs:
             ir["periodic_node_pairs"] = periodic_node_pairs
+        if mesh.periodic_mesh_certificate is not None:
+            ir["periodic_mesh_certificate"] = dict(mesh.periodic_mesh_certificate)
         if mesh.per_domain_quality is not None:
             ir["per_domain_quality"] = {
                 str(marker): {

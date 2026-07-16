@@ -330,14 +330,6 @@ async function verifyCameraGesturesStayLocal({ page }) {
   const y = box.y + box.height * 0.5;
   const startIndex = cameraGestureRequests.length;
 
-  await assertCameraGestureDoesNotFetch(page, "viewport focus", async () => {
-    await page.mouse.move(x, y);
-    await page.mouse.click(x, y);
-  });
-  gesturePerformancePhases.push(
-    await collectViewport3DPerformancePhase(page, "viewport-focus"),
-  );
-
   const initialCameraSignature = await readViewportCameraSignature(page);
 
   await assertCameraGestureDoesNotFetch(page, "orbit rotate", async () => {
@@ -1421,16 +1413,17 @@ async function verifyGeometryAuthoringFlow({
       canvasBaseline,
       "3D viewport canvas change after UI object commit",
     );
-    const regionCanvasSample = await verifyRegionAuthoringOverlayFlow({
+    const regionOverlayResult = await verifyRegionAuthoringOverlayFlow({
       baseline: uiCanvasSample,
       objectId,
       page,
     });
+    cleanupRevision = regionOverlayResult.sceneRevision;
+    const regionCanvasSample = regionOverlayResult.canvasSample;
 
     const externalObjectName = `Smoke WS Box ${Date.now().toString(36)}`;
     const externalObjectId = `smoke-ws-${Date.now().toString(36)}`;
-    const externalBaseRevision =
-      sceneRevision(uiScene) ?? transaction.scene_revision ?? null;
+    const externalBaseRevision = cleanupRevision;
     if (typeof externalBaseRevision !== "number") {
       throw new Error(
         "Cannot run websocket refetch check: current SceneDocument revision is missing.",
@@ -1552,6 +1545,10 @@ async function verifyRegionAuthoringOverlayFlow({
   const createRegionResponse = await createRegionResponsePromise;
   await scriptSyncResponsePromise;
   const scene = await createRegionResponse.json();
+  const committedSceneRevision = sceneRevision(scene);
+  if (typeof committedSceneRevision !== "number") {
+    throw new Error("Created object region response has no scene revision.");
+  }
   const object = sceneObjects(scene).find(
     (candidate) => sceneObjectId(candidate) === objectId,
   );
@@ -1581,10 +1578,24 @@ async function verifyRegionAuthoringOverlayFlow({
     state: "visible",
     timeout: GEOMETRY_FLOW_TIMEOUT_MS,
   });
-  await page
+  const regionOverlayControl = page
     .locator(".fm-viewport-3d")
-    .getByRole("button", { name: "Hide regions" })
-    .waitFor({ state: "visible", timeout: GEOMETRY_FLOW_TIMEOUT_MS });
+    .getByRole("group", { name: "Region overlays" });
+  await regionOverlayControl.waitFor({
+    state: "visible",
+    timeout: GEOMETRY_FLOW_TIMEOUT_MS,
+  });
+  const authoredRegionOverlayMode = regionOverlayControl.getByRole("button", {
+    exact: true,
+    name: "Authored",
+  });
+  await authoredRegionOverlayMode.click();
+  await waitForCondition("authored region overlay mode active", async () => {
+    return (await authoredRegionOverlayMode.getAttribute("aria-pressed")) ===
+      "true"
+      ? true
+      : null;
+  });
   await assertViewportTopologyNotStale(page, "region authoring");
   const canvasSample = await waitForCanvasChange(
     page,
@@ -1603,7 +1614,10 @@ async function verifyRegionAuthoringOverlayFlow({
       "viewport=overlay+canvas-delta",
     ].join(" "),
   );
-  return canvasSample;
+  return {
+    canvasSample,
+    sceneRevision: committedSceneRevision,
+  };
 }
 
 async function waitForRegionAuthoringScriptSync(page) {

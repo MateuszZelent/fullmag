@@ -21,6 +21,10 @@ const memoryChurnScriptUrl = new URL(
   "../../../scripts/audit-viewport-3d-memory-churn.mjs",
   import.meta.url,
 );
+const femTopologyUploadAuditScriptUrl = new URL(
+  "../../../scripts/audit-viewport-3d-fem-topology-uploads.mjs",
+  import.meta.url,
+);
 const profileSwitchScriptUrl = new URL(
   "../../../scripts/audit-viewport-3d-profile-switch.mjs",
   import.meta.url,
@@ -101,7 +105,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("Viewport 3D phased compute metrics:");
     expect(smokeScript).toContain('"long-animation-frame"');
     expect(smokeScript).toContain('"startup-to-canvas"');
-    expect(smokeScript).toContain('"viewport-focus"');
+    expect(smokeScript).not.toContain('"viewport-focus"');
     expect(smokeScript).toContain('"camera-orbit-rotate"');
     expect(smokeScript).toContain('"camera-wheel-zoom"');
     expect(smokeScript).toContain('"camera-right-pan"');
@@ -126,6 +130,16 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain('scope === "phase"');
     expect(smokeScript).toContain("viewportDiagnostics?.frames ?? 0");
     expect(smokeScript).toContain("__FULLMAG_READ_VIEWPORT_3D_DIAGNOSTICS__");
+  });
+
+  it("does not confuse a selectable canvas click with a camera gesture", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).not.toContain('"viewport focus"');
+    expect(smokeScript).not.toContain("await page.mouse.click(x, y);");
+    expect(smokeScript.indexOf("const initialCameraSignature")).toBeLessThan(
+      smokeScript.indexOf('"orbit rotate"'),
+    );
   });
 
   it("excludes smoke harness canvas sampling from viewport long-task metrics", () => {
@@ -311,7 +325,17 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain('shapeSelect.selectOption("cylinder")');
     expect(smokeScript).toContain("region create button enabled");
     expect(smokeScript).toContain("createButton.evaluate");
-    expect(smokeScript).toContain('getByRole("button", { name: "Hide regions" })');
+    expect(smokeScript).toContain(
+      'getByRole("group", { name: "Region overlays" })',
+    );
+    expect(smokeScript).toContain(
+      'const authoredRegionOverlayMode = regionOverlayControl.getByRole("button",',
+    );
+    expect(smokeScript).toContain('name: "Authored"');
+    expect(smokeScript).toContain("authored region overlay mode active");
+    expect(smokeScript).not.toContain(
+      'getByRole("button", { name: "Hide regions" })',
+    );
     expect(smokeScript).toContain("assertViewportTopologyNotStale");
     expect(smokeScript).toContain("topology remains renderable");
     expect(smokeScript).toContain("edge-only safety view");
@@ -323,6 +347,24 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("waitForRegionAuthoringScriptSync");
     expect(smokeScript).toContain(JSON.stringify(MODEL_SYNCS_PATH));
     expect(smokeScript).toContain("script=region-authoring-synced");
+  });
+
+  it("uses the region transaction revision for geometry smoke cleanup", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain(
+      "const regionOverlayResult = await verifyRegionAuthoringOverlayFlow",
+    );
+    expect(smokeScript).toContain(
+      "cleanupRevision = regionOverlayResult.sceneRevision;",
+    );
+    expect(smokeScript).toContain("sceneRevision: committedSceneRevision");
+    expect(smokeScript).toContain(
+      "const externalBaseRevision = cleanupRevision;",
+    );
+    expect(smokeScript).not.toContain(
+      "sceneRevision(uiScene) ?? transaction.scene_revision ?? null",
+    );
   });
 
   it("does not order websocket refetch proof by probe timestamps", () => {
@@ -384,6 +426,54 @@ describe("viewport smoke projection round-trip", () => {
     expect(screenshotScript).toContain("Viewport 3D region overlay selection passed");
   });
 
+  it("publishes the current scene and a complete generated-shape target registry for projection screenshots", () => {
+    const screenshotScript = readFileSync(screenshotScriptUrl, "utf8");
+
+    expect(screenshotScript).toContain('scope: "part"');
+    expect(screenshotScript).toContain('scope_id: "part-film"');
+    expect(screenshotScript).toContain('source: "mesh_part"');
+    expect(screenshotScript).toContain('object_id: "projection-film"');
+  });
+
+  it("selects the semantic object Visualization node before changing projection", () => {
+    const screenshotScript = readFileSync(screenshotScriptUrl, "utf8");
+
+    expect(screenshotScript).toContain(
+      "selectProjectionFixtureVisualizationNode",
+    );
+    expect(screenshotScript).toContain(
+      'page.locator(\'[data-node-id="model:objects"]\')',
+    );
+    expect(screenshotScript).toContain(
+      'page.locator(\'[data-node-id="model:object:projection-film"]\')',
+    );
+    expect(screenshotScript).toContain(
+      '[data-node-id="model:object:projection-film:visualization"]',
+    );
+    expect(screenshotScript).toContain("const objectOverride =");
+    expect(screenshotScript).toContain(
+      'entry?.scope_id === "projection-film"',
+    );
+    expect(screenshotScript).toContain("const partOverride =");
+    expect(screenshotScript).toContain(
+      "const override = objectOverride ?? partOverride;",
+    );
+    expect(screenshotScript).not.toContain(
+      "clickCanvasUntilProjectionControlVisible",
+    );
+  });
+
+  it("rejects a projection screenshot gate with no pixel difference for any mode pair", () => {
+    const screenshotScript = readFileSync(screenshotScriptUrl, "utf8");
+
+    expect(screenshotScript).toContain(
+      "if (!rawToSurface.changed || !surfaceToThickness.changed || !rawToThickness.changed)",
+    );
+    expect(screenshotScript).toContain(
+      "Top/bottom projection fixture did not visually distinguish all projection modes.",
+    );
+  });
+
   it("keeps the memory churn fixture isolated from live realtime websocket events", () => {
     const memoryChurnScript = readFileSync(memoryChurnScriptUrl, "utf8");
 
@@ -391,6 +481,81 @@ describe("viewport smoke projection round-trip", () => {
     expect(memoryChurnScript).toContain(
       "Cached quantity switching refetched field resources",
     );
+  });
+
+  it("keeps production lifecycle negative controls wired to their runtime guards", () => {
+    const memoryChurnScript = readFileSync(memoryChurnScriptUrl, "utf8");
+
+    expect(memoryChurnScript).toContain("CONTROL_ROOM_AUDIT_INJECT_IDLE_LOOP");
+    expect(memoryChurnScript).toContain("injectViewportIdleLoop(page)");
+    expect(memoryChurnScript).toContain("Viewport rendered during");
+    expect(memoryChurnScript).toContain("CONTROL_ROOM_AUDIT_INJECT_WORKER_LEAK");
+    expect(memoryChurnScript).toContain("injectViewportAuditWorkerLeak");
+    expect(memoryChurnScript).toContain("workers.activeLeases !== 0");
+    expect(memoryChurnScript).toContain("CONTROL_ROOM_AUDIT_INJECT_GPU_BUFFER_LEAK");
+    expect(memoryChurnScript).toContain("injectViewportGpuBufferLeak(page)");
+    expect(memoryChurnScript).toContain("Live WebGL buffers did not return");
+  });
+
+  it("browser-proves the pre-canvas React error boundary and forensic stacks", () => {
+    const femTopologyAuditScript = readFileSync(femTopologyUploadAuditScriptUrl, "utf8");
+
+    expect(femTopologyAuditScript).toContain("verifyViewport3DPreCanvasErrorBoundary");
+    expect(femTopologyAuditScript).toContain("CONTROL_ROOM_AUDIT_PRE_CANVAS_ONLY");
+    expect(femTopologyAuditScript).toContain("injectViewport3DRenderError: true");
+    expect(femTopologyAuditScript).toContain('entry.name === "viewport-3d.render-error"');
+    expect(femTopologyAuditScript).toContain("record?.detail?.componentStack");
+    expect(femTopologyAuditScript).toContain("Retry viewport");
+  });
+
+  it("measures shared FEM topology position uploads in a real WebGL viewport", () => {
+    const femTopologyAuditScript = readFileSync(femTopologyUploadAuditScriptUrl, "utf8");
+
+    expect(femTopologyAuditScript).toContain("FEM_PART_COUNTS = [1, 10, 100]");
+    expect(femTopologyAuditScript).toContain("surface-wireframe-points");
+    expect(femTopologyAuditScript).toContain("createFemTopologyFixture");
+    expect(femTopologyAuditScript).toContain("boundary_face_indices");
+    expect(femTopologyAuditScript).toContain("arrayBufferBytesUploaded");
+    expect(femTopologyAuditScript).toContain("elementArrayBufferBytesUploaded");
+    expect(femTopologyAuditScript).toContain("drawCalls <= 0");
+    expect(femTopologyAuditScript).toContain("Position upload grew with FEM part count");
+    expect(femTopologyAuditScript).toContain("fem-topology-upload-metrics.json");
+  });
+
+  it("browser-proves semantic picks and keeps outer boundary under Universe", () => {
+    const femTopologyAuditScript = readFileSync(femTopologyUploadAuditScriptUrl, "utf8");
+
+    expect(femTopologyAuditScript).toContain("verifySemanticTargetExplorerInvariant");
+    expect(femTopologyAuditScript).toContain('"model:airbox"');
+    expect(femTopologyAuditScript).toContain('"model:object:semantic-magnet"');
+    expect(femTopologyAuditScript).toContain(
+      '"model:mesh:unassigned:semantic-orphan"',
+    );
+    expect(femTopologyAuditScript).toContain('"model:boundary-faces"');
+    expect(femTopologyAuditScript).toContain(
+      '"model:mesh:unassigned:semantic-outer-boundary"',
+    );
+    expect(femTopologyAuditScript).toContain("Boundary Faces Overview");
+    expect(femTopologyAuditScript).toContain("Outer boundary leaked into Unassigned mesh");
+    expect(femTopologyAuditScript).toContain('"Realized carriers": "1"');
+    expect(femTopologyAuditScript).toContain('"Boundary faces": "4"');
+    expect(femTopologyAuditScript).toContain('"Manifest state": "ready"');
+    expect(femTopologyAuditScript).toContain("postInteractionWebgl");
+    expect(femTopologyAuditScript).toContain(
+      "semantic-target-boundary-faces-success.png",
+    );
+    expect(femTopologyAuditScript).toContain("drawingBufferWidth");
+    expect(femTopologyAuditScript).toContain("isContextLost()");
+    expect(femTopologyAuditScript).toContain("aria-selected");
+    expect(femTopologyAuditScript).toContain("unaddressable-render-target:");
+    expect(femTopologyAuditScript).toContain("boundary_face_count: surfaceFaces.length");
+    expect(femTopologyAuditScript).toContain("tetraSurfaceFaces(nodeStart)");
+    expect(femTopologyAuditScript).toContain("PICK_SCAN_COLUMNS = 32");
+    expect(femTopologyAuditScript).toContain("PICK_SCAN_ROWS = 24");
+    expect(femTopologyAuditScript).toContain(
+      "fixture.domainMeta ?? femDomainMetaFixture()",
+    );
+    expect(femTopologyAuditScript).toContain("bounds: { max: [4, 2, 1], min: [-4, -2, -1] }");
   });
 
   it("finds viewport diagnostics by content instead of a fixed HUD index", () => {

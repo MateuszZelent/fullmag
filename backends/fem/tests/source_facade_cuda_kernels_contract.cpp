@@ -939,9 +939,9 @@ void gpu_rk_rhs_runtime_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             fsal_source.find("ctx.thermal_brown.temperature > 0.0") !=
                 std::string::npos &&
-            fsal_source.find("ctx.oersted.time_dep_kind != 0u") !=
+            fsal_source.find("ctx.oersted.time_dep_kind != 0u") ==
                 std::string::npos,
-        "GPU CUDA RK FSAL policy source must reject stochastic Brown thermal and time-dependent Oersted RHS");
+        "GPU CUDA RK FSAL policy must reject stochastic thermal RHS while permitting endpoint-safe deterministic Oersted reuse");
     check(
         rhs_source.find("#include \"gpu/cuda/integrators/rk/rk_rhs_runtime.hpp\"") !=
                 std::string::npos &&
@@ -1037,7 +1037,7 @@ void gpu_rk_rhs_runtime_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             rhs_source.find("#include \"gpu/cuda/integrators/rk/rk_effective_field.hpp\"") !=
                 std::string::npos &&
-            rhs_source.find("gpu_rk_accumulate_effective_field(ctx, stream, n, label, reason)") !=
+            rhs_source.find("gpu_rk_accumulate_effective_field(ctx, stream, n, evaluation_time_s, label, reason)") !=
                 std::string::npos &&
             rhs_source.find("#include \"gpu/cuda/integrators/rk/rk_direct_torques.hpp\"") !=
                 std::string::npos &&
@@ -1383,7 +1383,7 @@ void gpu_rk_effective_field_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             effective_source.find("fullmag_cuda_add_field_inplace(") !=
                 std::string::npos &&
-            effective_source.find("gpu_rk_accumulate_oersted_field(ctx, stream, n, reason)") !=
+            effective_source.find("gpu_rk_accumulate_oersted_field(ctx, stream, n, evaluation_time_s, reason)") !=
                 std::string::npos,
         "GPU CUDA RK effective-field source must own base/local H_eff accumulation and delegate Oersted contribution");
     check(
@@ -1967,6 +1967,35 @@ void cuda_demag_kernels_are_owned_by_cuda_demag_kernel_module() {
         "GPU CUDA demag kernels source must own demag kernels and exported wrappers");
 }
 
+void gpu_regional_field_drive_is_device_resident_and_stage_time_aware() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
+    const std::string kernel = read_text_file(
+        root / "gpu" / "cuda" / "interactions" / "zeeman" / "regional_field_kernels.cu");
+    const std::string evaluator = read_text_file(
+        root / "gpu" / "cuda" / "interactions" / "zeeman" / "time_dependence_device.cuh");
+    const std::string effective = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" / "rk_effective_field.cu");
+    const std::string energy = read_text_file(
+        root / "gpu" / "cuda" / "integrators" / "rk" / "rk_external_energy_reductions.cu");
+    check(cmake.find("gpu/cuda/interactions/zeeman/regional_field_kernels.cu") != std::string::npos,
+        "CMake must build the regional field CUDA owner");
+    check(kernel.find("materialize_regional_field_kernel") != std::string::npos &&
+          kernel.find("drive * node_count + node") != std::string::npos &&
+          kernel.find("cudaMemcpyHostToDevice") != std::string::npos,
+        "regional drive CUDA owner must pack each basis once and materialize on device");
+    check(evaluator.find("evaluation_time_s - stage_start_time_s") != std::string::npos &&
+          evaluator.find("FULLMAG_FEM_TIME_PIECEWISE_LINEAR") != std::string::npos &&
+          evaluator.find("stable_device_sinc") != std::string::npos,
+        "device evaluator must implement stage-local, PWL, and stable sinc semantics");
+    check(effective.find("gpu_regional_field_drive_materialize_and_accumulate") != std::string::npos &&
+          effective.find("evaluation_time_s, true") != std::string::npos,
+        "every GPU RK RHS must materialize H_drive at its exact stage time");
+    check(energy.find("GpuFinalScalarSlot::DriveEnergy") != std::string::npos &&
+          energy.find("ctx.state.current_time, false") != std::string::npos,
+        "GPU drive energy must use the final-time field without adding H_drive to H_eff twice");
+}
+
 
 } // namespace
 
@@ -1997,5 +2026,6 @@ int main() {
     gpu_observable_kernels_are_owned_by_cuda_observables_module();
     gpu_magnetoelastic_kernels_are_owned_by_cuda_magnetoelastic_interaction_module();
     cuda_demag_kernels_are_owned_by_cuda_demag_kernel_module();
+    gpu_regional_field_drive_is_device_resident_and_stage_time_aware();
     return 0;
 }

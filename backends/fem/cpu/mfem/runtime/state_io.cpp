@@ -46,6 +46,22 @@ const std::vector<double> *effective_field_source(const Context &ctx, uint64_t e
                : &ctx.effective_field.h_xyz;
 }
 
+const std::vector<double> *full_domain_visual_field_source(
+    const Context &ctx,
+    fullmag_fem_observable observable,
+    uint64_t expected_len)
+{
+    if (observable == FULLMAG_FEM_OBSERVABLE_H_DEMAG &&
+        ctx.demag.h_visual_xyz.size() == static_cast<size_t>(expected_len)) {
+        return &ctx.demag.h_visual_xyz;
+    }
+    if (observable == FULLMAG_FEM_OBSERVABLE_H_EFF &&
+        ctx.effective_field.h_visual_xyz.size() == static_cast<size_t>(expected_len)) {
+        return &ctx.effective_field.h_visual_xyz;
+    }
+    return nullptr;
+}
+
 int copy_torque_observable_f64(
     const Context &ctx,
     double *out_xyz,
@@ -191,6 +207,14 @@ int context_copy_field_f64(
         return copy_torque_observable_f64(ctx, out_xyz, out_len, error);
     }
 
+    if (const auto *visual_source =
+            full_domain_visual_field_source(ctx, observable, expected_len)) {
+        const uint64_t bytes = sizeof(double) * out_len;
+        record_device_to_host(ctx.transfer_audit.audit, bytes);
+        std::memcpy(out_xyz, visual_source->data(), static_cast<size_t>(bytes));
+        return FULLMAG_FEM_OK;
+    }
+
     if (ctx.gpu_state.device.lifecycle.allocated) {
 
         const FemGpuComponentField *gpu_field = nullptr;
@@ -207,6 +231,10 @@ int context_copy_field_f64(
             case FULLMAG_FEM_OBSERVABLE_H_EXT:
                 gpu_field = &ctx.gpu_state.device.fields.h_ext;
                 label = "H_ext";
+                break;
+            case FULLMAG_FEM_OBSERVABLE_H_DRIVE:
+                gpu_field = &ctx.gpu_state.device.fields.h_drive;
+                label = "H_drive";
                 break;
             case FULLMAG_FEM_OBSERVABLE_H_ANI:
                 gpu_field = &ctx.gpu_state.device.fields.h_ani;
@@ -284,6 +312,10 @@ int context_copy_field_f64(
         case FULLMAG_FEM_OBSERVABLE_H_EXT:
             source = &ctx.zeeman.h_ext_xyz;
             break;
+        case FULLMAG_FEM_OBSERVABLE_H_DRIVE:
+            materialize_regional_field_drive(const_cast<Context &>(ctx), ctx.state.current_time);
+            source = &ctx.zeeman.h_drive_xyz;
+            break;
         case FULLMAG_FEM_OBSERVABLE_H_EFF:
             // Prefer full-domain visual version (includes airbox stray field)
             // when available; fall back to LLG-zeroed version.
@@ -306,6 +338,8 @@ int context_copy_field_f64(
             source = &ctx.dmi.h_bulk_xyz;
             break;
         case FULLMAG_FEM_OBSERVABLE_H_OE:
+            materialize_oersted_field(
+                const_cast<Context &>(ctx), ctx.state.current_time);
             source = &ctx.oersted.h_xyz;
             break;
         case FULLMAG_FEM_OBSERVABLE_H_THERM:
@@ -418,6 +452,7 @@ int context_upload_magnetization_f64(
         if (!compute_effective_fields_for_magnetization(
                 ctx,
                 ctx.state.m_xyz,
+                ctx.state.current_time,
                 ctx.exchange.h_xyz,
                 ctx.demag.h_xyz,
                 ctx.effective_field.h_xyz,
@@ -475,6 +510,7 @@ int context_upload_magnetization_f64(
                 ctx.anisotropy.h_cubic_xyz.data(),
                 ctx.dmi.h_interfacial_xyz.data(),
                 ctx.dmi.h_bulk_xyz.data(),
+                ctx.oersted.h_basis_per_ampere_xyz.data(),
                 ctx.oersted.h_xyz.data(),
                 ctx.thermal_brown.h_xyz.data(),
                 ctx.magnetoelastic.h_xyz.data(),

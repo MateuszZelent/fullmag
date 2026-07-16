@@ -456,6 +456,15 @@ qualification metadata:
 - demag runtime policy, residual, iteration count, and requested/resolved
   device provenance.
 
+The ordinary and strict-M5 `exchange_coupled` qualification fixture uses one
+`projected_gradient_bb` stage with an explicit workload stop threshold of
+`500 A/m`. The final artifact must therefore carry PG-BB relaxation
+qualification; a trailing LLG stage is not part of this gate contract. This is
+a fixture-specific validation threshold shared with the z-padding, supercell,
+air-gap, and uniform-slab workloads. It does not change the canonical public
+relaxation default of `1e-4 A/m` defined in
+`0580-canonical-relaxation-equilibrium-contract.md`.
+
 For GPU qualification, `fem_gpu_relaxation_qualification.device_policy` must
 prove that CUDA kernels and device Poisson demag were used:
 `uses_cuda_kernels=true`, `uses_gpu_poisson=true`, and

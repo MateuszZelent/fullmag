@@ -51,6 +51,24 @@ The intended Fullmag model is:
 This avoids an architecture where gradients of `Ms`, `A`, or `alpha` require artificial
 fragmentation into many regions.
 
+Every resolved FDM grid is accompanied by one `FdmGridCertificateIR`.  The certificate is
+resolved planner output, not a copy of the requested cell hint, and contains:
+
+| Field | Meaning | SI unit / constraint |
+|---|---|---|
+| `origin_m` | lower world-space grid corner | m; finite |
+| `counts` | cell counts `(N_x,N_y,N_z)` | dimensionless; strictly positive |
+| `cell_m` | cell edge lengths `(d_x,d_y,d_z)` | m; strictly positive |
+| `extent_m` | realized extent `(L_x,L_y,L_z)` | m; each `L_i = N_i d_i` |
+| `active_cells` | active magnetic cells in the resolved mask | count; `0 <= active_cells <= N_xN_yN_z` |
+| `estimated_bytes` | checked resident-memory estimate | bytes; positive and within the FDM budget |
+| `grid_fingerprint` | canonical SHA-256 of origin/count/cell/extent plus active-mask and region-topology payload | lowercase hexadecimal |
+
+The planner validates all fields after voxelization (including precomputed grid assets).  The
+runner must validate the certificate and compare counts, origin, cell size, active count and budget
+before allocating state or kernels.  Any mismatch is a hard, fail-closed error.  A PBC policy does
+not create a second certificate; its identity is bound to this same resolved grid.
+
 ### 3.2 FEM
 
 Imported geometry is meshed, and regions become domain markers over elements or mesh attributes.
@@ -59,6 +77,12 @@ The same semantic split must hold:
 
 - topology by region/domain markers,
 - coefficient variability by piecewise constants or coefficient fields.
+
+Adaptive FEM remeshing is an observable-driven workflow, not a generic
+heuristic. Relaxation stages currently support only named energy, torque, or
+solution-change estimators. An authored `eigenfrequency_delta` criterion is
+rejected until the stage exposes a real eigenfrequency estimator; it must never
+be silently replaced with an energy proxy.
 
 ### 3.3 Hybrid
 
@@ -92,7 +116,7 @@ Hybrid execution needs explicit projection semantics between FEM mesh representa
 - [x] ProblemIR
 - [x] Planner-facing structure
 - [x] Capability matrix
-- [ ] FDM backend
+- [x] FDM backend grid realization certificate
 - [ ] FEM backend
 - [ ] Hybrid backend
 - [ ] Outputs / observables

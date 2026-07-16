@@ -34,12 +34,17 @@ mod interactive_runtime;
 mod native_fem;
 mod preview;
 pub mod quantities;
+mod regional_field_drive_artifacts;
 mod relaxation;
 pub mod runtime_registry;
 mod scalar_metrics;
 mod schedules;
 mod solver_profile;
+pub mod spin_wave_response;
+pub mod spin_wave_sampling;
 pub mod table_autosave;
+mod time_dependence;
+mod time_events;
 mod types;
 
 // ── Shared runner defaults (FEM-040) ─────────────────────────────────────
@@ -975,7 +980,7 @@ pub fn run_planned_problem(
         }
     });
     let pipeline_summary = artifact_pipeline.finish();
-    let executed = match executed_result {
+    let mut executed = match executed_result {
         Ok(executed) => executed,
         Err(error) => {
             if let Err(writer_error) = pipeline_summary {
@@ -990,6 +995,10 @@ pub fn run_planned_problem(
         }
     };
     let pipeline_summary = pipeline_summary?;
+    spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
+    executed.auxiliary_artifacts.extend(
+        spin_wave_sampling::requested_finite_k_artifacts(problem, plan, output_dir)?,
+    );
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -1261,7 +1270,7 @@ pub fn run_planned_problem_with_callback(
         }
     });
     let pipeline_summary = artifact_pipeline.finish();
-    let executed = match executed_result {
+    let mut executed = match executed_result {
         Ok(executed) => executed,
         Err(error) => {
             if let Err(writer_error) = pipeline_summary {
@@ -1276,6 +1285,10 @@ pub fn run_planned_problem_with_callback(
         }
     };
     let pipeline_summary = pipeline_summary?;
+    spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
+    executed.auxiliary_artifacts.extend(
+        spin_wave_sampling::requested_finite_k_artifacts(problem, plan, output_dir)?,
+    );
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -1572,7 +1585,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         }
     });
     let pipeline_summary = artifact_pipeline.finish();
-    let executed = match executed_result {
+    let mut executed = match executed_result {
         Ok(executed) => executed,
         Err(error) => {
             if let Err(writer_error) = pipeline_summary {
@@ -1587,6 +1600,10 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         }
     };
     let pipeline_summary = pipeline_summary?;
+    spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
+    executed.auxiliary_artifacts.extend(
+        spin_wave_sampling::requested_finite_k_artifacts(problem, plan, output_dir)?,
+    );
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,

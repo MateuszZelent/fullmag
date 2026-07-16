@@ -19,5 +19,13 @@ void fullmag_cuda_add_scaled_field_inplace(
     int N,
     cudaStream_t stream = nullptr);
 
+/// h_out = scale * h_basis (component-wise).
+void fullmag_cuda_scale_field(
+    const double *h_basis,
+    double *h_out,
+    double scale,
+    int N,
+    cudaStream_t stream = nullptr);
+
 } // namespace fullmag::fem
 #endif

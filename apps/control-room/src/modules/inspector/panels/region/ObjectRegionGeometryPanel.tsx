@@ -16,6 +16,9 @@ export function ObjectRegionGeometryPanel({
   model,
   draft,
   pending,
+  draftDirty,
+  buildRegion,
+  regionMeshLifecycle,
   canWriteRegion,
   couplingDependencies,
   updateShape,
@@ -89,7 +92,9 @@ export function ObjectRegionGeometryPanel({
             />
           </>
         ) : null}
-        {draft.shape.kind === "box" || draft.shape.kind === "cylinder" || draft.shape.kind === "sphere" ? (
+        {(
+          draft.shape.kind === "cylinder" || draft.shape.kind === "sphere"
+        ) ? (
           <PhysicalScalarField
             label="Radius"
             unit="m"
@@ -126,6 +131,9 @@ export function ObjectRegionGeometryPanel({
 
       <ObjectRegionActionsSection
         pending={pending}
+        draftDirty={draftDirty}
+        buildRegion={buildRegion}
+        regionMeshLifecycle={regionMeshLifecycle}
         canWriteRegion={canWriteRegion}
         couplingDependencies={couplingDependencies}
         applyRegion={applyRegion}

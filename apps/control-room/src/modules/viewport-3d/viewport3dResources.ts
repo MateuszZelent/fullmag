@@ -7,7 +7,6 @@ import {
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FIELD_META_PATH,
-  DATA_FIELD_VECTOR_PATH,
   MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
   MODEL_SCENE_PATH,
@@ -17,9 +16,14 @@ import {
   isMagneticOnlyQuantityId,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
+import {
+  canonicalFieldVectorQuery,
+  serializeCanonicalFieldVectorResourceKey,
+} from "@/kernel/api/fieldQueryIdentity";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
   BinaryResourceResult,
+  FieldVectorResponseMetadata,
   FieldVectorQuery,
   ResourceRevision,
 } from "@/kernel/api/apiTypes";
@@ -31,7 +35,10 @@ import type {
 import { useKernel } from "@/kernel/KernelContext";
 import { memoryBudgetRegistry } from "@/kernel/performance/MemoryBudgetRegistry";
 import { fieldVectorMinRefetchIntervalMs } from "@/kernel/realtime/communicationPolicy";
-import { ResourceCache } from "@/kernel/resources/ResourceCache";
+import {
+  ResourceCache,
+  type ResourceCacheEntryDiagnostics,
+} from "@/kernel/resources/ResourceCache";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { useResource } from "@/kernel/resources/useResource";
 
@@ -44,14 +51,17 @@ import { viewport3DFieldUpdateHoldActive } from "./viewport3dFieldUpdateHold";
 const topologyCache = new ResourceCache<DecodedTopology>({
   maxBytes: 96 * 1024 * 1024,
 });
-const fieldVectorCache = new ResourceCache<DecodedFieldVector>({
+const fieldVectorCache = new ResourceCache<
+  DecodedFieldVector,
+  FieldVectorResponseMetadata
+>({
   maxBytes: 128 * 1024 * 1024,
 });
 const qualityDataCache = new ResourceCache<DecodedMeshQualityData>({
   maxBytes: 48 * 1024 * 1024,
 });
 const binaryResourceInflight = new WeakMap<
-  ResourceCache<unknown>,
+  object,
   Map<string, InflightBinaryResource<unknown>>
 >();
 
@@ -168,7 +178,7 @@ export function invalidateViewport3DFieldMetaResources(
   );
 }
 
-function resolveDomainMetaRevision(meta: { generation_id: number }) {
+function resolveDomainMetaRevision(meta: { generation_id: string }) {
   return meta.generation_id;
 }
 
@@ -212,13 +222,108 @@ export function getViewport3DCacheStats() {
   };
 }
 
-export async function loadCachedBinaryResource<TData>(
-  cache: ResourceCache<TData>,
+export interface Viewport3DFieldVectorCacheEntryDiagnostics
+  extends ResourceCacheEntryDiagnostics {
+  responseMetadata: FieldVectorResponseMetadata | null;
+}
+
+export interface Viewport3DFieldVectorCacheBudgetDiagnostics {
+  byteLength: number;
+  entryCount: number;
+  maxBytes: number;
+}
+
+export function getViewport3DFieldVectorCacheEntryDiagnostics(
+  resourceKey: string,
+): Viewport3DFieldVectorCacheEntryDiagnostics {
+  return inspectViewport3DFieldVectorCacheEntryDiagnostics(
+    fieldVectorCache,
+    resourceKey,
+    binaryResourceInflight,
+  );
+}
+
+export function inspectViewport3DFieldVectorCacheEntryDiagnostics<TInflight>(
+  cache: ResourceCache<DecodedFieldVector, FieldVectorResponseMetadata>,
+  resourceKey: string,
+  inflightRegistry: WeakMap<object, ReadonlyMap<string, TInflight>>,
+): Viewport3DFieldVectorCacheEntryDiagnostics {
+  const diagnostics = cache.inspect(resourceKey);
+  const binaryInflight =
+    inflightRegistry.get(cache)?.has(resourceKey) ?? false;
+  const entryState =
+    binaryInflight ? "inflight" : diagnostics.entryState;
+  const metadata = cache.peek(resourceKey)?.metadata;
+  return {
+    ...diagnostics,
+    entryState,
+    responseMetadata: metadata
+      ? boundFieldVectorResponseMetadata(metadata)
+      : null,
+  };
+}
+
+export function getViewport3DFieldVectorCacheBudgetDiagnostics(): Viewport3DFieldVectorCacheBudgetDiagnostics {
+  const stats = fieldVectorCache.stats();
+  return {
+    byteLength: stats.byteLength,
+    entryCount: stats.entryCount,
+    maxBytes: fieldVectorCache.maxBytes(),
+  };
+}
+
+const MAX_FIELD_VECTOR_DIAGNOSTIC_STRING_LENGTH = 4_096;
+const MAX_FIELD_VECTOR_IDENTITY_ISSUES = 20;
+
+function boundFieldVectorDiagnosticString(value: string | null): string | null {
+  return value?.slice(0, MAX_FIELD_VECTOR_DIAGNOSTIC_STRING_LENGTH) ?? null;
+}
+
+function boundFieldVectorResponseMetadata(
+  metadata: FieldVectorResponseMetadata,
+): FieldVectorResponseMetadata {
+  return {
+    component: boundFieldVectorDiagnosticString(metadata.component),
+    domainGenerationId: boundFieldVectorDiagnosticString(
+      metadata.domainGenerationId,
+    ),
+    encoding: boundFieldVectorDiagnosticString(metadata.encoding),
+    fieldIndexing: boundFieldVectorDiagnosticString(metadata.fieldIndexing),
+    fieldRevision: boundFieldVectorDiagnosticString(metadata.fieldRevision),
+    identityIssues: metadata.identityIssues
+      .slice(0, MAX_FIELD_VECTOR_IDENTITY_ISSUES)
+      .map((issue) => ({
+        field: boundFieldVectorDiagnosticString(issue.field) ?? "",
+        headerValue:
+          typeof issue.headerValue === "string"
+            ? boundFieldVectorDiagnosticString(issue.headerValue)
+            : issue.headerValue,
+        payloadValue:
+          typeof issue.payloadValue === "string"
+            ? boundFieldVectorDiagnosticString(issue.payloadValue)
+            : issue.payloadValue,
+      })),
+    meshTopologyHash: boundFieldVectorDiagnosticString(
+      metadata.meshTopologyHash,
+    ),
+    nComp: metadata.nComp,
+    nodeIndexCount: metadata.nodeIndexCount,
+    pointCount: metadata.pointCount,
+    quantityId: boundFieldVectorDiagnosticString(metadata.quantityId),
+    scopeId: boundFieldVectorDiagnosticString(metadata.scopeId),
+    scopeKind: boundFieldVectorDiagnosticString(metadata.scopeKind),
+    snapshotId: boundFieldVectorDiagnosticString(metadata.snapshotId),
+    valueCount: metadata.valueCount,
+  };
+}
+
+export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
+  cache: ResourceCache<TData, TMetadata>,
   key: string,
   request: (
     etag?: string | null,
     signal?: AbortSignal,
-  ) => Promise<BinaryResourceResult<TData>>,
+  ) => Promise<BinaryResourceResult<TData, TMetadata>>,
   options: {
     pauseRequest?: () => boolean;
     preferCached?: boolean;
@@ -233,7 +338,7 @@ export async function loadCachedBinaryResource<TData>(
     return cached?.data ?? null;
   }
 
-  const inflight = getInflightBinaryResource<TData>(cache, key);
+  const inflight = getInflightBinaryResource(cache, key);
   if (inflight) {
     retainInflightBinaryResource(inflight, options.signal);
     return inflight.promise;
@@ -264,6 +369,7 @@ export async function loadCachedBinaryResource<TData>(
       byteLength: result.byteLength,
       data: result.data,
       etag: result.etag,
+      metadata: result.responseMetadata,
     });
     return result.data;
   })();
@@ -283,22 +389,22 @@ export async function loadCachedBinaryResource<TData>(
   }
 }
 
-function getInflightBinaryResource<TData>(
-  cache: ResourceCache<TData>,
+function getInflightBinaryResource<TData, TMetadata>(
+  cache: ResourceCache<TData, TMetadata>,
   key: string,
 ): InflightBinaryResource<TData> | null {
   const inflight = binaryResourceInflight
-    .get(cache as ResourceCache<unknown>)
+    .get(cache as ResourceCache<unknown, unknown>)
     ?.get(key);
   return (inflight as InflightBinaryResource<TData> | undefined) ?? null;
 }
 
-function setInflightBinaryResource<TData>(
-  cache: ResourceCache<TData>,
+function setInflightBinaryResource<TData, TMetadata>(
+  cache: ResourceCache<TData, TMetadata>,
   key: string,
   inflight: InflightBinaryResource<TData>,
 ): void {
-  const typedCache = cache as ResourceCache<unknown>;
+  const typedCache = cache as ResourceCache<unknown, unknown>;
   let cacheInflight = binaryResourceInflight.get(typedCache);
   if (!cacheInflight) {
     cacheInflight = new Map<string, InflightBinaryResource<unknown>>();
@@ -307,12 +413,12 @@ function setInflightBinaryResource<TData>(
   cacheInflight.set(key, inflight as InflightBinaryResource<unknown>);
 }
 
-function clearInflightBinaryResource<TData>(
-  cache: ResourceCache<TData>,
+function clearInflightBinaryResource<TData, TMetadata>(
+  cache: ResourceCache<TData, TMetadata>,
   key: string,
   inflight: InflightBinaryResource<TData>,
 ): void {
-  const typedCache = cache as ResourceCache<unknown>;
+  const typedCache = cache as ResourceCache<unknown, unknown>;
   const cacheInflight = binaryResourceInflight.get(typedCache);
   if (!cacheInflight || cacheInflight.get(key) !== inflight) return;
   releaseInflightBinaryResourceListeners(inflight);
@@ -356,8 +462,8 @@ function releaseInflightBinaryResourceListeners<TData>(
   inflight.consumerSignals.clear();
 }
 
-export function cachedBinaryResourceMatchesRevision<TData>(
-  cache: ResourceCache<TData>,
+export function cachedBinaryResourceMatchesRevision<TData, TMetadata>(
+  cache: ResourceCache<TData, TMetadata>,
   key: string,
   revision: ResourceRevision | null,
 ): boolean {
@@ -370,24 +476,9 @@ export function resolveViewport3DFieldVectorResourceKey(
   quantityId: string,
   query: FieldVectorQuery = {},
 ): string {
-  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
-  const path = DATA_FIELD_VECTOR_PATH.replace(
-    "{quantity_id}",
-    encodeURIComponent(canonicalQuantityId),
+  return serializeCanonicalFieldVectorResourceKey(
+    canonicalFieldVectorQuery(quantityId, query),
   );
-  const params = new URLSearchParams();
-  if (query.component) params.set("component", query.component);
-  if (query.max_samples != null) {
-    params.set("max_samples", String(query.max_samples));
-  }
-  if (query.scope_id) params.set("scope_id", query.scope_id);
-  if (query.scope_kind) params.set("scope_kind", query.scope_kind);
-  if (query.snapshot_id) params.set("snapshot_id", query.snapshot_id);
-  if (query.stage_id) params.set("stage_id", query.stage_id);
-  if (query.view) params.set("view", query.view);
-  if (query.phase_rad != null) params.set("phase_rad", String(query.phase_rad));
-  const suffix = params.toString();
-  return suffix ? `${path}?${suffix}` : path;
 }
 
 export function resolveViewport3DFieldVectorRequestResourceKey(

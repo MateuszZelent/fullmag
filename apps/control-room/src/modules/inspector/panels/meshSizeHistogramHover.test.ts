@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { KernelApi } from "@/kernel/types";
+import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 
 import { emitMeshSizeHistogramHover } from "./meshSizeHistogramHover";
 
 function kernelWithBus(emit: ReturnType<typeof vi.fn>): KernelApi {
   return {
     bus: { emit },
+    visualizationDebug: new VisualizationDebugController(),
   } as unknown as KernelApi;
 }
 
@@ -26,6 +28,7 @@ describe("emitMeshSizeHistogramHover", () => {
         lo: 4e-9,
       },
       kernel: kernelWithBus(emit),
+      airboxPartId: "part:__air__",
       scope: { kind: "airbox" },
     });
 
@@ -35,7 +38,7 @@ describe("emitMeshSizeHistogramHover", () => {
           binIndex: 12,
           meshId: "study_domain",
           metric: "characteristic_size",
-          partId: "airbox",
+          partId: "part:__air__",
         },
       }),
       source: "inspector",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -9,8 +10,98 @@ from numpy.typing import NDArray
 
 from fullmag._progress import emit_progress
 
-from ._gmsh_types import MeshData, MeshOptions, MeshQualityReport
+from ._gmsh_types import (
+    SUPPORTED_BOUNDARY_ELEMENTS,
+    SUPPORTED_VOLUME_ELEMENTS,
+    MeshData,
+    MeshOptions,
+    MeshQualityReport,
+)
 from ._gmsh_infra import _import_meshio
+
+
+class UnsupportedGmshElementError(ValueError):
+    """Raised when a Gmsh element cannot be represented by :class:`MeshData`."""
+
+    def __init__(
+        self,
+        *,
+        element_type: int | str,
+        name: str,
+        dimension: int,
+        order: int,
+        arity: int,
+        primary_arity: int,
+        context: str,
+    ) -> None:
+        self.element_type = element_type
+        self.element_name = name
+        self.dimension = int(dimension)
+        self.order = int(order)
+        self.arity = int(arity)
+        self.primary_arity = int(primary_arity)
+        self.context = context
+        self.rejected_element_types = [
+            {
+                "element_type": element_type,
+                "name": name,
+                "dimension": self.dimension,
+                "order": self.order,
+                "arity": self.arity,
+                "primary_arity": self.primary_arity,
+                "context": context,
+            }
+        ]
+        super().__init__(
+            f"unsupported Gmsh element type {element_type} ({name}) in {context}: "
+            f"dimension={self.dimension}, order={self.order}, arity={self.arity}, "
+            f"primary_arity={self.primary_arity}"
+        )
+
+
+def _gmsh_element_properties(
+    gmsh: Any,
+    element_type: int,
+    *,
+    dimension: int,
+    supported: dict[int, tuple[str, int]],
+    context: str,
+) -> tuple[int, str]:
+    """Resolve one exact supported Gmsh element type before reading connectivity."""
+    name, element_dimension, order, arity, _parametric, primary_arity = (
+        gmsh.model.mesh.getElementProperties(int(element_type))
+    )
+    expected = supported.get(int(element_type))
+    if (
+        expected is None
+        or int(element_dimension) != int(dimension)
+        or int(arity) != int(expected[1])
+        or int(primary_arity) != int(expected[1])
+    ):
+        raise UnsupportedGmshElementError(
+            element_type=int(element_type),
+            name=str(name),
+            dimension=int(element_dimension),
+            order=int(order),
+            arity=int(arity),
+            primary_arity=int(primary_arity),
+            context=context,
+        )
+    return int(arity), str(expected[0])
+
+
+def _validate_gmsh_element_blocks(gmsh: Any, *, dimension: int) -> None:
+    """Validate all elements in one dimension before selecting physical groups."""
+    supported = SUPPORTED_VOLUME_ELEMENTS if dimension == 3 else SUPPORTED_BOUNDARY_ELEMENTS
+    element_types, _tags, _node_tags = gmsh.model.mesh.getElements(dim=dimension)
+    for element_type in element_types:
+        _gmsh_element_properties(
+            gmsh,
+            int(element_type),
+            dimension=dimension,
+            supported=supported,
+            context=("volume extraction" if dimension == 3 else "boundary extraction"),
+        )
 
 
 def _cell_blocks(mesh: Any, allowed: set[str], allow_empty: bool = False) -> NDArray[np.int32]:
@@ -126,6 +217,7 @@ def _meshio_cell_markers(mesh: Any, *, cell_type: str, fallback: int = 1) -> NDA
 def _read_mesh_file(path: Path) -> MeshData:
     meshio = _import_meshio()
     mesh = meshio.read(path)
+    _reject_unsupported_meshio_elements(mesh)
     tetra = _cell_blocks(mesh, {"tetra"})
     triangles = _cell_blocks(mesh, {"triangle"}, allow_empty=True)
     nodes = np.asarray(mesh.points[:, :3], dtype=np.float64)
@@ -133,13 +225,51 @@ def _read_mesh_file(path: Path) -> MeshData:
     boundary_faces = np.asarray(triangles, dtype=np.int32)
     element_markers = _meshio_cell_markers(mesh, cell_type="tetra")
     boundary_markers = _meshio_cell_markers(mesh, cell_type="triangle")
-    return MeshData(
+    mesh = MeshData(
         nodes=nodes,
         elements=elements,
         element_markers=element_markers,
         boundary_faces=boundary_faces,
         boundary_markers=boundary_markers,
     )
+    return mesh
+
+
+_MESHIO_SUPPORTED_ELEMENTS: dict[str, tuple[int, int, int]] = {
+    "tetra": (3, 1, 4),
+    "triangle": (2, 1, 3),
+}
+_MESHIO_IGNORED_LOWER_DIM_ELEMENTS: dict[str, tuple[int, int, int]] = {
+    "vertex": (0, 1, 1),
+    "line": (1, 1, 2),
+    "line3": (1, 2, 3),
+}
+
+
+def _reject_unsupported_meshio_elements(mesh: Any) -> None:
+    """Reject every non-empty cell block not representable by MeshData."""
+    for cell_block in getattr(mesh, "cells", []):
+        cell_type = str(getattr(cell_block, "type", "unknown"))
+        data = np.asarray(getattr(cell_block, "data", []))
+        if data.size == 0:
+            continue
+        metadata = _MESHIO_SUPPORTED_ELEMENTS.get(cell_type)
+        if metadata is not None:
+            continue
+        if cell_type in _MESHIO_IGNORED_LOWER_DIM_ELEMENTS:
+            continue
+        dimension = 3 if cell_type in {"hexahedron", "prism", "pyramid", "wedge", "tetra10"} else 2
+        order = 2 if any(token in cell_type for token in ("10", "6", "20", "27", "18", "15", "9")) else 1
+        arity = int(data.shape[1]) if data.ndim == 2 else int(data.size)
+        raise UnsupportedGmshElementError(
+            element_type=cell_type,
+            name=cell_type,
+            dimension=dimension,
+            order=order,
+            arity=arity,
+            primary_arity=arity,
+            context="mesh file import",
+        )
 
 
 def _extract_mesh_data(
@@ -156,6 +286,11 @@ def _extract_mesh_data(
 
     node_index = {int(tag): idx for idx, tag in enumerate(node_tags)}
     nodes = np.asarray(coords, dtype=np.float64).reshape(-1, 3)
+
+    # Validate the complete topology, including ungrouped entities, before
+    # region-aware extraction can silently skip an unsupported block.
+    _validate_gmsh_element_blocks(gmsh, dimension=3)
+    _validate_gmsh_element_blocks(gmsh, dimension=2)
 
     extracted_element_tags: list[int] = []
 
@@ -180,13 +315,17 @@ def _extract_mesh_data(
             for entity in entities:
                 elem_types, elem_tags, node_ids = gmsh.model.mesh.getElements(3, entity)
                 for etype, tags, nids in zip(elem_types, elem_tags, node_ids):
-                    _, _, _, num_nodes, _, npn = gmsh.model.mesh.getElementProperties(int(etype))
-                    if npn < 4:
-                        continue
+                    num_nodes, _kind = _gmsh_element_properties(
+                        gmsh,
+                        int(etype),
+                        dimension=3,
+                        supported=SUPPORTED_VOLUME_ELEMENTS,
+                        context="volume extraction",
+                    )
                     flat = [node_index[int(t)] for t in nids]
                     block_tags = [int(tag) for tag in tags]
                     for element_offset, start in enumerate(range(0, len(flat), num_nodes)):
-                        elements_list.append(flat[start : start + 4])
+                        elements_list.append(flat[start : start + num_nodes])
                         markers_list.append(semantic_marker)
                         if element_offset < len(block_tags):
                             extracted_element_tags.append(block_tags[element_offset])
@@ -202,12 +341,16 @@ def _extract_mesh_data(
             for entity in entities:
                 elem_types, _elem_tags, node_ids = gmsh.model.mesh.getElements(2, entity)
                 for etype, nids in zip(elem_types, node_ids):
-                    _, _, _, num_nodes, _, npn = gmsh.model.mesh.getElementProperties(int(etype))
-                    if npn < 3:
-                        continue
+                    num_nodes, _kind = _gmsh_element_properties(
+                        gmsh,
+                        int(etype),
+                        dimension=2,
+                        supported=SUPPORTED_BOUNDARY_ELEMENTS,
+                        context="boundary extraction",
+                    )
                     flat = [node_index[int(t)] for t in nids]
                     for start in range(0, len(flat), num_nodes):
-                        bfaces_list.append(flat[start : start + 3])
+                        bfaces_list.append(flat[start : start + num_nodes])
                         bmarkers_list.append(semantic_marker)
 
         elements = (
@@ -246,6 +389,13 @@ def _extract_mesh_data(
 
         element_markers = np.ones(elements.shape[0], dtype=np.int32)
         boundary_markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
+        if periodic_pair_specs:
+            boundary_markers = _extract_periodic_surface_markers(
+                gmsh,
+                node_index,
+                boundary_faces,
+                periodic_pair_specs,
+            )
 
     aligned_quality = _align_quality_report_to_element_tags(
         quality,
@@ -261,6 +411,14 @@ def _extract_mesh_data(
         if aligned_quality is not None
         else per_domain_quality
     )
+    if periodic_pair_specs:
+        _orient_periodic_boundary_faces(
+            nodes,
+            elements,
+            boundary_faces,
+            boundary_markers,
+            periodic_pair_specs,
+        )
     periodic_boundary_pairs, periodic_node_pairs = _extract_periodic_pairs(
         gmsh,
         node_index,
@@ -278,6 +436,235 @@ def _extract_mesh_data(
         quality=aligned_quality,
         per_domain_quality=aligned_per_domain_quality,
     )
+
+
+def _orient_periodic_boundary_faces(
+    nodes: np.ndarray,
+    elements: np.ndarray,
+    boundary_faces: np.ndarray,
+    boundary_markers: np.ndarray,
+    periodic_pair_specs: list[dict[str, object]],
+) -> None:
+    """Orient periodic outer faces away from their owning tetrahedron.
+
+    Gmsh may return a periodic surface's triangle winding in the same local
+    direction on both translated copies.  The v6 certificate intentionally
+    checks opposed outward normals, so normalize only the explicitly periodic
+    boundary faces against the adjacent volume element before publishing the
+    mesh IR.
+    """
+    periodic_markers = {
+        int(spec["marker_a"])
+        for spec in periodic_pair_specs
+    } | {
+        int(spec["marker_b"])
+        for spec in periodic_pair_specs
+    }
+    if not periodic_markers or boundary_faces.size == 0 or elements.size == 0:
+        return
+    face_owner: dict[tuple[int, int, int], int] = {}
+    for element_index, element in enumerate(elements):
+        for opposite in range(4):
+            face = tuple(
+                int(element[index])
+                for index in range(4)
+                if index != opposite
+            )
+            face_owner.setdefault(tuple(sorted(face)), element_index)
+    for index, (face, marker) in enumerate(zip(boundary_faces, boundary_markers, strict=False)):
+        if int(marker) not in periodic_markers:
+            continue
+        owner_index = face_owner.get(tuple(sorted(int(node) for node in face)))
+        if owner_index is None:
+            continue
+        element = elements[owner_index]
+        opposite = next(
+            (int(node) for node in element if int(node) not in {int(value) for value in face}),
+            None,
+        )
+        if opposite is None:
+            continue
+        a, b, c = (nodes[int(node)] for node in face)
+        normal = np.cross(b - a, c - a)
+        if float(np.dot(normal, nodes[opposite] - a)) > 0.0:
+            boundary_faces[index, 1], boundary_faces[index, 2] = (
+                boundary_faces[index, 2],
+                boundary_faces[index, 1],
+            )
+    return None
+
+
+def certify_extracted_periodic_mesh(
+    nodes: NDArray[np.float64],
+    boundary_faces: NDArray[np.int32],
+    boundary_markers: NDArray[np.int32],
+    periodic_boundary_pairs: list[dict[str, object]],
+    periodic_node_pairs: list[dict[str, object]],
+) -> dict[str, object]:
+    """Certify periodic topology after Gmsh extraction.
+
+    Gmsh's ``setPeriodic`` relation is only input evidence.  This verifier
+    checks the extracted node bijection, translated face vertex sets,
+    opposite face orientation, and multi-axis corner/edge commutation before
+    the mesh is handed to the Rust v6 certificate builder.
+    """
+    coordinates = np.asarray(nodes, dtype=np.float64)
+    faces = np.asarray(boundary_faces, dtype=np.int32)
+    markers = np.asarray(boundary_markers, dtype=np.int32)
+    if faces.ndim != 2 or faces.shape[1] != 3 or markers.shape != (faces.shape[0],):
+        raise ValueError("periodic certificate requires triangular boundary faces and markers")
+    if not periodic_boundary_pairs:
+        raise ValueError("periodic certificate requires boundary pair metadata")
+
+    maps: dict[str, dict[int, int]] = {}
+    for raw_pair in periodic_node_pairs:
+        pair_id = str(raw_pair.get("pair_id", "")).strip()
+        if not pair_id:
+            raise ValueError("periodic node pair has an empty pair_id")
+        node_a = int(raw_pair.get("node_a", -1))
+        node_b = int(raw_pair.get("node_b", -1))
+        if node_a < 0 or node_b < 0 or node_a >= len(coordinates) or node_b >= len(coordinates):
+            raise ValueError(f"periodic node pair '{pair_id}' references an invalid node")
+        mapping = maps.setdefault(pair_id, {})
+        previous = mapping.get(node_a)
+        if previous is not None and previous != node_b:
+            raise ValueError(f"periodic node bijection for '{pair_id}' has conflicting source mapping")
+        if node_b in mapping.values() and previous != node_b:
+            raise ValueError(f"periodic node bijection for '{pair_id}' has duplicate destination mapping")
+        mapping[node_a] = node_b
+
+    marker_faces: dict[int, list[int]] = {}
+    for index, marker in enumerate(markers.tolist()):
+        marker_faces.setdefault(int(marker), []).append(index)
+
+    pair_ids: set[str] = set()
+    for raw_pair in periodic_boundary_pairs:
+        pair_id = str(raw_pair.get("pair_id", "")).strip()
+        marker_a = int(raw_pair.get("marker_a", -1))
+        marker_b = int(raw_pair.get("marker_b", -1))
+        mapping = maps.get(pair_id)
+        if mapping is None:
+            raise ValueError(f"periodic face pair '{pair_id}' has no extracted node bijection")
+        source_faces = marker_faces.get(marker_a, [])
+        destination_faces = marker_faces.get(marker_b, [])
+        if not source_faces or len(source_faces) != len(destination_faces):
+            raise ValueError(
+                f"periodic face bijection for '{pair_id}' is incomplete: "
+                f"{len(source_faces)} source faces vs {len(destination_faces)} destination faces"
+            )
+        destination_by_vertices = {
+            frozenset(int(node) for node in faces[index]): index
+            for index in destination_faces
+        }
+        if len(destination_by_vertices) != len(destination_faces):
+            raise ValueError(f"periodic face bijection for '{pair_id}' has duplicate destination faces")
+        translation = np.asarray(raw_pair.get("translation", [0.0, 0.0, 0.0]), dtype=np.float64)
+        if translation.shape != (3,) or not np.all(np.isfinite(translation)):
+            raise ValueError(f"periodic face pair '{pair_id}' has an invalid translation")
+        tolerance = float(raw_pair.get("tolerance_m", 0.0))
+        if not np.isfinite(tolerance) or tolerance < 0.0:
+            raise ValueError(f"periodic face pair '{pair_id}' has an invalid tolerance")
+        tolerance = max(tolerance, np.finfo(np.float64).eps * max(1.0, float(np.ptp(coordinates))))
+        for node_a, node_b in mapping.items():
+            residual = float(np.max(np.abs(coordinates[node_a] + translation - coordinates[node_b])))
+            if residual > tolerance:
+                raise ValueError(
+                    f"periodic node translation residual for '{pair_id}' is {residual:.3e}, "
+                    f"above tolerance {tolerance:.3e}"
+                )
+        for source_index in source_faces:
+            source_face = faces[source_index]
+            mapped_vertices = frozenset(mapping.get(int(node), -1) for node in source_face)
+            if -1 in mapped_vertices or mapped_vertices not in destination_by_vertices:
+                raise ValueError(f"periodic face bijection for '{pair_id}' is incomplete")
+            destination_index = destination_by_vertices[mapped_vertices]
+            source_normal = np.cross(
+                coordinates[source_face[1]] - coordinates[source_face[0]],
+                coordinates[source_face[2]] - coordinates[source_face[0]],
+            )
+            destination_face = faces[destination_index]
+            destination_normal = np.cross(
+                coordinates[destination_face[1]] - coordinates[destination_face[0]],
+                coordinates[destination_face[2]] - coordinates[destination_face[0]],
+            )
+            source_norm = float(np.linalg.norm(source_normal))
+            destination_norm = float(np.linalg.norm(destination_normal))
+            if source_norm == 0.0 or destination_norm == 0.0 or float(np.dot(source_normal, destination_normal)) >= 0.0:
+                raise ValueError(f"periodic face normals for '{pair_id}' are not mirrored")
+        pair_ids.add(pair_id)
+
+    ordered_pair_ids = sorted(pair_ids)
+    for left_index, left_id in enumerate(ordered_pair_ids):
+        for right_id in ordered_pair_ids[left_index + 1 :]:
+            left_map = maps[left_id]
+            right_map = maps[right_id]
+            shared_sources = set(left_map).intersection(right_map)
+            for source in shared_sources:
+                left_then_right = right_map.get(left_map[source])
+                right_then_left = left_map.get(right_map[source])
+                if left_then_right is None or right_then_left is None or left_then_right != right_then_left:
+                    raise ValueError(
+                        f"periodic edge/corner closure does not commute for '{left_id}' and '{right_id}'"
+                    )
+
+    topology_digest = hashlib.sha256(
+        np.ascontiguousarray(coordinates).tobytes()
+        + np.ascontiguousarray(faces).tobytes()
+        + np.ascontiguousarray(markers).tobytes()
+    ).hexdigest()
+    return {
+        "schema_version": "periodic_mesh_certificate.v6",
+        "certificate_status": "accepted",
+        "axis_pair_count": len(pair_ids),
+        "node_pair_count": len(periodic_node_pairs),
+        "face_pair_count": len(periodic_boundary_pairs),
+        "corner_edge_cycle_unique": True,
+        "topology_fingerprint": f"sha256:{topology_digest}",
+    }
+
+
+def _extract_periodic_surface_markers(
+    gmsh: Any,
+    node_index: dict[int, int],
+    boundary_faces: NDArray[np.int32],
+    periodic_pair_specs: list[dict[str, object]],
+) -> NDArray[np.int32]:
+    """Recover periodic surface markers for legacy non-physical extraction."""
+    surface_markers: dict[int, int] = {}
+    for spec in periodic_pair_specs:
+        for surface_key, marker_key in (("master_tag", "marker_a"), ("slave_tag", "marker_b")):
+            surface_tag = int(spec[surface_key])
+            marker = int(spec.get(marker_key, surface_tag))
+            previous = surface_markers.get(surface_tag)
+            if previous is not None and previous != marker:
+                raise ValueError(f"periodic surface {surface_tag} has conflicting extracted markers")
+            surface_markers[surface_tag] = marker
+
+    marker_by_face: dict[tuple[int, int, int], int] = {}
+    for surface_tag, marker in surface_markers.items():
+        element_blocks = gmsh.model.mesh.getElements(2, surface_tag)
+        for element_type, node_blocks in zip(element_blocks[0], element_blocks[2], strict=False):
+            arity, _ = _gmsh_element_properties(
+                gmsh,
+                int(element_type),
+                dimension=2,
+                supported=SUPPORTED_BOUNDARY_ELEMENTS,
+                context="periodic surface extraction",
+            )
+            flat = [node_index[int(tag)] for tag in node_blocks]
+            for start in range(0, len(flat), arity):
+                face = tuple(sorted(flat[start : start + arity]))
+                if len(face) != 3:
+                    raise ValueError(f"periodic surface {surface_tag} produced a non-triangular face")
+                previous = marker_by_face.get(face)
+                if previous is not None and previous != marker:
+                    raise ValueError(f"periodic face {face} belongs to conflicting surfaces")
+                marker_by_face[face] = marker
+
+    markers = np.ones(boundary_faces.shape[0], dtype=np.int32)
+    for index, face in enumerate(boundary_faces):
+        markers[index] = marker_by_face.get(tuple(sorted(int(node) for node in face)), 1)
+    return markers
 
 
 def _extract_periodic_pairs(
@@ -580,14 +967,17 @@ def _extract_gmsh_connectivity(
     element_types, _, node_tags_blocks = element_blocks
     rows: list[list[int]] = []
     for element_type, tags in zip(element_types, node_tags_blocks):
-        _, _, _, num_nodes, _, num_primary_nodes = gmsh.model.mesh.getElementProperties(
-            int(element_type)
+        num_nodes, _kind = _gmsh_element_properties(
+            gmsh,
+            int(element_type),
+            dimension=3 if nodes_per_element == 4 else 2,
+            supported=(
+                SUPPORTED_VOLUME_ELEMENTS
+                if nodes_per_element == 4
+                else SUPPORTED_BOUNDARY_ELEMENTS
+            ),
+            context=("volume extraction" if nodes_per_element == 4 else "boundary extraction"),
         )
-        if num_primary_nodes < nodes_per_element:
-            raise ValueError(
-                f"gmsh element type {element_type} exposes only {num_primary_nodes} "
-                f"primary nodes, expected at least {nodes_per_element}"
-            )
         flat = [node_index[int(tag)] for tag in tags]
         if len(flat) % num_nodes != 0:
             raise ValueError(
@@ -596,7 +986,7 @@ def _extract_gmsh_connectivity(
             )
         for start in range(0, len(flat), num_nodes):
             element_nodes = flat[start : start + num_nodes]
-            rows.append(element_nodes[:nodes_per_element])
+            rows.append(element_nodes)
     if not rows:
         return np.zeros((0, nodes_per_element), dtype=np.int32)
     return np.asarray(rows, dtype=np.int32)

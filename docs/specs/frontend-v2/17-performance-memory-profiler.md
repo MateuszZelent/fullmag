@@ -25,6 +25,33 @@ Initial budgets for the v2 implementation:
 
 Budgets can be tightened after the first implementation has baseline measurements.
 
+### 2.1 Visualization Debug Budgets
+
+Visualization diagnostics are opt-in and demand-driven. A serialized
+`VisualizationDebugController` snapshot is capped at **64 KiB** measured as the
+UTF-8 byte length of its serialized JSON, not JavaScript string length. The
+limit is `new TextEncoder().encode(JSON.stringify(snapshot)).byteLength <=
+64 * 1024`. Per snapshot,
+diagnostic collections are capped at 12 sampled points, 8 displayed components
+per point, 20 issues, and 8 matched request records. Oversized input is rejected
+or replaced by a bounded `snapshot-size-limit` issue; it is never retained as an
+unbounded diagnostic log.
+
+When no `Visualization > Debug` node is selected, the zero-work contract is:
+
+- no value scan or sample extraction;
+- no additional field-meta hook or heavy field request;
+- no polling, timer, or periodic memory sampling;
+- no viewport frame or render-model rebuild caused by diagnostics;
+- no retained target snapshot after demand is released.
+
+Opening Debug reuses the field payload already consumed by the viewport and
+must add zero heavy FMVP requests. A cooperative full-value scan is permitted
+only under active demand, is cancellable on target/resource/revision changes or
+unmount, and publishes bounded start/final states rather than per-chunk updates.
+Repeated open/close stress must leave subscription, timer, scan, object URL, and
+snapshot counts at baseline.
+
 ## 3. Render Reason Instrumentation
 
 Development builds expose render reasons for:

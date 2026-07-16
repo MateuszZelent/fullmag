@@ -84,6 +84,14 @@ for periodic node pairs $(i,j)$.
 Zero-phase periodicity is the special case $\mathbf{k} = \mathbf{0}$,
 where $P_{ij} = 1$ for all periodic pairs.
 
+The public authoring contract names this quantity `k_vector_rad_per_m` and
+stores exactly three finite SI components.  Each nonzero component must lie on
+an axis present in the current accepted `periodic_mesh_certificate.v6`; a
+component on an open axis is rejected.  The zero vector is not an exemption:
+periodic/Floquet studies still require a current accepted v6 certificate so a
+remesh or stale seam cannot silently change the operator.  The backend remains
+the authority for these reasons; UI parsing is only an early shape check.
+
 ### 2.2 Symbols and SI units
 
 | Symbol | Meaning | SI unit |
@@ -116,6 +124,16 @@ where $P_{ij} = 1$ for all periodic pairs.
 ## 3. Numerical interpretation
 
 ### 3.1 FDM
+
+#### 3.1.0 Grid identity and certificate
+
+PBC changes the operator realization but not the resolved Cartesian grid.  The planner therefore
+publishes exactly one `FdmGridCertificateIR` for the grid used by local operators and demagnetizing
+images.  Its `origin_m`, `counts`, `cell_m`, `extent_m`, active-cell count, memory estimate and
+`grid_fingerprint` (including active-mask/region topology) are validated before execution.  In particular, the period used by image
+summation is the certified extent `L_i = N_i d_i`, never a value recomputed from a requested hint.
+Changing a periodic axis, image count, or any grid realization input invalidates the plan/runtime
+identity and requires a new certificate; no competing PBC certificate may be substituted.
 
 #### 3.1.1 Neighbor policy
 
@@ -189,6 +207,42 @@ Demag kernel changes mirror the Rust reference: mixed padding, truncated-images
 kernel precomputed on host and uploaded.
 
 ### 3.2 FEM
+
+#### 3.2.0 Mirrored seam region/material invariant
+
+For every certified periodic seam, the realized region class is invariant under
+the declared translation.  For a source point or element (x) and its paired
+destination (x+L_i), the certificate requires:
+
+\[
+  \operatorname{region}(x)=\operatorname{region}(x+L_i),\qquad
+  \operatorname{owner}(x)=\operatorname{owner}(x+L_i)
+\]
+
+where equality is over the canonical region/owner identity, not merely the
+numeric Gmsh marker.  Face elements must have an explicit vertex bijection,
+opposed outward normals and matching adjacent material classes.  The same
+condition is checked for multi-axis edge and corner equivalence classes.
+
+The v6 certificate carries a single material-realization evidence lane (it is
+not a second PBC certificate):
+
+| Field | Meaning | SI tolerance/identity |
+|---|---|---|
+| `topology_fingerprint` | mesh node/element/boundary topology | exact hash |
+| `marker_map_fingerprint` | owner/region/marker assignment | exact hash |
+| `material_realization_fingerprint` | nodal P1 and element DG0 material arrays | exact hash plus value residuals |
+| `max_ms_residual_Apm` | paired (M_s) residual | configured absolute/relative tolerance |
+| `max_aex_residual_Jpm` | paired (A) residual | configured absolute/relative tolerance |
+| `max_alpha_residual` | paired damping residual | configured absolute/relative tolerance |
+| `region_class_count` | closed seam equivalence classes | exact integer |
+
+Nodal fields are compared in A/m for (M_s), J/m for (A), and dimensionless
+for \(\alpha\); element DG0 values are compared element-by-element after the
+face bijection.  A missing field, marker-owner mismatch, stale generation, or
+residual above tolerance rejects the periodic plan before native solver
+allocation.  Any remesh or region mutation affecting topology/membership
+invalidates the certificate and all dependent PBC resources.
 
 #### 3.2.1 Static / time-domain (Line A — zero-phase)
 
@@ -300,6 +354,24 @@ pub enum FdmDemagPeriodicityIR {
 pub periodicity: Option<FdmPeriodicityIR>,
 ```
 
+The planner keeps this requested policy separate from the runtime resolution.
+Every executable FDM lane consumes the canonical resolved boundary enum:
+
+```rust
+enum ResolvedFdmDemagBoundaryIR {
+    Open,
+    PeriodicTruncatedImages { image_counts: [u32; 3] },
+}
+```
+
+When demagnetization is enabled, `axes` containing any periodic axis together
+with `demag = "open"` is rejected before allocation.  This request would make
+the local exchange/DMI stencils periodic while leaving the dipolar kernel open,
+and historically CPU and CUDA interpreted it differently.  `truncated_images`
+resolves image counts once (defaulting to 10 on periodic axes and zero on open
+axes); both CPU and CUDA consume that same value.  A no-demag plan may retain
+periodic local operators and resolves its unused demag boundary to `open`.
+
 `MeshPeriodicBoundaryPairIR` is enriched with:
 
 ```rust
@@ -366,6 +438,31 @@ pub tolerance: Option<f64>,
 7. Python round-trip: `set_pbc(...)` → IR → plan → check periodic fields.
 
 ## 6. Completeness checklist
+
+### 6.1 Mirrored FEM seam certificate
+
+For every zero-phase FEM periodic axis, the accepted `periodic_mesh_certificate.v6`
+must prove more than coordinate residuals. The source and destination boundary
+face node sets must equal the node-pair domains exactly; duplicate, missing, or
+foreign nodes are a validation error. Every translated face must have one
+destination with matching vertex set, area, opposite outward normal, element
+domain, and resolved owner/region marker. For two or three periodic axes, the
+edge/corner equivalence graph must close: applying two axis transfers in either
+order reaches the same node and the same summed translation within the declared
+tolerance. A certificate must never report `corner_edge_cycle_unique=true`
+without this graph proof.
+
+The certificate identity includes the topology fingerprint, mesh generation,
+periodic pair metadata, region-marker map, and material-realization identity.
+Any topology, region membership, or coefficient realization change invalidates
+the certificate and requires a fresh post-extraction validation.
+
+The v6 payload also records `edge_class_count`, `corner_class_count`, and
+`max_commutation_residual_m`. These are measured seam-class evidence (not
+requested counts): a two-axis fixture must expose the audited edge classes and
+a three-axis fixture must expose the corner classes. A non-zero commutation
+residual is compared with the largest declared axis tolerance before the
+certificate can be accepted.
 
 - [x] Python API (`pbc()` function in world.py, Problem.pbc field)
 - [x] ProblemIR (`FdmPeriodicityIR`, `AxisBoundary`, `FdmDemagPeriodicityIR`)
