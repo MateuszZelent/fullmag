@@ -9,11 +9,13 @@
 - Operator versions: `fdm_face_to_cell_current.v1`,
   `fdm_oersted_cell_integrated_open.v1`,
   `fem_conservative_current_rt0_view.v1`,
+  `fem_closed_current_extension.v1`,
   `fem_oersted_direct_tetra_quadrature.v1`,
   `fem_oersted_hcurl_h1_gauge.v1`,
   `fem_oersted_hcurl_h1_zero_mean_natural.v1`
 - Realization versions: `oersted_fdm_fft_open.v1`,
   `oersted_direct_biot_savart.v1`,
+  `oersted_analytic_return_additive.v1`,
   `oersted_fem_vector_potential.v1`
 
 Executable engines such as `fdm_oersted_fft_open_v1` are distinct from those
@@ -116,13 +118,26 @@ Local continuity in a truncated bar with inlet and outlet is insufficient for
 Biot–Savart: the magnetic field depends on the return circuit. A general
 `OerstedField` requires exactly one closure:
 
-- closed conductor geometry with return path and zero net outer source flux;
-- versioned `ExternalLeadExtension` that extends and closes electrodes;
-- analytic field of a complete circuit as a prescribed source.
+- `closed_geometry`: a volumetrically meshed conductor/return loop whose
+  conservative current is part of the same RT0 view and has zero net outer
+  source flux;
+- `external_lead_extension`: a versioned, volumetrically tetrahedralized lead
+  extension whose current is joined to the conductor by
+  `fem_closed_current_extension.v1`, with oriented interface-flux equality and
+  its own mesh/revision/digest certificate;
+- `analytic_return_path`: an OE-F1-only additive analytic field realization,
+  `oersted_analytic_return_additive.v1`. It is not an RT0 field, is never
+  inserted into `ConservativeCurrentView`, and is unsupported for OE-F2.
 
 An open two-electrode bar without specified leads/return path is rejected for
 general Oersted evaluation. Closure identity and geometry revision are
 provenance and cache inputs.
+
+Canonical FEM v1 therefore permits OE-F2 only with `closed_geometry` or a
+volumetrically meshed `external_lead_extension`. A line/wire formula, endpoint
+correction, or analytic return may augment OE-F1 only and must publish its
+field and error contribution separately. It cannot be relabelled as a closed
+RT0 source or used to satisfy the mixed-solver range condition.
 
 ### 2.3 Magnetoquasistatic Oersted field
 
@@ -290,7 +305,7 @@ ConservativeCurrentView = {
   mesh_revision, topology_revision, geometry_digest,
   source_module_id, source_state_revision, source_field_digest,
   closure_revision, closure_digest,
-  rt0_true_dof_count, rt0_true_dof_digest,
+  canonical_face_record_count, canonical_face_digest,
   balance_certificate, evaluation_time_s, stage_identity
 }
 ```
@@ -315,6 +330,15 @@ projection whose element balance and electrode balance are independently
 certified. The Oersted owner receives a read-only view pinned to the exact
 accepted/stage source snapshot. Source revision, coefficient digest, closure
 digest, mesh revision, time and stage identity are mandatory cache keys.
+
+The digest is not computed from MFEM true-dof order. The canonical serialized
+record is `(face_key, flux_A)`, sorted by a `face_key` made from the three
+stable mesh-vertex identities. Its canonical normal follows the versioned
+orientation of that ordered face key; local/MFEM signs are converted before
+serialization. The digest hashes the operator/schema IDs, geometry digest and
+little-endian records in sorted order. Stable vertex identities are independent
+of element numbering and MPI ownership. Element reorder, local face reorder,
+true-dof reorder and MPI repartition must therefore leave the digest unchanged.
 
 ### 3.3 FEM direct tetrahedral Biot--Savart oracle (OE-F1)
 
@@ -341,16 +365,22 @@ The resolved operator is `fem_oersted_direct_tetra_quadrature.v1`; it uses the
 existing realization family `oersted_direct_biot_savart.v1` and CPU engine
 `fem_oersted_direct_tetra_cpu_v1`. Its fixed FP64 profile records quadrature
 orders, relative/absolute field tolerances, near-pair criterion, subdivision
-limit and an unconverged-pair count. It evaluates at the magnetic observation
-points and then uses the same versioned `L2` projection to the LLG nodal field
-space as OE-F2. The published `H_oe` is that exact projected field, not the
-unprojected quadrature samples. OE-F1 requires global circuit closure but no
+limit and an unconverged-pair count. It evaluates the direct volume integral at
+every integration point used to assemble the target-space load
+`l_i=sum_K integral_K phi_i(x) H_direct(x)dV`. Near/singular source rules and
+their error estimator are applied independently at those projection quadrature
+points. A versioned projection-quadrature profile controls target integration
+order and load error. The consistent vector `L2` mass solve then produces the
+LLG nodal field. Interpolating values sampled only at target nodes into the
+load is not this operator. The published `H_oe` is that exact projected field,
+not unprojected samples. OE-F1 requires global circuit closure but no
 volumetric airbox. It is the small-problem oracle and validation reference, not
 the production asymptotic algorithm.
 
 ### 3.4 FEM mixed vector-potential contract (OE-F2)
 
-Production FEM solves on conductor plus airbox with vacuum `mu0` everywhere:
+The OE-F2 FEM target formulation solves on conductor plus airbox with vacuum
+`mu0` everywhere:
 
 ```text
 curl(mu0^-1 curl A)+grad p_gauge=J_c,
@@ -407,17 +437,24 @@ domain, and comparison with OE-F1. The airbox must contain the entire closed
 current view and magnetic target; conductor/lead interfaces are internal, not
 artificial outer boundaries.
 
-The load is assembled directly from the pinned `RT0/H(div)` view. This is the
+The Ampere load is assembled directly from the pinned `RT0/H(div)` view. This is the
 compatible pairing `(J_RT0,v_ND)`; importing the nodal `J_charge` visualization
 buffer or independently evaluating `-sigma grad V` is forbidden.
 
-`H_oe` is projected by a consistent `L2` mass matrix to the same nodal field
-space used by the LLG RHS, and the observable publishes that exact projection.
-Matrix caching is allowed only for unchanged geometry and `mu0`. Production
-CPU uses MFEM plus block solver/AMS; GPU uses device hypre/libCEED-owned
-operators and state. Assembly, BC, solve, projection, and telemetry have
-separate owners; `mfem_bridge.cpp` is an adapter. Strict GPU has no CPU vector-
-potential solve or hidden transfer fallback.
+The compatible magnetic flux is formed by the discrete de Rham curl into RT0:
+`b=Curl_ND_to_RT a`, so `B_oe` is the RT0 field represented by `b` and its
+incidence divergence vanishes before any nodal projection. `H_oe=B_oe/mu0` is
+then projected by a consistent `L2` mass matrix to the same nodal field space
+used by the LLG RHS, and the observable publishes that exact projection. The
+weak Ampere/current residual and compatible RT0 divergence are measured before
+projection; differentiating the nodal display/LLG field is not a Maxwell or
+gauge residual.
+Matrix caching is allowed only for unchanged geometry and `mu0`. The CPU target
+uses MFEM plus block solver/AMS. A future device target would require
+device-owned hypre/libCEED operators and state, but this publication makes no
+GPU executable claim. Assembly, BC, solve, projection, and telemetry have
+separate owners; `mfem_bridge.cpp` is an adapter. Any later strict GPU target
+must have no CPU vector-potential solve or hidden transfer fallback.
 
 Material `mu_r != 1` requires a separate coupled publication to prevent double
 counting micromagnetic response.
@@ -564,8 +601,10 @@ cannot satisfy OE-T0 without the conservative reconstruction and range check.
 
 ### 5.3 Regression and quantitative gates
 
-Tests cover discrete `curl(H)-J` and `div(H)` away from a controlled boundary
-zone, FFT layout/normalization, singleton axes, unsupported PBC rejection,
+Tests cover OE-F2 preconditioner-scaled first-block and `B^T a` constraint
+residuals, weak Ampere/current residual, compatible RT0 curl and incidence
+divergence before nodal projection, FFT layout/normalization, singleton axes,
+unsupported PBC rejection,
 closure rejection, conductor/magnet masks, sine/pulse/PWL/sinc timing, FSAL,
 rejected-step rollback, final refresh, M2 diagnostic exclusion from `E_total`,
 strict-GPU zero hot-loop transfers, quantity/RHS identity, normalized authoring

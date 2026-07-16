@@ -424,8 +424,10 @@ velocity is outflow at that face. Ambiguous inflow fails planning.
 OerstedSource = {
   schema_version:"oersted_source.v1", id, current_source_id,
   circuit_closure:
-    | {kind:"closed_geometry"}
-    | {kind:"external_lead_extension", version, parameters}
+    | {kind:"closed_geometry", volume_mesh_ref, current_view_ref}
+    | {kind:"external_lead_extension", version,
+       closure_current_operator:"fem_closed_current_extension.v1",
+       volume_mesh_ref, parameters}
     | {kind:"analytic_return_path", version, parameters},
   method:"auto"|"analytic_cylinder"|"fdm_fft_cell_integrated"
          |"direct_biot_savart"|"fem_vector_potential",
@@ -476,6 +478,14 @@ two variants or combine the baseline with the zero-mean gauge solver.
 General Biot–Savart/Oersted execution without a globally closed circuit model
 MUST be rejected. `accepted_step_approx` is a degraded approximation, never a
 strict default, and requires a workload-specific temporal-order qualification.
+For FEM v1, `closed_geometry` and `external_lead_extension` are volumetrically
+meshed sources whose current is represented in the conservative RT0 view. The
+extension operator certifies equal/opposite oriented flux at every join and a
+closed outer balance. `analytic_return_path` is legal only for OE-F1 as the
+separate additive realization `oersted_analytic_return_additive.v1`; it is not
+RT0 data and is unsupported for OE-F2 `fem_vector_potential`. The planner MUST
+reject any attempt to use an analytic line/return field as an OE-F2 range or
+closure certificate.
 
 ## 4. ProblemIR and resolved plan
 
@@ -615,7 +625,7 @@ ConservativeCurrentViewRef = {
   mesh_revision, topology_revision, geometry_digest,
   closure_revision, closure_digest,
   unit:"A/m^2", component_convention:"signed_conventional_xyz",
-  fe_space:"RT0_Hdiv_3d", rt0_true_dof_count, rt0_true_dof_digest,
+  fe_space:"RT0_Hdiv_3d", canonical_face_record_count, canonical_face_digest,
   balance_certificate_ref, evaluation_time_s, stage_identity
 }
 ```
@@ -627,6 +637,16 @@ normal-flux cancellation, electrode balance and completed circuit closure.
 Any stale revision, digest mismatch, unpaired terminal flux or missing
 certificate invalidates the Oersted plan/cache. OE-F1 and OE-F2 consume the
 same view and cannot independently evaluate `-sigma grad V`.
+
+The artifact digest uses `fem_rt0_canonical_face_digest.v1`, not MFEM
+true-dof order. Each record is `(canonical global face identity, flux_A)`.
+The face identity is the sorted triple of stable mesh-vertex identities and
+the canonical normal is derived from the versioned ordered triple; every local
+RT sign is converted to that normal. Records are globally sorted and encoded
+as canonical little-endian values before hashing. Element/face iteration
+order, true-dof renumbering and MPI partition changes MUST NOT alter the
+digest. Qualification includes element reorder and MPI partition invariance
+tests with identical physical current and geometry.
 
 Cache identity includes module/schema/formula/operator versions, normalized
 materials, BCs, oriented interfaces, source bindings, envelope, geometry,
@@ -762,8 +782,8 @@ category.
 | Category | Canonical identifiers |
 |---|---|
 | formula | `gilbert_transform.fullmag.v1`; `zhang_li.fullmag.v1`; `zhang_li.legacy_fullmag.v0`; `slonczewski.fullmag.v1`; `prescribed_sot.fullmag.v1`; `prescribed_sot.legacy_fullmag.v0`; `transport_constitutive.one_way.fullmag.v1`; `transport_constitutive.reciprocal.fullmag.v1`; `conductivity_tensor_3d.fullmag.v1`; `magnetoelectronic.fullmag.v1`; `sml_surface_conductance.fullmag.v1`; `transport_absorption.fullmag.v1`; `current_transport.fullmag.v1`; `current_transport.prescribed_density.legacy_fullmag.v0` |
-| operator | `zl_upwind_first_order_v1`; `zl_central_reference_v1`; `fv_charge_face_flux.v1`; `fv_spin_upwind_v1`; `fv_spin_central_reference_v1`; `structured_cross_gradient_v1`; `fdm_face_to_cell_current.v1`; `fdm_oersted_cell_integrated_open.v1`; `fem_charge_spin_broken_h1_mortar.v1`; `fem_conservative_current_rt0_view.v1`; `fem_oersted_direct_tetra_quadrature.v1`; `fem_oersted_hcurl_h1_gauge.v1`; `fem_oersted_hcurl_h1_zero_mean_natural.v1`; `coupled_imex_ark2.v1`; `coupled_bdf2_small_oracle.v1` |
-| realization | `slonczewski_thin_layer_homogenized.v1`; `slonczewski_interface_flux.v1`; `oersted_analytic_cylinder.v1`; `oersted_direct_biot_savart.v1`; `oersted_fdm_fft_open.v1`; `oersted_fem_vector_potential.v1` |
+| operator | `zl_upwind_first_order_v1`; `zl_central_reference_v1`; `fv_charge_face_flux.v1`; `fv_spin_upwind_v1`; `fv_spin_central_reference_v1`; `structured_cross_gradient_v1`; `fdm_face_to_cell_current.v1`; `fdm_oersted_cell_integrated_open.v1`; `fem_charge_spin_broken_h1_mortar.v1`; `fem_conservative_current_rt0_view.v1`; `fem_closed_current_extension.v1`; `fem_oersted_direct_tetra_quadrature.v1`; `fem_oersted_hcurl_h1_gauge.v1`; `fem_oersted_hcurl_h1_zero_mean_natural.v1`; `coupled_imex_ark2.v1`; `coupled_bdf2_small_oracle.v1` |
+| realization | `slonczewski_thin_layer_homogenized.v1`; `slonczewski_interface_flux.v1`; `oersted_analytic_cylinder.v1`; `oersted_direct_biot_savart.v1`; `oersted_analytic_return_additive.v1`; `oersted_fdm_fft_open.v1`; `oersted_fem_vector_potential.v1` |
 | engine | `fdm_charge_cg_matrix_free_v1`; `fdm_charge_cg_cuda_v1`; `fdm_spin_block_gmres_csr_v1`; `fdm_spin_block_gmres_cuda_v1`; `fdm_charge_spin_block_gmres_v1`; `fdm_charge_spin_block_gmres_cuda_v1`; `fem_charge_h1_hypre_v1`; `fem_charge_h1_hypre_device_v1`; `fem_spin_broken_h1_mortar_v1`; `fem_spin_broken_h1_mortar_device_v1`; `fem_charge_spin_block_gmres_v1`; `fem_charge_spin_block_gmres_device_v1`; `fdm_oersted_fft_open_v1`; `fdm_oersted_cufft_open_v1`; `fem_oersted_direct_tetra_cpu_v1`; `fem_oersted_hcurl_h1_gauge_v1`; `fem_oersted_hcurl_h1_gauge_device_v1` |
 
 Every resolved plan names all applicable IDs by their category. For example,
@@ -895,8 +915,8 @@ precision:
 | M1 Oersted | FDM GPU/double | `fdm_oersted_cufft_open_v1` | cuFFT; no Krylov/preconditioner | n/a | FP64 parity gates |
 | M1 Oersted | FDM GPU/single | `fdm_oersted_cufft_open_v1` | cuFFT; no Krylov/preconditioner | n/a | qualified FP32 parity gates only |
 | M1 Oersted direct oracle | FEM CPU/double | `fem_oersted_direct_tetra_cpu_v1` | deterministic adaptive tetra/Duffy quadrature; no Krylov | bounded subdivision | direct singular/near/far quadrature and RT0 source gates |
-| M1 Oersted | FEM CPU/double | `fem_oersted_hcurl_h1_gauge_v1` | block GMRES + AMS(`A`)/BoomerAMG(`p`) | `100` / `2000` | algebraic `1e-10`; physical curl/div `1e-8` |
-| M1 Oersted | FEM GPU/double | `fem_oersted_hcurl_h1_gauge_device_v1` | device block GMRES + device AMS/BoomerAMG | `100` / `2000` | algebraic `1e-10`; physical curl/div `1e-8` |
+| M1 Oersted | FEM CPU/double | `fem_oersted_hcurl_h1_gauge_v1` | block GMRES + AMS(`A`)/BoomerAMG(`p`) | `100` / `2000` | algebraic `1e-10`; v2 first-block/constraint/weak-Ampere `1e-8`, compatible divergence `1e-12` |
+| M1 Oersted | FEM GPU/double | `fem_oersted_hcurl_h1_gauge_device_v1` | device block GMRES + device AMS/BoomerAMG | `100` / `2000` | semantic profile only; no executable claim in this publication |
 | M2 coupled | FDM CPU/double | `fdm_charge_spin_block_gmres_v1` | FGMRES + charge-AMG/spin-MG-ILU field split | `50` / `1500` | FP64 |
 | M2 coupled | FDM GPU/double | `fdm_charge_spin_block_gmres_cuda_v1` | device FGMRES + device charge/spin AMG field split | `50` / `1500` | FP64 |
 | M2 coupled | FEM CPU/double | `fem_charge_spin_block_gmres_v1` | hypre FGMRES + BoomerAMG field split/interface Jacobi | `50` / `1500` | FP64 |
@@ -910,20 +930,49 @@ precision:
 FEM single, all M2 single, and all M3 single are unsupported in v1 until a
 new qualification entry supplies an error budget; `auto` cannot select them.
 Oersted FFT qualification additionally enforces direct cell-integrated
-Biot–Savart parity, while FEM Oersted enforces `curl(H)-J`, `div(B)`, gauge,
-and airbox convergence; the displayed curl/div gate is a starting solver gate,
-not a substitute for the continuum study.
+Biot–Savart parity. FEM OE-F2 separately enforces the mixed block equations,
+the weak Ampere residual, compatible de Rham divergence, source range, and
+airbox convergence. None is inferred by differentiating the nodal LLG/display
+projection.
 
-FEM Oersted uses `oersted_maxwell_residual.v1`:
+FEM Oersted uses `oersted_maxwell_residual.v2`. With free-edge coefficient
+vector `a`, Dirichlet-`H1` multiplier coefficients `p`, first-block matrix
+`C`, coupling `B`, RT0 source load `f`, AMS-compatible SPD edge
+preconditioner `P_A`, and Schur approximation
+`P_p=B^T P_A^-1 B`, define:
 
 ```text
-rho_curl = ||curl(H_oe)-J_c||_L2 /
-           max(||J_c||_L2, 1e-30 A/m^2)
-rho_div  = L_ref ||div(mu0 H_oe)||_L2 /
-           max(||mu0 H_oe||_L2, 1e-30 T)
-rho_gauge = ||div(A)||_L2 /
-            max(||A||_L2/L_ref, 1e-30 T m / L_ref)
+r_A = C a + B p - f
+r_p = B^T a
+rho_first = sqrt(r_A^T P_A^-1 r_A) /
+            max(sqrt(f^T P_A^-1 f), epsilon_block)
+rho_constraint = sqrt(r_p^T P_p^-1 r_p) /
+                 max(sqrt(a^T P_A a), epsilon_block)
 ```
+
+These are preconditioner-scaled dual residuals of the actual discrete saddle
+system. `epsilon_block` and the exact application of `P_A^-1/P_p^-1` belong to
+the versioned profile and are published. The implementation must report the
+unscaled absolute dual norms too. A pointwise or recovered `||div A||` is not a
+valid gauge residual for an `H(curl)` unknown and MUST NOT be used for
+acceptance.
+
+The physical/source checks remain distinct:
+
+```text
+r_ampere_i = (mu0^-1 curl A, curl w_i) - (J_RT0, w_i)
+rho_ampere_weak = ||r_ampere||_(P_A^-1) /
+                  max(||f||_(P_A^-1), epsilon_block)
+b = Curl_ND_to_RT a
+rho_div_compatible = ||D_RT_to_L2 b||_M_L2 /
+                     max(||b||_M_RT/L_ref, epsilon_de_rham)
+```
+
+`rho_ampere_weak` is the weak Ampere residual without the gauge-multiplier
+term and therefore also exposes incompatible current/range contamination.
+The compatible RT0 `B_oe=curl A` is `b`; its incidence divergence is measured
+before division by `mu0`. The separately mass-projected nodal `H_oe` is used by
+LLG and visualization only and MUST NOT be reused for either residual.
 
 For the baseline `tangential_A_h1_0.v1`, the discrete scalar space is exactly
 `H^1_0`; no zero-mean residual or pinned scalar dof is accepted as equivalent.
@@ -934,12 +983,12 @@ error, maximum subdivision depth reached and unconverged-pair count; any
 unconverged pair fails strict execution.
 
 `L_ref` is the conductor-plus-airbox bounding-box diagonal recorded in the
-plan. The FP64 starting gates are `rho_curl<=1e-8`, `rho_div<=1e-8`, and
-`rho_gauge<=1e-8`; all are reported independently. FDM FFT reports the same
-curl/div definitions on the qualified interior stencil, with excluded boundary
-width and `L_ref` in provenance, but acceptance is primarily direct-integral
-parity plus convergence because open-boundary truncation controls the stencil
-residual.
+plan. The FP64 starting gates are `rho_first<=1e-8`,
+`rho_constraint<=1e-8`, `rho_ampere_weak<=1e-8`, and
+`rho_div_compatible<=1e-12`; all are reported independently. These numerical
+starting gates do not replace mesh/airbox/direct-oracle convergence. FDM FFT
+keeps its separately versioned qualified-interior stencil diagnostics and is
+not redefined by this FEM residual contract.
 
 The frozen nonlinear default is `transport_nonlinear_picard.v1`:
 
