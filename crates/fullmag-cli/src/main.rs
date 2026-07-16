@@ -198,8 +198,8 @@ fn main() -> Result<()> {
         } => {
             let ir = read_ir(&path)?;
             validate_ir(&ir)?;
-            let execution_plan = fullmag_plan::plan(&ir)
-                .map_err(|error| anyhow!(error.to_string()))?;
+            let execution_plan =
+                fullmag_plan::plan(&ir).map_err(|error| anyhow!(error.to_string()))?;
             let BackendPlanIR::Fdm(fdm) = &execution_plan.backend_plan else {
                 bail!("coupled M3 checkpoint resume requires a single-grid FDM plan");
             };
@@ -208,7 +208,7 @@ fn main() -> Result<()> {
             let checkpoint_value: Value = serde_json::from_slice(&raw)
                 .with_context(|| format!("parsing checkpoint {}", checkpoint.display()))?;
             let coupled_state = coupled_checkpoint_state(checkpoint_value)?;
-            let result = fullmag_runner::resume_reference_fdm_from_coupled_checkpoint(
+            let evidence = fullmag_runner::resume_reference_fdm_from_coupled_checkpoint_evidence(
                 fdm,
                 coupled_state,
                 until,
@@ -218,9 +218,7 @@ fn main() -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
-                    "status": result.status,
-                    "total_steps": result.steps.len(),
-                    "final_time": result.steps.last().map(|step| step.time),
+                    "evidence": evidence,
                     "resumed_from": checkpoint.display().to_string(),
                 }))?
             );
@@ -477,6 +475,7 @@ fn is_script_mode(raw_args: &[OsString]) -> bool {
         "validate-json",
         "plan-json",
         "run-json",
+        "resume-json",
         "resolve-runtime-invocation",
     ];
     const FLAG_ONLY: &[&str] = &["-i", "--interactive", "--headless", "--dev", "--json"];
@@ -1306,6 +1305,10 @@ mod tests {
         ])
         .expect("cli resume parse");
         assert!(matches!(cli.command, Command::ResumeJson { .. }));
+        assert!(!is_script_mode(&[
+            OsString::from("fullmag"),
+            OsString::from("resume-json"),
+        ]));
     }
 
     #[test]

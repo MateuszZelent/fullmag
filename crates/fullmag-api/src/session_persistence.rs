@@ -1237,6 +1237,38 @@ impl CheckpointSnapshotProvider for LiveCheckpointProvider {
 }
 
 fn validate_coupled_checkpoint_value(value: &serde_json::Value) -> Result<(), ApiError> {
+    let identity = &value["identity"];
+    let identity_strings_valid = [
+        "requested_discretization",
+        "requested_device",
+        "requested_precision",
+        "requested_execution_mode",
+        "resolved_discretization",
+        "resolved_device",
+        "resolved_precision",
+        "resolved_execution_mode",
+        "charge_cache_identity",
+        "spin_cache_identity",
+        "oersted_cache_identity",
+        "source_identity",
+    ]
+    .iter()
+    .all(|field| {
+        identity[field]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty())
+    });
+    let identity_revisions_valid = [
+        "scene_revision",
+        "plan_revision",
+        "mesh_revision",
+        "material_revision",
+        "current_operator_revision",
+        "spin_operator_revision",
+        "oersted_operator_revision",
+    ]
+    .iter()
+    .all(|field| identity[field].is_u64());
     let valid = value["schema"] == "fullmag.fdm.coupled_m3_checkpoint.v1"
         && value["problem_ir_abi"] == "fullmag.problem_ir.v1"
         && value["scalar_layout"] == "f64"
@@ -1244,10 +1276,17 @@ fn validate_coupled_checkpoint_value(value: &serde_json::Value) -> Result<(), Ap
         && value["endianness"] == "little"
         && value["formula_version"] == "transient_spin_balance.fullmag.v1"
         && value["integrator_version"] == "coupled_imex_ark2.v1"
+        && value["integrator_implementation_revision"] == "imex_ars_232_step_doubling.fullmag.v1"
+        && identity.is_object()
+        && identity_strings_valid
+        && identity_revisions_valid
         && value["magnetization"].is_array()
         && value["previous_magnetization"].is_array()
         && value["transient_states"].is_object()
         && value["accepted"].is_object()
+        && value["charge_nonlinear_history"].is_object()
+        && value["telemetry_cursor"].is_u64()
+        && value["thermal_rng_algorithm"] == "counter_hash_box_muller.fullmag.v1"
         && value["thermal_seed"].is_u64()
         && value["thermal_counter"].is_u64();
     if !valid {
@@ -1462,8 +1501,10 @@ fn read_checkpoint_coupled_state(
         .read_document(reference)
         .map_err(|error| ApiError::internal(format!("reading checkpoint backend state: {error}")))?
         .ok_or_else(|| ApiError::not_found("checkpoint backend state not found"))?;
-    let payload: fullmag_session::BackendStatePayload = serde_json::from_slice(&bytes)
-        .map_err(|error| ApiError::bad_request(format!("invalid checkpoint backend state: {error}")))?;
+    let payload: fullmag_session::BackendStatePayload =
+        serde_json::from_slice(&bytes).map_err(|error| {
+            ApiError::bad_request(format!("invalid checkpoint backend state: {error}"))
+        })?;
     if payload.format != "fullmag.backend_state.v1"
         || payload.backend_family != "fdm_cpu_reference"
         || payload.integrator_kind.as_deref() != Some("coupled_imex_ark2")
@@ -1905,4 +1946,108 @@ fn base64_encode(data: &[u8]) -> String {
 fn base64_decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.decode(s)
+}
+
+#[cfg(test)]
+mod coupled_checkpoint_identity_tests {
+    use super::validate_coupled_checkpoint_value;
+
+    fn checkpoint() -> serde_json::Value {
+        serde_json::json!({
+            "schema": "fullmag.fdm.coupled_m3_checkpoint.v1",
+            "problem_ir_abi": "fullmag.problem_ir.v1",
+            "scalar_layout": "f64",
+            "vector_layout": "aos_xyz",
+            "endianness": "little",
+            "formula_version": "transient_spin_balance.fullmag.v1",
+            "integrator_version": "coupled_imex_ark2.v1",
+            "integrator_implementation_revision": "imex_ars_232_step_doubling.fullmag.v1",
+            "identity": {
+                "requested_discretization": "fdm",
+                "requested_device": "cpu",
+                "requested_precision": "double",
+                "requested_execution_mode": "strict",
+                "resolved_discretization": "fdm",
+                "resolved_device": "cpu",
+                "resolved_precision": "double",
+                "resolved_execution_mode": "strict",
+                "scene_revision": 1,
+                "plan_revision": 2,
+                "mesh_revision": 3,
+                "material_revision": 4,
+                "current_operator_revision": 5,
+                "spin_operator_revision": 6,
+                "oersted_operator_revision": 7,
+                "charge_cache_identity": "charge-cache:5",
+                "spin_cache_identity": "spin-cache:6",
+                "oersted_cache_identity": "oersted-cache:7",
+                "source_identity": "source:8"
+            },
+            "magnetization": [[1.0, 0.0, 0.0]],
+            "previous_magnetization": [[1.0, 0.0, 0.0]],
+            "transient_states": {},
+            "accepted": {},
+            "charge_nonlinear_history": {},
+            "telemetry_cursor": 9,
+            "thermal_rng_algorithm": "counter_hash_box_muller.fullmag.v1",
+            "thermal_seed": 17,
+            "thermal_counter": 42
+        })
+    }
+
+    #[test]
+    fn api_rejects_missing_or_malformed_coupled_identity_classes() {
+        validate_coupled_checkpoint_value(&checkpoint()).expect("complete checkpoint");
+        let mut invalid = Vec::new();
+        for field in [
+            "requested_discretization",
+            "requested_device",
+            "requested_precision",
+            "requested_execution_mode",
+            "resolved_discretization",
+            "resolved_device",
+            "resolved_precision",
+            "resolved_execution_mode",
+            "charge_cache_identity",
+            "spin_cache_identity",
+            "oersted_cache_identity",
+            "source_identity",
+        ] {
+            let mut value = checkpoint();
+            value["identity"][field] = serde_json::json!("");
+            invalid.push(value);
+        }
+        for field in [
+            "scene_revision",
+            "plan_revision",
+            "mesh_revision",
+            "material_revision",
+            "current_operator_revision",
+            "spin_operator_revision",
+            "oersted_operator_revision",
+        ] {
+            let mut value = checkpoint();
+            value["identity"][field] = serde_json::Value::Null;
+            invalid.push(value);
+        }
+        let mut no_history = checkpoint();
+        no_history
+            .as_object_mut()
+            .unwrap()
+            .remove("charge_nonlinear_history");
+        invalid.push(no_history);
+        let mut no_cursor = checkpoint();
+        no_cursor
+            .as_object_mut()
+            .unwrap()
+            .remove("telemetry_cursor");
+        invalid.push(no_cursor);
+
+        for value in invalid {
+            assert!(
+                validate_coupled_checkpoint_value(&value).is_err(),
+                "{value}"
+            );
+        }
+    }
 }

@@ -907,6 +907,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     let mut last_solver_dt = resume_previous_timestep.unwrap_or(0.0);
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count: u64 = resume_step_count.unwrap_or(0);
+    let mut final_coupled_checkpoint = None;
     let fft_backend = resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let mut provenance = ExecutionProvenance {
         execution_engine: "cpu_reference".to_string(),
@@ -1125,7 +1126,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                         None
                     };
                     let action = (live.on_step)(StepUpdate {
-            coupled_checkpoint: None,
+                        coupled_checkpoint: None,
                         stats: current_stats.clone(),
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         grid: live.grid,
@@ -1354,6 +1355,26 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
             };
             current_stats = latest_stats.clone();
 
+            final_coupled_checkpoint = spin_transport
+                .as_ref()
+                .filter(|workflow| workflow.has_transient())
+                .map(|workflow| {
+                    workflow
+                        .coupled_checkpoint(
+                            state.magnetization(),
+                            &previous_magnetization,
+                            report.dt_used,
+                            problem.thermal_seed,
+                            problem.thermal_step(),
+                        )
+                        .and_then(|checkpoint| {
+                            serde_json::to_value(checkpoint).map_err(|error| RunError {
+                                message: format!("serializing coupled M3 checkpoint: {error}"),
+                            })
+                        })
+                })
+                .transpose()?;
+
             if !default_scalar_trace || !field_schedules.is_empty() {
                 record_due_outputs(
                     &problem,
@@ -1443,29 +1464,8 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                 if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
                     apply_average_m_to_step_stats(&mut update_stats, state.magnetization());
                 }
-                let coupled_checkpoint = spin_transport
-                    .as_ref()
-                    .filter(|workflow| workflow.has_transient())
-                    .map(|workflow| {
-                        workflow
-                            .coupled_checkpoint(
-                                state.magnetization(),
-                                &previous_magnetization,
-                                report.dt_used,
-                                problem.thermal_seed,
-                                problem.thermal_step(),
-                            )
-                            .and_then(|checkpoint| {
-                                serde_json::to_value(checkpoint).map_err(|error| RunError {
-                                    message: format!(
-                                        "serializing coupled M3 checkpoint: {error}"
-                                    ),
-                                })
-                            })
-                    })
-                    .transpose()?;
                 let action = (live.on_step)(StepUpdate {
-                    coupled_checkpoint,
+                    coupled_checkpoint: final_coupled_checkpoint.clone(),
                     stats: update_stats,
                     scalar_row_due: due_scalar_row,
                     grid: live.grid,
@@ -1562,7 +1562,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
     if completion.status == "failed" {
         status = RunStatus::Failed;
     }
-    let auxiliary_artifacts = spin_transport
+    let mut auxiliary_artifacts: Vec<_> = spin_transport
         .as_ref()
         .and_then(FdmSpinTransportWorkflow::accepted)
         .map(|evaluation| {
@@ -1595,6 +1595,14 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         .transpose()?
         .into_iter()
         .collect();
+    if let Some(checkpoint) = final_coupled_checkpoint {
+        auxiliary_artifacts.push(crate::types::AuxiliaryArtifact {
+            relative_path: "transport/coupled_checkpoint.json".to_string(),
+            bytes: serde_json::to_vec_pretty(&checkpoint).map_err(|error| RunError {
+                message: format!("serializing final coupled M3 checkpoint artifact: {error}"),
+            })?,
+        });
+    }
 
     Ok(ExecutedRun {
         result: RunResult {

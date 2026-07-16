@@ -151,10 +151,11 @@ verify-fdm-pbc-production:
     cargo test -p fullmag-runner --lib stale_resolved_periodic_workspace --no-fail-fast
     python3 scripts/verify_pbc_production_matrix.py --manifest scripts/pbc_production_matrix.v1.json
 
-# M3 CPU reference gate. This intentionally does not promote the public
-# capability: the final planner test proves transient M3 remains fail-closed
-# until public coupled checkpoint persistence is qualified.
+# M3 CPU reference gate. The public Python -> ProblemIR -> planner -> runner
+# workload proves exact 300 K continuation through the built resume-json process.
 verify-fdm-transient-spin-m3-reference:
+    cargo build -p fullmag-cli --bin fullmag
+    PYTHONPATH=packages/fullmag-py/src python3 scripts/verify_fdm_transient_spin_m3_public_e2e.py --fullmag target/debug/fullmag
     cargo test -p fullmag-engine --lib transient_spin --no-fail-fast
     cargo test -p fullmag-runner --lib coupled_ars232 --no-fail-fast
     cargo test -p fullmag-runner --lib adaptive_norm_detects_each_dimensional_observable_family --no-fail-fast
@@ -163,6 +164,9 @@ verify-fdm-transient-spin-m3-reference:
     cargo test -p fullmag-api session_checkpoint_create_captures_live_magnetization --no-fail-fast
     cargo test -p fullmag-api legacy_checkpoint_fails_closed_for_active_coupled_m3_session --no-fail-fast
     cargo test -p fullmag-plan --lib resolves_transient_fdm_cpu_double_with_physical_capacitance_and_versions --no-fail-fast
+    cargo test -p fullmag-plan --lib transient_reference_execution_rejects_non_strict_mode --no-fail-fast
+    cargo test -p fullmag-runner --lib coupled_checkpoint_rejects_each_public_identity_mismatch --no-fail-fast
+    cargo test -p fullmag-api api_rejects_missing_or_malformed_coupled_identity_classes --no-fail-fast
     cargo test -p fullmag-cli cli_parses_exact_coupled_checkpoint_resume_entrypoint --no-fail-fast
     cargo test -p fullmag-cli cli_resume_unwraps_only_the_exact_backend_state_envelope --no-fail-fast
     PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_spin_drift_diffusion.py -q

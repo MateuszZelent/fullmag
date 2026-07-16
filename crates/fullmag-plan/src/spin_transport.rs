@@ -37,6 +37,15 @@ pub(crate) fn resolve_spin_transport(
     for module in &problem.spin_transport_modules {
         let transient = module.mode == fullmag_ir::SpinTransportModeIR::Transient;
         let requested = &module.requested_execution;
+        if transient
+            && (problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict
+                || requested.execution_mode != fullmag_ir::ExecutionMode::Strict)
+        {
+            errors.push(format!(
+                "spin transport '{}' transient reference execution requires strict execution mode",
+                module.id
+            ));
+        }
         if !matches!(
             requested.discretization,
             BackendTarget::Fdm | BackendTarget::Auto
@@ -271,19 +280,22 @@ fn materialize_m2_descriptor(
             module.id
         )]);
     }
-    if base.spin_boundaries.iter().any(|boundary| matches!(
-        boundary.condition,
-        ResolvedSpinBoundaryConditionIR::PeriodicSpin
-    )) {
+    if base.spin_boundaries.iter().any(|boundary| {
+        matches!(
+            boundary.condition,
+            ResolvedSpinBoundaryConditionIR::PeriodicSpin
+        )
+    }) {
         return Err(vec![format!(
             "spin transport '{}' M2 CPU v1 does not support periodic spin boundaries",
             module.id
         )]);
     }
-    if base.interfaces.iter().any(|interface| matches!(
-        interface.law,
-        ResolvedSpinInterfaceLawIR::Transparent
-    )) {
+    if base
+        .interfaces
+        .iter()
+        .any(|interface| matches!(interface.law, ResolvedSpinInterfaceLawIR::Transparent))
+    {
         return Err(vec![format!(
             "spin transport '{}' M2 CPU v1 requires explicit mixing-conductance laws at cross-material interfaces",
             module.id
@@ -302,19 +314,30 @@ fn materialize_m2_descriptor(
     let mut assigned = vec![false; count];
     for assignment in &charge.materials {
         let parallel = assignment.material.sigma_parallel_spm.ok_or_else(|| {
-            vec![format!("spin transport '{}' M2 charge material requires sigma_parallel_Spm", module.id)]
+            vec![format!(
+                "spin transport '{}' M2 charge material requires sigma_parallel_Spm",
+                module.id
+            )]
         })?;
         let perpendicular = assignment.material.sigma_perpendicular_spm.ok_or_else(|| {
-            vec![format!("spin transport '{}' M2 charge material requires sigma_perpendicular_Spm", module.id)]
+            vec![format!(
+                "spin transport '{}' M2 charge material requires sigma_perpendicular_Spm",
+                module.id
+            )]
         })?;
         let ahe = assignment.material.sigma_ahe_spm.ok_or_else(|| {
-            vec![format!("spin transport '{}' M2 charge material requires sigma_AHE_Spm", module.id)]
+            vec![format!(
+                "spin transport '{}' M2 charge material requires sigma_AHE_Spm",
+                module.id
+            )]
         })?;
         let mask = resolve_region_mask(&assignment.region, context, "M2 charge material")?;
         for cell in 0..count {
             if mask[cell] && base.charge_active_cells[cell] {
                 if assigned[cell] {
-                    return Err(vec![format!("M2 charge material assignments overlap at cell {cell}")]);
+                    return Err(vec![format!(
+                        "M2 charge material assignments overlap at cell {cell}"
+                    )]);
                 }
                 assigned[cell] = true;
                 sigma_parallel[cell] = parallel;
@@ -1090,11 +1113,7 @@ mod tests {
         *coupling = TransportCouplingIR::Bidirectional;
         *solve_region = None;
         *conductivity_s_per_m = None;
-        let material = &mut definition
-            .as_mut()
-            .expect("charge definition")
-            .materials[0]
-            .material;
+        let material = &mut definition.as_mut().expect("charge definition").materials[0].material;
         material.sigma_parallel_spm = Some(4.4e6);
         material.sigma_perpendicular_spm = Some(4.0e6);
         material.sigma_ahe_spm = Some(0.2e6);
@@ -1187,7 +1206,10 @@ mod tests {
             .expect("separate reciprocal descriptor");
         assert_eq!(descriptor.reciprocal_materials[0].sigma_parallel_spm, 4.4e6);
         assert_eq!(descriptor.reciprocal_materials[0].sigma_ahe_spm, 0.2e6);
-        assert!(plan.capabilities.iter().any(|capability| capability == "transport.spin.inverse_she"));
+        assert!(plan
+            .capabilities
+            .iter()
+            .any(|capability| capability == "transport.spin.inverse_she"));
     }
 
     #[test]
@@ -1211,7 +1233,10 @@ mod tests {
             &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
         )
         .expect_err("incomplete reciprocal material must fail closed");
-        assert!(error.reasons.iter().any(|reason| reason.contains("sigma_parallel")));
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("sigma_parallel")));
     }
 
     #[test]
@@ -1282,5 +1307,38 @@ mod tests {
             provenance["fdm_cpu_double_transient"]["capacitance_formula_versions"][0],
             "dos_constant.fullmag.v1"
         );
+    }
+
+    #[test]
+    fn transient_reference_execution_rejects_non_strict_mode() {
+        let owners = ["strip"];
+        let region_mask = [0];
+        let magnetization = [[0.0, 0.0, 1.0]];
+        let ms = [8.0e5];
+        let region_ids = BTreeMap::new();
+        let mut problem = problem(ExecutionDevice::Cpu);
+        problem.validation_profile.execution_mode = ExecutionMode::Extended;
+        let spin = &mut problem.spin_transport_modules[0];
+        spin.mode = SpinTransportModeIR::Transient;
+        spin.requested_execution.execution_mode = ExecutionMode::Extended;
+        spin.materials[0].material.spin_capacitance_as_per_v_m3 = Some(2.5);
+        spin.materials[0].material.capacitance_formula_version =
+            Some("dos_constant.fullmag.v1".into());
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut problem.study else {
+            unreachable!()
+        };
+        let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+        *integrator = "coupled_imex_ark2".into();
+
+        let error = resolve_spin_transport(
+            &problem,
+            BackendTarget::Fdm,
+            &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
+        )
+        .expect_err("M3 reference execution must remain strict-only");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("strict execution mode")));
     }
 }

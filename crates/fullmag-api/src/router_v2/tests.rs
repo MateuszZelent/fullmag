@@ -16861,10 +16861,35 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         "endianness": "little",
         "formula_version": "transient_spin_balance.fullmag.v1",
         "integrator_version": "coupled_imex_ark2.v1",
+        "integrator_implementation_revision": "imex_ars_232_step_doubling.fullmag.v1",
+        "identity": {
+            "requested_discretization": "fdm",
+            "requested_device": "cpu",
+            "requested_precision": "double",
+            "requested_execution_mode": "strict",
+            "resolved_discretization": "fdm",
+            "resolved_device": "cpu",
+            "resolved_precision": "double",
+            "resolved_execution_mode": "strict",
+            "scene_revision": 1,
+            "plan_revision": 2,
+            "mesh_revision": 3,
+            "material_revision": 4,
+            "current_operator_revision": 5,
+            "spin_operator_revision": 6,
+            "oersted_operator_revision": 7,
+            "charge_cache_identity": "charge-cache:5",
+            "spin_cache_identity": "spin-cache:6",
+            "oersted_cache_identity": "oersted-cache:7",
+            "source_identity": "source:8"
+        },
         "magnetization": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
         "previous_magnetization": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
         "transient_states": {},
         "accepted": {},
+        "charge_nonlinear_history": {},
+        "telemetry_cursor": 9,
+        "thermal_rng_algorithm": "counter_hash_box_muller.fullmag.v1",
         "thermal_seed": 17,
         "thermal_counter": 42
     });
@@ -17070,7 +17095,9 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
                 .method("POST")
                 .uri("/v2/sessions/current/persistence/checkpoints")
                 .header("content-type", "application/json")
-                .body(Body::from(serde_json::json!({"profile": "resume"}).to_string()))
+                .body(Body::from(
+                    serde_json::json!({"profile": "resume"}).to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -17082,7 +17109,8 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
         .await
         .as_mut()
         .unwrap()
-        .coupled_checkpoint = Some(serde_json::json!({"schema": "fullmag.fdm.coupled_m3_checkpoint.v1"}));
+        .coupled_checkpoint =
+        Some(serde_json::json!({"schema": "fullmag.fdm.coupled_m3_checkpoint.v1"}));
 
     let restore = app
         .oneshot(
@@ -17097,7 +17125,9 @@ async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
         .unwrap();
     assert_eq!(restore.status(), StatusCode::BAD_REQUEST);
     let body = body_json(restore).await;
-    assert!(body.to_string().contains("legacy magnetization-only checkpoint"));
+    assert!(body
+        .to_string()
+        .contains("legacy magnetization-only checkpoint"));
     let _ = fs::remove_dir_all(&repo_root);
 }
 

@@ -1099,7 +1099,7 @@ fn fem_eigen_progress_update(progress: fem_eigen::FemEigenProgress) -> StepUpdat
     per_object_scalars.insert("fem_eigen_progress".to_string(), progress_scalars);
 
     StepUpdate {
-            coupled_checkpoint: None,
+        coupled_checkpoint: None,
         stats: StepStats {
             step: progress
                 .iteration
@@ -1324,7 +1324,7 @@ pub fn run_planned_problem_with_callback(
         | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
     };
     on_step(StepUpdate {
-            coupled_checkpoint: None,
+        coupled_checkpoint: None,
         stats: final_stats,
         grid: final_grid,
         fem_mesh: match &plan.backend_plan {
@@ -1629,7 +1629,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
     };
     on_step(StepUpdate {
-            coupled_checkpoint: None,
+        coupled_checkpoint: None,
         stats: final_stats,
         grid: final_grid,
         fem_mesh: match &plan.backend_plan {
@@ -1804,7 +1804,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         .flat_map(|vector| vector.iter().copied())
         .collect();
     on_step(StepUpdate {
-            coupled_checkpoint: None,
+        coupled_checkpoint: None,
         stats: final_stats,
         grid: fdm.grid.cells,
         fem_mesh: None,
@@ -1926,7 +1926,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         ..StepStats::default()
     });
     on_step(StepUpdate {
-            coupled_checkpoint: None,
+        coupled_checkpoint: None,
         stats: final_stats,
         grid: [0, 0, 0],
         fem_mesh: Some(FemMeshPayload::from(fem)),
@@ -2594,15 +2594,56 @@ pub fn resume_reference_fdm_from_coupled_checkpoint(
     until_seconds: f64,
     outputs: &[OutputIR],
 ) -> Result<RunResult, RunError> {
-    Ok(cpu_reference::execute_reference_fdm_with_coupled_checkpoint(
+    Ok(
+        cpu_reference::execute_reference_fdm_with_coupled_checkpoint(
+            plan,
+            until_seconds,
+            outputs,
+            None,
+            None,
+            Some(checkpoint),
+        )?
+        .result,
+    )
+}
+
+/// Resume the CPU-double coupled M3 reference runtime and return the public
+/// qualification evidence emitted by the accepted backend execution.
+pub fn resume_reference_fdm_from_coupled_checkpoint_evidence(
+    plan: &FdmPlanIR,
+    checkpoint: serde_json::Value,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+) -> Result<serde_json::Value, RunError> {
+    let executed = cpu_reference::execute_reference_fdm_with_coupled_checkpoint(
         plan,
         until_seconds,
         outputs,
         None,
         None,
         Some(checkpoint),
-    )?
-    .result)
+    )?;
+    let artifact = |path: &str| -> Result<serde_json::Value, RunError> {
+        let bytes = &executed
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == path)
+            .ok_or_else(|| RunError {
+                message: format!("resumed coupled M3 execution did not emit {path}"),
+            })?
+            .bytes;
+        serde_json::from_slice(bytes).map_err(|error| RunError {
+            message: format!("parsing resumed coupled M3 artifact {path}: {error}"),
+        })
+    };
+    Ok(serde_json::json!({
+        "status": executed.result.status,
+        "total_steps": executed.result.steps.len(),
+        "final_time": executed.result.steps.last().map(|step| step.time),
+        "final_magnetization": executed.result.final_magnetization,
+        "accepted_transport": artifact("transport/spin_transport_accepted.json")?,
+        "coupled_checkpoint": artifact("transport/coupled_checkpoint.json")?,
+    }))
 }
 
 pub fn run_reference_multilayer_fdm(
