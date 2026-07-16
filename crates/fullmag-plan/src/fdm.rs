@@ -1077,6 +1077,25 @@ pub(crate) fn plan_fdm(
     })?
     .with_region_legend(grid_legend);
 
+    let resolved_ms_for_transport = ms_field_opt
+        .clone()
+        .unwrap_or_else(|| vec![material.saturation_magnetisation; n_cells]);
+    let spin_transport_context = crate::spin_transport::FdmSpinTransportResolutionContext {
+        owner_names: &owner_names,
+        grid_cells,
+        active_mask: active_mask.as_deref(),
+        region_mask: &region_mask,
+        region_index_by_id: &region_index_by_id,
+        initial_magnetization: &initial_magnetization,
+        saturation_magnetization_apm: &resolved_ms_for_transport,
+        gamma0_m_per_a_s: gyromagnetic_ratio,
+    };
+    let spin_transport_plans = crate::spin_transport::resolve_m1_spin_transport(
+        problem,
+        resolved_backend,
+        &spin_transport_context,
+    )?;
+
     let mut fdm_plan = FdmPlanIR {
         origin_m: native_origin,
         grid: GridDimensions { cells: grid_cells },
@@ -1084,10 +1103,7 @@ pub(crate) fn plan_fdm(
         grid_certificate: Some(grid_certificate),
         region_mask,
         active_mask: active_mask.clone(),
-        spin_transport_plans: crate::spin_transport::resolve_m1_spin_transport(
-            problem,
-            resolved_backend,
-        )?,
+        spin_transport_plans,
         initial_magnetization,
         material: FdmMaterialIR {
             name: material.name.clone(),

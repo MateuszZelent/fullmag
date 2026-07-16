@@ -451,6 +451,7 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
                 current_density,
                 solve_region,
                 conductivity_s_per_m,
+                definition,
                 ..
             } => {
                 if let Some(region) = solve_region {
@@ -468,7 +469,13 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
                     }
                 }
                 match model {
-                    CurrentTransportModelIR::PrescribedDensity => match current_density {
+                    CurrentTransportModelIR::PrescribedDensity => {
+                        if definition.is_some() {
+                            errors.push(format!(
+                                "current_modules[{index}] current_transport prescribed_density must not define an ohmic charge solve"
+                            ));
+                        }
+                        match current_density {
                         Some(current_density) => {
                             if !vector3_is_finite(current_density) {
                                 errors.push(format!(
@@ -479,17 +486,155 @@ pub(crate) fn validate_current_modules(problem: &ProblemIR, errors: &mut Vec<Str
                         None => errors.push(format!(
                             "current_modules[{index}] current_transport prescribed_density requires current_density"
                         )),
-                    },
+                        }
+                    }
                     CurrentTransportModelIR::OhmicPoisson => {
                         if current_density.is_some() {
                             errors.push(format!(
                                 "current_modules[{index}] current_transport ohmic_poisson must not define current_density"
                             ));
                         }
+                        if solve_region.is_some() || conductivity_s_per_m.is_some() {
+                            errors.push(format!(
+                                "current_modules[{index}] legacy ohmic_poisson solve_region/conductivity_s_per_m is ambiguous; author the complete charge contract"
+                            ));
+                        }
+                        match definition {
+                            Some(definition) => validate_charge_transport_definition(
+                                index,
+                                definition,
+                                errors,
+                            ),
+                            None => errors.push(format!(
+                                "current_modules[{index}] current_transport ohmic_poisson requires a complete charge contract"
+                            )),
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+fn validate_charge_transport_definition(
+    index: usize,
+    definition: &crate::ChargeTransportDefinitionIR,
+    errors: &mut Vec<String>,
+) {
+    let prefix = format!("current_modules[{index}] current_transport");
+    if definition.domain.is_empty()
+        || definition.materials.is_empty()
+        || definition.boundaries.is_empty()
+    {
+        errors.push(format!(
+            "{prefix} complete charge contract requires non-empty domain, materials, and boundaries"
+        ));
+    }
+    for (material_index, assignment) in definition.materials.iter().enumerate() {
+        if !assignment.material.sigma_spm.is_finite() || assignment.material.sigma_spm <= 0.0 {
+            errors.push(format!(
+                "{prefix}.materials[{material_index}].material.sigma_Spm must be finite and > 0"
+            ));
+        }
+        if !definition.domain.contains(&assignment.region) {
+            errors.push(format!(
+                "{prefix}.materials[{material_index}].region must belong to the authored charge domain"
+            ));
+        }
+    }
+    for region in &definition.domain {
+        let assignments = definition
+            .materials
+            .iter()
+            .filter(|assignment| &assignment.region == region)
+            .count();
+        if assignments != 1 {
+            errors.push(format!(
+                "{prefix} each charge domain region requires exactly one material assignment"
+            ));
+        }
+    }
+
+    let mut boundary_ids = BTreeSet::new();
+    let mut assigned_surfaces = BTreeSet::new();
+    let mut voltage_count = 0usize;
+    for (boundary_index, boundary) in definition.boundaries.iter().enumerate() {
+        if boundary.id().trim().is_empty() || !boundary_ids.insert(boundary.id()) {
+            errors.push(format!(
+                "{prefix}.boundaries[{boundary_index}].id must be non-empty and unique"
+            ));
+        }
+        if boundary.surfaces().is_empty() {
+            errors.push(format!(
+                "{prefix}.boundaries[{boundary_index}].surfaces must not be empty"
+            ));
+        }
+        for surface in boundary.surfaces() {
+            if !vector3_is_finite(&surface.orientation)
+                || surface
+                    .orientation
+                    .iter()
+                    .map(|value| value * value)
+                    .sum::<f64>()
+                    <= 0.0
+            {
+                errors.push(format!(
+                    "{prefix}.boundaries[{boundary_index}] surface orientation must be finite and nonzero"
+                ));
+            }
+            if !assigned_surfaces.insert((surface.object_id.as_str(), surface.surface_id.as_str()))
+            {
+                errors.push(format!(
+                    "{prefix} surface '{}:{}' has conflicting charge boundary assignments",
+                    surface.object_id, surface.surface_id
+                ));
+            }
+        }
+        match boundary {
+            crate::ChargeBoundaryIR::VoltageElectrode { potential_v, .. } => {
+                voltage_count += 1;
+                if !potential_v.is_finite() {
+                    errors.push(format!(
+                        "{prefix}.boundaries[{boundary_index}].potential_V must be finite"
+                    ));
+                }
+            }
+            crate::ChargeBoundaryIR::NormalCurrentElectrode {
+                outward_current_density_apm2,
+                ..
+            } if !outward_current_density_apm2.is_finite() => errors.push(format!(
+                "{prefix}.boundaries[{boundary_index}].outward_current_density_Apm2 must be finite"
+            )),
+            _ => {}
+        }
+    }
+    match definition.gauge {
+        crate::ChargePotentialGaugeIR::DirichletReference if voltage_count == 0 => errors.push(
+            format!("{prefix}.gauge=dirichlet_reference requires a voltage electrode"),
+        ),
+        crate::ChargePotentialGaugeIR::ZeroMean if voltage_count != 0 => errors.push(format!(
+            "{prefix}.gauge=zero_mean conflicts with voltage electrodes"
+        )),
+        _ => {}
+    }
+    let solver = &definition.solver;
+    if solver.engine != "cg"
+        || solver.operator_version != "fv_charge_harmonic_v1"
+        || solver.physical_residual_version != "charge_balance_integrated_l2.v1"
+    {
+        errors.push(format!(
+            "{prefix}.solver carries an unsupported M1 charge engine/version"
+        ));
+    }
+    if !solver.linear.relative_tolerance.is_finite()
+        || solver.linear.relative_tolerance <= 0.0
+        || !solver.linear.absolute_tolerance.is_finite()
+        || solver.linear.absolute_tolerance < 0.0
+        || solver.linear.max_iterations == 0
+    {
+        errors.push(format!(
+            "{prefix}.solver linear tolerances/iterations are invalid"
+        ));
     }
 }
 
@@ -1118,13 +1263,13 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             .find_map(|current| match current {
                 CurrentModuleIR::CurrentTransport {
                     name,
-                    conductivity_s_per_m,
                     coupling,
+                    definition,
                     ..
-                } if name == &module.current_source_id => Some((*conductivity_s_per_m, *coupling)),
+                } if name == &module.current_source_id => Some((definition.as_ref(), *coupling)),
                 _ => None,
             });
-        let Some((sigma_ref, coupling)) = source else {
+        let Some((charge_definition, coupling)) = source else {
             errors.push(format!(
                 "{prefix}.current_source_id '{}' must reference a current_transport module",
                 module.current_source_id
@@ -1164,10 +1309,21 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             {
                 errors.push(format!("{prefix}.materials[{material_index}] theta_sh must be finite and lambda_sf_m > 0"));
             }
+            let sigma_ref = charge_definition.and_then(|definition| {
+                definition
+                    .materials
+                    .iter()
+                    .find(|charge| charge.region == assignment.region)
+                    .map(|charge| charge.material.sigma_spm)
+            });
             if let Some(sigma) = sigma_ref {
                 if material.sigma_s_spm - material.polarization_p.powi(2) * sigma <= 0.0 {
                     errors.push(format!("{prefix}.materials[{material_index}] requires sigma_s_Spm - polarization_p^2*sigma_ref > 0"));
                 }
+            } else {
+                errors.push(format!(
+                    "{prefix}.materials[{material_index}] requires a matching charge material assignment"
+                ));
             }
         }
         if module.solver.operator_version != "fv_spin_upwind_v1"

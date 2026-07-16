@@ -17,6 +17,81 @@ pub struct SurfaceRefIR {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChargeTransportDefinitionIR {
+    pub domain: Vec<RegionRefIR>,
+    pub materials: Vec<ChargeTransportMaterialAssignmentIR>,
+    pub boundaries: Vec<ChargeBoundaryIR>,
+    pub gauge: ChargePotentialGaugeIR,
+    pub solver: ChargeSolverPolicyIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChargeTransportMaterialAssignmentIR {
+    pub region: RegionRefIR,
+    pub material: ChargeTransportMaterialIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChargeTransportMaterialIR {
+    #[serde(rename = "sigma_Spm")]
+    pub sigma_spm: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChargeBoundaryIR {
+    VoltageElectrode {
+        id: String,
+        surfaces: Vec<SurfaceRefIR>,
+        #[serde(rename = "potential_V")]
+        potential_v: f64,
+    },
+    NormalCurrentElectrode {
+        id: String,
+        surfaces: Vec<SurfaceRefIR>,
+        #[serde(rename = "outward_current_density_Apm2")]
+        outward_current_density_apm2: f64,
+    },
+    Insulating {
+        id: String,
+        surfaces: Vec<SurfaceRefIR>,
+    },
+}
+
+impl ChargeBoundaryIR {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::VoltageElectrode { id, .. }
+            | Self::NormalCurrentElectrode { id, .. }
+            | Self::Insulating { id, .. } => id,
+        }
+    }
+
+    pub fn surfaces(&self) -> &[SurfaceRefIR] {
+        match self {
+            Self::VoltageElectrode { surfaces, .. }
+            | Self::NormalCurrentElectrode { surfaces, .. }
+            | Self::Insulating { surfaces, .. } => surfaces,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChargePotentialGaugeIR {
+    DirichletReference,
+    ZeroMean,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChargeSolverPolicyIR {
+    pub engine: String,
+    pub linear: LinearTransportSolverPolicyIR,
+    pub physical_residual_version: String,
+    pub operator_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SpinTransportModuleIR {
     pub schema_version: String,
     pub id: String,
@@ -168,4 +243,131 @@ pub struct ResolvedSpinTransportPlanIR {
     pub physical_residual_version: String,
     pub capabilities: Vec<String>,
     pub inserted_default_boundaries: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_cpu_double: Option<ResolvedFdmSpinTransportIR>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuredBoundaryFaceIR {
+    XMin,
+    XMax,
+    YMin,
+    YMax,
+    ZMin,
+    ZMax,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StructuredInternalFaceIR {
+    pub axis: u8,
+    pub negative_cell: u64,
+    pub positive_cell: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResolvedChargeBoundaryConditionIR {
+    Voltage {
+        #[serde(rename = "potential_V")]
+        potential_v: f64,
+    },
+    OutwardNormalCurrentDensity {
+        #[serde(rename = "current_density_Apm2")]
+        current_density_apm2: f64,
+    },
+    Insulating,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedChargeBoundaryFaceIR {
+    pub source_id: String,
+    pub face: StructuredBoundaryFaceIR,
+    pub condition: ResolvedChargeBoundaryConditionIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResolvedSpinBoundaryConditionIR {
+    SpinInsulating,
+    SpinSink,
+    SpecifiedPotential {
+        #[serde(rename = "value_V")]
+        value_v: [f64; 3],
+    },
+    SpecifiedOutwardFlux {
+        #[serde(rename = "value_Apm2")]
+        value_apm2: [f64; 3],
+    },
+    PeriodicSpin,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedSpinBoundaryFaceIR {
+    pub source_id: String,
+    pub face: StructuredBoundaryFaceIR,
+    pub condition: ResolvedSpinBoundaryConditionIR,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResolvedSpinInterfaceLawIR {
+    Transparent,
+    MixingConductance {
+        #[serde(rename = "g_up_Spm2")]
+        g_up_spm2: f64,
+        #[serde(rename = "g_down_Spm2")]
+        g_down_spm2: f64,
+        #[serde(rename = "g_r_Spm2")]
+        g_r_spm2: f64,
+        #[serde(rename = "g_i_Spm2")]
+        g_i_spm2: f64,
+        #[serde(rename = "g_sml_Spm2")]
+        g_sml_spm2: f64,
+        formula_version: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedSpinInterfaceFaceIR {
+    pub source_id: String,
+    pub face: StructuredInternalFaceIR,
+    pub from_cell: u64,
+    pub to_cell: u64,
+    pub law: ResolvedSpinInterfaceLawIR,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedSpinReactionLengthsIR {
+    pub spin_flip_m: Option<f64>,
+    pub exchange_m: Option<f64>,
+    pub dephasing_m: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFdmSpinTransportIR {
+    pub descriptor_schema: String,
+    pub charge_active_cells: Vec<bool>,
+    #[serde(rename = "charge_conductivity_Spm")]
+    pub charge_conductivity_spm: Vec<f64>,
+    pub charge_boundaries: Vec<ResolvedChargeBoundaryFaceIR>,
+    pub charge_gauge: ChargePotentialGaugeIR,
+    pub charge_solver: ChargeSolverPolicyIR,
+    pub spin_active_cells: Vec<bool>,
+    #[serde(rename = "spin_conductivity_Spm")]
+    pub spin_conductivity_spm: Vec<f64>,
+    pub polarization_p: Vec<f64>,
+    pub theta_sh: Vec<f64>,
+    pub reactions: Vec<ResolvedSpinReactionLengthsIR>,
+    pub region_ids: Vec<u32>,
+    pub spin_boundaries: Vec<ResolvedSpinBoundaryFaceIR>,
+    pub interfaces: Vec<ResolvedSpinInterfaceFaceIR>,
+    pub torque_target_cells: Vec<bool>,
+    #[serde(rename = "saturation_magnetization_Apm")]
+    pub saturation_magnetization_apm: Vec<f64>,
+    #[serde(rename = "gamma_e_rad_per_s_T")]
+    pub gamma_e_rad_per_s_t: f64,
+    pub spin_solver: SpinSolverPolicyIR,
+    pub torque_formula_version: Option<String>,
+    pub oersted_source_bound: bool,
 }

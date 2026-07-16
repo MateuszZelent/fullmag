@@ -39,13 +39,12 @@ pub use fdm::{
     compute_periodic_newell_kernel_spectra, run_reference_exchange_demo, AbmHistory, AbmHistorySoA,
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, DemagKernelSpectra,
     EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
-    ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy,
-    FdmDemagBoundary, FftWorkspace, ResolvedFdmPeriodicWorkspace,
-    GridShape, IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
-    OerstedCylinderConfig, ReferenceDemoReport, Result, RhsEvaluation, SlonczewskiFormula,
-    SlonczewskiSttConfig, SolverSession, SotConfig, SotFormula, StepReport, TimeIntegrator,
-    UniaxialAnisotropyConfig, VectorFieldSoA,
-    ZhangLiSttConfig,
+    ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, ExternalStageTerms,
+    FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
+    MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, ReferenceDemoReport,
+    ResolvedFdmPeriodicWorkspace, Result, RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig,
+    SolverSession, SotConfig, SotFormula, StepReport, TimeIntegrator, UniaxialAnisotropyConfig,
+    VectorFieldSoA, ZhangLiSttConfig,
 };
 
 // ── Vector math utilities ─────────────────────────────────────────────
@@ -931,6 +930,43 @@ mod tests {
                 magnetization
             );
         }
+    }
+
+    #[test]
+    fn coupled_heun_rolls_back_when_final_transport_refresh_fails() {
+        let problem = simple_problem(0.1, 1.0);
+        let mut state = problem
+            .new_state(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
+            .expect("state should build");
+        let initial = state.clone();
+        let mut ws = problem.create_workspace();
+        let mut bufs = problem.create_integrator_buffers();
+        let mut calls = 0;
+
+        let error = problem
+            .heun_step_with_external_stage_terms(
+                &mut state,
+                1e-3,
+                &mut ws,
+                &mut bufs,
+                EvaluationRequest::Full,
+                |_m, _time| {
+                    calls += 1;
+                    if calls == 3 {
+                        return Err(EngineError::new("transport solve failed"));
+                    }
+                    Ok(ExternalStageTerms {
+                        additional_field_apm: vec![[0.0, 0.0, 1.0]; 3],
+                        direct_torque_per_s: vec![[0.0; 3]; 3],
+                    })
+                },
+            )
+            .expect_err("final transport failure must reject the step");
+
+        assert!(error.to_string().contains("transport solve failed"));
+        assert_eq!(calls, 3);
+        assert_eq!(state.magnetization(), initial.magnetization());
+        assert_eq!(state.time_seconds, initial.time_seconds);
     }
 
     #[test]
@@ -2731,7 +2767,9 @@ mod tests {
         assert!((observables.total_energy_joules - expected_energy).abs() <= 1.0e-12);
 
         state.time_seconds = 0.0;
-        let inactive = problem.observe(&state).expect("inactive observables should build");
+        let inactive = problem
+            .observe(&state)
+            .expect("inactive observables should build");
         assert_vector_close(inactive.effective_field[0], [0.0, 0.0, 0.0], 1.0e-15);
         assert_eq!(inactive.external_energy_joules, 0.0);
     }

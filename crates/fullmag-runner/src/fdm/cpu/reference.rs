@@ -7,23 +7,20 @@ use fullmag_engine::{
     magnetoelastic::{MagnetoelasticParams, PrescribedStrainField},
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
     EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
-    FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
+    ExternalStageTerms, FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
     MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig,
-    ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, SotFormula,
-    StepReport, TimeIntegrator,
-    UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
+    ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, SotFormula, StepReport,
+    TimeIntegrator, UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
 };
 use fullmag_ir::{
     ExecutionPrecision, FdmPlanIR, IntegratorChoice, OutputIR, RelaxationAlgorithmIR,
     RelaxationControlIR, StageCompletionIR,
 };
 
+use super::spin_transport::{FdmSpinTransportEvaluation, FdmSpinTransportWorkflow};
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
-use crate::fdm::{
-    artifacts::select_state_observable_field,
-    validate_single_grid_budget,
-};
+use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_grid_preview_field, build_grid_scalar_preview_field, flatten_vectors, select_observables,
@@ -584,7 +581,7 @@ pub(crate) fn build_snapshot_problem_and_state(
             fullmag_ir::AxisBoundary::Periodic => AxisBoundary::Periodic,
             fullmag_ir::AxisBoundary::Open => AxisBoundary::Open,
         };
-    problem.boundary_policy = FdmBoundaryPolicy {
+        problem.boundary_policy = FdmBoundaryPolicy {
             x: map_axis(&pbc.axes[0]),
             y: map_axis(&pbc.axes[1]),
             z: map_axis(&pbc.axes[2]),
@@ -594,16 +591,14 @@ pub(crate) fn build_snapshot_problem_and_state(
         }
     }
     problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary(plan)?);
-    problem.set_resolved_periodic_workspace(
-        plan.resolved_periodic_images
-            .as_ref()
-            .map(|resolved| ResolvedFdmPeriodicWorkspace {
-                image_counts: resolved.resolved_image_counts,
-                padded_counts: resolved.padded_counts,
-                image_terms: resolved.image_terms,
-                estimated_bytes: resolved.estimated_bytes,
-            }),
-    );
+    problem.set_resolved_periodic_workspace(plan.resolved_periodic_images.as_ref().map(
+        |resolved| ResolvedFdmPeriodicWorkspace {
+            image_counts: resolved.resolved_image_counts,
+            padded_counts: resolved.padded_counts,
+            image_terms: resolved.image_terms,
+            estimated_bytes: resolved.estimated_bytes,
+        },
+    ));
     // Set thermal noise parameters
     problem.temperature = plan.temperature.unwrap_or(0.0);
     if let Some(dt) = plan.fixed_timestep {
@@ -653,6 +648,29 @@ pub(crate) fn execute_reference_fdm(
                 }
             ),
         });
+    }
+    let mut spin_transport = FdmSpinTransportWorkflow::from_plan(plan)?;
+    if spin_transport.is_some() {
+        if plan.integrator.unwrap_or(IntegratorChoice::Heun) != IntegratorChoice::Heun {
+            return Err(RunError {
+                message: "FDM CPU-double spin transport currently requires the fixed-step Heun integrator; integrator fallback is forbidden".to_string(),
+            });
+        }
+        if plan.adaptive_timestep.is_some() {
+            return Err(RunError {
+                message: "FDM CPU-double spin transport does not yet support adaptive-step rejection; use a fixed timestep".to_string(),
+            });
+        }
+        if plan.relaxation.as_ref().is_some_and(|control| {
+            matches!(
+                control.algorithm,
+                RelaxationAlgorithmIR::ProjectedGradientBb | RelaxationAlgorithmIR::NonlinearCg
+            )
+        }) {
+            return Err(RunError {
+                message: "direct energy minimization cannot execute a dynamic spin-transport coupling; use LLG/Heun".to_string(),
+            });
+        }
     }
 
     let grid = GridShape::new(
@@ -841,7 +859,7 @@ pub(crate) fn execute_reference_fdm(
     // --- Create FFT workspace once for the entire simulation ---
     let mut fft_workspace = problem.create_workspace();
     let mut integrator_bufs = problem.create_integrator_buffers();
-    let mut state_soa = if problem.soa_fast_path_supported() {
+    let mut state_soa = if spin_transport.is_none() && problem.soa_fast_path_supported() {
         Some(state.to_soa())
     } else {
         None
@@ -1045,17 +1063,59 @@ pub(crate) fn execute_reference_fdm(
                     resolved_per_node_external_field(plan, state.time_seconds);
             }
             let wall_start = Instant::now();
-            let report = step_reference_fdm_problem(
-                &problem,
-                &mut state,
-                &mut state_soa,
-                dt_step,
-                &mut fft_workspace,
-                &mut integrator_bufs,
-            )
-            .map_err(|e| RunError {
-                message: format!("Step {}: {}", step_count, e),
-            })?;
+            let report = if let Some(workflow) = spin_transport.as_mut() {
+                let mut candidate: Option<FdmSpinTransportEvaluation> = None;
+                let result = problem.heun_step_with_external_stage_terms(
+                    &mut state,
+                    dt_step,
+                    &mut fft_workspace,
+                    &mut integrator_bufs,
+                    EvaluationRequest::Full,
+                    |magnetization, time_s| {
+                        let evaluation = workflow
+                            .evaluate_stage(magnetization, time_s)
+                            .map_err(|error| EngineError::new(error.message))?;
+                        let terms = ExternalStageTerms {
+                            additional_field_apm: evaluation
+                                .combined_oersted_field_apm
+                                .clone()
+                                .unwrap_or_else(|| vec![[0.0; 3]; magnetization.len()]),
+                            direct_torque_per_s: evaluation.combined_transport_torque_per_s.clone(),
+                        };
+                        candidate = Some(evaluation);
+                        Ok(terms)
+                    },
+                );
+                match result {
+                    Ok(report) => {
+                        let accepted = candidate.take().ok_or_else(|| RunError {
+                            message:
+                                "coupled Heun step produced no final spin-transport evaluation"
+                                    .to_string(),
+                        })?;
+                        workflow.commit(accepted)?;
+                        report
+                    }
+                    Err(error) => {
+                        workflow.rollback();
+                        return Err(RunError {
+                            message: format!("Step {}: {}", step_count, error),
+                        });
+                    }
+                }
+            } else {
+                step_reference_fdm_problem(
+                    &problem,
+                    &mut state,
+                    &mut state_soa,
+                    dt_step,
+                    &mut fft_workspace,
+                    &mut integrator_bufs,
+                )
+                .map_err(|e| RunError {
+                    message: format!("Step {}: {}", step_count, e),
+                })?
+            };
             let wall_elapsed = wall_start.elapsed().as_nanos() as u64;
             step_count += 1;
             last_solver_dt = report.dt_used;
@@ -1269,6 +1329,25 @@ pub(crate) fn execute_reference_fdm(
     if completion.status == "failed" {
         status = RunStatus::Failed;
     }
+    let auxiliary_artifacts = spin_transport
+        .as_ref()
+        .and_then(FdmSpinTransportWorkflow::accepted)
+        .map(|evaluation| {
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema": "fullmag.fdm.spin_transport.accepted.v1",
+                "evaluation": evaluation,
+            }))
+            .map(|bytes| crate::types::AuxiliaryArtifact {
+                relative_path: "transport/spin_transport_accepted.json".to_string(),
+                bytes,
+            })
+            .map_err(|error| RunError {
+                message: format!("serializing accepted spin-transport artifact: {error}"),
+            })
+        })
+        .transpose()?
+        .into_iter()
+        .collect();
 
     Ok(ExecutedRun {
         result: RunResult {
@@ -1280,7 +1359,7 @@ pub(crate) fn execute_reference_fdm(
         initial_magnetization,
         field_snapshots,
         field_snapshot_count,
-        auxiliary_artifacts: Vec::new(),
+        auxiliary_artifacts,
         provenance,
     })
 }
@@ -1922,10 +2001,8 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             }
             "H_OE" => {
                 if self.oersted_field.is_none() {
-                    self.oersted_field = Some(
-                        self.problem
-                            .oersted_field_at_time(self.state.time_seconds),
-                    );
+                    self.oersted_field =
+                        Some(self.problem.oersted_field_at_time(self.state.time_seconds));
                 }
                 Ok(self.oersted_field.as_deref().expect("cached Oersted field"))
             }
@@ -4281,8 +4358,14 @@ mod tests {
 
         assert_eq!(top.current_sign, 1.0);
         assert_eq!(bottom.current_sign, -1.0);
-        assert_eq!(top.formula, fullmag_engine::SlonczewskiFormula::LegacyFullmagV0);
-        assert_eq!(bottom.formula, fullmag_engine::SlonczewskiFormula::LegacyFullmagV0);
+        assert_eq!(
+            top.formula,
+            fullmag_engine::SlonczewskiFormula::LegacyFullmagV0
+        );
+        assert_eq!(
+            bottom.formula,
+            fullmag_engine::SlonczewskiFormula::LegacyFullmagV0
+        );
     }
 
     #[test]
@@ -4308,8 +4391,14 @@ mod tests {
         assert_eq!(reversed.current_density_magnitude, 4.0e10);
         assert_eq!(forward.current_sign, 1.0);
         assert_eq!(reversed.current_sign, -1.0);
-        assert_eq!(forward.formula, fullmag_engine::SlonczewskiFormula::FullmagV1);
-        assert_eq!(reversed.formula, fullmag_engine::SlonczewskiFormula::FullmagV1);
+        assert_eq!(
+            forward.formula,
+            fullmag_engine::SlonczewskiFormula::FullmagV1
+        );
+        assert_eq!(
+            reversed.formula,
+            fullmag_engine::SlonczewskiFormula::FullmagV1
+        );
         assert_eq!(forward.active_mask, plan.slonczewski_active_mask);
     }
 

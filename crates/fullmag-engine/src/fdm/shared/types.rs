@@ -3,6 +3,8 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::Vector3;
+
 // ── Error ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,7 +13,7 @@ pub struct EngineError {
 }
 
 impl EngineError {
-    pub(crate) fn new(message: impl Into<String>) -> Self {
+    pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }
@@ -27,6 +29,16 @@ impl fmt::Display for EngineError {
 impl Error for EngineError {}
 
 pub type Result<T> = std::result::Result<T, EngineError>;
+
+/// Dynamic terms supplied by a coupled solver for one explicit integrator
+/// stage. Both arrays use the canonical FDM cell ordering.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternalStageTerms {
+    /// Additional magnetic field in A/m, assembled before the Gilbert RHS.
+    pub additional_field_apm: Vec<Vector3>,
+    /// Direct contribution to `dm/dt` in 1/s, added after the Gilbert RHS.
+    pub direct_torque_per_s: Vec<Vector3>,
+}
 
 // ── Grid & Cell ────────────────────────────────────────────────────────
 

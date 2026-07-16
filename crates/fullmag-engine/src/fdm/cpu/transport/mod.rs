@@ -5,8 +5,8 @@ mod spin_drift_diffusion;
 mod transient_spin;
 
 pub use charge::{
-    ChargeBalanceDiagnostics, ChargeBoundaryConditions, ChargeSolution, ChargeSolverConfig,
-    OrientedFaceFluxes, PotentialGauge, StructuredChargeProblem,
+    ChargeBalanceDiagnostics, ChargeBoundaryCondition, ChargeBoundaryConditions, ChargeSolution,
+    ChargeSolverConfig, OrientedFaceFluxes, PotentialGauge, StructuredChargeProblem,
 };
 pub use oersted::biot_savart_midpoint_field;
 pub use reciprocal_constitutive::{ReciprocalConstitutiveMaterial, ReciprocalConstitutiveResponse};

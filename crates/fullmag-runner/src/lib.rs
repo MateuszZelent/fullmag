@@ -5063,6 +5063,8 @@ mod tests {
                 current_density: Some([0.0, 0.0, 5e10]),
                 solve_region: None,
                 conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                definition: None,
             });
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)

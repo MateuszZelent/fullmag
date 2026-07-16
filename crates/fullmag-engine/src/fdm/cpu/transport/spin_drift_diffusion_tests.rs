@@ -1,7 +1,7 @@
 use super::{
-    ChargeBoundaryConditions, InternalSpinContact, OrientedSpinInterface, SpinBoundaryCondition,
-    SpinBoundaryConditions, SpinDriftDiffusionProblem, SpinFluxOperator, SpinInterfaceLaw,
-    SpinMaterialFields, SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets,
+    ChargeBoundaryCondition, ChargeBoundaryConditions, InternalSpinContact, OrientedSpinInterface,
+    SpinBoundaryCondition, SpinBoundaryConditions, SpinDriftDiffusionProblem, SpinFluxOperator,
+    SpinInterfaceLaw, SpinMaterialFields, SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets,
     StructuredChargeProblem, StructuredSpinFace,
 };
 use crate::fdm::shared::types::{CellSize, GridShape};
@@ -236,8 +236,8 @@ fn she_problem(nz: usize, theta: f64, magnetization: [f64; 3]) -> SpinDriftDiffu
         vec![5.0; grid.cell_count()],
         None,
         ChargeBoundaryConditions {
-            x_min: Some(1.5),
-            x_max: Some(-1.5),
+            x_min: ChargeBoundaryCondition::Voltage(1.5),
+            x_max: ChargeBoundaryCondition::Voltage(-1.5),
             ..Default::default()
         },
     )
@@ -341,8 +341,8 @@ fn polarized_flux_reverses_with_magnetization_but_she_does_not() {
             vec![2.0; 2],
             None,
             ChargeBoundaryConditions {
-                x_min: Some(1.0),
-                x_max: Some(-1.0),
+                x_min: ChargeBoundaryCondition::Voltage(1.0),
+                x_max: ChargeBoundaryCondition::Voltage(-1.0),
                 ..Default::default()
             },
         )

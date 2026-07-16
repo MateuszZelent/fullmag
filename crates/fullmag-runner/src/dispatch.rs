@@ -5531,7 +5531,8 @@ fn execute_native_fem(
             crate::relaxation::native_direct_minimizer_realization(
                 control.algorithm,
                 provenance.execution_engine == "fem_native_gpu",
-            ).map(str::to_string)
+            )
+            .map(str::to_string)
         });
     } else if crate::fem::relax::llg_overdamped::uses_pure_damping(plan) {
         provenance.energy_minimizer_realization =
@@ -6197,8 +6198,7 @@ mod tests {
                 object_id: "free".to_string(),
                 region_id: None,
             }),
-            stack_normal: (formula_version == "slonczewski.fullmag.v1")
-                .then_some([0.0, 0.0, 1.0]),
+            stack_normal: (formula_version == "slonczewski.fullmag.v1").then_some([0.0, 0.0, 1.0]),
             lande_g: (formula_version == "zhang_li.fullmag.v1").then_some(2.0),
             active_node_mask: Some(vec![true; 4]),
             active_element_mask: Some(vec![true]),
@@ -6873,11 +6873,8 @@ mod tests {
             reason: "GPU RK device-resident path requires enable_exchange=true".to_string(),
         };
 
-        let err = validate_native_fem_gpu_engine_runtime_contract(
-            FemEngine::NativeGpu,
-            &rk_plan,
-        )
-        .expect_err("STT-only GPU plan must not execute through host RK");
+        let err = validate_native_fem_gpu_engine_runtime_contract(FemEngine::NativeGpu, &rk_plan)
+            .expect_err("STT-only GPU plan must not execute through host RK");
 
         assert!(err.message.contains("gpu_rk_plan_disabled"));
         assert!(err.message.contains("enable_exchange=true"));
@@ -6900,11 +6897,8 @@ mod tests {
             reason: "GPU RK device-resident path requires enable_exchange=true".to_string(),
         };
 
-        let err = validate_native_fem_gpu_engine_runtime_contract(
-            FemEngine::NativeGpu,
-            &rk_plan,
-        )
-        .expect_err("Oersted-only GPU plan must not execute through host RK");
+        let err = validate_native_fem_gpu_engine_runtime_contract(FemEngine::NativeGpu, &rk_plan)
+            .expect_err("Oersted-only GPU plan must not execute through host RK");
 
         assert!(err.message.contains("gpu_rk_plan_disabled"));
         assert!(err.message.contains("enable_exchange=true"));
@@ -7220,18 +7214,16 @@ mod tests {
             std::env::set_var("FULLMAG_FEM_EXECUTION", "cpu");
         }
 
-        let result = resolve_fem_engine_with_registry(
-            &problem,
-            &registry,
-            false,
-            Some(&tiny_fem_plan()),
-        );
+        let result =
+            resolve_fem_engine_with_registry(&problem, &registry, false, Some(&tiny_fem_plan()));
 
         unsafe {
             std::env::remove_var("FULLMAG_FEM_EXECUTION");
         }
         let err = result.expect_err("strict GPU must reject a CPU-only registry");
-        assert!(err.message.contains("no advertised FEM runtime matches device=gpu"));
+        assert!(err
+            .message
+            .contains("no advertised FEM runtime matches device=gpu"));
     }
 
     #[test]
@@ -7252,7 +7244,9 @@ mod tests {
         )
         .expect_err("strict requested GPU must fail closed instead of selecting CPU");
 
-        assert!(err.message.contains("native FEM GPU backend is not available"));
+        assert!(err
+            .message
+            .contains("native FEM GPU backend is not available"));
         assert!(err.message.contains("strict"));
     }
 
@@ -9237,6 +9231,8 @@ mod tests {
                 current_density: Some([0.0, 0.0, 5e10]),
                 solve_region: Some("free".to_string()),
                 conductivity_s_per_m: None,
+                coupling: fullmag_ir::TransportCouplingIR::OneWay,
+                definition: None,
             });
 
         let resolution = resolve_fem_engine_with_availability(

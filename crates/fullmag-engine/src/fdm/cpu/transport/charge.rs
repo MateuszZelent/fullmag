@@ -7,13 +7,22 @@ pub enum PotentialGauge {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ChargeBoundaryCondition {
+    #[default]
+    Insulating,
+    Voltage(f64),
+    /// Authored outward-normal conventional current density `n dot J_c`.
+    SpecifiedOutwardCurrentDensity(f64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ChargeBoundaryConditions {
-    pub x_min: Option<f64>,
-    pub x_max: Option<f64>,
-    pub y_min: Option<f64>,
-    pub y_max: Option<f64>,
-    pub z_min: Option<f64>,
-    pub z_max: Option<f64>,
+    pub x_min: ChargeBoundaryCondition,
+    pub x_max: ChargeBoundaryCondition,
+    pub y_min: ChargeBoundaryCondition,
+    pub y_max: ChargeBoundaryCondition,
+    pub z_min: ChargeBoundaryCondition,
+    pub z_max: ChargeBoundaryCondition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -112,7 +121,7 @@ impl StructuredChargeProblem {
                 "every active charge-transport cell must have positive conductivity",
             ));
         }
-        for value in [
+        for condition in [
             boundary.x_min,
             boundary.x_max,
             boundary.y_min,
@@ -121,12 +130,14 @@ impl StructuredChargeProblem {
             boundary.z_max,
         ]
         .into_iter()
-        .flatten()
         {
+            let value = match condition {
+                ChargeBoundaryCondition::Insulating => continue,
+                ChargeBoundaryCondition::Voltage(value)
+                | ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(value) => value,
+            };
             if !value.is_finite() {
-                return Err(EngineError::new(
-                    "Dirichlet boundary potentials must be finite",
-                ));
+                return Err(EngineError::new("charge boundary values must be finite"));
             }
         }
         Ok(Self {
@@ -284,7 +295,7 @@ impl StructuredChargeProblem {
             self.boundary.z_max,
         ]
         .iter()
-        .any(Option::is_some);
+        .any(|condition| matches!(condition, ChargeBoundaryCondition::Voltage(_)));
         if !has_dirichlet && config.gauge.is_none() {
             return Err(EngineError::new(
                 "a pure-Neumann charge problem requires an explicit potential gauge",
@@ -478,12 +489,18 @@ impl StructuredChargeProblem {
                 let yz = cell / self.grid.nx;
                 let y = yz % self.grid.ny;
                 let z = yz / self.grid.ny;
-                anchored |= (x == 0 && self.boundary.x_min.is_some())
-                    || (x + 1 == self.grid.nx && self.boundary.x_max.is_some())
-                    || (y == 0 && self.boundary.y_min.is_some())
-                    || (y + 1 == self.grid.ny && self.boundary.y_max.is_some())
-                    || (z == 0 && self.boundary.z_min.is_some())
-                    || (z + 1 == self.grid.nz && self.boundary.z_max.is_some());
+                anchored |= (x == 0
+                    && matches!(self.boundary.x_min, ChargeBoundaryCondition::Voltage(_)))
+                    || (x + 1 == self.grid.nx
+                        && matches!(self.boundary.x_max, ChargeBoundaryCondition::Voltage(_)))
+                    || (y == 0
+                        && matches!(self.boundary.y_min, ChargeBoundaryCondition::Voltage(_)))
+                    || (y + 1 == self.grid.ny
+                        && matches!(self.boundary.y_max, ChargeBoundaryCondition::Voltage(_)))
+                    || (z == 0
+                        && matches!(self.boundary.z_min, ChargeBoundaryCondition::Voltage(_)))
+                    || (z + 1 == self.grid.nz
+                        && matches!(self.boundary.z_max, ChargeBoundaryCondition::Voltage(_)));
 
                 for neighbor in self.active_neighbors(x, y, z) {
                     if !visited[neighbor] {
@@ -536,7 +553,7 @@ impl StructuredChargeProblem {
     fn boundary_flux(
         &self,
         cell: usize,
-        boundary_potential: Option<f64>,
+        boundary: ChargeBoundaryCondition,
         potential: &[f64],
         cell_width: f64,
         positive_face: bool,
@@ -544,8 +561,12 @@ impl StructuredChargeProblem {
         if !self.active_cells[cell] {
             return 0.0;
         }
-        let Some(boundary_potential) = boundary_potential else {
-            return 0.0;
+        let boundary_potential = match boundary {
+            ChargeBoundaryCondition::Insulating => return 0.0,
+            ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(outward) => {
+                return if positive_face { outward } else { -outward };
+            }
+            ChargeBoundaryCondition::Voltage(value) => value,
         };
         let oriented_difference = if positive_face {
             boundary_potential - potential[cell]
@@ -637,8 +658,8 @@ mod tests {
             vec![sigma; grid.cell_count()],
             None,
             ChargeBoundaryConditions {
-                x_min: Some(0.0),
-                x_max: Some(0.16),
+                x_min: ChargeBoundaryCondition::Voltage(0.0),
+                x_max: ChargeBoundaryCondition::Voltage(0.16),
                 ..Default::default()
             },
         )
@@ -694,8 +715,8 @@ mod tests {
             vec![sigma_left, sigma_right],
             None,
             ChargeBoundaryConditions {
-                x_min: Some(0.0),
-                x_max: Some(1.0),
+                x_min: ChargeBoundaryCondition::Voltage(0.0),
+                x_max: ChargeBoundaryCondition::Voltage(1.0),
                 ..Default::default()
             },
         )
@@ -746,6 +767,33 @@ mod tests {
     }
 
     #[test]
+    fn specified_outward_current_density_preserves_min_max_face_orientation() {
+        let grid = GridShape::new(4, 1, 1).unwrap();
+        let problem = StructuredChargeProblem::new(
+            grid,
+            CellSize::new(1.0, 1.0, 1.0).unwrap(),
+            vec![2.0; grid.cell_count()],
+            None,
+            ChargeBoundaryConditions {
+                x_min: ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(-3.0),
+                x_max: ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(3.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let solution = problem
+            .solve(ChargeSolverConfig {
+                gauge: Some(PotentialGauge::ZeroMean),
+                ..Default::default()
+            })
+            .unwrap();
+        for flux in solution.current_density.x {
+            assert_close(flux, 3.0, 1.0e-11);
+        }
+        assert_close(solution.balance.net_boundary_current_a, 0.0, 1.0e-12);
+    }
+
+    #[test]
     fn active_cells_must_have_positive_conductivity() {
         let grid = GridShape::new(1, 1, 1).unwrap();
         let error = StructuredChargeProblem::new(
@@ -768,7 +816,7 @@ mod tests {
             vec![1.0; 3],
             Some(vec![true, false, true]),
             ChargeBoundaryConditions {
-                x_min: Some(0.0),
+                x_min: ChargeBoundaryCondition::Voltage(0.0),
                 ..Default::default()
             },
         )

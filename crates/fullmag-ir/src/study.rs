@@ -120,6 +120,10 @@ pub enum CurrentModuleIR {
         conductivity_s_per_m: Option<f64>,
         #[serde(default)]
         coupling: crate::TransportCouplingIR,
+        /// Complete executable charge solve. Legacy records without this
+        /// payload remain readable but fail closed for `ohmic_poisson`.
+        #[serde(default, flatten, skip_serializing_if = "Option::is_none")]
+        definition: Option<crate::ChargeTransportDefinitionIR>,
     },
 }
 

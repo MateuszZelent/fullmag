@@ -1,4 +1,4 @@
-use super::StructuredChargeProblem;
+use super::{ChargeBoundaryCondition, StructuredChargeProblem};
 use crate::fdm::shared::types::{EngineError, GridShape, Result};
 use std::collections::VecDeque;
 
@@ -676,6 +676,39 @@ impl SpinDriftDiffusionProblem {
             }
         }
         Ok(divergence)
+    }
+
+    /// Reconstruct the cell-centred `Q_ia` tensor from conservative oriented
+    /// face fluxes. Rows are flow axes `i=x,y,z`; columns are spin axes.
+    pub fn cell_centered_spin_current_tensor(
+        &self,
+        fluxes: &OrientedSpinFaceFluxes,
+    ) -> Result<Vec<[[f64; 3]; 3]>> {
+        self.conservative_divergence(fluxes)?;
+        let GridShape { nx, ny, nz } = self.charge.grid;
+        let mut tensor = vec![[[0.0; 3]; 3]; self.charge.grid.cell_count()];
+        for z in 0..nz {
+            for y in 0..ny {
+                for x in 0..nx {
+                    let cell = self.charge.grid.index(x, y, z);
+                    if !self.active_cells[cell] {
+                        continue;
+                    }
+                    let x0 = x + (nx + 1) * (y + ny * z);
+                    let y0 = x + nx * (y + (ny + 1) * z);
+                    let z0 = x + nx * (y + ny * z);
+                    for spin_axis in 0..3 {
+                        tensor[cell][0][spin_axis] =
+                            0.5 * (fluxes.x[x0][spin_axis] + fluxes.x[x0 + 1][spin_axis]);
+                        tensor[cell][1][spin_axis] =
+                            0.5 * (fluxes.y[y0][spin_axis] + fluxes.y[y0 + nx][spin_axis]);
+                        tensor[cell][2][spin_axis] =
+                            0.5 * (fluxes.z[z0][spin_axis] + fluxes.z[z0 + nx * ny][spin_axis]);
+                    }
+                }
+            }
+        }
+        Ok(tensor)
     }
 
     pub fn reaction_channels(&self, spin_potential_volts: &[Vector3]) -> Result<ReactionChannels> {
@@ -1670,7 +1703,7 @@ impl SpinDriftDiffusionProblem {
     }
 
     fn charge_boundary(&self, axis: usize, positive: bool) -> Option<f64> {
-        match (axis, positive) {
+        match match (axis, positive) {
             (0, false) => self.charge.boundary.x_min,
             (0, true) => self.charge.boundary.x_max,
             (1, false) => self.charge.boundary.y_min,
@@ -1678,6 +1711,10 @@ impl SpinDriftDiffusionProblem {
             (2, false) => self.charge.boundary.z_min,
             (2, true) => self.charge.boundary.z_max,
             _ => unreachable!(),
+        } {
+            ChargeBoundaryCondition::Voltage(value) => Some(value),
+            ChargeBoundaryCondition::Insulating
+            | ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(_) => None,
         }
     }
 }

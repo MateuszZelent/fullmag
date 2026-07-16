@@ -35,8 +35,23 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     let mut value = problem_ir_value_with_version(CURRENT_IR_VERSION);
     value["current_modules"] = serde_json::json!([{
         "kind": "current_transport", "name": "charge",
-        "model": "ohmic_poisson", "solve_region": "strip",
-        "conductivity_s_per_m": 4.0e6, "coupling": "one_way"
+        "model": "ohmic_poisson", "coupling": "one_way",
+        "domain": [{"object_id": "strip"}],
+        "materials": [{"region": {"object_id": "strip"},
+            "material": {"sigma_Spm": 4.0e6}}],
+        "boundaries": [
+            {"kind": "voltage_electrode", "id": "ground", "surfaces": [
+                {"object_id": "strip", "surface_id": "x_min", "orientation": [-1.0, 0.0, 0.0]}
+            ], "potential_V": 0.0},
+            {"kind": "voltage_electrode", "id": "drive", "surfaces": [
+                {"object_id": "strip", "surface_id": "x_max", "orientation": [1.0, 0.0, 0.0]}
+            ], "potential_V": 0.1}
+        ],
+        "gauge": "dirichlet_reference",
+        "solver": {"engine": "cg", "linear": {"relative_tolerance": 1.0e-10,
+            "absolute_tolerance": 0.0, "max_iterations": 1000},
+            "physical_residual_version": "charge_balance_integrated_l2.v1",
+            "operator_version": "fv_charge_harmonic_v1"}
     }]);
     value["spin_transport_modules"] = serde_json::json!([{
         "schema_version": "spin_transport.v1", "id": "spin_solve",
@@ -68,6 +83,14 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     decoded.validate().expect("typed M1 IR should validate");
     assert_eq!(decoded.spin_transport_modules.len(), 1);
     let encoded = serde_json::to_value(decoded).expect("typed M1 IR should encode");
+    assert_eq!(
+        encoded["current_modules"][0]["gauge"],
+        "dirichlet_reference"
+    );
+    assert_eq!(
+        encoded["current_modules"][0]["boundaries"][1]["potential_V"],
+        0.1
+    );
     assert_eq!(encoded["spin_transport_modules"][0]["mode"], "steady");
     assert!(encoded["spin_transport_modules"][0]
         .get("coupling")
@@ -555,6 +578,7 @@ fn prescribed_sot_v1_accepts_nonunit_vector_source_axes_and_rejects_near_paralle
         solve_region: None,
         conductivity_s_per_m: None,
         coupling: TransportCouplingIR::OneWay,
+        definition: None,
     }];
     let module = |drive_direction, interface_normal| SpinTorqueModuleIR::PrescribedSot {
         schema_version: "prescribed_sot.v1".to_string(),
@@ -4509,6 +4533,7 @@ fn excitation_analysis_source_must_reference_antenna_module() {
         solve_region: None,
         conductivity_s_per_m: None,
         coupling: TransportCouplingIR::OneWay,
+        definition: None,
     });
     ir.excitation_analysis = Some(ExcitationAnalysisIR {
         source: "drive".to_string(),
@@ -4608,6 +4633,7 @@ fn validation_rejects_multiple_oersted_terms() {
         solve_region: Some("box".to_string()),
         conductivity_s_per_m: None,
         coupling: TransportCouplingIR::OneWay,
+        definition: None,
     });
     ir.energy_terms = vec![
         EnergyTermIR::OerstedCylinder {

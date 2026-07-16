@@ -5,14 +5,118 @@
 
 use crate::vector::{add, norm, normalized, scale};
 use crate::{
-    EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FftWorkspace,
-    IntegratorBuffers, Result, RhsEvaluation, StepReport, Vector3, VectorFieldSoA,
+    EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
+    ExternalStageTerms, FftWorkspace, IntegratorBuffers, Result, RhsEvaluation, StepReport,
+    Vector3, VectorFieldSoA,
 };
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
 impl ExchangeLlgProblem {
+    /// Transactional Heun step for a solver coupled through stage-dependent
+    /// fields and direct torques.
+    ///
+    /// The callback is evaluated at `(m_n, t_n)`, at the Heun predictor, and
+    /// at the corrected candidate. The state is committed only after all
+    /// three evaluations succeed, so a coupled-solver failure cannot leave a
+    /// partially advanced magnetization or time.
+    pub fn heun_step_with_external_stage_terms<F>(
+        &self,
+        state: &mut ExchangeLlgState,
+        dt: f64,
+        ws: &mut FftWorkspace,
+        bufs: &mut IntegratorBuffers,
+        evaluation: EvaluationRequest,
+        mut external_terms: F,
+    ) -> Result<StepReport>
+    where
+        F: FnMut(&[Vector3], f64) -> Result<ExternalStageTerms>,
+    {
+        self.ensure_state_matches_grid(state)?;
+        if dt <= 0.0 || !dt.is_finite() {
+            return Err(crate::EngineError::new("dt must be finite and positive"));
+        }
+        let n = state.magnetization.len();
+        let t0 = state.time_seconds;
+        bufs.m0[..n].copy_from_slice(&state.magnetization);
+
+        self.effective_field_into_ws_at_time(&bufs.m0[..n], ws, &mut bufs.h_eff[..n], t0);
+        let terms0 = external_terms(&bufs.m0[..n], t0)?;
+        apply_external_stage_terms(
+            &bufs.m0[..n],
+            &mut bufs.h_eff[..n],
+            &mut bufs.k[0][..n],
+            terms0,
+            |m, h, rhs| self.llg_rhs_from_fields_with_direct_torques_into(m, h, rhs),
+        )?;
+
+        for i in 0..n {
+            bufs.m_stage[i] = normalized(add(bufs.m0[i], scale(bufs.k[0][i], dt)))?;
+        }
+
+        self.effective_field_into_ws_at_time(&bufs.m_stage[..n], ws, &mut bufs.h_eff[..n], t0 + dt);
+        let terms1 = external_terms(&bufs.m_stage[..n], t0 + dt)?;
+        apply_external_stage_terms(
+            &bufs.m_stage[..n],
+            &mut bufs.h_eff[..n],
+            &mut bufs.k[1][..n],
+            terms1,
+            |m, h, rhs| self.llg_rhs_from_fields_with_direct_torques_into(m, h, rhs),
+        )?;
+
+        // `delta` owns the corrected candidate until the coupled solve and
+        // final observables have both succeeded.
+        for i in 0..n {
+            bufs.delta[i] = normalized(add(
+                bufs.m0[i],
+                scale(add(bufs.k[0][i], bufs.k[1][i]), 0.5 * dt),
+            ))?;
+        }
+
+        let mut eval = self.compute_step_observables_at_time(
+            &bufs.delta[..n],
+            ws,
+            &mut bufs.h_eff,
+            &mut bufs.h_scratch,
+            &mut bufs.rhs,
+            evaluation,
+            t0 + dt,
+        );
+        let final_terms = external_terms(&bufs.delta[..n], t0 + dt)?;
+        let dynamic_field = final_terms.additional_field_apm.clone();
+        apply_external_stage_terms(
+            &bufs.delta[..n],
+            &mut bufs.h_eff[..n],
+            &mut bufs.rhs[..n],
+            final_terms,
+            |m, h, rhs| self.llg_rhs_from_fields_with_direct_torques_into(m, h, rhs),
+        )?;
+
+        let dynamic_external_energy =
+            self.external_energy_from_fields(&bufs.delta[..n], &dynamic_field);
+        eval.external_energy_joules += dynamic_external_energy;
+        eval.total_energy_joules += dynamic_external_energy;
+        eval.max_effective_field_amplitude = bufs.h_eff[..n]
+            .iter()
+            .map(|value| norm(*value))
+            .fold(0.0, f64::max);
+        eval.max_rhs_amplitude = bufs.rhs[..n]
+            .iter()
+            .map(|value| norm(*value))
+            .fold(0.0, f64::max);
+        eval.max_torque_Apm = bufs.delta[..n]
+            .iter()
+            .zip(&bufs.h_eff[..n])
+            .map(|(m, h)| norm(crate::vector::cross(*m, *h)))
+            .fold(0.0, f64::max);
+
+        state.magnetization[..n].copy_from_slice(&bufs.delta[..n]);
+        state.time_seconds = t0 + dt;
+        self.advance_thermal_step();
+        Ok(eval.into_step_report(state.time_seconds, dt, false))
+    }
+
     // -----------------------------------------------------------------------
     // Buffer-reusing Heun step (zero-allocation hot path)
     // -----------------------------------------------------------------------
@@ -2532,6 +2636,43 @@ impl ExchangeLlgProblem {
             max_err
         }
     }
+}
+
+fn apply_external_stage_terms<F>(
+    magnetization: &[Vector3],
+    field: &mut [Vector3],
+    rhs: &mut [Vector3],
+    terms: ExternalStageTerms,
+    llg_rhs: F,
+) -> Result<()>
+where
+    F: FnOnce(&[Vector3], &[Vector3], &mut [Vector3]),
+{
+    let n = magnetization.len();
+    if terms.additional_field_apm.len() != n || terms.direct_torque_per_s.len() != n {
+        return Err(crate::EngineError::new(
+            "external stage fields and torques must match the FDM grid",
+        ));
+    }
+    if terms
+        .additional_field_apm
+        .iter()
+        .chain(&terms.direct_torque_per_s)
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err(crate::EngineError::new(
+            "external stage fields and torques must be finite",
+        ));
+    }
+    for (base, additional) in field.iter_mut().zip(&terms.additional_field_apm) {
+        *base = add(*base, *additional);
+    }
+    llg_rhs(magnetization, field, rhs);
+    for (value, direct) in rhs.iter_mut().zip(&terms.direct_torque_per_s) {
+        *value = add(*value, *direct);
+    }
+    Ok(())
 }
 
 fn max_norm_soa(field: &VectorFieldSoA) -> f64 {
