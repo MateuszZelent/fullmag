@@ -8,7 +8,11 @@ from tempfile import TemporaryDirectory
 
 import fullmag as fm
 from fullmag.runtime.scene_document import build_scene_document_from_builder
-from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
+from fullmag.runtime.script_builder import (
+    _requested_sampling_period_from_ir,
+    export_builder_draft,
+    rewrite_loaded_problem_script,
+)
 
 
 def _load_text(script: str, directory: Path, name: str = "problem.py"):
@@ -193,6 +197,76 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
 
         self.assertIn('study.stages.tableautosave("auto"', rendered)
         self.assertNotIn("7.6923e-11", rendered)
+
+    def test_resolved_auto_output_ir_imports_as_requested_auto_intent(self) -> None:
+        policy = {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        }
+        for kind in ("field_resolved_auto", "scalar_resolved_auto"):
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    _requested_sampling_period_from_ir(
+                        {
+                            "kind": kind,
+                            "name": "m" if kind.startswith("field") else "mx",
+                            "every_seconds": 7.6923e-11,
+                            "requested_policy": policy,
+                        },
+                        "every_seconds",
+                    ),
+                    "auto",
+                )
+
+    def test_ordered_resolved_auto_outputs_rewrite_as_literal_auto(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("resolved-auto-output-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.autosave("m", every="auto", stage_id="field-auto")
+        study.stages.autosave("mx", every="auto", stage_id="scalar-auto")
+        study.stages.add_run(stage_id="excite", until=2e-9)
+        """
+        policy = {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        }
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(script, Path(tmp_dir), "source.py")
+            for index, kind in enumerate(("field_resolved_auto", "scalar_resolved_auto")):
+                output = loaded.stages[index].action["output"]
+                output.clear()
+                output.update(
+                    {
+                        "kind": kind,
+                        "name": "m" if kind.startswith("field") else "mx",
+                        "every_seconds": 7.6923e-11,
+                        "requested_policy": policy,
+                    }
+                )
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+
+        self.assertIn('study.stages.autosave("m", every="auto"', rendered)
+        self.assertIn('study.stages.autosave("mx", every="auto"', rendered)
+        self.assertNotIn("7.6923e-11", rendered)
+
+    def test_resolved_auto_output_rejects_invalid_requested_policy(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported automatic sampling period policy"):
+            _requested_sampling_period_from_ir(
+                {
+                    "kind": "field_resolved_auto",
+                    "name": "m",
+                    "every_seconds": 7.6923e-11,
+                    "requested_policy": {
+                        "kind": "auto_sinc_cutoff",
+                        "nyquist_guard_factor": 1.2,
+                    },
+                },
+                "every_seconds",
+            )
 
     def test_table_autosave_override_rejects_invalid_numeric_ir_cadence(self) -> None:
         script = """

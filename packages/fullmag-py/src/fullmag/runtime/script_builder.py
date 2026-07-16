@@ -5251,17 +5251,23 @@ def _requested_sampling_period_from_ir(
     value: Mapping[str, object],
     numeric_key: str,
 ) -> SamplingPeriod | None:
+    kind = value.get("kind")
+    resolved_auto_kind = kind in {"field_resolved_auto", "scalar_resolved_auto"}
+    requested_policy = value.get("requested_policy")
+    if resolved_auto_kind:
+        if requested_policy is None:
+            raise ValueError("resolved automatic sampling output requires requested_policy")
+        _validate_auto_sinc_sampling_policy_ir(requested_policy)
+        if numeric_key not in value:
+            raise ValueError("resolved automatic sampling output requires a resolved cadence")
+        normalize_sampling_period(value[numeric_key], numeric_key)
+        return "auto"
+    if requested_policy is not None:
+        raise ValueError("requested_policy is only valid for resolved automatic outputs")
+
     policy_value = value.get("sample_period_policy")
     if policy_value is not None:
-        policy = _normalize_mapping(policy_value)
-        guard = policy.get("nyquist_guard_factor")
-        if (
-            policy.get("kind") != "auto_sinc_cutoff"
-            or isinstance(guard, bool)
-            or not isinstance(guard, (int, float))
-            or float(guard) != AUTO_SINC_NYQUIST_GUARD_FACTOR
-        ):
-            raise ValueError("unsupported automatic sampling period policy")
+        _validate_auto_sinc_sampling_policy_ir(policy_value)
         if value.get(numeric_key) is not None:
             raise ValueError("automatic sampling intent must not contain an explicit cadence")
         return "auto"
@@ -5269,6 +5275,18 @@ def _requested_sampling_period_from_ir(
     if numeric_key not in value:
         return None
     return normalize_sampling_period(value[numeric_key], numeric_key)
+
+
+def _validate_auto_sinc_sampling_policy_ir(value: object) -> None:
+    policy = _normalize_mapping(value)
+    guard = policy.get("nyquist_guard_factor")
+    if (
+        policy.get("kind") != "auto_sinc_cutoff"
+        or isinstance(guard, bool)
+        or not isinstance(guard, (int, float))
+        or float(guard) != AUTO_SINC_NYQUIST_GUARD_FACTOR
+    ):
+        raise ValueError("unsupported automatic sampling period policy")
 
 
 def _override_string(overrides: dict[str, object], key: str, fallback: str | None) -> str | None:
