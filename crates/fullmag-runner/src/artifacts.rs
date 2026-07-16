@@ -1037,12 +1037,11 @@ pub(crate) fn write_artifacts(
             .insert("thermal".to_string(), thermal);
     }
 
-    let metadata = serde_json::json!({
+    let mut metadata = serde_json::json!({
         "problem_name": problem.problem_meta.name,
         "ir_version": problem.ir_version,
         "source_hash": problem.problem_meta.source_hash,
         "problem_meta": problem.problem_meta,
-        "sampling_resolution": sampling_resolution,
         "pbc": problem.pbc,
         "execution_plan": plan,
         "requested_execution": requested_execution,
@@ -1070,6 +1069,12 @@ pub(crate) fn write_artifacts(
         })),
         "material_field_assets": material_field_assets,
     });
+    if let Some(sampling_resolution) = sampling_resolution {
+        metadata
+            .as_object_mut()
+            .expect("run metadata must be an object")
+            .insert("sampling_resolution".into(), sampling_resolution.clone());
+    }
     let metadata_path = output_dir.join("metadata.json");
     let mut metadata_file = fs::File::create(&metadata_path)?;
     metadata_file.write_all(serde_json::to_string_pretty(&metadata).unwrap().as_bytes())?;
@@ -3194,6 +3199,7 @@ mod tests {
             std::process::id()
         ));
         let resolution = serde_json::json!({
+            "schema_version": "sampling_resolution.v1",
             "requested_policy": {"kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3},
             "sample_period_s": 7.692307692307691e-11,
             "maximum_cutoff_hz": 5.0e9,
@@ -3762,6 +3768,10 @@ mod tests {
         assert_eq!(fallback["original_engine"], "fem_native_gpu");
         assert_eq!(fallback["fallback_engine"], "fem_cpu_native");
         assert_eq!(fallback["reason"], "native_fem_gpu_unavailable");
+        assert!(
+            metadata.get("sampling_resolution").is_none(),
+            "explicit legacy runs must omit automatic sampling provenance"
+        );
         assert_eq!(
             metadata["region_realization_revisions"],
             serde_json::json!({

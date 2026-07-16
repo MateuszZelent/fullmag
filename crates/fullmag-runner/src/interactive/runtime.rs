@@ -210,6 +210,7 @@ impl InteractiveRuntime {
         interrupt_requested: Option<&AtomicBool>,
         mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
     ) -> Result<RunResult, RunError> {
+        crate::require_resolved_runtime_sampling(problem, plan)?;
         if matches!(problem.study, StudyIR::Hysteresis { .. }) {
             let result = crate::hysteresis::run_planned_hysteresis_with_live_preview(
                 problem,

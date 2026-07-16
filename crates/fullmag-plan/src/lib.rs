@@ -43,7 +43,9 @@ pub use quantities::{
     default_capability_matrix, validate_quantity_requests, BackendFamily, CapabilityMatrix,
     QuantityCapability,
 };
-pub use sampling::{resolve_auto_sampling_for_stage, SamplingResolutionIR};
+pub use sampling::{
+    resolve_auto_sampling_for_stage, SamplingResolutionIR, SAMPLING_RESOLUTION_SCHEMA_VERSION,
+};
 pub use surface_selectors::{resolve_fem_surface_selector, ResolvedFemSurfaceSelector};
 pub use util::generate_random_unit_vectors;
 

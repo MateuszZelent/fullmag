@@ -77,6 +77,7 @@ fn auto_sampling_uses_maximum_active_sinc_cutoff_with_guard() {
     assert!((resolution.sample_period_s - 1.0 / 13.0e9).abs() < 1e-24);
     assert_eq!(resolution.source_drive_ids, ["drive-1", "drive-2"]);
     assert_eq!(resolution.target_stage_id, "excite");
+    assert_eq!(resolution.schema_version, "sampling_resolution.v1");
 
     let sampling = problem.study.sampling();
     assert_eq!(

@@ -405,16 +405,19 @@ fn write_schema_json(path: &Path, config: &TableAutosaveConfig) -> io::Result<()
             })
         })
         .collect::<Vec<_>>();
-    fs::write(
-        path,
-        serde_json::to_string_pretty(&serde_json::json!({
-            "kind": "table_autosave.schema",
-            "table_id": config.table_id,
-            "sample_period_s": config.sample_period_s,
-            "sampling_resolution": config.sampling_resolution,
-            "columns": columns,
-        }))?,
-    )
+    let mut schema = serde_json::json!({
+        "kind": "table_autosave.schema",
+        "table_id": config.table_id,
+        "sample_period_s": config.sample_period_s,
+        "columns": columns,
+    });
+    if let Some(sampling_resolution) = config.sampling_resolution.as_ref() {
+        schema
+            .as_object_mut()
+            .expect("table schema must be an object")
+            .insert("sampling_resolution".into(), sampling_resolution.clone());
+    }
+    fs::write(path, serde_json::to_string_pretty(&schema)?)
 }
 
 #[cfg(test)]
@@ -566,6 +569,7 @@ mod tests {
     #[test]
     fn auto_sampling_schema_preserves_complete_planner_resolution() {
         let resolution = serde_json::json!({
+            "schema_version": "sampling_resolution.v1",
             "requested_policy": {
                 "kind": "auto_sinc_cutoff",
                 "nyquist_guard_factor": 1.3
@@ -601,6 +605,32 @@ mod tests {
         )
         .expect("schema artifact should be JSON");
         assert_eq!(schema["sampling_resolution"], resolution);
+        let _ = fs::remove_dir_all(artifact_dir);
+    }
+
+    #[test]
+    fn explicit_sampling_schema_omits_automatic_resolution() {
+        let store = TableStore::new(config(1.0e-12));
+        let artifact_dir = std::env::temp_dir().join(format!(
+            "fullmag-table-explicit-provenance-{}",
+            std::process::id()
+        ));
+
+        store
+            .write_artifacts(&artifact_dir)
+            .expect("explicit table schema should write");
+
+        let schema: serde_json::Value = serde_json::from_slice(
+            &fs::read(
+                artifact_dir
+                    .join("tables")
+                    .join(DEFAULT_TABLE_ID)
+                    .join("schema.json"),
+            )
+            .expect("schema artifact should be readable"),
+        )
+        .expect("schema artifact should be JSON");
+        assert!(schema.get("sampling_resolution").is_none());
         let _ = fs::remove_dir_all(artifact_dir);
     }
 }

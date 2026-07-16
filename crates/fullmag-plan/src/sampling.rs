@@ -6,8 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::PlanError;
 
+pub const SAMPLING_RESOLUTION_SCHEMA_VERSION: &str = "sampling_resolution.v1";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SamplingResolutionIR {
+    pub schema_version: String,
     pub requested_policy: SamplingPeriodPolicyIR,
     pub sample_period_s: f64,
     pub maximum_cutoff_hz: f64,
@@ -124,6 +127,7 @@ pub fn resolve_auto_sampling_for_stage(
     let sampling_frequency_hz = 2.0 * target_nyquist_hz;
     let sample_period_s = 1.0 / sampling_frequency_hz;
     let resolution = SamplingResolutionIR {
+        schema_version: SAMPLING_RESOLUTION_SCHEMA_VERSION.to_string(),
         requested_policy: requested_policy.clone(),
         sample_period_s,
         maximum_cutoff_hz,

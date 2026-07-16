@@ -887,7 +887,7 @@ fn attach_resolved_fallback_to_executed_run(
     }
 }
 
-fn require_resolved_runtime_sampling(
+pub(crate) fn require_resolved_runtime_sampling(
     problem: &ProblemIR,
     plan: &fullmag_ir::ExecutionPlanIR,
 ) -> Result<(), RunError> {
@@ -896,6 +896,112 @@ fn require_resolved_runtime_sampling(
     if let Some(table) = problem.study.sampling().table_autosave.as_ref() {
         table_autosave::TableAutosaveConfig::from_ir(table)
             .map_err(|message| RunError { message })?;
+    }
+    validate_sampling_resolution_provenance(problem)?;
+    Ok(())
+}
+
+fn validate_sampling_resolution_provenance(problem: &ProblemIR) -> Result<(), RunError> {
+    let table = problem.study.sampling().table_autosave.as_ref();
+    let automatic_table_period = table.and_then(|table| {
+        table
+            .requests_auto_sinc_cutoff()
+            .then_some(table.resolved_sample_period_s)
+            .flatten()
+    });
+    let metadata = problem
+        .problem_meta
+        .runtime_metadata
+        .get("sampling_resolution");
+    if automatic_table_period.is_some() && metadata.is_none() {
+        return Err(RunError {
+            message: "resolved automatic table sampling requires runtime_metadata.sampling_resolution provenance".into(),
+        });
+    }
+    let Some(metadata) = metadata else {
+        return Ok(());
+    };
+    let resolution: fullmag_plan::SamplingResolutionIR = serde_json::from_value(metadata.clone())
+        .map_err(|error| RunError {
+            message: format!("runtime_metadata.sampling_resolution is malformed: {error}"),
+        })?;
+    if resolution.schema_version != fullmag_plan::SAMPLING_RESOLUTION_SCHEMA_VERSION {
+        return Err(RunError {
+            message: format!(
+                "sampling_resolution.schema_version must be '{}'",
+                fullmag_plan::SAMPLING_RESOLUTION_SCHEMA_VERSION
+            ),
+        });
+    }
+    let finite_positive = [
+        ("sample_period_s", resolution.sample_period_s),
+        ("maximum_cutoff_hz", resolution.maximum_cutoff_hz),
+        ("nyquist_guard_factor", resolution.nyquist_guard_factor),
+        ("target_nyquist_hz", resolution.target_nyquist_hz),
+        ("sampling_frequency_hz", resolution.sampling_frequency_hz),
+    ];
+    for (field, value) in finite_positive {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(RunError {
+                message: format!("sampling_resolution.{field} must be finite and positive"),
+            });
+        }
+    }
+    let fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+        nyquist_guard_factor: requested_guard_factor,
+    } = resolution.requested_policy;
+    if requested_guard_factor != fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR {
+        return Err(RunError {
+            message: "sampling_resolution.requested_policy.nyquist_guard_factor must be exactly 1.3".into(),
+        });
+    }
+    if resolution.nyquist_guard_factor != fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR {
+        return Err(RunError {
+            message: "sampling_resolution.nyquist_guard_factor must be exactly 1.3".into(),
+        });
+    }
+    if resolution.target_nyquist_hz
+        != fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR * resolution.maximum_cutoff_hz
+    {
+        return Err(RunError {
+            message: "sampling_resolution.target_nyquist_hz must equal 1.3 * maximum_cutoff_hz".into(),
+        });
+    }
+    if resolution.sampling_frequency_hz != 2.0 * resolution.target_nyquist_hz {
+        return Err(RunError {
+            message: "sampling_resolution.sampling_frequency_hz must equal 2 * target_nyquist_hz".into(),
+        });
+    }
+    if resolution.sample_period_s != 1.0 / resolution.sampling_frequency_hz {
+        return Err(RunError {
+            message: "sampling_resolution.sample_period_s must equal 1 / sampling_frequency_hz".into(),
+        });
+    }
+    if automatic_table_period.is_some_and(|period| period != resolution.sample_period_s) {
+        return Err(RunError {
+            message: "sampling_resolution.sample_period_s must match table_autosave.resolved_sample_period_s".into(),
+        });
+    }
+    let active_stage_id = problem
+        .problem_meta
+        .runtime_metadata
+        .get("active_stage_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|stage_id| !stage_id.trim().is_empty());
+    if active_stage_id != Some(resolution.target_stage_id.as_str()) {
+        return Err(RunError {
+            message: "sampling_resolution.target_stage_id must match runtime_metadata.active_stage_id".into(),
+        });
+    }
+    if resolution.source_drive_ids.is_empty()
+        || resolution
+            .source_drive_ids
+            .iter()
+            .any(|drive_id| drive_id.trim().is_empty())
+    {
+        return Err(RunError {
+            message: "sampling_resolution.source_drive_ids must contain nonempty drive IDs".into(),
+        });
     }
     Ok(())
 }
@@ -1041,6 +1147,7 @@ pub fn run_planned_problem_with_hysteresis_stage_id(
     output_dir: &Path,
     hysteresis_stage_id: Option<&str>,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis(
             problem,
@@ -1384,6 +1491,7 @@ pub fn run_planned_problem_with_callback_and_hysteresis_stage_id(
     hysteresis_stage_id: Option<&str>,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_callback(
             problem,
@@ -1696,6 +1804,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     hysteresis_stage_id: Option<&str>,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_live_preview(
             problem,
@@ -2668,6 +2777,128 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn resolved_auto_sampling_problem() -> (ProblemIR, fullmag_ir::ExecutionPlanIR) {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "active_stage_id".into(),
+            json!("excite"),
+        );
+        problem.problem_meta.runtime_metadata.insert(
+            "study_pipeline".into(),
+            json!({
+                "version": "study_pipeline.v1",
+                "nodes": [{"id": "excite", "enabled": true}]
+            }),
+        );
+        let sample_period_s = 1.0 / 13.0e9;
+        problem.study.sampling_mut().table_autosave = Some(fullmag_ir::TableAutosaveIR {
+            kind: "table_autosave".into(),
+            table_id: "default".into(),
+            sample_period_s: None,
+            sample_period_policy: Some(fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            }),
+            resolved_sample_period_s: Some(sample_period_s),
+            quantities: vec!["t".into(), "my".into()],
+        });
+        let resolution = fullmag_plan::SamplingResolutionIR {
+            schema_version: fullmag_plan::SAMPLING_RESOLUTION_SCHEMA_VERSION.to_string(),
+            requested_policy: fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            },
+            sample_period_s,
+            maximum_cutoff_hz: 5.0e9,
+            nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            target_nyquist_hz: 6.5e9,
+            sampling_frequency_hz: 13.0e9,
+            source_drive_ids: vec!["k0-sinc-antenna".into()],
+            target_stage_id: "excite".into(),
+        };
+        problem.problem_meta.runtime_metadata.insert(
+            "sampling_resolution".into(),
+            serde_json::to_value(resolution).expect("resolution should serialize"),
+        );
+        let plan = fullmag_plan::plan(&problem).expect("resolved automatic sampling should plan");
+        (problem, plan)
+    }
+
+    #[test]
+    fn runtime_sampling_accepts_canonical_resolution_and_explicit_legacy() {
+        let (problem, plan) = resolved_auto_sampling_problem();
+        require_resolved_runtime_sampling(&problem, &plan)
+            .expect("canonical automatic resolution should dispatch");
+
+        let explicit = ProblemIR::bootstrap_example();
+        let explicit_plan = fullmag_plan::plan(&explicit).expect("explicit legacy problem should plan");
+        require_resolved_runtime_sampling(&explicit, &explicit_plan)
+            .expect("explicit legacy sampling should not require automatic provenance");
+    }
+
+    #[test]
+    fn runtime_sampling_rejects_missing_or_invalid_automatic_provenance() {
+        let (problem, plan) = resolved_auto_sampling_problem();
+
+        let mut missing = problem.clone();
+        missing.problem_meta.runtime_metadata.remove("sampling_resolution");
+        assert!(require_resolved_runtime_sampling(&missing, &plan)
+            .expect_err("resolved automatic table without provenance must fail")
+            .message
+            .contains("sampling_resolution"));
+
+        let invalid_cases = [
+            ("schema_version", json!("sampling_resolution.v0")),
+            ("sample_period_s", json!(1.0e-12)),
+            ("maximum_cutoff_hz", json!(0.0)),
+            ("nyquist_guard_factor", json!(1.2)),
+            ("target_nyquist_hz", json!(6.4e9)),
+            ("sampling_frequency_hz", json!(12.0e9)),
+            ("source_drive_ids", json!([])),
+            ("target_stage_id", json!("other")),
+        ];
+        for (field, invalid_value) in invalid_cases {
+            let mut invalid = problem.clone();
+            invalid
+                .problem_meta
+                .runtime_metadata
+                .get_mut("sampling_resolution")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("resolution metadata should be an object")
+                .insert(field.to_string(), invalid_value);
+            let error = require_resolved_runtime_sampling(&invalid, &plan)
+                .expect_err("malformed automatic sampling provenance must fail");
+            assert!(
+                error.message.contains(field),
+                "expected {field} in validation error, got {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn every_public_planned_execution_path_calls_the_runtime_sampling_guard() {
+        let lib_source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("read lib.rs");
+        assert_eq!(
+            lib_source
+                .split("#[cfg(test)]\nmod tests")
+                .next()
+                .expect("lib.rs should contain production code")
+                .matches("require_resolved_runtime_sampling(problem, plan)?;")
+                .count(),
+            7,
+            "all seven public planned runner entry points must fail closed before dispatch"
+        );
+        let interactive_source = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/interactive/runtime.rs"
+        ))
+        .expect("read interactive runtime");
+        assert!(
+            interactive_source.contains("crate::require_resolved_runtime_sampling(problem, plan)?;"),
+            "direct InteractiveRuntime::execute_planned_streaming calls must fail closed"
+        );
+    }
 
     fn fem_frequency_response_validation_problem(
         frequencies_hz: Vec<f64>,
