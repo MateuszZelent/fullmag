@@ -35,23 +35,11 @@ pub struct ChargeTransportMaterialAssignmentIR {
 pub struct ChargeTransportMaterialIR {
     #[serde(rename = "sigma_Spm")]
     pub sigma_spm: f64,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "sigma_parallel_Spm"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sigma_parallel_Spm")]
     pub sigma_parallel_spm: Option<f64>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "sigma_perpendicular_Spm"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sigma_perpendicular_Spm")]
     pub sigma_perpendicular_spm: Option<f64>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "sigma_AHE_Spm"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sigma_AHE_Spm")]
     pub sigma_ahe_spm: Option<f64>,
 }
 
@@ -295,6 +283,14 @@ pub struct ResolvedSpinTransportPlanIR {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFemSpinTransportIR {
     pub descriptor_schema: String,
+    pub charge_definition: ChargeTransportDefinitionIR,
+    pub charge_domain: ResolvedFemTransportDomainIR,
+    pub spin_domain: ResolvedFemTransportDomainIR,
+    pub charge_insulating_boundaries: Vec<ResolvedFemBoundaryMarkerSetIR>,
+    pub spin_insulating_boundaries: Vec<ResolvedFemBoundaryMarkerSetIR>,
+    pub interfaces: Vec<ResolvedFemTransportInterfaceIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub torque_target: Option<ResolvedFemTorqueTargetIR>,
     pub charge_conductivity_spm_per_element: Vec<f64>,
     pub charge_gauge: ChargePotentialGaugeIR,
     pub charge_solver: ChargeSolverPolicyIR,
@@ -317,9 +313,39 @@ pub struct ResolvedFemSpinTransportIR {
     pub interface_law: String,
     pub interface_realization: String,
     pub stage_coupling: String,
+    pub capability_status: String,
     pub implementation_state: String,
     pub validation_state: String,
     pub validation_scope: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFemTransportDomainIR {
+    pub regions: Vec<RegionRefIR>,
+    pub element_mask: Vec<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedFemBoundaryMarkerSetIR {
+    pub id: String,
+    pub boundary_attributes: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFemTransportInterfaceIR {
+    pub id: String,
+    pub side_a: RegionRefIR,
+    pub side_b: RegionRefIR,
+    pub normal_a_to_b: [f64; 3],
+    pub law: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFemTorqueTargetIR {
+    pub torque_module_id: String,
+    pub target: RegionRefIR,
+    pub element_mask: Vec<bool>,
+    pub formula_version: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -1930,7 +1930,7 @@ pub struct ExecutionProvenance {
     pub fem_poisson_demag: Option<FemPoissonDemagProvenance>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TransportExecutionProvenance {
     pub module_id: String,
     pub current_source_id: String,
@@ -1942,6 +1942,7 @@ pub struct TransportExecutionProvenance {
     pub resolved_device: String,
     pub resolved_precision: String,
     pub resolved_execution_mode: String,
+    pub runtime_family: String,
     pub runtime_id: String,
     pub engine_id: String,
     pub charge_solver_engine: String,
@@ -1951,11 +1952,34 @@ pub struct TransportExecutionProvenance {
     pub physical_residual_version: String,
     pub interface_realization: String,
     pub stage_coupling: String,
+    pub capability_status: String,
     pub implementation_state: String,
     pub validation_state: String,
     pub validation_scope: String,
-    pub fallback: String,
-    pub degradation: String,
+    pub charge_domain: fullmag_ir::ResolvedFemTransportDomainIR,
+    pub spin_domain: fullmag_ir::ResolvedFemTransportDomainIR,
+    pub charge_insulating_boundaries: Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>,
+    pub spin_insulating_boundaries: Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>,
+    pub interfaces: Vec<fullmag_ir::ResolvedFemTransportInterfaceIR>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub torque_target: Option<fullmag_ir::ResolvedFemTorqueTargetIR>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<TransportFallbackProvenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub degradation: Option<TransportDegradationProvenance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TransportFallbackProvenance {
+    pub requested_lane: String,
+    pub resolved_lane: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TransportDegradationProvenance {
+    pub kind: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1987,7 +2011,145 @@ pub(crate) struct FieldSnapshot {
     pub step: u64,
     pub time: f64,
     pub solver_dt: f64,
-    pub values: Vec<[f64; 3]>,
+    pub component_count: u8,
+    pub component_order: String,
+    pub location: String,
+    pub scope: String,
+    pub revision: u64,
+    pub values: Vec<f64>,
+}
+
+impl FieldSnapshot {
+    pub(crate) fn flatten_vec3(values: Vec<[f64; 3]>) -> Vec<f64> {
+        values.into_iter().flatten().collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+    pub(crate) fn new(
+        name: impl Into<String>,
+        step: u64,
+        time: f64,
+        solver_dt: f64,
+        component_count: u8,
+        component_order: impl Into<String>,
+        location: impl Into<String>,
+        scope: impl Into<String>,
+        revision: u64,
+        values: Vec<f64>,
+    ) -> Result<Self, String> {
+        if component_count == 0 {
+            return Err("field snapshot component_count must be greater than zero".into());
+        }
+        if values.len() % usize::from(component_count) != 0 {
+            return Err(format!(
+                "field snapshot value count {} is not divisible by component_count {component_count}",
+                values.len()
+            ));
+        }
+        if revision == 0 {
+            return Err("field snapshot revision must be greater than zero".into());
+        }
+        Ok(Self {
+            name: name.into(),
+            step,
+            time,
+            solver_dt,
+            component_count,
+            component_order: component_order.into(),
+            location: location.into(),
+            scope: scope.into(),
+            revision,
+            values,
+        })
+    }
+
+    pub(crate) fn sample_count(&self) -> usize {
+        self.values.len() / usize::from(self.component_count)
+    }
+
+    pub(crate) fn vec3_values(&self) -> Result<Vec<[f64; 3]>, String> {
+        if self.component_count != 3 {
+            return Err(format!(
+                "field snapshot '{}' has {} components, expected 3",
+                self.name, self.component_count
+            ));
+        }
+        Ok(self
+            .values
+            .chunks_exact(3)
+            .map(|value| [value[0], value[1], value[2]])
+            .collect())
+    }
+}
+
+#[cfg(test)]
+mod field_snapshot_tests {
+    use super::FieldSnapshot;
+
+    #[test]
+    fn canonical_snapshot_supports_scalar_vector_and_tensor_shapes() {
+        let scalar = FieldSnapshot::new(
+            "V_electric",
+            0,
+            0.0,
+            0.0,
+            1,
+            "scalar",
+            "node",
+            "module:transport",
+            1,
+            vec![1.0, 2.0],
+        )
+        .unwrap();
+        assert_eq!(scalar.sample_count(), 2);
+
+        let vector = FieldSnapshot::new(
+            "J_charge",
+            0,
+            0.0,
+            0.0,
+            3,
+            "xyz",
+            "node",
+            "module:transport",
+            2,
+            FieldSnapshot::flatten_vec3(vec![[1.0, 2.0, 3.0]; 2]),
+        )
+        .unwrap();
+        assert_eq!(vector.values, vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
+
+        let tensor = FieldSnapshot::new(
+            "spin_current_tensor",
+            0,
+            0.0,
+            0.0,
+            9,
+            "row_major_Q_ia",
+            "node",
+            "module:transport",
+            3,
+            vec![0.0; 18],
+        )
+        .unwrap();
+        assert_eq!(tensor.sample_count(), 2);
+    }
+
+    #[test]
+    fn canonical_snapshot_rejects_invalid_component_shape_and_revision() {
+        assert!(FieldSnapshot::new(
+            "bad", 0, 0.0, 0.0, 0, "none", "node", "full", 1, vec![]
+        )
+        .is_err());
+        assert!(FieldSnapshot::new(
+            "bad", 0, 0.0, 0.0, 3, "xyz", "node", "full", 1, vec![1.0, 2.0]
+        )
+        .is_err());
+        assert!(FieldSnapshot::new(
+            "bad", 0, 0.0, 0.0, 1, "scalar", "node", "full", 0, vec![1.0]
+        )
+        .is_err());
+    }
 }
 
 #[derive(Debug, Clone)]

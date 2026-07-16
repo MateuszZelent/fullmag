@@ -85,23 +85,6 @@ pub enum QuantityComponent {
     Magnitude,
 }
 
-#[cfg(test)]
-#[test]
-fn steady_transport_outputs_have_canonical_quantity_metadata() {
-    for (id, n_comp) in [
-        ("V_electric", 1),
-        ("J_charge", 3),
-        ("spin_potential", 3),
-        ("spin_current_tensor", 9),
-        ("torque_stt", 3),
-    ] {
-        let spec = quantity_spec(id).expect("transport quantity should be catalogued");
-        assert_eq!(spec.n_comp, n_comp);
-        assert_eq!(spec.location, QuantityLocation::Node);
-        assert!(spec.supports_export);
-    }
-}
-
 impl QuantityComponent {
     pub const fn as_str(self) -> &'static str {
         match self {

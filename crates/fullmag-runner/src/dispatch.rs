@@ -2317,7 +2317,7 @@ pub(crate) fn execute_fem<'a>(
             // Fall through to native execution below.
         }
     }
-    let mut executed = match engine {
+    let executed = match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
             execute_native_fem(
@@ -2342,7 +2342,23 @@ pub(crate) fn execute_fem<'a>(
         }
     }?;
     #[cfg(feature = "fem-gpu")]
-    if let Some(bundle) = transport_bundle {
+    let mut executed = executed;
+    #[cfg(feature = "fem-gpu")]
+    if let Some(mut bundle) = transport_bundle {
+        let mut next_revision = executed
+            .field_snapshots
+            .iter()
+            .map(|snapshot| snapshot.revision)
+            .max()
+            .unwrap_or(0);
+        for snapshot in &mut bundle.field_snapshots {
+            next_revision = next_revision.saturating_add(1);
+            snapshot.revision = next_revision;
+        }
+        executed.field_snapshot_count = executed
+            .field_snapshot_count
+            .saturating_add(bundle.field_snapshots.len());
+        executed.field_snapshots.extend(bundle.field_snapshots);
         executed.auxiliary_artifacts.extend(bundle.artifacts);
         executed
             .provenance
@@ -5433,7 +5449,12 @@ fn record_native_fem_initial_field_snapshots(
                 step: current_stats.step,
                 time: current_stats.time,
                 solver_dt: current_stats.dt,
-                values,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: (current_stats.step as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(values),
             })?;
         }
     }
@@ -5770,7 +5791,12 @@ fn capture_initial_cuda_fields(
                 step: 0,
                 time: 0.0,
                 solver_dt: 0.0,
-                values,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: (0 as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(values),
             })?;
         }
     }
@@ -5813,7 +5839,12 @@ fn record_cuda_due_outputs(
                 step: stats.step,
                 time: stats.time,
                 solver_dt: stats.dt,
-                values,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: (stats.step as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(values),
             })?;
         }
     }
@@ -5884,7 +5915,12 @@ fn record_cuda_final_outputs(
                 step: latest_stats.step,
                 time: latest_stats.time,
                 solver_dt: latest_stats.dt,
-                values,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: (latest_stats.step as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(values),
             })?;
         }
     }

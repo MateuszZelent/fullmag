@@ -553,6 +553,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
         }
 
         let descriptor = materialize_fem_descriptor(
+            problem,
             module,
             charge,
             mesh,
@@ -599,6 +600,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
 }
 
 fn materialize_fem_descriptor(
+    problem: &ProblemIR,
     module: &fullmag_ir::SpinTransportModuleIR,
     charge: &fullmag_ir::ChargeTransportDefinitionIR,
     mesh: &MeshIR,
@@ -684,6 +686,54 @@ fn materialize_fem_descriptor(
 
     let charge_dirichlet = resolve_charge_dirichlet(charge, mesh, mesh_parts)?;
     let spin_dirichlet = resolve_spin_dirichlet(module, mesh, mesh_parts)?;
+    let charge_insulating_boundaries =
+        resolve_charge_insulating_boundaries(charge, mesh, mesh_parts)?;
+    let spin_insulating_boundaries =
+        resolve_spin_insulating_boundaries(module, mesh, mesh_parts)?;
+    let interfaces = module
+        .interfaces
+        .iter()
+        .filter_map(|interface| match interface {
+            SpinInterfaceIR::Transparent {
+                id,
+                side_a,
+                side_b,
+                normal_a_to_b,
+            } => Some(fullmag_ir::ResolvedFemTransportInterfaceIR {
+                id: id.clone(),
+                side_a: side_a.clone(),
+                side_b: side_b.clone(),
+                normal_a_to_b: *normal_a_to_b,
+                law: "transparent".into(),
+            }),
+            SpinInterfaceIR::MixingConductance { .. } => None,
+        })
+        .collect();
+    let torque_target = problem.spin_torque_modules.iter().find_map(|torque| match torque {
+        SpinTorqueModuleIR::DriftDiffusionSpinTorque {
+            id,
+            solve_id,
+            target,
+            formula_version,
+            ..
+        } if solve_id == &module.id => Some((id, target, formula_version)),
+        _ => None,
+    });
+    let torque_target = torque_target
+        .map(|(id, target, formula_version)| -> Result<_, Vec<String>> {
+            Ok(fullmag_ir::ResolvedFemTorqueTargetIR {
+                torque_module_id: id.clone(),
+                target: target.clone(),
+                element_mask: fem_domain_mask(
+                    std::slice::from_ref(target),
+                    mesh.elements.len(),
+                    object_segments,
+                    "torque target",
+                )?,
+                formula_version: formula_version.clone(),
+            })
+        })
+        .transpose()?;
     match charge.gauge {
         fullmag_ir::ChargePotentialGaugeIR::DirichletReference if charge_dirichlet.is_empty() => {
             return Err(vec![
@@ -707,6 +757,19 @@ fn materialize_fem_descriptor(
     const MU0_H_PER_M: f64 = 1.256_637_061_435_917_3e-6;
     Ok(ResolvedFemSpinTransportIR {
         descriptor_schema: "fullmag.fem.spin_transport_descriptor.v1".into(),
+        charge_definition: charge.clone(),
+        charge_domain: fullmag_ir::ResolvedFemTransportDomainIR {
+            regions: charge.domain.clone(),
+            element_mask: charge_domain,
+        },
+        spin_domain: fullmag_ir::ResolvedFemTransportDomainIR {
+            regions: module.domain.clone(),
+            element_mask: spin_domain,
+        },
+        charge_insulating_boundaries,
+        spin_insulating_boundaries,
+        interfaces,
+        torque_target,
         charge_conductivity_spm_per_element: conductivity,
         charge_gauge: charge.gauge,
         charge_solver: charge.solver.clone(),
@@ -726,8 +789,9 @@ fn materialize_fem_descriptor(
         interface_law: "transparent".into(),
         interface_realization: "transparent_conforming_h1".into(),
         stage_coupling: "none".into(),
-        implementation_state: "reference_executable".into(),
-        validation_state: "contract_validated".into(),
+        capability_status: "reference_executable".into(),
+        implementation_state: "executable".into(),
+        validation_state: "algebra_validated".into(),
         validation_scope: "fem_cpu_double_conforming_h1_p1_transparent_m1".into(),
     })
 }
@@ -889,6 +953,31 @@ fn resolve_charge_dirichlet(
     Ok(values.into_iter().collect())
 }
 
+fn resolve_charge_insulating_boundaries(
+    charge: &fullmag_ir::ChargeTransportDefinitionIR,
+    mesh: &MeshIR,
+    mesh_parts: &[FemMeshPartIR],
+) -> Result<Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>, Vec<String>> {
+    charge
+        .boundaries
+        .iter()
+        .filter_map(|boundary| match boundary {
+            ChargeBoundaryIR::Insulating { id, surfaces } => Some((id, surfaces)),
+            _ => None,
+        })
+        .map(|(id, surfaces)| {
+            let mut markers = BTreeSet::new();
+            for surface in surfaces {
+                markers.extend(surface_markers(surface, mesh, mesh_parts)?);
+            }
+            Ok(fullmag_ir::ResolvedFemBoundaryMarkerSetIR {
+                id: id.clone(),
+                boundary_attributes: markers.into_iter().collect(),
+            })
+        })
+        .collect()
+}
+
 fn resolve_spin_dirichlet(
     module: &fullmag_ir::SpinTransportModuleIR,
     mesh: &MeshIR,
@@ -933,6 +1022,45 @@ fn resolve_spin_dirichlet(
         }
     }
     Ok(values.into_iter().collect())
+}
+
+fn resolve_spin_insulating_boundaries(
+    module: &fullmag_ir::SpinTransportModuleIR,
+    mesh: &MeshIR,
+    mesh_parts: &[FemMeshPartIR],
+) -> Result<Vec<fullmag_ir::ResolvedFemBoundaryMarkerSetIR>, Vec<String>> {
+    if module.boundaries.is_empty() {
+        let boundary_attributes = mesh
+            .boundary_markers
+            .iter()
+            .copied()
+            .filter(|marker| *marker != 0)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        return Ok(vec![fullmag_ir::ResolvedFemBoundaryMarkerSetIR {
+            id: "default:spin_insulating".into(),
+            boundary_attributes,
+        }]);
+    }
+    module
+        .boundaries
+        .iter()
+        .filter_map(|boundary| match boundary {
+            fullmag_ir::SpinBoundaryIR::SpinInsulating { id, surfaces } => Some((id, surfaces)),
+            _ => None,
+        })
+        .map(|(id, surfaces)| {
+            let mut markers = BTreeSet::new();
+            for surface in surfaces {
+                markers.extend(surface_markers(surface, mesh, mesh_parts)?);
+            }
+            Ok(fullmag_ir::ResolvedFemBoundaryMarkerSetIR {
+                id: id.clone(),
+                boundary_attributes: markers.into_iter().collect(),
+            })
+        })
+        .collect()
 }
 
 fn materialize_fdm_descriptor(
@@ -2016,6 +2144,13 @@ mod tests {
             .expect("executable FEM descriptor");
         assert_eq!(descriptor.charge_conductivity_spm_per_element, [4.0e6]);
         assert_eq!(descriptor.charge_dirichlet, [(11, 0.0), (12, 0.1)]);
+        assert_eq!(descriptor.charge_domain.element_mask, [true]);
+        assert_eq!(descriptor.spin_domain.element_mask, [true]);
+        assert!(descriptor.charge_insulating_boundaries.is_empty());
+        assert_eq!(
+            descriptor.spin_insulating_boundaries[0].boundary_attributes,
+            [11, 12, 13, 14]
+        );
         assert_eq!(
             plans[0].requested_execution.discretization,
             BackendTarget::Fem
@@ -2031,8 +2166,9 @@ mod tests {
                 "transport.coupling.one_way",
             ]
         );
-        assert_eq!(descriptor.implementation_state, "reference_executable");
-        assert_eq!(descriptor.validation_state, "contract_validated");
+        assert_eq!(descriptor.capability_status, "reference_executable");
+        assert_eq!(descriptor.implementation_state, "executable");
+        assert_eq!(descriptor.validation_state, "algebra_validated");
         assert_eq!(
             descriptor.validation_scope,
             "fem_cpu_double_conforming_h1_p1_transparent_m1"

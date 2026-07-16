@@ -1765,7 +1765,12 @@ fn record_due_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: direct_fields.select(&name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
             })?;
         }
         if has_due_fields {
@@ -1796,7 +1801,12 @@ fn record_due_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: select_state_observable_field(&observables, &name, true)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(select_state_observable_field(&observables, &name, true)?),
             })?;
         }
         advance_due_schedules(field_schedules, state.time_seconds);
@@ -1889,7 +1899,12 @@ fn record_final_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: direct_fields.select(&name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
             })?;
         }
         return Ok(());
@@ -1914,7 +1929,12 @@ fn record_final_outputs(
                 step,
                 time: state.time_seconds,
                 solver_dt,
-                values: direct_fields.select(&name)?,
+                component_count: 3,
+                component_order: "xyz".into(),
+                location: "sample".into(),
+                scope: "full".into(),
+                revision: step.saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(direct_fields.select(&name)?),
             })?;
         }
         return Ok(());
@@ -1934,7 +1954,12 @@ fn record_final_outputs(
             step,
             time: state.time_seconds,
             solver_dt,
-            values: select_state_observable_field(&observables, &name, true)?,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: step.saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_state_observable_field(&observables, &name, true)?),
         })?;
     }
 
@@ -3494,9 +3519,9 @@ mod tests {
             .map(|snapshot| snapshot.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(field_names, vec!["m", "m.z"]);
-        assert_eq!(field_snapshots[0].values, state.magnetization());
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), state.magnetization());
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
         );
     }
@@ -3572,12 +3597,12 @@ mod tests {
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_ext");
         assert_eq!(
-            field_snapshots[0].values,
+            field_snapshots[0].vec3_values().unwrap(),
             vec![[2.5, 3.25, 4.125], [0.0, 0.0, 0.0]]
         );
         assert_eq!(field_snapshots[1].name, "H_ext.y");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             vec![[3.25, 0.0, 0.0], [0.0, 0.0, 0.0]]
         );
     }
@@ -3650,12 +3675,12 @@ mod tests {
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_OE");
         assert_eq!(
-            field_snapshots[0].values,
+            field_snapshots[0].vec3_values().unwrap(),
             vec![[0.0, 0.0, 2.0], [1.0, 0.5, 0.25]]
         );
         assert_eq!(field_snapshots[1].name, "H_OE.z");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             vec![[2.0, 0.0, 0.0], [0.25, 0.0, 0.0]]
         );
     }
@@ -3770,10 +3795,10 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_ex");
-        assert_eq!(field_snapshots[0].values, expected_exchange);
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), expected_exchange);
         assert_eq!(field_snapshots[1].name, "H_ex.y");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_exchange
                 .iter()
                 .map(|value| [value[1], 0.0, 0.0])
@@ -3850,10 +3875,10 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_demag");
-        assert_eq!(field_snapshots[0].values, expected_demag);
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), expected_demag);
         assert_eq!(field_snapshots[1].name, "H_demag.x");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_demag
                 .iter()
                 .map(|value| [value[0], 0.0, 0.0])
@@ -3946,10 +3971,10 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_dmi");
-        assert_eq!(field_snapshots[0].values, expected_dmi);
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), expected_dmi);
         assert_eq!(field_snapshots[1].name, "H_dmi.x");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_dmi
                 .iter()
                 .map(|value| [value[0], 0.0, 0.0])
@@ -4031,10 +4056,10 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_ani");
-        assert_eq!(field_snapshots[0].values, expected_anisotropy);
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), expected_anisotropy);
         assert_eq!(field_snapshots[1].name, "H_ani.z");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_anisotropy
                 .iter()
                 .map(|value| [value[2], 0.0, 0.0])
@@ -4132,10 +4157,10 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "H_eff");
-        assert_eq!(field_snapshots[0].values, expected_effective);
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), expected_effective);
         assert_eq!(field_snapshots[1].name, "H_eff.y");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_effective
                 .iter()
                 .map(|value| [value[1], 0.0, 0.0])
@@ -4231,10 +4256,10 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 2);
         assert_eq!(field_snapshots[0].name, "torque");
-        assert_eq!(field_snapshots[0].values, expected_torque);
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), expected_torque);
         assert_eq!(field_snapshots[1].name, "torque.z");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             expected_torque
                 .iter()
                 .map(|value| [value[2], 0.0, 0.0])
@@ -4348,10 +4373,10 @@ mod tests {
         let (field_snapshots, field_snapshot_count, _) = artifacts.finish();
         assert_eq!(field_snapshot_count, 4);
         assert_eq!(field_snapshots[0].name, "H_eff");
-        assert_eq!(field_snapshots[0].values, observables.effective_field);
+        assert_eq!(field_snapshots[0].vec3_values().unwrap(), observables.effective_field);
         assert_eq!(field_snapshots[1].name, "H_eff.y");
         assert_eq!(
-            field_snapshots[1].values,
+            field_snapshots[1].vec3_values().unwrap(),
             observables
                 .effective_field
                 .iter()
@@ -4359,10 +4384,10 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(field_snapshots[2].name, "torque");
-        assert_eq!(field_snapshots[2].values, expected_torque);
+        assert_eq!(field_snapshots[2].vec3_values().unwrap(), expected_torque);
         assert_eq!(field_snapshots[3].name, "torque.z");
         assert_eq!(
-            field_snapshots[3].values,
+            field_snapshots[3].vec3_values().unwrap(),
             expected_torque
                 .iter()
                 .map(|value| [value[2], 0.0, 0.0])
@@ -4432,7 +4457,7 @@ mod tests {
         assert_eq!(field_snapshot_count, 1);
         assert_eq!(field_snapshots[0].name, "m.y");
         assert_eq!(
-            field_snapshots[0].values,
+            field_snapshots[0].vec3_values().unwrap(),
             vec![[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
         );
     }
@@ -4786,7 +4811,7 @@ mod tests {
                 for (index, is_active) in active_mask.iter().enumerate() {
                     if !is_active {
                         assert!(
-                            is_zero(snapshot.values[index]),
+                            is_zero(snapshot.vec3_values().unwrap()[index]),
                             "inactive cell {index} should stay zero in snapshot '{}'",
                             snapshot.name
                         );

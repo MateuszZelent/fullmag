@@ -554,6 +554,11 @@ impl CpuInteractiveFemPreviewRuntime {
                             step: local_stats.step,
                             time: local_stats.time,
                             solver_dt: report.dt_used,
+                           component_count: 3,
+                           component_order: "xyz".into(),
+                           location: "sample".into(),
+                           scope: "full".into(),
+                           revision: (local_stats.step as u64).saturating_add(1),
                             values: select_output_field_values_from_observables(
                                 &observables,
                                 name,

@@ -1006,7 +1006,7 @@ const CATALOG: [QuantitySpec; 49] = [
         ui_exposed: false,
         n_comp: 3,
         location: QuantityLocation::Node,
-        domain: QuantityDomain::MagneticOnly,
+        domain: QuantityDomain::FullDomain,
         normalization_hint: NormalizationHint::MaxAbs,
         default_component: QuantityComponent::Magnitude,
         supports_preview_2d: true,

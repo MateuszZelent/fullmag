@@ -1743,8 +1743,20 @@ fn write_static_pbc_demag_seam_diagnostics_artifact(
     let mut issues = Vec::<String>::new();
     let h_demag_snapshot = field_snapshot_at_step(executed, "H_demag", final_stats.step);
     let demag_phi_snapshot = field_snapshot_at_step(executed, "demag_phi", final_stats.step);
-    let h_demag = h_demag_snapshot.map(|snapshot| snapshot.values.as_slice());
-    let demag_phi = demag_phi_snapshot.map(|snapshot| snapshot.values.as_slice());
+    let h_demag = h_demag_snapshot.and_then(|snapshot| match snapshot.vec3_values() {
+        Ok(values) => Some(values),
+        Err(error) => {
+            issues.push(error);
+            None
+        }
+    });
+    let demag_phi = demag_phi_snapshot.and_then(|snapshot| match snapshot.vec3_values() {
+        Ok(values) => Some(values),
+        Err(error) => {
+            issues.push(error);
+            None
+        }
+    });
     if h_demag.is_none() {
         issues.push(format!(
             "missing H_demag field snapshot at final step {}",
@@ -1757,7 +1769,7 @@ fn write_static_pbc_demag_seam_diagnostics_artifact(
             final_stats.step
         ));
     }
-    if let Some(values) = h_demag {
+    if let Some(values) = &h_demag {
         if values.len() != fem.mesh.nodes.len() {
             issues.push(format!(
                 "H_demag field snapshot length {} does not match FEM mesh node count {}",
@@ -1766,7 +1778,7 @@ fn write_static_pbc_demag_seam_diagnostics_artifact(
             ));
         }
     }
-    if let Some(values) = demag_phi {
+    if let Some(values) = &demag_phi {
         if values.len() != fem.mesh.nodes.len() {
             issues.push(format!(
                 "demag_phi field snapshot length {} does not match FEM mesh node count {}",
@@ -1798,8 +1810,8 @@ fn write_static_pbc_demag_seam_diagnostics_artifact(
                     boundary_pair,
                     node_pairs,
                     &executed.result.final_magnetization,
-                    h_demag,
-                    demag_phi,
+                    &h_demag,
+                    &demag_phi,
                 );
                 issues.extend(pair_issues);
                 pair_diagnostics.push(diagnostics);
@@ -2773,30 +2785,28 @@ pub(crate) fn write_field_snapshot_artifact(
 
     let Some(layers) = multilayer_field_layers(&context.layout)? else {
         let snapshot_path = observable_dir.join(format!("step_{:06}.json", snapshot.step));
-        return write_field_file(
-            &snapshot_path,
-            context,
-            provenance,
-            &snapshot.name,
-            snapshot.step,
-            snapshot.time,
-            snapshot.solver_dt,
-            &snapshot.values,
-        );
+        return write_canonical_field_snapshot_file(&snapshot_path, context, provenance, snapshot);
     };
+
+    if snapshot.component_count != 3 {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "multilayer field snapshots require three components",
+        ));
+    }
 
     let expected_len = layers
         .iter()
         .map(|layer| layer.value_offset.saturating_add(layer.value_count))
         .max()
         .unwrap_or(0);
-    if expected_len != snapshot.values.len() {
+    if expected_len != snapshot.sample_count() {
         return Err(Error::new(
             ErrorKind::InvalidData,
             format!(
                 "multilayer field snapshot '{}' has {} values, expected {} from artifact layout",
                 snapshot.name,
-                snapshot.values.len(),
+                snapshot.sample_count(),
                 expected_len
             ),
         ));
@@ -2807,8 +2817,8 @@ pub(crate) fn write_field_snapshot_artifact(
     for layer in &layers {
         let layer_dir = observable_dir.join(&layer.directory);
         fs::create_dir_all(&layer_dir)?;
-        let start = layer.value_offset;
-        let end = start + layer.value_count;
+        let start = layer.value_offset * usize::from(snapshot.component_count);
+        let end = start + layer.value_count * usize::from(snapshot.component_count);
         let snapshot_path = layer_dir.join(format!("step_{:06}.json", snapshot.step));
         write_layer_field_file(
             &snapshot_path,
@@ -2818,12 +2828,53 @@ pub(crate) fn write_field_snapshot_artifact(
             snapshot.step,
             snapshot.time,
             snapshot.solver_dt,
+            snapshot.revision,
             layer,
             &snapshot.values[start..end],
         )?;
     }
 
     Ok(())
+}
+
+fn write_canonical_field_snapshot_file(
+    path: &Path,
+    context: &FieldArtifactContext,
+    provenance: &crate::types::ExecutionProvenance,
+    snapshot: &crate::types::FieldSnapshot,
+) -> std::io::Result<()> {
+    if snapshot.component_count == 0
+        || snapshot.values.len() % usize::from(snapshot.component_count) != 0
+        || snapshot.revision == 0
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid canonical field snapshot '{}' shape or revision", snapshot.name),
+        ));
+    }
+    let field_json = serde_json::json!({
+        "observable": snapshot.name,
+        "unit": field_unit(&snapshot.name),
+        "step": snapshot.step,
+        "time": snapshot.time,
+        "solver_dt": snapshot.solver_dt,
+        "component_count": snapshot.component_count,
+        "component_order": snapshot.component_order,
+        "location": snapshot.location,
+        "scope": snapshot.scope,
+        "revision": snapshot.revision,
+        "layout": context.layout,
+        "provenance": {
+            "problem_name": context.problem_name,
+            "ir_version": context.ir_version,
+            "source_hash": context.source_hash,
+            "execution_mode": context.execution_mode,
+            "execution_engine": provenance.execution_engine,
+            "precision": provenance.precision,
+        },
+        "values": snapshot.values,
+    });
+    fs::write(path, serde_json::to_string_pretty(&field_json).unwrap())
 }
 
 fn multilayer_field_layers(
@@ -2922,8 +2973,9 @@ fn write_layer_field_file(
     step: u64,
     time: f64,
     solver_dt: f64,
+    revision: u64,
     layer: &MultilayerFieldLayer,
-    values: &[[f64; 3]],
+    values: &[f64],
 ) -> std::io::Result<()> {
     let field_json = serde_json::json!({
         "observable": observable,
@@ -2931,6 +2983,11 @@ fn write_layer_field_file(
         "step": step,
         "time": time,
         "solver_dt": solver_dt,
+        "component_count": 3,
+        "component_order": "xyz",
+        "location": "cell",
+        "scope": "layer",
+        "revision": revision,
         "layer": layer.manifest_entry.clone(),
         "layout": context.layout.clone(),
         "provenance": {
@@ -6032,7 +6089,12 @@ mod tests {
                 step: 1,
                 time: 1.0e-13,
                 solver_dt: 1.0e-13,
-                values: vec![
+               component_count: 3,
+               component_order: "xyz".into(),
+               location: "sample".into(),
+               scope: "full".into(),
+               revision: (1 as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(vec![
                     [0.0, 0.0, 1.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.0, 0.0],
@@ -6041,7 +6103,7 @@ mod tests {
                     [0.0, 0.0, 0.0],
                     [-1.0, 0.0, 0.0],
                     [0.0, 0.0, 0.0],
-                ],
+                ]),
             }],
             field_snapshot_count: 1,
             auxiliary_artifacts: Vec::new(),
@@ -6325,21 +6387,36 @@ mod tests {
                     step: 1,
                     time: 1.0e-13,
                     solver_dt: 1.0e-13,
-                    values: vec![[1.0, 0.0, 0.0]; 8],
+                   component_count: 3,
+                   component_order: "xyz".into(),
+                   location: "sample".into(),
+                   scope: "full".into(),
+                   revision: (1 as u64).saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(vec![[1.0, 0.0, 0.0]; 8]),
                 },
                 FieldSnapshot {
                     name: "H_eff.z".to_string(),
                     step: 1,
                     time: 1.0e-13,
                     solver_dt: 1.0e-13,
-                    values: vec![[5.0, 0.0, 0.0]; 8],
+                   component_count: 3,
+                   component_order: "xyz".into(),
+                   location: "sample".into(),
+                   scope: "full".into(),
+                   revision: (1 as u64).saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(vec![[5.0, 0.0, 0.0]; 8]),
                 },
                 FieldSnapshot {
                     name: "torque".to_string(),
                     step: 1,
                     time: 1.0e-13,
                     solver_dt: 1.0e-13,
-                    values: vec![[0.0, 0.0, 2.0e-3]; 8],
+                   component_count: 3,
+                   component_order: "xyz".into(),
+                   location: "sample".into(),
+                   scope: "full".into(),
+                   revision: (1 as u64).saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(vec![[0.0, 0.0, 2.0e-3]; 8]),
                 },
             ],
             field_snapshot_count: 3,
@@ -6420,12 +6497,17 @@ mod tests {
                 step: 1,
                 time: 1.0e-13,
                 solver_dt: 1.0e-13,
-                values: vec![
+               component_count: 3,
+               component_order: "xyz".into(),
+               location: "sample".into(),
+               scope: "full".into(),
+               revision: (1 as u64).saturating_add(1),
+                values: FieldSnapshot::flatten_vec3(vec![
                     [1.0, 0.0, 0.0],
                     [0.9, 0.1, 0.0],
                     [0.0, 1.0, 0.0],
                     [0.0, 0.9, 0.1],
-                ],
+                ]),
             }],
             field_snapshot_count: 1,
             auxiliary_artifacts: Vec::new(),
@@ -6631,14 +6713,24 @@ mod tests {
                     step: 4,
                     time: 2.0e-12,
                     solver_dt: 5.0e-13,
-                    values: vec![[10.0, 2.0, 0.0]; 8],
+                   component_count: 3,
+                   component_order: "xyz".into(),
+                   location: "sample".into(),
+                   scope: "full".into(),
+                   revision: (4 as u64).saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(vec![[10.0, 2.0, 0.0]; 8]),
                 },
                 FieldSnapshot {
                     name: "demag_phi".to_string(),
                     step: 4,
                     time: 2.0e-12,
                     solver_dt: 5.0e-13,
-                    values: vec![
+                   component_count: 3,
+                   component_order: "xyz".into(),
+                   location: "sample".into(),
+                   scope: "full".into(),
+                   revision: (4 as u64).saturating_add(1),
+                    values: FieldSnapshot::flatten_vec3(vec![
                         [1.0e-6, 0.0, 0.0],
                         [3.0e-6, 0.0, 0.0],
                         [3.0e-6, 0.0, 0.0],
@@ -6647,7 +6739,7 @@ mod tests {
                         [3.0e-6, 0.0, 0.0],
                         [3.0e-6, 0.0, 0.0],
                         [1.0e-6, 0.0, 0.0],
-                    ],
+                    ]),
                 },
             ],
             field_snapshot_count: 2,

@@ -480,18 +480,23 @@ linear tolerance/iteration policy shared by the charge CG and spin GMRES
 solves. Planning therefore requires the authored charge and spin linear
 policies to be exactly equal; it must never synthesize a hidden policy with
 minimum tolerances or maximum iteration counts. The resolved descriptor keeps
-the distinct `cg` and `gmres` engine identities and records
-`reference_executable` implementation state plus the exact contract-validation
-scope. Mixing/SML, specified spin flux, periodic spin boundaries, and normal
-current electrodes fail before native execution.
+the distinct `cg` and `gmres` engine identities, the charge/spin domain masks,
+explicit insulating marker sets, transparent interface identities, and any
+authored torque target. Capability status is `reference_executable`; the
+independent evidence axes are `implementation_state=executable` and
+`validation_state=algebra_validated` for the exact bounded validation scope.
+Mixing/SML, specified spin flux, periodic spin boundaries, and normal current
+electrodes fail before native execution.
 
 Every successful FEM M1 solve publishes revisioned canonical field records for
 `V_electric` (`V`, scalar), `J_charge` (`A/m^2`, `xyz`), `spin_potential`
 (`V`, `xyz`), `spin_current_tensor` (`A/m^2`, nine components in
 `row_major_Q_ia` order), and `torque_stt` (`1/s`, `xyz`). These are node-located
 and scoped to the named transport module's full resolved solve domain. The
-summary transport artifact is supplementary and is not a substitute for these
-quantity records.
+runner publishes them through the canonical `ExecutedRun.field_snapshots`
+carrier with monotonic revisions; the v2 field resource/data plane reads the
+persisted field artifacts. The summary transport artifact is supplementary and
+is not a substitute for these quantity records.
 
 ## 5. Validation strategy
 
