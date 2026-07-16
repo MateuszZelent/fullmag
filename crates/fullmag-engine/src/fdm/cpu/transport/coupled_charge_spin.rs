@@ -4,7 +4,7 @@ use super::coupled_block_linear::{
     BlockDiagonalPreconditioner, LocalInverseBlock,
 };
 use super::{
-    ChargeBoundaryConditions, OrientedSpinInterface, ReactionChannels,
+    ChargeBoundaryCondition, ChargeBoundaryConditions, OrientedSpinInterface, ReactionChannels,
     ReciprocalConstitutiveMaterial, SpinBoundaryCondition, SpinBoundaryConditions,
     SpinInterfaceFluxObservation, SpinInterfaceLaw, SpinReactionLengths, SpinTorqueTargets,
     StructuredSpinFace,
@@ -206,7 +206,7 @@ impl CoupledChargeSpinProblem {
             boundary.charge.z_max,
         ]
         .iter()
-        .any(Option::is_some);
+        .any(|condition| matches!(condition, ChargeBoundaryCondition::Voltage(_)));
         if !has_charge_anchor {
             return Err(EngineError::new(
                 "M2 CPU v1 requires at least one voltage electrode; zero-mean and total-current gauges are unsupported",
@@ -683,18 +683,19 @@ impl CoupledChargeSpinProblem {
     ) -> Result<(f64, Vector3)> {
         let gradients = self.cell_gradients(potential, spin);
         let mut electric_field = gradients[cell].0;
-        let charge_is_dirichlet =
-            if let Some(value) = charge_boundary(self.boundary.charge, axis, positive) {
-                let electric_normal = if positive {
-                    -(value - potential[cell]) / (0.5 * self.spacing(axis))
-                } else {
-                    -(potential[cell] - value) / (0.5 * self.spacing(axis))
-                };
-                electric_field[axis] = electric_normal;
-                true
+        let charge_condition = charge_boundary(self.boundary.charge, axis, positive);
+        let charge_is_dirichlet = if let ChargeBoundaryCondition::Voltage(value) = charge_condition
+        {
+            let electric_normal = if positive {
+                -(value - potential[cell]) / (0.5 * self.spacing(axis))
             } else {
-                false
+                -(potential[cell] - value) / (0.5 * self.spacing(axis))
             };
+            electric_field[axis] = electric_normal;
+            true
+        } else {
+            false
+        };
         let condition = spin_boundary(self.boundary.spin, axis, positive);
         let mut spin_gradient = gradients[cell].1;
         if let SpinBoundaryCondition::SpinSink | SpinBoundaryCondition::SpecifiedPotential(_) =
@@ -718,10 +719,18 @@ impl CoupledChargeSpinProblem {
             spin_gradient,
             self.materials.magnetization[cell],
         )?;
-        let charge = if charge_is_dirichlet {
-            response.charge_current_density_a_per_m2[axis]
-        } else {
-            0.0
+        let charge = match charge_condition {
+            ChargeBoundaryCondition::Voltage(_) if charge_is_dirichlet => {
+                response.charge_current_density_a_per_m2[axis]
+            }
+            ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(outward) => {
+                if positive {
+                    outward
+                } else {
+                    -outward
+                }
+            }
+            ChargeBoundaryCondition::Insulating | ChargeBoundaryCondition::Voltage(_) => 0.0,
         };
         let spin_flux = match condition {
             SpinBoundaryCondition::SpinInsulating => [0.0; 3],
@@ -814,8 +823,8 @@ impl CoupledChargeSpinProblem {
     fn scalar_derivative(&self, field: &[f64], c: [usize; 3], axis: usize) -> f64 {
         let extent = [self.grid.nx, self.grid.ny, self.grid.nz][axis];
         let coordinate = c[axis];
-        let lower = charge_boundary(self.boundary.charge, axis, false);
-        let upper = charge_boundary(self.boundary.charge, axis, true);
+        let lower = charge_boundary_voltage(self.boundary.charge, axis, false);
+        let upper = charge_boundary_voltage(self.boundary.charge, axis, true);
         let cell = self.grid.index(c[0], c[1], c[2]);
         if extent == 1 {
             return match (lower, upper) {
@@ -1277,8 +1286,10 @@ impl CoupledChargeSpinProblem {
             self.boundary.charge.z_max,
         ]
         .into_iter()
-        .flatten()
-        .map(f64::abs)
+        .filter_map(|condition| match condition {
+            ChargeBoundaryCondition::Voltage(value) => Some(value.abs()),
+            _ => None,
+        })
         .fold(0.0, f64::max);
         let spin_voltage_scale = [
             self.boundary.spin.x_min,
@@ -1338,19 +1349,21 @@ fn validate_config(config: CoupledChargeSpinSolverConfig) -> Result<()> {
 }
 
 fn validate_boundaries(boundary: CoupledChargeSpinBoundaryConditions) -> Result<()> {
-    for value in [
+    for condition in [
         boundary.charge.x_min,
         boundary.charge.x_max,
         boundary.charge.y_min,
         boundary.charge.y_max,
         boundary.charge.z_min,
         boundary.charge.z_max,
-    ]
-    .into_iter()
-    .flatten()
-    {
+    ] {
+        let value = match condition {
+            ChargeBoundaryCondition::Insulating => continue,
+            ChargeBoundaryCondition::Voltage(value)
+            | ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(value) => value,
+        };
         if !value.is_finite() {
-            return Err(EngineError::new("M2 voltage BCs must be finite"));
+            return Err(EngineError::new("M2 charge BC values must be finite"));
         }
     }
     for condition in [
@@ -1554,7 +1567,11 @@ fn coordinates(grid: GridShape, cell: usize) -> [usize; 3] {
     let yz = cell / grid.nx;
     [x, yz % grid.ny, yz / grid.ny]
 }
-fn charge_boundary(boundary: ChargeBoundaryConditions, axis: usize, positive: bool) -> Option<f64> {
+fn charge_boundary(
+    boundary: ChargeBoundaryConditions,
+    axis: usize,
+    positive: bool,
+) -> ChargeBoundaryCondition {
     match (axis, positive) {
         (0, false) => boundary.x_min,
         (0, true) => boundary.x_max,
@@ -1563,6 +1580,18 @@ fn charge_boundary(boundary: ChargeBoundaryConditions, axis: usize, positive: bo
         (2, false) => boundary.z_min,
         (2, true) => boundary.z_max,
         _ => unreachable!(),
+    }
+}
+
+fn charge_boundary_voltage(
+    boundary: ChargeBoundaryConditions,
+    axis: usize,
+    positive: bool,
+) -> Option<f64> {
+    match charge_boundary(boundary, axis, positive) {
+        ChargeBoundaryCondition::Voltage(value) => Some(value),
+        ChargeBoundaryCondition::Insulating
+        | ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(_) => None,
     }
 }
 fn spin_boundary(

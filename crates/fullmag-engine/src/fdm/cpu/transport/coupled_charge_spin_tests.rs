@@ -47,8 +47,8 @@ fn bar(nx: usize) -> CoupledChargeSpinProblem {
         None,
         CoupledChargeSpinBoundaryConditions {
             charge: ChargeBoundaryConditions {
-                x_min: Some(1.0),
-                x_max: Some(0.0),
+                x_min: ChargeBoundaryCondition::Voltage(1.0),
+                x_max: ChargeBoundaryCondition::Voltage(0.0),
                 ..Default::default()
             },
             spin: SpinBoundaryConditions {
@@ -122,8 +122,8 @@ fn m2_dirichlet_boundary_uses_one_reciprocal_charge_spin_response() {
         None,
         CoupledChargeSpinBoundaryConditions {
             charge: ChargeBoundaryConditions {
-                x_min: Some(1.0),
-                x_max: Some(0.0),
+                x_min: ChargeBoundaryCondition::Voltage(1.0),
+                x_max: ChargeBoundaryCondition::Voltage(0.0),
                 ..Default::default()
             },
             spin: SpinBoundaryConditions {
@@ -179,8 +179,8 @@ fn m2_transport_torque_is_dimensionally_converted_and_gated_by_outer_lte() {
         None,
         CoupledChargeSpinBoundaryConditions {
             charge: ChargeBoundaryConditions {
-                x_min: Some(1.0),
-                x_max: Some(0.0),
+                x_min: ChargeBoundaryCondition::Voltage(1.0),
+                x_max: ChargeBoundaryCondition::Voltage(0.0),
                 ..Default::default()
             },
             spin: SpinBoundaryConditions {
@@ -265,8 +265,8 @@ fn m2_phe_and_ahe_manufactured_current_has_full_3d_components() {
         None,
         CoupledChargeSpinBoundaryConditions {
             charge: ChargeBoundaryConditions {
-                x_min: Some(1.0),
-                x_max: Some(0.0),
+                x_min: ChargeBoundaryCondition::Voltage(1.0),
+                x_max: ChargeBoundaryCondition::Voltage(0.0),
                 ..Default::default()
             },
             spin: SpinBoundaryConditions {
@@ -348,8 +348,8 @@ fn m2_warm_start_requires_exact_revisions_and_failure_is_transactional() {
 #[test]
 fn m2_rejects_periodic_spin_until_coupled_periodic_charge_drop_is_implemented() {
     let mut boundaries = CoupledChargeSpinBoundaryConditions::default();
-    boundaries.charge.x_min = Some(1.0);
-    boundaries.charge.x_max = Some(0.0);
+    boundaries.charge.x_min = ChargeBoundaryCondition::Voltage(1.0);
+    boundaries.charge.x_max = ChargeBoundaryCondition::Voltage(0.0);
     boundaries.spin.x_min = SpinBoundaryCondition::PeriodicSpin;
     boundaries.spin.x_max = SpinBoundaryCondition::PeriodicSpin;
     let result = CoupledChargeSpinProblem::new(
@@ -437,8 +437,8 @@ fn m2_mixing_interface_closes_nonzero_absorption_and_sml_with_torque_target() {
         None,
         CoupledChargeSpinBoundaryConditions {
             charge: ChargeBoundaryConditions {
-                x_min: Some(1.0),
-                x_max: Some(0.0),
+                x_min: ChargeBoundaryCondition::Voltage(1.0),
+                x_max: ChargeBoundaryCondition::Voltage(0.0),
                 ..Default::default()
             },
             spin: SpinBoundaryConditions {
@@ -511,8 +511,8 @@ fn m2_material_jump_without_a_distinct_region_and_interface_fails_closed() {
         None,
         CoupledChargeSpinBoundaryConditions {
             charge: ChargeBoundaryConditions {
-                x_min: Some(1.0),
-                x_max: Some(0.0),
+                x_min: ChargeBoundaryCondition::Voltage(1.0),
+                x_max: ChargeBoundaryCondition::Voltage(0.0),
                 ..Default::default()
             },
             spin: SpinBoundaryConditions {
@@ -599,8 +599,8 @@ fn m2_picard_convergence_map_covers_reciprocal_and_hall_strengths() {
             None,
             CoupledChargeSpinBoundaryConditions {
                 charge: ChargeBoundaryConditions {
-                    x_min: Some(1.0),
-                    x_max: Some(0.0),
+                    x_min: ChargeBoundaryCondition::Voltage(1.0),
+                    x_max: ChargeBoundaryCondition::Voltage(0.0),
                     ..Default::default()
                 },
                 spin: SpinBoundaryConditions {
@@ -656,7 +656,7 @@ fn m2_inactive_cells_do_not_require_physical_material_or_publish_current() {
         Some(vec![true, false]),
         CoupledChargeSpinBoundaryConditions {
             charge: ChargeBoundaryConditions {
-                x_min: Some(1.0),
+                x_min: ChargeBoundaryCondition::Voltage(1.0),
                 ..Default::default()
             },
             spin: SpinBoundaryConditions {
@@ -673,5 +673,77 @@ fn m2_inactive_cells_do_not_require_physical_material_or_publish_current() {
     assert_eq!(
         solution.cell_spin_current_density_a_per_m2[1],
         [[0.0; 3]; 3]
+    );
+}
+
+#[test]
+fn m2_current_only_charge_boundary_fails_closed_without_supported_gauge() {
+    let error = CoupledChargeSpinProblem::new(
+        GridShape {
+            nx: 1,
+            ny: 1,
+            nz: 1,
+        },
+        CellSize {
+            dx: 1.0,
+            dy: 1.0,
+            dz: 1.0,
+        },
+        material(1),
+        None,
+        CoupledChargeSpinBoundaryConditions {
+            charge: ChargeBoundaryConditions {
+                x_min: ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(-2.0),
+                x_max: ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(2.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("requires at least one voltage electrode"));
+}
+
+#[test]
+fn m2_specified_outward_charge_flux_preserves_face_orientation() {
+    let problem = CoupledChargeSpinProblem::new(
+        GridShape {
+            nx: 1,
+            ny: 1,
+            nz: 1,
+        },
+        CellSize {
+            dx: 1.0,
+            dy: 1.0,
+            dz: 1.0,
+        },
+        material(1),
+        None,
+        CoupledChargeSpinBoundaryConditions {
+            charge: ChargeBoundaryConditions {
+                x_min: ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(2.0),
+                x_max: ChargeBoundaryCondition::SpecifiedOutwardCurrentDensity(3.0),
+                y_min: ChargeBoundaryCondition::Voltage(0.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let potential = [0.0];
+    let spin = [[0.0; 3]];
+    assert_eq!(
+        problem
+            .boundary_flux_for_test(0, false, 0, &potential, &spin)
+            .0,
+        -2.0
+    );
+    assert_eq!(
+        problem
+            .boundary_flux_for_test(0, true, 0, &potential, &spin)
+            .0,
+        3.0
     );
 }
