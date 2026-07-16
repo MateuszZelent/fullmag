@@ -2541,6 +2541,7 @@ fn frequency_response_demag_backend_plan(
         external_field: plan.external_field,
         antenna_zeeman_masks: Vec::new(),
         current_modules: Vec::new(),
+        spin_transport_plans: Vec::new(),
         gyromagnetic_ratio: plan.gyromagnetic_ratio,
         precision: plan.precision,
         exchange_bc: plan.exchange_bc,

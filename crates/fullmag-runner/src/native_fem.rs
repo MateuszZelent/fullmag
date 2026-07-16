@@ -59,7 +59,8 @@ pub(crate) use runtime_info::{
 #[allow(unused_imports)]
 #[cfg(feature = "fem-gpu")]
 pub(crate) use steady_transport::{
-    solve_native_fem_steady_transport, NativeFemSteadyTransportExecution,
+    execute_native_fem_steady_transport_plans, solve_native_fem_steady_transport,
+    NativeFemSteadyTransportBundle, NativeFemSteadyTransportExecution,
     NativeFemSteadyTransportGauge, NativeFemSteadyTransportInterface,
     NativeFemSteadyTransportRequest, NativeFemSteadyTransportResult,
 };
@@ -2836,8 +2837,10 @@ mod tests {
         let mut plan = make_test_plan();
         plan.mesh.elements = vec![[0, 1, 3, 2]];
 
-        let error = NativeFemBackend::create_with_initial_effective_field(&plan, false)
-            .expect_err("inverted mesh must fail before native ABI packaging");
+        let error = match NativeFemBackend::create_with_initial_effective_field(&plan, false) {
+            Ok(_) => panic!("inverted mesh must fail before native ABI packaging"),
+            Err(error) => error,
+        };
         assert!(error.message.contains("negative tetra orientation"));
         assert!(error.message.contains("before ABI packaging"));
     }
@@ -2965,6 +2968,7 @@ mod tests {
             external_field: Some([1.0, 2.0, 3.0]),
             antenna_zeeman_masks: Vec::new(),
             current_modules: vec![],
+            spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -4304,6 +4308,7 @@ mod tests {
             external_field: Some([1.5e3, -2.0e3, 7.5e2]),
             antenna_zeeman_masks: Vec::new(),
             current_modules: vec![],
+            spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -4663,6 +4668,7 @@ mod tests {
                 },
                 slonczewski_stt: if has_slonczewski_stt(plan) {
                     Some(fullmag_engine::SlonczewskiSttConfig {
+                        active_mask: None,
                         formula: fullmag_engine::SlonczewskiFormula::LegacyFullmagV0,
                         current_density_magnitude: {
                             let j = plan.current_density.expect("current density");

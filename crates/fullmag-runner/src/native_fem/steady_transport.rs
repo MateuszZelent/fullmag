@@ -1,6 +1,6 @@
-use crate::types::RunError;
+use crate::types::{AuxiliaryArtifact, RunError, TransportExecutionProvenance};
 use fullmag_fem_sys as ffi;
-use fullmag_ir::MeshIR;
+use fullmag_ir::{FemPlanIR, MeshIR, ResolvedSpinTransportPlanIR};
 use serde_json::Value;
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -77,6 +77,184 @@ pub(crate) struct NativeFemSteadyTransportResult {
     pub physical_residual_version: String,
     pub resolved_execution: String,
     pub resolved_interface: String,
+}
+
+pub(crate) struct NativeFemSteadyTransportBundle {
+    pub artifact: AuxiliaryArtifact,
+    pub provenance: Vec<TransportExecutionProvenance>,
+}
+
+pub(crate) fn execute_native_fem_steady_transport_plans(
+    plan: &FemPlanIR,
+) -> Result<Option<NativeFemSteadyTransportBundle>, RunError> {
+    if plan.spin_transport_plans.is_empty() {
+        return Ok(None);
+    }
+    if plan
+        .mfem_device_string
+        .as_deref()
+        .is_some_and(|device| device != "cpu")
+    {
+        return Err(RunError {
+            message: "FEM M1 steady transport resolved CPU but the enclosing plan requests a non-CPU MFEM device; refusing hidden fallback before provenance".into(),
+        });
+    }
+    let mut records = Vec::with_capacity(plan.spin_transport_plans.len());
+    let mut provenance = Vec::with_capacity(plan.spin_transport_plans.len());
+    for resolved in &plan.spin_transport_plans {
+        let request = materialize_native_fem_steady_transport_request(
+            &plan.mesh,
+            &plan.initial_magnetization,
+            resolved,
+        )?;
+        let result = solve_native_fem_steady_transport(&request)?;
+        let entry = transport_provenance(resolved)?;
+        records.push(serde_json::json!({
+            "module_id": resolved.module_id,
+            "current_source_id": resolved.current_source_id,
+            "requested_execution": resolved.requested_execution,
+            "resolved_execution": {
+                "discretization": resolved.resolved_discretization,
+                "device": resolved.resolved_device,
+                "precision": resolved.resolved_precision,
+            },
+            "capabilities": resolved.capabilities,
+            "inserted_default_boundaries": resolved.inserted_default_boundaries,
+            "descriptor": resolved.fem_cpu_double,
+            "result": {
+                "electric_potential_v": result.electric_potential_v,
+                "charge_current_density_xyz_apm2": result.charge_current_density_xyz_apm2,
+                "spin_potential_xyz_v": result.spin_potential_xyz_v,
+                "spin_current_tensor_row_major_qia_apm2": result.spin_current_tensor_row_major_qia_apm2,
+                "torque_xyz_per_s": result.torque_xyz_per_s,
+                "charge_iterations": result.charge_iterations,
+                "charge_relative_residual": result.charge_relative_residual,
+                "net_boundary_current_a": result.net_boundary_current_a,
+                "current_density_volume_average_apm2": result.current_density_volume_average_apm2,
+                "spin_iterations": result.spin_iterations,
+                "spin_relative_residual": result.spin_relative_residual,
+                "boundary_spin_flux_a": result.boundary_spin_flux_a,
+                "reaction_integral_a": result.reaction_integral_a,
+                "angular_momentum_balance_apm2": result.angular_momentum_balance_apm2,
+                "torque_volume_average_per_s": result.torque_volume_average_per_s,
+                "torque_l2_per_s": result.torque_l2_per_s,
+                "diagnostics": result.diagnostics,
+                "constitutive_version": result.constitutive_version,
+                "operator_version": result.operator_version,
+                "physical_residual_version": result.physical_residual_version,
+                "resolved_execution": result.resolved_execution,
+                "resolved_interface": result.resolved_interface,
+            }
+        }));
+        provenance.push(entry);
+    }
+    let bytes = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema": "fullmag.fem.steady_spin_transport.v1",
+        "component_order": "row_major_Q_ia",
+        "flow_axes": ["x", "y", "z"],
+        "spin_axes": ["x", "y", "z"],
+        "location": "node",
+        "modules": records,
+    }))
+    .map_err(|error| RunError {
+        message: format!("serialize FEM steady transport artifact: {error}"),
+    })?;
+    Ok(Some(NativeFemSteadyTransportBundle {
+        artifact: AuxiliaryArtifact {
+            relative_path: "transport/fem_steady_spin_transport.json".into(),
+            bytes,
+        },
+        provenance,
+    }))
+}
+
+fn materialize_native_fem_steady_transport_request(
+    mesh: &MeshIR,
+    initial_magnetization: &[[f64; 3]],
+    resolved: &ResolvedSpinTransportPlanIR,
+) -> Result<NativeFemSteadyTransportRequest, RunError> {
+    let descriptor = resolved.fem_cpu_double.as_ref().ok_or_else(|| RunError {
+        message: format!(
+            "FEM spin transport '{}' lacks fem_cpu_double descriptor",
+            resolved.module_id
+        ),
+    })?;
+    if resolved.fdm_cpu_double.is_some()
+        || descriptor.descriptor_schema != "fullmag.fem.spin_transport_descriptor.v1"
+        || resolved.resolved_discretization != fullmag_ir::BackendTarget::Fem
+        || resolved.resolved_device != fullmag_ir::ExecutionDevice::Cpu
+        || resolved.resolved_precision != fullmag_ir::ExecutionPrecision::Double
+        || descriptor.interface_realization != "transparent_conforming_h1"
+        || descriptor.stage_coupling != "none"
+    {
+        return Err(RunError {
+            message: format!(
+                "FEM spin transport '{}' has an unsupported or contradictory resolved descriptor",
+                resolved.module_id
+            ),
+        });
+    }
+    Ok(NativeFemSteadyTransportRequest {
+        mesh: mesh.clone(),
+        execution: NativeFemSteadyTransportExecution::CpuDouble,
+        interface: NativeFemSteadyTransportInterface::TransparentConformingH1,
+        gauge: match descriptor.charge_gauge {
+            fullmag_ir::ChargePotentialGaugeIR::DirichletReference => {
+                NativeFemSteadyTransportGauge::BoundaryReference
+            }
+            fullmag_ir::ChargePotentialGaugeIR::ZeroMean => {
+                NativeFemSteadyTransportGauge::ZeroMeanPotential
+            }
+        },
+        constitutive_version: resolved.constitutive_version.clone(),
+        operator_version: resolved.operator_version.clone(),
+        physical_residual_version: resolved.physical_residual_version.clone(),
+        charge_conductivity_spm_per_element: descriptor.charge_conductivity_spm_per_element.clone(),
+        magnetization: initial_magnetization.to_vec(),
+        sigma_s_spm: descriptor.sigma_s_spm,
+        polarization_p: descriptor.polarization_p,
+        theta_sh: descriptor.theta_sh,
+        lambda_sf_m: descriptor.lambda_sf_m,
+        lambda_j_m: descriptor.lambda_j_m,
+        lambda_phi_m: descriptor.lambda_phi_m,
+        gamma_e_per_ts: descriptor.gamma_e_rad_per_s_t,
+        saturation_magnetization_apm: descriptor.saturation_magnetization_apm,
+        relative_tolerance: descriptor.resolved_linear_solver.relative_tolerance,
+        absolute_tolerance: descriptor.resolved_linear_solver.absolute_tolerance,
+        maximum_iterations: descriptor.resolved_linear_solver.max_iterations,
+        charge_dirichlet: descriptor.charge_dirichlet.clone(),
+        spin_dirichlet: descriptor.spin_dirichlet.clone(),
+    })
+}
+
+fn transport_provenance(
+    resolved: &ResolvedSpinTransportPlanIR,
+) -> Result<TransportExecutionProvenance, RunError> {
+    let descriptor = resolved.fem_cpu_double.as_ref().ok_or_else(|| RunError {
+        message: format!(
+            "FEM spin transport '{}' lacks provenance descriptor",
+            resolved.module_id
+        ),
+    })?;
+    Ok(TransportExecutionProvenance {
+        module_id: resolved.module_id.clone(),
+        current_source_id: resolved.current_source_id.clone(),
+        requested_discretization: format!("{:?}", resolved.requested_execution.discretization)
+            .to_ascii_lowercase(),
+        requested_device: format!("{:?}", resolved.requested_execution.device).to_ascii_lowercase(),
+        requested_precision: format!("{:?}", resolved.requested_execution.precision)
+            .to_ascii_lowercase(),
+        requested_execution_mode: format!("{:?}", resolved.requested_execution.execution_mode)
+            .to_ascii_lowercase(),
+        resolved_discretization: "fem".into(),
+        resolved_device: "cpu".into(),
+        resolved_precision: "double".into(),
+        constitutive_version: resolved.constitutive_version.clone(),
+        operator_version: resolved.operator_version.clone(),
+        physical_residual_version: resolved.physical_residual_version.clone(),
+        interface_realization: descriptor.interface_realization.clone(),
+        stage_coupling: descriptor.stage_coupling.clone(),
+    })
 }
 
 struct FlatBuffers {
@@ -373,6 +551,15 @@ pub(crate) fn solve_native_fem_steady_transport(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fullmag_ir::{
+        BackendTarget, ChargeBoundaryIR, ChargePotentialGaugeIR, ChargeSolverPolicyIR,
+        ChargeTransportDefinitionIR, ChargeTransportMaterialAssignmentIR,
+        ChargeTransportMaterialIR, ExecutionDevice, ExecutionMode, ExecutionPrecision,
+        LinearTransportSolverPolicyIR, RegionRefIR, RequestedTransportExecutionIR,
+        ResolvedFemSpinTransportIR, ResolvedSpinTransportPlanIR, SpinSolverPolicyIR,
+        SpinTransportMaterialAssignmentIR, SpinTransportMaterialIR, SurfaceRefIR,
+        TransportCouplingIR,
+    };
     use std::collections::HashMap;
 
     fn request() -> NativeFemSteadyTransportRequest {
@@ -417,6 +604,121 @@ mod tests {
         }
     }
 
+    fn resolved_plan() -> ResolvedSpinTransportPlanIR {
+        let region = RegionRefIR {
+            object_id: "strip".into(),
+            region_id: None,
+        };
+        let charge_solver = ChargeSolverPolicyIR {
+            engine: "cg".into(),
+            linear: LinearTransportSolverPolicyIR {
+                relative_tolerance: 1.0e-9,
+                absolute_tolerance: 0.0,
+                max_iterations: 300,
+            },
+            physical_residual_version: "charge_balance_integrated_l2.v1".into(),
+            operator_version: "fem_charge_conforming_h1_p1.transparent.v1".into(),
+        };
+        let charge_definition = ChargeTransportDefinitionIR {
+            domain: vec![region.clone()],
+            materials: vec![ChargeTransportMaterialAssignmentIR {
+                region: region.clone(),
+                material: ChargeTransportMaterialIR {
+                    sigma_spm: 4.0,
+                    sigma_parallel_spm: None,
+                    sigma_perpendicular_spm: None,
+                    sigma_ahe_spm: None,
+                },
+            }],
+            boundaries: vec![ChargeBoundaryIR::VoltageElectrode {
+                id: "electrode".into(),
+                surfaces: vec![SurfaceRefIR {
+                    object_id: "strip".into(),
+                    surface_id: "bottom".into(),
+                    orientation: [0.0, 0.0, -1.0],
+                }],
+                potential_v: 1.0,
+            }],
+            gauge: ChargePotentialGaugeIR::DirichletReference,
+            solver: charge_solver.clone(),
+        };
+        let spin_material = SpinTransportMaterialAssignmentIR {
+            region: region.clone(),
+            material: SpinTransportMaterialIR {
+                sigma_s_spm: 5.0,
+                polarization_p: 0.2,
+                theta_sh: 0.1,
+                lambda_sf_m: 0.5,
+                lambda_j_m: fullmag_ir::ReactionLengthIR::Enabled(0.4),
+                lambda_phi_m: fullmag_ir::ReactionLengthIR::Enabled(0.6),
+                spin_capacitance_as_per_v_m3: None,
+                capacitance_formula_version: None,
+            },
+        };
+        let spin_solver = SpinSolverPolicyIR {
+            engine: "gmres".into(),
+            linear: LinearTransportSolverPolicyIR {
+                relative_tolerance: 1.0e-10,
+                absolute_tolerance: 0.0,
+                max_iterations: 500,
+            },
+            physical_residual_version: PHYSICAL_RESIDUAL_VERSION.into(),
+            operator_version: OPERATOR_VERSION.into(),
+            default_external_boundary: "spin_insulating".into(),
+            reciprocal_nonlinear: None,
+        };
+        ResolvedSpinTransportPlanIR {
+            module_id: "spin".into(),
+            current_source_id: "charge".into(),
+            resolved_coupling: TransportCouplingIR::OneWay,
+            requested_execution: RequestedTransportExecutionIR {
+                discretization: BackendTarget::Auto,
+                device: ExecutionDevice::Auto,
+                precision: ExecutionPrecision::Double,
+                execution_mode: ExecutionMode::Strict,
+            },
+            resolved_discretization: BackendTarget::Fem,
+            resolved_device: ExecutionDevice::Cpu,
+            resolved_precision: ExecutionPrecision::Double,
+            constitutive_version: CONSTITUTIVE_VERSION.into(),
+            operator_version: OPERATOR_VERSION.into(),
+            physical_residual_version: PHYSICAL_RESIDUAL_VERSION.into(),
+            capabilities: vec!["transport.spin.fem_conforming_h1_p1".into()],
+            inserted_default_boundaries: vec!["all_unassigned_external_surfaces".into()],
+            fdm_cpu_double: None,
+            fdm_cpu_double_reciprocal: None,
+            fem_cpu_double: Some(ResolvedFemSpinTransportIR {
+                descriptor_schema: "fullmag.fem.spin_transport_descriptor.v1".into(),
+                charge_definition,
+                spin_domain: vec![region],
+                spin_materials: vec![spin_material],
+                interfaces: vec![],
+                spin_boundaries: vec![],
+                charge_conductivity_spm_per_element: vec![4.0],
+                charge_gauge: ChargePotentialGaugeIR::DirichletReference,
+                charge_solver,
+                resolved_linear_solver: LinearTransportSolverPolicyIR {
+                    relative_tolerance: 1.0e-10,
+                    absolute_tolerance: 0.0,
+                    max_iterations: 500,
+                },
+                charge_dirichlet: vec![(1, 1.0)],
+                spin_dirichlet: vec![],
+                sigma_s_spm: 5.0,
+                polarization_p: 0.2,
+                theta_sh: 0.1,
+                lambda_sf_m: 0.5,
+                lambda_j_m: Some(0.4),
+                lambda_phi_m: Some(0.6),
+                saturation_magnetization_apm: 8.0e5,
+                gamma_e_rad_per_s_t: 1.760_859_630_23e11,
+                spin_solver,
+                interface_realization: "transparent_conforming_h1".into(),
+                stage_coupling: "none".into(),
+            }),
+        }
+    }
+
     #[test]
     fn preflight_rejects_gpu_and_mixing_before_native_call() {
         let mut gpu = request();
@@ -446,5 +748,45 @@ mod tests {
             flat.magnetization,
             vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]
         );
+    }
+
+    #[test]
+    fn canonical_descriptor_materializes_exact_solver_policy_and_provenance() {
+        let fixture = request();
+        let resolved = resolved_plan();
+        let mapped = materialize_native_fem_steady_transport_request(
+            &fixture.mesh,
+            &fixture.magnetization,
+            &resolved,
+        )
+        .expect("canonical native request");
+        assert_eq!(mapped.charge_conductivity_spm_per_element, [4.0]);
+        assert_eq!(mapped.relative_tolerance, 1.0e-10);
+        assert_eq!(mapped.maximum_iterations, 500);
+        assert_eq!(mapped.charge_dirichlet, [(1, 1.0)]);
+        let provenance = transport_provenance(&resolved).expect("transport provenance");
+        assert_eq!(provenance.requested_discretization, "auto");
+        assert_eq!(provenance.requested_device, "auto");
+        assert_eq!(provenance.resolved_discretization, "fem");
+        assert_eq!(provenance.resolved_device, "cpu");
+        assert_eq!(provenance.stage_coupling, "none");
+    }
+
+    #[test]
+    fn contradictory_resolved_descriptor_fails_before_native_call() {
+        let fixture = request();
+        let mut resolved = resolved_plan();
+        resolved
+            .fem_cpu_double
+            .as_mut()
+            .expect("FEM descriptor")
+            .stage_coupling = "llg_stage".into();
+        let error = materialize_native_fem_steady_transport_request(
+            &fixture.mesh,
+            &fixture.magnetization,
+            &resolved,
+        )
+        .expect_err("unproven stage coupling must fail closed");
+        assert!(error.message.contains("contradictory resolved descriptor"));
     }
 }

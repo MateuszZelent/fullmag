@@ -941,6 +941,8 @@ pub struct FemPlanIR {
     pub antenna_zeeman_masks: Vec<ResolvedAntennaZeemanMaskIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_modules: Vec<CurrentModuleIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spin_transport_plans: Vec<ResolvedSpinTransportPlanIR>,
     pub gyromagnetic_ratio: f64,
     pub precision: ExecutionPrecision,
     pub exchange_bc: ExchangeBoundaryCondition,

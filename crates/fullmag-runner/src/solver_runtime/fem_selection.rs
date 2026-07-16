@@ -258,6 +258,19 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
                     .to_string(),
         });
     }
+    if !plan.spin_transport_plans.is_empty() {
+        let policy = std::env::var("FULLMAG_FEM_EXECUTION")
+            .unwrap_or_else(|_| runtime_fem_policy(problem).to_string());
+        if fem_policy_requires_gpu(&policy) {
+            return Err(RunError {
+                message: "FEM steady spin transport is qualified only for CPU-double; an explicit GPU execution request cannot fall back before provenance".to_string(),
+            });
+        }
+        return Ok(EngineResolution {
+            engine: FemEngine::CpuNative,
+            fallback: None,
+        });
+    }
     let mut resolution = resolve_fem_engine_with_trail(problem)?;
     if resolution.engine == FemEngine::NativeGpu {
         if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(plan) {

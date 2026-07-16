@@ -276,6 +276,38 @@ pub struct ResolvedSpinTransportPlanIR {
     pub fdm_cpu_double_reciprocal: Option<ResolvedFdmCoupledSpinTransportIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_cpu_double_transient: Option<ResolvedFdmTransientSpinTransportIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_cpu_double: Option<ResolvedFemSpinTransportIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFemSpinTransportIR {
+    pub descriptor_schema: String,
+    pub charge_definition: ChargeTransportDefinitionIR,
+    pub spin_domain: Vec<RegionRefIR>,
+    pub spin_materials: Vec<SpinTransportMaterialAssignmentIR>,
+    pub interfaces: Vec<SpinInterfaceIR>,
+    pub spin_boundaries: Vec<SpinBoundaryIR>,
+    pub charge_conductivity_spm_per_element: Vec<f64>,
+    pub charge_gauge: ChargePotentialGaugeIR,
+    pub charge_solver: ChargeSolverPolicyIR,
+    pub resolved_linear_solver: LinearTransportSolverPolicyIR,
+    pub charge_dirichlet: Vec<(u32, f64)>,
+    pub spin_dirichlet: Vec<(u32, [f64; 3])>,
+    #[serde(rename = "sigma_s_Spm")]
+    pub sigma_s_spm: f64,
+    pub polarization_p: f64,
+    pub theta_sh: f64,
+    pub lambda_sf_m: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lambda_j_m: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lambda_phi_m: Option<f64>,
+    pub saturation_magnetization_apm: f64,
+    pub gamma_e_rad_per_s_t: f64,
+    pub spin_solver: SpinSolverPolicyIR,
+    pub interface_realization: String,
+    pub stage_coupling: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -3623,6 +3623,7 @@ mod tests {
                 external_field: None,
                 antenna_zeeman_masks: Vec::new(),
                 current_modules: Vec::new(),
+                spin_transport_plans: Vec::new(),
                 gyromagnetic_ratio: 2.211e5,
                 precision: ExecutionPrecision::Double,
                 exchange_bc: ExchangeBoundaryCondition::Neumann,
@@ -5077,6 +5078,7 @@ mod tests {
         let plan = test_fem_execution_plan();
         let context = build_field_context(&problem, &plan);
         let provenance = crate::types::ExecutionProvenance {
+            transport_modules: Vec::new(),
             execution_engine: "fem_cpu_native".to_string(),
             precision: "double".to_string(),
             demag_operator_kind: None,
@@ -5941,6 +5943,7 @@ mod tests {
             true, true, false, false, true, false, true, false,
         ]));
         let provenance = ExecutionProvenance {
+            transport_modules: Vec::new(),
             execution_engine: "fdm_gpu_native".to_string(),
             precision: "double".to_string(),
             demag_operator_kind: None,

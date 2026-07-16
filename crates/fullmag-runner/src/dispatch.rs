@@ -1501,6 +1501,17 @@ pub(crate) fn resolve_fem_engine_for_plan_with_trail(
                     .to_string(),
         });
     }
+    if !plan.spin_transport_plans.is_empty() {
+        if fem_gpu_execution_forced() || strict_fem_gpu_requested(problem) {
+            return Err(RunError {
+                message: "FEM steady spin transport is qualified only for CPU-double; an explicit GPU execution request cannot fall back before provenance".to_string(),
+            });
+        }
+        return Ok(EngineResolution {
+            engine: FemEngine::CpuNative,
+            fallback: None,
+        });
+    }
     apply_fem_gpu_plan_constraints(
         plan,
         resolve_fem_engine_with_trail(problem)?,
@@ -2249,6 +2260,23 @@ pub(crate) fn execute_fem<'a>(
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
+    #[cfg(feature = "fem-gpu")]
+    let transport_bundle = if normalized_plan.spin_transport_plans.is_empty() {
+        None
+    } else {
+        if engine != FemEngine::CpuNative {
+            return Err(RunError {
+                message: "FEM M1 steady spin transport resolved CPU-double, but runtime selected GPU; refusing hidden fallback before provenance".to_string(),
+            });
+        }
+        crate::native_fem::execute_native_fem_steady_transport_plans(&normalized_plan)?
+    };
+    #[cfg(not(feature = "fem-gpu"))]
+    if !normalized_plan.spin_transport_plans.is_empty() {
+        return Err(RunError {
+            message: "FEM steady spin transport requires a runner built with the managed native FEM feature".to_string(),
+        });
+    }
     let pbc_decision = fem_static_periodic_decision(&normalized_plan);
     match pbc_decision.lane {
         FemStaticPbcLane::Unsupported => {
@@ -2287,7 +2315,7 @@ pub(crate) fn execute_fem<'a>(
             // Fall through to native execution below.
         }
     }
-    match engine {
+    let mut executed = match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
             execute_native_fem(
@@ -2310,7 +2338,16 @@ pub(crate) fn execute_fem<'a>(
                 artifact_writer,
             )
         }
+    }?;
+    #[cfg(feature = "fem-gpu")]
+    if let Some(bundle) = transport_bundle {
+        executed.auxiliary_artifacts.push(bundle.artifact);
+        executed
+            .provenance
+            .transport_modules
+            .extend(bundle.provenance);
     }
+    Ok(executed)
 }
 
 pub(crate) fn execute_fem_eigen(
@@ -6129,6 +6166,7 @@ mod tests {
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
             current_modules: Vec::new(),
+            spin_transport_plans: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: fullmag_ir::ExecutionPrecision::Double,
             exchange_bc: fullmag_ir::ExchangeBoundaryCondition::Neumann,

@@ -1748,6 +1748,8 @@ pub struct ExecutionProvenance {
     pub execution_engine: String,
     /// Numeric precision used: "double" or "single".
     pub precision: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transport_modules: Vec<TransportExecutionProvenance>,
     /// Demag operator kind: e.g. "tensor_fft_newell".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demag_operator_kind: Option<String>,
@@ -1928,6 +1930,24 @@ pub struct ExecutionProvenance {
     pub fem_poisson_demag: Option<FemPoissonDemagProvenance>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TransportExecutionProvenance {
+    pub module_id: String,
+    pub current_source_id: String,
+    pub requested_discretization: String,
+    pub requested_device: String,
+    pub requested_precision: String,
+    pub requested_execution_mode: String,
+    pub resolved_discretization: String,
+    pub resolved_device: String,
+    pub resolved_precision: String,
+    pub constitutive_version: String,
+    pub operator_version: String,
+    pub physical_residual_version: String,
+    pub interface_realization: String,
+    pub stage_coupling: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeEngineInfo {
     /// Canonical backend family such as "fdm", "fem", or "fem_eigen".
@@ -2086,6 +2106,7 @@ mod tests {
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
             current_modules: Vec::new(),
+            spin_transport_plans: Vec::new(),
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,

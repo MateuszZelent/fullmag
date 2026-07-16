@@ -2513,6 +2513,7 @@ mod tests {
                 fdm_cpu_double: Some(descriptor),
                 fdm_cpu_double_reciprocal: None,
                 fdm_cpu_double_transient: None,
+                fem_cpu_double: None,
             }],
             ..FdmPlanIR::default()
         }

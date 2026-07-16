@@ -1029,6 +1029,7 @@ mod tests {
             external_field: None,
             antenna_zeeman_masks: Vec::new(),
             current_modules: vec![],
+            spin_transport_plans: vec![],
             gyromagnetic_ratio: 2.211e5,
             precision: ExecutionPrecision::Double,
             exchange_bc: ExchangeBoundaryCondition::Neumann,

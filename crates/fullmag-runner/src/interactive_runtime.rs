@@ -4141,6 +4141,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
     let fft_backend = cpu_reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
 
     Ok(ExecutionProvenance {
+        transport_modules: Vec::new(),
         execution_engine: "cpu_reference".to_string(),
         precision: "double".to_string(),
         demag_operator_kind: if plan.enable_demag {
@@ -4315,6 +4316,7 @@ fn fem_gpu_execution_provenance(
     let execution_engine = native_fem_backend_id(plan).provenance_name();
     let resolved_demag_realization = resolved_native_fem_demag(plan);
     let mut provenance = ExecutionProvenance {
+        transport_modules: Vec::new(),
         execution_engine: execution_engine.to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),

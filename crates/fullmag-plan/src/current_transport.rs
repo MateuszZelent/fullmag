@@ -62,19 +62,25 @@ pub(crate) fn resolve_current_transports(
                 )),
             },
             CurrentModuleIR::CurrentTransport {
+                name,
                 model:
                     CurrentTransportModelIR::OhmicPoisson
                     | CurrentTransportModelIR::MagnetoresistivePoisson,
                 ..
             } => {
-                if lane == CurrentTransportExecutableLane::Fem {
+                if lane == CurrentTransportExecutableLane::Fem
+                    && !problem
+                        .spin_transport_modules
+                        .iter()
+                        .any(|module| module.current_source_id == *name)
+                {
                     reasons.push(format!(
-                        "current_modules[{index}] current_transport(ohmic_poisson) is not executable on the FEM lane through the Rust current resolver"
+                        "current_modules[{index}] current_transport(ohmic_poisson) requires a bound FEM spin_transport module on the M1 lane"
                     ));
                 }
-                // FDM M1 materializes the complete charge solve together with
-                // its owning spin-transport plan. It deliberately does not
-                // masquerade as a prescribed uniform-current source here.
+                // M1 materializes the complete charge solve together with its
+                // owning spin-transport plan. It deliberately does not
+                // masquerade as a prescribed uniform-current source.
             }
         }
     }
