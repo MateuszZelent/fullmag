@@ -120,11 +120,16 @@ Biot–Savart: the magnetic field depends on the return circuit. A general
 
 - `closed_geometry`: a volumetrically meshed conductor/return loop whose
   conservative current is part of the same RT0 view and has zero net outer
-  source flux;
+  source flux. A nonzero loop current additionally requires a versioned
+  impressed source representation (`source_cut` or periodic potential drop),
+  or an already certified imported closed RT0 field. A single-valued
+  electrostatic `H1` potential on a closed loop is not such a source;
 - `external_lead_extension`: a versioned, volumetrically tetrahedralized lead
   extension whose current is joined to the conductor by
   `fem_closed_current_extension.v1`, with oriented interface-flux equality and
-  its own mesh/revision/digest certificate;
+  its own mesh/revision/digest certificate. V1 solves the device and extension
+  as one coupled minimum-dissipation problem, so lead impedance feeds back on
+  the device current; a sequential field extrapolation is not this closure;
 - `analytic_return_path`: an OE-F1-only additive analytic field realization,
   `oersted_analytic_return_additive.v1`. It is not an RT0 field, is never
   inserted into `ConservativeCurrentView`, and is unsupported for OE-F2.
@@ -339,6 +344,95 @@ serialization. The digest hashes the operator/schema IDs, geometry digest and
 little-endian records in sorted order. Stable vertex identities are independent
 of element numbering and MPI ownership. Element reorder, local face reorder,
 true-dof reorder and MPI repartition must therefore leave the digest unchanged.
+
+#### 3.2.1 OE-T0 v1 construction contract
+
+V1 is restricted to straight, affine, nondegenerate tetrahedra. Curved or
+higher-order geometry is rejected until a separately versioned canonical
+geometry and face-quadrature contract exists. Every mesh vertex carries an
+explicit stable unsigned 64-bit identity. MFEM vertex, element, face and true
+DOF numbers are never substituted for that identity.
+
+For a potential-derived source, OE-T0 reconstructs the conservative field in
+`RT0` with discontinuous elementwise constants as Lagrange multipliers. With
+`j_0=-sigma grad V`, the discrete problem is the constrained weighted
+projection
+
+```text
+min_j 1/2 integral (j-j_0) dot sigma^{-1}(j-j_0) dV,
+subject to B j = q and C j = d,
+
+[ M  B^T C^T ] [ j      ]   [ g ],
+[ B   0   0  ] [ lambda ] = [ q ],
+[ C   0   0  ] [ eta    ]   [ d ].
+```
+
+`M` is the `RT0` weighted vector mass matrix and `B` is the `RT0`--`L2`
+divergence operator. `C` contains nonlocal terminal-current sums,
+source-cut/periodic-pair flux equations and nonconforming closure-interface
+pairing equations. Zero insulating normal-flux DOFs and any other pointwise
+prescribed RT trace are eliminated as essential DOFs before forming the KKT
+system. A deterministic rank-revealing analysis removes redundant rows from
+`[B;C]`; in particular exactly one dependent divergence equation per closed
+connected component is removed unless an equivalent explicit compatibility
+constraint is used. Every omitted physical equation is still checked by the
+independent certificate. Direct coefficient projection is not a conservation
+proof.
+
+A resolved v1 `source_cut` is an oriented pair of conforming triangulated cut
+surfaces materialized only from the current module's authored
+`periodic_potential_drop`. It carries stable face-key pairings, a canonical
+minus-to-plus orientation and a potential jump in volts. Before RT
+reconstruction, `fem_charge_h1_periodic_jump.v1` solves the periodic `H1`
+quotient unknown plus an affine jump lift (equivalently duplicated paired
+traces) satisfying `V_plus-V_minus=drop_V`, with one explicit gauge. The RT KKT
+does not impose this voltage equation; it consumes the converged lifted
+potential and requires equal/opposite paired cut flux through `Cj=d`. Every cut
+face occurs exactly once on each side, geometry matches under the declared
+transform, and `drop_V` is multiplied by the source time envelope. Missing,
+multiply paired or orientation-inconsistent cut faces are rejected. A future
+total-current cut is a separately versioned charge operator.
+
+The construction request contains the potential and conductivity snapshots,
+stable vertex identities, classified boundary faces, terminal/source-cut
+constraints, closure support, all source/mesh/topology revisions and digests,
+evaluation time and stage identity. `closed_geometry` accepts either a
+periodic-drop reconstruction sourced by the same current module or a certified
+imported closed RT0 field. The closure object itself never invents a drive;
+absent either source, its only admissible potential-derived solution is zero
+current. `external_lead_extension` participates in the same coupled
+constrained solve. OE-T0 rejects analytic returns, incomplete interface pairing
+and any attempt to manufacture closure by zeroing an open terminal flux.
+
+The published view owns an immutable mesh snapshot, RT collection, finite
+element space, grid function, canonical records and identity metadata. The
+transport owner atomically replaces its `shared_ptr<const
+ConservativeCurrentView>` only after the charge solve, constrained
+reconstruction and all independent gates succeed. Failure leaves the previous
+accepted view intact; tentative/rejected-stage state is never published.
+
+The balance certificate is evaluated from the physical Piola-mapped field by
+independent quadrature, not from the KKT residual. It records every element
+residual, shared-face trace jump, terminal/source-cut flux, closure-interface
+pair, net outer flux and normalized global balance using a `1e-30 A` floor.
+The public summary may expose maxima, but the complete diagnostic artifact is
+retained.
+
+For canonical face records, the sorted stable vertex triple `(a<b<c)` defines
+the face key and its ordered coordinates define the canonical normal. Repeated
+identities, degenerate faces, non-finite fluxes, or identity/coordinate
+disagreement across ranks are rejected. Records normalize negative zero,
+encode unsigned identities and binary64 flux in little-endian form, and hash
+the schema, operator/orientation version, geometry digest and sorted records.
+
+The OE-T0 v1 reference executable guarantees byte-identical one-rank/two-rank
+results by gathering the canonical affine mesh, coefficients and constraints,
+performing the reconstruction in deterministic canonical order on rank zero,
+and broadcasting canonical records and the accepted field. This is an
+explicit correctness/reference realization, not the production-scalability
+claim. A future distributed reconstruction may replace it only under a new
+deterministic reduction/quantization contract and must retain the same
+physical gates.
 
 ### 3.3 FEM direct tetrahedral Biot--Savart oracle (OE-F1)
 

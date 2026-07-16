@@ -56,7 +56,7 @@
 | `apps/control-room/src/kernel/api/generated/*`, `ControlRoomApi.ts`, and `kernel/resources/spinAuthoringResources.ts` | generated transport, typed facade and resource hooks |
 | `apps/control-room/src/modules/inspector/panels/SpinAuthoringInspectorModel.ts` and `SpinAuthoringInspector.tsx` | current-view/Oersted authoring, capability and inspector projection through typed API |
 | `backends/fem/tests/*oersted*` | native independent physics and numerical contracts |
-| `justfile` | managed CPU-only steady-transport, time-domain, OE-F1 and OE-F2 verification recipes plus configuration audit |
+| `justfile` | managed CPU-only steady-transport, time-domain, OE-T0, OE-F1 and OE-F2 verification recipes plus configuration audit |
 
 ---
 
@@ -72,8 +72,8 @@ GPU-backed build/profile. Do not invoke them anywhere in this plan.
 - Test: the recipe configuration audit added beside the managed FEM recipes
 
 - [ ] Add `verify-fem-steady-transport-cpu-only-contract` and
-  `verify-fem-time-domain-cpu-only-contract`, plus the OE-F1/OE-F2 CPU recipes
-  named below. Every recipe must create or select a managed runtime whose
+  `verify-fem-time-domain-cpu-only-contract`, plus the OE-T0/OE-F1/OE-F2 CPU
+  recipes named below. Every recipe must create or select a managed runtime whose
   configure evidence records `CUDA=OFF` and `FEM_GPU=OFF`, links only the
   prebuilt CPU MFEM/hypre library, enables no Rust GPU feature, and selects no
   GPU image, compose profile or device runtime.
@@ -91,8 +91,12 @@ fi
 ```
 
 - [ ] Run each new CPU-only recipe once and retain configure output proving the
-  above invariants. No later task may substitute a legacy/native recipe whose
-  transitive build configuration is GPU-backed.
+  above invariants. At Task 0, steady-transport and time-domain must pass;
+  OE-T0, OE-F1 and OE-F2 must pass the repository/runtime audits and configure,
+  then fail RED on their still-missing milestone-specific target. Passing one
+  of those three by running a legacy Oersted target is a contract failure. No
+  later task may substitute a legacy/native recipe whose transitive build
+  configuration is accelerator-backed.
 
 ### Task 1: OE-T0 conservative RT0 current-view contract
 
@@ -105,7 +109,14 @@ fi
 - Modify: `backends/fem/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: the converged M1 charge potential, conductivity coefficient, tetrahedral mesh, globally completed closure support, source/mesh/topology revisions, stage time.
+- Consumes: the converged M1 charge potential, conductivity coefficient,
+  straight affine tetrahedral mesh, explicit stable `u64` vertex identities,
+  classified boundary faces, terminal/source-cut constraints, globally
+  completed closure support, source/mesh/topology revisions and digests,
+  evaluation time and stage identity. `closed_geometry` requires an explicit
+  `periodic_potential_drop` from the same current module or certified imported
+  closed RT0 field; the closure object alone cannot author a drive.
+  `external_lead_extension` participates in the coupled solve.
 - Produces:
 
 ```cpp
@@ -140,12 +151,36 @@ public:
     const mfem::GridFunction &field() const;
     const ConservativeCurrentIdentity &identity() const;
     const ConservativeCurrentBalanceCertificate &balance() const;
+    const std::vector<CanonicalFaceFluxRecord> &local_canonical_records() const;
 };
 ```
 
+The concrete class uses pImpl and owns an immutable mesh snapshot, RT
+collection, finite-element space, grid function, canonical records and
+metadata. The transport owner exposes only
+`std::shared_ptr<const ConservativeCurrentView>` and atomically replaces it
+after full acceptance.
+
 - [ ] **Step 1: Write failing native tests for orientation, conservation, identity, and immutability**
 
-Create fixtures for two tetrahedra sharing a face and a volumetrically meshed closed conductor loop. Assert exact cancellation of the globally oriented shared-face flux, element integrated divergence below `1e-12 A`, closure balance below `1e-12`, and digest changes for each individual source/mesh/closure revision mutation. Add rejection cases for NaN RT0 dofs, an unpaired terminal, stale source revision, non-tetrahedral input, and mutation of the source after view construction. Repeat the same physical fixture with reversed element order, permuted local face order, different MFEM true-dof numbering and one-rank/two-rank partitioning; the canonical digest must be byte-identical.
+Create fixtures for two tetrahedra sharing a face, a layered-conductivity series
+conductor, a volumetrically meshed closed loop with explicit source cut and a
+device with volumetric external leads. Assert exact cancellation of the
+globally oriented shared-face flux, element integrated divergence below
+`1e-12 A`, closure balance below `1e-12`, correct uniform/series current and
+digest changes for each individual source/mesh/closure revision mutation. Add
+rejection cases for NaN/Inf, an unpaired terminal, incomplete lead join, stale
+source revision, duplicate or inconsistent stable IDs, non-tetrahedral or
+curved input, degenerate faces, singular constraints and mutation of the source
+after view construction. Repeat an exactly imported RT0 fixture with reversed
+element order, permuted local face/RT DOF order and different MFEM numbering.
+Run a real `mpiexec -n 1`/`-n 2` ParMesh fixture; the canonical records and
+digest must be byte-identical.
+
+The closed-loop source-cut fixture is authored through
+`periodic_potential_drop`. It first proves the periodic H1 potential jump and
+paired weak flux, then exercises RT reconstruction; it must fail if only
+`closed_geometry` is provided without a current-module drive.
 
 ```cpp
 require(view.identity().operator_version ==
@@ -162,18 +197,69 @@ require(view.balance().closure_complete, "current closure is incomplete");
 Add `fem_conservative_current_view_contract` to CMake, then run:
 
 ```bash
-just verify-fem-oersted-oef1-cpu-contract
+just verify-fem-oersted-oet0-cpu-contract
 ```
 
 Expected: the managed container configures successfully and fails because the new target/API is not implemented; it must not fall through to an existing nodal-current test.
 
 - [ ] **Step 3: Implement conservative RT0 reconstruction**
 
-Use `RT_FECollection(0,3)` and the global true-dof orientation from MFEM. Assemble a constrained flux-equilibration/mixed projection that minimizes the weighted difference from `-sigma grad V` subject to the element divergence and terminal/closure constraints. Do not use `GridFunction::ProjectCoefficient` as proof of conservation. Construct a new immutable view only after both algebraic convergence and the independent integrated balance pass.
+First add `fem_charge_h1_periodic_jump.v1` to the current-transport owner. Build
+the paired periodic H1 quotient space from the resolved stable face pairing,
+apply an affine lift whose plus/minus trace jump equals the authored `drop_V`,
+remove the remaining constant gauge explicitly, solve the charge equation and
+independently certify the paired weak flux. The RT stage consumes this accepted
+potential; its `Cj=d` equations do not impose voltage. A failed periodic solve
+publishes neither potential nor conservative current.
 
-The balance calculator must independently integrate outward flux per element and outer/electrode boundary, pair internal faces once, and apply the v1 absolute/relative floors from the runtime contract. Build `fem_rt0_canonical_face_digest.v1` records from a canonical global face identity: sort stable mesh-vertex identities, derive the versioned canonical normal, convert every local RT sign, globally sort `(face_key,flux_A)`, then hash canonical little-endian records plus identity strings. Never hash pointer values, MFEM true-dof numbers, element order or partition-local ordering. Add explicit element-reorder and MPI partition invariance tests.
+Use `RT_FECollection(0,3)` and a discontinuous elementwise constant multiplier.
+Assemble the KKT system `[M B^T C^T; B 0 0; C 0 0]`, where `M` is weighted by
+`sigma^{-1}`, `B` is the RT0--L2 divergence operator and `C` contains terminal
+current sums, paired source-cut equations and closure-interface flux
+constraints. Eliminate zero insulating normal-flux and other pointwise
+prescribed RT traces as essential DOFs first. Minimize the weighted difference
+from `-sigma grad V` subject to `Bj=q` and `Cj=d`. Apply a deterministic
+rank-revealing analysis to `[B;C]`; remove exactly one dependent divergence row
+per closed connected component when appropriate and remove any other redundant
+constraint explicitly rather than accepting a singular system. Independently
+validate every omitted balance. Do not use `GridFunction::ProjectCoefficient`
+as proof of conservation. Construct a new immutable view only after both
+algebraic convergence and the independent integrated balance pass.
 
-`closed_geometry` imports its already closed volumetric RT0 field. `external_lead_extension` tetrahedralizes the authored leads and applies `fem_closed_current_extension.v1`, proving equal/opposite interface flux before joining the canonical records. Reject `analytic_return_path` in OE-T0 because it has no volumetric RT0 representation.
+The balance calculator must independently integrate the physical Piola-mapped
+field by quadrature: outward flux per element and outer/electrode/source-cut
+boundary, shared-face trace jump and every closure-interface pair. It must not
+reuse a KKT residual. Apply the v1 absolute/relative floors from the runtime
+contract and retain complete diagnostics. Build
+`fem_rt0_canonical_face_digest.v1` records from a canonical global face
+identity: sort stable mesh-vertex identities, derive the canonical normal from
+the coordinates in that ID order, reject ID/coordinate disagreement, convert
+every local RT sign, normalize negative zero, globally sort
+`(face_key,flux_A)`, then hash version tags, geometry digest and canonical
+little-endian records. Never hash pointer values, MFEM true-dof numbers,
+element order or partition-local ordering.
+
+`closed_geometry` either imports an already certified closed volumetric RT0
+field or reconstructs one from the same current module's authored
+`periodic_potential_drop`; it does not define a source by itself;
+a single-valued electrostatic potential alone cannot drive a nonzero closed
+loop. `external_lead_extension` tetrahedralizes the authored leads and includes
+them in the same coupled minimum-dissipation solve so lead impedance feeds back
+on the device; prove equal/opposite flux on every join face. Reject
+`analytic_return_path` and never fake closure by setting terminal flux to zero.
+
+Represent a resolved v1 source cut as two bijectively paired sets of stable
+triangular face keys, a declared minus-to-plus transform/orientation and the
+authored `potential_jump [V]`. Periodic H1 reconstruction uses an affine lift
+or equivalent duplicated traces with `V_plus-V_minus=drop_V`; RT reconstruction
+requires equal/opposite paired flux. Reject unmatched faces, multiple pairing,
+geometry/orientation mismatch and any independently invented cut excitation.
+
+For the v1 reference executable, gather the canonical affine mesh,
+coefficients and constraints, reconstruct in deterministic canonical order on
+rank zero, and broadcast the records/accepted field. This deliberately favors
+byte-identical MPI qualification over scalability. A distributed solver needs
+a separately versioned deterministic reduction or quantization contract.
 
 - [ ] **Step 4: Preserve visualization compatibility without semantic aliasing**
 
@@ -182,7 +268,7 @@ Keep `charge_current_density()` as the current nodal visualization quantity. Add
 - [ ] **Step 5: Run focused and steady-transport managed gates**
 
 ```bash
-just verify-fem-oersted-oef1-cpu-contract
+just verify-fem-oersted-oet0-cpu-contract
 just verify-fem-steady-transport-cpu-only-contract
 ```
 
@@ -220,12 +306,31 @@ git commit -m "feat(fem): publish conservative RT0 current view"
 - Test: `crates/fullmag-runner/src/lib/tests.rs`
 
 **Interfaces:**
-- Consumes: `ConservativeCurrentView` from Task 1.
-- Produces: `fullmag.fem.conservative_current_view.v1` descriptor, canonical RT0 binary member, JSON manifest and runner-side `ConservativeCurrentViewRef`.
+- Consumes internally: `ConservativeCurrentView` from Task 1.
+- Native-to-Rust export: a new combined conservative-transport solve/export
+  entry point writes caller-allocated output buffers during the call; it never
+  returns a native or MFEM pointer.
+- Rust-to-native import: OE-F1/OE-F2 receive a separate const input descriptor;
+  `oersted_c_api.cpp` validates and deep-copies it before the solver retains it.
+- Produces: `fullmag.fem.conservative_current_view.v1` input/output descriptor
+  family, canonical RT0 binary member, JSON manifest and runner-side
+  `ConservativeCurrentViewRef`.
 
 - [ ] **Step 1: Write failing append-only ABI and artifact tests**
 
-Define a new ABI family rather than changing the size of `fullmag_fem_steady_transport_result_v1`. Test the exact prefix `(abi_version, struct_version, struct_size)`, every pointer+length null/zero/mismatch combination, arithmetic overflow before allocation/copy, finite fluxes, stable face keys, digest verification, bounded byte tags, and round-trip of every revision. Runner tests must tamper independently with face records, `source_module_id`, SI/component/FE tags, every balance-certificate field, source revision, closure digest and mesh revision and observe fail-closed loading. A lifetime test destroys/reuses caller buffers after the call and proves retained native state owns a deep copy.
+Define a new ABI family rather than changing the size of
+`fullmag_fem_steady_transport_result_v1`. The export function takes the existing
+steady request/result plus a conservative-current build request and a mutable
+output descriptor; the import descriptor is a separate const type. Test the
+exact prefix `(abi_version, struct_version, struct_size)`, every
+pointer+capacity/written-length and pointer+length null/zero/mismatch
+combination, arithmetic overflow before allocation/copy, finite fluxes, stable
+face keys, digest verification, bounded byte tags, and round-trip of every
+revision. Runner tests must tamper independently with face records,
+`source_module_id`, SI/component/FE tags, every balance-certificate field,
+source revision, closure digest and mesh revision and observe fail-closed
+loading. An import lifetime test destroys/reuses caller buffers after the call
+and proves retained native state owns a deep copy.
 
 - [ ] **Step 2: Implement self-describing descriptor and Rust mirror**
 
@@ -244,7 +349,7 @@ typedef struct fullmag_fem_current_balance_certificate_v1 {
     uint32_t reserved_zero;
 } fullmag_fem_current_balance_certificate_v1;
 
-typedef struct fullmag_fem_conservative_current_view_v1 {
+typedef struct fullmag_fem_conservative_current_view_input_v1 {
     uint32_t abi_version;
     uint32_t struct_version;
     uint64_t struct_size;
@@ -269,10 +374,25 @@ typedef struct fullmag_fem_conservative_current_view_v1 {
     fullmag_fem_current_balance_certificate_v1 balance_certificate;
     double evaluation_time_s;
     uint64_t stage_identity;
-} fullmag_fem_conservative_current_view_v1;
+} fullmag_fem_conservative_current_view_input_v1;
 ```
 
-Mirror this layout exactly in Rust and add compile-time size/offset assertions. Every byte view is bounded and need not be NUL-terminated; embedded NUL and invalid UTF-8 are rejected for semantic tags/IDs. `canonical_face_vertex_ids_len` must equal three times `canonical_face_flux_count`. Input buffers are caller-owned and valid only for the dynamic extent of the ABI call. `oersted_c_api.cpp` validates everything, checks multiplication/addition overflow, and deep-copies accepted records/tags into the native owner before returning; no borrowed pointer is retained. Result arrays use caller-allocated pointer+capacity with exact written length. Never return an MFEM object pointer across the ABI.
+Define a distinct `fullmag_fem_conservative_current_view_output_v1` with
+mutable buffers, capacity and written length for the vertex-ID array, flux
+array and every bounded string. Define
+`fullmag_fem_solve_steady_transport_conservative_v1(steady_request,
+current_build_request, steady_result, current_output)` for native-to-Rust
+export. Define OE solver entry points to accept only the const input descriptor
+above for Rust-to-native import. Mirror all layouts exactly in Rust and add
+compile-time size/offset assertions. Every byte view is bounded and need not be
+NUL-terminated; embedded NUL and invalid UTF-8 are rejected for semantic
+tags/IDs. `canonical_face_vertex_ids_len` must equal three times
+`canonical_face_flux_count`. Import buffers are caller-owned and valid only for
+the dynamic extent of the call; `oersted_c_api.cpp` validates everything,
+checks multiplication/addition overflow, and deep-copies accepted records/tags
+before returning. Export writes caller-allocated buffers and exact written
+lengths, with no partial publication on capacity failure. Never return an MFEM
+object pointer across the ABI.
 
 - [ ] **Step 3: Implement and test the explicit C++ C-ABI adapter owner**
 
@@ -280,16 +400,29 @@ Keep exported `extern "C"` entry points and descriptor validation/copying in `oe
 
 - [ ] **Step 4: Persist canonical data-plane artifact**
 
-Write `current_transport/<id>.rt0.f64le` and `current_transport/<id>.conservative-view.json` atomically. The JSON manifest contains schema/operator versions, count, byte length, SHA-256 digest, SI/component/space tags, all source/mesh/topology/closure revisions, balance certificate, evaluation time and stage identity. On restore, validate the complete manifest before allocating or exposing an Oersted request.
+Write `current_transport/<id>.rt0-face-flux.v1.bin` and
+`current_transport/<id>.conservative-view.json` atomically. Each binary record
+is exactly 32 bytes in this order: three canonical face vertex identities as
+unsigned 64-bit little-endian integers followed by `flux_A` as IEEE-754
+binary64 little-endian. Records are lexicographically sorted by the three IDs;
+there is no in-band header or padding. The manifest supplies schema, record
+size/count, exact byte length and SHA-256 digest plus operator/orientation
+versions, SI/component/space tags, all source/mesh/topology/closure revisions,
+balance certificate, evaluation time and stage identity. On restore, validate
+the manifest, checked `count*32` length, record ordering, finite normalized
+flux bytes and digest before allocating or exposing an Oersted request.
 
 - [ ] **Step 5: Verify and review OE-T0 bridge**
 
 ```bash
-just verify-fem-oersted-oef1-cpu-contract
 just verify-fem-oersted-oet0-cpu-contract
 ```
 
-Both commands are managed CPU-only recipes and link the Rust ABI tests against the prebuilt CPU-only FEM library; neither configures CUDA nor enables a GPU feature. Review must confirm canonical face-flux record streams are data-plane artifacts and JSON never embeds the heavy current field.
+The command is a managed CPU-only recipe and links the Rust ABI tests against
+the prebuilt CPU-only FEM library; it neither configures CUDA nor enables an
+accelerator feature. Review must confirm canonical face-flux record streams are
+data-plane artifacts and JSON never embeds the heavy current field. OE-F1
+remains intentionally RED until Task 3 adds its direct-tetra target.
 
 - [ ] **Step 6: Commit OE-T0 bridge**
 
@@ -602,12 +735,20 @@ One reviewer traces a single source revision from Python/UI through IR, plan, AB
 
 - [ ] **Step 1: Freeze managed verification recipes**
 
-Confirm the four Task 0 CPU-only recipes retain their configuration assertions, then freeze `just verify-fem-oersted-oef1-cpu-contract` and `just verify-fem-oersted-oef2-cpu-contract` around the exact native tests and Rust ABI checks inside the managed CPU-only FEM container against its prebuilt CPU library. Add one public end-to-end recipe that runs canonical Python authoring, planner, native CPU-double execution, artifact validation and quantity readback.
+Confirm all five Task 0 CPU-only recipes retain their configuration assertions,
+then freeze `just verify-fem-oersted-oet0-cpu-contract`,
+`just verify-fem-oersted-oef1-cpu-contract` and
+`just verify-fem-oersted-oef2-cpu-contract` around the exact native tests and
+Rust ABI checks inside the managed CPU-only FEM container against its prebuilt
+CPU library. Add one public end-to-end recipe that runs canonical Python
+authoring, planner, native CPU-double execution, artifact validation and
+quantity readback.
 
 - [ ] **Step 2: Run complete evidence matrix**
 
 ```bash
 just verify-fem-steady-transport-cpu-only-contract
+just verify-fem-oersted-oet0-cpu-contract
 just verify-fem-oersted-oef1-cpu-contract
 just verify-fem-oersted-oef2-cpu-contract
 just verify-fem-time-domain-cpu-only-contract

@@ -126,6 +126,15 @@ ChargeBoundary =
   | {kind:"periodic_potential_drop", id, minus_surface:SurfaceRef,
      plus_surface:SurfaceRef, translation_m:Vector3 nonzero, drop_V:finite}
 
+ResolvedSourceCut = {
+  schema_version:"fem_current_source_cut.v1", id,
+  minus_face_keys:[FaceKey,...] nonempty,
+  plus_face_keys:[FaceKey,...] same length,
+  pairing:[{minus:FaceKey,plus:FaceKey},...] bijective,
+  transform:{translation_m:Vector3, orientation:"minus_to_plus"},
+  excitation:{kind:"potential_jump", drop_V:finite}
+}
+
 ChargeGauge =
   | {kind:"boundary_reference", boundary_id:id}
   | {kind:"zero_mean_potential", weighted_by:"cell_volume"|"fem_mass"}
@@ -145,6 +154,16 @@ boundary assignment, except that the two members of one periodic pair are one
 logical assignment. `boundary_reference` must reference `ground` or a voltage
 electrode whose potential fixes the nullspace. `zero_mean_potential` is legal
 only when no fixed-potential boundary already removes the gauge.
+
+`ResolvedSourceCut` is not an additional authored boundary kind. In v1 the
+planner materializes it only from a validated authored
+`periodic_potential_drop` drive/boundary pair of the same
+`CurrentTransportModule`; `closed_geometry` alone never creates an excitation.
+Its face keys use stable mesh vertex identities. The charge operator solves a
+periodic `H1` quotient problem with an affine jump lift (equivalently duplicated
+paired traces) satisfying `V_plus-V_minus=drop_V`. The subsequent RT
+reconstruction consumes that converged potential and requires equal/opposite
+normal flux on every paired cut face. Pairing must be geometrically bijective.
 
 ```text
 CurrentTransportModule = {
@@ -640,6 +659,48 @@ Any stale revision, digest mismatch, unpaired terminal flux or missing
 certificate invalidates the Oersted plan/cache. OE-F1 and OE-F2 consume the
 same view and cannot independently evaluate `-sigma grad V`.
 
+The v1 construction request is a resolved runtime object, never authored UI
+state. It includes stable `u64` vertex identities, classified boundary faces,
+terminal and source-cut constraints, potential/conductivity snapshots,
+closure support, source/mesh/topology identities, evaluation time and stage
+identity. V1 accepts straight affine tetrahedra only. A nonzero
+`closed_geometry` current requires either the same current module's authored
+`periodic_potential_drop` or a certified imported closed RT0 field. The closure
+object alone never creates a drive. An
+`external_lead_extension` is solved together with the device in the same
+constrained minimum-dissipation system; sequential extrapolation and terminal
+zeroing are invalid closure realizations.
+
+For a potential-jump source, the charge solve precedes the RT KKT. The
+versioned operator `fem_charge_h1_periodic_jump.v1` identifies the paired
+periodic trace space, applies an affine lift carrying the authored voltage
+jump, solves the remaining periodic unknown with one explicit gauge, and
+certifies the paired weak flux. `Cj=d` does not impose a voltage jump; it only
+enforces RT terminal/cut/interface flux constraints after that potential solve.
+V1 has no independently authored total-current source-cut variant.
+
+The reconstruction uses `Bj=q` for element divergence and a distinct `Cj=d`
+for terminal totals, paired source-cut flux and nonconforming closure-interface
+constraints. Pointwise zero insulating traces are eliminated as essential RT
+DOFs. A deterministic rank analysis of `[B;C]` removes dependent rows and
+records them for independent physical re-evaluation; a singular or
+incompatible constraint set fails closed.
+
+The reference MPI realization gathers the canonical mesh, coefficients and
+constraints, reconstructs in deterministic order on rank zero, then broadcasts
+the canonical result. This rule, together with canonical stable identities,
+is what makes the v1 binary64 records and digest byte-identical for one and two
+ranks. It is not permission to hash partition-local or MFEM numbering. A
+scalable distributed realization requires a new versioned deterministic
+reduction or quantization policy.
+
+The immutable resolved payload owns its mesh snapshot and RT0 storage. It is
+published by atomic replacement only after algebraic convergence and an
+independent physical certificate computed from Piola-mapped flux quadrature.
+The complete certificate artifact retains per-element, per-face, terminal,
+source-cut, interface and outer-boundary diagnostics even when the API summary
+contains only maxima and normalized balances.
+
 `OerstedSource` authoring contains only geometry/meshing intent. It MUST NOT
 contain `ConservativeCurrentViewRef`, artifact paths, record counts or digests.
 Normalization resolves `current_source_id`; after the exact current-source
@@ -656,6 +717,21 @@ as canonical little-endian values before hashing. Element/face iteration
 order, true-dof renumbering and MPI partition changes MUST NOT alter the
 digest. Qualification includes element reorder and MPI partition invariance
 tests with identical physical current and geometry.
+
+The canonical binary artifact is
+`current_transport/<id>.rt0-face-flux.v1.bin`. It contains no header or padding;
+each 32-byte record is `(u64le a,u64le b,u64le c,f64le flux_A)` with
+`a<b<c`, and records are lexicographically sorted by `(a,b,c)`. The adjacent
+manifest fixes schema/orientation versions, record size/count, byte length and
+SHA-256 digest. Restore checks `byte_length=32*count`, ordering, finite
+normalized flux bytes and digest before publication.
+
+The C ABI has separate directions. Native-to-Rust export uses a combined
+steady-transport/conservative-current entry point and caller-allocated mutable
+buffers with capacity and written length. Rust-to-native OE import uses const
+pointer+length descriptors that the adapter validates and deep-copies during
+the call. Neither direction returns an MFEM/native object pointer, and neither
+partially publishes output after a capacity or validation failure.
 
 Cache identity includes module/schema/formula/operator versions, normalized
 materials, BCs, oriented interfaces, source bindings, envelope, geometry,
