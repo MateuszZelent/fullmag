@@ -1280,6 +1280,38 @@ pub(crate) fn validate_spin_torque_modules(problem: &ProblemIR, errors: &mut Vec
 }
 
 pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let llg_integrator = problem
+        .study
+        .optional_dynamics()
+        .map(|dynamics| match dynamics {
+            DynamicsIR::Llg { integrator, .. } => integrator.as_str(),
+        });
+    let has_transient = problem
+        .spin_transport_modules
+        .iter()
+        .any(|module| module.mode == crate::SpinTransportModeIR::Transient);
+    let has_steady = problem
+        .spin_transport_modules
+        .iter()
+        .any(|module| module.mode == crate::SpinTransportModeIR::Steady);
+    if has_transient && llg_integrator != Some("coupled_imex_ark2") {
+        errors.push(
+            "transient spin requires llg.integrator='coupled_imex_ark2'; explicit_dp45/rk45 and auto fail closed"
+                .to_string(),
+        );
+    }
+    if has_steady && llg_integrator == Some("coupled_imex_ark2") {
+        errors.push(
+            "steady spin rejects llg.integrator='coupled_imex_ark2'; select a steady-compatible LLG integrator"
+                .to_string(),
+        );
+    }
+    if !has_transient && llg_integrator == Some("coupled_imex_ark2") {
+        errors.push(
+            "llg.integrator='coupled_imex_ark2' requires a transient spin transport module"
+                .to_string(),
+        );
+    }
     let mut ids = BTreeSet::new();
     for (index, module) in problem.spin_transport_modules.iter().enumerate() {
         let prefix = format!("spin_transport_modules[{index}]");
@@ -1688,7 +1720,7 @@ pub(crate) fn validate_unique_names<'a>(
 pub(crate) fn is_supported_llg_integrator(integrator: &str) -> bool {
     matches!(
         integrator,
-        "heun" | "rk4" | "rk23" | "rk45" | "abm3" | "auto"
+        "heun" | "rk4" | "rk23" | "rk45" | "abm3" | "coupled_imex_ark2" | "auto"
     )
 }
 
@@ -1723,7 +1755,7 @@ fn validate_study_dynamics_with_integrator_policy(
                 errors.push("llg.integrator must not be empty".to_string());
             } else if validate_integrator && !is_supported_llg_integrator(integrator.as_str()) {
                 errors.push(
-                    "llg.integrator must be one of: heun, rk4, rk23, rk45, abm3, auto".to_string(),
+                    "llg.integrator must be one of: heun, rk4, rk23, rk45, abm3, coupled_imex_ark2, auto".to_string(),
                 );
             }
             if fixed_timestep.is_some_and(|value| value <= 0.0) {

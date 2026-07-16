@@ -104,10 +104,37 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
         ["capacitance_formula_version"] = serde_json::json!("dos_constant.fullmag.v1");
     let transient: ProblemIR =
         serde_json::from_value(transient_value.clone()).expect("transient M3 IR should decode");
+    let mut transient = transient;
+    let StudyIR::TimeEvolution { dynamics, .. } = &mut transient.study else {
+        panic!("typed transport fixture must be time evolution")
+    };
+    let DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "coupled_imex_ark2".to_string();
     transient
         .validate()
-        .expect("transient M3 IR with physical capacitance should validate semantically");
+        .expect("transient M3 IR with the coupled integrator should validate semantically");
 
+    let mut explicit_transient = transient.clone();
+    let StudyIR::TimeEvolution { dynamics, .. } = &mut explicit_transient.study else {
+        unreachable!()
+    };
+    let DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "rk45".to_string();
+    assert!(explicit_transient
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error.contains("transient spin requires llg.integrator='coupled_imex_ark2'")));
+
+    let mut steady_coupled = transient.clone();
+    steady_coupled.spin_transport_modules[0].mode = SpinTransportModeIR::Steady;
+    assert!(steady_coupled
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error.contains("steady spin rejects llg.integrator='coupled_imex_ark2'")));
+
+    let mut transient_value = serde_json::to_value(transient).unwrap();
     transient_value["spin_transport_modules"][0]["materials"][0]["material"]
         .as_object_mut()
         .unwrap()
@@ -2901,6 +2928,28 @@ fn llg_requires_supported_integrator() {
     assert!(errors
         .iter()
         .any(|error| error.contains("llg.integrator must be one of")));
+}
+
+#[test]
+fn coupled_imex_ark2_round_trips_as_canonical_llg_integrator() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+        panic!("bootstrap example must use time evolution")
+    };
+    let DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "coupled_imex_ark2".to_string();
+
+    let encoded = serde_json::to_value(&ir).expect("ProblemIR serialization");
+    assert_eq!(
+        encoded["study"]["dynamics"]["integrator"],
+        "coupled_imex_ark2"
+    );
+    let decoded: ProblemIR = serde_json::from_value(encoded).expect("ProblemIR round-trip");
+    let StudyIR::TimeEvolution { dynamics, .. } = decoded.study else {
+        panic!("round-trip must preserve time evolution")
+    };
+    let DynamicsIR::Llg { integrator, .. } = dynamics;
+    assert_eq!(integrator, "coupled_imex_ark2");
 }
 
 #[test]

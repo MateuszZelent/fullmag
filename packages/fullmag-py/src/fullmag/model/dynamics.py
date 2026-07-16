@@ -5,7 +5,15 @@ from dataclasses import dataclass
 from fullmag._validation import require_positive
 
 DEFAULT_GAMMA = 2.211e5
-SUPPORTED_INTEGRATORS = {"heun", "rk4", "rk23", "rk45", "abm3", "auto"}
+SUPPORTED_INTEGRATORS = {
+    "heun",
+    "rk4",
+    "rk23",
+    "rk45",
+    "abm3",
+    "coupled_imex_ark2",
+    "auto",
+}
 
 # Canonical aliases: user-facing name → algorithm family.
 # rk45 = Dormand-Prince 5(4), rk23 = Bogacki-Shampine 3(2).
@@ -15,7 +23,7 @@ INTEGRATOR_ALIASES: dict[str, str] = {
 }
 
 # Integrators that support embedded error estimation (adaptive step).
-ADAPTIVE_INTEGRATORS = {"rk23", "rk45"}
+ADAPTIVE_INTEGRATORS = {"rk23", "rk45", "coupled_imex_ark2"}
 
 
 @dataclass(frozen=True, slots=True)

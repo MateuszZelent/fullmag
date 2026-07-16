@@ -26,7 +26,8 @@ pub use spin_drift_diffusion::{
     SpinTorqueTargets, StructuredSpinFace,
 };
 pub use transient_spin::{
-    TransientSpinIntegrator, TransientSpinMaterial, TransientSpinSolverConfig, TransientSpinState,
+    TransientSpinCheckpoint, TransientSpinIntegrator, TransientSpinMaterial,
+    TransientSpinRestartIdentity, TransientSpinSolverConfig, TransientSpinState,
     TransientStepAttempt, TransientStepTelemetry,
 };
 

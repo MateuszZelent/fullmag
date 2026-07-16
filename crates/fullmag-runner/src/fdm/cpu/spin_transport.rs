@@ -13,7 +13,8 @@ use fullmag_engine::{CellSize, GridShape};
 use fullmag_ir::{
     ChargePotentialGaugeIR, FdmPlanIR, ResolvedChargeBoundaryConditionIR,
     ResolvedFdmCoupledSpinTransportIR, ResolvedFdmSpinTransportIR,
-    ResolvedSpinBoundaryConditionIR, ResolvedSpinInterfaceLawIR, StructuredBoundaryFaceIR,
+    ResolvedFdmTransientSpinTransportIR, ResolvedSpinBoundaryConditionIR,
+    ResolvedSpinInterfaceLawIR, StructuredBoundaryFaceIR,
 };
 use serde::Serialize;
 
@@ -132,6 +133,13 @@ impl FdmSpinTransportWorkflow {
             {
                 return Err(run_error(format!(
                     "spin transport '{}' resolved to an unsupported lane; runtime fallback is forbidden",
+                    resolved.module_id
+                )));
+            }
+            if let Some(descriptor) = resolved.fdm_cpu_double_transient.as_ref() {
+                validate_transient_descriptor(descriptor, grid.cell_count(), &resolved.module_id)?;
+                return Err(run_error(format!(
+                    "spin transport '{}' has a valid CPU transient descriptor, but the coupled m/charge/spin ARS transaction owner is not implemented; no fallback and no artifacts are allowed",
                     resolved.module_id
                 )));
             }
@@ -287,6 +295,44 @@ impl FdmSpinTransportWorkflow {
     pub(crate) fn accepted(&self) -> Option<&FdmSpinTransportEvaluation> {
         self.accepted.as_ref()
     }
+}
+
+fn validate_transient_descriptor(
+    descriptor: &ResolvedFdmTransientSpinTransportIR,
+    count: usize,
+    module_id: &str,
+) -> Result<(), RunError> {
+    if descriptor.descriptor_schema != "fullmag.fdm.transient_spin_transport_descriptor.v1"
+        || descriptor.transient_formula_version != "transient_spin_balance.fullmag.v1"
+        || descriptor.integrator != fullmag_ir::CoupledSpinIntegratorIR::CoupledImexArk2
+        || descriptor.integrator_version != "coupled_imex_ark2.v1"
+    {
+        return Err(run_error(format!(
+            "spin transport '{module_id}' carries an incompatible transient formula/integrator descriptor"
+        )));
+    }
+    validate_descriptor(&descriptor.steady_operator, count, module_id)?;
+    if descriptor.spin_capacitance_as_per_v_m3.len() != count
+        || descriptor.capacitance_formula_versions.len() != count
+    {
+        return Err(run_error(format!(
+            "spin transport '{module_id}' transient capacitance fields do not match the FDM grid"
+        )));
+    }
+    for cell in 0..count {
+        if descriptor.steady_operator.spin_active_cells[cell]
+            && (!descriptor.spin_capacitance_as_per_v_m3[cell].is_finite()
+                || descriptor.spin_capacitance_as_per_v_m3[cell] <= 0.0
+                || descriptor.capacitance_formula_versions[cell]
+                    .trim()
+                    .is_empty())
+        {
+            return Err(run_error(format!(
+                "spin transport '{module_id}' transient capacitance/formula is invalid at active cell {cell}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_descriptor(
@@ -1099,6 +1145,7 @@ mod tests {
                 inserted_default_boundaries: vec![],
                 fdm_cpu_double: Some(descriptor),
                 fdm_cpu_double_reciprocal: None,
+                fdm_cpu_double_transient: None,
             }],
             ..FdmPlanIR::default()
         }
@@ -1268,6 +1315,32 @@ mod tests {
         assert_eq!(retried.revision, 2);
         assert_eq!(retried.refresh_count, 2);
         assert_eq!(workflow.accepted().unwrap().revision, 1);
+    }
+
+    #[test]
+    fn transient_descriptor_fails_closed_until_one_owner_coordinates_all_ars_states() {
+        let mut plan = plan();
+        let resolved = &mut plan.spin_transport_plans[0];
+        let steady_operator = resolved.fdm_cpu_double.take().unwrap();
+        let count = steady_operator.spin_active_cells.len();
+        resolved.capabilities = vec!["transport.spin.transient_drift_diffusion".into()];
+        resolved.fdm_cpu_double_transient = Some(ResolvedFdmTransientSpinTransportIR {
+            descriptor_schema: "fullmag.fdm.transient_spin_transport_descriptor.v1".into(),
+            steady_operator,
+            spin_capacitance_as_per_v_m3: vec![2.0; count],
+            capacitance_formula_versions: vec!["dos_constant.fullmag.v1".into(); count],
+            transient_formula_version: "transient_spin_balance.fullmag.v1".into(),
+            integrator: CoupledSpinIntegratorIR::CoupledImexArk2,
+            integrator_version: "coupled_imex_ark2.v1".into(),
+        });
+        plan.integrator = None;
+
+        let error = FdmSpinTransportWorkflow::from_plan(&plan)
+            .expect_err("partial spin-only runner wiring must fail closed");
+        assert!(error
+            .message
+            .contains("coupled m/charge/spin ARS transaction"));
+        assert!(error.message.contains("no fallback"));
     }
 
     #[test]

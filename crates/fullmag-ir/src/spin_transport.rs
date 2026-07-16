@@ -121,6 +121,12 @@ pub enum SpinTransportModeIR {
     Transient,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CoupledSpinIntegratorIR {
+    CoupledImexArk2,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SpinTransportMaterialAssignmentIR {
     pub region: RegionRefIR,
@@ -268,6 +274,8 @@ pub struct ResolvedSpinTransportPlanIR {
     pub fdm_cpu_double: Option<ResolvedFdmSpinTransportIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_cpu_double_reciprocal: Option<ResolvedFdmCoupledSpinTransportIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_cpu_double_transient: Option<ResolvedFdmTransientSpinTransportIR>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -393,6 +401,18 @@ pub struct ResolvedFdmSpinTransportIR {
     pub spin_solver: SpinSolverPolicyIR,
     pub torque_formula_version: Option<String>,
     pub oersted_source_bound: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFdmTransientSpinTransportIR {
+    pub descriptor_schema: String,
+    pub steady_operator: ResolvedFdmSpinTransportIR,
+    #[serde(rename = "spin_capacitance_As_per_V_m3")]
+    pub spin_capacitance_as_per_v_m3: Vec<f64>,
+    pub capacitance_formula_versions: Vec<String>,
+    pub transient_formula_version: String,
+    pub integrator: CoupledSpinIntegratorIR,
+    pub integrator_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

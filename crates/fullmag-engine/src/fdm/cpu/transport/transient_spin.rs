@@ -62,6 +62,26 @@ pub struct TransientStepAttempt {
     pub telemetry: TransientStepTelemetry,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransientSpinRestartIdentity {
+    pub topology_revision: u64,
+    pub material_revision: u64,
+    pub operator_revision: u64,
+    pub cache_identity: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransientSpinCheckpoint {
+    pub state: TransientSpinState,
+    pub charge_potential_v: Vec<f64>,
+    pub charge_nonlinear_history: Vec<f64>,
+    pub spin_capacitance_as_per_v_m3: Vec<f64>,
+    pub capacitance_formula_version: String,
+    pub transient_formula_version: String,
+    pub integrator_version: String,
+    pub restart_identity: TransientSpinRestartIdentity,
+}
+
 pub struct TransientSpinIntegrator<'a> {
     problem: &'a SpinDriftDiffusionProblem,
     material: TransientSpinMaterial,
@@ -195,6 +215,105 @@ impl<'a> TransientSpinIntegrator<'a> {
                 half_step_solve_count: 4,
             },
         })
+    }
+
+    /// Fixed-step production attempt using the same ARS(2,3,2) stages as the
+    /// adaptive path, without constructing an error estimate or rejecting on LTE.
+    pub fn try_fixed_step(
+        &self,
+        state: &TransientSpinState,
+        dt_s: f64,
+    ) -> Result<TransientStepAttempt> {
+        self.validate_state(state)?;
+        validate_dt(dt_s)?;
+        let (next_time_s, next_revision) = next_state_metadata(state, dt_s)?;
+        let (next, iterations) = self.ars232_step(&state.spin_potential_v, dt_s)?;
+        Ok(TransientStepAttempt {
+            candidate: Some(TransientSpinState {
+                spin_potential_v: next,
+                previous_spin_potential_v: Some(state.spin_potential_v.clone()),
+                time_s: next_time_s,
+                previous_dt_s: Some(dt_s),
+                state_revision: next_revision,
+            }),
+            telemetry: TransientStepTelemetry {
+                accepted: true,
+                normalized_error: 0.0,
+                linear_iterations: iterations,
+                attempted_dt_s: dt_s,
+                suggested_dt_s: dt_s,
+                full_step_solve_count: 2,
+                half_step_solve_count: 0,
+            },
+        })
+    }
+
+    pub fn checkpoint(
+        &self,
+        state: &TransientSpinState,
+        charge_potential_v: Vec<f64>,
+        charge_nonlinear_history: Vec<f64>,
+        restart_identity: TransientSpinRestartIdentity,
+    ) -> Result<TransientSpinCheckpoint> {
+        self.validate_state(state)?;
+        if charge_potential_v.iter().any(|value| !value.is_finite())
+            || charge_nonlinear_history
+                .iter()
+                .any(|value| !value.is_finite())
+            || restart_identity.cache_identity.trim().is_empty()
+        {
+            return Err(EngineError::new(
+                "transient spin checkpoint charge state/history/cache identity is invalid",
+            ));
+        }
+        Ok(TransientSpinCheckpoint {
+            state: state.clone(),
+            charge_potential_v,
+            charge_nonlinear_history,
+            spin_capacitance_as_per_v_m3: self.material.spin_capacitance_as_per_v_m3.clone(),
+            capacitance_formula_version: self.material.capacitance_formula_version.clone(),
+            transient_formula_version: Self::FORMULA_VERSION.to_string(),
+            integrator_version: Self::INTEGRATOR_VERSION.to_string(),
+            restart_identity,
+        })
+    }
+
+    pub fn restore_checkpoint(
+        &self,
+        checkpoint: &TransientSpinCheckpoint,
+        expected: &TransientSpinRestartIdentity,
+    ) -> Result<TransientSpinState> {
+        if checkpoint.restart_identity.topology_revision != expected.topology_revision {
+            return Err(EngineError::new(
+                "transient spin checkpoint topology revision mismatch",
+            ));
+        }
+        if checkpoint.restart_identity.material_revision != expected.material_revision {
+            return Err(EngineError::new(
+                "transient spin checkpoint material revision mismatch",
+            ));
+        }
+        if checkpoint.restart_identity.operator_revision != expected.operator_revision {
+            return Err(EngineError::new(
+                "transient spin checkpoint operator revision mismatch",
+            ));
+        }
+        if checkpoint.restart_identity.cache_identity != expected.cache_identity {
+            return Err(EngineError::new(
+                "transient spin checkpoint cache identity mismatch",
+            ));
+        }
+        if checkpoint.spin_capacitance_as_per_v_m3 != self.material.spin_capacitance_as_per_v_m3
+            || checkpoint.capacitance_formula_version != self.material.capacitance_formula_version
+            || checkpoint.transient_formula_version != Self::FORMULA_VERSION
+            || checkpoint.integrator_version != Self::INTEGRATOR_VERSION
+        {
+            return Err(EngineError::new(
+                "transient spin checkpoint formula/integrator/material contract mismatch",
+            ));
+        }
+        self.validate_state(&checkpoint.state)?;
+        Ok(checkpoint.state.clone())
     }
 
     /// Constant-step fully implicit BDF2 reference. If no history exists, a
@@ -453,7 +572,7 @@ mod tests {
     use super::*;
     use crate::fdm::cpu::transport::{
         ChargeBoundaryConditions, SpinBoundaryConditions, SpinMaterialFields, SpinReactionLengths,
-        StructuredChargeProblem,
+        SpinSolverConfig, StructuredChargeProblem,
     };
     use crate::fdm::shared::types::{CellSize, GridShape};
 
@@ -647,6 +766,27 @@ mod tests {
     }
 
     #[test]
+    fn ars232_stiff_limit_approaches_the_steady_spin_solution() {
+        let problem = decay_problem(1.0, 4.0);
+        let integrator = integrator(&problem, 1.0e-12);
+        let steady = problem.solve(SpinSolverConfig::default()).unwrap();
+        let candidate = integrator
+            .try_fixed_step(&initial_state(), 1.0e6)
+            .unwrap()
+            .candidate
+            .unwrap();
+
+        for (actual, expected) in candidate
+            .spin_potential_v
+            .iter()
+            .flatten()
+            .zip(steady.spin_potential_volts.iter().flatten())
+        {
+            assert!((actual - expected).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
     fn rejected_step_is_transactional_and_does_not_advance_revision() {
         let problem = decay_problem(1.0, 4.0);
         let integrator = integrator(&problem, 1.0e-12);
@@ -701,5 +841,70 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("revision overflow"));
+    }
+
+    #[test]
+    fn fixed_step_uses_the_same_ars_stages_without_error_rejection() {
+        let problem = decay_problem(1.0, 4.0);
+        let integrator = integrator(&problem, 1.0e-12);
+        let state = initial_state();
+        let expected = integrator
+            .ars232_step(&state.spin_potential_v, 0.1)
+            .unwrap()
+            .0;
+
+        let attempt = integrator.try_fixed_step(&state, 0.1).unwrap();
+
+        assert!(attempt.telemetry.accepted);
+        assert_eq!(attempt.candidate.unwrap().spin_potential_v, expected);
+        assert_eq!(attempt.telemetry.full_step_solve_count, 2);
+        assert_eq!(attempt.telemetry.half_step_solve_count, 0);
+    }
+
+    #[test]
+    fn checkpoint_restart_is_exact_and_rejects_revision_mismatch() {
+        let problem = decay_problem(1.0, 4.0);
+        let integrator = integrator(&problem, 1.0e-12);
+        let first = integrator
+            .try_fixed_step(&initial_state(), 0.1)
+            .unwrap()
+            .candidate
+            .unwrap();
+        let identity = TransientSpinRestartIdentity {
+            topology_revision: 11,
+            material_revision: 12,
+            operator_revision: 13,
+            cache_identity: "charge-spin-cache.v1".into(),
+        };
+        let checkpoint = integrator
+            .checkpoint(&first, vec![0.25], vec![1.0e-9, 2.0e-10], identity.clone())
+            .unwrap();
+        let restored = integrator
+            .restore_checkpoint(&checkpoint, &identity)
+            .expect("compatible restart");
+        let continued = integrator
+            .try_fixed_step(&restored, 0.1)
+            .unwrap()
+            .candidate
+            .unwrap();
+        let uninterrupted = integrator
+            .try_fixed_step(&first, 0.1)
+            .unwrap()
+            .candidate
+            .unwrap();
+        assert_eq!(continued, uninterrupted);
+        assert_eq!(checkpoint.charge_potential_v, [0.25]);
+        assert_eq!(checkpoint.charge_nonlinear_history, [1.0e-9, 2.0e-10]);
+        assert_eq!(
+            checkpoint.capacitance_formula_version,
+            "dos_constant_test.v1"
+        );
+        let mut incompatible = identity;
+        incompatible.operator_revision += 1;
+        assert!(integrator
+            .restore_checkpoint(&checkpoint, &incompatible)
+            .unwrap_err()
+            .to_string()
+            .contains("operator revision"));
     }
 }

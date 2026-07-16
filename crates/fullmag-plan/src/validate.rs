@@ -357,10 +357,11 @@ pub(crate) fn planned_study_controls(
                 "rk23" => Some(IntegratorChoice::Rk23),
                 "rk45" => Some(IntegratorChoice::Rk45),
                 "abm3" => Some(IntegratorChoice::Abm3),
+                "coupled_imex_ark2" => None,
                 "auto" => None,
                 other => {
                     errors.push(format!(
-                        "integrator '{}' is not supported; use heun/rk4/rk23/rk45/abm3/auto",
+                        "integrator '{}' is not supported; use heun/rk4/rk23/rk45/abm3/coupled_imex_ark2/auto",
                         other
                     ));
                     None
@@ -374,7 +375,10 @@ pub(crate) fn planned_study_controls(
     // Resolve "auto" to the physics-optimal default per study kind.
     // TimeEvolution → RK45 (mumax3's default: Dormand-Prince, 5th-order adaptive).
     // Relaxation    → algorithm.default_integrator() (e.g. LlgOverdamped→RK23).
-    let integrator = if uses_time_integrator {
+    let uses_coupled_imex_ark2 = dynamics.is_some_and(|dynamics| match dynamics {
+        fullmag_ir::DynamicsIR::Llg { integrator, .. } => integrator == "coupled_imex_ark2",
+    });
+    let integrator = if uses_time_integrator && !uses_coupled_imex_ark2 {
         user_integrator.or_else(|| match &problem.study {
             fullmag_ir::StudyIR::TimeEvolution { .. } => Some(IntegratorChoice::Rk45),
             fullmag_ir::StudyIR::Relaxation { algorithm, .. } => algorithm.default_integrator(),
@@ -453,6 +457,7 @@ pub(crate) fn planned_study_controls(
     }
     if uses_time_integrator
         && adaptive_timestep.is_some()
+        && !uses_coupled_imex_ark2
         && !matches!(
             integrator,
             Some(IntegratorChoice::Rk23 | IntegratorChoice::Rk45)

@@ -1090,7 +1090,7 @@ pub(crate) fn plan_fdm(
         saturation_magnetization_apm: &resolved_ms_for_transport,
         gamma0_m_per_a_s: gyromagnetic_ratio,
     };
-    let spin_transport_plans = crate::spin_transport::resolve_steady_spin_transport(
+    let spin_transport_plans = crate::spin_transport::resolve_spin_transport(
         problem,
         resolved_backend,
         &spin_transport_context,

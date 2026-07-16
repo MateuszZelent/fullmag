@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use fullmag_ir::{
     BackendTarget, ChargeBoundaryIR, ExecutionDevice, ExecutionPrecision, ProblemIR,
     ReactionLengthIR, RegionRefIR, ResolvedChargeBoundaryConditionIR, ResolvedChargeBoundaryFaceIR,
-    ResolvedFdmCoupledSpinTransportIR, ResolvedFdmSpinTransportIR, ResolvedReciprocalMaterialIR,
+    ResolvedFdmCoupledSpinTransportIR, ResolvedFdmSpinTransportIR,
+    ResolvedFdmTransientSpinTransportIR, ResolvedReciprocalMaterialIR,
     ResolvedSpinBoundaryConditionIR, ResolvedSpinBoundaryFaceIR, ResolvedSpinInterfaceFaceIR,
     ResolvedSpinInterfaceLawIR, ResolvedSpinReactionLengthsIR, ResolvedSpinTransportPlanIR,
     SpinBoundaryIR, SpinInterfaceIR, SpinTorqueModuleIR, StructuredBoundaryFaceIR,
@@ -26,7 +27,7 @@ pub(crate) struct FdmSpinTransportResolutionContext<'a> {
     pub gamma0_m_per_a_s: f64,
 }
 
-pub(crate) fn resolve_steady_spin_transport(
+pub(crate) fn resolve_spin_transport(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
     context: &FdmSpinTransportResolutionContext<'_>,
@@ -34,13 +35,7 @@ pub(crate) fn resolve_steady_spin_transport(
     let mut plans = Vec::with_capacity(problem.spin_transport_modules.len());
     let mut errors = Vec::new();
     for module in &problem.spin_transport_modules {
-        if module.mode != fullmag_ir::SpinTransportModeIR::Steady {
-            errors.push(format!(
-                "spin transport '{}' transient mode is not executable through the steady M1/M2 resolver",
-                module.id
-            ));
-            continue;
-        }
+        let transient = module.mode == fullmag_ir::SpinTransportModeIR::Transient;
         let requested = &module.requested_execution;
         if !matches!(
             requested.discretization,
@@ -110,23 +105,37 @@ pub(crate) fn resolve_steady_spin_transport(
             continue;
         };
         let descriptor = materialize_fdm_descriptor(problem, module, charge_definition, context);
-        let (fdm_cpu_double, fdm_cpu_double_reciprocal) = match descriptor {
-            Ok(descriptor) if reciprocal => match materialize_m2_descriptor(
-                module,
-                charge_definition,
-                context,
-                descriptor,
-            ) {
-                Ok(coupled) => (None, Some(coupled)),
-                Err(mut reasons) => {
-                    errors.append(&mut reasons);
-                    (None, None)
+        let (fdm_cpu_double, fdm_cpu_double_reciprocal, fdm_cpu_double_transient) = match descriptor
+        {
+            Ok(_descriptor) if transient && reciprocal => {
+                errors.push(format!(
+                    "spin transport '{}' transient reciprocal M3 is not available in the FDM CPU v1 realization; fallback is forbidden",
+                    module.id
+                ));
+                (None, None, None)
+            }
+            Ok(descriptor) if transient => {
+                match materialize_transient_descriptor(module, context, descriptor) {
+                    Ok(transient) => (None, None, Some(transient)),
+                    Err(mut reasons) => {
+                        errors.append(&mut reasons);
+                        (None, None, None)
+                    }
                 }
-            },
-            Ok(descriptor) => (Some(descriptor), None),
+            }
+            Ok(descriptor) if reciprocal => {
+                match materialize_m2_descriptor(module, charge_definition, context, descriptor) {
+                    Ok(coupled) => (None, Some(coupled), None),
+                    Err(mut reasons) => {
+                        errors.append(&mut reasons);
+                        (None, None, None)
+                    }
+                }
+            }
+            Ok(descriptor) => (Some(descriptor), None, None),
             Err(mut reasons) => {
                 errors.append(&mut reasons);
-                (None, None)
+                (None, None, None)
             }
         };
         plans.push(ResolvedSpinTransportPlanIR {
@@ -140,7 +149,14 @@ pub(crate) fn resolve_steady_spin_transport(
             constitutive_version: module.constitutive_version.clone(),
             operator_version: module.solver.operator_version.clone(),
             physical_residual_version: module.solver.physical_residual_version.clone(),
-            capabilities: if reciprocal {
+            capabilities: if transient {
+                vec![
+                    "transport.charge.ohmic".to_string(),
+                    "transport.spin.transient_drift_diffusion".to_string(),
+                    "transport.spin.direct_she".to_string(),
+                    "transport.coupling.one_way".to_string(),
+                ]
+            } else if reciprocal {
                 vec![
                     "transport.charge.magnetoresistive".to_string(),
                     "transport.spin.steady_drift_diffusion".to_string(),
@@ -166,6 +182,7 @@ pub(crate) fn resolve_steady_spin_transport(
             },
             fdm_cpu_double,
             fdm_cpu_double_reciprocal,
+            fdm_cpu_double_transient,
         });
     }
     if errors.is_empty() {
@@ -173,6 +190,67 @@ pub(crate) fn resolve_steady_spin_transport(
     } else {
         Err(PlanError { reasons: errors })
     }
+}
+
+fn materialize_transient_descriptor(
+    module: &fullmag_ir::SpinTransportModuleIR,
+    context: &FdmSpinTransportResolutionContext<'_>,
+    steady_operator: ResolvedFdmSpinTransportIR,
+) -> Result<ResolvedFdmTransientSpinTransportIR, Vec<String>> {
+    let count = steady_operator.spin_active_cells.len();
+    let mut capacitance = vec![0.0; count];
+    let mut formula_versions = vec![String::new(); count];
+    let mut assigned = vec![false; count];
+    for assignment in &module.materials {
+        let value = assignment
+            .material
+            .spin_capacitance_as_per_v_m3
+            .ok_or_else(|| {
+                vec![format!(
+                    "spin transport '{}' transient material is missing physical spin capacitance",
+                    module.id
+                )]
+            })?;
+        let formula_version = assignment
+            .material
+            .capacitance_formula_version
+            .as_deref()
+            .filter(|version| !version.trim().is_empty())
+            .ok_or_else(|| {
+                vec![format!(
+                    "spin transport '{}' transient material is missing capacitance formula version",
+                    module.id
+                )]
+            })?;
+        let mask = resolve_region_mask(&assignment.region, context, "transient spin material")?;
+        for cell in 0..count {
+            if mask[cell] && steady_operator.spin_active_cells[cell] {
+                if assigned[cell] {
+                    return Err(vec![format!(
+                        "spin transport '{}' has overlapping transient capacitance assignments at cell {cell}",
+                        module.id
+                    )]);
+                }
+                assigned[cell] = true;
+                capacitance[cell] = value;
+                formula_versions[cell] = formula_version.to_string();
+            }
+        }
+    }
+    require_complete_assignment(
+        &steady_operator.spin_active_cells,
+        &assigned,
+        "transient spin capacitance",
+    )?;
+    Ok(ResolvedFdmTransientSpinTransportIR {
+        descriptor_schema: "fullmag.fdm.transient_spin_transport_descriptor.v1".to_string(),
+        steady_operator,
+        spin_capacitance_as_per_v_m3: capacitance,
+        capacitance_formula_versions: formula_versions,
+        transient_formula_version: "transient_spin_balance.fullmag.v1".to_string(),
+        integrator: fullmag_ir::CoupledSpinIntegratorIR::CoupledImexArk2,
+        integrator_version: "coupled_imex_ark2.v1".to_string(),
+    })
 }
 
 fn materialize_m2_descriptor(
@@ -1064,7 +1142,7 @@ mod tests {
         let region_ids = BTreeMap::new();
         let context = context(&owners, &region_mask, &magnetization, &ms, &region_ids);
         let plans =
-            resolve_steady_spin_transport(&problem(ExecutionDevice::Cpu), BackendTarget::Fdm, &context)
+            resolve_spin_transport(&problem(ExecutionDevice::Cpu), BackendTarget::Fdm, &context)
                 .expect("M1 CPU plan");
         assert_eq!(plans[0].requested_execution.device, ExecutionDevice::Cpu);
         assert_eq!(plans[0].resolved_device, ExecutionDevice::Cpu);
@@ -1093,7 +1171,7 @@ mod tests {
         problem
             .validate()
             .expect("authored M2 problem should satisfy canonical IR validation");
-        let plans = resolve_steady_spin_transport(
+        let plans = resolve_spin_transport(
             &problem,
             BackendTarget::Fdm,
             &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
@@ -1127,7 +1205,7 @@ mod tests {
         definition.as_mut().unwrap().materials[0]
             .material
             .sigma_parallel_spm = None;
-        let error = resolve_steady_spin_transport(
+        let error = resolve_spin_transport(
             &problem,
             BackendTarget::Fdm,
             &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
@@ -1145,11 +1223,64 @@ mod tests {
         let region_ids = BTreeMap::new();
         let context = context(&owners, &region_mask, &magnetization, &ms, &region_ids);
         let error =
-            resolve_steady_spin_transport(&problem(ExecutionDevice::Gpu), BackendTarget::Fdm, &context)
+            resolve_spin_transport(&problem(ExecutionDevice::Gpu), BackendTarget::Fdm, &context)
                 .expect_err("GPU must not silently fall back");
         assert!(error
             .reasons
             .iter()
             .any(|reason| reason.contains("cannot fall back silently")));
+    }
+
+    #[test]
+    fn resolves_transient_fdm_cpu_double_with_physical_capacitance_and_versions() {
+        let owners = ["strip"];
+        let region_mask = [0];
+        let magnetization = [[0.0, 0.0, 1.0]];
+        let ms = [8.0e5];
+        let region_ids = BTreeMap::new();
+        let mut problem = problem(ExecutionDevice::Cpu);
+        let spin = &mut problem.spin_transport_modules[0];
+        spin.mode = SpinTransportModeIR::Transient;
+        spin.materials[0].material.spin_capacitance_as_per_v_m3 = Some(2.5);
+        spin.materials[0].material.capacitance_formula_version =
+            Some("dos_constant.fullmag.v1".into());
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut problem.study else {
+            unreachable!()
+        };
+        let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+        *integrator = "coupled_imex_ark2".into();
+
+        let plans = resolve_spin_transport(
+            &problem,
+            BackendTarget::Fdm,
+            &context(&owners, &region_mask, &magnetization, &ms, &region_ids),
+        )
+        .expect("M3 should resolve on FDM CPU double");
+        let descriptor = plans[0]
+            .fdm_cpu_double_transient
+            .as_ref()
+            .expect("dedicated transient descriptor");
+        assert_eq!(descriptor.spin_capacitance_as_per_v_m3, [2.5]);
+        assert_eq!(
+            descriptor.capacitance_formula_versions,
+            ["dos_constant.fullmag.v1"]
+        );
+        assert_eq!(descriptor.integrator_version, "coupled_imex_ark2.v1");
+        assert_eq!(
+            descriptor.integrator,
+            fullmag_ir::CoupledSpinIntegratorIR::CoupledImexArk2
+        );
+        assert!(plans[0]
+            .capabilities
+            .contains(&"transport.spin.transient_drift_diffusion".to_string()));
+        let provenance = serde_json::to_value(&plans[0]).expect("resolved plan provenance");
+        assert_eq!(
+            provenance["fdm_cpu_double_transient"]["spin_capacitance_As_per_V_m3"][0],
+            2.5
+        );
+        assert_eq!(
+            provenance["fdm_cpu_double_transient"]["capacitance_formula_versions"][0],
+            "dos_constant.fullmag.v1"
+        );
     }
 }

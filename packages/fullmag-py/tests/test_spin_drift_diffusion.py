@@ -143,6 +143,16 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
                 lambda_sf_m=1.0,
             )
 
+    def test_coupled_imex_ark2_is_owned_by_llg_and_round_trips_exactly(self) -> None:
+        dynamics = fm.LLG(
+            integrator="coupled_imex_ark2",
+            adaptive_timestep=fm.AdaptiveTimestep(atol=1.0e-12, rtol=1.0e-6),
+        )
+
+        self.assertEqual(dynamics.integrator, "coupled_imex_ark2")
+        self.assertEqual(dynamics.to_ir()["integrator"], "coupled_imex_ark2")
+        self.assertEqual(fm.LLG().integrator, "auto")
+
     def test_current_transport_is_single_coupling_owner(self) -> None:
         source = self.complete_charge_transport()
         self.assertEqual(source.to_ir()["coupling"], "one_way")
