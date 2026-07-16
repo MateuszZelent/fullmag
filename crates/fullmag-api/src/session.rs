@@ -2024,9 +2024,9 @@ mod tests {
         apply_current_live_snapshot(
             &mut current,
             CurrentLiveSnapshotRequest {
-            session_id: "test-session".to_string(),
-            coupled_checkpoint: None,
-            session: None,
+                session_id: "test-session".to_string(),
+                coupled_checkpoint: None,
+                session: None,
                 session_status: None,
                 metadata: None,
                 mesh_workspace: None,
@@ -2056,9 +2056,9 @@ mod tests {
         apply_current_live_snapshot(
             &mut current,
             CurrentLiveSnapshotRequest {
-            session_id: "test-session".to_string(),
-            coupled_checkpoint: None,
-            session: None,
+                session_id: "test-session".to_string(),
+                coupled_checkpoint: None,
+                session: None,
                 session_status: None,
                 metadata: None,
                 mesh_workspace: None,
@@ -2596,8 +2596,8 @@ mod tests {
         apply_current_live_session_frame(
             &mut current,
             CurrentLiveSessionFrameRequest {
-            session_id: "test-session".to_string(),
-            session: None,
+                session_id: "test-session".to_string(),
+                session: None,
                 session_status: None,
                 metadata: None,
                 mesh_workspace: None,
@@ -2836,9 +2836,9 @@ mod tests {
         apply_current_live_snapshot(
             &mut current,
             CurrentLiveSnapshotRequest {
-            session_id: "test-session".to_string(),
-            coupled_checkpoint: None,
-            session: None,
+                session_id: "test-session".to_string(),
+                coupled_checkpoint: None,
+                session: None,
                 session_status: None,
                 metadata: None,
                 mesh_workspace: None,

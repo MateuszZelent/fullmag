@@ -16898,7 +16898,19 @@ fn complete_coupled_m3_checkpoint() -> serde_json::Value {
                 "interface_fluxes": [],
                 "transport_torque_per_s": [[0.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
                 "oersted_field_apm": [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
-                "telemetry": {},
+                "telemetry": {
+                    "charge_iterations": 1,
+                    "charge_residual_l2": 0.0,
+                    "charge_net_boundary_current_a": 0.0,
+                    "charge_max_abs_divergence_a_per_m3": 0.0,
+                    "spin_iterations": 1,
+                    "spin_initial_residual_l2": 0.0,
+                    "spin_final_residual_l2": 0.0,
+                    "spin_scaled_residual": 0.0,
+                    "spin_relative_balance_closure": 0.0,
+                    "convergence_reason": "converged",
+                    "preconditioner": "none"
+                },
                 "constitutive_version": "transport_constitutive.one_way.fullmag.v1",
                 "charge_operator_version": "fv_charge_face_flux.v1",
                 "spin_operator_version": "fv_spin_upwind_v1",
@@ -17286,6 +17298,50 @@ async fn coupled_m3_restore_rejects_every_identity_and_state_shape_mismatch_with
     let mut inconsistent_magnetization = expected.clone();
     inconsistent_magnetization["magnetization"][0] = serde_json::json!([0.0, 0.0, 1.0]);
     invalid.push(("common-state magnetization", inconsistent_magnetization));
+    for (label, path, value) in [
+        ("accepted revision", vec!["accepted", "revision"], serde_json::json!(0)),
+        ("next revision", vec!["next_revision"], serde_json::json!(1)),
+        (
+            "accepted refresh",
+            vec!["accepted", "refresh_count"],
+            serde_json::json!(99),
+        ),
+        ("accepted steps", vec!["accepted_steps"], serde_json::json!(0)),
+        ("telemetry cursor", vec!["telemetry_cursor"], serde_json::json!(0)),
+        ("thermal counter", vec!["thermal_counter"], serde_json::json!(99)),
+        (
+            "controller timestep",
+            vec!["error_controller", "next_dt_s"],
+            serde_json::json!(0.0),
+        ),
+        (
+            "controller error",
+            vec!["error_controller", "last_normalized_error"],
+            serde_json::json!(-1.0),
+        ),
+        (
+            "module revision",
+            vec!["accepted", "modules", "0", "state_revision"],
+            serde_json::json!(99),
+        ),
+        (
+            "module telemetry",
+            vec!["accepted", "modules", "0", "telemetry"],
+            serde_json::json!([]),
+        ),
+    ] {
+        let mut candidate = expected.clone();
+        let mut target = &mut candidate;
+        for segment in &path[..path.len() - 1] {
+            target = if let Ok(index) = segment.parse::<usize>() {
+                &mut target[index]
+            } else {
+                &mut target[*segment]
+            };
+        }
+        target[path[path.len() - 1]] = value;
+        invalid.push((label, candidate));
+    }
 
     for (label, candidate) in invalid {
         let (before_m, before_step, before_time, before_version) = {

@@ -869,6 +869,14 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         })?;
     let mut restored_checkpoint = coupled_checkpoint
         .map(|value| {
+            super::spin_transport::validate_coupled_m3_checkpoint_value(
+                &value,
+                plan.grid
+                    .cells
+                    .iter()
+                    .map(|cells| *cells as usize)
+                    .product(),
+            )?;
             serde_json::from_value::<FdmCoupledCheckpoint>(value).map_err(|error| RunError {
                 message: format!("invalid coupled M3 checkpoint payload: {error}"),
             })

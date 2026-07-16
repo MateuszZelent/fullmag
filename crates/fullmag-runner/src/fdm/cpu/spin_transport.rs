@@ -184,6 +184,200 @@ pub(crate) struct FdmCoupledCheckpoint {
     pub thermal_counter: u64,
 }
 
+pub(crate) fn validate_coupled_m3_checkpoint_value(
+    value: &serde_json::Value,
+    vector_count: usize,
+) -> Result<(), RunError> {
+    let checkpoint: FdmCoupledCheckpoint = serde_json::from_value(value.clone())
+        .map_err(|error| run_error(format!("invalid coupled M3 checkpoint payload: {error}")))?;
+    validate_complete_coupled_checkpoint(&checkpoint, vector_count)
+}
+
+fn validate_complete_coupled_checkpoint(
+    checkpoint: &FdmCoupledCheckpoint,
+    vector_count: usize,
+) -> Result<(), RunError> {
+    let valid_vectors = |values: &[[f64; 3]]| {
+        values.len() == vector_count && values.iter().flatten().all(|value| value.is_finite())
+    };
+    let required_identity_strings = [
+        checkpoint.identity.requested_discretization.as_str(),
+        checkpoint.identity.requested_device.as_str(),
+        checkpoint.identity.requested_precision.as_str(),
+        checkpoint.identity.requested_execution_mode.as_str(),
+        checkpoint.identity.resolved_discretization.as_str(),
+        checkpoint.identity.resolved_device.as_str(),
+        checkpoint.identity.resolved_precision.as_str(),
+        checkpoint.identity.resolved_execution_mode.as_str(),
+        checkpoint.identity.charge_cache_identity.as_str(),
+        checkpoint.identity.spin_cache_identity.as_str(),
+        checkpoint.identity.oersted_cache_identity.as_str(),
+        checkpoint.identity.source_identity.as_str(),
+    ];
+    if vector_count == 0
+        || checkpoint.schema != "fullmag.fdm.coupled_m3_checkpoint.v1"
+        || checkpoint.problem_ir_abi != "fullmag.problem_ir.v1"
+        || checkpoint.scalar_layout != "f64"
+        || checkpoint.vector_layout != "aos_xyz"
+        || checkpoint.endianness != "little"
+        || checkpoint.formula_version != "transient_spin_balance.fullmag.v1"
+        || checkpoint.integrator_version != "coupled_imex_ark2.v1"
+        || checkpoint.integrator_implementation_revision != "imex_ars_232_step_doubling.fullmag.v1"
+        || checkpoint.thermal_rng_algorithm != "counter_hash_box_muller.fullmag.v1"
+        || required_identity_strings
+            .iter()
+            .any(|value| value.trim().is_empty())
+        || !valid_vectors(&checkpoint.magnetization)
+        || !valid_vectors(&checkpoint.previous_magnetization)
+        || !checkpoint.time_s.is_finite()
+        || checkpoint.time_s < 0.0
+        || !checkpoint.previous_dt_s.is_finite()
+        || checkpoint.previous_dt_s <= 0.0
+        || checkpoint.transient_states.is_empty()
+        || checkpoint.accepted.modules.is_empty()
+        || checkpoint.accepted.revision == 0
+        || checkpoint.next_revision <= checkpoint.accepted.revision
+        || checkpoint.refresh_count != checkpoint.accepted.refresh_count
+        || checkpoint.accepted_steps == 0
+        || checkpoint.telemetry_cursor < checkpoint.accepted_steps
+        || checkpoint.thermal_counter != checkpoint.accepted_steps
+        || !checkpoint.accepted.evaluated_time_s.is_finite()
+        || checkpoint.accepted.evaluated_time_s != checkpoint.time_s
+        || !valid_vectors(&checkpoint.accepted.combined_transport_torque_per_s)
+        || checkpoint
+            .accepted
+            .combined_oersted_field_apm
+            .as_deref()
+            .is_some_and(|values| !valid_vectors(values))
+        || !checkpoint.error_controller.next_dt_s.is_finite()
+        || checkpoint.error_controller.next_dt_s <= 0.0
+        || !checkpoint
+            .error_controller
+            .last_normalized_error
+            .is_finite()
+        || checkpoint.error_controller.last_normalized_error < 0.0
+    {
+        return Err(run_error(
+            "coupled checkpoint contract/state/controller is invalid",
+        ));
+    }
+
+    let transient_keys = checkpoint.transient_states.keys().collect::<Vec<_>>();
+    let history_keys = checkpoint
+        .charge_nonlinear_history
+        .keys()
+        .collect::<Vec<_>>();
+    let mut module_keys = checkpoint
+        .accepted
+        .modules
+        .iter()
+        .map(|module| &module.module_id)
+        .collect::<Vec<_>>();
+    module_keys.sort();
+    if transient_keys != history_keys || transient_keys != module_keys {
+        return Err(run_error(
+            "coupled checkpoint module/history keys are inconsistent",
+        ));
+    }
+    for state in checkpoint.transient_states.values() {
+        if !valid_vectors(&state.spin_potential_v)
+            || state
+                .previous_spin_potential_v
+                .as_deref()
+                .is_none_or(|values| !valid_vectors(values))
+            || state.time_s != checkpoint.time_s
+            || state
+                .previous_dt_s
+                .is_none_or(|dt| !dt.is_finite() || dt <= 0.0)
+            || state.state_revision == 0
+        {
+            return Err(run_error(
+                "coupled checkpoint transient history shape is invalid",
+            ));
+        }
+    }
+    for module in &checkpoint.accepted.modules {
+        let state = &checkpoint.transient_states[&module.module_id];
+        if module.current_source_id.trim().is_empty()
+            || module.potential_volts.len() != vector_count
+            || module
+                .potential_volts
+                .iter()
+                .any(|value| !value.is_finite())
+            || !valid_vectors(&module.current_density_apm2)
+            || !valid_vectors(&module.spin_potential_volts)
+            || module.spin_current_tensor_apm2.len() != vector_count
+            || module
+                .spin_current_tensor_apm2
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+            || !valid_vectors(&module.transport_torque_per_s)
+            || module
+                .oersted_field_apm
+                .as_deref()
+                .is_some_and(|values| !valid_vectors(values))
+            || module.constitutive_version.trim().is_empty()
+            || module.charge_operator_version.trim().is_empty()
+            || module.spin_operator_version.trim().is_empty()
+            || module.state_revision != state.state_revision
+            || !valid_module_telemetry(&module.telemetry)
+            || module.interface_fluxes.iter().any(|flux| {
+                flux.source_id.trim().is_empty()
+                    || flux_values(flux).any(|value| !value.is_finite())
+            })
+        {
+            return Err(run_error(
+                "coupled checkpoint accepted module shape is invalid",
+            ));
+        }
+    }
+    if checkpoint
+        .charge_nonlinear_history
+        .values()
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err(run_error("coupled checkpoint nonlinear history is invalid"));
+    }
+    Ok(())
+}
+
+fn flux_values(flux: &FdmSpinInterfaceFluxSnapshot) -> impl Iterator<Item = f64> + '_ {
+    flux.incoming_longitudinal_apm2
+        .iter()
+        .chain(&flux.backflow_longitudinal_apm2)
+        .chain(&flux.absorbed_transverse_apm2)
+        .chain(&flux.spin_memory_loss_apm2)
+        .chain(&flux.from_side_outgoing_apm2)
+        .chain(&flux.to_side_transmitted_apm2)
+        .copied()
+}
+
+fn valid_module_telemetry(telemetry: &FdmSpinTransportTelemetry) -> bool {
+    let required = [
+        telemetry.charge_residual_l2,
+        telemetry.charge_net_boundary_current_a,
+        telemetry.charge_max_abs_divergence_a_per_m3,
+        telemetry.spin_initial_residual_l2,
+        telemetry.spin_final_residual_l2,
+        telemetry.spin_scaled_residual,
+        telemetry.spin_relative_balance_closure,
+    ];
+    let optional = [
+        telemetry.scaled_charge_residual,
+        telemetry.relative_charge_current_update,
+        telemetry.relative_spin_potential_update,
+        telemetry.transport_outer_error_ratio,
+        telemetry.charge_balance_relative,
+        telemetry.spin_balance_relative,
+    ];
+    !telemetry.convergence_reason.trim().is_empty()
+        && !telemetry.preconditioner.trim().is_empty()
+        && required.iter().all(|value| value.is_finite())
+        && optional.iter().flatten().all(|value| value.is_finite())
+}
+
 impl FdmSpinTransportWorkflow {
     pub(crate) fn from_plan(plan: &FdmPlanIR) -> Result<Option<Self>, RunError> {
         if plan.spin_transport_plans.is_empty() {
@@ -617,76 +811,20 @@ impl FdmSpinTransportWorkflow {
         checkpoint: FdmCoupledCheckpoint,
     ) -> Result<FdmCoupledCheckpoint, RunError> {
         compare_checkpoint_identity(&checkpoint.identity, &self.checkpoint_identity)?;
-        if checkpoint.schema != "fullmag.fdm.coupled_m3_checkpoint.v1"
-            || checkpoint.problem_ir_abi != "fullmag.problem_ir.v1"
-            || checkpoint.scalar_layout != "f64"
-            || checkpoint.vector_layout != "aos_xyz"
-            || checkpoint.endianness != "little"
-            || checkpoint.formula_version != "transient_spin_balance.fullmag.v1"
-            || checkpoint.integrator_version != "coupled_imex_ark2.v1"
-            || checkpoint.integrator_implementation_revision
-                != "imex_ars_232_step_doubling.fullmag.v1"
-            || checkpoint.thermal_rng_algorithm != "counter_hash_box_muller.fullmag.v1"
-        {
-            return Err(run_error(
-                "coupled checkpoint schema/ABI/layout/formula/operator/plan mismatch",
-            ));
-        }
         let count = self.grid.cell_count();
-        if checkpoint.magnetization.len() != count
-            || checkpoint.previous_magnetization.len() != count
-            || checkpoint
-                .magnetization
-                .iter()
-                .chain(&checkpoint.previous_magnetization)
-                .flatten()
-                .any(|value| !value.is_finite())
-            || !checkpoint.time_s.is_finite()
-            || !checkpoint.previous_dt_s.is_finite()
-            || checkpoint.previous_dt_s <= 0.0
-            || !checkpoint.error_controller.next_dt_s.is_finite()
-            || checkpoint.error_controller.next_dt_s <= 0.0
-            || !checkpoint
-                .error_controller
-                .last_normalized_error
-                .is_finite()
-            || checkpoint.error_controller.last_normalized_error < 0.0
-            || checkpoint
-                .transient_states
-                .keys()
-                .ne(self.transient_states.keys())
+        validate_complete_coupled_checkpoint(&checkpoint, count)?;
+        if checkpoint
+            .transient_states
+            .keys()
+            .ne(self.transient_states.keys())
             || checkpoint
                 .charge_nonlinear_history
                 .keys()
                 .ne(self.charge_nonlinear_history.keys())
-            || checkpoint
-                .charge_nonlinear_history
-                .values()
-                .flatten()
-                .any(|value| !value.is_finite())
         {
             return Err(run_error(
-                "coupled checkpoint state/history/controller is invalid",
+                "coupled checkpoint state/history identity is invalid",
             ));
-        }
-        for (module_id, state) in &checkpoint.transient_states {
-            if state.spin_potential_v.len() != count
-                || state
-                    .spin_potential_v
-                    .iter()
-                    .flatten()
-                    .any(|value| !value.is_finite())
-                || state.time_s != checkpoint.time_s
-                || !checkpoint
-                    .accepted
-                    .modules
-                    .iter()
-                    .any(|module| module.module_id == *module_id)
-            {
-                return Err(run_error(
-                    "coupled checkpoint transient warm-start/module state is invalid",
-                ));
-            }
         }
         self.accepted = Some(checkpoint.accepted.clone());
         self.transient_states = checkpoint.transient_states.clone();
@@ -2604,6 +2742,103 @@ mod tests {
             restored_problem.thermal_step(),
             uninterrupted_thermal_counter
         );
+    }
+
+    #[test]
+    fn coupled_checkpoint_restore_rejects_incomplete_state_without_mutating_workflow() {
+        let plan = fixed_transient_plan(1.0e-4);
+        let (problem, mut state) =
+            super::super::reference::build_snapshot_problem_and_state(&plan).unwrap();
+        let previous_magnetization = state.magnetization().to_vec();
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan).unwrap().unwrap();
+        let mut workspace = problem.create_workspace();
+        let mut buffers = problem.create_integrator_buffers();
+        super::super::reference::execute_coupled_ars_trial(
+            &problem,
+            &mut state,
+            &mut workflow,
+            1.0e-4,
+            &mut workspace,
+            &mut buffers,
+        )
+        .unwrap();
+        problem.commit_coupled_imex_ark2_step();
+        let checkpoint = workflow
+            .coupled_checkpoint(
+                state.magnetization(),
+                &previous_magnetization,
+                1.0e-4,
+                problem.thermal_seed,
+                problem.thermal_step(),
+            )
+            .unwrap();
+
+        for label in [
+            "V",
+            "J",
+            "mu",
+            "Q",
+            "torque",
+            "H",
+            "previous spin history",
+        ] {
+            let mut raw = serde_json::to_value(&checkpoint).unwrap();
+            if label == "H" {
+                raw["accepted"]["modules"][0]["oersted_field_apm"] = serde_json::json!([]);
+            } else {
+                let (object, key) = match label {
+                    "V" => (&mut raw["accepted"]["modules"][0], "potential_volts"),
+                    "J" => (&mut raw["accepted"]["modules"][0], "current_density_apm2"),
+                    "mu" => (&mut raw["accepted"]["modules"][0], "spin_potential_volts"),
+                    "Q" => (&mut raw["accepted"]["modules"][0], "spin_current_tensor_apm2"),
+                    "torque" => (
+                        &mut raw["accepted"]["modules"][0],
+                        "transport_torque_per_s",
+                    ),
+                    "previous spin history" => (
+                        &mut raw["transient_states"]["spin"],
+                        "previous_spin_potential_v",
+                    ),
+                    _ => unreachable!(),
+                };
+                object.as_object_mut().unwrap().remove(key);
+            }
+            super::super::reference::execute_reference_fdm_with_coupled_checkpoint(
+                &plan,
+                2.0e-4,
+                &[],
+                None,
+                None,
+                Some(raw),
+            )
+            .expect_err(label);
+        }
+
+        type Mutation = Box<dyn Fn(&mut FdmCoupledCheckpoint)>;
+        let mutations: Vec<(&str, Mutation)> = vec![
+            ("V shape", Box::new(|value| value.accepted.modules[0].potential_volts.clear())),
+            ("J finite", Box::new(|value| value.accepted.modules[0].current_density_apm2[0][0] = f64::NAN)),
+            ("mu shape", Box::new(|value| value.accepted.modules[0].spin_potential_volts.clear())),
+            ("Q finite", Box::new(|value| value.accepted.modules[0].spin_current_tensor_apm2[0][0] = f64::INFINITY)),
+            ("torque shape", Box::new(|value| value.accepted.modules[0].transport_torque_per_s.clear())),
+            ("H shape", Box::new(|value| value.accepted.modules[0].oersted_field_apm = Some(Vec::new()))),
+            ("previous spin history", Box::new(|value| value.transient_states.get_mut("spin").unwrap().previous_spin_potential_v = None)),
+            ("module keys", Box::new(|value| value.accepted.modules[0].module_id = "other".into())),
+            ("module revision", Box::new(|value| value.accepted.modules[0].state_revision += 1)),
+            ("accepted refresh", Box::new(|value| value.accepted.refresh_count += 1)),
+            ("telemetry finite", Box::new(|value| value.accepted.modules[0].telemetry.charge_residual_l2 = f64::NAN)),
+            ("telemetry cursor", Box::new(|value| value.telemetry_cursor = 0)),
+            ("thermal counter", Box::new(|value| value.thermal_counter += 1)),
+        ];
+        for (label, mutate) in mutations {
+            let pristine = workflow.clone();
+            let mut malformed = checkpoint.clone();
+            mutate(&mut malformed);
+            workflow
+                .restore_coupled_checkpoint(malformed)
+                .expect_err(label);
+            assert_eq!(workflow, pristine, "restore mutated workflow for {label}");
+        }
     }
 
     #[test]

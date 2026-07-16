@@ -63,6 +63,15 @@ pub(crate) fn resolve_initial_timestep(
     })
 }
 
+/// Validate the complete public coupled-M3 checkpoint envelope before any
+/// runner or session state is restored.
+pub fn validate_coupled_m3_checkpoint_value(
+    value: &serde_json::Value,
+    vector_count: usize,
+) -> Result<(), RunError> {
+    fdm::cpu::spin_transport::validate_coupled_m3_checkpoint_value(value, vector_count)
+}
+
 // Public re-exports (unchanged API surface).
 pub use capabilities::{BackendCapabilities, RuntimeEngineId};
 pub use interactive::backend::BackendGeometry;

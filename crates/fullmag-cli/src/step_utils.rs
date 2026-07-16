@@ -239,7 +239,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
             let mut stats = stats;
             stats.per_object_scalars = initial_frequency_response_progress_scalars(fem);
             fullmag_runner::StepUpdate {
-            coupled_checkpoint: None,
+                coupled_checkpoint: None,
                 stats,
                 grid: [0, 0, 0],
                 fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),

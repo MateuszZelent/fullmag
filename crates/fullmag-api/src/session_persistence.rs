@@ -1279,48 +1279,19 @@ struct CoupledM3CheckpointIdentity {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct CoupledM3TransientState {
-    spin_potential_v: Vec<[f64; 3]>,
-    previous_spin_potential_v: Option<Vec<[f64; 3]>>,
-    time_s: f64,
-    previous_dt_s: Option<f64>,
-    state_revision: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 struct CoupledM3AcceptedModule {
     module_id: String,
     current_source_id: String,
-    potential_volts: Vec<f64>,
-    current_density_apm2: Vec<[f64; 3]>,
-    spin_potential_volts: Vec<[f64; 3]>,
-    spin_current_tensor_apm2: Vec<[f64; 9]>,
-    interface_fluxes: serde_json::Value,
-    transport_torque_per_s: Vec<[f64; 3]>,
-    oersted_field_apm: Option<Vec<[f64; 3]>>,
-    telemetry: serde_json::Value,
     constitutive_version: String,
     charge_operator_version: String,
     spin_operator_version: String,
     torque_formula_version: Option<String>,
-    state_revision: u64,
     operator_revision: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct CoupledM3AcceptedState {
-    revision: u64,
-    evaluated_time_s: f64,
-    refresh_count: u64,
     modules: Vec<CoupledM3AcceptedModule>,
-    combined_transport_torque_per_s: Vec<[f64; 3]>,
-    combined_oersted_field_apm: Option<Vec<[f64; 3]>>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-struct CoupledM3ErrorController {
-    next_dt_s: f64,
-    last_normalized_error: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1335,21 +1306,11 @@ struct CoupledM3CheckpointPayload {
     integrator_implementation_revision: String,
     identity: CoupledM3CheckpointIdentity,
     magnetization: Vec<[f64; 3]>,
-    previous_magnetization: Vec<[f64; 3]>,
     time_s: f64,
     previous_dt_s: f64,
     accepted: CoupledM3AcceptedState,
-    transient_states: BTreeMap<String, CoupledM3TransientState>,
-    next_revision: u64,
-    refresh_count: u64,
-    accepted_steps: u64,
-    rejected_steps: u64,
-    error_controller: CoupledM3ErrorController,
-    charge_nonlinear_history: BTreeMap<String, Vec<f64>>,
-    telemetry_cursor: u64,
     thermal_rng_algorithm: String,
     thermal_seed: u64,
-    thermal_counter: u64,
 }
 
 fn parse_coupled_checkpoint(
@@ -1362,8 +1323,8 @@ fn parse_coupled_checkpoint(
 
 fn validate_coupled_checkpoint_value(value: &serde_json::Value) -> Result<(), ApiError> {
     let payload = parse_coupled_checkpoint(value)?;
-    validate_coupled_checkpoint_contract(&payload)?;
-    validate_coupled_checkpoint_shapes(&payload, payload.magnetization.len())
+    fullmag_runner::validate_coupled_m3_checkpoint_value(value, payload.magnetization.len())
+        .map_err(|error| ApiError::bad_request(error.message))
 }
 
 fn validate_coupled_checkpoint_restore(
@@ -1374,12 +1335,15 @@ fn validate_coupled_checkpoint_restore(
     common_time_s: f64,
     common_dt_s: f64,
 ) -> Result<(), ApiError> {
+    fullmag_runner::validate_coupled_m3_checkpoint_value(active_value, common_magnetization.len())
+        .map_err(|error| ApiError::bad_request(error.message))?;
+    fullmag_runner::validate_coupled_m3_checkpoint_value(
+        candidate_value,
+        common_magnetization.len(),
+    )
+    .map_err(|error| ApiError::bad_request(error.message))?;
     let active = parse_coupled_checkpoint(active_value)?;
     let candidate = parse_coupled_checkpoint(candidate_value)?;
-    validate_coupled_checkpoint_contract(&active)?;
-    validate_coupled_checkpoint_contract(&candidate)?;
-    validate_coupled_checkpoint_shapes(&active, common_magnetization.len())?;
-    validate_coupled_checkpoint_shapes(&candidate, common_magnetization.len())?;
     validate_active_coupled_identity(snapshot, &active.identity)?;
     compare_coupled_identity(&candidate.identity, &active.identity)?;
     compare_coupled_contract(&candidate, &active)?;
@@ -1392,162 +1356,6 @@ fn validate_coupled_checkpoint_restore(
         ));
     }
     compare_coupled_module_identity(&candidate, &active)
-}
-
-fn validate_coupled_checkpoint_contract(payload: &CoupledM3CheckpointPayload) -> Result<(), ApiError> {
-    let required_identity_strings = [
-        payload.identity.requested_discretization.as_str(),
-        payload.identity.requested_device.as_str(),
-        payload.identity.requested_precision.as_str(),
-        payload.identity.requested_execution_mode.as_str(),
-        payload.identity.resolved_discretization.as_str(),
-        payload.identity.resolved_device.as_str(),
-        payload.identity.resolved_precision.as_str(),
-        payload.identity.resolved_execution_mode.as_str(),
-        payload.identity.charge_cache_identity.as_str(),
-        payload.identity.spin_cache_identity.as_str(),
-        payload.identity.oersted_cache_identity.as_str(),
-        payload.identity.source_identity.as_str(),
-    ];
-    let valid = payload.schema == "fullmag.fdm.coupled_m3_checkpoint.v1"
-        && payload.problem_ir_abi == "fullmag.problem_ir.v1"
-        && payload.scalar_layout == "f64"
-        && payload.vector_layout == "aos_xyz"
-        && payload.endianness == "little"
-        && payload.formula_version == "transient_spin_balance.fullmag.v1"
-        && payload.integrator_version == "coupled_imex_ark2.v1"
-        && payload.integrator_implementation_revision
-            == "imex_ars_232_step_doubling.fullmag.v1"
-        && payload.thermal_rng_algorithm == "counter_hash_box_muller.fullmag.v1"
-        && required_identity_strings
-            .iter()
-            .all(|value| !value.trim().is_empty());
-    if !valid {
-        return Err(ApiError::bad_request(
-            "unsupported coupled M3 checkpoint schema/ABI/layout/formula payload",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_coupled_checkpoint_shapes(
-    payload: &CoupledM3CheckpointPayload,
-    vector_count: usize,
-) -> Result<(), ApiError> {
-    let valid_scalar = |value: f64| value.is_finite();
-    let valid_vectors = |values: &[[f64; 3]]| {
-        values.len() == vector_count && values.iter().flatten().all(|value| value.is_finite())
-    };
-    if vector_count == 0
-        || !valid_vectors(&payload.magnetization)
-        || !valid_vectors(&payload.previous_magnetization)
-        || !valid_scalar(payload.time_s)
-        || payload.time_s < 0.0
-        || !valid_scalar(payload.previous_dt_s)
-        || payload.previous_dt_s <= 0.0
-        || payload.transient_states.is_empty()
-        || payload.accepted.modules.is_empty()
-        || payload.accepted.revision == 0
-        || payload.next_revision <= payload.accepted.revision
-        || payload.refresh_count != payload.accepted.refresh_count
-        || payload.accepted_steps == 0
-        || payload.telemetry_cursor < payload.accepted_steps
-        || payload.thermal_counter != payload.accepted_steps
-        || !valid_scalar(payload.accepted.evaluated_time_s)
-        || payload.accepted.evaluated_time_s != payload.time_s
-        || !valid_vectors(&payload.accepted.combined_transport_torque_per_s)
-        || payload
-            .accepted
-            .combined_oersted_field_apm
-            .as_deref()
-            .is_some_and(|values| !valid_vectors(values))
-        || !valid_scalar(payload.error_controller.next_dt_s)
-        || payload.error_controller.next_dt_s <= 0.0
-        || !valid_scalar(payload.error_controller.last_normalized_error)
-        || payload.error_controller.last_normalized_error < 0.0
-    {
-        return Err(ApiError::bad_request(
-            "coupled M3 checkpoint state/controller shape is invalid",
-        ));
-    }
-    let transient_keys = payload.transient_states.keys().cloned().collect::<Vec<_>>();
-    let history_keys = payload
-        .charge_nonlinear_history
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut module_keys = payload
-        .accepted
-        .modules
-        .iter()
-        .map(|module| module.module_id.clone())
-        .collect::<Vec<_>>();
-    module_keys.sort();
-    if transient_keys != history_keys || transient_keys != module_keys {
-        return Err(ApiError::bad_request(
-            "coupled M3 checkpoint module/history keys are inconsistent",
-        ));
-    }
-    for state in payload.transient_states.values() {
-        if !valid_vectors(&state.spin_potential_v)
-            || state
-                .previous_spin_potential_v
-                .as_deref()
-                .is_none_or(|values| !valid_vectors(values))
-            || state.time_s != payload.time_s
-            || state
-                .previous_dt_s
-                .is_none_or(|dt| !valid_scalar(dt) || dt <= 0.0)
-            || state.state_revision == 0
-        {
-            return Err(ApiError::bad_request(
-                "coupled M3 checkpoint transient history shape is invalid",
-            ));
-        }
-    }
-    for module in &payload.accepted.modules {
-        let valid_tensor = module.spin_current_tensor_apm2.len() == vector_count
-            && module
-                .spin_current_tensor_apm2
-                .iter()
-                .flatten()
-                .all(|value| value.is_finite());
-        if module.current_source_id.trim().is_empty()
-            || module.potential_volts.len() != vector_count
-            || module.potential_volts.iter().any(|value| !value.is_finite())
-            || !valid_vectors(&module.current_density_apm2)
-            || !valid_vectors(&module.spin_potential_volts)
-            || !valid_tensor
-            || !valid_vectors(&module.transport_torque_per_s)
-            || module
-                .oersted_field_apm
-                .as_deref()
-                .is_some_and(|values| !valid_vectors(values))
-            || !module.interface_fluxes.is_array()
-            || !module.telemetry.is_object()
-            || module.constitutive_version.trim().is_empty()
-            || module.charge_operator_version.trim().is_empty()
-            || module.spin_operator_version.trim().is_empty()
-            || module.state_revision
-                != payload.transient_states[&module.module_id].state_revision
-        {
-            return Err(ApiError::bad_request(
-                "coupled M3 checkpoint accepted module shape is invalid",
-            ));
-        }
-    }
-    if payload
-        .charge_nonlinear_history
-        .values()
-        .flatten()
-        .any(|value| !value.is_finite())
-    {
-        return Err(ApiError::bad_request(
-            "coupled M3 checkpoint nonlinear history is invalid",
-        ));
-    }
-    let _rejected_steps = payload.rejected_steps;
-    Ok(())
 }
 
 fn validate_active_coupled_identity(
@@ -1669,8 +1477,7 @@ fn compare_coupled_contract(
         || actual.endianness != expected.endianness
         || actual.formula_version != expected.formula_version
         || actual.integrator_version != expected.integrator_version
-        || actual.integrator_implementation_revision
-            != expected.integrator_implementation_revision
+        || actual.integrator_implementation_revision != expected.integrator_implementation_revision
         || actual.thermal_rng_algorithm != expected.thermal_rng_algorithm
         || actual.thermal_seed != expected.thermal_seed
     {
@@ -2363,7 +2170,7 @@ mod coupled_checkpoint_identity_tests {
     use super::validate_coupled_checkpoint_value;
 
     fn checkpoint() -> serde_json::Value {
-        serde_json::json!({
+        let mut checkpoint = serde_json::json!({
             "schema": "fullmag.fdm.coupled_m3_checkpoint.v1",
             "problem_ir_abi": "fullmag.problem_ir.v1",
             "scalar_layout": "f64",
@@ -2439,7 +2246,21 @@ mod coupled_checkpoint_identity_tests {
             "thermal_rng_algorithm": "counter_hash_box_muller.fullmag.v1",
             "thermal_seed": 17,
             "thermal_counter": 1
-        })
+        });
+        checkpoint["accepted"]["modules"][0]["telemetry"] = serde_json::json!({
+            "charge_iterations": 1,
+            "charge_residual_l2": 0.0,
+            "charge_net_boundary_current_a": 0.0,
+            "charge_max_abs_divergence_a_per_m3": 0.0,
+            "spin_iterations": 1,
+            "spin_initial_residual_l2": 0.0,
+            "spin_final_residual_l2": 0.0,
+            "spin_scaled_residual": 0.0,
+            "spin_relative_balance_closure": 0.0,
+            "convergence_reason": "converged",
+            "preconditioner": "none"
+        });
+        checkpoint
     }
 
     #[test]
