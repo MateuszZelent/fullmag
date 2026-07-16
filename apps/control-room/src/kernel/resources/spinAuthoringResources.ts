@@ -7,6 +7,7 @@ import type {
   OerstedFieldListResource,
   ResourceRevision,
   SpinTorqueListResource,
+  SpinTransportListResource,
 } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 
@@ -14,6 +15,7 @@ import { useResource } from "./useResource";
 
 export const CURRENT_TRANSPORTS_RESOURCE_KEY = "model.current-transports";
 export const SPIN_TORQUES_RESOURCE_KEY = "model.spin-torques";
+export const SPIN_TRANSPORTS_RESOURCE_KEY = "model.spin-transports";
 export const OERSTED_FIELDS_RESOURCE_KEY = "model.oersted-fields";
 
 interface ResourceHookOptions {
@@ -49,6 +51,20 @@ export function useSpinTorquesResource(options: ResourceHookOptions = {}) {
     load,
     resolveRevision: sceneRevision,
     resourceKey: SPIN_TORQUES_RESOURCE_KEY,
+  });
+}
+
+export function useSpinTransportsResource(options: ResourceHookOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) => api.model.spinTransports({ signal }),
+    [api],
+  );
+  return useResource<SpinTransportListResource>({
+    enabled: options.enabled,
+    load,
+    resolveRevision: sceneRevision,
+    resourceKey: SPIN_TRANSPORTS_RESOURCE_KEY,
   });
 }
 

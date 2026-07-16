@@ -175,6 +175,13 @@ export type SelectionRef =
       type: "physics-coupling";
     }
   | {
+      kind: "physics.spin-transports" | "physics.spin-transport";
+      nodeId: string;
+      spinTransportId?: string;
+      spinTransportIndex?: number;
+      type: "spin-transport";
+    }
+  | {
       chartId: string;
       kind: "analysis.chart";
       nodeId: string;
@@ -424,6 +431,14 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.couplingId === right.couplingId
+      );
+    case "spin-transport":
+      return (
+        right.type === "spin-transport" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.spinTransportId === right.spinTransportId
+        && left.spinTransportIndex === right.spinTransportIndex
       );
     case "analysis-chart":
       return (

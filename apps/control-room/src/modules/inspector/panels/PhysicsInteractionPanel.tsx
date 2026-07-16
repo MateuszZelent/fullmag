@@ -43,6 +43,7 @@ import {
   type PhysicsInteractionId,
 } from "./PhysicsInteractionPanelModel";
 import { SpinAuthoringInspector } from "./SpinAuthoringInspector";
+import { TransportAuthoringInspector } from "./TransportAuthoringInspector";
 
 interface DraftState {
   draft: PhysicsInteractionDraft;
@@ -267,8 +268,10 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     }
   }
 
+  if (interactionId === "current_transport") {
+    return <TransportAuthoringInspector family="current_transport" />;
+  }
   if (
-    interactionId === "current_transport" ||
     interactionId === "spin_torque" ||
     interactionId === "oersted_field"
   ) {

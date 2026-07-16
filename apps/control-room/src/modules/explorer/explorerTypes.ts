@@ -71,6 +71,8 @@ type ExplorerNodeKind =
   | "visualizations-2d.plot"
   | "physics.couplings"
   | "physics.coupling"
+  | "physics.spin-transports"
+  | "physics.spin-transport"
   | "study.root"
   | "study.execution"
   | "study.recovery"
@@ -271,6 +273,8 @@ export interface ExplorerNode {
   objectId?: string;
   observableId?: string;
   couplingId?: string;
+  spinTransportId?: string;
+  spinTransportIndex?: number;
   regionId?: string;
   resourceRef?: string;
   sampleIndex?: number;
@@ -379,6 +383,15 @@ export interface ModelTreeSnapshot {
   objects?: readonly ModelTreeObjectSnapshot[];
   physicsInteractions?: readonly ModelTreePhysicsInteractionSnapshot[];
   study?: ModelTreeStudySnapshot | null;
+  spinTransports?: readonly ModelTreeSpinTransportSnapshot[];
+}
+
+export interface ModelTreeSpinTransportSnapshot {
+  currentSourceId: string | null;
+  id: string;
+  index: number;
+  mode: string | null;
+  supported: boolean;
 }
 
 export interface ModelTreeCrossSectionSnapshot {

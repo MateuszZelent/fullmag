@@ -4084,4 +4084,34 @@ describe("buildModelTree", () => {
       ),
     ).toMatchObject({ label: "Run 2", status: "completed" });
   });
+
+  it("builds semantic typed and read-only spin transport nodes", () => {
+    const nodes = flattenExplorerNodes(buildModelTree({
+      spinTransports: [
+        { currentSourceId: "charge", id: "spin", index: 0, mode: "steady", supported: true },
+        { currentSourceId: null, id: "future", index: 1, mode: null, supported: false },
+      ],
+    }));
+    expect(nodes.find((node) => node.kind === "physics.spin-transports")).toMatchObject({ badge: "2" });
+    expect(nodes.find((node) => node.spinTransportId === "spin")).toMatchObject({ badge: "steady · charge", status: "ready" });
+    expect(nodes.find((node) => node.spinTransportId === "future")).toMatchObject({ badge: "read-only", status: "unsupported" });
+    expect(nodes.find((node) => node.spinTransportId === "future")?.spinTransportIndex).toBe(1);
+  });
+
+  it("keeps id-less unknown spin records addressable by their lossless list position", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      spinTransports: {
+        items: [{ future_kind: "spin_transport.v9", opaque: { coefficients: [1, 2] } }],
+        scene_revision: 4,
+      },
+    });
+
+    expect(snapshot.spinTransports).toEqual([{
+      currentSourceId: null,
+      id: "unknown-spin-transport-1",
+      index: 0,
+      mode: null,
+      supported: false,
+    }]);
+  });
 });

@@ -4232,4 +4232,62 @@ describe("ControlRoomApi", () => {
 
     await expect(api.meshing.sharedDomainManifest()).resolves.toBeNull();
   });
+
+  it("routes spin-transport list and mutations through the canonical model resource", async () => {
+    const requests: Array<{ body: unknown; method: string; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestJsonBody(init.body) : null,
+          method: init?.method ?? "GET",
+          url: String(url),
+        });
+        return jsonResponse({ items: [], scene_revision: 7 });
+      },
+    });
+    const request = {
+      base_revision: 7,
+      resource: {
+        boundaries: [],
+        constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+        current_source_id: "charge",
+        domain: [],
+        id: "spin path/1",
+        interfaces: [],
+        materials: [],
+        mode: "steady" as const,
+        requested_execution: {
+          device: "auto" as const,
+          discretization: "auto" as const,
+          execution_mode: "strict" as const,
+          precision: "double" as const,
+        },
+        schema_version: "spin_transport.v1",
+        solver: {
+          default_external_boundary: "spin_insulating",
+          engine: "gmres",
+          linear: { absolute_tolerance: 1e-14, max_iterations: 1000, relative_tolerance: 1e-10 },
+          operator_version: "fv_spin_upwind_v1",
+          physical_residual_version: "transport_balance_integrated_l2.v1",
+        },
+      },
+    };
+
+    await api.model.spinTransports();
+    await api.model.spinTransport("spin path/1");
+    await api.model.createSpinTransport(request);
+    await api.model.replaceSpinTransport("spin path/1", request);
+    await api.model.deleteSpinTransport("spin path/1", { base_revision: 8 });
+
+    const collection = "http://127.0.0.1:8765/v2/sessions/current/model/spin-transports";
+    const member = `${collection}/spin%20path%2F1`;
+    expect(requests).toEqual([
+      { body: null, method: "GET", url: collection },
+      { body: null, method: "GET", url: member },
+      { body: request, method: "POST", url: collection },
+      { body: request, method: "PATCH", url: member },
+      { body: { base_revision: 8 }, method: "DELETE", url: member },
+    ]);
+  });
 });

@@ -2340,6 +2340,38 @@ export interface paths {
         patch: operations["model_patch_sessions_current_model_spin_torques_id"];
         trace?: never;
     };
+    "/v2/sessions/current/model/spin-transports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_spin_transports"];
+        put?: never;
+        post: operations["model_post_sessions_current_model_spin_transports"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/spin-transports/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_spin_transports_id"];
+        put?: never;
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_spin_transports_id"];
+        options?: never;
+        head?: never;
+        patch: operations["model_patch_sessions_current_model_spin_transports_id"];
+        trace?: never;
+    };
     "/v2/sessions/current/model/study": {
         parameters: {
             query?: never;
@@ -5003,13 +5035,19 @@ export interface components {
             triangle_count?: number | null;
         };
         KnownSceneCurrentTransport: {
+            boundaries?: components["schemas"]["SceneChargeBoundary"][];
             /** Format: double */
             conductivity_s_per_m?: number | null;
+            coupling?: components["schemas"]["SceneTransportCoupling"];
             current_density?: number[] | null;
+            domain?: components["schemas"]["SceneRegionRef"][];
+            gauge?: null | components["schemas"]["SceneChargePotentialGauge"];
             kind: components["schemas"]["CurrentTransportKind"];
+            materials?: components["schemas"]["SceneChargeTransportMaterialAssignment"][];
             model: components["schemas"]["CurrentTransportModel"];
             name: string;
             solve_region?: string | null;
+            solver?: null | components["schemas"]["SceneChargeSolverPolicy"];
         };
         KnownSceneOerstedField: {
             axis: number[];
@@ -5076,6 +5114,19 @@ export interface components {
             xi_dl: number;
             /** Format: double */
             xi_fl: number;
+        };
+        KnownSceneSpinTransport: {
+            boundaries?: components["schemas"]["SceneSpinBoundary"][];
+            constitutive_version: string;
+            current_source_id: string;
+            domain: components["schemas"]["SceneRegionRef"][];
+            id: string;
+            interfaces?: components["schemas"]["SceneSpinInterface"][];
+            materials: components["schemas"]["SceneSpinTransportMaterialAssignment"][];
+            mode: components["schemas"]["SceneSpinTransportMode"];
+            requested_execution: components["schemas"]["SceneRequestedTransportExecution"];
+            schema_version: string;
+            solver: components["schemas"]["SceneSpinSolverPolicy"];
         };
         LivePublisherDiagnosticsResource: {
             /** Format: int64 */
@@ -6420,6 +6471,42 @@ export interface components {
             /** Format: int64 */
             total_rows: number;
         };
+        SceneChargeBoundary: {
+            id: string;
+            /** @enum {string} */
+            kind: "voltage_electrode";
+            /** Format: double */
+            potential_V: number;
+            surfaces: components["schemas"]["SceneSurfaceRef"][];
+        } | {
+            id: string;
+            /** @enum {string} */
+            kind: "normal_current_electrode";
+            /** Format: double */
+            outward_current_density_Apm2: number;
+            surfaces: components["schemas"]["SceneSurfaceRef"][];
+        } | {
+            id: string;
+            /** @enum {string} */
+            kind: "insulating";
+            surfaces: components["schemas"]["SceneSurfaceRef"][];
+        };
+        /** @enum {string} */
+        SceneChargePotentialGauge: "dirichlet_reference" | "zero_mean";
+        SceneChargeSolverPolicy: {
+            engine: string;
+            linear: components["schemas"]["SceneLinearTransportSolverPolicy"];
+            operator_version: string;
+            physical_residual_version: string;
+        };
+        SceneChargeTransportMaterial: {
+            /** Format: double */
+            sigma_Spm: number;
+        };
+        SceneChargeTransportMaterialAssignment: {
+            material: components["schemas"]["SceneChargeTransportMaterial"];
+            region: components["schemas"]["SceneRegionRef"];
+        };
         SceneCompatibilityOrigin: {
             authored_kind: string;
             source_ir_version: string;
@@ -6485,6 +6572,8 @@ export interface components {
         };
         SceneCurrentTransport: components["schemas"]["KnownSceneCurrentTransport"] | components["schemas"]["UnsupportedAuthoringRecord"];
         /** @enum {string} */
+        SceneDisabledReaction: "disabled";
+        /** @enum {string} */
         SceneEnvelopeExtrapolation: "zero" | "hold" | "error";
         /** @enum {string} */
         SceneEnvelopeInterpolation: "linear" | "previous";
@@ -6512,6 +6601,14 @@ export interface components {
                 [key: string]: unknown;
             };
             texture_transform?: components["schemas"]["SceneTextureTransform3D"];
+        };
+        SceneLinearTransportSolverPolicy: {
+            /** Format: double */
+            absolute_tolerance: number;
+            /** Format: int32 */
+            max_iterations: number;
+            /** Format: double */
+            relative_tolerance: number;
         };
         /** @enum {string} */
         SceneMaterialFieldLocation: "cell" | "node" | "element" | "quadrature";
@@ -6718,6 +6815,7 @@ export interface components {
             /** @enum {string} */
             kind: "legacy_current_source_norm";
         };
+        SceneReactionLength: number | components["schemas"]["SceneDisabledReaction"];
         /** @enum {string} */
         SceneRegionConflictPolicy: "error" | "higher_priority_wins" | "min_mesh_size_wins";
         /** @enum {string} */
@@ -6770,6 +6868,12 @@ export interface components {
             /** @enum {string} */
             kind: "csg";
         };
+        SceneRequestedTransportExecution: {
+            device: components["schemas"]["SceneTransportDevice"];
+            discretization: components["schemas"]["SceneTransportDiscretization"];
+            execution_mode: components["schemas"]["SceneTransportExecutionMode"];
+            precision: components["schemas"]["SceneTransportPrecision"];
+        };
         SceneResource: {
             couplings?: components["schemas"]["SceneCoupling"][];
             current_modules?: {
@@ -6794,6 +6898,7 @@ export interface components {
             /** Format: int64 */
             scene_revision?: number | null;
             spin_torques?: components["schemas"]["SceneSpinTorque"][];
+            spin_transports?: components["schemas"]["SceneSpinTransport"][];
             study?: {
                 [key: string]: unknown;
             } | null;
@@ -6802,7 +6907,98 @@ export interface components {
             } | null;
             version?: string | null;
         };
+        SceneSpinBoundary: {
+            id: string;
+            /** @enum {string} */
+            kind: "spin_insulating";
+            surfaces: components["schemas"]["SceneSurfaceRef"][];
+        } | {
+            id: string;
+            /** @enum {string} */
+            kind: "spin_sink";
+            surfaces: components["schemas"]["SceneSurfaceRef"][];
+        } | {
+            id: string;
+            /** @enum {string} */
+            kind: "specified_spin_potential";
+            spin_potential_V: number[];
+            surfaces: components["schemas"]["SceneSurfaceRef"][];
+        } | {
+            id: string;
+            /** @enum {string} */
+            kind: "specified_spin_flux";
+            normal_spin_flux_Apm2: number[];
+            surfaces: components["schemas"]["SceneSurfaceRef"][];
+        } | {
+            id: string;
+            /** @enum {string} */
+            kind: "periodic_spin";
+            minus_surface: components["schemas"]["SceneSurfaceRef"];
+            plus_surface: components["schemas"]["SceneSurfaceRef"];
+            translation_m: number[];
+        };
+        SceneSpinInterface: {
+            id: string;
+            /** @enum {string} */
+            kind: "transparent";
+            normal_a_to_b: number[];
+            side_a: components["schemas"]["SceneRegionRef"];
+            side_b: components["schemas"]["SceneRegionRef"];
+        } | {
+            absorption: string;
+            ferromagnet_side: components["schemas"]["SceneRegionRef"];
+            formula_version: string;
+            /** Format: double */
+            g_down_Spm2: number;
+            /** Format: double */
+            g_i_Spm2: number;
+            /** Format: double */
+            g_r_Spm2: number;
+            /** Format: double */
+            g_sml_Spm2: number;
+            /** Format: double */
+            g_up_Spm2: number;
+            id: string;
+            /** @enum {string} */
+            kind: "mixing_conductance";
+            normal_side: components["schemas"]["SceneRegionRef"];
+            normal_to_ferromagnet: number[];
+        };
+        SceneSpinSolverPolicy: {
+            default_external_boundary: string;
+            engine: string;
+            linear: components["schemas"]["SceneLinearTransportSolverPolicy"];
+            operator_version: string;
+            physical_residual_version: string;
+        };
         SceneSpinTorque: components["schemas"]["KnownSceneSpinTorque"] | components["schemas"]["UnsupportedAuthoringRecord"];
+        SceneSpinTransport: components["schemas"]["KnownSceneSpinTransport"] | components["schemas"]["UnsupportedAuthoringRecord"];
+        SceneSpinTransportMaterial: {
+            capacitance_formula_version?: string | null;
+            lambda_j_m: components["schemas"]["SceneReactionLength"];
+            lambda_phi_m: components["schemas"]["SceneReactionLength"];
+            /** Format: double */
+            lambda_sf_m: number;
+            /** Format: double */
+            polarization_p: number;
+            /** Format: double */
+            sigma_s_Spm: number;
+            /** Format: double */
+            spin_capacitance_As_per_V_m3?: number | null;
+            /** Format: double */
+            theta_sh: number;
+        };
+        SceneSpinTransportMaterialAssignment: {
+            material: components["schemas"]["SceneSpinTransportMaterial"];
+            region: components["schemas"]["SceneRegionRef"];
+        };
+        /** @enum {string} */
+        SceneSpinTransportMode: "steady" | "transient";
+        SceneSurfaceRef: {
+            object_id: string;
+            orientation: number[];
+            surface_id: string;
+        };
         SceneTextureMapping: {
             clamp_mode?: string;
             projection?: string;
@@ -6872,6 +7068,16 @@ export interface components {
             /** Format: double */
             value: number;
         };
+        /** @enum {string} */
+        SceneTransportCoupling: "one_way" | "bidirectional";
+        /** @enum {string} */
+        SceneTransportDevice: "cpu" | "gpu" | "auto";
+        /** @enum {string} */
+        SceneTransportDiscretization: "fdm" | "fem" | "auto" | "hybrid";
+        /** @enum {string} */
+        SceneTransportExecutionMode: "strict" | "extended" | "hybrid";
+        /** @enum {string} */
+        SceneTransportPrecision: "single" | "double";
         ScriptSourceResponse: {
             bytes: number;
             script_path: string;
@@ -7320,6 +7526,20 @@ export interface components {
             /** Format: int64 */
             base_revision: number;
             resource: components["schemas"]["SceneSpinTorque"];
+        };
+        SpinTransportCommitResource: {
+            committed_scene: components["schemas"]["SceneResource"];
+            resource: components["schemas"]["SceneSpinTransport"];
+        };
+        SpinTransportListResource: {
+            items: components["schemas"]["SceneSpinTransport"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        SpinTransportMutationRequest: {
+            /** Format: int64 */
+            base_revision: number;
+            resource: components["schemas"]["SceneSpinTransport"];
         };
         StageExecutionRecordResource: {
             action?: string | null;
@@ -14172,6 +14392,143 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpinTorqueCommitResource"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_spin_transports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpinTransportListResource"];
+                };
+            };
+        };
+    };
+    model_post_sessions_current_model_spin_transports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpinTransportMutationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpinTransportCommitResource"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_spin_transports_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SceneSpinTransport"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_spin_transports_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpinAuthoringDeleteRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpinTransportCommitResource"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_patch_sessions_current_model_spin_transports_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpinTransportMutationRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpinTransportCommitResource"];
                 };
             };
             409: {

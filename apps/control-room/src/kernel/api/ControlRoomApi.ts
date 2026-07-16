@@ -89,6 +89,8 @@ import {
   MODEL_COUPLINGS_PATH,
   MODEL_CURRENT_TRANSPORT_PATH,
   MODEL_CURRENT_TRANSPORTS_PATH,
+  MODEL_SPIN_TRANSPORT_PATH,
+  MODEL_SPIN_TRANSPORTS_PATH,
   MODEL_MAGNETIZATION_ASSET_PATH,
   MODEL_MATERIAL_FIELDS_PATH,
   MODEL_MATERIAL_PATH,
@@ -280,11 +282,15 @@ import type {
   TableRowsResource,
   SceneResource,
   SceneCurrentTransport,
+  SceneSpinTransport,
   SceneSpinTorque,
   SceneOerstedField,
   CurrentTransportListResource,
   CurrentTransportMutationRequest,
   CurrentTransportCommitResource,
+  SpinTransportListResource,
+  SpinTransportMutationRequest,
+  SpinTransportCommitResource,
   SpinTorqueListResource,
   SpinTorqueMutationRequest,
   SpinTorqueCommitResource,
@@ -1186,6 +1192,16 @@ export class ControlRoomApi {
       this.patchJson<CurrentTransportCommitResource, CurrentTransportMutationRequest>(MODEL_CURRENT_TRANSPORT_PATH, request, options, { path: { id } }),
     deleteCurrentTransport: (id: string, request: SpinAuthoringDeleteRequest, options?: RequestOptions) =>
       this.deleteJsonWithBody<CurrentTransportCommitResource, SpinAuthoringDeleteRequest>(MODEL_CURRENT_TRANSPORT_PATH, request, options, { path: { id } }),
+    spinTransports: (options?: RequestOptions) =>
+      this.requestJson<SpinTransportListResource>(MODEL_SPIN_TRANSPORTS_PATH, options),
+    spinTransport: (id: string, options?: RequestOptions) =>
+      this.requestJson<SceneSpinTransport>(MODEL_SPIN_TRANSPORT_PATH, options, { path: { id } }),
+    createSpinTransport: (request: SpinTransportMutationRequest, options?: RequestOptions) =>
+      this.postJson<SpinTransportCommitResource, SpinTransportMutationRequest>(MODEL_SPIN_TRANSPORTS_PATH, request, options),
+    replaceSpinTransport: (id: string, request: SpinTransportMutationRequest, options?: RequestOptions) =>
+      this.patchJson<SpinTransportCommitResource, SpinTransportMutationRequest>(MODEL_SPIN_TRANSPORT_PATH, request, options, { path: { id } }),
+    deleteSpinTransport: (id: string, request: SpinAuthoringDeleteRequest, options?: RequestOptions) =>
+      this.deleteJsonWithBody<SpinTransportCommitResource, SpinAuthoringDeleteRequest>(MODEL_SPIN_TRANSPORT_PATH, request, options, { path: { id } }),
     spinTorques: (options?: RequestOptions) =>
       this.requestJson<SpinTorqueListResource>(MODEL_SPIN_TORQUES_PATH, options),
     spinTorque: (id: string, options?: RequestOptions) =>

@@ -446,11 +446,17 @@ export interface ObjectMetricsResource {
 }
 export type SceneResource = components["schemas"]["SceneResource"];
 export type SceneCurrentTransport = components["schemas"]["SceneCurrentTransport"];
+export type SceneSpinTransport = components["schemas"]["SceneSpinTransport"];
+export type KnownSceneCurrentTransport = components["schemas"]["KnownSceneCurrentTransport"];
+export type KnownSceneSpinTransport = components["schemas"]["KnownSceneSpinTransport"];
 export type SceneSpinTorque = components["schemas"]["SceneSpinTorque"];
 export type SceneOerstedField = components["schemas"]["SceneOerstedField"];
 export type CurrentTransportListResource = components["schemas"]["CurrentTransportListResource"];
 export type CurrentTransportMutationRequest = components["schemas"]["CurrentTransportMutationRequest"];
 export type CurrentTransportCommitResource = components["schemas"]["CurrentTransportCommitResource"];
+export type SpinTransportListResource = components["schemas"]["SpinTransportListResource"];
+export type SpinTransportMutationRequest = components["schemas"]["SpinTransportMutationRequest"];
+export type SpinTransportCommitResource = components["schemas"]["SpinTransportCommitResource"];
 export type SpinTorqueListResource = components["schemas"]["SpinTorqueListResource"];
 export type SpinTorqueMutationRequest = components["schemas"]["SpinTorqueMutationRequest"];
 export type SpinTorqueCommitResource = components["schemas"]["SpinTorqueCommitResource"];

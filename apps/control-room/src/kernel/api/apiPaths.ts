@@ -491,6 +491,14 @@ export const MODEL_CURRENT_TRANSPORT_PATH = openApiV2Path(
   "/v2/sessions/current/model/current-transports/{id}",
 );
 
+export const MODEL_SPIN_TRANSPORTS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/spin-transports",
+);
+
+export const MODEL_SPIN_TRANSPORT_PATH = openApiV2Path(
+  "/v2/sessions/current/model/spin-transports/{id}",
+);
+
 export const MODEL_SPIN_TORQUES_PATH = openApiV2Path(
   "/v2/sessions/current/model/spin-torques",
 );

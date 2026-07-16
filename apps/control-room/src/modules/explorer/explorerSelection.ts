@@ -318,6 +318,16 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
+  if (node.kind === "physics.spin-transports" || node.kind === "physics.spin-transport") {
+    return {
+      kind: node.kind,
+      nodeId: node.id,
+      ...(node.spinTransportId ? { spinTransportId: node.spinTransportId } : {}),
+      ...(node.spinTransportIndex !== undefined ? { spinTransportIndex: node.spinTransportIndex } : {}),
+      type: "spin-transport",
+    };
+  }
+
   return null;
 }
 

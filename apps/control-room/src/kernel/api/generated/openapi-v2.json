@@ -7945,12 +7945,21 @@
       },
       "KnownSceneCurrentTransport": {
         "properties": {
+          "boundaries": {
+            "items": {
+              "$ref": "#/components/schemas/SceneChargeBoundary"
+            },
+            "type": "array"
+          },
           "conductivity_s_per_m": {
             "format": "double",
             "type": [
               "number",
               "null"
             ]
+          },
+          "coupling": {
+            "$ref": "#/components/schemas/SceneTransportCoupling"
           },
           "current_density": {
             "items": {
@@ -7962,8 +7971,30 @@
               "null"
             ]
           },
+          "domain": {
+            "items": {
+              "$ref": "#/components/schemas/SceneRegionRef"
+            },
+            "type": "array"
+          },
+          "gauge": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneChargePotentialGauge"
+              }
+            ]
+          },
           "kind": {
             "$ref": "#/components/schemas/CurrentTransportKind"
+          },
+          "materials": {
+            "items": {
+              "$ref": "#/components/schemas/SceneChargeTransportMaterialAssignment"
+            },
+            "type": "array"
           },
           "model": {
             "$ref": "#/components/schemas/CurrentTransportModel"
@@ -7975,6 +8006,16 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "solver": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SceneChargeSolverPolicy"
+              }
             ]
           }
         },
@@ -8296,6 +8337,67 @@
             "type": "object"
           }
         ]
+      },
+      "KnownSceneSpinTransport": {
+        "properties": {
+          "boundaries": {
+            "items": {
+              "$ref": "#/components/schemas/SceneSpinBoundary"
+            },
+            "type": "array"
+          },
+          "constitutive_version": {
+            "type": "string"
+          },
+          "current_source_id": {
+            "type": "string"
+          },
+          "domain": {
+            "items": {
+              "$ref": "#/components/schemas/SceneRegionRef"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "interfaces": {
+            "items": {
+              "$ref": "#/components/schemas/SceneSpinInterface"
+            },
+            "type": "array"
+          },
+          "materials": {
+            "items": {
+              "$ref": "#/components/schemas/SceneSpinTransportMaterialAssignment"
+            },
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SceneSpinTransportMode"
+          },
+          "requested_execution": {
+            "$ref": "#/components/schemas/SceneRequestedTransportExecution"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "solver": {
+            "$ref": "#/components/schemas/SceneSpinSolverPolicy"
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "current_source_id",
+          "mode",
+          "domain",
+          "materials",
+          "solver",
+          "requested_execution",
+          "constitutive_version"
+        ],
+        "type": "object"
       },
       "LivePublisherDiagnosticsResource": {
         "properties": {
@@ -13625,6 +13727,152 @@
         ],
         "type": "object"
       },
+      "SceneChargeBoundary": {
+        "oneOf": [
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "voltage_electrode"
+                ],
+                "type": "string"
+              },
+              "potential_V": {
+                "format": "double",
+                "type": "number"
+              },
+              "surfaces": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneSurfaceRef"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "surfaces",
+              "potential_V",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "normal_current_electrode"
+                ],
+                "type": "string"
+              },
+              "outward_current_density_Apm2": {
+                "format": "double",
+                "type": "number"
+              },
+              "surfaces": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneSurfaceRef"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "surfaces",
+              "outward_current_density_Apm2",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "insulating"
+                ],
+                "type": "string"
+              },
+              "surfaces": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneSurfaceRef"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "surfaces",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneChargePotentialGauge": {
+        "enum": [
+          "dirichlet_reference",
+          "zero_mean"
+        ],
+        "type": "string"
+      },
+      "SceneChargeSolverPolicy": {
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "linear": {
+            "$ref": "#/components/schemas/SceneLinearTransportSolverPolicy"
+          },
+          "operator_version": {
+            "type": "string"
+          },
+          "physical_residual_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "engine",
+          "linear",
+          "physical_residual_version",
+          "operator_version"
+        ],
+        "type": "object"
+      },
+      "SceneChargeTransportMaterial": {
+        "properties": {
+          "sigma_Spm": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sigma_Spm"
+        ],
+        "type": "object"
+      },
+      "SceneChargeTransportMaterialAssignment": {
+        "properties": {
+          "material": {
+            "$ref": "#/components/schemas/SceneChargeTransportMaterial"
+          },
+          "region": {
+            "$ref": "#/components/schemas/SceneRegionRef"
+          }
+        },
+        "required": [
+          "region",
+          "material"
+        ],
+        "type": "object"
+      },
       "SceneCompatibilityOrigin": {
         "additionalProperties": {
           "type": "string"
@@ -13909,6 +14157,12 @@
           }
         ]
       },
+      "SceneDisabledReaction": {
+        "enum": [
+          "disabled"
+        ],
+        "type": "string"
+      },
       "SceneEnvelopeExtrapolation": {
         "enum": [
           "zero",
@@ -14033,6 +14287,29 @@
             "type": "object"
           }
         ]
+      },
+      "SceneLinearTransportSolverPolicy": {
+        "properties": {
+          "absolute_tolerance": {
+            "format": "double",
+            "type": "number"
+          },
+          "max_iterations": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relative_tolerance": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "relative_tolerance",
+          "absolute_tolerance",
+          "max_iterations"
+        ],
+        "type": "object"
       },
       "SceneMaterialFieldLocation": {
         "enum": [
@@ -14921,6 +15198,17 @@
           }
         ]
       },
+      "SceneReactionLength": {
+        "oneOf": [
+          {
+            "format": "double",
+            "type": "number"
+          },
+          {
+            "$ref": "#/components/schemas/SceneDisabledReaction"
+          }
+        ]
+      },
       "SceneRegionConflictPolicy": {
         "enum": [
           "error",
@@ -15136,6 +15424,29 @@
           }
         ]
       },
+      "SceneRequestedTransportExecution": {
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/SceneTransportDevice"
+          },
+          "discretization": {
+            "$ref": "#/components/schemas/SceneTransportDiscretization"
+          },
+          "execution_mode": {
+            "$ref": "#/components/schemas/SceneTransportExecutionMode"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/SceneTransportPrecision"
+          }
+        },
+        "required": [
+          "discretization",
+          "device",
+          "precision",
+          "execution_mode"
+        ],
+        "type": "object"
+      },
       "SceneResource": {
         "properties": {
           "couplings": {
@@ -15231,6 +15542,12 @@
             },
             "type": "array"
           },
+          "spin_transports": {
+            "items": {
+              "$ref": "#/components/schemas/SceneSpinTransport"
+            },
+            "type": "array"
+          },
           "study": {
             "additionalProperties": true,
             "type": [
@@ -15254,6 +15571,292 @@
         },
         "type": "object"
       },
+      "SceneSpinBoundary": {
+        "oneOf": [
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "spin_insulating"
+                ],
+                "type": "string"
+              },
+              "surfaces": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneSurfaceRef"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "surfaces",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "spin_sink"
+                ],
+                "type": "string"
+              },
+              "surfaces": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneSurfaceRef"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "surfaces",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "specified_spin_potential"
+                ],
+                "type": "string"
+              },
+              "spin_potential_V": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "surfaces": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneSurfaceRef"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "surfaces",
+              "spin_potential_V",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "specified_spin_flux"
+                ],
+                "type": "string"
+              },
+              "normal_spin_flux_Apm2": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "surfaces": {
+                "items": {
+                  "$ref": "#/components/schemas/SceneSurfaceRef"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "surfaces",
+              "normal_spin_flux_Apm2",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "periodic_spin"
+                ],
+                "type": "string"
+              },
+              "minus_surface": {
+                "$ref": "#/components/schemas/SceneSurfaceRef"
+              },
+              "plus_surface": {
+                "$ref": "#/components/schemas/SceneSurfaceRef"
+              },
+              "translation_m": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "minus_surface",
+              "plus_surface",
+              "translation_m",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneSpinInterface": {
+        "oneOf": [
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "transparent"
+                ],
+                "type": "string"
+              },
+              "normal_a_to_b": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "side_a": {
+                "$ref": "#/components/schemas/SceneRegionRef"
+              },
+              "side_b": {
+                "$ref": "#/components/schemas/SceneRegionRef"
+              }
+            },
+            "required": [
+              "id",
+              "side_a",
+              "side_b",
+              "normal_a_to_b",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "absorption": {
+                "type": "string"
+              },
+              "ferromagnet_side": {
+                "$ref": "#/components/schemas/SceneRegionRef"
+              },
+              "formula_version": {
+                "type": "string"
+              },
+              "g_down_Spm2": {
+                "format": "double",
+                "type": "number"
+              },
+              "g_i_Spm2": {
+                "format": "double",
+                "type": "number"
+              },
+              "g_r_Spm2": {
+                "format": "double",
+                "type": "number"
+              },
+              "g_sml_Spm2": {
+                "format": "double",
+                "type": "number"
+              },
+              "g_up_Spm2": {
+                "format": "double",
+                "type": "number"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "mixing_conductance"
+                ],
+                "type": "string"
+              },
+              "normal_side": {
+                "$ref": "#/components/schemas/SceneRegionRef"
+              },
+              "normal_to_ferromagnet": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "normal_to_ferromagnet",
+              "normal_side",
+              "ferromagnet_side",
+              "g_up_Spm2",
+              "g_down_Spm2",
+              "g_r_Spm2",
+              "g_i_Spm2",
+              "g_sml_Spm2",
+              "absorption",
+              "formula_version",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SceneSpinSolverPolicy": {
+        "properties": {
+          "default_external_boundary": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "linear": {
+            "$ref": "#/components/schemas/SceneLinearTransportSolverPolicy"
+          },
+          "operator_version": {
+            "type": "string"
+          },
+          "physical_residual_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "engine",
+          "linear",
+          "physical_residual_version",
+          "operator_version",
+          "default_external_boundary"
+        ],
+        "type": "object"
+      },
       "SceneSpinTorque": {
         "oneOf": [
           {
@@ -15263,6 +15866,109 @@
             "$ref": "#/components/schemas/UnsupportedAuthoringRecord"
           }
         ]
+      },
+      "SceneSpinTransport": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/KnownSceneSpinTransport"
+          },
+          {
+            "$ref": "#/components/schemas/UnsupportedAuthoringRecord"
+          }
+        ]
+      },
+      "SceneSpinTransportMaterial": {
+        "properties": {
+          "capacitance_formula_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lambda_j_m": {
+            "$ref": "#/components/schemas/SceneReactionLength"
+          },
+          "lambda_phi_m": {
+            "$ref": "#/components/schemas/SceneReactionLength"
+          },
+          "lambda_sf_m": {
+            "format": "double",
+            "type": "number"
+          },
+          "polarization_p": {
+            "format": "double",
+            "type": "number"
+          },
+          "sigma_s_Spm": {
+            "format": "double",
+            "type": "number"
+          },
+          "spin_capacitance_As_per_V_m3": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "theta_sh": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sigma_s_Spm",
+          "polarization_p",
+          "theta_sh",
+          "lambda_sf_m",
+          "lambda_j_m",
+          "lambda_phi_m"
+        ],
+        "type": "object"
+      },
+      "SceneSpinTransportMaterialAssignment": {
+        "properties": {
+          "material": {
+            "$ref": "#/components/schemas/SceneSpinTransportMaterial"
+          },
+          "region": {
+            "$ref": "#/components/schemas/SceneRegionRef"
+          }
+        },
+        "required": [
+          "region",
+          "material"
+        ],
+        "type": "object"
+      },
+      "SceneSpinTransportMode": {
+        "enum": [
+          "steady",
+          "transient"
+        ],
+        "type": "string"
+      },
+      "SceneSurfaceRef": {
+        "properties": {
+          "object_id": {
+            "type": "string"
+          },
+          "orientation": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "surface_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_id",
+          "surface_id",
+          "orientation"
+        ],
+        "type": "object"
       },
       "SceneTextureMapping": {
         "properties": {
@@ -15512,6 +16218,45 @@
           "value"
         ],
         "type": "object"
+      },
+      "SceneTransportCoupling": {
+        "enum": [
+          "one_way",
+          "bidirectional"
+        ],
+        "type": "string"
+      },
+      "SceneTransportDevice": {
+        "enum": [
+          "cpu",
+          "gpu",
+          "auto"
+        ],
+        "type": "string"
+      },
+      "SceneTransportDiscretization": {
+        "enum": [
+          "fdm",
+          "fem",
+          "auto",
+          "hybrid"
+        ],
+        "type": "string"
+      },
+      "SceneTransportExecutionMode": {
+        "enum": [
+          "strict",
+          "extended",
+          "hybrid"
+        ],
+        "type": "string"
+      },
+      "SceneTransportPrecision": {
+        "enum": [
+          "single",
+          "double"
+        ],
+        "type": "string"
       },
       "ScriptSourceResponse": {
         "properties": {
@@ -17111,6 +17856,58 @@
           },
           "resource": {
             "$ref": "#/components/schemas/SceneSpinTorque"
+          }
+        },
+        "required": [
+          "base_revision",
+          "resource"
+        ],
+        "type": "object"
+      },
+      "SpinTransportCommitResource": {
+        "properties": {
+          "committed_scene": {
+            "$ref": "#/components/schemas/SceneResource"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/SceneSpinTransport"
+          }
+        },
+        "required": [
+          "resource",
+          "committed_scene"
+        ],
+        "type": "object"
+      },
+      "SpinTransportListResource": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SceneSpinTransport"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "items"
+        ],
+        "type": "object"
+      },
+      "SpinTransportMutationRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/SceneSpinTransport"
           }
         },
         "required": [
@@ -28482,6 +29279,172 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SpinTorqueCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/spin-transports": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_spin_transports",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpinTransportListResource"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "post": {
+        "operationId": "model_post_sessions_current_model_spin_transports",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpinTransportMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpinTransportCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/spin-transports/{id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_spin_transports_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpinAuthoringDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpinTransportCommitResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "get": {
+        "operationId": "model_get_sessions_current_model_spin_transports_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SceneSpinTransport"
+                }
+              }
+            },
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "patch": {
+        "operationId": "model_patch_sessions_current_model_spin_transports_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpinTransportMutationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpinTransportCommitResource"
                 }
               }
             },

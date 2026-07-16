@@ -6,6 +6,7 @@ import type {
   RegionListResource,
   SceneResource,
   StageExecutionResource,
+  SpinTransportListResource,
 } from "@/kernel/api/apiTypes";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
@@ -43,6 +44,7 @@ interface ModelTreeResourceInputs {
   materialFields?: MaterialParameterFieldListResource | null;
   regions?: RegionListResource | null;
   regionMemberships?: readonly MeshRegionMembershipResource[] | null;
+  spinTransports?: SpinTransportListResource | null;
 }
 
 export function modelTreeSnapshotFromScene(
@@ -89,6 +91,13 @@ export function modelTreeSnapshotFromScene(
         }, [])
       : [],
     physicsInteractions: scenePhysicsInteractions(scene?.objects),
+    spinTransports: (resources.spinTransports?.items ?? []).map((item, index) => ({
+      currentSourceId: "current_source_id" in item && typeof item.current_source_id === "string" ? item.current_source_id : null,
+      id: "id" in item && typeof item.id === "string" ? item.id : `unknown-spin-transport-${index + 1}`,
+      index,
+      mode: "mode" in item && typeof item.mode === "string" ? item.mode : null,
+      supported: "schema_version" in item && "requested_execution" in item,
+    })),
     study: sceneStudySnapshot(scene?.study),
     universe: sceneUniverseSnapshot(scene?.universe),
   };

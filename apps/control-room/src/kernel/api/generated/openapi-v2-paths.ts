@@ -146,6 +146,8 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/model/script",
   "/v2/sessions/current/model/spin-torques",
   "/v2/sessions/current/model/spin-torques/{id}",
+  "/v2/sessions/current/model/spin-transports",
+  "/v2/sessions/current/model/spin-transports/{id}",
   "/v2/sessions/current/model/study",
   "/v2/sessions/current/model/syncs",
   "/v2/sessions/current/model/transactions",

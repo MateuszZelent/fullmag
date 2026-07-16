@@ -986,6 +986,29 @@ function couplingNodes(couplings: readonly ModelTreeCouplingSnapshot[]): Explore
   };
 }
 
+function spinTransportNodes(transports: NonNullable<ModelTreeSnapshot["spinTransports"]>): ExplorerNode {
+  return {
+    id: "model:physics:spin-transports",
+    kind: "physics.spin-transports",
+    label: "Spin Transport",
+    parentId: "model:session",
+    badge: `${transports.length}`,
+    icon: "activity",
+    status: "ready",
+    children: transports.map((transport) => ({
+      id: `model:physics:spin-transports:${encodeURIComponent(transport.id)}`,
+      kind: "physics.spin-transport" as const,
+      label: transport.id,
+      parentId: "model:physics:spin-transports",
+      badge: transport.supported ? `${transport.mode ?? "typed"} · ${transport.currentSourceId ?? "no source"}` : "read-only",
+      icon: "activity" as const,
+      spinTransportId: transport.id,
+      spinTransportIndex: transport.index,
+      status: transport.supported ? "ready" as const : "unsupported" as const,
+    })),
+  };
+}
+
 function couplingStatus(coupling: ModelTreeCouplingSnapshot): ExplorerNodeStatus {
   if (!coupling.enabled) return "degraded";
   if (coupling.realizationStatus?.includes("requires")) return "unsupported";
@@ -1149,6 +1172,7 @@ export function buildModelTree(
   if (couplingBranch) {
     sessionChildren.push(couplingBranch);
   }
+  sessionChildren.push(spinTransportNodes(snapshot?.spinTransports ?? []));
 
   sessionChildren.push(
     meshPolicyNodes(snapshot?.mesh ?? null),

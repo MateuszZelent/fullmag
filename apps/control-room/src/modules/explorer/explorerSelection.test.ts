@@ -1012,4 +1012,23 @@ describe("selectExplorerNode", () => {
       },
     });
   });
+
+  it("selects a spin transport as its own semantic resource", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:physics:spin-transports:spin",
+      kind: "physics.spin-transport",
+      label: "spin",
+      parentId: "model:physics:spin-transports",
+      spinTransportId: "spin",
+      spinTransportIndex: 0,
+    }, "explorer");
+    expect(kernel.selection.get().ref).toEqual({
+      kind: "physics.spin-transport",
+      nodeId: "model:physics:spin-transports:spin",
+      spinTransportId: "spin",
+      spinTransportIndex: 0,
+      type: "spin-transport",
+    });
+  });
 });
