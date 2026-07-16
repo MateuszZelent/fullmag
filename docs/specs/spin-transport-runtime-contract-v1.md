@@ -235,7 +235,8 @@ SpinTransportMaterial = {
   lambda_sf_m>0,
   lambda_j_m:(positive|"disabled"),
   lambda_phi_m:(positive|"disabled"),
-  spin_capacitance_As_per_Vm3:(positive|required only for transient)
+  spin_capacitance_As_per_V_m3:(positive|required only for transient),
+  capacitance_formula_version:(nonempty|required with spin_capacitance)
 }
 ```
 
@@ -674,6 +675,12 @@ physical positive `C_s` is required. `explicit_dp45` with transient spin is
 unsupported until a separately validated partition exists. Optional
 subcycling requires its own formula version, error controller, interpolation
 order proof, and provenance.
+
+The canonical public selection is `LLG(integrator="coupled_imex_ark2")`.
+`SpinSolverPolicy.engine` selects the spatial transport solve and never the
+coupled time integrator. Adaptive execution uses the versioned full-step versus
+two-half-step estimator; the BDF2 small oracle is validation-only and is not a
+production authoring choice.
 
 ## 7. Acceptance, rejection, and rollback
 

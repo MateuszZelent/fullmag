@@ -281,6 +281,15 @@ constant-step formula to unequal steps is prohibited. `explicit_dp45` is
 unsupported for transient spin until a compatible partitioned-order proof
 exists. Subcycling requires a coupled error/order proof.
 
+The public owner of this coupled time algorithm is the stage dynamics choice:
+transient spin requires `LLG(integrator="coupled_imex_ark2")`. The
+`SpinSolverPolicy.engine` field continues to select the spatial linear/nonlinear
+transport solver and must not be overloaded with time-integration semantics.
+The existing adaptive-timestep contract controls ARS step doubling; fixed-step
+execution disables error-based rejection but still executes the same versioned
+ARS stages. `coupled_bdf2_small_oracle.v1` remains validation-only and is not a
+production authoring choice in M3.
+
 ### 2.7 Symbols and SI units
 
 | Symbol | Meaning | SI unit / condition |
