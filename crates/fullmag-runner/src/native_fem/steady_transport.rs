@@ -597,6 +597,7 @@ mod tests {
             inserted_default_boundaries: vec!["all_unassigned_external_surfaces".into()],
             fdm_cpu_double: None,
             fdm_cpu_double_reciprocal: None,
+            fdm_cpu_double_transient: None,
             fem_cpu_double: Some(ResolvedFemSpinTransportIR {
                 descriptor_schema: "fullmag.fem.spin_transport_descriptor.v1".into(),
                 charge_definition,
