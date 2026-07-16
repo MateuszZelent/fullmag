@@ -498,6 +498,15 @@ carrier with monotonic revisions; the v2 field resource/data plane reads the
 persisted field artifacts. The summary transport artifact is supplementary and
 is not a substitute for these quantity records.
 
+Artifact persistence is owned by the run's `ArtifactRecorder`: streaming runs
+must enqueue these records before the pipeline is closed, while in-memory runs
+must serialize the same catalog-owned units and component metadata. M1 accepts
+exactly one steady FEM transport module per run because the current v2 field
+resource identity is the canonical quantity id; multiple module-scoped records
+with the same quantity id fail before native execution rather than overwriting
+one another. Requested field schedules for these steady quantities select the
+already-solved records and must not query the time-domain FEM preview ABI.
+
 ## 5. Validation strategy
 
 ### 5.1 Analytical and algebraic checks

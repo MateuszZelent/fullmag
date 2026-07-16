@@ -521,7 +521,7 @@ mod tests {
         }
     }
 
-    fn resolved_plan() -> ResolvedSpinTransportPlanIR {
+    pub(crate) fn resolved_plan() -> ResolvedSpinTransportPlanIR {
         let charge_solver = ChargeSolverPolicyIR {
             engine: "cg".into(),
             linear: LinearTransportSolverPolicyIR {
@@ -736,6 +736,35 @@ mod tests {
     }
 
     #[test]
+    fn multiple_transport_modules_fail_before_native_execution() {
+        let mut plan = crate::dispatch::test_tiny_fem_plan();
+        let first = resolved_plan();
+        let mut second = first.clone();
+        second.module_id = "spin-2".into();
+        second.current_source_id = "charge-2".into();
+        let source = |resolved: &ResolvedSpinTransportPlanIR| {
+            let descriptor = resolved.fem_cpu_double.as_ref().expect("FEM descriptor");
+            fullmag_ir::CurrentModuleIR::CurrentTransport {
+                name: resolved.current_source_id.clone(),
+                model: fullmag_ir::CurrentTransportModelIR::OhmicPoisson,
+                current_density: None,
+                solve_region: None,
+                conductivity_s_per_m: None,
+                coupling: TransportCouplingIR::OneWay,
+                definition: Some(descriptor.charge_definition.clone()),
+            }
+        };
+        plan.current_modules = vec![source(&first), source(&second)];
+        plan.spin_transport_plans = vec![first, second];
+
+        let error = match descriptor::preflight_transport_plans(&plan) {
+            Ok(_) => panic!("quantity-scoped M1 publication must reject multiple modules"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("exactly one module"), "{}", error.message);
+    }
+
+    #[test]
     fn contradictory_resolved_descriptor_fails_before_native_call() {
         let fixture = request();
         let mut resolved = resolved_plan();
@@ -751,6 +780,35 @@ mod tests {
         )
         .expect_err("unproven stage coupling must fail closed");
         assert!(error.message.contains("contradictory resolved descriptor"));
+    }
+
+    #[test]
+    fn resolved_descriptor_mesh_masks_and_boundary_attributes_fail_closed() {
+        assert_descriptor_contradiction("charge mask must cover the native mesh", |plan| {
+            plan.fem_cpu_double.as_mut().unwrap().charge_domain.element_mask[0] = false;
+        });
+        assert_descriptor_contradiction("spin mask must match the native mesh", |plan| {
+            plan.fem_cpu_double.as_mut().unwrap().spin_domain.element_mask.clear();
+        });
+        assert_descriptor_contradiction("conductivity must match the native mesh", |plan| {
+            plan.fem_cpu_double
+                .as_mut()
+                .unwrap()
+                .charge_conductivity_spm_per_element
+                .push(4.0);
+        });
+        assert_descriptor_contradiction("boundary attributes must exist on the native mesh", |plan| {
+            plan.fem_cpu_double.as_mut().unwrap().charge_dirichlet = vec![(99, 1.0)];
+        });
+        assert_descriptor_contradiction("torque target must select native mesh elements", |plan| {
+            let descriptor = plan.fem_cpu_double.as_mut().unwrap();
+            descriptor.torque_target = Some(fullmag_ir::ResolvedFemTorqueTargetIR {
+                torque_module_id: "torque".into(),
+                target: descriptor.charge_domain.regions[0].clone(),
+                element_mask: vec![false],
+                formula_version: "drift_diffusion.fullmag.v1".into(),
+            });
+        });
     }
 
     fn assert_descriptor_contradiction(
@@ -864,3 +922,6 @@ mod tests {
             .all(|field| field.scope == "transport_module:spin:full_solve_domain"));
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::resolved_plan as test_resolved_plan;

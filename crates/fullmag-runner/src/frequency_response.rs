@@ -185,6 +185,7 @@ fn requested_frequency_response_preconditioner_name(
 }
 
 #[derive(Clone, Copy, Default)]
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
 struct FrequencyResponseProgressMetadata<'a> {
     solver_method: Option<&'a str>,
     solver_preconditioner: Option<&'a str>,

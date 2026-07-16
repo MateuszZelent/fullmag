@@ -3614,7 +3614,9 @@ fn build_preview_state(
         fullmag_runner::DisplayKind::GlobalScalar => {
             build_global_scalar_preview_state(current, display_selection)
         }
-        fullmag_runner::DisplayKind::VectorField | fullmag_runner::DisplayKind::SpatialScalar => {
+        fullmag_runner::DisplayKind::VectorField
+        | fullmag_runner::DisplayKind::TensorField
+        | fullmag_runner::DisplayKind::SpatialScalar => {
             build_spatial_preview_state(current, display_selection, config)
         }
     }

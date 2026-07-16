@@ -920,3 +920,77 @@ fn update_atomic_max(target: &AtomicU64, value: u64) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn recorder_streams_transport_scalar_vector_and_tensor_fields() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-transport-streaming-{}-{unique}",
+            std::process::id()
+        ));
+        let context = FieldArtifactContext {
+            problem_name: "transport".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fem", "node_count": 2}),
+        };
+        let mut pipeline = ArtifactPipeline::start(output_dir.clone(), context, 2)
+            .expect("start artifact pipeline");
+        let mut recorder = ArtifactRecorder::streaming(
+            ExecutionProvenance {
+                execution_engine: "fem_cpu_native".into(),
+                precision: "double".into(),
+                ..ExecutionProvenance::default()
+            },
+            pipeline.sender(),
+        );
+        for (name, components, order, values, revision) in [
+            ("V_electric", 1, "scalar", vec![1.0, 0.0], 1),
+            ("J_charge", 3, "xyz", vec![1.0; 6], 2),
+            ("spin_current_tensor", 9, "row_major_Q_ia", vec![1.0; 18], 3),
+        ] {
+            recorder
+                .record_field_snapshot(
+                    FieldSnapshot::new(
+                        name,
+                        0,
+                        0.0,
+                        0.0,
+                        components,
+                        order,
+                        "node",
+                        "transport_module:spin:full_solve_domain",
+                        revision,
+                        values,
+                    )
+                    .expect("valid transport snapshot"),
+                )
+                .expect("enqueue transport snapshot");
+        }
+        assert_eq!(recorder.finish().1, 3);
+        let summary = pipeline.finish().expect("finish artifact pipeline");
+        assert_eq!(summary.field_snapshots_written, 3);
+        for (name, components, unit) in [
+            ("V_electric", 1, "V"),
+            ("J_charge", 3, "A/m^2"),
+            ("spin_current_tensor", 9, "A/m^2"),
+        ] {
+            let bytes = fs::read(output_dir.join("fields").join(name).join("step_000000.json"))
+                .expect("streamed transport field");
+            let payload: serde_json::Value =
+                serde_json::from_slice(&bytes).expect("transport field JSON");
+            assert_eq!(payload["component_count"], components);
+            assert_eq!(payload["unit"], unit);
+        }
+        fs::remove_dir_all(output_dir).expect("remove transport artifact fixture");
+    }
+}

@@ -2852,6 +2852,93 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn public_fem_dispatch_streams_transport_quantity_artifacts() {
+        let _guard = ENV_LOCK.lock().expect("environment mutex");
+        unsafe {
+            std::env::set_var("FULLMAG_FEM_EXECUTION", "cpu");
+        }
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        let mut fem = dispatch::test_tiny_fem_plan();
+        let resolved = native_fem::test_resolved_steady_transport_plan();
+        let descriptor = resolved.fem_cpu_double.as_ref().expect("FEM descriptor");
+        fem.current_modules = vec![fullmag_ir::CurrentModuleIR::CurrentTransport {
+            name: resolved.current_source_id.clone(),
+            model: fullmag_ir::CurrentTransportModelIR::OhmicPoisson,
+            current_density: None,
+            solve_region: None,
+            conductivity_s_per_m: None,
+            coupling: fullmag_ir::TransportCouplingIR::OneWay,
+            definition: Some(descriptor.charge_definition.clone()),
+        }];
+        fem.spin_transport_plans = vec![resolved];
+        let plan = fullmag_ir::ExecutionPlanIR {
+            common: fullmag_ir::CommonPlanMeta {
+                ir_version: problem.ir_version.clone(),
+                requested_backend: fullmag_ir::BackendTarget::Fem,
+                resolved_backend: fullmag_ir::BackendTarget::Fem,
+                execution_mode: fullmag_ir::ExecutionMode::Strict,
+                material_field_plans: Vec::new(),
+            },
+            backend_plan: fullmag_ir::BackendPlanIR::Fem(fem),
+            output_plan: fullmag_ir::OutputPlanIR {
+                outputs: vec![
+                    fullmag_ir::OutputIR::Field {
+                        name: "V_electric".into(),
+                        every_seconds: 1.0,
+                    },
+                    fullmag_ir::OutputIR::Field {
+                        name: "J_charge".into(),
+                        every_seconds: 1.0,
+                    },
+                    fullmag_ir::OutputIR::Field {
+                        name: "spin_current_tensor".into(),
+                        every_seconds: 1.0,
+                    },
+                ],
+            },
+            provenance: fullmag_ir::ProvenancePlanIR { notes: Vec::new() },
+        };
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-public-fem-transport-{}-{unique}",
+            std::process::id()
+        ));
+
+        let result = run_planned_problem(&problem, &plan, 1.0e-13, &output_dir)
+            .expect("public FEM dispatch should persist transport fields");
+        unsafe {
+            std::env::remove_var("FULLMAG_FEM_EXECUTION");
+        }
+        assert_eq!(result.status, RunStatus::Completed);
+        for (quantity, components, unit) in [
+            ("V_electric", 1, "V"),
+            ("J_charge", 3, "A/m^2"),
+            ("spin_potential", 3, "V"),
+            ("spin_current_tensor", 9, "A/m^2"),
+            ("torque_stt", 3, "1/s"),
+        ] {
+            let payload: serde_json::Value = serde_json::from_slice(
+                &fs::read(
+                    output_dir
+                        .join("fields")
+                        .join(quantity)
+                        .join("step_000000.json"),
+                )
+                .unwrap_or_else(|error| panic!("missing {quantity} artifact: {error}")),
+            )
+            .expect("transport artifact JSON");
+            assert_eq!(payload["component_count"], components, "{quantity}");
+            assert_eq!(payload["unit"], unit, "{quantity}");
+        }
+        fs::remove_dir_all(output_dir).expect("remove public transport artifact fixture");
+    }
+
     #[test]
     fn interactive_runtime_hysteresis_entrypoint_routes_through_hysteresis_runner() {
         let source = fs::read_to_string(concat!(

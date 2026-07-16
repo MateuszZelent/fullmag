@@ -17,6 +17,8 @@ mod plan;
 mod runtime_info;
 #[cfg(feature = "fem-gpu")]
 mod steady_transport;
+#[cfg(all(test, feature = "fem-gpu"))]
+pub(crate) use steady_transport::test_resolved_plan as test_resolved_steady_transport_plan;
 #[allow(unused_imports)]
 pub(crate) use availability::{
     is_cpu_available, is_gpu_available, native_availability, native_frequency_domain_availability,
@@ -2043,6 +2045,7 @@ impl NativeFemBackend {
         Ok(flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
     }
 
+    #[allow(dead_code)]
     pub fn copy_scalar_field(
         &self,
         observable: ffi::fullmag_fem_observable,
@@ -2070,6 +2073,7 @@ impl NativeFemBackend {
         )
     }
 
+    #[allow(dead_code)]
     pub fn copy_demag_phi(&self, node_count: usize) -> Result<Vec<f64>, RunError> {
         self.copy_scalar_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_DEMAG_PHI,

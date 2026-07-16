@@ -22740,6 +22740,74 @@ async fn v2_material_scalar_quantity_is_available_as_field_vector() {
 }
 
 #[tokio::test]
+async fn v2_field_data_plane_reads_transport_scalar_vector_and_tensor_snapshots() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "V_electric": {
+                "component_count": 1,
+                "values": [1.0, 0.0]
+            },
+            "J_charge": {
+                "component_count": 3,
+                "values": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+            },
+            "spin_current_tensor": {
+                "component_count": 9,
+                "component_order": "row_major_Q_ia",
+                "values": [
+                    1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0,
+                    10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0
+                ]
+            }
+        }))
+        .expect("transport latest-fields fixture");
+    }
+    let app = build_v2_router().with_state(state);
+
+    for (quantity, components, expected) in [
+        ("V_electric", 1usize, vec![1.0, 0.0]),
+        ("J_charge", 3, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+        (
+            "spin_current_tensor",
+            9,
+            (1..=18).map(f64::from).collect::<Vec<_>>(),
+        ),
+    ] {
+        let expected_components = components.to_string();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v2/sessions/current/data/fields/{quantity}/samples/vector?format=bin"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{quantity}");
+        assert_eq!(
+            response
+                .headers()
+                .get("x-fullmag-n-comp")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_components.as_str()),
+            "{quantity}"
+        );
+        let bytes = body_bytes(response).await;
+        assert_eq!(&bytes[..4], b"FMVP", "{quantity}");
+        assert_eq!(bytes.len(), 48 + expected.len() * 8, "{quantity}");
+        let decoded = bytes[48..]
+            .chunks_exact(8)
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(decoded, expected, "{quantity}");
+    }
+}
+
+#[tokio::test]
 async fn python_waveguide_box_region_ms_override_changes_backend_mat_ms_mean() {
     let base_ir = export_problem_ir_from_python_script(
         "waveguide_box_base.py",

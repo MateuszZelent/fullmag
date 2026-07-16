@@ -2263,6 +2263,8 @@ pub(crate) fn execute_fem<'a>(
 ) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     #[cfg(feature = "fem-gpu")]
+    let transport_artifact_writer = artifact_writer.clone();
+    #[cfg(feature = "fem-gpu")]
     let transport_bundle = if normalized_plan.spin_transport_plans.is_empty() {
         None
     } else {
@@ -2317,6 +2319,20 @@ pub(crate) fn execute_fem<'a>(
             // Fall through to native execution below.
         }
     }
+    #[cfg(feature = "fem-gpu")]
+    let dynamic_outputs = outputs
+        .iter()
+        .filter(|output| !steady_transport_output(output))
+        .cloned()
+        .collect::<Vec<_>>();
+    #[cfg(feature = "fem-gpu")]
+    let runtime_outputs = if normalized_plan.spin_transport_plans.is_empty() {
+        outputs
+    } else {
+        dynamic_outputs.as_slice()
+    };
+    #[cfg(not(feature = "fem-gpu"))]
+    let runtime_outputs = outputs;
     let executed = match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
@@ -2324,7 +2340,7 @@ pub(crate) fn execute_fem<'a>(
                 FemEngine::CpuNative,
                 &cpu_plan,
                 until_seconds,
-                outputs,
+                runtime_outputs,
                 live,
                 artifact_writer,
             )
@@ -2335,7 +2351,7 @@ pub(crate) fn execute_fem<'a>(
                 FemEngine::NativeGpu,
                 &gpu_plan,
                 until_seconds,
-                outputs,
+                runtime_outputs,
                 live,
                 artifact_writer,
             )
@@ -2350,15 +2366,27 @@ pub(crate) fn execute_fem<'a>(
             .iter()
             .map(|snapshot| snapshot.revision)
             .max()
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(executed.field_snapshot_count as u64);
         for snapshot in &mut bundle.field_snapshots {
             next_revision = next_revision.saturating_add(1);
             snapshot.revision = next_revision;
         }
-        executed.field_snapshot_count = executed
-            .field_snapshot_count
-            .saturating_add(bundle.field_snapshots.len());
-        executed.field_snapshots.extend(bundle.field_snapshots);
+        if let Some(writer) = transport_artifact_writer {
+            let mut recorder = ArtifactRecorder::streaming(executed.provenance.clone(), writer);
+            for snapshot in bundle.field_snapshots {
+                recorder.record_field_snapshot(snapshot)?;
+            }
+            let (_, recorded_count, _) = recorder.finish();
+            executed.field_snapshot_count = executed
+                .field_snapshot_count
+                .saturating_add(recorded_count);
+        } else {
+            executed.field_snapshot_count = executed
+                .field_snapshot_count
+                .saturating_add(bundle.field_snapshots.len());
+            executed.field_snapshots.extend(bundle.field_snapshots);
+        }
         executed.auxiliary_artifacts.extend(bundle.artifacts);
         executed
             .provenance
@@ -2366,6 +2394,20 @@ pub(crate) fn execute_fem<'a>(
             .extend(bundle.provenance);
     }
     Ok(executed)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn steady_transport_output(output: &OutputIR) -> bool {
+    let quantity = match output {
+        OutputIR::Field { name, .. } => name.as_str(),
+        OutputIR::Snapshot { field, .. } => field.as_str(),
+        OutputIR::SaveQuantity { quantity_id, .. } => quantity_id.as_str(),
+        _ => return false,
+    };
+    matches!(
+        quantity.split_once('.').map_or(quantity, |(base, _)| base),
+        "V_electric" | "J_charge" | "spin_potential" | "spin_current_tensor" | "torque_stt"
+    )
 }
 
 pub(crate) fn execute_fem_eigen(
@@ -6109,6 +6151,85 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn steady_transport_outputs_are_satisfied_by_the_steady_publisher() {
+        for output in [
+            OutputIR::Field {
+                name: "V_electric".into(),
+                every_seconds: 1.0,
+            },
+            OutputIR::Snapshot {
+                field: "J_charge".into(),
+                component: "3D".into(),
+                every_seconds: 1.0,
+                layer: None,
+            },
+            OutputIR::SaveQuantity {
+                quantity_id: "spin_current_tensor".into(),
+                every_seconds: 1.0,
+                reduction: None,
+                component: None,
+            },
+        ] {
+            assert!(steady_transport_output(&output));
+        }
+        assert!(!steady_transport_output(&OutputIR::Field {
+            name: "m".into(),
+            every_seconds: 1.0,
+        }));
+    }
+
+    #[cfg(feature = "fem-gpu")]
+    #[test]
+    fn non_streaming_fem_dispatch_retains_scheduled_transport_fields() {
+        if !crate::native_fem::is_cpu_available() {
+            eprintln!("skipping non-streaming FEM transport test: CPU MFEM stack unavailable");
+            return;
+        }
+        let mut plan = tiny_fem_plan();
+        let resolved = crate::native_fem::test_resolved_steady_transport_plan();
+        let descriptor = resolved.fem_cpu_double.as_ref().expect("FEM descriptor");
+        plan.current_modules = vec![fullmag_ir::CurrentModuleIR::CurrentTransport {
+            name: resolved.current_source_id.clone(),
+            model: fullmag_ir::CurrentTransportModelIR::OhmicPoisson,
+            current_density: None,
+            solve_region: None,
+            conductivity_s_per_m: None,
+            coupling: fullmag_ir::TransportCouplingIR::OneWay,
+            definition: Some(descriptor.charge_definition.clone()),
+        }];
+        plan.spin_transport_plans = vec![resolved];
+        let outputs = vec![
+            OutputIR::Field {
+                name: "V_electric".into(),
+                every_seconds: 1.0,
+            },
+            OutputIR::Field {
+                name: "spin_current_tensor".into(),
+                every_seconds: 1.0,
+            },
+        ];
+
+        let executed = execute_fem(FemEngine::CpuNative, &plan, 1.0e-13, &outputs, None, None)
+            .expect("steady publisher should satisfy transport schedules");
+        assert_eq!(executed.field_snapshot_count, 5);
+        assert_eq!(
+            executed
+                .field_snapshots
+                .iter()
+                .map(|snapshot| snapshot.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "V_electric",
+                "J_charge",
+                "spin_potential",
+                "spin_current_tensor",
+                "torque_stt",
+            ]
+        );
+    }
+
     fn fem_policy_problem() -> ProblemIR {
         let mut problem = ProblemIR::bootstrap_example();
         problem.backend_policy.requested_backend = BackendTarget::Fem;
@@ -6141,7 +6262,7 @@ mod tests {
         problem
     }
 
-    fn tiny_fem_plan() -> FemPlanIR {
+    pub(crate) fn tiny_fem_plan() -> FemPlanIR {
         FemPlanIR {
             mesh_name: "unit_tet".to_string(),
             mesh_source: None,
@@ -10140,3 +10261,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+pub(crate) use tests::tiny_fem_plan as test_tiny_fem_plan;

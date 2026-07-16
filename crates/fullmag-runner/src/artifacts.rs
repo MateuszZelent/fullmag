@@ -3141,11 +3141,11 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
     let base_observable = observable
         .split_once('.')
         .map_or(observable, |(base, _)| base);
+    if let Some(spec) = fullmag_quantities::quantity_spec(base_observable) {
+        return spec.unit;
+    }
     match base_observable {
-        "m" => "dimensionless",
-        "H_ex" | "H_demag" | "H_ext" | "H_oe" | "H_OE" | "H_eff" | "H_ani" | "H_dmi" | "H_dmi_bulk" | "H_therm" => "A/m",
-        "demag_phi" => "A",
-        "torque" => "T",
+        "H_OE" => "A/m",
         other => panic!("unsupported observable '{}'", other),
     }
 }
@@ -3175,6 +3175,15 @@ mod tests {
         assert_eq!(field_unit("H_dmi.x"), "A/m");
         assert_eq!(field_unit("H_dmi_bulk"), "A/m");
         assert_eq!(field_unit("H_dmi_bulk.z"), "A/m");
+    }
+
+    #[test]
+    fn steady_transport_field_artifact_units_come_from_quantity_catalog() {
+        assert_eq!(field_unit("V_electric"), "V");
+        assert_eq!(field_unit("J_charge"), "A/m^2");
+        assert_eq!(field_unit("spin_potential"), "V");
+        assert_eq!(field_unit("spin_current_tensor"), "A/m^2");
+        assert_eq!(field_unit("torque_stt"), "1/s");
     }
 
     fn test_execution_plan(active_mask: Option<Vec<bool>>) -> ExecutionPlanIR {
