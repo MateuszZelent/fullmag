@@ -468,6 +468,10 @@ impl SpinDriftDiffusionProblem {
         self.charge.grid
     }
 
+    pub(crate) fn active_cells(&self) -> &[bool] {
+        &self.active_cells
+    }
+
     pub fn face_fluxes(&self, spin_potential_volts: &[Vector3]) -> Result<OrientedSpinFaceFluxes> {
         self.validate_spin_values(spin_potential_volts)?;
         let GridShape { nx, ny, nz } = self.charge.grid;
@@ -1678,7 +1682,7 @@ impl SpinDriftDiffusionProblem {
     }
 }
 
-fn restarted_gmres<F>(
+pub(super) fn restarted_gmres<F>(
     rhs: &[f64],
     active_cells: &[bool],
     restart: usize,

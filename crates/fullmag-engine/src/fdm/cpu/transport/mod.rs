@@ -2,6 +2,7 @@ mod charge;
 mod oersted;
 mod reciprocal_constitutive;
 mod spin_drift_diffusion;
+mod transient_spin;
 
 pub use charge::{
     ChargeBalanceDiagnostics, ChargeBoundaryConditions, ChargeSolution, ChargeSolverConfig,
@@ -16,6 +17,10 @@ pub use spin_drift_diffusion::{
     SpinDriftDiffusionProblem, SpinFluxOperator, SpinInterfaceFluxObservation, SpinInterfaceLaw,
     SpinMaterialFields, SpinReactionLengths, SpinSolution, SpinSolverConfig, SpinSolverTelemetry,
     SpinTorqueTargets, StructuredSpinFace,
+};
+pub use transient_spin::{
+    TransientSpinIntegrator, TransientSpinMaterial, TransientSpinSolverConfig, TransientSpinState,
+    TransientStepAttempt, TransientStepTelemetry,
 };
 
 #[cfg(test)]
