@@ -95,6 +95,30 @@ fn steady_spin_transport_round_trips_as_top_level_typed_ir() {
     assert!(encoded["spin_transport_modules"][0]
         .get("coupling")
         .is_none());
+
+    let mut transient_value = encoded;
+    transient_value["spin_transport_modules"][0]["mode"] = serde_json::json!("transient");
+    transient_value["spin_transport_modules"][0]["materials"][0]["material"]
+        ["spin_capacitance_As_per_V_m3"] = serde_json::json!(2.0);
+    transient_value["spin_transport_modules"][0]["materials"][0]["material"]
+        ["capacitance_formula_version"] = serde_json::json!("dos_constant.fullmag.v1");
+    let transient: ProblemIR =
+        serde_json::from_value(transient_value.clone()).expect("transient M3 IR should decode");
+    transient
+        .validate()
+        .expect("transient M3 IR with physical capacitance should validate semantically");
+
+    transient_value["spin_transport_modules"][0]["materials"][0]["material"]
+        .as_object_mut()
+        .unwrap()
+        .remove("spin_capacitance_As_per_V_m3");
+    let invalid: ProblemIR = serde_json::from_value(transient_value).unwrap();
+    assert!(invalid
+        .validate()
+        .unwrap_err()
+        .iter()
+        .any(|error| error
+            .contains("spin capacitance and formula version must be authored together")));
 }
 
 #[test]

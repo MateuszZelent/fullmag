@@ -3,8 +3,9 @@ use crate::{
     KnownSceneSpinTorque, PrescribedSotFormulaVersion, SceneChargeBoundary,
     SceneChargePotentialGauge, SceneDocument, SceneOerstedField, SceneOerstedTimeDependence,
     ScenePrescribedSotDrive, SceneReactionLength, SceneRegionRef, SceneSpinBoundary,
-    SceneSpinInterface, SceneSpinTorque, SceneSpinTransport, SceneSurfaceRef, SceneTimeEnvelope,
-    SlonczewskiFormulaVersion, StudyPipelineDocument, StudyPipelineNode,
+    SceneSpinInterface, SceneSpinTorque, SceneSpinTransport, SceneSpinTransportMode,
+    SceneSurfaceRef, SceneTimeEnvelope, SlonczewskiFormulaVersion, StudyPipelineDocument,
+    StudyPipelineNode,
 };
 use fullmag_ir::{
     CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, ExchangeCouplingModeIR,
@@ -238,6 +239,35 @@ fn validate_spin_authoring(
                 &material.lambda_phi_m,
                 &format!("spin_transports[{index}].materials[{material_index}].lambda_phi_m"),
             )?;
+            match (
+                material.spin_capacitance_as_per_v_m3,
+                material.capacitance_formula_version.as_deref(),
+            ) {
+                (Some(capacitance), Some(version)) => {
+                    positive(
+                        capacitance,
+                        &format!(
+                            "spin_transports[{index}].materials[{material_index}].spin_capacitance_As_per_V_m3"
+                        ),
+                    )?;
+                    if version.trim().is_empty() {
+                        return Err(SceneDocumentValidationError::new(format!(
+                            "spin_transports[{index}].materials[{material_index}].capacitance_formula_version must be non-empty"
+                        )));
+                    }
+                }
+                (None, None) if module.mode == SceneSpinTransportMode::Steady => {}
+                (None, None) => {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "spin_transports[{index}].materials[{material_index}] transient mode requires physical spin capacitance and formula version"
+                    )));
+                }
+                _ => {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "spin_transports[{index}].materials[{material_index}] spin capacitance and formula version must be authored together"
+                    )));
+                }
+            }
         }
         for (interface_index, interface) in module.interfaces.iter().enumerate() {
             validate_scene_spin_interface(
@@ -1634,6 +1664,60 @@ mod tests {
         .unwrap();
 
         validate_scene_document(&scene).expect("complete graph must validate");
+    }
+
+    #[test]
+    fn scene_document_validation_requires_physical_capacitance_for_transient_spin() {
+        let mut scene = region_owned_scene();
+        scene.current_transports = serde_json::from_value(serde_json::json!([{
+            "kind": "current_transport",
+            "name": "transport",
+            "model": "prescribed_density",
+            "coupling": "one_way",
+            "current_density": [1.0e11, 0.0, 0.0]
+        }]))
+        .unwrap();
+        let transient = serde_json::json!({
+            "schema_version": "spin_transport.v1",
+            "id": "spin",
+            "current_source_id": "transport",
+            "mode": "transient",
+            "domain": [{"object_id": "body"}],
+            "materials": [{
+                "region": {"object_id": "body"},
+                "material": {
+                    "sigma_s_Spm": 5.0e6,
+                    "polarization_p": 0.4,
+                    "theta_sh": 0.1,
+                    "lambda_sf_m": 5.0e-9,
+                    "lambda_j_m": "disabled",
+                    "lambda_phi_m": "disabled",
+                    "spin_capacitance_As_per_V_m3": 2.0,
+                    "capacitance_formula_version": "dos_constant.fullmag.v1"
+                }
+            }],
+            "solver": {
+                "engine": "gmres",
+                "linear": {"relative_tolerance": 1.0e-8, "absolute_tolerance": 0.0, "max_iterations": 500},
+                "physical_residual_version": "transport_balance_integrated_l2.v1",
+                "operator_version": "fv_spin_upwind_v1",
+                "default_external_boundary": "spin_insulating"
+            },
+            "requested_execution": {"discretization": "fdm", "device": "cpu", "precision": "double", "execution_mode": "strict"},
+            "constitutive_version": "transport_constitutive.one_way.fullmag.v1"
+        });
+        scene.spin_transports =
+            serde_json::from_value(serde_json::json!([transient.clone()])).unwrap();
+        validate_scene_document(&scene).expect("physical transient contract must validate");
+
+        let mut missing = transient;
+        missing["materials"][0]["material"]
+            .as_object_mut()
+            .unwrap()
+            .remove("spin_capacitance_As_per_V_m3");
+        scene.spin_transports = serde_json::from_value(serde_json::json!([missing])).unwrap();
+        let error = validate_scene_document(&scene).expect_err("partial capacitance must fail");
+        assert!(error.message.contains("authored together"), "{error}");
     }
 
     #[test]

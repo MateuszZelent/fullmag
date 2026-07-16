@@ -130,6 +130,11 @@ pub struct SpinTransportMaterialIR {
     pub lambda_sf_m: f64,
     pub lambda_j_m: ReactionLengthIR,
     pub lambda_phi_m: ReactionLengthIR,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "spin_capacitance_As_per_V_m3")]
+    pub spin_capacitance_as_per_v_m3: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacitance_formula_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

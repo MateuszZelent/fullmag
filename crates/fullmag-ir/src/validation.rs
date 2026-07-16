@@ -1251,9 +1251,6 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
         if !ids.insert(module.id.as_str()) || module.id.trim().is_empty() {
             errors.push(format!("{prefix}.id must be non-empty and unique"));
         }
-        if module.mode != crate::SpinTransportModeIR::Steady {
-            errors.push(format!("{prefix}.mode must be steady for M1"));
-        }
         if module.domain.is_empty() || module.materials.is_empty() {
             errors.push(format!("{prefix} requires non-empty domain and materials"));
         }
@@ -1308,6 +1305,30 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
                 || material.lambda_sf_m <= 0.0
             {
                 errors.push(format!("{prefix}.materials[{material_index}] theta_sh must be finite and lambda_sf_m > 0"));
+            }
+            match (
+                material.spin_capacitance_as_per_v_m3,
+                material.capacitance_formula_version.as_deref(),
+            ) {
+                (Some(capacitance), Some(version)) => {
+                    if !capacitance.is_finite() || capacitance <= 0.0 {
+                        errors.push(format!(
+                            "{prefix}.materials[{material_index}].spin_capacitance_As_per_V_m3 must be finite and > 0"
+                        ));
+                    }
+                    if version.trim().is_empty() {
+                        errors.push(format!(
+                            "{prefix}.materials[{material_index}].capacitance_formula_version must be non-empty"
+                        ));
+                    }
+                }
+                (None, None) if module.mode == crate::SpinTransportModeIR::Steady => {}
+                (None, None) => errors.push(format!(
+                    "{prefix}.materials[{material_index}] transient mode requires physical spin capacitance and formula version"
+                )),
+                _ => errors.push(format!(
+                    "{prefix}.materials[{material_index}] spin capacitance and formula version must be authored together"
+                )),
             }
             let sigma_ref = charge_definition.and_then(|definition| {
                 definition

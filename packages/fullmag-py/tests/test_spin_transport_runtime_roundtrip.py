@@ -350,8 +350,18 @@ class SpinTorqueRuntimeRoundTripTests(unittest.TestCase):
             fm.CurrentTransport(
                 name="ohmic",
                 model="ohmic_poisson",
-                solve_region="conductor",
-                conductivity_s_per_m=5.8e7,
+                domain=[fm.RegionRef("conductor")],
+                materials=[fm.ChargeTransportMaterialAssignment(
+                    fm.RegionRef("conductor"),
+                    fm.ChargeTransportMaterial(5.8e7),
+                )],
+                boundaries=[fm.VoltageElectrode(
+                    "ground",
+                    [fm.SurfaceRef("conductor", "left", (-1.0, 0.0, 0.0))],
+                    potential_V=0.0,
+                )],
+                gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+                solver=fm.ChargeSolverPolicy(),
             ).to_ir(),
         ]
         antenna = {"kind": "antenna_field_source", "name": "rf"}

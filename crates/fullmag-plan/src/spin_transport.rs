@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use fullmag_ir::{
-    BackendTarget, ChargeBoundaryIR, ExecutionDevice, ExecutionPrecision,
-    ProblemIR, ReactionLengthIR, RegionRefIR, ResolvedChargeBoundaryConditionIR,
-    ResolvedChargeBoundaryFaceIR, ResolvedFdmSpinTransportIR, ResolvedSpinBoundaryConditionIR,
-    ResolvedSpinBoundaryFaceIR, ResolvedSpinInterfaceFaceIR, ResolvedSpinInterfaceLawIR,
-    ResolvedSpinReactionLengthsIR, ResolvedSpinTransportPlanIR, SpinBoundaryIR, SpinInterfaceIR,
-    SpinTorqueModuleIR, StructuredBoundaryFaceIR, StructuredInternalFaceIR,
+    BackendTarget, ChargeBoundaryIR, ExecutionDevice, ExecutionPrecision, ProblemIR,
+    ReactionLengthIR, RegionRefIR, ResolvedChargeBoundaryConditionIR, ResolvedChargeBoundaryFaceIR,
+    ResolvedFdmSpinTransportIR, ResolvedSpinBoundaryConditionIR, ResolvedSpinBoundaryFaceIR,
+    ResolvedSpinInterfaceFaceIR, ResolvedSpinInterfaceLawIR, ResolvedSpinReactionLengthsIR,
+    ResolvedSpinTransportPlanIR, SpinBoundaryIR, SpinInterfaceIR, SpinTorqueModuleIR,
+    StructuredBoundaryFaceIR, StructuredInternalFaceIR,
 };
 #[cfg(test)]
 use fullmag_ir::{ChargePotentialGaugeIR, TransportCouplingIR};
@@ -812,6 +812,8 @@ mod tests {
                     lambda_sf_m: 5.0e-9,
                     lambda_j_m: ReactionLengthIR::Enabled(1.0e-9),
                     lambda_phi_m: ReactionLengthIR::Disabled(DisabledReactionIR::Disabled),
+                    spin_capacitance_as_per_v_m3: None,
+                    capacitance_formula_version: None,
                 },
             }],
             interfaces: vec![],

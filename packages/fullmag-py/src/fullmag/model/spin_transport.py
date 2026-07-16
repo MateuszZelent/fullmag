@@ -73,6 +73,8 @@ class SpinTransportMaterial:
     lambda_sf_m: float
     lambda_j_m: float | None = None
     lambda_phi_m: float | None = None
+    spin_capacitance_As_per_V_m3: float | None = None
+    capacitance_formula_version: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sigma_s_Spm", require_positive(self.sigma_s_Spm, "sigma_s_Spm"))
@@ -86,6 +88,24 @@ class SpinTransportMaterial:
             object.__setattr__(self, "lambda_j_m", require_positive(self.lambda_j_m, "lambda_j_m"))
         if self.lambda_phi_m is not None:
             object.__setattr__(self, "lambda_phi_m", require_positive(self.lambda_phi_m, "lambda_phi_m"))
+        if (self.spin_capacitance_As_per_V_m3 is None) != (self.capacitance_formula_version is None):
+            raise ValueError(
+                "spin_capacitance_As_per_V_m3 and capacitance_formula_version must be authored together"
+            )
+        if self.spin_capacitance_As_per_V_m3 is not None:
+            object.__setattr__(
+                self,
+                "spin_capacitance_As_per_V_m3",
+                require_positive(
+                    self.spin_capacitance_As_per_V_m3,
+                    "spin_capacitance_As_per_V_m3",
+                ),
+            )
+            object.__setattr__(
+                self,
+                "capacitance_formula_version",
+                require_non_empty(self.capacitance_formula_version, "capacitance_formula_version"),
+            )
 
     def to_ir(self) -> dict[str, object]:
         value: dict[str, object] = {
@@ -96,6 +116,9 @@ class SpinTransportMaterial:
             "lambda_j_m": self.lambda_j_m if self.lambda_j_m is not None else "disabled",
             "lambda_phi_m": self.lambda_phi_m if self.lambda_phi_m is not None else "disabled",
         }
+        if self.spin_capacitance_As_per_V_m3 is not None:
+            value["spin_capacitance_As_per_V_m3"] = self.spin_capacitance_As_per_V_m3
+            value["capacitance_formula_version"] = self.capacitance_formula_version
         return value
 
 
@@ -274,15 +297,27 @@ class SpinDriftDiffusion:
     mode: str = "steady"
 
     def __init__(self, *, id: str, current_source_id: str, domain: Sequence[RegionRef], materials: Sequence[SpinTransportMaterialAssignment], interfaces: Sequence[TransparentSpinInterface | MixingConductanceSpinInterface] = (), boundaries: Sequence[_SurfaceBoundary | PeriodicSpin] = (), solver: SpinSolverPolicy | None = None, requested_execution: TransportExecution | None = None, mode: str = "steady") -> None:
-        if mode != "steady":
-            raise ValueError("M1 SpinDriftDiffusion supports steady mode only")
+        if mode not in {"steady", "transient"}:
+            raise ValueError("mode must be 'steady' or 'transient'")
         resolved_domain = tuple(domain)
         if not resolved_domain:
             raise ValueError("domain must not be empty")
         object.__setattr__(self, "id", require_non_empty(id, "id"))
         object.__setattr__(self, "current_source_id", require_non_empty(current_source_id, "current_source_id"))
         object.__setattr__(self, "domain", resolved_domain)
-        object.__setattr__(self, "materials", tuple(materials))
+        resolved_materials = tuple(materials)
+        if not resolved_materials:
+            raise ValueError("materials must not be empty")
+        if not all(isinstance(item, SpinTransportMaterialAssignment) for item in resolved_materials):
+            raise TypeError("materials must contain SpinTransportMaterialAssignment values")
+        if mode == "transient" and any(
+            item.material.spin_capacitance_As_per_V_m3 is None for item in resolved_materials
+        ):
+            raise ValueError(
+                "transient SpinDriftDiffusion requires physical spin_capacitance_As_per_V_m3 "
+                "and capacitance_formula_version for every material"
+            )
+        object.__setattr__(self, "materials", resolved_materials)
         object.__setattr__(self, "interfaces", tuple(interfaces))
         object.__setattr__(self, "boundaries", tuple(boundaries))
         object.__setattr__(self, "solver", solver or SpinSolverPolicy())

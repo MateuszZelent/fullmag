@@ -5,7 +5,16 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from fullmag.model.current_transport import CurrentTransport
+from fullmag.model.current_transport import (
+    ChargeInsulating,
+    ChargePotentialGauge,
+    ChargeSolverPolicy,
+    ChargeTransportMaterial,
+    ChargeTransportMaterialAssignment,
+    CurrentTransport,
+    NormalCurrentElectrode,
+    VoltageElectrode,
+)
 from fullmag.model.energy import (
     Constant as OerstedConstant,
     OerstedCylinder,
@@ -30,6 +39,7 @@ from fullmag.model.spin_torque import (
     VectorCurrentDrive,
     ZhangLiSTT,
 )
+from fullmag.model.spin_transport import SurfaceRef
 
 
 def _material_id(name: str) -> str:
@@ -97,6 +107,12 @@ def _finite_number(value: object, context: str) -> float:
     return result
 
 
+def _positive_integer(value: object, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{context} must be a positive integer")
+    return value
+
+
 def _vec3(value: object, context: str, *, nonzero: bool = False) -> tuple[float, float, float]:
     if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or len(value) != 3:
         raise ValueError(f"{context} must be a three-component vector")
@@ -126,6 +142,130 @@ def _decode_current_transport(value: object) -> CurrentTransport:
     if entry.get("kind") != "current_transport":
         raise ValueError(f"unsupported current transport kind {entry.get('kind')!r}")
     current_density = entry.get("current_density")
+    domain_value = entry.get("domain", [])
+    materials_value = entry.get("materials", [])
+    boundaries_value = entry.get("boundaries", [])
+    if not isinstance(domain_value, list):
+        raise ValueError("current_transport.domain must be a list")
+    if not isinstance(materials_value, list):
+        raise ValueError("current_transport.materials must be a list")
+    if not isinstance(boundaries_value, list):
+        raise ValueError("current_transport.boundaries must be a list")
+    domain = [
+        _region_ref(region, f"current_transport.domain[{index}]")
+        for index, region in enumerate(domain_value)
+    ]
+    materials: list[ChargeTransportMaterialAssignment] = []
+    for index, raw_assignment in enumerate(materials_value):
+        assignment = _mapping(raw_assignment, f"current_transport.materials[{index}]")
+        material = _mapping(
+            assignment.get("material"),
+            f"current_transport.materials[{index}].material",
+        )
+        materials.append(
+            ChargeTransportMaterialAssignment(
+                _region_ref(
+                    assignment.get("region"),
+                    f"current_transport.materials[{index}].region",
+                ),
+                ChargeTransportMaterial(
+                    _finite_number(
+                        material.get("sigma_Spm"),
+                        f"current_transport.materials[{index}].material.sigma_Spm",
+                    )
+                ),
+            )
+        )
+
+    boundaries = []
+    for index, raw_boundary in enumerate(boundaries_value):
+        boundary = _mapping(raw_boundary, f"current_transport.boundaries[{index}]")
+        surfaces_value = boundary.get("surfaces")
+        if not isinstance(surfaces_value, list):
+            raise ValueError(f"current_transport.boundaries[{index}].surfaces must be a list")
+        surfaces = []
+        for surface_index, raw_surface in enumerate(surfaces_value):
+            surface = _mapping(
+                raw_surface,
+                f"current_transport.boundaries[{index}].surfaces[{surface_index}]",
+            )
+            surfaces.append(
+                SurfaceRef(
+                    _nonempty_string(
+                        surface.get("object_id"),
+                        f"current_transport.boundaries[{index}].surfaces[{surface_index}].object_id",
+                    ),
+                    _nonempty_string(
+                        surface.get("surface_id"),
+                        f"current_transport.boundaries[{index}].surfaces[{surface_index}].surface_id",
+                    ),
+                    _vec3(
+                        surface.get("orientation"),
+                        f"current_transport.boundaries[{index}].surfaces[{surface_index}].orientation",
+                        nonzero=True,
+                    ),
+                )
+            )
+        boundary_id = _nonempty_string(
+            boundary.get("id"), f"current_transport.boundaries[{index}].id"
+        )
+        kind = boundary.get("kind")
+        if kind == "voltage_electrode":
+            boundaries.append(
+                VoltageElectrode(
+                    boundary_id,
+                    surfaces,
+                    potential_V=_finite_number(
+                        boundary.get("potential_V"),
+                        f"current_transport.boundaries[{index}].potential_V",
+                    ),
+                )
+            )
+        elif kind == "normal_current_electrode":
+            boundaries.append(
+                NormalCurrentElectrode(
+                    boundary_id,
+                    surfaces,
+                    outward_current_density_Apm2=_finite_number(
+                        boundary.get("outward_current_density_Apm2"),
+                        f"current_transport.boundaries[{index}].outward_current_density_Apm2",
+                    ),
+                )
+            )
+        elif kind == "insulating":
+            boundaries.append(ChargeInsulating(boundary_id, surfaces))
+        else:
+            raise ValueError(f"unsupported charge boundary kind {kind!r}")
+
+    gauge_value = entry.get("gauge")
+    solver_value = entry.get("solver")
+    solver = None
+    if solver_value is not None:
+        solver_entry = _mapping(solver_value, "current_transport.solver")
+        linear = _mapping(solver_entry.get("linear"), "current_transport.solver.linear")
+        solver = ChargeSolverPolicy(
+            engine=_nonempty_string(solver_entry.get("engine"), "current_transport.solver.engine"),
+            relative_tolerance=_finite_number(
+                linear.get("relative_tolerance"),
+                "current_transport.solver.linear.relative_tolerance",
+            ),
+            absolute_tolerance=_finite_number(
+                linear.get("absolute_tolerance"),
+                "current_transport.solver.linear.absolute_tolerance",
+            ),
+            max_iterations=_positive_integer(
+                linear.get("max_iterations"),
+                "current_transport.solver.linear.max_iterations",
+            ),
+            physical_residual_version=_nonempty_string(
+                solver_entry.get("physical_residual_version"),
+                "current_transport.solver.physical_residual_version",
+            ),
+            operator_version=_nonempty_string(
+                solver_entry.get("operator_version"),
+                "current_transport.solver.operator_version",
+            ),
+        )
     return CurrentTransport(
         name=_nonempty_string(entry.get("name"), "current_transport.name"),
         model=_nonempty_string(entry.get("model", "prescribed_density"), "current_transport.model"),
@@ -144,6 +284,20 @@ def _decode_current_transport(value: object) -> CurrentTransport:
             if entry.get("conductivity_s_per_m") is not None
             else None
         ),
+        coupling=_nonempty_string(
+            entry.get("coupling", "one_way"), "current_transport.coupling"
+        ),
+        domain=domain,
+        materials=materials,
+        boundaries=boundaries,
+        gauge=(
+            ChargePotentialGauge(
+                _nonempty_string(gauge_value, "current_transport.gauge")
+            )
+            if gauge_value is not None
+            else None
+        ),
+        solver=solver,
     )
 
 

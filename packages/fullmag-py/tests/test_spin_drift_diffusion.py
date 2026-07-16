@@ -11,6 +11,21 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
         self.fm = fm.RegionRef("stack", "ferromagnet")
         self.top = fm.SurfaceRef("stack", "top", (0.0, 0.0, 1.0))
 
+    def complete_charge_transport(self) -> fm.CurrentTransport:
+        return fm.CurrentTransport(
+            name="charge",
+            model="ohmic_poisson",
+            coupling="one_way",
+            domain=[self.fm],
+            materials=[fm.ChargeTransportMaterialAssignment(
+                self.fm,
+                fm.ChargeTransportMaterial(4.0e6),
+            )],
+            boundaries=[fm.VoltageElectrode("ground", [self.top], potential_V=0.0)],
+            gauge=fm.ChargePotentialGauge("dirichlet_reference"),
+            solver=fm.ChargeSolverPolicy(),
+        )
+
     def test_m1_module_serializes_canonical_typed_contract(self) -> None:
         solve = fm.SpinDriftDiffusion(
             id="spin_solve",
@@ -88,13 +103,36 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
             },
         )
 
-    def test_m1_rejects_transient_and_invalid_material_coefficients(self) -> None:
-        with self.assertRaisesRegex(ValueError, "steady"):
+    def test_transient_requires_physical_capacitance_and_invalid_coefficients_fail(self) -> None:
+        material = fm.SpinTransportMaterial(
+            sigma_s_Spm=1.0,
+            polarization_p=0.0,
+            theta_sh=0.0,
+            lambda_sf_m=1.0,
+            spin_capacitance_As_per_V_m3=2.0,
+            capacitance_formula_version="dos_constant.fullmag.v1",
+        )
+        transient = fm.SpinDriftDiffusion(
+            id="transient",
+            current_source_id="charge",
+            domain=[self.nm],
+            materials=[fm.SpinTransportMaterialAssignment(self.nm, material)],
+            mode="transient",
+        )
+        self.assertEqual(transient.to_ir()["mode"], "transient")
+        self.assertEqual(
+            transient.to_ir()["materials"][0]["material"]["spin_capacitance_As_per_V_m3"],
+            2.0,
+        )
+        with self.assertRaisesRegex(ValueError, "spin_capacitance"):
             fm.SpinDriftDiffusion(
                 id="bad",
                 current_source_id="charge",
                 domain=[self.nm],
-                materials=[],
+                materials=[fm.SpinTransportMaterialAssignment(
+                    self.nm,
+                    fm.SpinTransportMaterial(1.0, 0.0, 0.0, 1.0),
+                )],
                 mode="transient",
             )
         with self.assertRaisesRegex(ValueError, "polarization_p"):
@@ -106,13 +144,7 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
             )
 
     def test_current_transport_is_single_coupling_owner(self) -> None:
-        source = fm.CurrentTransport(
-            name="charge",
-            model="ohmic_poisson",
-            solve_region="stack",
-            conductivity_s_per_m=4.0e6,
-            coupling="one_way",
-        )
+        source = self.complete_charge_transport()
         self.assertEqual(source.to_ir()["coupling"], "one_way")
         with self.assertRaisesRegex(ValueError, "M1"):
             fm.CurrentTransport(
@@ -133,8 +165,7 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
         problem = fm.Problem(
             name="m1", magnets=[magnet], energy=[fm.Exchange()],
             study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[fm.SaveScalar("E_total", every=1e-12)]),
-            current_modules=[fm.CurrentTransport(name="charge", model="ohmic_poisson",
-                solve_region="stack", conductivity_s_per_m=4e6)],
+            current_modules=[self.complete_charge_transport()],
             spin_transports=[solve],
             spin_torques=[fm.DriftDiffusionSpinTorque("tr", "spin_solve", self.fm)],
         )
