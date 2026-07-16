@@ -1835,9 +1835,8 @@ class _WorldState:
     _b_ext: tuple[float, float, float] | None = None
 
     # Solver
-    _dt: float | None = None
-    _max_error: float | None = None
-    _adaptive_dt_min: float | None = None
+    _fixed_timestep: float | None = None
+    _adaptive_timestep_policy: AdaptiveTimestep | None = None
     _integrator: str | None = None
     _gamma: float | None = None
     _demag_interval_s: float | None = None
@@ -4250,6 +4249,11 @@ class StudyBuilder:
     def solver(
         self,
         *,
+        fix_dt: float | None = None,
+        dt_initial: float | None = None,
+        dt_max: float | None = None,
+        max_err: float | None = None,
+        adaptive_timestep: AdaptiveTimestep | None = None,
         dt: float | None = None,
         max_error: float | None = None,
         dt_min: float | None = None,
@@ -4259,6 +4263,11 @@ class StudyBuilder:
         demag_interval_s: float | None = None,
     ) -> "StudyBuilder":
         solver(
+            fix_dt=fix_dt,
+            dt_initial=dt_initial,
+            dt_max=dt_max,
+            max_err=max_err,
+            adaptive_timestep=adaptive_timestep,
             dt=dt,
             max_error=max_error,
             dt_min=dt_min,
@@ -6051,6 +6060,11 @@ def demag_quality(profile: str) -> None:
 
 def solver(
     *,
+    fix_dt: float | None = None,
+    dt_initial: float | None = None,
+    dt_max: float | None = None,
+    max_err: float | None = None,
+    adaptive_timestep: AdaptiveTimestep | None = None,
     dt: float | None = None,
     max_error: float | None = None,
     dt_min: float | None = None,
@@ -6063,11 +6077,13 @@ def solver(
 
     Parameters
     ----------
-    dt : float, optional
-        Fixed timestep in seconds. When ``max_error`` is also provided, this
-        becomes the initial timestep for adaptive RK23/RK45 stepping.
-    max_error : float, optional
-        Adaptive integrator error tolerance.
+    fix_dt : float, optional
+        Fixed timestep in seconds. Mutually exclusive with adaptive controls.
+    dt_initial : float, optional
+        Initial adaptive timestep. Omission is preserved and resolves to
+        ``dt_min`` at runtime.
+    max_err : float, optional
+        Absolute maximum embedded vector error for adaptive stepping.
     dt_min : float, optional
         Minimum adaptive timestep in seconds.
     integrator : str, optional
@@ -6080,28 +6096,130 @@ def solver(
     """
     if gamma is not None and g is not None:
         raise ValueError("solver() accepts either gamma=... or g=..., not both")
+    if dt is not None and (fix_dt is not None or dt_initial is not None or max_err is not None):
+        raise ValueError("deprecated dt cannot be mixed with fix_dt, dt_initial, or max_err")
+    if max_error is not None and max_err is not None:
+        raise ValueError("deprecated max_error cannot be mixed with max_err")
+    if dt is not None or max_error is not None:
+        warnings.warn(
+            "solver(dt=..., max_error=...) is deprecated; use fix_dt or "
+            "dt_initial/max_err",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    legacy_adaptive = max_error is not None
     if dt is not None:
-        _state._dt = dt
+        if legacy_adaptive:
+            dt_initial = dt
+        else:
+            fix_dt = dt
     if max_error is not None:
-        _state._max_error = max_error
-    if dt_min is not None:
-        if dt_min <= 0.0:
-            raise ValueError("dt_min must be positive")
-        _state._adaptive_dt_min = dt_min
-    if integrator is not None:
-        _state._integrator = integrator
+        max_err = max_error
+
+    convenience_adaptive_requested = any(
+        value is not None for value in (dt_initial, dt_min, dt_max, max_err)
+    )
+    if adaptive_timestep is not None and (
+        fix_dt is not None or convenience_adaptive_requested
+    ):
+        raise ValueError(
+            "adaptive_timestep cannot be mixed with fixed or convenience adaptive controls"
+        )
+    if fix_dt is not None and convenience_adaptive_requested:
+        raise ValueError("fix_dt is mutually exclusive with adaptive timestep controls")
+    canonical_integrator = (
+        INTEGRATOR_ALIASES.get(integrator, integrator) if integrator is not None else None
+    )
+    if canonical_integrator is not None and canonical_integrator not in SUPPORTED_INTEGRATORS:
+        supported = ", ".join(sorted(SUPPORTED_INTEGRATORS))
+        raise ValueError(f"integrator must be one of: {supported}")
+    policy_was_requested = (
+        fix_dt is not None
+        or convenience_adaptive_requested
+        or adaptive_timestep is not None
+    )
+    resolved_fixed_timestep = _state._fixed_timestep
+    resolved_adaptive = _state._adaptive_timestep_policy
+    if fix_dt is not None:
+        require_positive(fix_dt, "fix_dt")
+        resolved_fixed_timestep = float(fix_dt)
+        resolved_adaptive = None
+    elif convenience_adaptive_requested:
+        previous_max_error = (
+            resolved_adaptive
+            if resolved_adaptive is not None
+            and resolved_adaptive._tolerance_mode == "max_error"
+            else None
+        )
+        resolved_max_err = (
+            float(max_err)
+            if max_err is not None
+            else previous_max_error.atol
+            if previous_max_error is not None
+            else None
+        )
+        if resolved_max_err is None:
+            raise ValueError("adaptive timestep controls require max_err")
+        resolved_adaptive = AdaptiveTimestep._from_max_error(
+            max_err=resolved_max_err,
+            dt_initial=(
+                dt_initial
+                if dt_initial is not None
+                else previous_max_error.dt_initial
+                if previous_max_error is not None
+                else None
+            ),
+            dt_min=(
+                dt_min
+                if dt_min is not None
+                else previous_max_error.dt_min
+                if previous_max_error is not None
+                else 1e-15
+            ),
+            dt_max=(
+                dt_max
+                if dt_max is not None
+                else previous_max_error.dt_max
+                if previous_max_error is not None
+                else None
+            ),
+        )
+        resolved_fixed_timestep = None
+    elif adaptive_timestep is not None:
+        if not isinstance(adaptive_timestep, AdaptiveTimestep):
+            raise TypeError("adaptive_timestep must be an AdaptiveTimestep")
+        resolved_adaptive = adaptive_timestep
+        resolved_fixed_timestep = None
+
+    effective_integrator = canonical_integrator or _state._integrator or "auto"
+    if (
+        resolved_adaptive is not None
+        and effective_integrator not in ADAPTIVE_INTEGRATORS
+        and effective_integrator != "auto"
+    ):
+        raise ValueError("adaptive timestep requires rk23, rk45, or auto")
+
+    resolved_demag_interval = _state._demag_interval_s
     if demag_interval_s is not None:
-        if demag_interval_s <= 0.0:
-            raise ValueError("demag_interval_s must be positive")
-        _state._demag_interval_s = demag_interval_s
+        resolved_demag_interval = require_positive(
+            demag_interval_s, "demag_interval_s"
+        )
+    resolved_gamma = _state._gamma
     if gamma is not None:
-        if gamma <= 0.0:
-            raise ValueError("gamma must be positive")
-        _state._gamma = gamma
+        resolved_gamma = require_positive(gamma, "gamma")
     elif g is not None:
-        if g <= 0.0:
-            raise ValueError("g must be positive")
-        _state._gamma = _gamma_from_g_factor(g)
+        require_positive(g, "g")
+        resolved_gamma = require_positive(_gamma_from_g_factor(g), "derived gamma")
+
+    # Commit only after the complete proposed configuration is valid.
+    if policy_was_requested:
+        _state._fixed_timestep = resolved_fixed_timestep
+        _state._adaptive_timestep_policy = resolved_adaptive
+    if canonical_integrator is not None:
+        _state._integrator = canonical_integrator
+    _state._demag_interval_s = resolved_demag_interval
+    _state._gamma = resolved_gamma
 
 
 # ---------------------------------------------------------------------------
@@ -6589,17 +6707,10 @@ def _build_problem(
 
     # Dynamics
     llg_kwargs: dict[str, Any] = {}
-    if s._max_error is not None:
-        adaptive_kwargs: dict[str, Any] = {"atol": s._max_error}
-        if s._dt is not None:
-            adaptive_kwargs["dt_initial"] = s._dt
-        if s._adaptive_dt_min is not None:
-            adaptive_kwargs["dt_min"] = s._adaptive_dt_min
-        llg_kwargs["adaptive_timestep"] = AdaptiveTimestep(**adaptive_kwargs)
-    elif s._adaptive_dt_min is not None:
-        raise ValueError("dt_min requires max_error for adaptive solver configuration")
-    elif s._dt is not None:
-        llg_kwargs["fixed_timestep"] = s._dt
+    if s._adaptive_timestep_policy is not None:
+        llg_kwargs["adaptive_timestep"] = s._adaptive_timestep_policy
+    elif s._fixed_timestep is not None:
+        llg_kwargs["fixed_timestep"] = s._fixed_timestep
     if s._integrator is not None:
         llg_kwargs["integrator"] = s._integrator
     if s._gamma is not None and not math.isclose(s._gamma, DEFAULT_GAMMA):

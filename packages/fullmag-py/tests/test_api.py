@@ -6567,7 +6567,7 @@ class ProblemApiTests(unittest.TestCase):
             loaded = fm.load_problem_from_script(path, lightweight_assets=True)
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
-        self.assertIn("fm.solver(dt=2e-13, demag_interval_s=8e-13)", rewritten)
+        self.assertIn("fm.solver(fix_dt=2e-13, demag_interval_s=8e-13)", rewritten)
         self.assertIn(
             'fm.relax(algorithm="llg_overdamped", stop=fm.RelaxStop(torque_tolerance_apm=1e-05, max_steps=50000, max_relaxation_time_s=4e-12))',
             rewritten,

@@ -41,7 +41,12 @@ from fullmag.model.spin_torque import (
     ZhangLiSTT,
 )
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds as shared_geometry_bounds
-from fullmag.model.dynamics import DEFAULT_GAMMA, LLG
+from fullmag.model.dynamics import (
+    ADAPTIVE_INTEGRATORS,
+    AdaptiveTimestep,
+    DEFAULT_GAMMA,
+    LLG,
+)
 from fullmag.model.energy import BulkDMI, Constant, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, Pulse, SincPulse, Sinusoidal, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.eigen import serialize_k_sampling
 from fullmag.model.geometry import (
@@ -86,6 +91,113 @@ DEFAULT_ADAPTIVE_DT_MIN = 1e-15
 DEFAULT_ADAPTIVE_ATOL = 1e-6
 
 
+def _is_exact_max_err_policy(policy: AdaptiveTimestep) -> bool:
+    return (
+        policy._tolerance_mode == "max_error"
+        and policy.rtol == 0.0
+        and policy.safety == 0.9
+        and policy.growth_limit == 2.0
+        and policy.shrink_limit == 0.2
+        and policy.max_spin_rotation is None
+        and policy.norm_tolerance is None
+    )
+
+
+def _adaptive_timestep_draft(policy: AdaptiveTimestep | None) -> dict[str, object] | None:
+    if policy is None or _is_exact_max_err_policy(policy):
+        return None
+    return {
+        "atol": _text_number(policy.atol),
+        "rtol": _text_number(policy.rtol),
+        "dt_initial": _text_number(policy.dt_initial),
+        "dt_min": _text_number(policy.dt_min),
+        "dt_max": _text_number(policy.dt_max),
+        "safety": _text_number(policy.safety),
+        "growth_limit": _text_number(policy.growth_limit),
+        "shrink_limit": _text_number(policy.shrink_limit),
+        "max_spin_rotation": _text_number(policy.max_spin_rotation),
+        "norm_tolerance": _text_number(policy.norm_tolerance),
+    }
+
+
+def _advanced_policy_with_overrides(
+    fallback: AdaptiveTimestep | None,
+    overrides: dict[str, object],
+) -> AdaptiveTimestep:
+    nullable = {"dt_initial", "dt_max", "max_spin_rotation", "norm_tolerance"}
+    defaults: dict[str, float | None] = {
+        "atol": fallback.atol if fallback is not None else None,
+        "rtol": fallback.rtol if fallback is not None else None,
+        "dt_initial": fallback.dt_initial if fallback is not None else None,
+        "dt_min": fallback.dt_min if fallback is not None else None,
+        "dt_max": fallback.dt_max if fallback is not None else None,
+        "safety": fallback.safety if fallback is not None else None,
+        "growth_limit": fallback.growth_limit if fallback is not None else None,
+        "shrink_limit": fallback.shrink_limit if fallback is not None else None,
+        "max_spin_rotation": fallback.max_spin_rotation if fallback is not None else None,
+        "norm_tolerance": fallback.norm_tolerance if fallback is not None else None,
+    }
+    merged = dict(defaults)
+    for key in defaults:
+        if key not in overrides:
+            continue
+        value = _number_or_none(overrides[key])
+        if value is None and key not in nullable:
+            raise ValueError(f"advanced adaptive override {key} cannot be cleared")
+        merged[key] = value
+    missing = [key for key in defaults if key not in nullable and merged[key] is None]
+    if missing:
+        raise ValueError(
+            "advanced adaptive override requires " + ", ".join(sorted(missing))
+        )
+    return AdaptiveTimestep(
+        atol=float(merged["atol"]),
+        rtol=float(merged["rtol"]),
+        dt_initial=merged["dt_initial"],
+        dt_min=float(merged["dt_min"]),
+        dt_max=merged["dt_max"],
+        safety=float(merged["safety"]),
+        growth_limit=float(merged["growth_limit"]),
+        shrink_limit=float(merged["shrink_limit"]),
+        max_spin_rotation=merged["max_spin_rotation"],
+        norm_tolerance=merged["norm_tolerance"],
+    )
+
+
+def _max_error_policy_with_overrides(
+    fallback: AdaptiveTimestep | None,
+    overrides: dict[str, object],
+) -> AdaptiveTimestep:
+    def value(key: str, default: float | None, *, nullable: bool) -> float | None:
+        if key not in overrides:
+            return default
+        resolved = _number_or_none(overrides[key])
+        if resolved is None and not nullable:
+            raise ValueError(f"convenience adaptive override {key} cannot be cleared")
+        return resolved
+
+    max_err_fallback = (
+        fallback.atol
+        if fallback is not None and fallback._tolerance_mode == "max_error"
+        else None
+    )
+    max_err = value("max_err", max_err_fallback, nullable=False)
+    if max_err is None:
+        raise ValueError("convenience adaptive override requires max_err")
+    return AdaptiveTimestep._from_max_error(
+        max_err=max_err,
+        dt_initial=value(
+            "dt_initial", fallback.dt_initial if fallback is not None else None, nullable=True
+        ),
+        dt_min=value(
+            "dt_min", fallback.dt_min if fallback is not None else 1e-15, nullable=False
+        ),
+        dt_max=value(
+            "dt_max", fallback.dt_max if fallback is not None else None, nullable=True
+        ),
+    )
+
+
 def _builder_base_problem(loaded: LoadedProblem) -> Problem:
     return loaded.pipeline_base_problem(loaded.workspace_problem or loaded.problem)
 
@@ -95,8 +207,14 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
     relax_stage = _first_relax_stage(loaded)
     source_root = loaded.source_path.parent
     base_dynamics = getattr(base_problem.study, "dynamics", None)
+    adaptive_policy = (
+        base_dynamics.adaptive_timestep if base_dynamics is not None else None
+    )
+    exact_max_err = (
+        adaptive_policy is not None and _is_exact_max_err_policy(adaptive_policy)
+    )
 
-    return {
+    draft = {
         "revision": 1,
         "backend": base_problem.runtime.backend_target.value,
         "cpu_threads": base_problem.runtime.cpu_threads,
@@ -108,6 +226,27 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         "solver": {
             "integrator": base_dynamics.integrator if base_dynamics is not None else None,
             "fixed_timestep": _text_number(base_dynamics.fixed_timestep) if base_dynamics is not None else None,
+            "dt_initial": _text_number(
+                adaptive_policy.dt_initial
+                if exact_max_err
+                else None
+            ),
+            "dt_min": _text_number(
+                adaptive_policy.dt_min
+                if exact_max_err
+                else None
+            ),
+            "dt_max": _text_number(
+                adaptive_policy.dt_max
+                if exact_max_err
+                else None
+            ),
+            "max_err": _text_number(
+                adaptive_policy.atol
+                if exact_max_err
+                else None
+            ),
+            "adaptive_timestep": _adaptive_timestep_draft(adaptive_policy),
             "demag_interval_s": _text_number(
                 base_dynamics.field_refresh.demag_interval_s
                 if base_dynamics is not None and base_dynamics.field_refresh is not None
@@ -167,6 +306,15 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
         ],
         "excitation_analysis": _export_excitation_analysis(base_problem),
     }
+    solver_draft = draft["solver"]
+    if base_dynamics is None or base_dynamics.fixed_timestep is None:
+        solver_draft.pop("fixed_timestep", None)
+    if not exact_max_err:
+        for key in ("dt_initial", "dt_min", "dt_max", "max_err"):
+            solver_draft.pop(key, None)
+    if adaptive_policy is None or exact_max_err:
+        solver_draft.pop("adaptive_timestep", None)
+    return draft
 
 
 def rewrite_loaded_problem_script(
@@ -3744,14 +3892,98 @@ def _render_solver_call(
         if dynamics.field_refresh is not None
         else None,
     )
-    if dynamics.adaptive_timestep is not None:
-        if fixed_timestep is not None:
-            kwargs.append(f"dt={_py_number(fixed_timestep)}")
-        kwargs.append(f"max_error={_py_number(dynamics.adaptive_timestep.atol)}")
-        if dynamics.adaptive_timestep.dt_min != DEFAULT_ADAPTIVE_DT_MIN:
-            kwargs.append(f"dt_min={_py_number(dynamics.adaptive_timestep.dt_min)}")
-    elif fixed_timestep is not None:
-        kwargs.append(f"dt={_py_number(fixed_timestep)}")
+    convenience_keys = {"dt_initial", "dt_min", "dt_max", "max_err"}
+    has_fixed_override = (
+        "fixed_timestep" in solver_override
+        and _number_or_none(solver_override.get("fixed_timestep")) is not None
+    )
+    has_advanced_override = isinstance(solver_override.get("adaptive_timestep"), dict)
+    has_convenience_override = any(key in solver_override for key in convenience_keys)
+    has_active_convenience_override = any(
+        key in solver_override and _number_or_none(solver_override.get(key)) is not None
+        for key in convenience_keys
+    )
+    if has_fixed_override and (
+        has_advanced_override or has_active_convenience_override
+    ):
+        raise ValueError("solver override must resolve exactly one timestep policy")
+    if has_advanced_override and has_active_convenience_override:
+        raise ValueError("solver override must resolve exactly one timestep policy")
+
+    resolved_adaptive = dynamics.adaptive_timestep
+    resolved_fixed = fixed_timestep
+    if has_fixed_override:
+        resolved_adaptive = None
+    elif has_advanced_override:
+        resolved_adaptive = _advanced_policy_with_overrides(
+            dynamics.adaptive_timestep,
+            solver_override["adaptive_timestep"],
+        )
+        resolved_fixed = None
+    elif has_convenience_override:
+        resolved_adaptive = _max_error_policy_with_overrides(
+            dynamics.adaptive_timestep, solver_override
+        )
+        resolved_fixed = None
+    elif "adaptive_timestep" in solver_override:
+        resolved_adaptive = None
+
+    if (
+        resolved_adaptive is not None
+        and integrator not in ADAPTIVE_INTEGRATORS
+        and integrator != "auto"
+    ):
+        raise ValueError("adaptive timestep requires rk23, rk45, or auto")
+
+    if resolved_adaptive is not None:
+        if not _is_exact_max_err_policy(resolved_adaptive):
+            kwargs.append(
+                "adaptive_timestep=fm.AdaptiveTimestep("
+                + ", ".join(
+                    [
+                        f"atol={_py_number(resolved_adaptive.atol)}",
+                        f"rtol={_py_number(resolved_adaptive.rtol)}",
+                        "dt_initial="
+                        + (
+                            "None"
+                            if resolved_adaptive.dt_initial is None
+                            else _py_number(resolved_adaptive.dt_initial)
+                        ),
+                        f"dt_min={_py_number(resolved_adaptive.dt_min)}",
+                        "dt_max="
+                        + (
+                            "None"
+                            if resolved_adaptive.dt_max is None
+                            else _py_number(resolved_adaptive.dt_max)
+                        ),
+                        f"safety={_py_number(resolved_adaptive.safety)}",
+                        f"growth_limit={_py_number(resolved_adaptive.growth_limit)}",
+                        f"shrink_limit={_py_number(resolved_adaptive.shrink_limit)}",
+                        "max_spin_rotation="
+                        + (
+                            "None"
+                            if resolved_adaptive.max_spin_rotation is None
+                            else _py_number(resolved_adaptive.max_spin_rotation)
+                        ),
+                        "norm_tolerance="
+                        + (
+                            "None"
+                            if resolved_adaptive.norm_tolerance is None
+                            else _py_number(resolved_adaptive.norm_tolerance)
+                        ),
+                    ]
+                )
+                + ")"
+            )
+        else:
+            if resolved_adaptive.dt_initial is not None:
+                kwargs.append(f"dt_initial={_py_number(resolved_adaptive.dt_initial)}")
+            kwargs.append(f"dt_min={_py_number(resolved_adaptive.dt_min)}")
+            if resolved_adaptive.dt_max is not None:
+                kwargs.append(f"dt_max={_py_number(resolved_adaptive.dt_max)}")
+            kwargs.append(f"max_err={_py_number(resolved_adaptive.atol)}")
+    elif resolved_fixed is not None:
+        kwargs.append(f"fix_dt={_py_number(resolved_fixed)}")
     if demag_interval_s is not None:
         kwargs.append(f"demag_interval_s={_py_number(demag_interval_s)}")
 

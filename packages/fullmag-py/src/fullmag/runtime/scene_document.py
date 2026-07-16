@@ -419,6 +419,39 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
 def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
     builder = build_builder_from_scene_document(scene)
     solver = dict(builder.get("solver") or {})
+    advanced_adaptive = solver.get("adaptive_timestep")
+    advanced_adaptive_override = None
+    if isinstance(advanced_adaptive, dict):
+        advanced_adaptive_override = {
+            key: _number_or_none(advanced_adaptive.get(key))
+            for key in (
+                "atol",
+                "rtol",
+                "dt_initial",
+                "dt_min",
+                "dt_max",
+                "safety",
+                "growth_limit",
+                "shrink_limit",
+                "max_spin_rotation",
+                "norm_tolerance",
+            )
+            if key in advanced_adaptive
+        }
+    solver_override: dict[str, Any] = {}
+    if "integrator" in solver:
+        solver_override["integrator"] = solver.get("integrator") or None
+    for key in ("fixed_timestep", "dt_initial", "dt_min", "dt_max", "max_err"):
+        if key in solver:
+            solver_override[key] = _number_or_none(solver.get(key))
+    if "adaptive_timestep" in solver:
+        solver_override["adaptive_timestep"] = advanced_adaptive_override
+    solver_override["relax"] = {
+        "algorithm": solver.get("relax_algorithm") or None,
+        "torque_tolerance": _number_or_none(solver.get("torque_tolerance")),
+        "energy_tolerance": _number_or_none(solver.get("energy_tolerance")),
+        "max_steps": _int_or_none(solver.get("max_relax_steps")),
+    }
     mesh = dict(builder.get("mesh") or {})
     return {
         "runtime_selection": {
@@ -438,16 +471,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
             and len(builder.get("external_field")) == 3
             else None
         ),
-        "solver": {
-            "integrator": solver.get("integrator") or None,
-            "fixed_timestep": _number_or_none(solver.get("fixed_timestep")),
-            "relax": {
-                "algorithm": solver.get("relax_algorithm") or None,
-                "torque_tolerance": _number_or_none(solver.get("torque_tolerance")),
-                "energy_tolerance": _number_or_none(solver.get("energy_tolerance")),
-                "max_steps": _int_or_none(solver.get("max_relax_steps")),
-            },
-        },
+        "solver": solver_override,
         "mesh": {
             "algorithm_2d": mesh.get("algorithm_2d"),
             "algorithm_3d": mesh.get("algorithm_3d"),

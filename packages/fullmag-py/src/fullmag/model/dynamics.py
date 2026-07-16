@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from fullmag._validation import require_positive
+from fullmag._validation import require_non_negative, require_positive
 
 DEFAULT_GAMMA = 2.211e5
 SUPPORTED_INTEGRATORS = {"heun", "rk4", "rk23", "rk45", "abm3", "auto"}
@@ -32,10 +32,36 @@ class AdaptiveTimestep:
     shrink_limit: float = 0.2
     max_spin_rotation: float | None = None
     norm_tolerance: float | None = None
+    _tolerance_mode: str = field(
+        default="advanced", init=False, repr=False, compare=False
+    )
+
+    @classmethod
+    def _from_max_error(
+        cls,
+        *,
+        max_err: float,
+        dt_initial: float | None = None,
+        dt_min: float = 1e-15,
+        dt_max: float | None = None,
+    ) -> "AdaptiveTimestep":
+        policy = cls(
+            atol=max_err,
+            rtol=0.0,
+            dt_initial=dt_initial,
+            dt_min=dt_min,
+            dt_max=dt_max,
+        )
+        object.__setattr__(policy, "_tolerance_mode", "max_error")
+        return policy
 
     def __post_init__(self) -> None:
-        require_positive(self.atol, "atol")
-        require_positive(self.rtol, "rtol")
+        if self._tolerance_mode not in {"advanced", "max_error"}:
+            raise ValueError("_tolerance_mode must be 'advanced' or 'max_error'")
+        require_non_negative(self.atol, "atol")
+        require_non_negative(self.rtol, "rtol")
+        if self.atol == 0.0 and self.rtol == 0.0:
+            raise ValueError("at least one of atol and rtol must be positive")
         if self.dt_initial is not None:
             require_positive(self.dt_initial, "dt_initial")
         require_positive(self.dt_min, "dt_min")
@@ -43,8 +69,14 @@ class AdaptiveTimestep:
             require_positive(self.dt_max, "dt_max")
             if self.dt_max < self.dt_min:
                 raise ValueError("dt_max must be >= dt_min")
+        if self.dt_initial is not None:
+            if self.dt_initial < self.dt_min:
+                raise ValueError("dt_initial must be >= dt_min")
+            if self.dt_max is not None and self.dt_initial > self.dt_max:
+                raise ValueError("dt_initial must be <= dt_max")
         if not (0.0 < self.safety <= 1.0):
             raise ValueError("safety must be in (0, 1]")
+        require_positive(self.growth_limit, "growth_limit")
         if self.growth_limit <= 1.0:
             raise ValueError("growth_limit must be > 1")
         if not (0.0 < self.shrink_limit < 1.0):
@@ -58,7 +90,7 @@ class AdaptiveTimestep:
         d: dict[str, object] = {
             "atol": self.atol,
             "rtol": self.rtol,
-            "dt_initial": self.dt_initial if self.dt_initial is not None else self.dt_min,
+            "dt_initial": self.dt_initial,
             "dt_min": self.dt_min,
             "safety": self.safety,
             "growth_limit": self.growth_limit,
