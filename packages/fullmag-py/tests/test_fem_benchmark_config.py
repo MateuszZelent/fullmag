@@ -10361,18 +10361,28 @@ def test_gpu_rk_external_energy_reductions_are_owned_by_rk_module():
     assert '#include "gpu/cuda/integrators/rk/rk_external_energy_reductions.hpp"' in external_source
     assert '#include "gpu/cuda/integrators/rk/rk_step_stats.hpp"' in external_source
     assert "ctx.zeeman.has_external_field" in external_source
+    assert "ctx.zeeman.regional_drives.empty()" in external_source
     assert "fullmag_cuda_external_energy_blocks(" in external_source
     assert "GpuFinalScalarSlot::ExternalEnergy" in external_source
+    assert "GpuFinalScalarSlot::DriveEnergy" in external_source
+    assert "gpu_regional_field_drive_materialize_and_accumulate(" in external_source
     assert "launch GPU RK external energy blocks" in external_source
     assert "launch GPU RK external energy reduction" in external_source
-    assert "GPU RK external energy requires device-resident Ms, lumped mass, and H_ext" in external_source
+    assert "GPU RK Zeeman energy requires device-resident Ms and lumped mass" in external_source
+    assert "GPU RK external energy requires device-resident H_ext" in external_source
+    assert "GPU RK drive energy requires device-resident H_drive" in external_source
+    assert external_source.index("GPU RK drive energy requires device-resident H_drive") < external_source.index(
+        "gpu_regional_field_drive_materialize_and_accumulate("
+    )
     assert "fullmag_cuda_device_sum(" in external_source
     for delegated in (
         "fullmag_cuda_external_energy_blocks(",
         "GpuFinalScalarSlot::ExternalEnergy",
         "launch GPU RK external energy blocks",
         "launch GPU RK external energy reduction",
-        "GPU RK external energy requires device-resident Ms, lumped mass, and H_ext",
+        "GPU RK Zeeman energy requires device-resident Ms and lumped mass",
+        "GPU RK external energy requires device-resident H_ext",
+        "GPU RK drive energy requires device-resident H_drive",
     ):
         assert delegated not in energy_source
 

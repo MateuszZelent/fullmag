@@ -236,6 +236,36 @@ field-solve lanes fail; they do not silently choose another device.
   resolution; capabilities metadata is part of the same public execution contract.
 - Canonical reference: `docs/specs/runtime-engine-naming-v0.md`.
 
+### LLG time-domain evidence overlay
+
+Contract IDs: `LLG-TD-POLICY-V1`, `LLG-TD-ATTEMPT-V1`, and
+`LLG-TD-STIFF-V1`, with `LLG-TD-FIRST-DT-V1`, `LLG-TD-MAX-ERR-V1`, and
+`LLG-TD-ATOMIC-V1` as required policy semantics. Status describes publication availability; implementation
+and validation remain separate evidence axes.
+
+| Policy | Backend | Device | Precision | Product status | implementation_state | validation_state | validated_scope |
+|---|---|---|---|---|---|---|---|
+| explicit fixed | FDM | CPU | double | `reference_executable` | executable | unvalidated | CPU reference semantics; new `fix_dt` round-trip pending |
+| explicit fixed | FDM | CPU | single | `unsupported` | absent | unvalidated | CPU reference is double-only |
+| explicit fixed | FDM | CUDA | double | `production_executable` | executable | unvalidated | existing single-grid fixed execution; Task 12 qualification pending |
+| explicit fixed | FDM | CUDA | single | `production_executable` | executable | unvalidated | existing calibrated fixed execution only; no adaptive promotion |
+| explicit fixed | FEM | CPU | double | `production_executable` | executable | unvalidated | native explicit fixed execution; full interaction matrix not implied |
+| explicit fixed | FEM | CPU | single | `unsupported` | absent | unvalidated | native FEM CPU is double-only |
+| explicit fixed | FEM | GPU | double | `production_executable` | executable | unvalidated | native explicit fixed execution; no FP32 implication |
+| explicit fixed | FEM | GPU | single | `unsupported` | absent | unvalidated | no qualified native FEM GPU FP32 lane |
+| explicit adaptive | FDM | CPU | double | `source_visible` | executable | unvalidated | blocked by P0/P1 audit findings and canonical policy migration |
+| explicit adaptive | FDM | CPU | single | `unsupported` | absent | unvalidated | CPU reference is double-only |
+| explicit adaptive | FDM | CUDA | double | `source_visible` | executable | unvalidated | controller, ABI propagation, floor failure, and trace qualification pending |
+| explicit adaptive | FDM | CUDA | single | `source_visible` | executable | unvalidated | separate FP32 accuracy and controller qualification pending; no FP64 promotion |
+| explicit adaptive | FEM | CPU | double | `source_visible` | executable | unvalidated | controller, guards, demag convergence, atomicity, and qualification pending |
+| explicit adaptive | FEM | CPU | single | `unsupported` | absent | unvalidated | native FEM CPU is double-only |
+| explicit adaptive | FEM | GPU | double | `source_visible` | executable | unvalidated | CPU/GPU policy parity and managed scientific qualification pending |
+| explicit adaptive | FEM | GPU | single | `unsupported` | absent | unvalidated | no qualified native FEM GPU FP32 adaptive lane |
+| stiff time-domain | FEM | CPU | double | `unsupported` | absent | unvalidated | a physical-time tangent-plane integrator must be implemented separately |
+| stiff time-domain | FEM | CPU | single | `unsupported` | absent | unvalidated | no implementation; CPU remains double-only |
+| stiff time-domain | FEM | GPU | double | `unsupported` | absent | unvalidated | no implementation and no hidden CPU fallback |
+| stiff time-domain | FEM | GPU | single | `unsupported` | absent | unvalidated | no implementation and no hidden CPU fallback |
+
 ## Capability matrix
 
 | Feature | FDM | FEM | Hybrid | Tier | Notes |
@@ -262,6 +292,9 @@ field-solve lanes fail; they do not silently choose another device.
 | `ThermalNoise` | ✅ exec | planned | planned | **public-executable** (single-grid FDM) | CPU/GPU single-grid FDM execute Brown thermal noise where configured. Public multilayer FDM rejects thermal noise explicitly until staged CPU/GPU multilayer RHS coverage exists, rather than dropping it from `FdmMultilayerPlanIR`. |
 | `Magnetoelastic` | planned | planned | planned | **internal-reference** | Small-strain magnetoelastic coupling (B1/B2 cubic, λ_s isotropic); prescribed-strain H_mel wired into H_eff; see `docs/physics/0700-shared-magnetoelastic-semantics.md` |
 | `LLG` (Heun) | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Heun stepper in `fullmag-engine` |
+| LLG explicit fixed | see LLG time-domain evidence overlay | see LLG time-domain evidence overlay | `unsupported` | lane-specific | Existing fixed execution is retained, but `fix_dt` API/IR round-trip is not complete until Task 5. |
+| LLG explicit adaptive | `source_visible` | `source_visible` | `unsupported` | **`source_visible`** | RK23/RK45 source exists, but production publication is blocked by findings `LLG-TD-API-001` through `LLG-TD-TEST-011`. |
+| LLG stiff time-domain | `unsupported` | `unsupported` | `unsupported` | **`unsupported`** | The existing `Relaxation(tangent_plane_implicit)` is an energy minimizer, not full physical-time LLG. No explicit-to-stiff or GPU-to-CPU fallback is legal. |
 | `Relaxation(llg_overdamped)` | ✅ exec | ✅ exec | planned | **public-executable** (FDM/FEM) | Shared `StudyIR::Relaxation` with `RelaxStop` and structured execution-owned completion. This is the only relaxation algorithm that owns `dynamics`, RK, `dt`, and a stage-local relaxation clock. |
 | `Relaxation(projected_gradient_bb)` | ✅ exec | ✅ exec on `fem_cpu_native` and `fem_native_gpu`, including demag at `rtol<=1e-12` | **planned** | **public-executable** (FDM CPU/reference/CUDA; native FEM CPU/MFEM/CUDA) | Direct minimization with the physical `mu0 Ms V` energy metric, norm-preserving retraction, and native Armijo/BB control. Its accepted line-search step is in `m/A`; it owns no RK, `dt`, physical time, or pseudo-time. FEM demag uses direct polarized increments; no hidden fallback is permitted. Heterogeneous cellwise FDM CUDA material fields remain fail-closed where that lane does not support them. |
 | `Relaxation(nonlinear_cg)` | ✅ exec | ✅ exec on `fem_cpu_native` and `fem_native_gpu` | **planned** | **public-executable** (FDM CPU/reference/CUDA; native FEM CPU/MFEM/CUDA) | PR+ direct minimization uses the same physical energy metric, retraction, and Armijo units as PG-BB. Its accepted line-search step is in `m/A`; it owns no RK or time controls. |

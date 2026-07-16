@@ -781,17 +781,27 @@ void gpu_rk_step_stats_is_owned_by_cuda_rk_module() {
                 std::string::npos &&
             external_energy_source.find("ctx.zeeman.has_external_field") !=
                 std::string::npos &&
+            external_energy_source.find("ctx.zeeman.regional_drives.empty()") !=
+                std::string::npos &&
             external_energy_source.find("fullmag_cuda_external_energy_blocks(") !=
                 std::string::npos &&
             external_energy_source.find("GpuFinalScalarSlot::ExternalEnergy") !=
+                std::string::npos &&
+            external_energy_source.find("GpuFinalScalarSlot::DriveEnergy") !=
+                std::string::npos &&
+            external_energy_source.find("gpu_regional_field_drive_materialize_and_accumulate(") !=
                 std::string::npos &&
             external_energy_source.find("launch GPU RK external energy blocks") !=
                 std::string::npos &&
             external_energy_source.find("launch GPU RK external energy reduction") !=
                 std::string::npos &&
-            external_energy_source.find("GPU RK external energy requires device-resident Ms, lumped mass, and H_ext") !=
+            external_energy_source.find("GPU RK Zeeman energy requires device-resident Ms and lumped mass") !=
+                std::string::npos &&
+            external_energy_source.find("GPU RK external energy requires device-resident H_ext") !=
+                std::string::npos &&
+            external_energy_source.find("GPU RK drive energy requires device-resident H_drive") !=
                 std::string::npos,
-        "GPU CUDA RK external final energy reductions source must own external energy validation, launch, and scalar slot");
+        "GPU CUDA RK external final energy reductions source must own external/drive validation, launch, and scalar slots");
     check(
         energy_source.find("fullmag_cuda_external_energy_blocks(") ==
                 std::string::npos &&

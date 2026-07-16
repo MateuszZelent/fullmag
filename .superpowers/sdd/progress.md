@@ -1,0 +1,37 @@
+# Subagent-driven development progress
+
+## Plan: 2026-07-17 LLG time-domain solver remediation
+
+- Worktree: `/tmp/fullmag-llg-time-domain-remediation`
+- Branch: `codex/llg-time-domain-remediation`
+- Base: `707a50386cdfe6787aac06cca3070289dc731fa2`
+- Approved audit: `docs/audits/2026-07-16-llg-time-domain-solver-audit.md`
+- Canonical contract: `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
+- Implementation plan: `docs/superpowers/plans/2026-07-17-llg-time-domain-solver-remediation.md`
+
+| Task | Status | RED evidence | GREEN evidence | Reviews | Commit |
+|---:|---|---|---|---|---|
+| 1 | completed | empty CUDA architecture, stale report path, stale external-energy assertion | default and `FULLMAG_CUDA_ARCHITECTURES=75` managed gates exit 0 | spec APPROVED; quality APPROVED | pending |
+| 2 | pending | pending | pending | pending | pending |
+| 3 | pending | pending | pending | pending | pending |
+| 4 | pending | pending | pending | pending | pending |
+| 5 | pending | pending | pending | pending | pending |
+| 6 | pending | pending | pending | pending | pending |
+| 7 | pending | pending | pending | pending | pending |
+| 8 | pending | pending | pending | pending | pending |
+| 9 | pending | pending | pending | pending | pending |
+| 10 | pending | pending | pending | pending | pending |
+| 11 | pending | pending | pending | pending | pending |
+| 12 | pending | pending | pending | pending | pending |
+| 13 | pending | pending | pending | pending | pending |
+| 14 | pending | pending | pending | pending | pending |
+| 15 | pending | pending | pending | pending | pending |
+
+### Baseline evidence
+
+- 2026-07-17: focused legacy Python solver tests passed (2 tests).
+- 2026-07-17: runner `initial_timestep_tests` passed (5 tests), including
+  stale expectations for hidden `1e-13` fallback.
+- 2026-07-17: `just verify-fem-time-domain-native-contract` failed during
+  CMake generation because CUDA targets had empty `CUDA_ARCHITECTURES`; the
+  recipe did not reach adaptive solver assertions.

@@ -7,6 +7,13 @@ option(FULLMAG_ENABLE_FEM_GPU "Build FEM GPU backend sources" ON)
 option(FULLMAG_USE_MFEM_STACK "Build FEM backend against MFEM/libCEED/hypre" OFF)
 option(FULLMAG_FEM_WITH_SLEPC "Build FEM frequency-domain dependency slice against PETSc/SLEPc" ON)
 
+if(FULLMAG_ENABLE_CUDA AND FULLMAG_ENABLE_FEM_GPU AND NOT CMAKE_CUDA_ARCHITECTURES)
+    message(FATAL_ERROR
+        "FEM CUDA builds require a non-empty CMAKE_CUDA_ARCHITECTURES. "
+        "Repo-managed recipes default it to 'native'; set "
+        "FULLMAG_CUDA_ARCHITECTURES for a portable build matrix.")
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 set(FEM_PUBLIC_HEADERS

@@ -255,6 +255,24 @@ Runner nie może zawierać:
 - produkcyjnych kerneli libCEED albo hypre-device,
 - zdublowanych GPU-resident state machines.
 
+### LLG time-domain workflow ownership
+
+Contracts: `LLG-TD-POLICY-V1`, `LLG-TD-ATTEMPT-V1`, `LLG-TD-STIFF-V1`,
+`LLG-TD-ATOMIC-V1`.
+
+Public fixed, adaptive, and stiff policies lower through one ProblemIR and
+planner vocabulary. The runner owns typed requested/resolved provenance and
+ABI orchestration, while `backends/fdm` and `backends/fem` own integration.
+Each backend realization owns an attempted-step transaction so candidate
+magnetization, fields, time, caches, controller state, and telemetry commit
+together or roll back together.
+
+CPU and GPU realizations share backend-neutral equations, scalar controller
+semantics, decision reasons, and immutable golden vectors. They do not share a
+mutable hot-loop implementation. Unsupported lane, device, precision, guard,
+or demag semantics fail before execution. There is no hidden explicit-to-stiff fallback
+and no hidden GPU-to-CPU fallback.
+
 `crates/fullmag-runner/src/native_fem.rs` i powiązane moduły runnera są
 fasadami ABI i orkiestracji. Można je dzielić dla utrzymania kodu, ale ich nazwy
 i dokumentacja muszą nadal mówić, że implementacja natywnego FEM żyje w

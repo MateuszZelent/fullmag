@@ -70,6 +70,20 @@ Public authoring and UI labels use `t` and `dt`.
 - The browser receives invalidations and cursor metadata over realtime events;
   it fetches row windows through HTTP resources.
 
+### 2.4 Solver attempts are not table-autosave rows
+
+Contract: `LLG-TD-ATTEMPT-V1`.
+
+Solver attempts include rejected candidates and controller decisions that do
+not correspond to published physical states. They are recorded in the bounded
+`solver_attempts.csv` diagnostic artifact defined by the canonical LLG
+time-domain contract. They are not inserted into a user table, resampled at an
+output cadence, interpolated, or coalesced.
+
+Table autosave contains accepted-state observables only. Its documented
+coalesced behavior when one adaptive step crosses several output times does
+not alter, compress, or replace the one-record-per-attempt solver trace.
+
 ## 3. Numerical Interpretation
 
 ### 3.1 FDM

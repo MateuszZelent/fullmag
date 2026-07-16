@@ -704,23 +704,6 @@ void gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal() {
         "GPU adaptive rejection must restore m and invalidate FSAL before retry");
 }
 
-void progress_report_marks_integrator_split_contract_covered() {
-    const std::string progress = read_text_file(
-        repo_root() / "docs" / "reports" / "16.05.2026" /
-        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
-
-    check(
-        progress.find("| Wydzielic integratory do osobnych modulow | zrobione kontraktowo |") !=
-            std::string::npos,
-        "progress report must mark native FEM integrator split as contract-covered");
-    check(
-        progress.find("`fem_rk_explicit_contract`") != std::string::npos &&
-            progress.find("`fem_adaptive_dt_contract`") != std::string::npos &&
-            progress.find("`fem_heun_step_contract`") != std::string::npos &&
-            progress.find("`fem_llg_rhs_contract`") != std::string::npos,
-        "progress report must cite RK, adaptive, Heun, and LLG RHS integrator gates");
-}
-
 } // namespace
 
 int main() {
@@ -738,6 +721,5 @@ int main() {
     deterministic_oersted_fsal_requires_an_identical_next_source_state();
     rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal();
 #endif
-    progress_report_marks_integrator_split_contract_covered();
     return 0;
 }

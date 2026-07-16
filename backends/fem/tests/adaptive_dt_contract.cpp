@@ -64,7 +64,22 @@ std::filesystem::path fem_source_root() {
 }
 
 std::filesystem::path repo_root() {
-    return fem_source_root().parent_path().parent_path().parent_path();
+    auto path = fem_source_root();
+    for (int depth = 0; depth < 8; ++depth) {
+        if (std::filesystem::exists(path / "Cargo.toml") &&
+            std::filesystem::exists(path / "justfile")) {
+            return path;
+        }
+        if (!path.has_parent_path()) {
+            break;
+        }
+        path = path.parent_path();
+    }
+    std::fprintf(
+        stderr,
+        "FAIL: unable to locate repository root from %s\n",
+        fem_source_root().string().c_str());
+    std::exit(1);
 }
 
 void adaptive_dt_controller_is_owned_by_integrator_module() {
@@ -285,25 +300,6 @@ void adaptive_plan_import_validates_and_copies_config() {
         "adaptive max_reject error string");
 }
 
-void progress_report_marks_adaptive_validation_contract_covered() {
-    const std::string progress = read_text_file(
-        repo_root() / "docs" / "reports" / "16.05.2026" /
-        "fullmag_fem_cpu_refactor_progress_2026-05-16.md");
-
-    check(
-        progress.find("| Dodac pelna walidacje adaptive RK | zrobione kontraktowo |") != std::string::npos,
-        "progress report must mark adaptive RK validation as contractually covered");
-    check(
-        progress.find("`fem_adaptive_dt_contract`") != std::string::npos &&
-            progress.find("PI-controllera") != std::string::npos &&
-            progress.find("wezlowej wektorowej normy bledu") != std::string::npos &&
-            progress.find("plan importu") != std::string::npos,
-        "progress report must cite the adaptive DT gate and covered validation surfaces");
-    check(
-        progress.find("Aktywna runtime kwalifikacja nadal idzie osobnymi fixture/benchmarkami") != std::string::npos,
-        "progress report must keep runtime qualification separate from contract coverage");
-}
-
 } // namespace
 
 int main() {
@@ -314,6 +310,5 @@ int main() {
     adaptive_error_norm_uses_nodewise_vector_l2_scale();
     gpu_adaptive_error_norm_uses_nodewise_vector_l2_scale();
     adaptive_plan_import_validates_and_copies_config();
-    progress_report_marks_adaptive_validation_contract_covered();
     return 0;
 }
