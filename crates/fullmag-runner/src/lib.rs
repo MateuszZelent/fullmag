@@ -887,6 +887,19 @@ fn attach_resolved_fallback_to_executed_run(
     }
 }
 
+fn require_resolved_runtime_sampling(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) -> Result<(), RunError> {
+    schedules::require_resolved_periodic_outputs(&plan.output_plan.outputs)
+        .map_err(|message| RunError { message })?;
+    if let Some(table) = problem.study.sampling().table_autosave.as_ref() {
+        table_autosave::TableAutosaveConfig::from_ir(table)
+            .map_err(|message| RunError { message })?;
+    }
+    Ok(())
+}
+
 /// Plan and run a problem, writing artifacts to `output_dir`.
 ///
 /// This is the top-level entry point: ProblemIR → plan → execute → artifacts.
@@ -911,6 +924,7 @@ pub fn run_planned_problem(
     until_seconds: f64,
     output_dir: &Path,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis(problem, plan, until_seconds, output_dir, None);
     }
@@ -1165,6 +1179,7 @@ pub fn run_planned_problem_with_callback(
     field_every_n: u64,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_callback(
             problem,
@@ -1471,6 +1486,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     initial_snapshot: bool,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
         return hysteresis::run_planned_hysteresis_with_live_preview(
             problem,
@@ -2063,6 +2079,7 @@ pub fn run_planned_problem_with_interactive_runtime_live_preview_interruptible(
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
     runtime.execute_planned_streaming(
         problem,
         plan,

@@ -230,6 +230,34 @@ mod tests {
     }
 
     #[test]
+    fn auto_sampling_resolved_5ghz_clock_lands_on_ticks_and_stage_boundary() {
+        let sample_period_s = 1.0 / 13.0e9;
+        let outputs = vec![OutputIR::Field {
+            name: "m".into(),
+            every_seconds: sample_period_s,
+        }];
+
+        let schedule = build_resolved_stage_event_schedule(
+            &[],
+            0.0,
+            4.0 * sample_period_s,
+            &outputs,
+            1e-24,
+        );
+
+        assert_eq!(
+            schedule.times_s,
+            vec![
+                0.0,
+                sample_period_s,
+                2.0 * sample_period_s,
+                3.0 * sample_period_s,
+                4.0 * sample_period_s,
+            ]
+        );
+    }
+
+    #[test]
     fn direct_minimizer_skips_physical_time_event_materialization() {
         let outputs = vec![OutputIR::Scalar {
             name: "mx".into(),

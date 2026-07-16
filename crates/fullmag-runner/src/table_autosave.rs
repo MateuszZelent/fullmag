@@ -47,6 +47,7 @@ pub struct TableAutosaveConfig {
     pub table_id: String,
     pub sample_period_s: f64,
     pub columns: Vec<TableColumnMeta>,
+    pub sampling_resolution: Option<serde_json::Value>,
 }
 
 impl TableAutosaveConfig {
@@ -57,7 +58,13 @@ impl TableAutosaveConfig {
         let sample_period_s = ir
             .explicit_sample_period_s()
             .or(ir.resolved_sample_period_s)
-            .ok_or_else(|| "table_autosave sampling period is unresolved".to_string())?;
+            .ok_or_else(|| {
+                if ir.requests_auto_sinc_cutoff() {
+                    "table_autosave has unresolved automatic sampling; the planner must resolve it before runtime dispatch".to_string()
+                } else {
+                    "table_autosave sampling period is unresolved".to_string()
+                }
+            })?;
         if !sample_period_s.is_finite() || sample_period_s <= 0.0 {
             return Err("table_autosave.sample_period_s must be positive".to_string());
         }
@@ -78,7 +85,16 @@ impl TableAutosaveConfig {
             table_id: ir.table_id.clone(),
             sample_period_s,
             columns,
+            sampling_resolution: None,
         })
+    }
+
+    pub fn with_sampling_resolution(
+        mut self,
+        sampling_resolution: Option<serde_json::Value>,
+    ) -> Self {
+        self.sampling_resolution = sampling_resolution;
+        self
     }
 }
 
@@ -395,6 +411,7 @@ fn write_schema_json(path: &Path, config: &TableAutosaveConfig) -> io::Result<()
             "kind": "table_autosave.schema",
             "table_id": config.table_id,
             "sample_period_s": config.sample_period_s,
+            "sampling_resolution": config.sampling_resolution,
             "columns": columns,
         }))?,
     )
@@ -480,6 +497,25 @@ mod tests {
     }
 
     #[test]
+    fn auto_sampling_unresolved_table_is_rejected_before_writer_construction() {
+        let error = TableAutosaveConfig::from_ir(&fullmag_ir::TableAutosaveIR {
+            kind: "table_autosave".to_string(),
+            table_id: DEFAULT_TABLE_ID.to_string(),
+            sample_period_s: None,
+            sample_period_policy: Some(
+                fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                    nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+                },
+            ),
+            resolved_sample_period_s: None,
+            quantities: vec!["t".to_string(), "my".to_string()],
+        })
+        .expect_err("unresolved automatic table cadence must fail closed");
+
+        assert!(error.contains("unresolved automatic sampling"));
+    }
+
+    #[test]
     fn table_store_returns_cursor_windows_and_resync_signal() {
         let mut store = TableStore::new(config(1e-12));
         for step in 0..5 {
@@ -525,5 +561,46 @@ mod tests {
         assert!(schema.contains("\"table_id\": \"default\""));
 
         fs::remove_dir_all(artifact_dir).expect("temp artifacts should be removable");
+    }
+
+    #[test]
+    fn auto_sampling_schema_preserves_complete_planner_resolution() {
+        let resolution = serde_json::json!({
+            "requested_policy": {
+                "kind": "auto_sinc_cutoff",
+                "nyquist_guard_factor": 1.3
+            },
+            "sample_period_s": 7.692307692307691e-11,
+            "maximum_cutoff_hz": 5.0e9,
+            "nyquist_guard_factor": 1.3,
+            "target_nyquist_hz": 6.5e9,
+            "sampling_frequency_hz": 13.0e9,
+            "source_drive_ids": ["k0-sinc-antenna"],
+            "target_stage_id": "excite"
+        });
+        let store = TableStore::new(config(1.0 / 13.0e9).with_sampling_resolution(
+            Some(resolution.clone()),
+        ));
+        let artifact_dir = std::env::temp_dir().join(format!(
+            "fullmag-table-auto-provenance-{}",
+            std::process::id()
+        ));
+
+        store
+            .write_artifacts(&artifact_dir)
+            .expect("table schema should write");
+
+        let schema: serde_json::Value = serde_json::from_slice(
+            &fs::read(
+                artifact_dir
+                    .join("tables")
+                    .join(DEFAULT_TABLE_ID)
+                    .join("schema.json"),
+            )
+            .expect("schema artifact should be readable"),
+        )
+        .expect("schema artifact should be JSON");
+        assert_eq!(schema["sampling_resolution"], resolution);
+        let _ = fs::remove_dir_all(artifact_dir);
     }
 }

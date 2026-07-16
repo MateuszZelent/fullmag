@@ -4854,6 +4854,24 @@ fn write_synthetic_stage_record(
     Ok(())
 }
 
+fn write_sampling_resolution_stage_record(
+    current_stage_artifact_dir: &Path,
+    sampling_resolution: Option<&serde_json::Value>,
+) -> Result<()> {
+    let Some(sampling_resolution) = sampling_resolution else {
+        return Ok(());
+    };
+    fs::create_dir_all(current_stage_artifact_dir)?;
+    fs::write(
+        current_stage_artifact_dir.join("sampling_stage_record.v1.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "sampling_stage_record.v1",
+            "sampling_resolution": sampling_resolution,
+        }))?,
+    )?;
+    Ok(())
+}
+
 struct SyntheticStageOutcome {
     magnetization: Vec<[f64; 3]>,
     message: String,
@@ -6639,6 +6657,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 current_stage_artifact_dir.display()
             )
         })?;
+        write_sampling_resolution_stage_record(
+            &current_stage_artifact_dir,
+            stage
+                .ir
+                .problem_meta
+                .runtime_metadata
+                .get("sampling_resolution"),
+        )?;
 
         let stage_initial_update = offset_step_update(
             &initial_step_update(&execution_plan.backend_plan),
@@ -7971,6 +7997,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     current_stage_artifact_dir.display()
                 )
             })?;
+            write_sampling_resolution_stage_record(
+                &current_stage_artifact_dir,
+                stage
+                    .ir
+                    .problem_meta
+                    .runtime_metadata
+                    .get("sampling_resolution"),
+            )?;
             let running_at_unix_ms = unix_time_millis()?;
             let stage_initial_update = offset_step_update(
                 &initial_step_update(&execution_plan.backend_plan),
@@ -9119,6 +9153,7 @@ mod tests {
         initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
         initial_step_update, interactive_session_should_stay_alive,
         live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
+        write_sampling_resolution_stage_record,
         live_step_ingest_preview_len, mesh_build_pipeline_status_json,
         mesh_source_scene_revision,
         prepare_remesh_stage_transaction,
@@ -11654,6 +11689,33 @@ mod tests {
         assert!(export_stage_dir.join("synthetic_stage.json").is_file());
 
         let _ = fs::remove_dir_all(&artifact_dir);
+    }
+
+    #[test]
+    fn auto_sampling_stage_record_preserves_planner_resolution() {
+        let stage_dir = temp_test_dir("auto-sampling-stage-record");
+        let resolution = serde_json::json!({
+            "requested_policy": {"kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3},
+            "sample_period_s": 7.692307692307691e-11,
+            "maximum_cutoff_hz": 5.0e9,
+            "nyquist_guard_factor": 1.3,
+            "target_nyquist_hz": 6.5e9,
+            "sampling_frequency_hz": 13.0e9,
+            "source_drive_ids": ["drive-5"],
+            "target_stage_id": "excite"
+        });
+
+        write_sampling_resolution_stage_record(&stage_dir, Some(&resolution))
+            .expect("sampling stage record should write");
+
+        let record: serde_json::Value = serde_json::from_slice(
+            &fs::read(stage_dir.join("sampling_stage_record.v1.json"))
+                .expect("sampling stage record should be readable"),
+        )
+        .expect("sampling stage record should be JSON");
+        assert_eq!(record["schema_version"], "sampling_stage_record.v1");
+        assert_eq!(record["sampling_resolution"], resolution);
+        let _ = fs::remove_dir_all(stage_dir);
     }
 
     #[test]

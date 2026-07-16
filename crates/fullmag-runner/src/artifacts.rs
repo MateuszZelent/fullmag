@@ -1000,6 +1000,11 @@ pub(crate) fn write_artifacts(
     streamed: Option<&ArtifactPipelineSummary>,
 ) -> std::io::Result<()> {
     fs::create_dir_all(output_dir)?;
+    let sampling_resolution = problem
+        .problem_meta
+        .runtime_metadata
+        .get("sampling_resolution");
+    write_sampling_resolution_artifact(output_dir, sampling_resolution)?;
     let field_context = build_field_context(problem, plan);
     let requested_execution = requested_execution_metadata(problem);
     let runtime_threading = runtime_threading_summary(problem);
@@ -1037,6 +1042,7 @@ pub(crate) fn write_artifacts(
         "ir_version": problem.ir_version,
         "source_hash": problem.problem_meta.source_hash,
         "problem_meta": problem.problem_meta,
+        "sampling_resolution": sampling_resolution,
         "pbc": problem.pbc,
         "execution_plan": plan,
         "requested_execution": requested_execution,
@@ -2629,7 +2635,14 @@ fn write_table_autosave_artifacts(
                 ErrorKind::InvalidInput,
                 format!("invalid table_autosave config: {error}"),
             )
-        })?;
+        })?
+        .with_sampling_resolution(
+            problem
+                .problem_meta
+                .runtime_metadata
+                .get("sampling_resolution")
+                .cloned(),
+        );
     let mut store = crate::table_autosave::TableStore::new(config);
     for step in steps {
         store
@@ -2637,6 +2650,24 @@ fn write_table_autosave_artifacts(
             .map_err(|error| Error::new(ErrorKind::InvalidInput, error))?;
     }
     store.write_artifacts(output_dir)
+}
+
+fn write_sampling_resolution_artifact(
+    output_dir: &Path,
+    sampling_resolution: Option<&serde_json::Value>,
+) -> std::io::Result<()> {
+    let Some(sampling_resolution) = sampling_resolution else {
+        return Ok(());
+    };
+    let sampling_dir = output_dir.join("sampling");
+    fs::create_dir_all(&sampling_dir)?;
+    fs::write(
+        sampling_dir.join("sampling_resolution.v1.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "sampling_resolution.v1",
+            "sampling_resolution": sampling_resolution,
+        }))?,
+    )
 }
 
 pub(crate) fn write_field_file(
@@ -3154,6 +3185,36 @@ mod tests {
             metadata["resolved_periodic_images"]["padded_counts"],
             serde_json::json!([4, 4, 2])
         );
+    }
+
+    #[test]
+    fn auto_sampling_writes_versioned_resolution_artifact_without_recomputing_values() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-auto-sampling-artifact-{}",
+            std::process::id()
+        ));
+        let resolution = serde_json::json!({
+            "requested_policy": {"kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3},
+            "sample_period_s": 7.692307692307691e-11,
+            "maximum_cutoff_hz": 5.0e9,
+            "nyquist_guard_factor": 1.3,
+            "target_nyquist_hz": 6.5e9,
+            "sampling_frequency_hz": 13.0e9,
+            "source_drive_ids": ["drive-5"],
+            "target_stage_id": "excite"
+        });
+
+        write_sampling_resolution_artifact(&output_dir, Some(&resolution))
+            .expect("sampling artifact should write");
+
+        let artifact: serde_json::Value = serde_json::from_slice(
+            &fs::read(output_dir.join("sampling/sampling_resolution.v1.json"))
+                .expect("sampling artifact should be readable"),
+        )
+        .expect("sampling artifact should be JSON");
+        assert_eq!(artifact["schema_version"], "sampling_resolution.v1");
+        assert_eq!(artifact["sampling_resolution"], resolution);
+        let _ = fs::remove_dir_all(output_dir);
     }
 
     #[test]
