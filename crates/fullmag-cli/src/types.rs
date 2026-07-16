@@ -1,4 +1,6 @@
-use fullmag_ir::{GeometryAssetsIR, ProblemIR, RegionalFieldDriveIR};
+use fullmag_ir::{
+    GeometryAssetsIR, OutputIR, ProblemIR, RegionalFieldDriveIR, TableAutosaveIR,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -232,14 +234,14 @@ fn default_study_pipeline_enabled() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StudyPipelineDocument {
     pub version: String,
     #[serde(default)]
     pub nodes: Vec<StudyPipelineNode>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 #[serde(tag = "node_kind", rename_all = "snake_case")]
 pub(crate) enum StudyPipelineNode {
@@ -334,10 +336,34 @@ pub(crate) enum ScriptExecutionStageAction {
     AddFieldDrive {
         drive: RegionalFieldDriveIR,
     },
+    TableAutosave {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default)]
+        table_autosave: Option<TableAutosaveIR>,
+    },
+    Autosave {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default)]
+        quantity: Option<String>,
+        #[serde(default)]
+        output: Option<OutputIR>,
+    },
+    FftResponse {
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default)]
+        request: Option<Value>,
+    },
 }
 
 fn default_stage_action_artifact_name() -> String {
     "state_snapshot".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -397,6 +423,19 @@ pub(crate) enum ResolvedScriptStageAction {
     },
     AddFieldDrive {
         drive: RegionalFieldDriveIR,
+    },
+    TableAutosave {
+        enabled: bool,
+        table_autosave: Option<TableAutosaveIR>,
+    },
+    Autosave {
+        enabled: bool,
+        quantity: Option<String>,
+        output: Option<OutputIR>,
+    },
+    FftResponse {
+        enabled: bool,
+        request: Option<Value>,
     },
 }
 

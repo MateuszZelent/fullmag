@@ -4,6 +4,7 @@ import {
   buildStudyStagesMergePatch,
   createDefaultStudyStageDraft,
   createStudyStageDraft,
+  createStudyStageDrafts,
   relaxationAlgorithmAvailability,
   studyStageDraftToSceneStage,
   validateStudyStageDraft,
@@ -46,24 +47,32 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
-  it("round-trips run-local autosave, field outputs, and Gamma response analysis", () => {
-    const source = {
-      entrypoint_kind: "flat_run",
-      fixed_timestep: 1e-13,
-      kind: "run",
-      sampling: {
-        outputs: [
-          { every_seconds: 2e-12, kind: "field", name: "m" },
-          { every_seconds: 0.5e-12, kind: "field", name: "H_drive" },
-        ],
-        table_autosave: {
-          kind: "table_autosave",
-          quantities: ["t", "step", "mx", "my", "mz", "e_drive"],
-          sample_period_s: 0.5e-12,
-          table_id: "default",
-        },
+  it("round-trips visible sampling and FFT configuration stages before a simple Run", () => {
+    const table = createStudyStageDraft({
+      enabled: true,
+      entrypoint_kind: "flat_table_autosave",
+      kind: "table_autosave",
+      stage_id: "table-on",
+      table_autosave: {
+        kind: "table_autosave",
+        quantities: ["t", "step", "mx", "my", "mz", "e_drive"],
+        sample_period_s: 0.5e-12,
+        table_id: "default",
       },
-      spin_wave_response: {
+    }, 0);
+    const autosave = createStudyStageDraft({
+      enabled: true,
+      entrypoint_kind: "flat_autosave",
+      kind: "autosave",
+      output: { every_seconds: 2e-12, kind: "field", name: "m" },
+      quantity: "m",
+      stage_id: "autosave-m",
+    }, 1);
+    const fft = createStudyStageDraft({
+      enabled: true,
+      entrypoint_kind: "flat_fft_response",
+      kind: "fft_response",
+      request: {
         analysis: "gamma",
         detrend: "linear",
         response_component: "my",
@@ -72,47 +81,188 @@ describe("StudyStageAuthoringModel", () => {
         weighting: "Ms_times_lumped_volume",
         window: "hann",
       },
+      stage_id: "fft-on",
+    }, 2);
+    const run = createStudyStageDraft({
+      entrypoint_kind: "flat_run",
+      kind: "run",
       stage_id: "excite",
       until_seconds: 2e-9,
-    };
+    }, 3);
 
-    const draft = createStudyStageDraft(source, 2);
-    expect(draft).toMatchObject({
-      dt: "1e-13",
-      runSampling: {
-        gammaDetrend: "linear",
-        gammaResponseComponent: "my",
-        gammaResponseEnabled: true,
-        outputs: [
-          { enabled: true, everySeconds: "2e-12", kind: "field", name: "m" },
-          { enabled: true, everySeconds: "5e-13", kind: "field", name: "H_drive" },
-        ],
+    expect(table).toMatchObject({
+      kind: "table_autosave",
+      stageId: "table-on",
+      tableAutosave: {
+        enabled: true,
         samplePeriodS: "5e-13",
-        tableAutosaveEnabled: true,
         tableQuantities: "t, step, mx, my, mz, e_drive",
       },
-      stageId: "excite",
-      timestepMode: "fixed",
-      untilSeconds: "2e-9",
     });
-    expect(studyStageDraftToSceneStage(draft)).toEqual(source);
+    expect(autosave).toMatchObject({
+      autosave: {
+        clearAll: false,
+        enabled: true,
+        everySeconds: "2e-12",
+        outputKind: "field",
+        quantity: "m",
+      },
+      kind: "autosave",
+    });
+    expect(fft).toMatchObject({
+      fftResponse: {
+        detrend: "linear",
+        enabled: true,
+        responseComponent: "my",
+        susceptibilityFloorFraction: "0.000001",
+      },
+      kind: "fft_response",
+    });
+    expect(studyStageDraftToSceneStage(table)).toMatchObject({
+      enabled: true,
+      kind: "table_autosave",
+    });
+    expect(studyStageDraftToSceneStage(autosave)).toMatchObject({
+      enabled: true,
+      kind: "autosave",
+      quantity: "m",
+    });
+    expect(studyStageDraftToSceneStage(fft)).toMatchObject({
+      enabled: true,
+      kind: "fft_response",
+    });
+    expect(studyStageDraftToSceneStage(run)).toEqual({
+      entrypoint_kind: "flat_run",
+      kind: "run",
+      stage_id: "excite",
+      until_seconds: 2e-9,
+    });
   });
 
-  it("validates stage-local response sampling without inventing resampling", () => {
-    const draft = createDefaultStudyStageDraft("run", 0);
-    const messages = validateStudyStageDraft({
-      ...draft,
-      runSampling: {
-        ...draft.runSampling,
-        outputs: [{ enabled: true, everySeconds: "0", kind: "field", name: "m" }],
-        samplePeriodS: "NaN",
-        susceptibilityFloorFraction: "1",
-      },
-    }).map((issue) => issue.message);
+  it("validates each configuration stage independently while allowing an unsampled Run", () => {
+    expect(validateStudyStageDraft(createDefaultStudyStageDraft("run", 0))).toEqual([]);
 
-    expect(messages).toContain("Response t_sampling must be a positive finite number.");
-    expect(messages).toContain("Output m cadence must be a positive finite number.");
-    expect(messages).toContain("Susceptibility floor fraction must be in [0, 1).");
+    const table = createDefaultStudyStageDraft("table_autosave", 0);
+    const autosave = createDefaultStudyStageDraft("autosave", 1);
+    const fft = createDefaultStudyStageDraft("fft_response", 2);
+    expect(validateStudyStageDraft({
+      ...table,
+      tableAutosave: { ...table.tableAutosave, samplePeriodS: "NaN" },
+    }).map((issue) => issue.message)).toContain(
+      "Table autosave t_sampling must be a positive finite number.",
+    );
+    expect(validateStudyStageDraft({
+      ...autosave,
+      autosave: { ...autosave.autosave, everySeconds: "0" },
+    }).map((issue) => issue.message)).toContain(
+      "Autosave cadence must be a positive finite number.",
+    );
+    expect(validateStudyStageDraft({
+      ...fft,
+      fftResponse: { ...fft.fftResponse, susceptibilityFloorFraction: "1" },
+    }).map((issue) => issue.message)).toContain(
+      "Susceptibility floor fraction must be in [0, 1).",
+    );
+  });
+
+  it("migrates legacy nested Run sampling into visible ordered instructions without data loss", () => {
+    const drafts = createStudyStageDrafts([
+      {
+        entrypoint_kind: "flat_run",
+        kind: "run",
+        sampling: {
+          outputs: [
+            { every_seconds: 2e-12, kind: "field", name: "m" },
+            { every_seconds: 5e-13, kind: "field", name: "H_drive" },
+          ],
+          table_autosave: {
+            kind: "table_autosave",
+            quantities: ["t", "mx", "my"],
+            sample_period_s: 5e-13,
+            table_id: "default",
+          },
+        },
+        spin_wave_response: {
+          analysis: "gamma",
+          detrend: "linear",
+          response_component: "my",
+          schema_version: "spin_wave_response.request.v1",
+          susceptibility_floor_fraction: 1e-6,
+          weighting: "Ms_times_lumped_volume",
+          window: "hann",
+        },
+        stage_id: "legacy-run",
+        until_seconds: 2e-9,
+      },
+    ]);
+
+    expect(drafts.map((draft) => draft.kind)).toEqual([
+      "autosave",
+      "table_autosave",
+      "autosave",
+      "autosave",
+      "fft_response",
+      "run",
+    ]);
+    expect(drafts[0].autosave).toMatchObject({ clearAll: true, enabled: false });
+    expect(drafts[1].tableAutosave).toMatchObject({
+      enabled: true,
+      samplePeriodS: "5e-13",
+    });
+    expect(drafts[2].autosave.quantity).toBe("m");
+    expect(drafts[3].autosave.quantity).toBe("H_drive");
+    expect(drafts[4].fftResponse.enabled).toBe(true);
+    expect(studyStageDraftToSceneStage(drafts[5])).toEqual({
+      entrypoint_kind: "flat_run",
+      kind: "run",
+      stage_id: "legacy-run",
+      until_seconds: 2e-9,
+    });
+  });
+
+  it("preserves an unsupported stage losslessly as read-only", () => {
+    const stage = {
+      kind: "future_solver_action",
+      stage_id: "future-1",
+      nested: { opaque: [1, 2, 3] },
+    };
+
+    const [draft] = createStudyStageDrafts([stage]);
+
+    expect(draft.kind).toBe("unsupported");
+    expect(draft.rawStage).toEqual(stage);
+    expect(studyStageDraftToSceneStage(draft)).toEqual(stage);
+    expect(validateStudyStageDraft(draft)).toContainEqual({
+      message: "Unsupported study stage is preserved losslessly and remains read-only.",
+      severity: "warning",
+    });
+  });
+
+  it("preserves an unsupported FFT request losslessly as read-only", () => {
+    const request = {
+      analysis: "gamma",
+      response_component: "my",
+      window: "blackman",
+    };
+    const draft = createStudyStageDraft({
+      enabled: true,
+      kind: "fft_response",
+      request,
+      stage_id: "future-fft",
+    }, 0);
+
+    expect(draft).toMatchObject({
+      fftResponse: {
+        rawRequest: request,
+        readOnly: true,
+      },
+      kind: "fft_response",
+    });
+    expect(studyStageDraftToSceneStage(draft)).toMatchObject({ request });
+    expect(validateStudyStageDraft(draft)).toContainEqual({
+      message: "Unsupported FFT response request is preserved read-only.",
+      severity: "warning",
+    });
   });
 
   it("serializes algorithm-specific canonical relaxation fields", () => {
@@ -704,7 +854,7 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
-  it("serializes relax and run drafts into a study stages merge patch", () => {
+  it("serializes ordered configuration instructions and a simple Run into a study stages merge patch", () => {
     const relax = {
       ...createDefaultStudyStageDraft("relax", 0),
       dt: "auto",
@@ -725,8 +875,20 @@ describe("StudyStageAuthoringModel", () => {
       stageId: "run-2",
       untilSeconds: "3e-9",
     };
+    const table = {
+      ...createDefaultStudyStageDraft("table_autosave", 1),
+      stageId: "table-on",
+    };
+    const autosave = {
+      ...createDefaultStudyStageDraft("autosave", 2),
+      stageId: "autosave-m",
+    };
+    const fft = {
+      ...createDefaultStudyStageDraft("fft_response", 3),
+      stageId: "fft-on",
+    };
 
-    expect(buildStudyStagesMergePatch([relax, run])).toEqual({
+    expect(buildStudyStagesMergePatch([relax, table, autosave, fft, run])).toEqual({
       kind: "merge_patch",
       merge_patch: {
         study: {
@@ -746,25 +908,30 @@ describe("StudyStageAuthoringModel", () => {
               torque_tolerance_apm: 1e-6,
             },
             {
-              entrypoint_kind: "flat_run",
-              kind: "run",
-              sampling: {
-                outputs: [
-                  { every_seconds: 2e-12, kind: "field", name: "m" },
-                  {
-                    every_seconds: 5e-13,
-                    kind: "field",
-                    name: "H_drive",
-                  },
-                ],
-                table_autosave: {
-                  kind: "table_autosave",
-                  quantities: ["t", "step", "mx", "my", "mz", "e_drive"],
-                  sample_period_s: 5e-13,
-                  table_id: "default",
-                },
+              enabled: true,
+              entrypoint_kind: "flat_table_autosave",
+              kind: "table_autosave",
+              stage_id: "table-on",
+              table_autosave: {
+                kind: "table_autosave",
+                quantities: ["t", "step", "mx", "my", "mz", "e_drive"],
+                sample_period_s: 5e-13,
+                table_id: "default",
               },
-              spin_wave_response: {
+            },
+            {
+              enabled: true,
+              entrypoint_kind: "flat_autosave",
+              kind: "autosave",
+              output: { every_seconds: 2e-12, kind: "field", name: "m" },
+              quantity: "m",
+              stage_id: "autosave-m",
+            },
+            {
+              enabled: true,
+              entrypoint_kind: "flat_fft_response",
+              kind: "fft_response",
+              request: {
                 analysis: "gamma",
                 detrend: "linear",
                 response_component: "my",
@@ -773,6 +940,11 @@ describe("StudyStageAuthoringModel", () => {
                 weighting: "Ms_times_lumped_volume",
                 window: "hann",
               },
+              stage_id: "fft-on",
+            },
+            {
+              entrypoint_kind: "flat_run",
+              kind: "run",
               stage_id: "run-2",
               until_seconds: 3e-9,
             },

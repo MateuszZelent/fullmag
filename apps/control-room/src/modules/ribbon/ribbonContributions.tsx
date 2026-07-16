@@ -1446,7 +1446,10 @@ const studyTab: RibbonTabContent = {
       actions: [
         { id: "study.add-relax-stage", icon: icon(Play), label: "Relax", iconColor: "text-emerald-400", menu: menu("study-relax",  "Relax stage",      ["Overdamped relax", "LLG relax", "Minimizer", "Stop criteria"]) },
         { id: "study.add-field-drive-stage", icon: icon(RadioTower), label: "Antenna", iconColor: "text-cyan-400", menu: menu("study-antenna-stage", "Add antenna instruction", ["Global or regional target", "Sinc waveform", "Source FFT", "Stage activation"]) },
-        { id: "study.add-run-stage",   icon: icon(Zap),  label: "Run",   iconColor: "text-yellow-400",  menu: menu("study-run-stage", "Run stage",  ["Time integration", "Pulse response", "RF drive", "Thermal noise"]) },
+        { id: "study.add-table-autosave-stage", icon: icon(Activity), label: "Table", iconColor: "text-blue-300", menu: menu("study-table-autosave-stage", "Table autosave instruction", ["ON or OFF", "t_sampling", "Table quantities", "FFT clock diagnostics"]) },
+        { id: "study.add-autosave-stage", icon: icon(Save), label: "Autosave", iconColor: "text-lime-300", menu: menu("study-autosave-stage", "Autosave instruction", ["Enable quantity", "Disable quantity", "Clear all outputs", "Independent cadence"]) },
+        { id: "study.add-fft-response-stage", icon: icon(FunctionSquare), label: "FFT", iconColor: "text-violet-300", menu: menu("study-fft-response-stage", "Response FFT instruction", ["ON or OFF", "Response component", "Window and detrend", "Effective dt and df"]) },
+        { id: "study.add-run-stage",   icon: icon(Zap),  label: "Run",   iconColor: "text-yellow-400",  menu: menu("study-run-stage", "Run stage",  ["Advance full LLG", "Until time", "No implicit autosave", "No implicit analysis"]) },
         { id: "study.add-hysteresis-stage", icon: icon(BarChart3), label: "Hysteresis", iconColor: "text-pink-400" },
         { id: "study.add-eigenmodes-stage", icon: icon(Sigma), label: "Eigenmodes", iconColor: "text-violet-400" },
         { id: "study.add-frequency-response-stage", icon: icon(Activity), label: "Frequency", iconColor: "text-sky-400" },

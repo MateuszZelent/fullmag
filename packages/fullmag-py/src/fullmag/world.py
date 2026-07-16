@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import copy
 import math
+import warnings
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence, cast
@@ -1845,6 +1846,7 @@ class _WorldState:
 
     # Outputs
     _outputs: list = field(default_factory=list)
+    _outputs_explicit: bool = False
     _table_autosave: TableAutosave | None = None
     _current_modules: list[AntennaFieldSource | CurrentTransport] = field(default_factory=list)
     _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
@@ -1914,9 +1916,6 @@ class RelaxStageSpec:
 @dataclass(frozen=True, slots=True)
 class RunStageSpec:
     until: float
-    outputs: Sequence[SaveField | SaveScalar | Snapshot] | None = None
-    table_autosave: TableAutosave | bool | None = None
-    spin_wave_response: GammaResponseAnalysis | bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2298,19 +2297,10 @@ def relax_stage(
 
 def run_stage(
     until: float,
-    *,
-    outputs: Sequence[SaveField | SaveScalar | Snapshot] | None = None,
-    table_autosave: TableAutosave | bool | None = None,
-    spin_wave_response: GammaResponseAnalysis | bool | None = None,
 ) -> RunStageSpec:
     if until <= 0.0:
         raise ValueError("run_stage(until) requires a positive stop time")
-    return RunStageSpec(
-        until=until,
-        outputs=outputs,
-        table_autosave=table_autosave,
-        spin_wave_response=spin_wave_response,
-    )
+    return RunStageSpec(until=until)
 
 
 def eigenmodes_stage(
@@ -2501,39 +2491,6 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
         problem = _build_problem()
         if not isinstance(problem.study, TimeEvolution):
             raise TypeError("run stage requires a time-evolution study")
-        outputs = (
-            tuple(stage_spec.outputs)
-            if stage_spec.outputs is not None
-            else tuple(problem.study.outputs)
-        )
-        if stage_spec.table_autosave is None:
-            table_autosave = problem.study._table_autosave
-        elif stage_spec.table_autosave is False:
-            table_autosave = None
-        elif isinstance(stage_spec.table_autosave, TableAutosave):
-            table_autosave = stage_spec.table_autosave
-        else:
-            raise TypeError("table_autosave must be TableAutosave, False, or None")
-        runtime_metadata = copy.deepcopy(problem.runtime_metadata)
-        if stage_spec.spin_wave_response is False:
-            runtime_metadata.pop("spin_wave_response", None)
-        elif isinstance(stage_spec.spin_wave_response, GammaResponseAnalysis):
-            runtime_metadata["spin_wave_response"] = (
-                stage_spec.spin_wave_response.to_runtime_metadata()
-            )
-        elif stage_spec.spin_wave_response is not None:
-            raise TypeError(
-                "spin_wave_response must be GammaResponseAnalysis, False, or None"
-            )
-        problem = replace(
-            problem,
-            study=TimeEvolution(
-                dynamics=problem.study.dynamics,
-                outputs=outputs,
-                table_autosave=table_autosave,
-            ),
-            runtime_metadata=runtime_metadata,
-        )
         return CapturedStage(
             problem=problem,
             entrypoint_kind="flat_run",
@@ -3083,24 +3040,92 @@ class StudyStagesBuilder:
         until: float | None = None,
         *,
         stage_id: str | None = None,
-        output_every: float | None = None,
-        outputs: Sequence[SaveField | SaveScalar | Snapshot] | None = None,
-        table_autosave: TableAutosave | bool | None = None,
-        spin_wave_response: GammaResponseAnalysis | bool | None = None,
+        **legacy_run_configuration: object,
     ) -> "StudyStagesBuilder":
         if until is None:
             raise TypeError("add_run() requires until")
+        if legacy_run_configuration:
+            self._expand_legacy_run_configuration(legacy_run_configuration)
         return self.add_stage(
-            run_stage(
-                until,
-                outputs=outputs,
-                table_autosave=table_autosave,
-                spin_wave_response=spin_wave_response,
-            ),
+            run_stage(until),
             stage_id=stage_id,
-            output_every=output_every,
             id_kind="run",
         )
+
+    def _expand_legacy_run_configuration(
+        self,
+        configuration: Mapping[str, object],
+    ) -> None:
+        allowed = {
+            "output_every",
+            "outputs",
+            "spin_wave_response",
+            "table_autosave",
+        }
+        unsupported = sorted(set(configuration) - allowed)
+        if unsupported:
+            joined = ", ".join(unsupported)
+            raise TypeError(f"add_run() got unsupported legacy keyword(s): {joined}")
+        warnings.warn(
+            "Run-local sampling and FFT arguments are deprecated; Fullmag expanded "
+            "them into visible Table autosave, Autosave, and FFT response stages.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+
+        table_autosave = configuration.get("table_autosave")
+        if table_autosave is False:
+            self._append_table_autosave_action(None, enabled=False, stage_id=None)
+        elif isinstance(table_autosave, TableAutosave):
+            self._append_table_autosave_action(
+                table_autosave,
+                enabled=True,
+                stage_id=None,
+            )
+        elif table_autosave is not None:
+            raise TypeError(
+                "legacy table_autosave must be TableAutosave, False, or None"
+            )
+
+        outputs = configuration.get("outputs")
+        if outputs is not None:
+            if isinstance(outputs, (str, bytes)) or not isinstance(outputs, Sequence):
+                raise TypeError("legacy outputs must be a sequence of SaveField/SaveScalar")
+            self.autosave(enabled=False)
+            for output in outputs:
+                if not isinstance(output, (SaveField, SaveScalar)):
+                    raise TypeError(
+                        "legacy Run outputs support SaveField and SaveScalar; "
+                        "configure snapshots independently"
+                    )
+                self._append_autosave_output_action(output, stage_id=None)
+
+        spin_wave_response = configuration.get("spin_wave_response")
+        if spin_wave_response is False:
+            self.fft_response(enabled=False)
+        elif isinstance(spin_wave_response, GammaResponseAnalysis):
+            self.fft_response(
+                spin_wave_response.response_component,
+                detrend=spin_wave_response.detrend,
+                window=spin_wave_response.window,
+                susceptibility_floor_fraction=(
+                    spin_wave_response.susceptibility_floor_fraction
+                ),
+            )
+        elif spin_wave_response is not None:
+            raise TypeError(
+                "legacy spin_wave_response must be GammaResponseAnalysis, False, or None"
+            )
+
+        output_every = configuration.get("output_every")
+        if output_every is not None:
+            require_positive(float(output_every), "output_every")
+            warnings.warn(
+                "legacy output_every had no independent runtime sampling contract and "
+                "is ignored; use explicit Table autosave or Autosave stages",
+                DeprecationWarning,
+                stacklevel=3,
+            )
 
     def add_field_drive(
         self,
@@ -3126,6 +3151,180 @@ class StudyStagesBuilder:
         if _state._interactive:
             _state._wait_for_solve = True
         return self
+
+    def tableautosave(
+        self,
+        t_sampling: float | None = None,
+        quantities: Sequence[str] | None = None,
+        *,
+        enabled: bool = True,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Enable or disable the scalar table clock for subsequent stages."""
+        configured: TableAutosave | None
+        if enabled:
+            if t_sampling is None:
+                raise TypeError("tableautosave() requires t_sampling when enabled=True")
+            configured = TableAutosave(
+                t_sampl=float(t_sampling),
+                quantities=quantities,
+            )
+        else:
+            configured = None
+        return self._append_table_autosave_action(
+            configured,
+            enabled=enabled,
+            stage_id=stage_id,
+        )
+
+    def _append_table_autosave_action(
+        self,
+        configured: TableAutosave | None,
+        *,
+        enabled: bool,
+        stage_id: str | None,
+    ) -> "StudyStagesBuilder":
+        self._append_configuration_action(
+            problem=_build_problem(),
+            entrypoint_kind="flat_table_autosave",
+            stage_id=self._allocate_stage_id("table-autosave", stage_id),
+            action={
+                "kind": "table_autosave",
+                "enabled": bool(enabled),
+                "table_autosave": configured.to_ir() if configured else None,
+            },
+        )
+        _state._table_autosave = configured if enabled else None
+        return self
+
+    def autosave(
+        self,
+        quantity: str | None = None,
+        every: float | None = None,
+        *,
+        enabled: bool = True,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Enable, replace, or disable periodic output for subsequent stages."""
+        output: SaveField | SaveScalar | None = None
+        if enabled:
+            if quantity is None:
+                raise TypeError("autosave() requires quantity when enabled=True")
+            if every is None:
+                raise TypeError("autosave() requires every when enabled=True")
+            output = _periodic_output(quantity, every)
+            return self._append_autosave_output_action(output, stage_id=stage_id)
+        resolved_id = self._allocate_stage_id("autosave", stage_id)
+        problem_before_action = _build_problem()
+        if quantity is None:
+            _state._outputs.clear()
+            _state._outputs_explicit = True
+        else:
+            _state._outputs = [
+                candidate
+                for candidate in _state._outputs
+                if _periodic_output_name(candidate) != quantity
+            ]
+            _state._outputs_explicit = True
+        self._append_configuration_action(
+            problem=problem_before_action,
+            entrypoint_kind="flat_autosave",
+            stage_id=resolved_id,
+            action={
+                "kind": "autosave",
+                "enabled": bool(enabled),
+                "quantity": quantity,
+                "output": output.to_ir() if output else None,
+            },
+        )
+        return self
+
+    def _append_autosave_output_action(
+        self,
+        output: SaveField | SaveScalar,
+        *,
+        stage_id: str | None,
+    ) -> "StudyStagesBuilder":
+        quantity = _periodic_output_name(output)
+        if quantity is None:
+            raise TypeError("autosave output must be SaveField or SaveScalar")
+        problem_before_action = _build_problem()
+        _state._outputs = [
+            candidate
+            for candidate in _state._outputs
+            if _periodic_output_name(candidate) != quantity
+        ]
+        _state._outputs.append(output)
+        _state._outputs_explicit = True
+        self._append_configuration_action(
+            problem=problem_before_action,
+            entrypoint_kind="flat_autosave",
+            stage_id=self._allocate_stage_id("autosave", stage_id),
+            action={
+                "kind": "autosave",
+                "enabled": True,
+                "quantity": quantity,
+                "output": output.to_ir(),
+            },
+        )
+        return self
+
+    def fft_response(
+        self,
+        response_component: str = "my",
+        *,
+        enabled: bool = True,
+        detrend: str = "linear",
+        window: str = "hann",
+        susceptibility_floor_fraction: float = 1e-6,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Enable or disable k=0 response FFT analysis for subsequent stages."""
+        resolved_id = self._allocate_stage_id("fft-response", stage_id)
+        problem_before_action = _build_problem()
+        request: dict[str, object] | None
+        if enabled:
+            request = GammaResponseAnalysis(
+                response_component=response_component,
+                detrend=detrend,
+                window=window,
+                susceptibility_floor_fraction=susceptibility_floor_fraction,
+            ).to_runtime_metadata()
+            _state._extra_runtime_metadata["spin_wave_response"] = request
+        else:
+            request = None
+            _state._extra_runtime_metadata.pop("spin_wave_response", None)
+        self._append_configuration_action(
+            problem=problem_before_action,
+            entrypoint_kind="flat_fft_response",
+            stage_id=resolved_id,
+            action={
+                "kind": "fft_response",
+                "enabled": bool(enabled),
+                "request": copy.deepcopy(request),
+            },
+        )
+        return self
+
+    def _append_configuration_action(
+        self,
+        *,
+        problem: Problem,
+        entrypoint_kind: str,
+        stage_id: str,
+        action: dict[str, object],
+    ) -> None:
+        _state._declared_stages.append(
+            CapturedStage(
+                problem=problem,
+                entrypoint_kind=entrypoint_kind,
+                default_until_seconds=None,
+                action=action,
+                stage_id=stage_id,
+            )
+        )
+        if _state._interactive:
+            _state._wait_for_solve = True
 
     def add_minimize(
         self,
@@ -6059,6 +6258,7 @@ def save(
     indices : sequence of int, optional
         Mode indices for ``"mode"`` output.
     """
+    _state._outputs_explicit = True
     if quantity in _EIGEN_QUANTITIES:
         if quantity == "spectrum":
             _state._outputs.append(SaveSpectrum())
@@ -6071,20 +6271,34 @@ def save(
         return
     if every is None:
         raise ValueError("save() requires every= for field/scalar outputs")
-    if quantity in _SCALAR_QUANTITIES or quantity.startswith("E_"):
-        _state._outputs.append(SaveScalar(scalar=quantity, every=every))
-    else:
-        _state._outputs.append(SaveField(field=quantity, every=every))
+    _state._outputs.append(_periodic_output(quantity, every))
+
+
+def _periodic_output(quantity: str, every: float) -> SaveField | SaveScalar:
+    normalized = require_non_empty(quantity, "quantity")
+    if normalized in _SCALAR_QUANTITIES or normalized.startswith("E_"):
+        return SaveScalar(scalar=normalized, every=every)
+    return SaveField(field=normalized, every=every)
+
+
+def _periodic_output_name(output: object) -> str | None:
+    if isinstance(output, SaveField):
+        return output.field
+    if isinstance(output, SaveScalar):
+        return output.scalar
+    return None
 
 
 def save_response(observable: str = "susceptibility_tensor") -> None:
     """Register a frequency-response observable output."""
+    _state._outputs_explicit = True
     _state._outputs.append(SaveResponse(observable))
 
 
 def clear_outputs() -> None:
     """Clear previously registered flat-script output quantities."""
     _state._outputs.clear()
+    _state._outputs_explicit = True
 
 
 def snapshot(
@@ -6139,6 +6353,7 @@ def snapshot(
         )
 
     field, component = parse_snapshot_quantity(raw_quantity)
+    _state._outputs_explicit = True
     _state._outputs.append(Snapshot(field=field, component=component, every=every, layer=layer_name))
 
 
@@ -6354,11 +6569,17 @@ def _build_problem(
     if s._b_ext is not None:
         energy.append(Zeeman(B=s._b_ext))
 
-    # Outputs
-    outputs = s._outputs if s._outputs else [
+    # Study pipelines start with autosave disabled. Flat scripts retain the
+    # historical default unless they explicitly configure or clear outputs.
+    default_outputs = [
         SaveField(field="m", every=1e-12),
         SaveScalar(scalar="E_total", every=1e-12),
     ]
+    outputs = (
+        list(s._outputs)
+        if s._outputs_explicit
+        else ([] if s._api_surface == "study" else default_outputs)
+    )
 
     # Dynamics
     llg_kwargs: dict[str, Any] = {}
@@ -6461,10 +6682,7 @@ def _build_problem(
             if relax_max_physical_time_s is not None:
                 relax_kwargs["max_physical_time_s"] = relax_max_physical_time_s
         study = Relaxation(
-            outputs=td_outputs or [
-                SaveField(field="m", every=1e-12),
-                SaveScalar(scalar="E_total", every=1e-12),
-            ],
+            outputs=td_outputs,
             algorithm=relax_algorithm,
             stop=relax_stop,
             dynamics=relax_dynamics,
@@ -6518,7 +6736,7 @@ def _build_problem(
     else:
         study = TimeEvolution(
             dynamics=dynamics,
-            outputs=td_outputs or outputs,
+            outputs=td_outputs,
             table_autosave=s._table_autosave,
         )
 

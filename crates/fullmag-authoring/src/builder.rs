@@ -280,6 +280,9 @@ pub enum StudyPrimitiveStageKind {
     Hysteresis,
     ChangeDevice,
     AddFieldDrive,
+    TableAutosave,
+    Autosave,
+    FftResponse,
     SetField,
     SetCurrent,
     SaveState,
@@ -900,6 +903,84 @@ mod tests {
                 .and_then(|value| value.get("id"))
                 .and_then(|value| value.as_str()),
             Some("k0-sinc")
+        );
+    }
+
+    #[test]
+    fn study_pipeline_accepts_visible_autosave_and_fft_configuration_stages() {
+        let document: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": [
+                {
+                    "id": "table-on",
+                    "label": "Table autosave ON",
+                    "enabled": true,
+                    "source": "ui_authored",
+                    "node_kind": "primitive",
+                    "stage_kind": "table_autosave",
+                    "payload": {
+                        "kind": "table_autosave",
+                        "enabled": true,
+                        "table_autosave": {
+                            "kind": "table_autosave",
+                            "table_id": "default",
+                            "sample_period_s": 5e-13,
+                            "quantities": ["t", "mx", "my", "mz"]
+                        }
+                    }
+                },
+                {
+                    "id": "autosave-m",
+                    "label": "Autosave m ON",
+                    "enabled": true,
+                    "source": "ui_authored",
+                    "node_kind": "primitive",
+                    "stage_kind": "autosave",
+                    "payload": {
+                        "kind": "autosave",
+                        "enabled": true,
+                        "quantity": "m",
+                        "output": {"kind": "field", "name": "m", "every_seconds": 2e-12}
+                    }
+                },
+                {
+                    "id": "fft-on",
+                    "label": "FFT response ON",
+                    "enabled": true,
+                    "source": "ui_authored",
+                    "node_kind": "primitive",
+                    "stage_kind": "fft_response",
+                    "payload": {
+                        "kind": "fft_response",
+                        "enabled": true,
+                        "request": {
+                            "schema_version": "spin_wave_response.request.v1",
+                            "analysis": "gamma",
+                            "response_component": "my"
+                        }
+                    }
+                }
+            ]
+        }))
+        .expect("configuration primitive stages should deserialize");
+
+        let kinds = document
+            .nodes
+            .iter()
+            .map(|node| match node {
+                StudyPipelineNode::Primitive(node) => node.stage_kind,
+                StudyPipelineNode::Macro(_) | StudyPipelineNode::Group(_) => {
+                    panic!("expected primitive stage")
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                StudyPrimitiveStageKind::TableAutosave,
+                StudyPrimitiveStageKind::Autosave,
+                StudyPrimitiveStageKind::FftResponse,
+            ]
         );
     }
 }

@@ -56,7 +56,7 @@ study.field_drives.add(fm.RegionalFieldDrive(
     activation=fm.DriveActivation.all_time_evolution(),
 ))
 study.stages.add_relax(stage_id="relax", max_steps=2)
-study.stages.add_run(stage_id="excite", until=4e-12, output_every=1e-12)
+study.stages.add_run(stage_id="excite", until=4e-12)
 """
 
 
@@ -84,7 +84,7 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             ),
             stage_id="add-antenna",
         )
-        study.stages.add_run(stage_id="excite", until=2e-9, output_every=5e-13)
+        study.stages.add_run(stage_id="excite", until=2e-9)
         """
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -111,7 +111,7 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             ["k0-sinc"],
         )
 
-    def test_run_stage_sampling_and_gamma_analysis_roundtrip(self) -> None:
+    def test_independent_autosave_and_fft_stages_roundtrip_before_simple_run(self) -> None:
         script = """
         import fullmag as fm
         study = fm.study("sampling-roundtrip")
@@ -119,16 +119,15 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
         film.Ms = 800e3
         film.Aex = 13e-12
         film.alpha = 0.01
-        study.stages.add_run(
-            stage_id="excite",
-            until=2e-9,
-            outputs=[fm.SaveField("m", every=2e-12), fm.SaveField("H_drive", every=5e-13)],
-            table_autosave=fm.TableAutosave(
-                t_sampl=5e-13,
-                quantities=["time", "step", "mx", "my", "mz", "E_drive"],
-            ),
-            spin_wave_response=fm.GammaResponseAnalysis(response_component="my"),
+        study.stages.tableautosave(
+            5e-13,
+            quantities=["time", "step", "mx", "my", "mz", "E_drive"],
+            stage_id="table-on",
         )
+        study.stages.autosave("m", every=2e-12, stage_id="autosave-m")
+        study.stages.autosave("H_drive", every=5e-13, stage_id="autosave-drive")
+        study.stages.fft_response("my", stage_id="analyse-k0")
+        study.stages.add_run(stage_id="excite", until=2e-9)
         """
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -136,11 +135,15 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
             rewritten = _load_text(str(rendered), root, "rewritten.py")
 
-        self.assertIn("table_autosave=fm.TableAutosave(", rendered)
-        self.assertIn("outputs=[fm.SaveField(", rendered)
-        self.assertIn("spin_wave_response=fm.GammaResponseAnalysis(", rendered)
-        before = loaded.stages[0].problem.to_ir(include_geometry_assets=False)
-        after = rewritten.stages[0].problem.to_ir(include_geometry_assets=False)
+        self.assertIn("study.stages.tableautosave(", rendered)
+        self.assertIn('study.stages.autosave("m", every=2e-12', rendered)
+        self.assertIn('study.stages.fft_response("my"', rendered)
+        self.assertIn('study.stages.add_run(stage_id="excite", until=2e-09)', rendered)
+        self.assertNotIn("table_autosave=", rendered)
+        self.assertNotIn("outputs=[", rendered)
+        self.assertNotIn("spin_wave_response=", rendered)
+        before = loaded.stages[-1].problem.to_ir(include_geometry_assets=False)
+        after = rewritten.stages[-1].problem.to_ir(include_geometry_assets=False)
         self.assertEqual(before["study"]["sampling"], after["study"]["sampling"])
         self.assertEqual(
             before["problem_meta"]["runtime_metadata"]["spin_wave_response"],
@@ -159,7 +162,6 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
         self.assertIn("study.field_drives.add(fm.RegionalFieldDrive(", rendered)
         self.assertIn('stage_id="relax"', rendered)
         self.assertIn('stage_id="excite"', rendered)
-        self.assertIn("output_every=1e-12", rendered)
         self.assertEqual(before, after)
         self.assertEqual(
             [stage.stage_id for stage in rewritten.stages],

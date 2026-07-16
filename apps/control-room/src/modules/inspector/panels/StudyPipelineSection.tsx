@@ -33,6 +33,7 @@ import type {
 } from "./StudyInspectorPanelModel";
 import { StudyProgressBar } from "./StudyProgressBar";
 import type { FrequencyDomainAuthoringView } from "./stages/StageInspectorFrame";
+import { validateStudyWorkflow } from "./stages/studyWorkflowState";
 
 type HysteresisSettleStepDraft = {
   [key: string]: unknown;
@@ -157,7 +158,7 @@ export function StudyPipelineSection({
   runCommand: StudyCommandRunner;
   showDraftEditor?: boolean;
 }) {
-  const validation = draft
+  const localValidation = draft
     ? validateStudyStageDraft(draft, {
         algorithmsAvailable,
         backend: model.requested.backend,
@@ -166,6 +167,12 @@ export function StudyPipelineSection({
         mode: model.requested.mode,
       })
     : [];
+  const validation = [
+    ...localValidation,
+    ...validateStudyWorkflow(drafts)
+      .filter((issue) => issue.index === draftIndex)
+      .map(({ message, severity }) => ({ message, severity })),
+  ];
   const hasDraftErrors = validation.some((issue) => issue.severity === "error");
   return (
     <InspectorSection
@@ -232,6 +239,33 @@ export function StudyPipelineSection({
         >
           <Radio size={13} aria-hidden="true" />
           Antenna
+        </Button>
+        <Button
+          size="sm"
+          type="button"
+          variant="ghost"
+          onClick={() => onAddStage("table_autosave")}
+        >
+          <Activity size={13} aria-hidden="true" />
+          Table
+        </Button>
+        <Button
+          size="sm"
+          type="button"
+          variant="ghost"
+          onClick={() => onAddStage("autosave")}
+        >
+          <Save size={13} aria-hidden="true" />
+          Autosave
+        </Button>
+        <Button
+          size="sm"
+          type="button"
+          variant="ghost"
+          onClick={() => onAddStage("fft_response")}
+        >
+          <Sigma size={13} aria-hidden="true" />
+          FFT
         </Button>
         <Button
           size="sm"
@@ -468,6 +502,7 @@ export function StudyStageDraftEditor({
         </ul>
       ) : null}
       <FormField
+        disabled={draft.kind === "unsupported"}
         label="Kind"
         type="select"
         value={draft.kind}
@@ -477,22 +512,50 @@ export function StudyStageDraftEditor({
       >
         <option value="relax">Relax</option>
         <option value="add_field_drive">Add antenna</option>
+        <option value="table_autosave">Table autosave</option>
+        <option value="autosave">Autosave</option>
+        <option value="fft_response">FFT response</option>
         <option value="run">Run</option>
         <option value="hysteresis">Hysteresis</option>
         <option value="eigenmodes">Eigenmodes</option>
         <option value="frequency_response">Frequency response</option>
         <option value="save_state">Save state</option>
         <option value="change_device">Change device</option>
+        {draft.kind === "unsupported" ? (
+          <option value="unsupported">Unsupported (read-only)</option>
+        ) : null}
       </FormField>
       <FormField
+        disabled={draft.kind === "unsupported"}
         label="Stage ID"
         value={draft.stageId}
         onChange={(event) => onUpdate({ stageId: event.target.value })}
       />
-      {draft.kind === "add_field_drive" ? (
+      {draft.kind === "unsupported" ? (
+        <div className="fm-study-stage-note">
+          This stage kind is not supported by the current editor. Its original
+          payload is preserved losslessly and cannot be edited here.
+        </div>
+      ) : draft.kind === "add_field_drive" ? (
         <div className="fm-study-stage-note">
           The ordered instruction adds its field drive to the current simulation
           state. Full antenna controls and the sampled source FFT are shown below.
+        </div>
+      ) : draft.kind === "table_autosave" ? (
+        <div className="fm-study-stage-note">
+          Zero-duration instruction that turns the shared table sampling clock ON
+          or OFF for following Run stages. t_sampling and FFT-clock diagnostics
+          are shown below.
+        </div>
+      ) : draft.kind === "autosave" ? (
+        <div className="fm-study-stage-note">
+          Zero-duration instruction that enables, replaces, or disables one
+          periodic output, or clears all periodic outputs for following Run stages.
+        </div>
+      ) : draft.kind === "fft_response" ? (
+        <div className="fm-study-stage-note">
+          Zero-duration instruction that turns Gamma response FFT analysis ON or
+          OFF for following Run stages. It uses the active table-autosave clock.
         </div>
       ) : draft.kind === "run" ? (
         <FormField
@@ -535,7 +598,11 @@ export function StudyStageDraftEditor({
 }
 
 function studyStageDraftKindLabel(kind: StudyStageDraftKind): string {
+  if (kind === "unsupported") return "Unsupported (read-only)";
   if (kind === "add_field_drive") return "Add Antenna";
+  if (kind === "table_autosave") return "Table Autosave";
+  if (kind === "autosave") return "Autosave";
+  if (kind === "fft_response") return "FFT Response";
   if (kind === "eigenmodes") return "Eigenmodes";
   if (kind === "frequency_response") return "Frequency Response";
   if (kind === "hysteresis") return "Hysteresis";

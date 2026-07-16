@@ -243,6 +243,7 @@ export type SelectionRef =
       kind:
         | "study.stage.action"
         | "study.stage.add_field_drive"
+        | "study.stage.autosave"
         | "study.stage.eigenmodes"
         | "study.stage.eigenmodes.setup"
         | "study.stage.eigenmodes.calculation_mode"
@@ -267,9 +268,12 @@ export type SelectionRef =
         | "study.stage.frequency_response.solver"
         | "study.stage.frequency_response.outputs"
         | "study.stage.frequency_response.diagnostics"
+        | "study.stage.fft_response"
         | "study.stage.hysteresis"
         | "study.stage.relax"
         | "study.stage.run"
+        | "study.stage.table_autosave"
+        | "study.stage.change_device"
         | "study.stage.save_state";
       hysteresisExecutionNodeId?: string;
       hysteresisExecutionNodeKind?: string;

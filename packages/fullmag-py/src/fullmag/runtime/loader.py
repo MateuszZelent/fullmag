@@ -7,7 +7,7 @@ from pathlib import Path
 from types import ModuleType
 from uuid import uuid4
 
-from fullmag.model import Problem
+from fullmag.model import Problem, Relaxation, TimeEvolution
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +117,7 @@ class LoadedProblem:
     auto_execute_stages: bool = False
 
     def pipeline_base_problem(self, problem: Problem | None = None) -> Problem:
-        """Return the problem state before ordered field-drive actions run."""
+        """Return persistent problem state before ordered action stages run."""
         candidate = problem or self.problem
         introduced_ids: set[str] = set()
         for stage in self.stages:
@@ -130,13 +130,33 @@ class LoadedProblem:
                 drive_id = drive.get("id")
             if isinstance(drive_id, str):
                 introduced_ids.add(drive_id)
-        if not introduced_ids:
-            return candidate
+        base_stage_problem = self.stages[0].problem if self.stages else None
+        study = candidate.study
+        runtime_metadata = dict(candidate.runtime_metadata)
+        if base_stage_problem is not None:
+            base_study = base_stage_problem.study
+            if isinstance(study, TimeEvolution) and isinstance(
+                base_study,
+                (Relaxation, TimeEvolution),
+            ):
+                study = TimeEvolution(
+                    dynamics=study.dynamics,
+                    outputs=tuple(base_study.outputs),
+                    table_autosave=base_study._table_autosave,
+                )
+            if "spin_wave_response" in base_stage_problem.runtime_metadata:
+                runtime_metadata["spin_wave_response"] = (
+                    base_stage_problem.runtime_metadata["spin_wave_response"]
+                )
+            else:
+                runtime_metadata.pop("spin_wave_response", None)
         return replace(
             candidate,
             field_drives=tuple(
                 drive for drive in candidate.field_drives if drive.id not in introduced_ids
             ),
+            runtime_metadata=runtime_metadata,
+            study=study,
         )
 
     def study_pipeline_document(self) -> dict[str, object] | None:

@@ -172,7 +172,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         study = payload["stages"][0]["ir"]["study"]
         self.assertEqual(study["kind"], "relaxation")
         self.assertEqual(study["algorithm"], "projected_gradient_bb")
-        self.assertEqual(study["stop"]["max_steps"], 4000)
+        self.assertEqual(study["stop"]["max_steps"], 500)
         self.assertEqual(study["stop"]["torque_tolerance_apm"], 5.0e2)
         self.assert_study_saves_equilibrium_and_demag_fields(study)
         self.assert_table_logs_pbc_sensitive_quantities(study)
@@ -307,15 +307,17 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             payload["ir"]["problem_meta"]["name"],
             "fem_periodic_antidot_relax_exchange_coupled_time_domain_k0",
         )
-        self.assertEqual(len(payload["stages"]), 3)
+        self.assertEqual(len(payload["stages"]), 6)
         self.assertEqual(payload["stages"][0]["entrypoint_kind"], "flat_relax")
         self.assertEqual(
             payload["stages"][1]["entrypoint_kind"],
             "flat_add_field_drive",
         )
-        self.assertEqual(payload["stages"][2]["entrypoint_kind"], "flat_run")
+        self.assertEqual(payload["stages"][2]["entrypoint_kind"], "flat_table_autosave")
+        self.assertEqual(payload["stages"][4]["entrypoint_kind"], "flat_fft_response")
+        self.assertEqual(payload["stages"][5]["entrypoint_kind"], "flat_run")
         self.assertEqual(payload["stages"][0]["ir"]["study"]["kind"], "relaxation")
-        self.assertEqual(payload["stages"][2]["ir"]["study"]["kind"], "time_evolution")
+        self.assertEqual(payload["stages"][5]["ir"]["study"]["kind"], "time_evolution")
         self.assertEqual(
             payload["stages"][0]["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"],
             "relax",
@@ -325,7 +327,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             "add-k0-antenna",
         )
         self.assertEqual(
-            payload["stages"][2]["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"],
+            payload["stages"][5]["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"],
             "excite",
         )
 
@@ -341,17 +343,26 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             {"kind": "stage_ids", "stage_ids": ["excite"]},
         )
         self.assertEqual(
-            [drive["id"] for drive in payload["stages"][2]["ir"]["field_drives"]],
+            [drive["id"] for drive in payload["stages"][5]["ir"]["field_drives"]],
             ["k0-sinc-antenna"],
         )
 
-        sampling = payload["stages"][2]["ir"]["study"]["sampling"]
-        self.assertAlmostEqual(sampling["table_autosave"]["sample_period_s"], 5e-13)
-        self.assertIn(
-            "H_drive",
-            [output["name"] for output in sampling["outputs"] if output["kind"] == "field"],
+        self.assertEqual(
+            [payload["stages"][index]["action"]["kind"] for index in range(2, 5)],
+            [
+                "table_autosave",
+                "autosave",
+                "fft_response",
+            ],
         )
-        response = payload["stages"][2]["ir"]["problem_meta"]["runtime_metadata"][
+        sampling = payload["stages"][5]["ir"]["study"]["sampling"]
+        self.assertAlmostEqual(sampling["table_autosave"]["sample_period_s"], 5e-13)
+        self.assertEqual(sampling["table_autosave"]["quantities"], ["t", "mx", "my", "mz"])
+        self.assertEqual(
+            sampling["outputs"],
+            [{"kind": "field", "name": "m", "every_seconds": 5e-13}],
+        )
+        response = payload["stages"][5]["ir"]["problem_meta"]["runtime_metadata"][
             "spin_wave_response"
         ]
         self.assertEqual(response["analysis"], "gamma")

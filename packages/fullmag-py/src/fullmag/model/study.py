@@ -461,8 +461,9 @@ class TimeEvolution:
         self.__post_init__()
 
     def __post_init__(self) -> None:
-        if not self.outputs:
-            raise ValueError("TimeEvolution requires at least one output")
+        # An empty output list is a valid unsampled integration interval. The
+        # final solver state remains available for continuation/checkpointing.
+        pass
 
     def to_ir(self) -> dict[str, object]:
         sampling: dict[str, object] = {
@@ -594,8 +595,8 @@ class Relaxation:
     Parameters
     ----------
     outputs : Sequence[OutputSpec]
-        Output specifications (fields and/or scalars) to record.
-        At least one output is required.
+        Optional output specifications (fields and/or scalars) to record.
+        An empty sequence performs relaxation without periodic output.
     algorithm : str, default ``"llg_overdamped"``
         Relaxation algorithm identifier.  Must be one of the strings listed
         above.
@@ -655,8 +656,6 @@ class Relaxation:
         self.__post_init__()
 
     def __post_init__(self) -> None:
-        if not self.outputs:
-            raise ValueError("Relaxation requires at least one output")
         if self.algorithm not in SUPPORTED_RELAXATION_ALGORITHMS:
             supported = ", ".join(sorted(SUPPORTED_RELAXATION_ALGORITHMS))
             raise ValueError(f"algorithm must be one of: {supported}")

@@ -13,6 +13,7 @@ import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorSection } from "../../primitives/InspectorSection";
 import {
+  regionalFieldDriveSamplingContext,
   regionalFieldDriveSelectorOptions,
 } from "../RegionalFieldDrivePanelModel";
 import { SincPulsePreview } from "../SincPulsePreview";
@@ -20,6 +21,7 @@ import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
 } from "./StageInspectorFrame";
+import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
 
 export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
   const draft = props.draft;
@@ -28,22 +30,30 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
     () => regionalFieldDriveSelectorOptions(props.scene ?? null),
     [props.scene],
   );
-  const subsequentRuns = (props.pipelineDrafts ?? [])
+  const solverDtS = useMemo(
+    () => regionalFieldDriveSamplingContext(
+      props.scene ?? null,
+      drive?.activation ?? null,
+    ).solverDtS,
+    [drive?.activation, props.scene],
+  );
+  const pipelineDrafts = props.pipelineDrafts ?? [];
+  const subsequentRuns = pipelineDrafts
+    .map((candidate, index) => ({ candidate, index }))
     .slice(props.draftIndex + 1)
-    .filter((candidate) => candidate.kind === "run");
-  const samplingRun = drive?.activation.kind === "stage_ids"
-    ? subsequentRuns.find((candidate) =>
+    .filter(({ candidate }) => candidate.kind === "run");
+  const samplingRunEntry = drive?.activation.kind === "stage_ids"
+    ? subsequentRuns.find(({ candidate }) =>
         drive.activation.kind === "stage_ids" &&
         drive.activation.stage_ids.includes(candidate.stageId),
       ) ?? null
     : subsequentRuns[0] ?? null;
-  const samplePeriodS = samplingRun?.runSampling.tableAutosaveEnabled
-    ? positiveNumber(samplingRun.runSampling.samplePeriodS)
+  const samplingRun = samplingRunEntry?.candidate ?? null;
+  const effectiveWorkflow = samplingRunEntry
+    ? resolveStudyWorkflowStateBefore(pipelineDrafts, samplingRunEntry.index)
     : null;
+  const samplePeriodS = effectiveWorkflow?.tableAutosave?.samplePeriodS ?? null;
   const durationS = positiveNumber(samplingRun?.untilSeconds);
-  const solverDtS = samplingRun?.timestepMode === "fixed"
-    ? positiveNumber(samplingRun.dt)
-    : null;
   const preview = drive?.waveform.kind === "sinc_pulse"
     ? buildSincPulsePreview({
         cutoffHz: drive.waveform.cutoff_hz,
@@ -455,7 +465,16 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
               />
             </label>
             {preview ? (
-              <SincPulsePreview model={preview} solverDtS={solverDtS} />
+              <>
+                <FieldRow
+                  label="Effective t_sampling source"
+                  value={
+                    effectiveWorkflow?.tableAutosave?.sourceStageId ??
+                    "no Table autosave ON stage before the target Run"
+                  }
+                />
+                <SincPulsePreview model={preview} solverDtS={solverDtS} />
+              </>
             ) : null}
           </>
         ) : null}
@@ -582,7 +601,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         {drive?.activation.kind === "stage_ids" ? (
           <fieldset className="fm-inspector-field">
             <legend>Following Run stages</legend>
-            {subsequentRuns.map((run) => (
+            {subsequentRuns.map(({ candidate: run }) => (
               <label key={run.stageId}>
                 <input
                   checked={drive.activation.kind === "stage_ids" && drive.activation.stage_ids.includes(run.stageId)}

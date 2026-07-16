@@ -118,4 +118,4 @@ study.runtime_metadata(
     },
 )
 study.stages.add_minimize(stage_id="relax", method="bb", max_steps=RELAX_STEPS, tol=5e2)
-study.stages.add_run(stage_id="excite", until=UNTIL, output_every=SAMPLE_DT)
+study.stages.add_run(stage_id="excite", until=UNTIL)

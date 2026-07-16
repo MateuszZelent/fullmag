@@ -2751,6 +2751,46 @@ fn eigenmodes_with_spectrum_and_mode_outputs_validate() {
 }
 
 #[test]
+fn unsampled_time_evolution_is_valid_but_eigenmodes_require_outputs() {
+    let mut time_ir = ProblemIR::bootstrap_example();
+    time_ir.study.sampling_mut().outputs.clear();
+    time_ir
+        .validate()
+        .expect("time evolution without periodic outputs must remain valid");
+
+    let mut eigen_ir = ProblemIR::bootstrap_example();
+    let dynamics = eigen_ir.study.dynamics().clone();
+    eigen_ir.study = StudyIR::Eigenmodes {
+        dynamics,
+        operator: EigenOperatorConfigIR {
+            kind: EigenOperatorIR::LinearizedLlg,
+            include_demag: false,
+        },
+        count: 4,
+        target: EigenTargetIR::Lowest,
+        equilibrium: EquilibriumSourceIR::Provided,
+        k_sampling: Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        }),
+        normalization: EigenNormalizationIR::UnitL2,
+        damping_policy: EigenDampingPolicyIR::Ignore,
+        spin_wave_bc: SpinWaveBoundaryConditionIR::default(),
+        sampling: SamplingIR {
+            table_autosave: None,
+            outputs: vec![],
+        },
+        mode_tracking: None,
+    };
+
+    let errors = eigen_ir
+        .validate()
+        .expect_err("eigenmodes without outputs must fail validation");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("spectral study requires at least one output")));
+}
+
+#[test]
 fn eigenmodes_k0_kittel_validation_runtime_metadata_deserializes_to_typed_ir() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.problem_meta.runtime_metadata.insert(

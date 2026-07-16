@@ -22,16 +22,6 @@ describe("StudyGlobalAuthoringModel", () => {
           requested_mode: "extended",
           requested_precision: "single",
           solver: { integrator: "rk45" },
-          table_autosave: {
-            kind: "table_autosave",
-            quantities: ["t", "mx", "my", "mz"],
-            sample_period_s: 5e-13,
-            table_id: "default",
-          },
-          outputs: [
-            { every_seconds: 2e-12, kind: "field", name: "m" },
-            { every_seconds: 5e-13, kind: "field", name: "H_drive" },
-          ],
         },
       }),
     ).toEqual({
@@ -46,13 +36,6 @@ describe("StudyGlobalAuthoringModel", () => {
       requestedMode: "extended",
       requestedPrecision: "single",
       solver: '{"integrator":"rk45"}',
-      tableAutosaveEnabled: true,
-      tableQuantities: "t, mx, my, mz",
-      tSampling: "5e-13",
-      outputs: [
-        { enabled: true, everySeconds: "2e-12", kind: "field", name: "m" },
-        { enabled: true, everySeconds: "5e-13", kind: "field", name: "H_drive" },
-      ],
     });
   });
 
@@ -70,12 +53,6 @@ describe("StudyGlobalAuthoringModel", () => {
         requestedMode: "strict",
         requestedPrecision: "double",
         solver: '{"integrator":"rk45"}',
-        tableAutosaveEnabled: true,
-        tableQuantities: "t, step, mx, my, mz",
-        tSampling: "5e-13",
-        outputs: [
-          { enabled: true, everySeconds: "2e-12", kind: "field", name: "m" },
-        ],
       }),
     ).toEqual({
       kind: "merge_patch",
@@ -92,15 +69,6 @@ describe("StudyGlobalAuthoringModel", () => {
           requested_mode: "strict",
           requested_precision: "double",
           solver: { integrator: "rk45" },
-          table_autosave: {
-            kind: "table_autosave",
-            quantities: ["t", "step", "mx", "my", "mz"],
-            sample_period_s: 5e-13,
-            table_id: "default",
-          },
-          outputs: [
-            { every_seconds: 2e-12, kind: "field", name: "m" },
-          ],
         },
       },
     });
@@ -119,13 +87,6 @@ describe("StudyGlobalAuthoringModel", () => {
       requestedMode: "strict",
       requestedPrecision: "double",
       solver: "",
-      tableAutosaveEnabled: false,
-      tableQuantities: "t, step, mx, my, mz, e_total, max_torque",
-      tSampling: "5e-13",
-      outputs: [
-        { enabled: true, everySeconds: "1e-12", kind: "field", name: "m" },
-        { enabled: true, everySeconds: "1e-12", kind: "scalar", name: "E_total" },
-      ],
     });
     expect(request.kind).toBe("merge_patch");
     if (request.kind !== "merge_patch") throw new Error("expected merge patch");
@@ -151,11 +112,7 @@ describe("StudyGlobalAuthoringModel", () => {
         requestedDevice: "auto",
         requestedMode: "strict",
         requestedPrecision: "double",
-      solver: "{bad",
-      tableAutosaveEnabled: true,
-      tableQuantities: "",
-      tSampling: "0",
-      outputs: [],
+        solver: "{bad",
       }).map((issue) => issue.message),
     ).toEqual([
       "Backend is required.",
@@ -163,9 +120,6 @@ describe("StudyGlobalAuthoringModel", () => {
       "CPU threads must be a positive integer.",
       "Solver must be a JSON object.",
       "FEM demag policy must be a JSON object.",
-      "Global t_sampling must be a positive finite number.",
-      "Global table autosave requires at least one quantity.",
-      "Global autosave requires at least one enabled output.",
     ]);
   });
 });

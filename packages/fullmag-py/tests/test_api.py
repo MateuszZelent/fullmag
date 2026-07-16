@@ -6342,8 +6342,8 @@ class ProblemApiTests(unittest.TestCase):
         self.assertIn("include_demag=False", rewritten)
         self.assertIn("k_sampling=fm.KPath", rewritten)
         self.assertIn('fm.KPoint("G", (0, 0, 0))', rewritten)
-        self.assertIn('fm.KPoint("X", (20000000, 0, 0))', rewritten)
-        self.assertIn('fm.KPoint("-X", (-20000000, 0, 0))', rewritten)
+        self.assertIn('fm.KPoint("X", (2000000, 0, 0))', rewritten)
+        self.assertIn('fm.KPoint("-X", (-2000000, 0, 0))', rewritten)
         self.assertIn("samples_per_segment=[1, 1, 1]", rewritten)
         self.assertIn('bc=fm.FloquetBC(["x_faces"])', rewritten)
 
@@ -6366,7 +6366,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(stage["eigen_include_demag"], False)
         self.assertEqual(
             stage["eigen_k_path"],
-            "G:0,0,0; X:20000000,0,0; G:0,0,0; -X:-20000000,0,0 | samples=1,1,1",
+            "G:0,0,0; X:2000000,0,0; G:0,0,0; -X:-2000000,0,0 | samples=1,1,1",
         )
         self.assertEqual(stage["eigen_spin_wave_bc"], "floquet")
         self.assertEqual(

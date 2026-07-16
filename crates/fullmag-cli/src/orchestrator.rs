@@ -5008,6 +5008,78 @@ fn execute_synthetic_stage(
                 message: format!("Added regional field drive {}", drive.id),
             })
         }
+        ResolvedScriptStageAction::TableAutosave {
+            enabled,
+            table_autosave,
+        } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "table_autosave",
+                    "enabled": enabled,
+                    "table_autosave": table_autosave,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!(
+                    "Table autosave {}",
+                    if *enabled { "enabled" } else { "disabled" }
+                ),
+            })
+        }
+        ResolvedScriptStageAction::Autosave {
+            enabled,
+            quantity,
+            output,
+        } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "autosave",
+                    "enabled": enabled,
+                    "quantity": quantity,
+                    "output": output,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!(
+                    "Autosave {}{}",
+                    if *enabled { "enabled" } else { "disabled" },
+                    quantity
+                        .as_deref()
+                        .map(|quantity| format!(" for {quantity}"))
+                        .unwrap_or_default()
+                ),
+            })
+        }
+        ResolvedScriptStageAction::FftResponse { enabled, request } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "fft_response",
+                    "enabled": enabled,
+                    "request": request,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!(
+                    "FFT response {}",
+                    if *enabled { "enabled" } else { "disabled" }
+                ),
+            })
+        }
     }
 }
 

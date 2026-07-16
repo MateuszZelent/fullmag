@@ -91,7 +91,7 @@ import {
 import {
   buildStudyStagesMergePatch,
   createDefaultStudyStageDraft,
-  createStudyStageDraft,
+  createStudyStageDrafts,
   validateStudyStageDraft,
   type StudyStageDraft,
   type StudyStageDraftKind,
@@ -103,6 +103,7 @@ import {
   type StudyInspectorSnapshot,
 } from "./StudyInspectorPanelModel";
 import { StudyPipelineSection } from "./StudyPipelineSection";
+import { validateStudyWorkflow } from "./stages/studyWorkflowState";
 import { StudyProgressBar } from "./StudyProgressBar";
 
 export { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
@@ -561,15 +562,16 @@ export function useStudyInspectorPanelController(
     if (!scene.data) return;
     if (!sceneHasAuthoringPayload(scene.data)) return;
     const rawStages = rawStudyStages(scene.data);
+    const stageDrafts = createStudyStageDrafts(rawStages);
     dispatch({
       type: "resetStageDrafts",
-      drafts: rawStages.map(createStudyStageDraft),
+      drafts: stageDrafts,
       globalDraft: createStudyGlobalDraft(scene.data),
       revision: sceneRevision,
       selectedIndex:
-        rawStages.length === 0
+        stageDrafts.length === 0
           ? 0
-          : Math.min(selectedStageIndex, rawStages.length - 1),
+          : Math.min(selectedStageIndex, stageDrafts.length - 1),
       signature: studySignature,
     });
   }, [scene.data, sceneRevision, selectedStageIndex, studySignature]);
@@ -627,7 +629,7 @@ export function useStudyInspectorPanelController(
       : kernel.commands.get(commandId)?.disabledReason?.(commandContext) ??
         "Command is unavailable.";
   const commitStageDrafts = async () => {
-    const issues = state.stageDrafts.flatMap((draft, index) =>
+    const localIssues = state.stageDrafts.flatMap((draft, index) =>
       validateStudyStageDraft(draft, {
         algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
         backend: model.requested.backend,
@@ -639,6 +641,13 @@ export function useStudyInspectorPanelController(
         message: `Stage ${index + 1}: ${issue.message}`,
       })),
     );
+    const workflowIssues = validateStudyWorkflow(state.stageDrafts).map(
+      (issue) => ({
+        ...issue,
+        message: `Stage ${issue.index + 1}: ${issue.message}`,
+      }),
+    );
+    const issues = [...localIssues, ...workflowIssues];
     const errors = issues.filter((issue) => issue.severity === "error");
     if (errors.length > 0) {
       dispatch({

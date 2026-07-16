@@ -34,6 +34,10 @@ export function SincPulsePreview({
         <Metric label="df" value={engineering(model.frequencyResolutionHz, "Hz")} />
         <Metric label="Nyquist" value={engineering(model.nyquistHz, "Hz")} />
         <Metric label="sinc cutoff" value={engineering(model.cutoffHz, "Hz")} />
+        <Metric
+          label="maximum t_sampling for fc"
+          value={engineering(model.maximumSamplePeriodForCutoffS, "s")}
+        />
       </div>
       <p
         className={`fm-sinc-preview__message fm-sinc-preview__message--${model.isSymmetricWindow ? "ready" : "preview_only"}`}
@@ -42,6 +46,12 @@ export function SincPulsePreview({
         {model.symmetryMessage} Symmetry is assessed with τ = t - t0; the horizontal axis remains the authored time t and t0 is never recentered silently.
       </p>
       {model.message ? <p className={`fm-sinc-preview__message fm-sinc-preview__message--${model.status}`}>{model.message}</p> : null}
+      <p
+        className={`fm-sinc-preview__message fm-sinc-preview__message--${model.nyquistStatus === "pass" ? "ready" : model.nyquistStatus === "fail" ? "unavailable" : "preview_only"}`}
+        role="status"
+      >
+        {model.nyquistMessage}
+      </p>
     </div>
   );
 }
@@ -64,7 +74,10 @@ function PreviewPlot({
   const inset = { left: 34, right: 10, top: 18, bottom: 24 };
   const xMin = points[0]?.[0] ?? 0;
   const xMax = points.at(-1)?.[0] ?? 1;
-  const yExtent = Math.max(...points.map((point) => Math.abs(point[1])), 1e-30);
+  const yExtent = points.reduce(
+    (maximum, point) => Math.max(maximum, Math.abs(point[1])),
+    1e-30,
+  );
   const plotWidth = width - inset.left - inset.right;
   const plotHeight = height - inset.top - inset.bottom;
   const x = (value: number) => inset.left + ((value - xMin) / Math.max(xMax - xMin, 1e-30)) * plotWidth;

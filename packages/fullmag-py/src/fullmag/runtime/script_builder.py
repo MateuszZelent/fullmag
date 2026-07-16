@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 from pathlib import Path
@@ -418,6 +419,9 @@ def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
         "export",
         "change_device",
         "add_field_drive",
+        "table_autosave",
+        "autosave",
+        "fft_response",
     }:
         return kind
     entrypoint = str(stage_draft.get("entrypoint_kind") or "").strip().lower()
@@ -495,6 +499,28 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 "kind": "add_field_drive",
                 "entrypoint_kind": stage.entrypoint_kind,
                 "drive": drive_payload,
+            }
+        if action_kind == "table_autosave":
+            return {
+                "kind": "table_autosave",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "enabled": bool(action.get("enabled", True)),
+                "table_autosave": copy.deepcopy(action.get("table_autosave")),
+            }
+        if action_kind == "autosave":
+            return {
+                "kind": "autosave",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "enabled": bool(action.get("enabled", True)),
+                "quantity": _text_value(action.get("quantity")),
+                "output": copy.deepcopy(action.get("output")),
+            }
+        if action_kind == "fft_response":
+            return {
+                "kind": "fft_response",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "enabled": bool(action.get("enabled", True)),
+                "request": copy.deepcopy(action.get("request")),
             }
 
     study = stage.problem.study
@@ -2945,49 +2971,6 @@ def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: s
     return lines
 
 
-def _render_time_output_expr(output: object) -> str:
-    if isinstance(output, SaveField):
-        return f"fm.SaveField({_py_repr(output.field)}, every={_py_number(output.every)})"
-    if isinstance(output, SaveScalar):
-        return f"fm.SaveScalar({_py_repr(output.scalar)}, every={_py_number(output.every)})"
-    if isinstance(output, Snapshot):
-        kwargs = [
-            f"field={_py_repr(output.field)}",
-            f"component={_py_repr(output.component)}",
-            f"every={_py_number(output.every)}",
-        ]
-        if output.layer is not None:
-            kwargs.append(f"layer={_py_repr(output.layer)}")
-        return f"fm.Snapshot({', '.join(kwargs)})"
-    raise TypeError(f"unsupported time output {type(output).__name__}")
-
-
-def _render_table_autosave_expr(table: TableAutosave | None) -> str:
-    if table is None:
-        return "False"
-    kwargs = [f"t_sampl={_py_number(table.t_sampl)}"]
-    quantities = tuple(table.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES)
-    kwargs.append(f"quantities={_py_literal(list(quantities))}")
-    if table.table_id != "default":
-        kwargs.append(f"table_id={_py_repr(table.table_id)}")
-    return f"fm.TableAutosave({', '.join(kwargs)})"
-
-
-def _render_gamma_response_expr(value: object) -> str:
-    request = _normalize_mapping(value)
-    if not request:
-        return "False"
-    kwargs = [
-        f"response_component={_py_repr(str(request.get('response_component') or 'my'))}",
-        f"weighting={_py_repr(str(request.get('weighting') or 'Ms_times_lumped_volume'))}",
-        f"detrend={_py_repr(str(request.get('detrend') or 'linear'))}",
-        f"window={_py_repr(str(request.get('window') or 'hann'))}",
-        "susceptibility_floor_fraction="
-        f"{_py_number(float(request.get('susceptibility_floor_fraction', 1e-6)))}",
-    ]
-    return f"fm.GammaResponseAnalysis({', '.join(kwargs)})"
-
-
 def _render_table_autosave(
     problem: Problem,
     *,
@@ -3075,6 +3058,77 @@ def _render_stages(
                 if stage.stage_id is not None:
                     call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
                 lines.append(f"study.stages.add_field_drive({', '.join(call_parts)})")
+                continue
+            if action_kind == "table_autosave":
+                if not is_study_surface:
+                    raise ValueError("table_autosave action requires the study API surface")
+                call_parts: list[str] = []
+                if bool(stage.action.get("enabled", True)):
+                    table = _normalize_mapping(stage.action.get("table_autosave"))
+                    sample_period = table.get("sample_period_s")
+                    if not isinstance(sample_period, (int, float)):
+                        raise ValueError("enabled table_autosave action requires sample_period_s")
+                    call_parts.append(_py_number(float(sample_period)))
+                    quantities = table.get("quantities")
+                    if isinstance(quantities, list):
+                        call_parts.append(f"quantities={_py_literal(quantities)}")
+                else:
+                    call_parts.append("enabled=False")
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(f"study.stages.tableautosave({', '.join(call_parts)})")
+                continue
+            if action_kind == "autosave":
+                if not is_study_surface:
+                    raise ValueError("autosave action requires the study API surface")
+                call_parts = []
+                enabled = bool(stage.action.get("enabled", True))
+                quantity = _text_value(stage.action.get("quantity"))
+                if enabled:
+                    output = _normalize_mapping(stage.action.get("output"))
+                    output_name = _text_value(output.get("name")) or quantity
+                    every_seconds = output.get("every_seconds")
+                    if not output_name or not isinstance(every_seconds, (int, float)):
+                        raise ValueError("enabled autosave action requires output name and cadence")
+                    call_parts.extend(
+                        [
+                            _py_repr(output_name),
+                            f"every={_py_number(float(every_seconds))}",
+                        ]
+                    )
+                else:
+                    if quantity:
+                        call_parts.append(_py_repr(quantity))
+                    call_parts.append("enabled=False")
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(f"study.stages.autosave({', '.join(call_parts)})")
+                continue
+            if action_kind == "fft_response":
+                if not is_study_surface:
+                    raise ValueError("fft_response action requires the study API surface")
+                call_parts = []
+                if bool(stage.action.get("enabled", True)):
+                    request = _normalize_mapping(stage.action.get("request"))
+                    call_parts.append(
+                        _py_repr(str(request.get("response_component") or "my"))
+                    )
+                    detrend = str(request.get("detrend") or "linear")
+                    window = str(request.get("window") or "hann")
+                    floor = float(request.get("susceptibility_floor_fraction", 1e-6))
+                    if detrend != "linear":
+                        call_parts.append(f"detrend={_py_repr(detrend)}")
+                    if window != "hann":
+                        call_parts.append(f"window={_py_repr(window)}")
+                    if floor != 1e-6:
+                        call_parts.append(
+                            f"susceptibility_floor_fraction={_py_number(floor)}"
+                        )
+                else:
+                    call_parts.append("enabled=False")
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(f"study.stages.fft_response({', '.join(call_parts)})")
                 continue
             continue
         if stage.problem.study is None:
@@ -3338,25 +3392,6 @@ def _render_stages(
             if stage.stage_id is not None:
                 run_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
             run_parts.append(f"until={_py_number(until_seconds)}")
-            if stage.output_every_seconds is not None:
-                run_parts.append(
-                    f"output_every={_py_number(stage.output_every_seconds)}"
-                )
-            if isinstance(study, TimeEvolution):
-                run_parts.append(
-                    "outputs=["
-                    + ", ".join(_render_time_output_expr(output) for output in study.outputs)
-                    + "]"
-                )
-                run_parts.append(
-                    f"table_autosave={_render_table_autosave_expr(study._table_autosave)}"
-                )
-                run_parts.append(
-                    "spin_wave_response="
-                    + _render_gamma_response_expr(
-                        stage.problem.runtime_metadata.get("spin_wave_response")
-                    )
-                )
             lines.append(f"study.stages.add_run({', '.join(run_parts)})")
         else:
             lines.append(f"{_surface_call(surface, 'run')}({_py_number(until_seconds)})")
@@ -3657,7 +3692,16 @@ def _stage_override_for(
         return {}
     if isinstance(stage.action, dict):
         action_kind = str(stage.action.get("kind") or "").strip().lower()
-        if action_kind in {"save_state", "load_state", "export"}:
+        if action_kind in {
+            "save_state",
+            "load_state",
+            "export",
+            "change_device",
+            "add_field_drive",
+            "table_autosave",
+            "autosave",
+            "fft_response",
+        }:
             expected_kind = action_kind
         else:
             expected_kind = "run"

@@ -4103,6 +4103,9 @@ describe("ribbon structure", () => {
       expect.arrayContaining([
         "study.add-relax-stage",
         "study.add-field-drive-stage",
+        "study.add-table-autosave-stage",
+        "study.add-autosave-stage",
+        "study.add-fft-response-stage",
         "study.add-run-stage",
         "study.add-hysteresis-stage",
         "study.add-eigenmodes-stage",

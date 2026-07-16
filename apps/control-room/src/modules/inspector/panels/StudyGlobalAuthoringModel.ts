@@ -17,19 +17,6 @@ export interface StudyGlobalDraft {
   requestedMode: string;
   requestedPrecision: string;
   solver: string;
-  tableAutosaveEnabled: boolean;
-  tableQuantities: string;
-  tSampling: string;
-  outputs: StudyGlobalOutputDraft[];
-}
-
-export interface StudyGlobalOutputDraft {
-  enabled: boolean;
-  everySeconds: string;
-  kind: "field" | "scalar";
-  name: string;
-  raw?: JsonObject;
-  readOnly?: boolean;
 }
 
 export interface StudyGlobalDraftValidation {
@@ -49,26 +36,10 @@ const DEFAULT_STUDY_GLOBAL_DRAFT: StudyGlobalDraft = {
   requestedMode: "strict",
   requestedPrecision: "double",
   solver: "",
-  tableAutosaveEnabled: false,
-  tableQuantities: "t, step, mx, my, mz, e_total, max_torque",
-  tSampling: "5e-13",
-  outputs: [
-    { enabled: true, everySeconds: "1e-12", kind: "field", name: "m" },
-    {
-      enabled: true,
-      everySeconds: "1e-12",
-      kind: "scalar",
-      name: "E_total",
-    },
-  ],
 };
 
 export function createStudyGlobalDraft(scene: unknown): StudyGlobalDraft {
   const study = asRecord(asRecord(scene)?.study);
-  const tableAutosave = asRecord(
-    study?.table_autosave ?? study?.tableautosave,
-  );
-  const outputValues = Array.isArray(study?.outputs) ? study.outputs : null;
   return {
     demagEnabled: booleanValue(study?.demag_enabled, true),
     demagRealization: stringValue(
@@ -99,17 +70,6 @@ export function createStudyGlobalDraft(scene: unknown): StudyGlobalDraft {
       DEFAULT_STUDY_GLOBAL_DRAFT.requestedPrecision,
     ),
     solver: objectText(study?.solver),
-    tableAutosaveEnabled: tableAutosave !== null,
-    tableQuantities: Array.isArray(tableAutosave?.quantities)
-      ? tableAutosave.quantities.map(String).join(", ")
-      : DEFAULT_STUDY_GLOBAL_DRAFT.tableQuantities,
-    tSampling: scalarText(
-      tableAutosave?.sample_period_s ?? tableAutosave?.every_seconds,
-      DEFAULT_STUDY_GLOBAL_DRAFT.tSampling,
-    ),
-    outputs: outputValues
-      ? outputValues.map(globalOutputDraft)
-      : DEFAULT_STUDY_GLOBAL_DRAFT.outputs.map((output) => ({ ...output })),
   };
 }
 
@@ -150,41 +110,6 @@ export function validateStudyGlobalDraft(
     draft.femDemagSolverPolicy,
     "FEM demag policy",
   );
-  if (draft.tableAutosaveEnabled) {
-    if (!positiveFiniteNumber(draft.tSampling)) {
-      issues.push({
-        message: "Global t_sampling must be a positive finite number.",
-        severity: "error",
-      });
-    }
-    if (commaSeparatedValues(draft.tableQuantities).length === 0) {
-      issues.push({
-        message: "Global table autosave requires at least one quantity.",
-        severity: "error",
-      });
-    }
-  }
-  const enabledOutputs = draft.outputs.filter((output) => output.enabled);
-  if (enabledOutputs.length === 0) {
-    issues.push({
-      message: "Global autosave requires at least one enabled output.",
-      severity: "error",
-    });
-  }
-  for (const output of enabledOutputs) {
-    if (!output.name.trim()) {
-      issues.push({
-        message: "Global autosave output name is required.",
-        severity: "error",
-      });
-    }
-    if (!positiveFiniteNumber(output.everySeconds)) {
-      issues.push({
-        message: `Global autosave ${output.name || "output"} cadence must be a positive finite number.`,
-        severity: "error",
-      });
-    }
-  }
   return issues;
 }
 
@@ -205,61 +130,12 @@ export function buildStudyGlobalMergePatch(
   const requestedCpuThreads = optionalPositiveInteger(draft.requestedCpuThreads);
   study.requested_cpu_threads = requestedCpuThreads;
   study.solver = optionalJsonObject(draft.solver) ?? {};
-  study.table_autosave = draft.tableAutosaveEnabled
-    ? {
-        kind: "table_autosave",
-        quantities: commaSeparatedValues(draft.tableQuantities),
-        sample_period_s: Number(draft.tSampling),
-        table_id: "default",
-      }
-    : null;
-  study.outputs = draft.outputs
-    .filter((output) => output.enabled)
-    .map((output) => {
-      if (output.readOnly && output.raw) {
-        return structuredClone(output.raw);
-      }
-      return {
-        every_seconds: Number(output.everySeconds),
-        kind: output.kind,
-        name: output.name.trim(),
-      } satisfies JsonObject;
-    });
   return {
     kind: "merge_patch",
     merge_patch: {
       study,
     },
   };
-}
-
-function globalOutputDraft(value: unknown): StudyGlobalOutputDraft {
-  const record = asRecord(value);
-  const kind = record?.kind;
-  const supported = kind === "field" || kind === "scalar";
-  return {
-    enabled: record?.enabled !== false,
-    everySeconds: scalarText(record?.every_seconds, ""),
-    kind: kind === "scalar" ? "scalar" : "field",
-    name: scalarText(record?.name ?? record?.field ?? record?.scalar, ""),
-    raw:
-      record && !supported
-        ? (structuredClone(record) as JsonObject)
-        : undefined,
-    readOnly: !supported,
-  };
-}
-
-function commaSeparatedValues(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function positiveFiniteNumber(value: string): boolean {
-  const parsed = Number(value.trim());
-  return Number.isFinite(parsed) && parsed > 0;
 }
 
 function objectText(value: unknown): string {

@@ -6,6 +6,11 @@ import type {
 import { buildActionStageNode } from "./actionStageNode";
 import { buildAddFieldDriveStageNode } from "./addFieldDriveStageNode";
 import { buildChangeDeviceStageNode } from "./changeDeviceStageNode";
+import {
+  buildAutosaveStageNode,
+  buildFftResponseStageNode,
+  buildTableAutosaveStageNode,
+} from "./configurationStageNodes";
 import { buildEigenmodesStageNode } from "./eigenmodesStageNode";
 import { buildFrequencyResponseStageNode } from "./frequencyResponseStageNode";
 import { buildHysteresisStageNode } from "./hysteresisStageNode";
@@ -17,6 +22,9 @@ import { STUDY_STAGES_NODE_ID } from "./studyStageCommon";
 const STUDY_ADD_STAGE_COMMANDS = [
   "study.add-relax-stage",
   "study.add-field-drive-stage",
+  "study.add-table-autosave-stage",
+  "study.add-autosave-stage",
+  "study.add-fft-response-stage",
   "study.add-run-stage",
   "study.add-hysteresis-stage",
   "study.add-eigenmodes-stage",
@@ -111,6 +119,9 @@ function buildStudyStageNode(stage: ModelTreeStudyStageSnapshot): ExplorerNode {
   const normalized = stage.kind.toLowerCase();
   if (normalized === "relax") return buildRelaxStageNode(stage);
   if (normalized === "add_field_drive") return buildAddFieldDriveStageNode(stage);
+  if (normalized === "table_autosave") return buildTableAutosaveStageNode(stage);
+  if (normalized === "autosave") return buildAutosaveStageNode(stage);
+  if (normalized === "fft_response") return buildFftResponseStageNode(stage);
   if (normalized === "run") return buildRunStageNode(stage);
   if (normalized === "change_device") return buildChangeDeviceStageNode(stage);
   if (normalized === "hysteresis") return buildHysteresisStageNode(stage);

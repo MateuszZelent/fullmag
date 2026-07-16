@@ -692,9 +692,12 @@ const PANELS: InspectorPanelContribution[] = [
     selectionKinds: [
       "study.stage.action",
       "study.stage.add_field_drive",
+      "study.stage.autosave",
+      "study.stage.fft_response",
       "study.stage.hysteresis",
       "study.stage.relax",
       "study.stage.run",
+      "study.stage.table_autosave",
       "study.stage.change_device",
       "study.stage.save_state",
     ],

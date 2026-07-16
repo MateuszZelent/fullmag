@@ -110,19 +110,34 @@ const DEFAULT_RELAX_STAGE: JsonObject = {
 const DEFAULT_RUN_STAGE: JsonObject = {
   entrypoint_kind: "flat_run",
   kind: "run",
-  sampling: {
-    outputs: [
-      { every_seconds: 2e-12, kind: "field", name: "m" },
-      { every_seconds: 5e-13, kind: "field", name: "H_drive" },
-    ],
-    table_autosave: {
-      kind: "table_autosave",
-      quantities: ["t", "step", "mx", "my", "mz", "e_drive"],
-      sample_period_s: 5e-13,
-      table_id: "default",
-    },
+  until_seconds: "1e-9",
+};
+
+const DEFAULT_TABLE_AUTOSAVE_STAGE: JsonObject = {
+  enabled: true,
+  entrypoint_kind: "flat_table_autosave",
+  kind: "table_autosave",
+  table_autosave: {
+    kind: "table_autosave",
+    quantities: ["t", "step", "mx", "my", "mz", "e_drive"],
+    sample_period_s: 5e-13,
+    table_id: "default",
   },
-  spin_wave_response: {
+};
+
+const DEFAULT_AUTOSAVE_STAGE: JsonObject = {
+  enabled: true,
+  entrypoint_kind: "flat_autosave",
+  kind: "autosave",
+  output: { every_seconds: 2e-12, kind: "field", name: "m" },
+  quantity: "m",
+};
+
+const DEFAULT_FFT_RESPONSE_STAGE: JsonObject = {
+  enabled: true,
+  entrypoint_kind: "flat_fft_response",
+  kind: "fft_response",
+  request: {
     analysis: "gamma",
     detrend: "linear",
     response_component: "my",
@@ -131,7 +146,6 @@ const DEFAULT_RUN_STAGE: JsonObject = {
     weighting: "Ms_times_lumped_volume",
     window: "hann",
   },
-  until_seconds: "1e-9",
 };
 
 const DEFAULT_ADD_FIELD_DRIVE_STAGE: JsonObject = {
@@ -1563,14 +1577,20 @@ function stageWithDefaultId(stage: JsonObject, index: number): JsonObject {
 function stageSelectionKind(kind: string):
   | "study.stage.action"
   | "study.stage.add_field_drive"
+  | "study.stage.autosave"
   | "study.stage.eigenmodes"
   | "study.stage.frequency_response"
+  | "study.stage.fft_response"
   | "study.stage.hysteresis"
   | "study.stage.relax"
   | "study.stage.run"
+  | "study.stage.table_autosave"
   | "study.stage.save_state" {
   if (kind === "eigenmodes") return "study.stage.eigenmodes";
   if (kind === "add_field_drive") return "study.stage.add_field_drive";
+  if (kind === "table_autosave") return "study.stage.table_autosave";
+  if (kind === "autosave") return "study.stage.autosave";
+  if (kind === "fft_response") return "study.stage.fft_response";
   if (kind === "frequency_response") return "study.stage.frequency_response";
   if (kind === "hysteresis") return "study.stage.hysteresis";
   if (kind === "relax") return "study.stage.relax";
@@ -1923,6 +1943,24 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     "Add Antenna Stage",
     DEFAULT_ADD_FIELD_DRIVE_STAGE,
     "Antenna instruction added.",
+  ),
+  addStageCommand(
+    "study.add-table-autosave-stage",
+    "Add Table Autosave Stage",
+    DEFAULT_TABLE_AUTOSAVE_STAGE,
+    "Table-autosave instruction added.",
+  ),
+  addStageCommand(
+    "study.add-autosave-stage",
+    "Add Autosave Stage",
+    DEFAULT_AUTOSAVE_STAGE,
+    "Autosave instruction added.",
+  ),
+  addStageCommand(
+    "study.add-fft-response-stage",
+    "Add FFT Response Stage",
+    DEFAULT_FFT_RESPONSE_STAGE,
+    "FFT-response instruction added.",
   ),
   addStageCommand(
     "study.add-run-stage",

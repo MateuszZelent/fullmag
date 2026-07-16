@@ -1069,6 +1069,16 @@ impl StudyIR {
         }
     }
 
+    pub fn sampling_mut(&mut self) -> &mut SamplingIR {
+        match self {
+            StudyIR::TimeEvolution { sampling, .. }
+            | StudyIR::Relaxation { sampling, .. }
+            | StudyIR::Eigenmodes { sampling, .. }
+            | StudyIR::FrequencyResponse { sampling, .. }
+            | StudyIR::Hysteresis { sampling, .. } => sampling,
+        }
+    }
+
     pub fn relaxation(&self) -> Option<RelaxationControlIR> {
         match self {
             StudyIR::TimeEvolution { .. }

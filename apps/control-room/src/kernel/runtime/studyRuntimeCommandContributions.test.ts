@@ -380,6 +380,9 @@ describe("study runtime command contributions", () => {
 
     const commands = [
       ["study.add-field-drive-stage", "add_field_drive"],
+      ["study.add-table-autosave-stage", "table_autosave"],
+      ["study.add-autosave-stage", "autosave"],
+      ["study.add-fft-response-stage", "fft_response"],
       ["study.add-run-stage", "run"],
       ["study.add-hysteresis-stage", "hysteresis"],
       ["study.add-eigenmodes-stage", "eigenmodes"],
@@ -409,6 +412,11 @@ describe("study runtime command contributions", () => {
         kind: expectedKind,
         stage_id: `${expectedKind.replace(/_/g, "-")}-2`,
       });
+      if (expectedKind === "run") {
+        expect(stage).not.toHaveProperty("sampling");
+        expect(stage).not.toHaveProperty("spin_wave_response");
+        expect(stage).not.toHaveProperty("fixed_timestep");
+      }
     }
     expect(resources.getRevision(MODEL_SCENE_PATH)).toBe(5);
     expect(resources.getRevision(MODEL_STUDY_PATH)).toBe(5);

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import textwrap
 import unittest
 from pathlib import Path
@@ -34,14 +35,13 @@ class StudyStageIdTests(unittest.TestCase):
             + """
 study.stages.add_relax(stage_id="relax", max_steps=2)
 study.stages.add_minimize(stage_id="equilibrate", method="bb", max_steps=2)
-study.stages.add_run(stage_id="excite", until=4e-12, output_every=1e-12)
+study.stages.add_run(stage_id="excite", until=4e-12)
 """
         )
         self.assertEqual(
             [stage.stage_id for stage in loaded.stages],
             ["relax", "equilibrate", "excite"],
         )
-        self.assertEqual(loaded.stages[2].output_every_seconds, 1e-12)
         excite_ir = loaded.stages[2].to_ir(
             requested_backend=None,
             execution_mode=None,
@@ -101,7 +101,7 @@ study.stages.add_field_drive(
     ),
     stage_id="add-antenna",
 )
-study.stages.add_run(stage_id="excite", until=2e-9, output_every=5e-13)
+study.stages.add_run(stage_id="excite", until=2e-9)
 """
         )
 
@@ -194,34 +194,44 @@ study.stages.add_field_drive(
 """
             )
 
-    def test_run_owns_sampling_outputs_and_gamma_response_request(self) -> None:
+    def test_autosave_and_fft_are_ordered_configuration_stages_not_run_arguments(self) -> None:
         loaded = _load(
             _PREAMBLE
             + """
 study.stages.add_minimize(stage_id="relax", method="bb", max_steps=2)
-study.stages.add_run(
-    stage_id="excite",
-    until=2e-9,
-    outputs=[
-        fm.SaveField("m", every=2e-12),
-        fm.SaveField("H_drive", every=5e-13),
-    ],
-    table_autosave=fm.TableAutosave(
-        t_sampl=5e-13,
-        quantities=["time", "step", "mx", "my", "mz", "E_drive"],
-    ),
-    spin_wave_response=fm.GammaResponseAnalysis(
-        response_component="my",
-        detrend="linear",
-        window="hann",
-        susceptibility_floor_fraction=1e-6,
-    ),
+study.stages.tableautosave(
+    5e-13,
+    quantities=["time", "step", "mx", "my", "mz", "E_drive"],
+    stage_id="table-on",
 )
+study.stages.autosave("m", every=2e-12, stage_id="autosave-m")
+study.stages.autosave("H_drive", every=5e-13, stage_id="autosave-drive")
+study.stages.fft_response("my", stage_id="analyse-k0")
+study.stages.add_run(stage_id="excite", until=2e-9)
+study.stages.tableautosave(enabled=False, stage_id="table-off")
+study.stages.autosave(enabled=False, stage_id="autosave-off")
+study.stages.fft_response(enabled=False, stage_id="analysis-off")
+study.stages.add_run(stage_id="unsampled", until=1e-9)
 """
         )
 
+        self.assertEqual(
+            [stage.action["kind"] if stage.action else stage.problem.study.to_ir()["kind"] for stage in loaded.stages],
+            [
+                "relaxation",
+                "table_autosave",
+                "autosave",
+                "autosave",
+                "fft_response",
+                "time_evolution",
+                "table_autosave",
+                "autosave",
+                "fft_response",
+                "time_evolution",
+            ],
+        )
         relax_sampling = loaded.stages[0].problem.study.to_ir()["sampling"]
-        run_ir = loaded.stages[1].problem.to_ir(include_geometry_assets=False)
+        run_ir = loaded.stages[5].problem.to_ir(include_geometry_assets=False)
         run_sampling = run_ir["study"]["sampling"]
         self.assertIsNone(relax_sampling.get("table_autosave"))
         self.assertEqual(run_sampling["table_autosave"]["sample_period_s"], 5e-13)
@@ -247,6 +257,71 @@ study.stages.add_run(
                 "window": "hann",
                 "susceptibility_floor_fraction": 1e-6,
             },
+        )
+        unsampled_ir = loaded.stages[9].problem.to_ir(include_geometry_assets=False)
+        self.assertIsNone(unsampled_ir["study"]["sampling"].get("table_autosave"))
+        self.assertEqual(unsampled_ir["study"]["sampling"]["outputs"], [])
+        self.assertNotIn(
+            "spin_wave_response",
+            unsampled_ir["problem_meta"]["runtime_metadata"],
+        )
+        for action_index in (1, 2, 3, 4, 6, 7, 8):
+            for attribute in (
+                "magnets",
+                "energy",
+                "dynamics",
+                "discretization",
+                "runtime",
+                "auxiliary_geometries",
+                "current_modules",
+                "couplings",
+                "pbc",
+            ):
+                self.assertEqual(
+                    getattr(loaded.stages[action_index].problem, attribute),
+                    getattr(loaded.stages[action_index - 1].problem, attribute),
+                    f"{attribute} must pass unchanged through configuration stage {action_index}",
+                )
+
+    def test_add_run_primary_signature_contains_only_time_and_stage_id(self) -> None:
+        fm.reset()
+        study = fm.study("simple-run-signature")
+        self.assertEqual(
+            [
+                name
+                for name, parameter in inspect.signature(
+                    study.stages.add_run
+                ).parameters.items()
+                if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+            ],
+            ["until", "stage_id"],
+        )
+
+    def test_legacy_run_configuration_expands_to_visible_actions(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_run(
+    stage_id="excite",
+    until=2e-9,
+    outputs=[fm.SaveField("m", every=2e-12)],
+    table_autosave=fm.TableAutosave(
+        t_sampl=5e-13,
+        quantities=["t", "mx", "my", "mz"],
+    ),
+    spin_wave_response=fm.GammaResponseAnalysis(response_component="my"),
+)
+"""
+        )
+
+        self.assertEqual(
+            [stage.action["kind"] if stage.action else "run" for stage in loaded.stages],
+            ["table_autosave", "autosave", "autosave", "fft_response", "run"],
+        )
+        self.assertEqual(loaded.stages[-1].stage_id, "excite")
+        self.assertEqual(
+            loaded.stages[-1].problem.study.to_ir()["sampling"]["outputs"],
+            [{"kind": "field", "name": "m", "every_seconds": 2e-12}],
         )
 
 

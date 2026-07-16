@@ -523,8 +523,12 @@ impl ProblemIR {
         if self.energy_terms.is_empty() {
             errors.push("at least one energy term is required".to_string());
         }
-        if self.study.sampling().outputs.is_empty() {
-            errors.push("at least one output is required".to_string());
+        if matches!(
+            &self.study,
+            StudyIR::Eigenmodes { .. } | StudyIR::FrequencyResponse { .. }
+        ) && self.study.sampling().outputs.is_empty()
+        {
+            errors.push("spectral study requires at least one output".to_string());
         }
         for output in &self.study.sampling().outputs {
             match output {

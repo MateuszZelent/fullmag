@@ -8,14 +8,19 @@ import { validateStudyStageDraft } from "./StudyStageAuthoringModel";
 import { useStudyInspectorPanelController } from "./StudyInspectorPanel";
 import { ChangeDeviceStageInspector } from "./stages/ChangeDeviceStageInspector";
 import { AddFieldDriveStageInspector } from "./stages/AddFieldDriveStageInspector";
+import { AutosaveStageInspector } from "./stages/AutosaveStageInspector";
 import { EigenmodesStageInspector } from "./stages/EigenmodesStageInspector";
 import { FrequencyResponseStageInspector } from "./stages/FrequencyResponseStageInspector";
+import { FftResponseStageInspector } from "./stages/FftResponseStageInspector";
 import { HysteresisStageInspector } from "./stages/HysteresisStageInspector";
 import { resolveHysteresisInspectorView } from "./stages/hysteresis/HysteresisInspectorUtils";
 import { RelaxStageInspector } from "./stages/RelaxStageInspector";
 import { RunStageInspector } from "./stages/RunStageInspector";
 import { SaveStateStageInspector } from "./stages/SaveStateStageInspector";
+import { TableAutosaveStageInspector } from "./stages/TableAutosaveStageInspector";
+import { UnsupportedStageInspector } from "./stages/UnsupportedStageInspector";
 import type { FrequencyDomainAuthoringView } from "./stages/StageInspectorFrame";
+import { validateStudyWorkflow } from "./stages/studyWorkflowState";
 
 export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   const {
@@ -34,7 +39,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   } = useStudyInspectorPanelController(selection);
   const selectedIndex = model.selectedStage?.index ?? state.selectedDraftIndex;
   const draft = state.stageDrafts[selectedIndex] ?? null;
-  const validation = draft
+  const localValidation = draft
     ? validateStudyStageDraft(draft, {
         algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
         backend: model.requested.backend,
@@ -43,6 +48,12 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         mode: model.requested.mode,
       })
     : [];
+  const validation = [
+    ...localValidation,
+    ...validateStudyWorkflow(state.stageDrafts)
+      .filter((issue) => issue.index === selectedIndex)
+      .map(({ message, severity }) => ({ message, severity })),
+  ];
   const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
   const inspectorKind = resolveStudyStageInspectorKind(selection.kind, selectedStageKind);
   const frequencyDomainAuthoringView =
@@ -90,9 +101,19 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         "add-field-drive",
         "add-field-waveform",
         "add-field-activation",
+        "table-autosave-state",
+        "table-autosave-fft-clock",
+        "autosave-state",
+        "fft-response-state",
+        "fft-response-clock",
+        "unsupported-stage",
         "eigenmodes-command-center",
         "frequency-response-command-center",
         "relax-results",
+        "run-progress",
+        "run-time-integration",
+        "run-drive",
+        "run-workflow-state",
         "run-results",
         "hysteresis-results",
         "eigenmodes-results",
@@ -114,11 +135,35 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         "hysteresis-current-field",
       ]}
     >
-      {inspectorKind === "add_field_drive" ? (
+      {inspectorKind === "unsupported" ? (
+        <UnsupportedStageInspector
+          {...commonProps}
+          expectedKind="unsupported"
+          kindLabel="Unsupported"
+        />
+      ) : inspectorKind === "add_field_drive" ? (
         <AddFieldDriveStageInspector
           {...commonProps}
           expectedKind="add_field_drive"
           kindLabel="Add Antenna"
+        />
+      ) : inspectorKind === "table_autosave" ? (
+        <TableAutosaveStageInspector
+          {...commonProps}
+          expectedKind="table_autosave"
+          kindLabel="Table Autosave"
+        />
+      ) : inspectorKind === "autosave" ? (
+        <AutosaveStageInspector
+          {...commonProps}
+          expectedKind="autosave"
+          kindLabel="Autosave"
+        />
+      ) : inspectorKind === "fft_response" ? (
+        <FftResponseStageInspector
+          {...commonProps}
+          expectedKind="fft_response"
+          kindLabel="FFT Response"
         />
       ) : inspectorKind === "run" ? (
         <RunStageInspector
@@ -240,6 +285,9 @@ export function resolveStudyStageInspectorKind(
     return selectedStageKind;
   }
   if (selectionKind === "study.stage.add_field_drive") return "add_field_drive";
+  if (selectionKind === "study.stage.table_autosave") return "table_autosave";
+  if (selectionKind === "study.stage.autosave") return "autosave";
+  if (selectionKind === "study.stage.fft_response") return "fft_response";
   if (selectionKind === "study.stage.run") return "run";
   if (selectionKind === "study.stage.change_device") return "change_device";
   if (selectionKind === "study.stage.hysteresis") return "hysteresis";

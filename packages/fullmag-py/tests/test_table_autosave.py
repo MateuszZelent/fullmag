@@ -110,6 +110,70 @@ def test_flat_tableautosave_round_trips_as_sampling_table_autosave() -> None:
     )
 
 
+def test_explicit_snapshot_replaces_flat_default_outputs() -> None:
+    script = textwrap.dedent(
+        """
+        import fullmag as fm
+
+        fm.name("snapshot_only")
+        fm.engine("fdm")
+        fm.cell(2e-9, 2e-9, 2e-9)
+        body = fm.geometry(fm.Box(20e-9, 10e-9, 2e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+        fm.snapshot("mz", every=2e-12)
+        fm.run(10e-12)
+        """
+    )
+
+    with TemporaryDirectory() as tmpdir:
+        script_path = Path(tmpdir) / "snapshot_only.py"
+        script_path.write_text(script, encoding="utf-8")
+        loaded = load_problem_from_script(script_path, lightweight_assets=True)
+
+    assert loaded.problem.to_ir()["study"]["sampling"]["outputs"] == [
+        {
+            "kind": "snapshot",
+            "field": "m",
+            "component": "z",
+            "every_seconds": 2e-12,
+        }
+    ]
+
+
+def test_explicit_frequency_response_output_replaces_flat_defaults() -> None:
+    script = textwrap.dedent(
+        """
+        import fullmag as fm
+
+        fm.name("response_only")
+        fm.engine("fdm")
+        fm.cell(2e-9, 2e-9, 2e-9)
+        body = fm.geometry(fm.Box(20e-9, 10e-9, 2e-9), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.m = fm.texture.uniform(1.0, 0.0, 0.0)
+
+        fm.save_response("susceptibility_tensor")
+        fm.frequency_response(frequencies_hz=[1e9], include_demag=False)
+        """
+    )
+
+    with TemporaryDirectory() as tmpdir:
+        script_path = Path(tmpdir) / "response_only.py"
+        script_path.write_text(script, encoding="utf-8")
+        loaded = load_problem_from_script(script_path, lightweight_assets=True)
+
+    assert loaded.problem.to_ir()["study"]["sampling"]["outputs"] == [
+        {
+            "kind": "frequency_response_output",
+            "observable": "susceptibility_tensor",
+        }
+    ]
+
+
 def test_table_autosave_survives_builder_scene_document_round_trip() -> None:
     script = textwrap.dedent(
         """

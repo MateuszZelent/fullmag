@@ -228,6 +228,12 @@ window `f(t)` for `0 <= t < T`; the UI must show that actual window and may
 also show the centred coordinate `tau=t-t0`. It must not silently reflect,
 extend, or recenter the waveform.
 
+Unequal left/right sinc-tail lengths are an informational truncation diagnostic,
+not an invalid workflow: a spectroscopy run normally keeps a much longer
+post-pulse interval to resolve free precession. Hard validation is reserved for
+an invalid sampling clock, a missing response observable, or a violated Nyquist
+condition.
+
 If a "dowolna funkcja czasu" UI is needed, it should lower to one of:
 
 1. `PiecewiseLinear(points=[...])` for sampled waveforms,
@@ -577,20 +583,48 @@ The stage must record whether `t` is:
 The default for new spin-wave stages should be stage-local time because users
 usually design a pulse relative to the drive stage start.
 
-### 5.1.1 Stage-local outputs and sampling
+### 5.1.1 Independent output and analysis commands
 
-Output policy belongs to the compute stage that produces the samples. A `Run`
-may define:
+The public scripting surface follows the MuMax command model: configuration
+commands mutate the persistent problem state seen by subsequent compute
+instructions, while `add_run()` only starts time integration. Table sampling,
+field/scalar autosave, and response analysis must not be nested inside
+`add_run()`. They are typed zero-duration stages because their enabled state
+may change between two time-integration intervals.
 
-- table autosave enabled/disabled, period `t_sampling`, and scalar quantities;
-- field autosave entries such as `m`, `H_drive`, `H_demag`, and `H_eff`, each
-  with its own cadence;
-- a Gamma-response analysis request (component, weighting, detrend, window,
-  and susceptibility floor).
+The canonical order is therefore:
 
-Global output settings are backward-compatible defaults only. A stage-local
-value wins when present. UI preview and script export must preserve the same
-precedence and must label which value is effective.
+```python
+t_sampling = 5e-13
+study.stages.tableautosave(t_sampling, quantities=["t", "mx", "my", "mz"])
+study.stages.autosave("m", every=2e-12)
+study.stages.autosave("H_drive", every=t_sampling)
+study.stages.fft_response("my")
+study.stages.add_run(stage_id="excite", until=2e-9)
+```
+
+`tableautosave()` defines the active response clock `t_sampling`.
+`autosave()` commands independently define field/scalar artifact cadences.
+`fft_response()` is an optional, independent post-processing request that
+selects the response component; its defaults are the physically documented
+Ms-times-lumped-volume weighting, linear detrend, Hann window, and a `1e-6`
+source-spectrum floor. The internal artifact request name
+`spin_wave_response` is not part of the normal user-facing workflow.
+
+Each command takes effect from its position in the ordered pipeline, preserves
+magnetization, mesh, materials, and solver time, and persists until another
+configuration stage changes it. An unsampled interval is therefore explicit:
+
+```python
+study.stages.tableautosave(enabled=False)
+study.stages.autosave("m", enabled=False)
+study.stages.add_run(stage_id="unsampled", until=1e-9)
+```
+
+The canonical exporter must reproduce configuration changes immediately before
+the first compute instruction that observes them. This keeps relaxation free
+of an analysis request added only after relaxation and makes state transfer
+explicit.
 
 For a planned run of duration `T` sampled every `Delta t_s`, the samples are
 
@@ -831,12 +865,16 @@ object / region target, spatial profile, waveform, stage-local/absolute clock,
 and compatibility activation metadata. It includes a live plot of the actual
 `sinc(t-t0)` window and its discrete source spectrum.
 
-The `Run` inspector owns `Sampling & outputs` and `Gamma response` sections. It
-must show, before execution, the effective integration `dt`, response
-`t_sampling`, `N`, duration, `Delta f`, Nyquist, sinc cutoff, and the provenance
-of every cadence (stage-local or inherited). After execution the analysis view
-shows actual drive and magnetization traces, source/response spectra, and peak
-table from the versioned resource
+The Study tree owns independent `Table autosave`, `Autosave quantity`, and `FFT
+response` stage inspectors, including explicit ON/OFF state. The `Run`
+inspector owns only time integration, execution progress, produced results, and
+a read-only summary of the configuration active at its position. The antenna
+inspector resolves the last active `t_sampling` stage before the target Run and
+must show, before execution,
+response `N`, duration, `Delta f`, Nyquist, sinc cutoff, the maximum legal
+`t_sampling = 1/(2 f_c)`, and an explicit pass/fail Nyquist verdict. After
+execution the analysis view shows actual drive and magnetization traces,
+source/response spectra, and peak table from the versioned resource
 `/v2/sessions/current/analysis/spin-wave/gamma.v1`.
 
 The inspector and analysis module share only pure physics/sampling models under

@@ -144,10 +144,12 @@ import {
   resolveStudyStageInspectorKind,
 } from "../StudyStageInspectorRouter";
 import type { StudyStageModel } from "../StudyInspectorPanelModel";
+import { AutosaveStageInspector } from "./AutosaveStageInspector";
 import { ChangeDeviceStageInspector } from "./ChangeDeviceStageInspector";
 import { AddFieldDriveStageInspector } from "./AddFieldDriveStageInspector";
 import { EigenmodesStageInspector } from "./EigenmodesStageInspector";
 import { FrequencyResponseStageInspector } from "./FrequencyResponseStageInspector";
+import { FftResponseStageInspector } from "./FftResponseStageInspector";
 import {
   HysteresisStageInspector,
   hysteresisInitialStateActionPresentation,
@@ -157,6 +159,8 @@ import { RelaxStageInspector } from "./RelaxStageInspector";
 import { RunStageInspector } from "./RunStageInspector";
 import { SaveStateStageInspector } from "./SaveStateStageInspector";
 import type { StageInspectorFrameProps } from "./StageInspectorFrame";
+import { TableAutosaveStageInspector } from "./TableAutosaveStageInspector";
+import { UnsupportedStageInspector } from "./UnsupportedStageInspector";
 
 function stage(kind: string): StudyStageModel {
   return {
@@ -214,9 +218,13 @@ function render(
     "add-field-activation",
     "run-time-integration",
     "run-drive",
-    "run-sampling",
-    "run-gamma-response",
+    "run-workflow-state",
     "run-progress",
+    "table-autosave-state",
+    "table-autosave-fft-clock",
+    "autosave-state",
+    "fft-response-state",
+    "fft-response-clock",
     "eigenmodes-command-center",
     "frequency-response-command-center",
   ],
@@ -279,13 +287,30 @@ describe("Study stage inspectors", () => {
       ),
     ).toContain("Sampled source spectrum |FFT(B)|");
     expect(render(<RunStageInspector {...props("run")} />)).toContain(
-      "Sampling &amp; Outputs",
+      "Active Autosave &amp; FFT State",
     );
-    expect(render(<RunStageInspector {...props("run")} />)).toContain(
-      "Gamma Response",
+    expect(render(<RunStageInspector {...props("run")} />)).not.toContain(
+      "Response t_sampling (s)",
     );
     expect(render(<RunStageInspector {...props("run")} />)).toContain(
       "Run Progress",
+    );
+    expect(
+      render(<TableAutosaveStageInspector {...props("table_autosave")} />),
+    ).toContain("Table Autosave State");
+    expect(
+      render(<AutosaveStageInspector {...props("autosave")} />),
+    ).toContain("Autosave Output State");
+    expect(
+      render(<FftResponseStageInspector {...props("fft_response")} />),
+    ).toContain("Gamma Response FFT");
+    const unsupported = props("unsupported");
+    unsupported.draft = {
+      ...unsupported.draft!,
+      rawStage: { kind: "future_solver_action", stage_id: "future-1" },
+    };
+    expect(render(<UnsupportedStageInspector {...unsupported} />)).toContain(
+      "Unsupported Stage",
     );
     expect(
       render(<ChangeDeviceStageInspector {...props("change_device")} />),
@@ -331,6 +356,32 @@ describe("Study stage inspectors", () => {
     expect(render(<SaveStateStageInspector {...props("save_state")} />)).toContain(
       "Captured State",
     );
+  });
+
+  it("resolves antenna t_sampling from the last preceding workflow instruction before its target Run", () => {
+    const relax = createDefaultStudyStageDraft("relax", 0);
+    const antenna = createDefaultStudyStageDraft("add_field_drive", 1);
+    const table = createDefaultStudyStageDraft("table_autosave", 2);
+    const run = {
+      ...createDefaultStudyStageDraft("run", 3),
+      untilSeconds: "2e-9",
+    };
+    const html = render(
+      <AddFieldDriveStageInspector
+        {...props("add_field_drive")}
+        draft={antenna}
+        draftIndex={1}
+        pipelineDrafts={[relax, antenna, table, run]}
+        scene={{ study: { solver: { dt: 1e-13 } } }}
+      />,
+    );
+
+    expect(html).toContain("Effective t_sampling source");
+    expect(html).toContain(table.stageId);
+    expect(html).toContain(
+      "The effective t_sampling satisfies Nyquist for the authored sinc cutoff.",
+    );
+    expect(html).toContain("100.0 fs");
   });
 
   it.each([
