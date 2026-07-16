@@ -112,17 +112,34 @@ fn geometry_cell_relation(
                 center[0] + sx * half[0], center[1] + sy * half[1], center[2] + sz * half[2],
             ])))
         .collect::<Vec<_>>();
-    if corners.iter().all(|point| geometry_contains(entry, *point).unwrap_or(false)) {
-        return Ok(CellRelation::Inside);
-    }
     Ok(match entry {
         GeometryEntryIR::Box { size, .. } => {
             if (0..3).any(|axis| center[axis] + half[axis] <= -0.5 * size[axis]
                 || center[axis] - half[axis] >= 0.5 * size[axis]) {
                 CellRelation::Outside
-            } else { CellRelation::Boundary }
+            } else if (0..3).all(|axis| {
+                center[axis] - half[axis] >= -0.5 * size[axis]
+                    && center[axis] + half[axis] <= 0.5 * size[axis]
+            }) {
+                CellRelation::Inside
+            } else {
+                CellRelation::Boundary
+            }
         }
-        GeometryEntryIR::Cylinder { .. } => CellRelation::Boundary,
+        GeometryEntryIR::Cylinder { .. } => {
+            let mut all_inside = true;
+            for point in &corners {
+                if !geometry_contains(entry, *point)? {
+                    all_inside = false;
+                    break;
+                }
+            }
+            if all_inside {
+                CellRelation::Inside
+            } else {
+                CellRelation::Boundary
+            }
+        }
         GeometryEntryIR::Translate { base, by, .. } => geometry_cell_relation(
             base,
             [center[0] - by[0], center[1] - by[1], center[2] - by[2]],
@@ -253,5 +270,28 @@ mod tests {
         };
         let average = spatial_cell_average(&profile, [0.0; 3], [1.0, 0.1, 0.1], &[]).unwrap();
         assert!(average < 1.0 && average > 0.5, "average={average}");
+    }
+
+    #[test]
+    fn difference_mask_does_not_treat_corner_coverage_as_full_cell_coverage() {
+        let geometry = vec![GeometryEntryIR::Difference {
+            name: "box-with-hole".into(),
+            base: Box::new(GeometryEntryIR::Box {
+                name: "outer".into(),
+                size: [2.0, 2.0, 2.0],
+            }),
+            tool: Box::new(GeometryEntryIR::Box {
+                name: "hole".into(),
+                size: [0.5, 0.5, 0.5],
+            }),
+        }];
+        let profile = FieldSpatialProfileIR::GeometryMask {
+            object_id: "box-with-hole".into(),
+            envelope: FieldEnvelopeIR::Uniform {},
+        };
+
+        let average = spatial_cell_average(&profile, [0.0; 3], [1.0; 3], &geometry).unwrap();
+
+        assert!((average - 0.875).abs() < 1.0e-10, "average={average}");
     }
 }

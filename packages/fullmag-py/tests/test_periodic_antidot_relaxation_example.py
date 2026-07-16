@@ -16,6 +16,9 @@ EXAMPLES = {
     "exchange_coupled_frequency_driven": Path(
         "examples/fem_periodic_antidot_relax_exchange_coupled_frequency_driven.py"
     ),
+    "exchange_coupled_time_domain_k0": Path(
+        "examples/fem_periodic_antidot_relax_exchange_coupled_time_domain_k0.py"
+    ),
     "exchange_coupled_z_padding_reference": Path(
         "examples/fem_periodic_antidot_relax_exchange_coupled_z_padding_reference.py"
     ),
@@ -293,6 +296,66 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
             universe_z=4e-7,
             lateral_gap_xy=0.0,
         )
+
+    def test_exchange_coupled_time_domain_k0_relaxes_then_runs_uniform_sinc_excitation(self) -> None:
+        scenario = "exchange_coupled_time_domain_k0"
+        self.assert_example_is_plain_python(scenario)
+        payload = self.export_run_config(scenario)
+        self.assert_problem_ir_declares_xy_pbc(payload)
+
+        self.assertEqual(
+            payload["ir"]["problem_meta"]["name"],
+            "fem_periodic_antidot_relax_exchange_coupled_time_domain_k0",
+        )
+        self.assertEqual(len(payload["stages"]), 3)
+        self.assertEqual(payload["stages"][0]["entrypoint_kind"], "flat_relax")
+        self.assertEqual(
+            payload["stages"][1]["entrypoint_kind"],
+            "flat_add_field_drive",
+        )
+        self.assertEqual(payload["stages"][2]["entrypoint_kind"], "flat_run")
+        self.assertEqual(payload["stages"][0]["ir"]["study"]["kind"], "relaxation")
+        self.assertEqual(payload["stages"][2]["ir"]["study"]["kind"], "time_evolution")
+        self.assertEqual(
+            payload["stages"][0]["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"],
+            "relax",
+        )
+        self.assertEqual(
+            payload["stages"][1]["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"],
+            "add-k0-antenna",
+        )
+        self.assertEqual(
+            payload["stages"][2]["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"],
+            "excite",
+        )
+
+        self.assertEqual(payload["ir"]["field_drives"], [])
+        self.assertEqual(payload["stages"][0]["ir"]["field_drives"], [])
+        self.assertEqual(payload["stages"][1]["ir"]["field_drives"], [])
+        drive = payload["stages"][1]["action"]["drive"]
+        self.assertEqual(drive["target"], {"kind": "global"})
+        self.assertEqual(drive["spatial_profile"], {"kind": "uniform"})
+        self.assertEqual(drive["waveform"]["kind"], "sinc_pulse")
+        self.assertEqual(
+            drive["activation"],
+            {"kind": "stage_ids", "stage_ids": ["excite"]},
+        )
+        self.assertEqual(
+            [drive["id"] for drive in payload["stages"][2]["ir"]["field_drives"]],
+            ["k0-sinc-antenna"],
+        )
+
+        sampling = payload["stages"][2]["ir"]["study"]["sampling"]
+        self.assertAlmostEqual(sampling["table_autosave"]["sample_period_s"], 5e-13)
+        self.assertIn(
+            "H_drive",
+            [output["name"] for output in sampling["outputs"] if output["kind"] == "field"],
+        )
+        response = payload["stages"][2]["ir"]["problem_meta"]["runtime_metadata"][
+            "spin_wave_response"
+        ]
+        self.assertEqual(response["analysis"], "gamma")
+        self.assertEqual(response["schema_version"], "spin_wave_response.request.v1")
 
     def test_air_gap_scenario_relaxes_centered_periodic_antidot_without_exchange_coupling(self) -> None:
         self.assert_example_is_plain_python("air_gap")

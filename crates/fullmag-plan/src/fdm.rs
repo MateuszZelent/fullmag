@@ -793,7 +793,7 @@ pub(crate) fn plan_fdm(
     }
     if runtime_requests_cuda(problem)
         && problem.field_drives.iter().any(|drive| {
-            crate::util::field_drive_is_active(drive, crate::util::active_stage_id(problem))
+            crate::util::field_drive_is_active(drive, problem)
         })
     {
         errors.push(
@@ -1009,7 +1009,7 @@ pub(crate) fn plan_fdm(
     })?
     .with_region_legend(grid_legend);
     let active_field_drives: Vec<_> = problem.field_drives.iter()
-        .filter(|drive| crate::util::field_drive_is_active(drive, crate::util::active_stage_id(problem)))
+        .filter(|drive| crate::util::field_drive_is_active(drive, problem))
         .cloned().collect();
     let regional_field_drive_bases = crate::regional_field_drive::resolve_fdm_regional_field_drives(
         &active_field_drives,

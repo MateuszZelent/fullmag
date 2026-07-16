@@ -3,6 +3,7 @@
 import { Save } from "lucide-react";
 
 import { Button } from "@/shared/ui/Button";
+import type { SceneResource } from "@/kernel/api/apiTypes";
 
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
@@ -46,9 +47,11 @@ export interface StageInspectorFrameProps {
   kindLabel: string;
   onCommit: () => void;
   onUpdateDraft: (patch: Partial<StudyStageDraft>) => void;
+  pipelineDrafts?: readonly StudyStageDraft[];
   requestedBackend?: string;
   requestedDevice?: string;
   requestedMode?: string;
+  scene?: SceneResource | null;
   runRuntimeCommand?: (commandId: string, input?: unknown) => void;
   runtimeCommandDisabledReason?: (commandId: string) => string | null;
   stage: StudyStageModel | null;

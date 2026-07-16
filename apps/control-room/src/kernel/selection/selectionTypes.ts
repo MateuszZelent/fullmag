@@ -242,6 +242,7 @@ export type SelectionRef =
   | {
       kind:
         | "study.stage.action"
+        | "study.stage.add_field_drive"
         | "study.stage.eigenmodes"
         | "study.stage.eigenmodes.setup"
         | "study.stage.eigenmodes.calculation_mode"

@@ -18,6 +18,103 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
+  it("serializes an add-field-drive instruction with the complete antenna payload", () => {
+    const draft = createDefaultStudyStageDraft("add_field_drive", 1);
+
+    expect(studyStageDraftToSceneStage(draft)).toEqual({
+      drive: {
+        activation: { kind: "all_time_evolution" },
+        amplitude_B_T: 1e-3,
+        direction: [0, 1, 0],
+        enabled: true,
+        id: "k0-sinc-antenna",
+        kind: "regional",
+        name: "Uniform transverse k0 sinc antenna",
+        spatial_profile: { kind: "uniform" },
+        target: { kind: "global" },
+        time_origin: "stage_local",
+        waveform: {
+          amplitude: 1,
+          cutoff_hz: 40e9,
+          kind: "sinc_pulse",
+          t0: 50e-12,
+        },
+      },
+      entrypoint_kind: "flat_add_field_drive",
+      kind: "add_field_drive",
+      stage_id: "add_field_drive-2",
+    });
+  });
+
+  it("round-trips run-local autosave, field outputs, and Gamma response analysis", () => {
+    const source = {
+      entrypoint_kind: "flat_run",
+      fixed_timestep: 1e-13,
+      kind: "run",
+      sampling: {
+        outputs: [
+          { every_seconds: 2e-12, kind: "field", name: "m" },
+          { every_seconds: 0.5e-12, kind: "field", name: "H_drive" },
+        ],
+        table_autosave: {
+          kind: "table_autosave",
+          quantities: ["t", "step", "mx", "my", "mz", "e_drive"],
+          sample_period_s: 0.5e-12,
+          table_id: "default",
+        },
+      },
+      spin_wave_response: {
+        analysis: "gamma",
+        detrend: "linear",
+        response_component: "my",
+        schema_version: "spin_wave_response.request.v1",
+        susceptibility_floor_fraction: 1e-6,
+        weighting: "Ms_times_lumped_volume",
+        window: "hann",
+      },
+      stage_id: "excite",
+      until_seconds: 2e-9,
+    };
+
+    const draft = createStudyStageDraft(source, 2);
+    expect(draft).toMatchObject({
+      dt: "1e-13",
+      runSampling: {
+        gammaDetrend: "linear",
+        gammaResponseComponent: "my",
+        gammaResponseEnabled: true,
+        outputs: [
+          { enabled: true, everySeconds: "2e-12", kind: "field", name: "m" },
+          { enabled: true, everySeconds: "5e-13", kind: "field", name: "H_drive" },
+        ],
+        samplePeriodS: "5e-13",
+        tableAutosaveEnabled: true,
+        tableQuantities: "t, step, mx, my, mz, e_drive",
+      },
+      stageId: "excite",
+      timestepMode: "fixed",
+      untilSeconds: "2e-9",
+    });
+    expect(studyStageDraftToSceneStage(draft)).toEqual(source);
+  });
+
+  it("validates stage-local response sampling without inventing resampling", () => {
+    const draft = createDefaultStudyStageDraft("run", 0);
+    const messages = validateStudyStageDraft({
+      ...draft,
+      runSampling: {
+        ...draft.runSampling,
+        outputs: [{ enabled: true, everySeconds: "0", kind: "field", name: "m" }],
+        samplePeriodS: "NaN",
+        susceptibilityFloorFraction: "1",
+      },
+    }).map((issue) => issue.message);
+
+    expect(messages).toContain("Response t_sampling must be a positive finite number.");
+    expect(messages).toContain("Output m cadence must be a positive finite number.");
+    expect(messages).toContain("Susceptibility floor fraction must be in [0, 1).");
+  });
+
   it("serializes algorithm-specific canonical relaxation fields", () => {
     const llg = studyStageDraftToSceneStage({
       ...createDefaultStudyStageDraft("relax", 0),
@@ -651,6 +748,31 @@ describe("StudyStageAuthoringModel", () => {
             {
               entrypoint_kind: "flat_run",
               kind: "run",
+              sampling: {
+                outputs: [
+                  { every_seconds: 2e-12, kind: "field", name: "m" },
+                  {
+                    every_seconds: 5e-13,
+                    kind: "field",
+                    name: "H_drive",
+                  },
+                ],
+                table_autosave: {
+                  kind: "table_autosave",
+                  quantities: ["t", "step", "mx", "my", "mz", "e_drive"],
+                  sample_period_s: 5e-13,
+                  table_id: "default",
+                },
+              },
+              spin_wave_response: {
+                analysis: "gamma",
+                detrend: "linear",
+                response_component: "my",
+                schema_version: "spin_wave_response.request.v1",
+                susceptibility_floor_fraction: 1e-6,
+                weighting: "Ms_times_lumped_volume",
+                window: "hann",
+              },
               stage_id: "run-2",
               until_seconds: 3e-9,
             },

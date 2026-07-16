@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use fullmag_ir::{BackendPlanIR, ProblemIR};
+use fullmag_ir::{BackendPlanIR, ProblemIR, RegionalFieldDriveIR};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -608,7 +608,7 @@ pub(crate) fn materialize_script_stages(
                 stage.ir,
                 stage.entrypoint_kind,
                 action,
-            ));
+            )?);
         } else {
             let until_seconds =
                 resolve_script_until_seconds(&stage.ir, stage.default_until_seconds)?;
@@ -690,6 +690,9 @@ fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> Stage
             StageTransitionReason::DeviceChange,
             Some(StateTransferOperatorKind::IdentityCopy),
         ),
+        ResolvedScriptStageAction::AddFieldDrive { .. } => {
+            StageTransitionMetadata::continue_in_place()
+        }
     }
 }
 
@@ -753,10 +756,10 @@ fn same_magnet_topology(
 }
 
 fn resolve_explicit_stage_action(
-    ir: ProblemIR,
+    mut ir: ProblemIR,
     entrypoint_kind: String,
     action: ScriptExecutionStageAction,
-) -> ResolvedScriptStage {
+) -> Result<ResolvedScriptStage> {
     let (entrypoint_fallback, resolved_action) = match action {
         ScriptExecutionStageAction::SaveState {
             artifact_name,
@@ -804,13 +807,21 @@ fn resolve_explicit_stage_action(
             "study_pipeline_change_device",
             ResolvedScriptStageAction::ChangeDevice { device },
         ),
+        ScriptExecutionStageAction::AddFieldDrive { drive } => {
+            ensure_field_drive_can_be_added(&ir, &drive)?;
+            ir.field_drives.push(drive.clone());
+            (
+                "study_pipeline_add_field_drive",
+                ResolvedScriptStageAction::AddFieldDrive { drive },
+            )
+        }
     };
     let entrypoint = if entrypoint_kind.trim().is_empty() {
         entrypoint_fallback.to_string()
     } else {
         entrypoint_kind
     };
-    ResolvedScriptStage::synthetic(ir, entrypoint, resolved_action)
+    Ok(ResolvedScriptStage::synthetic(ir, entrypoint, resolved_action))
 }
 
 fn materialize_study_pipeline(
@@ -844,6 +855,7 @@ fn walk_study_pipeline_nodes(
     for node in nodes {
         match node {
             StudyPipelineNode::Primitive {
+                id,
                 enabled,
                 stage_kind,
                 payload,
@@ -853,7 +865,7 @@ fn walk_study_pipeline_nodes(
                 if !enabled {
                     continue;
                 }
-                if let Some(stage) = materialize_pipeline_primitive(
+                if let Some(mut stage) = materialize_pipeline_primitive(
                     current_ir,
                     stage_kind,
                     payload,
@@ -861,6 +873,10 @@ fn walk_study_pipeline_nodes(
                 )
                 .with_context(|| format!("failed to materialize study pipeline node '{label}'"))?
                 {
+                    stage.ir.problem_meta.runtime_metadata.insert(
+                        "active_stage_id".to_string(),
+                        Value::String(id.clone()),
+                    );
                     out.push(stage);
                 }
             }
@@ -925,11 +941,48 @@ fn materialize_pipeline_primitive(
         "load_state" => materialize_pipeline_load_state(current_ir, payload).map(Some),
         "export" => materialize_pipeline_export(current_ir, payload).map(Some),
         "change_device" => materialize_pipeline_change_device(current_ir, payload).map(Some),
+        "add_field_drive" => materialize_pipeline_add_field_drive(current_ir, payload).map(Some),
         other => bail!(
             "study pipeline primitive stage '{}' is not yet executable by the runtime; materialize it into explicit stages first",
             other
         ),
     }
+}
+
+fn materialize_pipeline_add_field_drive(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let drive_value = payload
+        .get("drive")
+        .cloned()
+        .context("study pipeline add_field_drive requires payload.drive")?;
+    let drive: RegionalFieldDriveIR = serde_json::from_value(drive_value)
+        .context("study pipeline add_field_drive payload.drive is invalid")?;
+    ensure_field_drive_can_be_added(current_ir, &drive)?;
+    current_ir.field_drives.push(drive.clone());
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_add_field_drive".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::AddFieldDrive { drive },
+    ))
+}
+
+fn ensure_field_drive_can_be_added(ir: &ProblemIR, drive: &RegionalFieldDriveIR) -> Result<()> {
+    if ir.field_drives.iter().any(|existing| existing.id == drive.id) {
+        bail!("study pipeline field drive id '{}' already exists", drive.id);
+    }
+    if ir
+        .field_drives
+        .iter()
+        .any(|existing| existing.name == drive.name)
+    {
+        bail!("study pipeline field drive name '{}' already exists", drive.name);
+    }
+    Ok(())
 }
 
 fn materialize_pipeline_macro(
@@ -1191,10 +1244,27 @@ fn materialize_pipeline_run(
     let mut ir = base_ir.clone();
     let mut dynamics = required_study_dynamics(&ir.study, "run pipeline stage")?;
     apply_dynamics_overrides(&mut dynamics, payload)?;
-    let sampling = time_domain_sampling_from(ir.study.sampling());
+    let sampling = match payload.get("sampling") {
+        Some(value) if !value.is_null() => serde_json::from_value(value.clone())
+            .context("run pipeline stage sampling is invalid")?,
+        _ => time_domain_sampling_from(ir.study.sampling()),
+    };
     let entrypoint_kind = payload_string(payload, "entrypoint_kind")
         .unwrap_or_else(|| "study_pipeline_run".to_string());
     ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    if let Some(request) = payload.get("spin_wave_response") {
+        if request.is_null() || request == &Value::Bool(false) {
+            ir.problem_meta
+                .runtime_metadata
+                .remove("spin_wave_response");
+        } else if request.is_object() {
+            ir.problem_meta
+                .runtime_metadata
+                .insert("spin_wave_response".to_string(), request.clone());
+        } else {
+            bail!("run pipeline stage spin_wave_response must be an object, false, or null");
+        }
+    }
     ir.study = fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling };
     let until_seconds = resolve_script_until_seconds(
         &ir,
@@ -4676,6 +4746,142 @@ mod tests {
         assert_eq!(stages[0].entrypoint_kind, "pipeline_run_after_context");
         assert_eq!(zeeman_field(&stages[0].ir), Some([0.0, 0.0, 0.025]));
         assert_eq!(stages[0].ir.current_density, Some([0.0, 2.5e10, 0.0]));
+    }
+
+    #[test]
+    fn materialize_script_stages_adds_field_drive_only_after_explicit_action() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(2e-9),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    StudyPipelineNode::Primitive {
+                        id: "relax".to_string(),
+                        label: "Relax".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("ui_authored".to_string()),
+                        stage_kind: "relax".to_string(),
+                        payload: serde_json::from_value(json!({"max_steps": 2}))
+                            .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "add-k0-antenna".to_string(),
+                        label: "Add antenna".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("ui_authored".to_string()),
+                        stage_kind: "add_field_drive".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "kind": "add_field_drive",
+                            "entrypoint_kind": "flat_add_field_drive",
+                            "drive": {
+                                "id": "k0-sinc",
+                                "name": "K0 sinc",
+                                "kind": "regional",
+                                "enabled": true,
+                                "target": {"kind": "global"},
+                                "amplitude_B_T": 0.001,
+                                "direction": [0.0, 1.0, 0.0],
+                                "spatial_profile": {"kind": "uniform"},
+                                "waveform": {
+                                    "kind": "sinc_pulse",
+                                    "cutoff_hz": 40000000000.0,
+                                    "t0": 5e-11,
+                                    "amplitude": 1.0
+                                },
+                                "time_origin": "stage_local",
+                                "activation": {"kind": "all_time_evolution"}
+                            }
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "excite".to_string(),
+                        label: "Run".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("ui_authored".to_string()),
+                        stage_kind: "run".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "entrypoint_kind": "flat_run",
+                            "until_seconds": 2e-9,
+                            "sampling": {
+                                "outputs": [
+                                    {"kind": "field", "name": "m", "every_seconds": 2e-12},
+                                    {"kind": "field", "name": "H_drive", "every_seconds": 5e-13}
+                                ],
+                                "table_autosave": {
+                                    "kind": "table_autosave",
+                                    "table_id": "default",
+                                    "sample_period_s": 5e-13,
+                                    "quantities": ["t", "step", "mx", "my", "mz", "e_drive"]
+                                }
+                            },
+                            "spin_wave_response": {
+                                "schema_version": "spin_wave_response.request.v1",
+                                "analysis": "gamma",
+                                "response_component": "my",
+                                "weighting": "Ms_times_lumped_volume",
+                                "detrend": "linear",
+                                "window": "hann",
+                                "susceptibility_floor_fraction": 1e-6
+                            }
+                        }))
+                        .expect("payload"),
+                    },
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        assert_eq!(stages.len(), 3);
+        assert!(stages[0].ir.field_drives.is_empty());
+        assert_eq!(stages[1].entrypoint_kind, "flat_add_field_drive");
+        assert_eq!(stages[1].until_seconds, 0.0);
+        assert_eq!(stages[1].ir.field_drives[0].id, "k0-sinc");
+        assert_eq!(stages[2].ir.field_drives[0].id, "k0-sinc");
+        assert!(matches!(
+            &stages[1].action,
+            Some(ResolvedScriptStageAction::AddFieldDrive { drive })
+                if drive.id == "k0-sinc"
+        ));
+        let sampling = stages[2].ir.study.sampling();
+        assert_eq!(
+            sampling
+                .table_autosave
+                .as_ref()
+                .map(|table| table.sample_period_s),
+            Some(5e-13)
+        );
+        assert_eq!(sampling.outputs.len(), 2);
+        assert_eq!(
+            stages[2]
+                .ir
+                .problem_meta
+                .runtime_metadata
+                .get("spin_wave_response")
+                .and_then(|value| value.get("analysis"))
+                .and_then(Value::as_str),
+            Some("gamma")
+        );
+        assert_eq!(
+            stages[1]
+                .incoming_transition
+                .as_ref()
+                .map(|transition| transition.kind),
+            Some(StageTransitionKind::ContinueInPlace)
+        );
+        assert_eq!(
+            stages[2]
+                .incoming_transition
+                .as_ref()
+                .map(|transition| transition.kind),
+            Some(StageTransitionKind::ContinueInPlace)
+        );
     }
 
     #[test]

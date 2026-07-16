@@ -145,6 +145,7 @@ import {
 } from "../StudyStageInspectorRouter";
 import type { StudyStageModel } from "../StudyInspectorPanelModel";
 import { ChangeDeviceStageInspector } from "./ChangeDeviceStageInspector";
+import { AddFieldDriveStageInspector } from "./AddFieldDriveStageInspector";
 import { EigenmodesStageInspector } from "./EigenmodesStageInspector";
 import { FrequencyResponseStageInspector } from "./FrequencyResponseStageInspector";
 import {
@@ -208,6 +209,14 @@ function render(
     "identity",
     "authoring",
     "telemetry",
+    "add-field-drive",
+    "add-field-waveform",
+    "add-field-activation",
+    "run-time-integration",
+    "run-drive",
+    "run-sampling",
+    "run-gamma-response",
+    "run-progress",
     "eigenmodes-command-center",
     "frequency-response-command-center",
   ],
@@ -244,6 +253,39 @@ describe("Study stage inspectors", () => {
     );
     expect(render(<RunStageInspector {...props("run")} />)).toContain(
       "Drive &amp; Dynamics",
+    );
+    expect(
+      render(
+        <AddFieldDriveStageInspector
+          {...props("add_field_drive")}
+          pipelineDrafts={[
+            createDefaultStudyStageDraft("relax", 0),
+            createDefaultStudyStageDraft("add_field_drive", 1),
+            { ...createDefaultStudyStageDraft("run", 2), untilSeconds: "2e-9" },
+          ]}
+        />,
+      ),
+    ).toContain("Regional Field Drive");
+    expect(
+      render(
+        <AddFieldDriveStageInspector
+          {...props("add_field_drive")}
+          pipelineDrafts={[
+            createDefaultStudyStageDraft("relax", 0),
+            createDefaultStudyStageDraft("add_field_drive", 1),
+            { ...createDefaultStudyStageDraft("run", 2), untilSeconds: "2e-9" },
+          ]}
+        />,
+      ),
+    ).toContain("Sampled source spectrum |FFT(B)|");
+    expect(render(<RunStageInspector {...props("run")} />)).toContain(
+      "Sampling &amp; Outputs",
+    );
+    expect(render(<RunStageInspector {...props("run")} />)).toContain(
+      "Gamma Response",
+    );
+    expect(render(<RunStageInspector {...props("run")} />)).toContain(
+      "Run Progress",
     );
     expect(
       render(<ChangeDeviceStageInspector {...props("change_device")} />),
@@ -498,6 +540,15 @@ describe("Study stage inspectors", () => {
     expect(
       resolveStudyStageInspectorKind("study.stage.action", "change_device"),
     ).toBe("change_device");
+  });
+
+  it("routes add-field-drive instructions to their dedicated inspector", () => {
+    expect(
+      resolveStudyStageInspectorKind("study.stage.add_field_drive", null),
+    ).toBe("add_field_drive");
+    expect(
+      resolveStudyStageInspectorKind("study.stage.action", "add_field_drive"),
+    ).toBe("add_field_drive");
   });
 
   it("resolves every frequency-domain authoring child to a narrow draft view", () => {

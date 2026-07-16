@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
 from uuid import uuid4
@@ -116,6 +116,29 @@ class LoadedProblem:
     workspace_problem: Problem | None = None
     auto_execute_stages: bool = False
 
+    def pipeline_base_problem(self, problem: Problem | None = None) -> Problem:
+        """Return the problem state before ordered field-drive actions run."""
+        candidate = problem or self.problem
+        introduced_ids: set[str] = set()
+        for stage in self.stages:
+            action = stage.action
+            if not isinstance(action, dict) or action.get("kind") != "add_field_drive":
+                continue
+            drive = action.get("drive")
+            drive_id = getattr(drive, "id", None)
+            if drive_id is None and isinstance(drive, dict):
+                drive_id = drive.get("id")
+            if isinstance(drive_id, str):
+                introduced_ids.add(drive_id)
+        if not introduced_ids:
+            return candidate
+        return replace(
+            candidate,
+            field_drives=tuple(
+                drive for drive in candidate.field_drives if drive.id not in introduced_ids
+            ),
+        )
+
     def study_pipeline_document(self) -> dict[str, object] | None:
         from fullmag.runtime.script_builder import export_study_pipeline_document
 
@@ -131,7 +154,8 @@ class LoadedProblem:
         include_geometry_assets: bool = True,
     ) -> dict[str, object]:
         study_pipeline = self.study_pipeline_document()
-        ir = self.problem.to_ir(
+        base_problem = self.pipeline_base_problem()
+        ir = base_problem.to_ir(
             requested_backend=requested_backend,
             execution_mode=execution_mode,
             execution_precision=execution_precision,
@@ -142,10 +166,15 @@ class LoadedProblem:
             include_geometry_assets=include_geometry_assets,
             study_pipeline=study_pipeline,
         )
-        if self.workspace_problem is None or self.workspace_problem == self.problem:
+        workspace_problem = (
+            self.pipeline_base_problem(self.workspace_problem)
+            if self.workspace_problem is not None
+            else None
+        )
+        if workspace_problem is None or workspace_problem == base_problem:
             return ir
 
-        workspace_ir = self.workspace_problem.to_ir(
+        workspace_ir = workspace_problem.to_ir(
             requested_backend=requested_backend,
             execution_mode=execution_mode,
             execution_precision=execution_precision,

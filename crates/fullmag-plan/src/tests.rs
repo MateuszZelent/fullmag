@@ -9792,6 +9792,53 @@ fn fdm_regional_field_drive_activation_is_resolved_for_active_stage() {
 }
 
 #[test]
+fn all_time_evolution_drive_is_planned_only_for_time_evolution() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let time_evolution = ir.study.clone();
+    let sampling = ir.study.sampling().clone();
+    ir.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: None,
+            energy_tolerance_j: None,
+            max_steps: Some(2),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "time-evolution-only".into(),
+        name: "Time evolution only".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Constant,
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
+    });
+
+    let relaxed = plan(&ir).expect("inactive drive should not invalidate relaxation");
+    let BackendPlanIR::Fdm(relaxed) = relaxed.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert!(relaxed.field_drives.is_empty());
+    assert!(relaxed.regional_field_drive_bases.is_empty());
+
+    ir.study = time_evolution;
+    let evolved = plan(&ir).expect("drive should be active during time evolution");
+    let BackendPlanIR::Fdm(evolved) = evolved.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert_eq!(evolved.field_drives.len(), 1);
+    assert_eq!(evolved.regional_field_drive_bases.len(), 1);
+}
+
+#[test]
 fn fdm_regional_field_drive_rejects_abm3_without_exact_stage_time_contract() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.field_drives.push(RegionalFieldDriveIR {

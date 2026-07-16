@@ -4102,6 +4102,7 @@ describe("ribbon structure", () => {
     expect(addStageGroup?.actions.map((action) => action.id)).toEqual(
       expect.arrayContaining([
         "study.add-relax-stage",
+        "study.add-field-drive-stage",
         "study.add-run-stage",
         "study.add-hysteresis-stage",
         "study.add-eigenmodes-stage",

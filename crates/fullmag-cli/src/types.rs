@@ -1,4 +1,4 @@
-use fullmag_ir::{GeometryAssetsIR, ProblemIR};
+use fullmag_ir::{GeometryAssetsIR, ProblemIR, RegionalFieldDriveIR};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -331,6 +331,9 @@ pub(crate) enum ScriptExecutionStageAction {
     ChangeDevice {
         device: String,
     },
+    AddFieldDrive {
+        drive: RegionalFieldDriveIR,
+    },
 }
 
 fn default_stage_action_artifact_name() -> String {
@@ -391,6 +394,9 @@ pub(crate) enum ResolvedScriptStageAction {
     },
     ChangeDevice {
         device: String,
+    },
+    AddFieldDrive {
+        drive: RegionalFieldDriveIR,
     },
 }
 

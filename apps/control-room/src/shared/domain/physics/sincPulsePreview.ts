@@ -17,8 +17,23 @@ export interface SincPulsePreviewModel {
   durationS: number;
   frequencyResolutionHz: number;
   nyquistHz: number;
+  nyquistStatus: "fail" | "pass" | "preview";
+  nyquistMessage: string;
+  maximumSamplePeriodForCutoffS: number;
   cutoffHz: number;
   t0S: number;
+  leftOfCenterS: number;
+  rightOfCenterS: number;
+  isSymmetricWindow: boolean;
+  symmetryMessage: string;
+}
+
+export interface HalfOpenSamplingClock {
+  durationS: number;
+  frequencyResolutionHz: number;
+  nyquistHz: number;
+  sampleCount: number;
+  samplePeriodS: number;
 }
 
 const MAX_FFT_SAMPLES = 16_384;
@@ -30,7 +45,10 @@ export function buildSincPulsePreview(input: SincPulsePreviewInput): SincPulsePr
   const declaredSamplePeriodS = validPositive(input.samplePeriodS) ? input.samplePeriodS : null;
   const hasDeclaredSampling = declaredSamplePeriodS !== null;
   const samplePeriodS = declaredSamplePeriodS ?? durationS / 256;
-  const sampleCount = Math.floor(durationS / samplePeriodS) + 1;
+  const sampleCount = resolveHalfOpenSamplingClock(
+    durationS,
+    samplePeriodS,
+  )?.sampleCount ?? 0;
   if (!validPositive(input.cutoffHz) || !validPositive(durationS) || !validPositive(samplePeriodS)) {
     return emptyModel(input, "unavailable", "Sinc preview requires finite positive cutoff and time window.");
   }
@@ -52,8 +70,28 @@ export function buildSincPulsePreview(input: SincPulsePreviewInput): SincPulsePr
       value: input.fieldAmplitudeT * input.waveformAmplitude * normalizedSinc(x),
     };
   });
-  const binCount = Math.min(Math.floor(sampleCount / 2), MAX_SPECTRUM_BINS);
-  const spectrum = Array.from({ length: binCount + 1 }, (_, frequencyIndex) => {
+  const frequencyResolutionHz = 1 / (sampleCount * samplePeriodS);
+  const nyquistHz = 1 / (2 * samplePeriodS);
+  const maximumSamplePeriodForCutoffS = 1 / (2 * input.cutoffHz);
+  const maximumPositiveBin = Math.floor(sampleCount / 2);
+  const relevantMaximumHz = Math.min(
+    nyquistHz,
+    Math.max(2 * input.cutoffHz, MAX_SPECTRUM_BINS * frequencyResolutionHz),
+  );
+  const relevantMaximumBin = Math.min(
+    maximumPositiveBin,
+    Math.ceil(relevantMaximumHz / frequencyResolutionHz),
+  );
+  const spectrumPointCount = Math.min(
+    relevantMaximumBin + 1,
+    MAX_SPECTRUM_BINS + 1,
+  );
+  const spectrumBins = Array.from({ length: spectrumPointCount }, (_, index) =>
+    spectrumPointCount === 1
+      ? 0
+      : Math.round(index * relevantMaximumBin / (spectrumPointCount - 1)),
+  );
+  const spectrum = spectrumBins.map((frequencyIndex) => {
     let real = 0;
     let imaginary = 0;
     for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
@@ -63,10 +101,17 @@ export function buildSincPulsePreview(input: SincPulsePreviewInput): SincPulsePr
       imaginary += value * Math.sin(phase);
     }
     return {
-      frequencyHz: frequencyIndex / (sampleCount * samplePeriodS),
+      frequencyHz: frequencyIndex * frequencyResolutionHz,
       magnitude: Math.hypot(real, imaginary) / sampleCount,
     };
   });
+  const leftOfCenterS = Math.max(input.t0S, 0);
+  const rightOfCenterS = Math.max(durationS - input.t0S, 0);
+  const symmetryToleranceS = Math.max(samplePeriodS * 0.5, durationS * 1e-12);
+  const isSymmetricWindow =
+    input.t0S >= 0 &&
+    input.t0S <= durationS &&
+    Math.abs(leftOfCenterS - rightOfCenterS) <= symmetryToleranceS;
   return {
     status: hasDeclaredSampling ? "ready" : "preview_only",
     message: hasDeclaredSampling
@@ -77,10 +122,27 @@ export function buildSincPulsePreview(input: SincPulsePreviewInput): SincPulsePr
     samplePeriodS,
     sampleCount,
     durationS,
-    frequencyResolutionHz: 1 / (sampleCount * samplePeriodS),
-    nyquistHz: 1 / (2 * samplePeriodS),
+    frequencyResolutionHz,
+    nyquistHz,
+    nyquistStatus: hasDeclaredSampling
+      ? nyquistHz + Math.abs(input.cutoffHz) * 1e-12 >= input.cutoffHz
+        ? "pass"
+        : "fail"
+      : "preview",
+    nyquistMessage: hasDeclaredSampling
+      ? nyquistHz + Math.abs(input.cutoffHz) * 1e-12 >= input.cutoffHz
+        ? "The effective t_sampling satisfies Nyquist for the authored sinc cutoff."
+        : "The effective t_sampling violates Nyquist: the antenna cutoff exceeds the response Nyquist frequency."
+      : "Nyquist verification is provisional until an effective table-autosave t_sampling is declared.",
+    maximumSamplePeriodForCutoffS,
     cutoffHz: input.cutoffHz,
     t0S: input.t0S,
+    leftOfCenterS,
+    rightOfCenterS,
+    isSymmetricWindow,
+    symmetryMessage: isSymmetricWindow
+      ? "The sampled time window is symmetric around t0."
+      : "The sampled time window is asymmetric around t0; the sinc tail is truncated unequally.",
   };
 }
 
@@ -102,8 +164,38 @@ function emptyModel(
     durationS,
     frequencyResolutionHz: 0,
     nyquistHz: 0,
+    nyquistStatus: "preview",
+    nyquistMessage:
+      "Nyquist verification is unavailable until the sampling clock is valid.",
+    maximumSamplePeriodForCutoffS: validPositive(input.cutoffHz)
+      ? 1 / (2 * input.cutoffHz)
+      : 0,
     cutoffHz: input.cutoffHz,
     t0S: input.t0S,
+    leftOfCenterS: Math.max(input.t0S, 0),
+    rightOfCenterS: Math.max(durationS - input.t0S, 0),
+    isSymmetricWindow: false,
+    symmetryMessage: "Sinc window symmetry is unavailable until the sampling clock is valid.",
+  };
+}
+
+export function resolveHalfOpenSamplingClock(
+  durationS: number,
+  samplePeriodS: number,
+): HalfOpenSamplingClock | null {
+  if (!validPositive(durationS) || !validPositive(samplePeriodS)) return null;
+  const ratio = durationS / samplePeriodS;
+  const nearestInteger = Math.round(ratio);
+  const sampleCount =
+    Math.abs(ratio - nearestInteger) <= 1e-12 * Math.max(1, Math.abs(ratio))
+      ? nearestInteger
+      : Math.ceil(ratio);
+  return {
+    durationS,
+    frequencyResolutionHz: 1 / (sampleCount * samplePeriodS),
+    nyquistHz: 1 / (2 * samplePeriodS),
+    sampleCount,
+    samplePeriodS,
   };
 }
 

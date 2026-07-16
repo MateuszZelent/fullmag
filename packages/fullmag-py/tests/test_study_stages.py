@@ -83,6 +83,172 @@ study.stages.add_run(stage_id="same", until=4e-12)
 """
             )
 
+    def test_add_field_drive_is_an_ordered_action_after_relaxation(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_minimize(stage_id="relax", method="bb", max_steps=2)
+study.stages.add_field_drive(
+    fm.RegionalFieldDrive(
+        id="k0-sinc-antenna",
+        name="Uniform transverse k0 sinc antenna",
+        target=fm.FieldTarget.global_domain(),
+        amplitude_B_T=1e-3,
+        direction=(0.0, 1.0, 0.0),
+        spatial_profile=fm.UniformFieldProfile(),
+        waveform=fm.SincPulse(cutoff_hz=40e9, t0=50e-12),
+        time_origin="stage_local",
+    ),
+    stage_id="add-antenna",
+)
+study.stages.add_run(stage_id="excite", until=2e-9, output_every=5e-13)
+"""
+        )
+
+        self.assertEqual(
+            [stage.stage_id for stage in loaded.stages],
+            ["relax", "add-antenna", "excite"],
+        )
+        self.assertEqual(loaded.stages[0].problem.field_drives, ())
+        self.assertEqual(loaded.stages[1].problem.field_drives, ())
+        for attribute in (
+            "magnets",
+            "energy",
+            "dynamics",
+            "discretization",
+            "runtime",
+            "auxiliary_geometries",
+            "current_modules",
+            "couplings",
+            "pbc",
+        ):
+            self.assertEqual(
+                getattr(loaded.stages[1].problem, attribute),
+                getattr(loaded.stages[0].problem, attribute),
+                f"{attribute} must pass unchanged from Relax to Add antenna",
+            )
+        self.assertEqual(loaded.stages[1].action["kind"], "add_field_drive")
+        self.assertEqual(
+            loaded.stages[1].action["drive"]["id"],
+            "k0-sinc-antenna",
+        )
+        self.assertEqual(
+            [drive.id for drive in loaded.stages[2].problem.field_drives],
+            ["k0-sinc-antenna"],
+        )
+        for attribute in (
+            "magnets",
+            "energy",
+            "dynamics",
+            "discretization",
+            "runtime",
+            "auxiliary_geometries",
+            "current_modules",
+            "couplings",
+            "pbc",
+        ):
+            self.assertEqual(
+                getattr(loaded.stages[2].problem, attribute),
+                getattr(loaded.stages[1].problem, attribute),
+                f"{attribute} must pass unchanged from Add antenna to Run",
+            )
+        self.assertEqual(
+            [drive.id for drive in loaded.workspace_problem.field_drives],
+            ["k0-sinc-antenna"],
+        )
+
+        pipeline = loaded.study_pipeline_document()
+        self.assertEqual(pipeline["nodes"][1]["stage_kind"], "add_field_drive")
+        self.assertEqual(
+            pipeline["nodes"][1]["payload"]["drive"]["id"],
+            "k0-sinc-antenna",
+        )
+
+    def test_add_field_drive_rejects_duplicate_drive_id_at_action_boundary(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate field drive id"):
+            _load(
+                _PREAMBLE
+                + """
+drive = fm.RegionalFieldDrive(
+    id="same-drive",
+    name="First drive",
+    target=fm.FieldTarget.global_domain(),
+    amplitude_B_T=1e-3,
+    direction=(0.0, 1.0, 0.0),
+    spatial_profile=fm.UniformFieldProfile(),
+    waveform=fm.Constant(),
+)
+study.stages.add_field_drive(drive, stage_id="add-first")
+study.stages.add_field_drive(
+    fm.RegionalFieldDrive(
+        id="same-drive",
+        name="Second drive",
+        target=fm.FieldTarget.global_domain(),
+        amplitude_B_T=1e-3,
+        direction=(0.0, 0.0, 1.0),
+        spatial_profile=fm.UniformFieldProfile(),
+        waveform=fm.Constant(),
+    ),
+    stage_id="add-second",
+)
+"""
+            )
+
+    def test_run_owns_sampling_outputs_and_gamma_response_request(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_minimize(stage_id="relax", method="bb", max_steps=2)
+study.stages.add_run(
+    stage_id="excite",
+    until=2e-9,
+    outputs=[
+        fm.SaveField("m", every=2e-12),
+        fm.SaveField("H_drive", every=5e-13),
+    ],
+    table_autosave=fm.TableAutosave(
+        t_sampl=5e-13,
+        quantities=["time", "step", "mx", "my", "mz", "E_drive"],
+    ),
+    spin_wave_response=fm.GammaResponseAnalysis(
+        response_component="my",
+        detrend="linear",
+        window="hann",
+        susceptibility_floor_fraction=1e-6,
+    ),
+)
+"""
+        )
+
+        relax_sampling = loaded.stages[0].problem.study.to_ir()["sampling"]
+        run_ir = loaded.stages[1].problem.to_ir(include_geometry_assets=False)
+        run_sampling = run_ir["study"]["sampling"]
+        self.assertIsNone(relax_sampling.get("table_autosave"))
+        self.assertEqual(run_sampling["table_autosave"]["sample_period_s"], 5e-13)
+        self.assertEqual(
+            run_sampling["table_autosave"]["quantities"],
+            ["t", "step", "mx", "my", "mz", "e_drive"],
+        )
+        self.assertEqual(
+            run_sampling["outputs"],
+            [
+                {"kind": "field", "name": "m", "every_seconds": 2e-12},
+                {"kind": "field", "name": "H_drive", "every_seconds": 5e-13},
+            ],
+        )
+        self.assertEqual(
+            run_ir["problem_meta"]["runtime_metadata"]["spin_wave_response"],
+            {
+                "schema_version": "spin_wave_response.request.v1",
+                "analysis": "gamma",
+                "response_component": "my",
+                "weighting": "Ms_times_lumped_volume",
+                "detrend": "linear",
+                "window": "hann",
+                "susceptibility_floor_fraction": 1e-6,
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

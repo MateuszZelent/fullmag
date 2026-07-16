@@ -2473,7 +2473,7 @@ pub(crate) fn plan_fem(
     let dbulk_field = material.dbulk_field.clone();
     let antenna_zeeman_masks = resolve_prescribed_zeeman_masks(problem, &mesh.nodes, None)?;
     let active_field_drives: Vec<_> = problem.field_drives.iter()
-        .filter(|drive| crate::util::field_drive_is_active(drive, crate::util::active_stage_id(problem)))
+        .filter(|drive| crate::util::field_drive_is_active(drive, problem))
         .cloned().collect();
     let field_drive_geometry_masks = active_field_drives.iter().filter_map(|drive| {
         let fullmag_ir::FieldSpatialProfileIR::GeometryMask { object_id, .. } = &drive.spatial_profile else {

@@ -305,6 +305,10 @@ bool copy_regional_field_drive_plan(
         error = "regional field drives null/count mismatch";
         return false;
     }
+    if (!std::isfinite(plan.stage_start_time_s) || plan.stage_start_time_s < 0.0) {
+        error = "regional field drive stage start time must be finite and non-negative";
+        return false;
+    }
     ctx.zeeman.regional_drives.clear();
     ctx.zeeman.stage_start_time_s = plan.stage_start_time_s;
     for (uint64_t index = 0; index < plan.regional_field_drive_count; ++index) {
@@ -326,6 +330,10 @@ bool copy_regional_field_drive_plan(
             error = "regional field drive target markers null/count mismatch";
             return false;
         }
+        if (source.target.kind > FULLMAG_FEM_FIELD_TARGET_ELEMENT_MARKERS) {
+            error = "regional field drive target kind is unsupported";
+            return false;
+        }
         if (source.target.kind == FULLMAG_FEM_FIELD_TARGET_ELEMENT_MARKERS &&
             source.target.element_marker_count == 0) {
             error = "regional field drive marker target must not be empty";
@@ -339,8 +347,13 @@ bool copy_regional_field_drive_plan(
             source.direction[0] * source.direction[0] +
             source.direction[1] * source.direction[1] +
             source.direction[2] * source.direction[2]);
-        if (!std::isfinite(source.amplitude_b_t) || !std::isfinite(norm) || norm <= 0.0) {
-            error = "regional field drive amplitude/direction must be finite and direction nonzero";
+        if (!std::isfinite(source.amplitude_b_t) || source.amplitude_b_t < 0.0 ||
+            !std::isfinite(norm) || norm <= 0.0) {
+            error = "regional field drive amplitude must be finite and non-negative; direction must be finite and nonzero";
+            return false;
+        }
+        if (source.time_origin > FULLMAG_FEM_TIME_ABSOLUTE) {
+            error = "regional field drive time origin is unsupported";
             return false;
         }
         RegionalFieldDriveRuntime drive;

@@ -7,6 +7,7 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { validateStudyStageDraft } from "./StudyStageAuthoringModel";
 import { useStudyInspectorPanelController } from "./StudyInspectorPanel";
 import { ChangeDeviceStageInspector } from "./stages/ChangeDeviceStageInspector";
+import { AddFieldDriveStageInspector } from "./stages/AddFieldDriveStageInspector";
 import { EigenmodesStageInspector } from "./stages/EigenmodesStageInspector";
 import { FrequencyResponseStageInspector } from "./stages/FrequencyResponseStageInspector";
 import { HysteresisStageInspector } from "./stages/HysteresisStageInspector";
@@ -61,9 +62,11 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     onCommit: () => void commitStageDrafts(),
     onUpdateDraft: (patch: Partial<(typeof state.stageDrafts)[number]>) =>
       dispatch({ type: "updateStageDraft", index: selectedIndex, patch }),
+    pipelineDrafts: state.stageDrafts,
     requestedBackend: model.requested.backend,
     requestedDevice: model.requested.device,
     requestedMode: model.requested.mode,
+    scene: scene.data ?? null,
     runRuntimeCommand: runCommand,
     runtimeCommandDisabledReason: commandDisabledReason,
     stage: model.selectedStage,
@@ -84,6 +87,9 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         "identity",
         "authoring",
         "telemetry",
+        "add-field-drive",
+        "add-field-waveform",
+        "add-field-activation",
         "eigenmodes-command-center",
         "frequency-response-command-center",
         "relax-results",
@@ -108,7 +114,13 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
         "hysteresis-current-field",
       ]}
     >
-      {inspectorKind === "run" ? (
+      {inspectorKind === "add_field_drive" ? (
+        <AddFieldDriveStageInspector
+          {...commonProps}
+          expectedKind="add_field_drive"
+          kindLabel="Add Antenna"
+        />
+      ) : inspectorKind === "run" ? (
         <RunStageInspector
           {...commonProps}
           expectedKind="run"
@@ -227,6 +239,7 @@ export function resolveStudyStageInspectorKind(
   if (selectionKind === "study.stage.action" && selectedStageKind) {
     return selectedStageKind;
   }
+  if (selectionKind === "study.stage.add_field_drive") return "add_field_drive";
   if (selectionKind === "study.stage.run") return "run";
   if (selectionKind === "study.stage.change_device") return "change_device";
   if (selectionKind === "study.stage.hysteresis") return "hysteresis";

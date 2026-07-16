@@ -1,5 +1,11 @@
-import type { AuthoringTransactionRequest, JsonObject, JsonValue } from "@/kernel/api/apiTypes";
+import type {
+  AuthoringTransactionRequest,
+  JsonObject,
+  JsonValue,
+  RegionalFieldDriveResource,
+} from "@/kernel/api/apiTypes";
 import { DEFAULT_RELAX_TORQUE_APM } from "@/shared/domain/physics/torqueUnits";
+import { validateFieldDriveDraft } from "@/shared/domain/physics/fieldDrive";
 import {
   DEFAULT_HYSTERESIS_BRANCH_MODE,
   DEFAULT_HYSTERESIS_FIELD_MAX_MT,
@@ -110,6 +116,7 @@ const SPECTRAL_EQUILIBRIUM_SOURCE_ALIASES: Record<string, string> = {
 const MAX_HYSTERESIS_AUTHORING_FIELD_POINTS = 10_000;
 
 export type StudyStageDraftKind =
+  | "add_field_drive"
   | "change_device"
   | "eigenmodes"
   | "frequency_response"
@@ -117,6 +124,27 @@ export type StudyStageDraftKind =
   | "relax"
   | "run"
   | "save_state";
+
+export interface StudyRunOutputDraft {
+  enabled: boolean;
+  everySeconds: string;
+  kind: "field" | "scalar";
+  name: string;
+  raw?: JsonObject;
+  readOnly?: boolean;
+}
+
+export interface StudyRunSamplingDraft {
+  gammaDetrend: "none" | "mean" | "linear";
+  gammaResponseComponent: "my" | "mz";
+  gammaResponseEnabled: boolean;
+  gammaWindow: "hann";
+  outputs: StudyRunOutputDraft[];
+  samplePeriodS: string;
+  susceptibilityFloorFraction: string;
+  tableAutosaveEnabled: boolean;
+  tableQuantities: string;
+}
 
 export interface StudyStageDraft {
   algorithm: string;
@@ -140,6 +168,7 @@ export interface StudyStageDraft {
   fieldMinMt: string;
   fieldStepMt: string;
   fieldSteps: string;
+  fieldDrive: RegionalFieldDriveResource;
   format: string;
   frequenciesHz: string;
   includeDemag: boolean;
@@ -157,6 +186,7 @@ export interface StudyStageDraft {
   observable: string;
   operator: string;
   relaxAlpha: string;
+  runSampling: StudyRunSamplingDraft;
   solver: string;
   solverMethod: string;
   stageId: string;
@@ -198,6 +228,63 @@ export interface StudyStageDraftValidation {
   message: string;
   severity: "error" | "warning";
 }
+
+const DEFAULT_FIELD_DRIVE: RegionalFieldDriveResource = {
+  activation: { kind: "all_time_evolution" },
+  amplitude_B_T: 1e-3,
+  direction: [0, 1, 0],
+  enabled: true,
+  id: "k0-sinc-antenna",
+  kind: "regional",
+  name: "Uniform transverse k0 sinc antenna",
+  spatial_profile: { kind: "uniform" },
+  target: { kind: "global" },
+  time_origin: "stage_local",
+  waveform: {
+    amplitude: 1,
+    cutoff_hz: 40e9,
+    kind: "sinc_pulse",
+    t0: 50e-12,
+  },
+};
+
+const DEFAULT_RUN_SAMPLING: StudyRunSamplingDraft = {
+  gammaDetrend: "linear",
+  gammaResponseComponent: "my",
+  gammaResponseEnabled: true,
+  gammaWindow: "hann",
+  outputs: [
+    { enabled: true, everySeconds: "2e-12", kind: "field", name: "m" },
+    {
+      enabled: true,
+      everySeconds: "5e-13",
+      kind: "field",
+      name: "H_drive",
+    },
+    {
+      enabled: false,
+      everySeconds: "2e-12",
+      kind: "field",
+      name: "H_demag",
+    },
+    {
+      enabled: false,
+      everySeconds: "2e-12",
+      kind: "field",
+      name: "H_eff",
+    },
+    {
+      enabled: false,
+      everySeconds: "1e-11",
+      kind: "field",
+      name: "demag_phi",
+    },
+  ],
+  samplePeriodS: "5e-13",
+  susceptibilityFloorFraction: "1e-6",
+  tableAutosaveEnabled: true,
+  tableQuantities: "t, step, mx, my, mz, e_drive",
+};
 
 export function relaxationAlgorithmAvailability(
   algorithm: string,
@@ -257,6 +344,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   fieldMinMt: "",
   fieldStepMt: "",
   fieldSteps: "",
+  fieldDrive: DEFAULT_FIELD_DRIVE,
   format: "",
   frequenciesHz: "1e9",
   includeDemag: true,
@@ -274,6 +362,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   observable: "susceptibility_tensor",
   operator: "linearized_llg",
   relaxAlpha: "1",
+  runSampling: DEFAULT_RUN_SAMPLING,
   solver: "rk23",
   solverMethod: "auto",
   stageId: "",
@@ -332,6 +421,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   fieldMinMt: "",
   fieldStepMt: "",
   fieldSteps: "",
+  fieldDrive: DEFAULT_FIELD_DRIVE,
   format: "",
   frequenciesHz: "1e9",
   includeDemag: true,
@@ -349,6 +439,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   observable: "susceptibility_tensor",
   operator: "linearized_llg",
   relaxAlpha: "",
+  runSampling: DEFAULT_RUN_SAMPLING,
   solver: "",
   solverMethod: "auto",
   stageId: "",
@@ -383,6 +474,12 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   minorLoops: "",
   storagePolicy: "",
   storageEstimateAcknowledged: false,
+};
+
+const DEFAULT_ADD_FIELD_DRIVE_STAGE_DRAFT: StudyStageDraft = {
+  ...DEFAULT_RUN_STAGE_DRAFT,
+  kind: "add_field_drive",
+  untilSeconds: "",
 };
 
 const DEFAULT_EIGENMODES_STAGE_DRAFT: StudyStageDraft = {
@@ -460,10 +557,26 @@ export function createStudyStageDraft(
 ): StudyStageDraft {
   const record = asRecord(stage);
   const kind = stageKind(record);
+  if (kind === "add_field_drive") {
+    const action = asRecord(record?.action);
+    const payload = asRecord(record?.payload);
+    return cloneStudyStageDraft({
+      ...DEFAULT_ADD_FIELD_DRIVE_STAGE_DRAFT,
+      fieldDrive: regionalFieldDriveValue(
+        record?.drive ?? action?.drive ?? payload?.drive,
+        DEFAULT_FIELD_DRIVE,
+      ),
+      stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
+    });
+  }
   if (kind === "run") {
+    const fixedTimestep = scalarText(record?.fixed_timestep, "");
     return {
       ...DEFAULT_RUN_STAGE_DRAFT,
+      dt: fixedTimestep || DEFAULT_RUN_STAGE_DRAFT.dt,
+      runSampling: runSamplingDraft(record),
       stageId: stringValue(record?.stage_id ?? record?.id, `stage-${index + 1}`),
+      timestepMode: fixedTimestep ? "fixed" : "auto",
       untilSeconds: scalarText(
         record?.until_seconds ??
           record?.until ??
@@ -737,7 +850,9 @@ export function createDefaultStudyStageDraft(
   stageCount: number,
 ): StudyStageDraft {
   const base =
-    kind === "run"
+    kind === "add_field_drive"
+      ? DEFAULT_ADD_FIELD_DRIVE_STAGE_DRAFT
+      : kind === "run"
       ? DEFAULT_RUN_STAGE_DRAFT
       : kind === "eigenmodes"
         ? DEFAULT_EIGENMODES_STAGE_DRAFT
@@ -750,23 +865,75 @@ export function createDefaultStudyStageDraft(
               : kind === "change_device"
                 ? DEFAULT_CHANGE_DEVICE_STAGE_DRAFT
                 : DEFAULT_RELAX_STAGE_DRAFT;
-  return {
+  return cloneStudyStageDraft({
     ...base,
     kind,
     stageId: `${kind}-${stageCount + 1}`,
-  };
+  });
 }
 
 export function studyStageDraftToSceneStage(
   draft: StudyStageDraft,
 ): JsonObject {
-  if (draft.kind === "run") {
+  if (draft.kind === "add_field_drive") {
     return {
+      drive: structuredClone(draft.fieldDrive) as unknown as JsonObject,
+      entrypoint_kind: "flat_add_field_drive",
+      kind: "add_field_drive",
+      stage_id: requiredText(draft.stageId, "add-field-drive"),
+    };
+  }
+  if (draft.kind === "run") {
+    const stage: JsonObject = {
       entrypoint_kind: "flat_run",
       kind: "run",
       stage_id: requiredText(draft.stageId, "run"),
       until_seconds: requiredNumber(draft.untilSeconds, "until_seconds"),
     };
+    if (draft.timestepMode === "fixed" && draft.dt.trim() && draft.dt.trim() !== "auto") {
+      stage.fixed_timestep = requiredNumber(draft.dt, "fixed_timestep");
+    }
+    const outputs = draft.runSampling.outputs
+      .filter((output) => output.enabled)
+      .map((output) => {
+        if (output.readOnly && output.raw) return structuredClone(output.raw);
+        return {
+          every_seconds: requiredNumber(
+            output.everySeconds,
+            `${output.name || "output"}_every_seconds`,
+          ),
+          kind: output.kind,
+          name: requiredText(output.name, "output"),
+        } satisfies JsonObject;
+      });
+    const sampling: JsonObject = { outputs };
+    if (draft.runSampling.tableAutosaveEnabled) {
+      sampling.table_autosave = {
+        kind: "table_autosave",
+        quantities: commaSeparatedValues(draft.runSampling.tableQuantities),
+        sample_period_s: requiredNumber(
+          draft.runSampling.samplePeriodS,
+          "sample_period_s",
+        ),
+        table_id: "default",
+      };
+    }
+    stage.sampling = sampling;
+    if (draft.runSampling.gammaResponseEnabled) {
+      stage.spin_wave_response = {
+        analysis: "gamma",
+        detrend: draft.runSampling.gammaDetrend,
+        response_component: draft.runSampling.gammaResponseComponent,
+        schema_version: "spin_wave_response.request.v1",
+        susceptibility_floor_fraction: requiredFraction(
+          draft.runSampling.susceptibilityFloorFraction,
+          "susceptibility_floor_fraction",
+        ),
+        weighting: "Ms_times_lumped_volume",
+        window: draft.runSampling.gammaWindow,
+      };
+    }
+    return stage;
   }
   if (draft.kind === "eigenmodes") {
     const stage = spectralSceneStage(draft, "eigenmodes");
@@ -1003,8 +1170,66 @@ export function validateStudyStageDraft(
   if (!draft.stageId.trim()) {
     issues.push({ message: "Stage ID is required.", severity: "error" });
   }
+  if (draft.kind === "add_field_drive") {
+    for (const message of validateFieldDriveDraft(draft.fieldDrive)) {
+      issues.push({ message, severity: "error" });
+    }
+    return issues;
+  }
   if (draft.kind === "run") {
     validatePositiveNumber(issues, draft.untilSeconds, "Until seconds", true);
+    if (draft.timestepMode === "fixed") {
+      validatePositiveNumber(issues, draft.dt, "Fixed timestep", true);
+    }
+    if (draft.runSampling.tableAutosaveEnabled) {
+      validatePositiveNumber(
+        issues,
+        draft.runSampling.samplePeriodS,
+        "Response t_sampling",
+        true,
+      );
+      if (commaSeparatedValues(draft.runSampling.tableQuantities).length === 0) {
+        issues.push({
+          message: "Table autosave requires at least one quantity.",
+          severity: "error",
+        });
+      }
+    }
+    const enabledOutputs = draft.runSampling.outputs.filter(
+      (output) => output.enabled,
+    );
+    if (enabledOutputs.length === 0) {
+      issues.push({
+        message: "Run sampling requires at least one enabled output.",
+        severity: "error",
+      });
+    }
+    for (const output of enabledOutputs) {
+      if (!output.name.trim()) {
+        issues.push({ message: "Output name is required.", severity: "error" });
+      }
+      validatePositiveNumber(
+        issues,
+        output.everySeconds,
+        `Output ${output.name || "unnamed"} cadence`,
+        true,
+      );
+    }
+    if (draft.runSampling.gammaResponseEnabled) {
+      if (!draft.runSampling.tableAutosaveEnabled) {
+        issues.push({
+          message: "Gamma response FFT requires stage-local table autosave.",
+          severity: "error",
+        });
+      }
+      const floor = Number(draft.runSampling.susceptibilityFloorFraction);
+      if (!Number.isFinite(floor) || floor < 0 || floor >= 1) {
+        issues.push({
+          message: "Susceptibility floor fraction must be in [0, 1).",
+          severity: "error",
+        });
+      }
+    }
     return issues;
   }
   if (draft.kind === "eigenmodes") {
@@ -2471,6 +2696,7 @@ function validatePositiveInteger(
 function stageKind(record: JsonRecord | null): StudyStageDraftKind {
   const kind = String(record?.kind ?? record?.entrypoint_kind ?? "relax");
   const normalized = kind.toLowerCase();
+  if (normalized.includes("add_field_drive")) return "add_field_drive";
   if (normalized.includes("change_device")) return "change_device";
   if (normalized.includes("frequency")) return "frequency_response";
   if (normalized.includes("eigen")) return "eigenmodes";
@@ -2478,6 +2704,109 @@ function stageKind(record: JsonRecord | null): StudyStageDraftKind {
   if (normalized.includes("save")) return "save_state";
   if (normalized.includes("run")) return "run";
   return "relax";
+}
+
+function cloneStudyStageDraft(draft: StudyStageDraft): StudyStageDraft {
+  return {
+    ...draft,
+    fieldDrive: structuredClone(draft.fieldDrive),
+    runSampling: {
+      ...draft.runSampling,
+      outputs: draft.runSampling.outputs.map((output) => ({
+        ...output,
+        raw: output.raw ? structuredClone(output.raw) : undefined,
+      })),
+    },
+  };
+}
+
+function regionalFieldDriveValue(
+  value: unknown,
+  fallback: RegionalFieldDriveResource,
+): RegionalFieldDriveResource {
+  const record = asRecord(value);
+  if (!record) return structuredClone(fallback);
+  const direction = Array.isArray(record.direction)
+    ? record.direction.filter((component): component is number => typeof component === "number")
+    : fallback.direction;
+  const activation = asRecord(record.activation);
+  const spatialProfile = asRecord(record.spatial_profile);
+  const target = asRecord(record.target);
+  const waveform = asRecord(record.waveform);
+  return {
+    ...structuredClone(fallback),
+    ...record,
+    activation: (activation ?? fallback.activation) as RegionalFieldDriveResource["activation"],
+    amplitude_B_T:
+      typeof record.amplitude_B_T === "number"
+        ? record.amplitude_B_T
+        : fallback.amplitude_B_T,
+    direction,
+    enabled:
+      typeof record.enabled === "boolean" ? record.enabled : fallback.enabled,
+    id: stringValue(record.id, fallback.id),
+    kind: "regional",
+    name: stringValue(record.name, fallback.name),
+    spatial_profile: (spatialProfile ?? fallback.spatial_profile) as RegionalFieldDriveResource["spatial_profile"],
+    target: (target ?? fallback.target) as RegionalFieldDriveResource["target"],
+    time_origin:
+      record.time_origin === "absolute" ? "absolute" : "stage_local",
+    waveform: (waveform ?? fallback.waveform) as RegionalFieldDriveResource["waveform"],
+  } as RegionalFieldDriveResource;
+}
+
+function runSamplingDraft(record: JsonRecord | null): StudyRunSamplingDraft {
+  const sampling = asRecord(record?.sampling);
+  const tableAutosave = asRecord(
+    sampling?.table_autosave ?? sampling?.tableautosave,
+  );
+  const response = asRecord(record?.spin_wave_response);
+  if (!sampling && !response) {
+    return cloneStudyStageDraft(DEFAULT_RUN_STAGE_DRAFT).runSampling;
+  }
+  const outputValues = Array.isArray(sampling?.outputs) ? sampling.outputs : [];
+  return {
+    gammaDetrend:
+      response?.detrend === "none" ||
+      response?.detrend === "mean" ||
+      response?.detrend === "linear"
+        ? response.detrend
+        : DEFAULT_RUN_SAMPLING.gammaDetrend,
+    gammaResponseComponent:
+      response?.response_component === "mz" ? "mz" : "my",
+    gammaResponseEnabled: response !== null,
+    gammaWindow: "hann",
+    outputs: outputValues.map(runOutputDraft),
+    samplePeriodS: scalarText(
+      tableAutosave?.sample_period_s ?? tableAutosave?.every_seconds,
+      DEFAULT_RUN_SAMPLING.samplePeriodS,
+    ),
+    susceptibilityFloorFraction: scalarText(
+      response?.susceptibility_floor_fraction,
+      DEFAULT_RUN_SAMPLING.susceptibilityFloorFraction,
+    ),
+    tableAutosaveEnabled: tableAutosave !== null,
+    tableQuantities: Array.isArray(tableAutosave?.quantities)
+      ? tableAutosave.quantities.map(String).join(", ")
+      : DEFAULT_RUN_SAMPLING.tableQuantities,
+  };
+}
+
+function runOutputDraft(value: unknown): StudyRunOutputDraft {
+  const record = asRecord(value);
+  const kind = record?.kind;
+  const supported = kind === "field" || kind === "scalar";
+  return {
+    enabled: record?.enabled !== false,
+    everySeconds: scalarText(record?.every_seconds, ""),
+    kind: kind === "scalar" ? "scalar" : "field",
+    name: scalarText(record?.name ?? record?.field ?? record?.scalar, ""),
+    raw:
+      record && !supported
+        ? (structuredClone(record) as JsonObject)
+        : undefined,
+    readOnly: !supported,
+  };
 }
 
 function spectralDraft(
@@ -2820,6 +3149,21 @@ function requiredNumber(value: string, field: string): number {
     throw new Error(`${field} must be a positive finite number.`);
   }
   return parsed;
+}
+
+function requiredFraction(value: string, field: string): number {
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed >= 1) {
+    throw new Error(`${field} must be in [0, 1).`);
+  }
+  return parsed;
+}
+
+function commaSeparatedValues(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function requiredSignedNumber(value: string, field: string): number {

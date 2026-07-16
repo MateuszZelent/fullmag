@@ -71,6 +71,7 @@ from fullmag.model.study import (
     MinorLoop,
     PiecewiseFieldSchedule,
     FrequencyResponseSolverPolicy,
+    GammaResponseAnalysis,
     RelaxStop,
     Relaxation,
     SaturationProbe,
@@ -1913,6 +1914,9 @@ class RelaxStageSpec:
 @dataclass(frozen=True, slots=True)
 class RunStageSpec:
     until: float
+    outputs: Sequence[SaveField | SaveScalar | Snapshot] | None = None
+    table_autosave: TableAutosave | bool | None = None
+    spin_wave_response: GammaResponseAnalysis | bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2292,10 +2296,21 @@ def relax_stage(
     )
 
 
-def run_stage(until: float) -> RunStageSpec:
+def run_stage(
+    until: float,
+    *,
+    outputs: Sequence[SaveField | SaveScalar | Snapshot] | None = None,
+    table_autosave: TableAutosave | bool | None = None,
+    spin_wave_response: GammaResponseAnalysis | bool | None = None,
+) -> RunStageSpec:
     if until <= 0.0:
         raise ValueError("run_stage(until) requires a positive stop time")
-    return RunStageSpec(until=until)
+    return RunStageSpec(
+        until=until,
+        outputs=outputs,
+        table_autosave=table_autosave,
+        spin_wave_response=spin_wave_response,
+    )
 
 
 def eigenmodes_stage(
@@ -2483,8 +2498,44 @@ def _capture_stage(stage_spec: object) -> CapturedStage:
             default_until_seconds=None,
         )
     if isinstance(stage_spec, RunStageSpec):
+        problem = _build_problem()
+        if not isinstance(problem.study, TimeEvolution):
+            raise TypeError("run stage requires a time-evolution study")
+        outputs = (
+            tuple(stage_spec.outputs)
+            if stage_spec.outputs is not None
+            else tuple(problem.study.outputs)
+        )
+        if stage_spec.table_autosave is None:
+            table_autosave = problem.study._table_autosave
+        elif stage_spec.table_autosave is False:
+            table_autosave = None
+        elif isinstance(stage_spec.table_autosave, TableAutosave):
+            table_autosave = stage_spec.table_autosave
+        else:
+            raise TypeError("table_autosave must be TableAutosave, False, or None")
+        runtime_metadata = copy.deepcopy(problem.runtime_metadata)
+        if stage_spec.spin_wave_response is False:
+            runtime_metadata.pop("spin_wave_response", None)
+        elif isinstance(stage_spec.spin_wave_response, GammaResponseAnalysis):
+            runtime_metadata["spin_wave_response"] = (
+                stage_spec.spin_wave_response.to_runtime_metadata()
+            )
+        elif stage_spec.spin_wave_response is not None:
+            raise TypeError(
+                "spin_wave_response must be GammaResponseAnalysis, False, or None"
+            )
+        problem = replace(
+            problem,
+            study=TimeEvolution(
+                dynamics=problem.study.dynamics,
+                outputs=outputs,
+                table_autosave=table_autosave,
+            ),
+            runtime_metadata=runtime_metadata,
+        )
         return CapturedStage(
-            problem=_build_problem(),
+            problem=problem,
             entrypoint_kind="flat_run",
             default_until_seconds=stage_spec.until,
         )
@@ -3033,15 +3084,48 @@ class StudyStagesBuilder:
         *,
         stage_id: str | None = None,
         output_every: float | None = None,
+        outputs: Sequence[SaveField | SaveScalar | Snapshot] | None = None,
+        table_autosave: TableAutosave | bool | None = None,
+        spin_wave_response: GammaResponseAnalysis | bool | None = None,
     ) -> "StudyStagesBuilder":
         if until is None:
             raise TypeError("add_run() requires until")
         return self.add_stage(
-            run_stage(until),
+            run_stage(
+                until,
+                outputs=outputs,
+                table_autosave=table_autosave,
+                spin_wave_response=spin_wave_response,
+            ),
             stage_id=stage_id,
             output_every=output_every,
             id_kind="run",
         )
+
+    def add_field_drive(
+        self,
+        drive: RegionalFieldDrive,
+        *,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Add a regional field drive after all preceding pipeline stages."""
+        if not isinstance(drive, RegionalFieldDrive):
+            raise TypeError("add_field_drive() requires RegionalFieldDrive")
+        resolved_id = self._allocate_stage_id("add-field-drive", stage_id)
+        problem_before_action = _build_problem()
+        StudyFieldDriveRegistry().add(drive)
+        _state._declared_stages.append(
+            CapturedStage(
+                problem=problem_before_action,
+                entrypoint_kind="flat_add_field_drive",
+                default_until_seconds=None,
+                action={"kind": "add_field_drive", "drive": drive.to_ir()},
+                stage_id=resolved_id,
+            )
+        )
+        if _state._interactive:
+            _state._wait_for_solve = True
+        return self
 
     def add_minimize(
         self,

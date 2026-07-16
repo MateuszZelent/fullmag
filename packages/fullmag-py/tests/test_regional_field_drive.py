@@ -140,6 +140,30 @@ class RegionalFieldDriveTests(unittest.TestCase):
                 id="bad",
                 name="Bad",
                 target=fm.FieldTarget.global_domain(),
+                amplitude_B_T=float("nan"),
+                direction=(0.0, 1.0, 0.0),
+                spatial_profile=fm.UniformFieldProfile(),
+                waveform=fm.Constant(),
+            ),
+            lambda: fm.RegionalFieldDrive(
+                id="bad",
+                name="Bad",
+                target=fm.FieldTarget.global_domain(),
+                amplitude_B_T=float("inf"),
+                direction=(0.0, 1.0, 0.0),
+                spatial_profile=fm.UniformFieldProfile(),
+                waveform=fm.Constant(),
+            ),
+            lambda: fm.PiecewiseLinear(
+                [(0.0, 0.0), (float("nan"), 1.0)]
+            ),
+            lambda: fm.PiecewiseLinear(
+                [(0.0, 0.0), (1e-12, float("nan"))]
+            ),
+            lambda: fm.RegionalFieldDrive(
+                id="bad",
+                name="Bad",
+                target=fm.FieldTarget.global_domain(),
                 amplitude_B_T=1e-3,
                 direction=(0.0, 0.0, 0.0),
                 spatial_profile=fm.UniformFieldProfile(),

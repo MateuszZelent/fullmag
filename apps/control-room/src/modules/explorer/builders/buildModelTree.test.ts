@@ -1282,6 +1282,7 @@ describe("buildModelTree", () => {
     ).toEqual(
       expect.arrayContaining([
         "study.add-relax-stage",
+        "study.add-field-drive-stage",
         "study.add-run-stage",
         "study.add-hysteresis-stage",
         "study.add-eigenmodes-stage",
@@ -1416,6 +1417,36 @@ describe("buildModelTree", () => {
     expect(flattened.map((node) => node.id)).not.toContain(
       "model:study:run",
     );
+  });
+
+  it("builds an explicit Add Antenna pipeline instruction node", () => {
+    const snapshot = modelTreeSnapshotFromScene({
+      objects: [],
+      study: {
+        stages: [
+          {
+            drive: {
+              id: "k0-sinc-antenna",
+              waveform: { kind: "sinc_pulse" },
+            },
+            kind: "add_field_drive",
+            stage_id: "add-k0-antenna",
+          },
+        ],
+      },
+    });
+
+    const node = flattenExplorerNodes(buildModelTree(snapshot)).find(
+      (candidate) =>
+        candidate.id === "model:study:stages:stage:add-k0-antenna",
+    );
+    expect(node).toMatchObject({
+      badge: "field drive",
+      kind: "study.stage.add_field_drive",
+      label: "Add Antenna 1",
+      stageId: "add-k0-antenna",
+      stageIndex: 0,
+    });
   });
 
   it("omits periodic and k-sampling eigenmode nodes for a free-boundary stage", () => {

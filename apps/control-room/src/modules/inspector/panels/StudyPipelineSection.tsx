@@ -6,6 +6,7 @@ import {
   Cpu,
   Gauge,
   Plus,
+  Radio,
   Save,
   Sigma,
   Trash2,
@@ -222,6 +223,15 @@ export function StudyPipelineSection({
         >
           <Plus size={13} aria-hidden="true" />
           Relax
+        </Button>
+        <Button
+          size="sm"
+          type="button"
+          variant="ghost"
+          onClick={() => onAddStage("add_field_drive")}
+        >
+          <Radio size={13} aria-hidden="true" />
+          Antenna
         </Button>
         <Button
           size="sm"
@@ -466,6 +476,7 @@ export function StudyStageDraftEditor({
         }
       >
         <option value="relax">Relax</option>
+        <option value="add_field_drive">Add antenna</option>
         <option value="run">Run</option>
         <option value="hysteresis">Hysteresis</option>
         <option value="eigenmodes">Eigenmodes</option>
@@ -478,7 +489,12 @@ export function StudyStageDraftEditor({
         value={draft.stageId}
         onChange={(event) => onUpdate({ stageId: event.target.value })}
       />
-      {draft.kind === "run" ? (
+      {draft.kind === "add_field_drive" ? (
+        <div className="fm-study-stage-note">
+          The ordered instruction adds its field drive to the current simulation
+          state. Full antenna controls and the sampled source FFT are shown below.
+        </div>
+      ) : draft.kind === "run" ? (
         <FormField
           label="Until"
           unit="s"
@@ -519,6 +535,7 @@ export function StudyStageDraftEditor({
 }
 
 function studyStageDraftKindLabel(kind: StudyStageDraftKind): string {
+  if (kind === "add_field_drive") return "Add Antenna";
   if (kind === "eigenmodes") return "Eigenmodes";
   if (kind === "frequency_response") return "Frequency Response";
   if (kind === "hysteresis") return "Hysteresis";

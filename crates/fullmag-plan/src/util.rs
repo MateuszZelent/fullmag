@@ -1,4 +1,4 @@
-use fullmag_ir::{DeclaredUniverseIR, DomainFrameIR, ProblemIR};
+use fullmag_ir::{DeclaredUniverseIR, DomainFrameIR, ProblemIR, StudyIR};
 use serde_json::Value;
 
 pub(crate) fn active_stage_id(problem: &ProblemIR) -> Option<&str> {
@@ -23,14 +23,16 @@ pub(crate) fn time_stage_context(problem: &ProblemIR) -> fullmag_ir::TimeStageCo
 
 pub(crate) fn field_drive_is_active(
     drive: &fullmag_ir::RegionalFieldDriveIR,
-    active_stage: Option<&str>,
+    problem: &ProblemIR,
 ) -> bool {
     if !drive.enabled {
         return false;
     }
     match &drive.activation {
-        fullmag_ir::DriveActivationIR::AllTimeEvolution {} => true,
-        fullmag_ir::DriveActivationIR::StageIds { stage_ids } => active_stage
+        fullmag_ir::DriveActivationIR::AllTimeEvolution {} => {
+            matches!(problem.study, StudyIR::TimeEvolution { .. })
+        }
+        fullmag_ir::DriveActivationIR::StageIds { stage_ids } => active_stage_id(problem)
             .is_some_and(|active| stage_ids.iter().any(|stage_id| stage_id == active)),
     }
 }

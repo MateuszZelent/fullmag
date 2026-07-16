@@ -25,6 +25,8 @@ export function SincPulsePreview({
       />
       <div className="fm-sinc-preview__metrics" role="list" aria-label="FFT sampling parameters">
         <Metric label="t0" value={engineering(model.t0S, "s")} />
+        <Metric label="window before t0" value={engineering(model.leftOfCenterS, "s")} />
+        <Metric label="window after t0" value={engineering(model.rightOfCenterS, "s")} />
         <Metric label="solver dt" value={solverDtS ? engineering(solverDtS, "s") : "not declared"} />
         <Metric label="t_sampling" value={engineering(model.samplePeriodS, "s")} />
         <Metric label="samples N" value={String(model.sampleCount)} />
@@ -33,6 +35,12 @@ export function SincPulsePreview({
         <Metric label="Nyquist" value={engineering(model.nyquistHz, "Hz")} />
         <Metric label="sinc cutoff" value={engineering(model.cutoffHz, "Hz")} />
       </div>
+      <p
+        className={`fm-sinc-preview__message fm-sinc-preview__message--${model.isSymmetricWindow ? "ready" : "preview_only"}`}
+        role="status"
+      >
+        {model.symmetryMessage} Symmetry is assessed with τ = t - t0; the horizontal axis remains the authored time t and t0 is never recentered silently.
+      </p>
       {model.message ? <p className={`fm-sinc-preview__message fm-sinc-preview__message--${model.status}`}>{model.message}</p> : null}
     </div>
   );

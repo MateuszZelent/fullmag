@@ -4,6 +4,7 @@ import type {
   ModelTreeStudyStageSnapshot,
 } from "../../explorerTypes";
 import { buildActionStageNode } from "./actionStageNode";
+import { buildAddFieldDriveStageNode } from "./addFieldDriveStageNode";
 import { buildChangeDeviceStageNode } from "./changeDeviceStageNode";
 import { buildEigenmodesStageNode } from "./eigenmodesStageNode";
 import { buildFrequencyResponseStageNode } from "./frequencyResponseStageNode";
@@ -15,6 +16,7 @@ import { STUDY_STAGES_NODE_ID } from "./studyStageCommon";
 
 const STUDY_ADD_STAGE_COMMANDS = [
   "study.add-relax-stage",
+  "study.add-field-drive-stage",
   "study.add-run-stage",
   "study.add-hysteresis-stage",
   "study.add-eigenmodes-stage",
@@ -108,6 +110,7 @@ function buildStudyRecoveryNode(): ExplorerNode {
 function buildStudyStageNode(stage: ModelTreeStudyStageSnapshot): ExplorerNode {
   const normalized = stage.kind.toLowerCase();
   if (normalized === "relax") return buildRelaxStageNode(stage);
+  if (normalized === "add_field_drive") return buildAddFieldDriveStageNode(stage);
   if (normalized === "run") return buildRunStageNode(stage);
   if (normalized === "change_device") return buildChangeDeviceStageNode(stage);
   if (normalized === "hysteresis") return buildHysteresisStageNode(stage);

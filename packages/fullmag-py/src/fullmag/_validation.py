@@ -40,9 +40,10 @@ def require_positive_int(value: int, field_name: str) -> int:
 
 
 def require_non_negative(value: float, field_name: str) -> float:
-    if value < 0.0:
-        raise ValueError(f"{field_name} must be non-negative")
-    return value
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric < 0.0:
+        raise ValueError(f"{field_name} must be finite and non-negative")
+    return numeric
 
 
 def as_vector3(value: Sequence[float], field_name: str) -> tuple[float, float, float]:
