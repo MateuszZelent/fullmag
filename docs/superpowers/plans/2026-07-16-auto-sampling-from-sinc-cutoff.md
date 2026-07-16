@@ -441,7 +441,7 @@ fn unresolved_auto_output_is_rejected_before_event_schedule() {
 }
 
 #[test]
-fn resolved_5ghz_clock_lands_on_half_open_events() {
+fn resolved_5ghz_clock_lands_on_output_ticks_and_stage_boundary() {
     let dt = 1.0 / 13.0e9;
     let events = build_resolved_stage_event_schedule(&[], 0.0, 4.0 * dt, &[OutputIR::Field {
         name: "m".into(), every_seconds: dt,
@@ -449,6 +449,10 @@ fn resolved_5ghz_clock_lands_on_half_open_events() {
     assert_eq!(events.times_s, vec![0.0, dt, 2.0 * dt, 3.0 * dt, 4.0 * dt]);
 }
 ```
+
+The final `4*dt` entry is the integrator's required stage-end event. FFT/table
+sample rows remain half-open (`t_n < T`) and must not duplicate that boundary
+unless the output writer's existing contract explicitly records a final row.
 
 - [ ] **Step 2: Run focused runner tests and confirm RED**
 
@@ -634,8 +638,8 @@ remain auxiliary evidence only for native FEM runtime claims.
 
 ```bash
 git diff --check
-git diff --cached --name-only
 git add crates/fullmag-api/src/schemas/authoring.rs apps/control-room/src/kernel/api/generated apps/control-room/scripts/smoke-study-authoring-ui.mjs
+git diff --cached --name-only
 git commit -m "Expose automatic sampling across API and UI"
 ```
 
