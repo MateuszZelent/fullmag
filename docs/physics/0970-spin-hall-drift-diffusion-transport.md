@@ -233,11 +233,44 @@ cross-backend weighting and prevents mesh-dependent solver tolerances.
 Failure of any convergence criterion rejects the outer LLG step; it does not
 commit the last nonlinear iterate.
 
-M3 is stiff. Production target `coupled_imex_ark2` treats diffusion and all
-spin reactions implicitly and couples LLG explicitly or semi-implicitly under
-one rollback. `explicit_dp45` is unsupported for transient spin until a
-compatible partitioned-order proof exists. BDF2/fully implicit is the small
-reference oracle. Subcycling requires a coupled error/order proof.
+M3 is stiff. Production `coupled_imex_ark2` is the Ascher--Ruuth--Spiteri
+L-stable `(2,3,2)` pair, frozen as
+
+```text
+gamma = (2-sqrt(2))/2,
+delta = -2 sqrt(2)/3,
+
+A_implicit = [[gamma,       0],
+              [1-gamma, gamma]],       b_implicit = [1-gamma, gamma],
+
+A_explicit = [[0,       0,       0],
+              [gamma,   0,       0],
+              [delta, 1-delta,   0]],  b_explicit = [0, 1-gamma, gamma].
+```
+
+The leading zero row which pads the implicit tableau is part of the additive
+stage alignment. Diffusion and all spin reactions are implicit. Transient
+drives and the LLG/local-field partition are explicit or semi-implicit, but
+all partitions share stage times and one rollback transaction. The scheme has
+no invented embedded pair: adaptive error control uses one full step versus
+two half steps, scales their difference by `1/(2^2-1)`, and accepts the two
+half-step state. Both trials start from the same committed state and may not
+publish fields, caches, nonlinear history, or telemetry until acceptance.
+
+The small fully implicit reference is constant-step BDF2,
+
+```text
+C_s (3 mu_s^(n+1)-4 mu_s^n+mu_s^(n-1))/(2 dt)
+  + div Q(mu_s^(n+1), V^(n+1), m^(n+1))
+  = -R(mu_s^(n+1),m^(n+1)),
+```
+
+bootstrapped by backward Euler from an authored initial state or an explicitly
+requested equilibrium solve. A step-size change invalidates this constant-step
+history in v1 and restarts with backward Euler; silently applying the
+constant-step formula to unequal steps is prohibited. `explicit_dp45` is
+unsupported for transient spin until a compatible partitioned-order proof
+exists. Subcycling requires a coupled error/order proof.
 
 ### 2.7 Symbols and SI units
 
@@ -511,4 +544,7 @@ unchecked work in sections 5 and 6.
 9. A. Brataas, Yu. V. Nazarov, and G. E. W. Bauer, Phys. Rev. Lett. 84, 2481 (2000), DOI: 10.1103/PhysRevLett.84.2481.
 10. K. Xia et al., Phys. Rev. B 65, 220401(R) (2002), DOI: 10.1103/PhysRevB.65.220401.
 11. Y. Tserkovnyak, A. Brataas, and G. E. W. Bauer, Phys. Rev. Lett. 88, 117601 (2002), DOI: 10.1103/PhysRevLett.88.117601.
-12. BORIS transport sources under `external_solvers/BORIS/Boris`, used as comparative implementation evidence only.
+12. U. M. Ascher, S. J. Ruuth, and R. J. Spiteri, Appl. Numer. Math. 25,
+    151--167 (1997), DOI: 10.1016/S0168-9274(97)00056-1; the published
+    `(2,3,2)` tableaus and L-stability contract define `coupled_imex_ark2`.
+13. BORIS transport sources under `external_solvers/BORIS/Boris`, used as comparative implementation evidence only.
