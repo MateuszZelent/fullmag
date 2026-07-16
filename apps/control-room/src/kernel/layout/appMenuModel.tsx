@@ -50,7 +50,6 @@ const HIDDEN_PLACEHOLDER_COMMAND_IDS = new Set([
   "workspace.about",
   "workspace.new-problem",
   "workspace.save-sync",
-  "workspace.export-python",
   "workspace.undo",
   "workspace.redo",
   "workspace.view-2d",

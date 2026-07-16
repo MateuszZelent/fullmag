@@ -107,6 +107,7 @@ import {
   MODEL_REALIZED_REGIONS_PATH,
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
+  MODEL_SCRIPT_PATH,
   MODEL_STUDY_PATH,
   MODEL_TRANSACTIONS_PATH,
   MODEL_SYNCS_PATH,
@@ -289,6 +290,7 @@ import type {
   SceneResource,
   ScriptSyncRequest,
   ScriptSyncResponse,
+  ScriptSourceResponse,
   TopologicalChargeQuery,
   TopologicalChargeResource,
   SessionAssetImportResponse,
@@ -1648,6 +1650,8 @@ export class ControlRoomApi {
       ),
     scene: (options?: RequestOptions) =>
       this.requestJson<SceneResource>(MODEL_SCENE_PATH, options),
+    authoringScript: (options?: RequestOptions) =>
+      this.requestJson<ScriptSourceResponse>(MODEL_SCRIPT_PATH, options),
     syncAuthoringScript: (
       request: ScriptSyncRequest,
       options?: RequestOptions,

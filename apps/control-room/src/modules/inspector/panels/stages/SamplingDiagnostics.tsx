@@ -1,11 +1,11 @@
 import { resolveHalfOpenSamplingClock } from "@/shared/domain/physics/sincPulsePreview";
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
-import { FieldRow } from "../../primitives/FieldRow";
 import type {
   EffectiveStudyAutosaveOutput,
   EffectiveStudyTableAutosave,
 } from "./studyWorkflowState";
+import { formatEngineering } from "./samplingPresentation";
 
 type EffectiveSampling =
   | EffectiveStudyAutosaveOutput
@@ -27,102 +27,110 @@ export function SamplingDiagnostics({
     ? resolveHalfOpenSamplingClock(durationS, periodS)
     : null;
   const auto = sampling?.autoSampling ?? null;
+  const automatic = sampling?.samplingMode === "auto_sinc_cutoff";
+  const isUnresolved = automatic && auto?.status === "unresolved";
+  const stateClass = isUnresolved
+    ? "warning"
+    : automatic && auto?.status === "ready"
+      ? "ready"
+      : "manual";
 
-  if (sampling?.samplingMode === "auto_sinc_cutoff" && auto?.status === "unresolved") {
-    return (
-      <>
-        <FieldRow label="Automatic sampling diagnostics" value="unresolved" />
-        <FieldRow
-          label="Source drives"
-          value={sampling.sourceDriveIds.join(", ") || "none applicable"}
-        />
+  return (
+    <section
+      className={`fm-sampling-plan fm-sampling-plan--${stateClass}`}
+      aria-label="Sampling plan"
+    >
+      <header className="fm-sampling-plan__header">
+        <div>
+          <p>Sampling plan</p>
+          <h4>{automatic ? "Automatic from sinc cutoff" : "Explicit sampling cadence"}</h4>
+        </div>
+        <span className="fm-sampling-plan__status">
+          {isUnresolved ? "needs source" : automatic ? "resolved" : sampling ? "manual" : "missing"}
+        </span>
+      </header>
+
+      <div className="fm-sampling-plan__groups">
+        <PlanGroup title="Source">
+          <Metric
+            label="Mode"
+            value={automatic ? "automatic sinc cutoff" : sampling ? "explicit period" : "not configured"}
+          />
+          <Metric
+            label="Source stage"
+            value={sampling?.sourceStageId ?? "not available"}
+          />
+          {automatic ? (
+            <Metric
+              label="Source drives"
+              value={sampling?.sourceDriveIds.join(", ") || "none applicable"}
+            />
+          ) : null}
+        </PlanGroup>
+
+        <PlanGroup title="Clock">
+          <Metric
+            label="t_sampling"
+            value={periodS ? formatEngineering(periodS, "s") : "not available"}
+          />
+          <Metric
+            label="Sampling frequency"
+            value={auto?.status === "ready" ? formatEngineering(auto.samplingFrequencyHz, "Hz") : "not available"}
+          />
+          <Metric label="Duration" value={durationS ? formatEngineering(durationS, "s") : "not available"} />
+          <Metric label="N" value={clock ? String(clock.sampleCount) : "not available"} />
+        </PlanGroup>
+
+        <PlanGroup title="FFT limits">
+          <Metric
+            label="Maximum sinc cutoff"
+            value={auto?.status === "ready" ? formatEngineering(auto.maximumCutoffHz, "Hz") : "not applicable"}
+          />
+          <Metric
+            label="Target Nyquist"
+            value={auto?.status === "ready" ? formatEngineering(auto.targetNyquistHz, "Hz") : "not applicable"}
+          />
+          <Metric
+            label="Nyquist guard"
+            value={auto?.status === "ready" ? "1.3 × cutoff (+30%)" : "not applicable"}
+          />
+          <Metric
+            label="Highest represented FFT bin"
+            value={
+              clock
+                ? formatEngineering(
+                    Math.floor(clock.sampleCount / 2) * clock.frequencyResolutionHz,
+                    "Hz",
+                  )
+                : "not available"
+            }
+          />
+          <Metric label="Nyquist limit" value={clock ? formatEngineering(clock.nyquistHz, "Hz") : "not available"} />
+          <Metric label="df" value={clock ? formatEngineering(clock.frequencyResolutionHz, "Hz") : "not available"} />
+        </PlanGroup>
+      </div>
+
+      {isUnresolved ? (
         <FeedbackBanner
           kind="warning"
           message={`Automatic sampling is unresolved. ${auto.reason}`}
         />
-      </>
-    );
-  }
-
-  return (
-    <>
-      <FieldRow
-        label="Automatic sampling diagnostics"
-        value={
-          sampling?.samplingMode === "auto_sinc_cutoff"
-            ? "resolved from active sinc drives"
-            : "not requested"
-        }
-      />
-      {auto?.status === "ready" ? (
-        <>
-          <FieldRow
-            label="Source drives"
-            value={sampling?.sourceDriveIds.join(", ") || "none"}
-          />
-          <FieldRow
-            label="Maximum sinc cutoff"
-            value={engineering(auto.maximumCutoffHz, "Hz")}
-          />
-          <FieldRow label="Nyquist guard" value="1.3 × cutoff (+30%)" />
-          <FieldRow
-            label="Target Nyquist"
-            value={engineering(auto.targetNyquistHz, "Hz")}
-          />
-          <FieldRow
-            label="Sampling frequency"
-            value={engineering(auto.samplingFrequencyHz, "Hz")}
-          />
-        </>
       ) : null}
-      <div
-        className="fm-sinc-preview__metrics"
-        role="list"
-        aria-label="Automatic sampling and response FFT parameters"
-      >
-        <Metric
-          label="t_sampling"
-          value={periodS ? engineering(periodS, "s") : "not available"}
-        />
-        <Metric label="N" value={clock ? String(clock.sampleCount) : "not available"} />
-        <Metric
-          label="df"
-          value={clock ? engineering(clock.frequencyResolutionHz, "Hz") : "not available"}
-        />
-        <Metric
-          label="Highest represented FFT bin"
-          value={
-            clock
-              ? engineering(
-                  Math.floor(clock.sampleCount / 2) * clock.frequencyResolutionHz,
-                  "Hz",
-                )
-              : "not available"
-          }
-        />
-        <Metric
-          label="Nyquist limit"
-          value={clock ? engineering(clock.nyquistHz, "Hz") : "not available"}
-        />
+    </section>
+  );
+}
+
+function PlanGroup({ children, title }: { children: React.ReactNode; title: string }) {
+  return (
+    <section className="fm-sampling-plan__group">
+      <h5>{title}</h5>
+      <div className="fm-sampling-plan__metrics" role="list" aria-label={`${title} sampling parameters`}>
+        {children}
       </div>
-    </>
+    </section>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <span role="listitem"><small>{label}</small><strong>{value}</strong></span>;
-}
-
-export function engineering(value: number, unit: string): string {
-  if (!Number.isFinite(value)) return "invalid";
-  if (value === 0) return `0 ${unit}`.trim();
-  const exponent = Math.floor(Math.log10(Math.abs(value)) / 3) * 3;
-  const prefixes: Record<number, string> = {
-    [-15]: "f", [-12]: "p", [-9]: "n", [-6]: "µ", [-3]: "m",
-    0: "", 3: "k", 6: "M", 9: "G", 12: "T",
-  };
-  const prefix = prefixes[exponent];
-  return prefix === undefined
-    ? `${value.toExponential(3)} ${unit}`.trim()
-    : `${(value / 10 ** exponent).toPrecision(4)} ${prefix}${unit}`.trim();
 }

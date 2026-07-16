@@ -2,6 +2,7 @@
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
+import { FormField } from "../../primitives/FormField";
 import { InspectorSection } from "../../primitives/InspectorSection";
 import {
   StageInspectorFrame,
@@ -41,82 +42,73 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
         badge={draft?.fftResponse.enabled ? "ON" : "OFF"}
       >
         <FieldRow label="Physical duration" value="0 s" />
-        <label className="fm-inspector-field">
-          <span>Compute response FFT</span>
-          <input
-            checked={draft?.fftResponse.enabled ?? false}
-            disabled={disabled}
-            type="checkbox"
-            onChange={(event) =>
-              draft && props.onUpdateDraft({
-                fftResponse: {
-                  ...draft.fftResponse,
-                  enabled: event.target.checked,
-                },
-              })
-            }
-          />
-        </label>
-        <label className="fm-inspector-field">
-          <span>Response component</span>
-          <select
-            className="fm-inspector-input"
-            disabled={disabled || !draft?.fftResponse.enabled}
-            value={draft?.fftResponse.responseComponent ?? "my"}
-            onChange={(event) =>
-              draft && props.onUpdateDraft({
-                fftResponse: {
-                  ...draft.fftResponse,
-                  responseComponent: event.target.value as "my" | "mz",
-                },
-              })
-            }
-          >
+        <FormField
+          checked={draft?.fftResponse.enabled ?? false}
+          disabled={disabled}
+          label="Compute response FFT"
+          type="checkbox"
+          onChange={(event) =>
+            draft && props.onUpdateDraft({
+              fftResponse: {
+                ...draft.fftResponse,
+                enabled: event.target.checked,
+              },
+            })
+          }
+        />
+        <FormField
+          disabled={disabled || !draft?.fftResponse.enabled}
+          label="Response component"
+          type="select"
+          value={draft?.fftResponse.responseComponent ?? "my"}
+          onChange={(event) =>
+            draft && props.onUpdateDraft({
+              fftResponse: {
+                ...draft.fftResponse,
+                responseComponent: event.target.value as "my" | "mz",
+              },
+            })
+          }
+        >
             <option value="my">my</option>
             <option value="mz">mz</option>
-          </select>
-        </label>
-        <label className="fm-inspector-field">
-          <span>Detrend</span>
-          <select
-            className="fm-inspector-input"
-            disabled={disabled || !draft?.fftResponse.enabled}
-            value={draft?.fftResponse.detrend ?? "linear"}
-            onChange={(event) =>
-              draft && props.onUpdateDraft({
-                fftResponse: {
-                  ...draft.fftResponse,
-                  detrend: event.target.value as "linear" | "mean" | "none",
-                },
-              })
-            }
-          >
+        </FormField>
+        <FormField
+          disabled={disabled || !draft?.fftResponse.enabled}
+          label="Detrend"
+          type="select"
+          value={draft?.fftResponse.detrend ?? "linear"}
+          onChange={(event) =>
+            draft && props.onUpdateDraft({
+              fftResponse: {
+                ...draft.fftResponse,
+                detrend: event.target.value as "linear" | "mean" | "none",
+              },
+            })
+          }
+        >
             <option value="none">None</option>
             <option value="mean">Remove mean</option>
             <option value="linear">Linear</option>
-          </select>
-        </label>
+        </FormField>
         <FieldRow label="Window" value="Hann" />
         <FieldRow label="Weighting" value="Ms × lumped volume" />
-        <label className="fm-inspector-field">
-          <span>Susceptibility floor fraction</span>
-          <input
-            className="fm-inspector-input"
-            disabled={disabled || !draft?.fftResponse.enabled}
-            min="0"
-            step="1e-6"
-            type="number"
-            value={draft?.fftResponse.susceptibilityFloorFraction ?? ""}
-            onChange={(event) =>
-              draft && props.onUpdateDraft({
-                fftResponse: {
-                  ...draft.fftResponse,
-                  susceptibilityFloorFraction: event.target.value,
-                },
-              })
-            }
-          />
-        </label>
+        <FormField
+          disabled={disabled || !draft?.fftResponse.enabled}
+          label="Susceptibility floor fraction"
+          min="0"
+          step="1e-6"
+          type="number"
+          value={draft?.fftResponse.susceptibilityFloorFraction ?? ""}
+          onChange={(event) =>
+            draft && props.onUpdateDraft({
+              fftResponse: {
+                ...draft.fftResponse,
+                susceptibilityFloorFraction: event.target.value,
+              },
+            })
+          }
+        />
         <FieldRow
           label="Effect"
           value={

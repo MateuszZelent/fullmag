@@ -1,7 +1,5 @@
 "use client";
 
-import { resolveHalfOpenSamplingClock } from "@/shared/domain/physics/sincPulsePreview";
-
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorSection } from "../../primitives/InspectorSection";
@@ -13,6 +11,7 @@ import {
   type StageInspectorFrameProps,
 } from "./StageInspectorFrame";
 import { SamplingDiagnostics } from "./SamplingDiagnostics";
+import { formatEngineering } from "./samplingPresentation";
 import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
 
 export function RunStageInspector(props: StageInspectorFrameProps) {
@@ -28,9 +27,6 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
     props.scene ?? null,
     null,
   ).solverDtS;
-  const samplingClock = durationS && samplePeriodS
-    ? resolveHalfOpenSamplingClock(durationS, samplePeriodS)
-    : null;
   const precedingDriveDraft = findPrecedingActiveDrive(
     props.pipelineDrafts ?? [],
     props.draftIndex,
@@ -87,13 +83,13 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
         />
         <FieldRow
           label="Until"
-          value={durationS ? engineering(durationS, "s") : "not declared"}
+          value={durationS ? formatEngineering(durationS, "s") : "not declared"}
         />
         <FieldRow
           label="Solver and integration dt"
           value={
             solverDtS
-              ? `${engineering(solverDtS, "s")} — configured in the global Solver definition`
+              ? `${formatEngineering(solverDtS, "s")} — configured in the global Solver definition`
               : "configured independently in the global Solver definition"
           }
         />
@@ -127,7 +123,7 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
         />
         <FieldRow
           label="t_sampling"
-          value={samplePeriodS ? engineering(samplePeriodS, "s") : "not declared"}
+          value={samplePeriodS ? formatEngineering(samplePeriodS, "s") : "not declared"}
         />
         <FieldRow
           label="Table quantities"
@@ -142,7 +138,7 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
                     (output) =>
                       `${output.quantity} ${
                         output.everySeconds
-                          ? `every ${engineering(output.everySeconds, "s")}`
+                          ? `every ${formatEngineering(output.everySeconds, "s")}`
                           : "with unresolved cadence"
                       } (${output.sourceStageId})`,
                   )
@@ -158,17 +154,6 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
               : "OFF"
           }
         />
-        <div
-          className="fm-sinc-preview__metrics"
-          role="list"
-          aria-label="Effective response FFT parameters"
-        >
-          <Metric label="response dt (t_sampling)" value={samplePeriodS ? engineering(samplePeriodS, "s") : "not declared"} />
-          <Metric label="samples N" value={samplingClock ? String(samplingClock.sampleCount) : "not available"} />
-          <Metric label="duration" value={durationS ? engineering(durationS, "s") : "not declared"} />
-          <Metric label="df" value={samplingClock ? engineering(samplingClock.frequencyResolutionHz, "Hz") : "not available"} />
-          <Metric label="Nyquist" value={samplingClock ? engineering(samplingClock.nyquistHz, "Hz") : "not available"} />
-        </div>
         <SamplingDiagnostics
           durationS={durationS}
           sampling={workflow.tableAutosave}
@@ -219,25 +204,7 @@ function findPrecedingActiveDrive(
   return null;
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return <span role="listitem"><small>{label}</small><strong>{value}</strong></span>;
-}
-
 function positiveNumber(value: string | number | null | undefined): number | null {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function engineering(value: number, unit: string): string {
-  if (!Number.isFinite(value)) return "invalid";
-  if (value === 0) return `0 ${unit}`.trim();
-  const exponent = Math.floor(Math.log10(Math.abs(value)) / 3) * 3;
-  const prefixes: Record<number, string> = {
-    [-15]: "f", [-12]: "p", [-9]: "n", [-6]: "µ", [-3]: "m",
-    0: "", 3: "k", 6: "M", 9: "G", 12: "T",
-  };
-  const prefix = prefixes[exponent];
-  return prefix === undefined
-    ? `${value.toExponential(3)} ${unit}`.trim()
-    : `${(value / 10 ** exponent).toPrecision(4)} ${prefix}${unit}`.trim();
 }

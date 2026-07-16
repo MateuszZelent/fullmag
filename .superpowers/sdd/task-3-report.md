@@ -1,72 +1,80 @@
-# Task 3 report: canonical target routing consumers
+# Task 3 report: Python DSL automatic sampling
 
 ## Scope delivered
 
-- The viewport constructs canonical scene object ids once from the scene
-  resource and resolves every FEM part through
-  `resolveVisualizationTargetForMeshPart`, with `renderingState.targets` as
-  the backend authority.
-- The Inspector uses the same resolver for selected mesh parts, target snapshot
-  registration, per-part settings, and vector patches.
-- The View ribbon loads only the scene and mesh manifest it needs while active,
-  resolves a selected mesh part from those resources, and uses the same target
-  for its selected-display command controls.
-- Region handling remains on its existing explicit region-target path; no new
-  region inheritance or display pass was added.
-- No API route, generated transport, resource schema, direct request, or
-  websocket behavior changed. HTTP resources remain authoritative.
+- `TableAutosave(t_sampl="auto")`, `SaveField(..., every="auto")`, and
+  `SaveScalar(..., every="auto")` now preserve automatic sampling as requested
+  intent.
+- `study.stages.tableautosave("auto", ...)` and
+  `study.stages.autosave(..., every="auto")` accept the canonical literal.
+- One shared cadence normalizer accepts positive finite numeric seconds or the
+  exact lowercase literal `"auto"`; it rejects other strings, booleans, zero,
+  negative values, NaN, and infinity.
+- Automatic table, field, and scalar sampling lower to the Task 2 canonical
+  `auto_sinc_cutoff` policy with guard factor `1.3`.
+- Canonical script export preserves the literal `"auto"` for both flat and
+  ordered-stage surfaces. Import/export reads requested policy and deliberately
+  ignores `resolved_sample_period_s`, so a resolved runtime cadence cannot
+  overwrite author intent.
+- Existing numeric sampling JSON and rendered scripts remain unchanged.
 
 ## TDD record
 
 RED command:
 
 ```bash
-pnpm --dir apps/control-room exec vitest run src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts src/modules/inspector/panels/ObjectVisualizationPanelModel.test.ts src/modules/ribbon/ribbonStructure.test.ts
+PYTHONPATH=packages/fullmag-py/src /home/kkingstoun/software/anaconda3/envs/numba_sprawna/bin/python -m pytest packages/fullmag-py/tests/test_table_autosave.py packages/fullmag-py/tests/test_study_stages.py packages/fullmag-py/tests/test_script_builder_roundtrip.py -q
 ```
 
-Observed expected failures:
+Expected RED result: 13 failed, 24 passed. Failures were the missing `"auto"`
+acceptance, the previous permissive boolean handling, missing automatic IR
+variants, and exporters requiring only numeric cadence fields.
 
-- the viewport result had no canonical `target` identity;
-- the Inspector had no shared part-target entry point;
-- the Ribbon had no shared mesh-part target resolver.
+Final GREEN result for the same focused suite: 38 passed, with one existing
+deprecation warning for legacy run-local sampling arguments.
 
-GREEN command:
-
-```bash
-pnpm --dir apps/control-room exec vitest run src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts src/modules/inspector/panels/ObjectVisualizationPanelModel.test.ts src/modules/ribbon/ribbonStructure.test.ts
-```
-
-Result: 3 files passed, 217 tests passed.
-
-## Additional verification
+Additional successful checks:
 
 ```bash
-pnpm --dir apps/control-room typecheck
-pnpm --dir apps/control-room exec eslint src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts src/modules/viewport-3d/hooks/useViewport3DSceneModel.test.ts src/modules/inspector/panels/ObjectVisualizationPanel.tsx src/modules/inspector/panels/ObjectVisualizationPanelModel.ts src/modules/inspector/panels/ObjectVisualizationPanelModel.test.ts src/modules/ribbon/RibbonModule.tsx src/modules/ribbon/ribbonContributions.tsx src/modules/ribbon/ribbonStructure.test.ts src/kernel/selection/visualizationTargetResolver.ts
+PYTHONPATH=packages/fullmag-py/src /home/kkingstoun/software/anaconda3/envs/numba_sprawna/bin/python -m compileall -q packages/fullmag-py/src/fullmag/_validation.py packages/fullmag-py/src/fullmag/model/outputs.py packages/fullmag-py/src/fullmag/model/study.py packages/fullmag-py/src/fullmag/world.py packages/fullmag-py/src/fullmag/runtime/script_builder.py
 git diff --check
 ```
 
-All passed. The targeted search for the prior local `targetForMeshPart` helper
-in these consumers returned no matches, which is expected after routing them
-through the canonical resolver.
+## Known unrelated failure
 
-## Review follow-up: late manifest safety
+The required expanded run including `test_api.py` produced 288 passed and one
+failure in
+`ProblemApiTests.test_fem_backend_forwards_study_universe_to_shared_domain_realization`:
+the mocked FEM domain mesher had call count 0 instead of 1. The same test fails
+identically in isolation. It does not traverse sampling code, so no FEM code was
+changed. Ruff was not available in the selected Python environment.
 
-Reviewer feedback found that an absent or late mesh manifest could make a
-selected mesh part fall through to generic selection resolution, which may use
-the selection's object id. Both the Inspector and Ribbon now retain the safe
-`{ id: selection.ref.nodeId, kind: "part" }` target until the manifest part is
-available, then resolve it through the canonical resolver. The obsolete
-`objectVisualizationTargetForMeshPart` compatibility helper and its unsafe
-`object_id ?? geometry_id` inference were removed.
+## Commit
 
-Review RED:
+`6629c6c3 Accept automatic sampling in the Python DSL`
+
+## Review fix
+
+The importer and ordered-stage renderer now route every present numeric cadence
+through the shared `normalize_sampling_period` validator. Missing cadence keys
+still mean “not configured”, while zero, negative, NaN, infinity, booleans, and
+non-numeric values fail closed. Automatic policy import, resolved-cadence
+handling, and valid legacy numeric rendering are unchanged.
+
+TDD RED: `test_script_builder_roundtrip.py` reported 10 failing subtests that
+demonstrated invalid imported or ordered-stage cadence values being accepted.
+
+GREEN verification:
 
 ```bash
-pnpm --dir apps/control-room exec vitest run src/kernel/visualization/ObjectVisualizationController.test.ts src/modules/inspector/panels/ObjectVisualizationPanelModel.test.ts src/modules/ribbon/ribbonStructure.test.ts
+PYTHONPATH=packages/fullmag-py/src /home/kkingstoun/software/anaconda3/envs/numba_sprawna/bin/python -m pytest packages/fullmag-py/tests/test_script_builder_roundtrip.py -q
+# 10 passed, 18 subtests passed
+
+PYTHONPATH=packages/fullmag-py/src /home/kkingstoun/software/anaconda3/envs/numba_sprawna/bin/python -m pytest packages/fullmag-py/tests/test_table_autosave.py packages/fullmag-py/tests/test_study_stages.py packages/fullmag-py/tests/test_script_builder_roundtrip.py -q
+# 40 passed, 1 warning, 18 subtests passed
+
+git diff --check
+# clean
 ```
 
-Expected failures: absent Inspector resolver and Ribbon resolving the selected
-part as `object:projection-film`.
-
-Review GREEN: the same command passed 3 files and 174 tests.
+Review-fix commit: `cc802582 Validate imported sampling cadences`.

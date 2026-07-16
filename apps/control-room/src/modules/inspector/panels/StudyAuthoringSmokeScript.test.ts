@@ -72,8 +72,10 @@ describe("study authoring smoke script", () => {
 
   it("asserts automatic sinc sampling diagnostics and Python literals", () => {
     expect(smokeScript).toContain('selectOption("auto_sinc_cutoff")');
-    expect(smokeScript).toContain('"6.500 GHz"');
+    expect(smokeScript).toContain('"6.5 GHz"');
     expect(smokeScript).toContain('"76.92 ps"');
+    expect(smokeScript).toContain("boundingBox()");
+    expect(smokeScript).toContain("assertMeasurableLayout(");
     expect(smokeScript).toContain('tableautosave("auto"');
     expect(smokeScript).toContain('every="auto"');
   });

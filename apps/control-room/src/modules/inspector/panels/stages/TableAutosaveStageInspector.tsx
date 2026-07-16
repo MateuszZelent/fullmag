@@ -2,12 +2,14 @@
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
+import { FormField } from "../../primitives/FormField";
 import { InspectorSection } from "../../primitives/InspectorSection";
 import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
 } from "./StageInspectorFrame";
-import { SamplingDiagnostics, engineering } from "./SamplingDiagnostics";
+import { SamplingDiagnostics } from "./SamplingDiagnostics";
+import { formatEngineering } from "./samplingPresentation";
 import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
 
 export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
@@ -45,81 +47,73 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
           label="Previous state"
           value={stateBefore.tableAutosave?.sourceStageId ?? "OFF"}
         />
-        <label className="fm-inspector-field">
-          <span>Table autosave</span>
-          <input
-            checked={draft?.tableAutosave.enabled ?? false}
-            disabled={!draft || readOnly}
-            type="checkbox"
-            onChange={(event) =>
-              draft && props.onUpdateDraft({
-                tableAutosave: {
-                  ...draft.tableAutosave,
-                  enabled: event.target.checked,
-                },
-              })
-            }
-          />
-        </label>
-        <label className="fm-inspector-field">
-          <span>Sampling mode</span>
-          <select
-            className="fm-inspector-input"
-            disabled={!draft?.tableAutosave.enabled || readOnly}
-            value={draft?.tableAutosave.samplingMode ?? "explicit"}
-            onChange={(event) =>
-              draft && props.onUpdateDraft({
-                tableAutosave: {
-                  ...draft.tableAutosave,
-                  samplingMode: event.target.value as
-                    | "auto_sinc_cutoff"
-                    | "explicit",
-                },
-              })
-            }
-          >
+        <FormField
+          checked={draft?.tableAutosave.enabled ?? false}
+          disabled={!draft || readOnly}
+          label="Table autosave"
+          type="checkbox"
+          onChange={(event) =>
+            draft && props.onUpdateDraft({
+              tableAutosave: {
+                ...draft.tableAutosave,
+                enabled: event.target.checked,
+              },
+            })
+          }
+        />
+        <FormField
+          disabled={!draft?.tableAutosave.enabled || readOnly}
+          label="Sampling mode"
+          type="select"
+          value={draft?.tableAutosave.samplingMode ?? "explicit"}
+          onChange={(event) =>
+            draft && props.onUpdateDraft({
+              tableAutosave: {
+                ...draft.tableAutosave,
+                samplingMode: event.target.value as
+                  | "auto_sinc_cutoff"
+                  | "explicit",
+              },
+            })
+          }
+        >
             <option value="explicit">Explicit period</option>
             <option value="auto_sinc_cutoff">Automatic from sinc cutoff</option>
-          </select>
-        </label>
-        <label className="fm-inspector-field">
-          <span>t_sampling (s)</span>
-          <input
-            className="fm-inspector-input"
-            disabled={
-              !draft?.tableAutosave.enabled ||
-              readOnly ||
-              draft.tableAutosave.samplingMode === "auto_sinc_cutoff"
-            }
-            min="0"
-            type="number"
-            value={draft?.tableAutosave.samplePeriodS ?? ""}
-            onChange={(event) =>
-              draft && props.onUpdateDraft({
-                tableAutosave: {
-                  ...draft.tableAutosave,
-                  samplePeriodS: event.target.value,
-                },
-              })
-            }
-          />
-        </label>
-        <label className="fm-inspector-field">
-          <span>Table quantities</span>
-          <input
-            className="fm-inspector-input"
-            disabled={!draft?.tableAutosave.enabled || readOnly}
-            value={draft?.tableAutosave.tableQuantities ?? ""}
-            onChange={(event) =>
-              draft && props.onUpdateDraft({
-                tableAutosave: {
-                  ...draft.tableAutosave,
-                  tableQuantities: event.target.value,
-                },
-              })
-            }
-          />
-        </label>
+        </FormField>
+        <FormField
+          disabled={
+            !draft?.tableAutosave.enabled ||
+            readOnly ||
+            draft.tableAutosave.samplingMode === "auto_sinc_cutoff"
+          }
+          label="t_sampling"
+          min="0"
+          type="number"
+          unit="s"
+          value={draft?.tableAutosave.samplePeriodS ?? ""}
+          onChange={(event) =>
+            draft && props.onUpdateDraft({
+              tableAutosave: {
+                ...draft.tableAutosave,
+                samplePeriodS: event.target.value,
+              },
+            })
+          }
+        />
+        <FormField
+          disabled={!draft?.tableAutosave.enabled || readOnly}
+          label="Table quantities"
+          mono={false}
+          value={draft?.tableAutosave.tableQuantities ?? ""}
+          onChange={(event) =>
+            draft && props.onUpdateDraft({
+              tableAutosave: {
+                ...draft.tableAutosave,
+                tableQuantities: event.target.value,
+              },
+            })
+          }
+        />
         <FieldRow
           label="Effect"
           value={
@@ -144,7 +138,7 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
         <FieldRow label="Following Run" value={nextRun?.stageId ?? "none"} />
         <FieldRow
           label="Duration"
-          value={durationS ? engineering(durationS, "s") : "not available"}
+          value={durationS ? formatEngineering(durationS, "s") : "not available"}
         />
         <SamplingDiagnostics durationS={durationS} sampling={effectiveSampling} />
         <p className="fm-sinc-preview__message fm-sinc-preview__message--ready">

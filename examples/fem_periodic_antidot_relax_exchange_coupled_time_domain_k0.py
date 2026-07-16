@@ -76,22 +76,6 @@ hole_transition.mesh(
     order=1,
 )
 
-# Scenario provenance
-study.runtime_metadata(
-    "periodic_antidot_relaxation",
-    {
-        "scenario": "exchange_coupled_time_domain_k0",
-        "exchange_coupled_across_periods": True,
-        "magnetostatic_pbc": "periodic_airbox_k0",
-        "periodic_pair_ids": ["x_faces", "y_faces"],
-        "film_size_m": [200e-9, 200e-9, 10e-9],
-        "universe_size_m": [200e-9, 200e-9, 90e-9],
-        "lateral_air_gap_m": [0.0, 0.0],
-        "excitation": "global_uniform_sinc",
-        "wave_vector": "Gamma_k0",
-    },
-)
-
 # Interactions, mesh, and time solver
 study.b_ext(10e-3, 0.0, 0.0)
 study.exchange()
@@ -111,13 +95,13 @@ study.objects.mesh.defaults(
     narrow_regions=1,
 )
 study.build_domain_mesh()
-study.solver(dt=1e-13, g=2.115)
+
 
 # User-facing time-domain parameters.
-t_sampling = 5e-13
-t_run = 2e-9
-f_cutoff = 40e9
-pulse_t0 = 50e-12
+t_sampling = "auto"
+t_run = 0.5e-9
+f_cutoff = 3e9
+pulse_t0 = 1e-10
 
 # No antenna, table sampling, field autosave, or FFT is active here.
 study.stages.add_minimize(
@@ -127,33 +111,40 @@ study.stages.add_minimize(
     tol=5.0e2,
 )
 
-study.stages.add_field_drive(
-    stage_id="add-k0-antenna",
-    drive=fm.RegionalFieldDrive(
-        id="k0-sinc-antenna",
-        name="Uniform transverse k0 sinc antenna",
-        target=fm.FieldTarget.global_domain(),
-        amplitude_B_T=1e-3,
-        direction=(0.0, 1.0, 0.0),
-        spatial_profile=fm.UniformFieldProfile(),
-        waveform=fm.SincPulse(cutoff_hz=f_cutoff, t0=pulse_t0),
-        time_origin="stage_local",
-        activation=fm.DriveActivation.stage_ids(["excite"]),
-    ),
-)
+# study.stages.add_field_drive(
+#     stage_id="add-k0-antenna",
+#     drive=fm.RegionalFieldDrive(
+#         id="k0-sinc-antenna",
+#         name="Uniform transverse k0 sinc antenna",
+#         target=fm.FieldTarget.global_domain(),
+#         amplitude_B_T=1e-9,
+#         direction=(0.0, 1.0, 0.0),
+#         spatial_profile=fm.UniformFieldProfile(),
+#         waveform=fm.SincPulse(cutoff_hz=f_cutoff, t0=pulse_t0),
+#         time_origin="stage_local",
+#         activation=fm.DriveActivation.stage_ids(["excite"]),
+#     ),
+# )
 
 # Each command below is a separate visible workflow stage.  The final Run only
 # advances the LLG solver; it does not hide any output or analysis settings.
-study.stages.tableautosave(
-    t_sampling,
-    quantities=[
-        "t",
-        "mx",
-        "my",
-        "mz",
-    ],
-    stage_id="table-autosave-on",
+# study.stages.tableautosave(
+#     t_sampling,
+#     quantities=[
+#         "t",
+#         "mx",
+#         "my",
+#         "mz",
+#     ],
+#     stage_id="table-autosave-on",
+# )
+# study.stages.autosave("m", t_sampling, stage_id="autosave-m")
+# study.stages.fft_response("my", stage_id="analyse-k0-response")
+study.solver(
+    integrator="rk45",
+    # dt=1e-13,
+    dt_min=1e-16,
+    max_error=1e-6,
+    g=2.115,
 )
-study.stages.autosave("m", t_sampling, stage_id="autosave-m")
-study.stages.fft_response("my", stage_id="analyse-k0-response")
-study.stages.add_run(stage_id="excite", until=t_run)
+study.stages.add_run(until=t_run)

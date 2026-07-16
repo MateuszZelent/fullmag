@@ -107,7 +107,39 @@ export const SHELL_COMMANDS: CommandContribution[] = [
   disabledPlaceholder("workspace.about", "About Fullmag", "Application"),
   disabledPlaceholder("workspace.new-problem", "New Problem", "File", "Ctrl+N"),
   disabledPlaceholder("workspace.save-sync", "Save / Sync", "File", "Ctrl+S"),
-  disabledPlaceholder("workspace.export-python", "Export Python DSL", "File"),
+  {
+    id: "workspace.export-python",
+    title: "Export Python DSL",
+    group: "workspace",
+    category: "File",
+    scope: "workspace",
+    isEnabled: (ctx) => Boolean(ctx.api),
+    disabledReason: (ctx) =>
+      ctx.api ? null : "Export Python DSL requires an active workspace API.",
+    run: async (ctx) => {
+      if (!ctx.api) {
+        return {
+          message: "Export Python DSL requires an active workspace API.",
+          status: "failed",
+        };
+      }
+      await ctx.api.model.syncAuthoringScript({});
+      const script = await ctx.api.model.authoringScript();
+      if (typeof document !== "undefined") {
+        const blob = new Blob([script.source], { type: "text/x-python;charset=utf-8" });
+        const href = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.download = script.script_path.split(/[\\/]/).pop() || "fullmag-study.py";
+        anchor.href = href;
+        anchor.click();
+        URL.revokeObjectURL(href);
+      }
+      return {
+        message: `Canonical Python exported from ${script.script_path}.`,
+        status: "completed",
+      };
+    },
+  },
   disabledPlaceholder("workspace.undo", "Undo", "Edit", "Ctrl+Z"),
   disabledPlaceholder("workspace.redo", "Redo", "Edit", "Ctrl+Y"),
   disabledPlaceholder("workspace.view-2d", "2D Slice Workspace", "View", "2"),

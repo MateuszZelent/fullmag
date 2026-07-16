@@ -2,6 +2,7 @@
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
+import { FormField } from "../../primitives/FormField";
 import { InspectorSection } from "../../primitives/InspectorSection";
 import {
   StageInspectorFrame,
@@ -124,47 +125,43 @@ export function AutosaveStageInspector(props: StageInspectorFrameProps) {
                 <option value="scalar">Scalar</option>
               </select>
             </label>
-            <label className="fm-inspector-field">
-              <span>Sampling mode</span>
-              <select
-                className="fm-inspector-input"
-                disabled={disabled}
-                value={draft.autosave.samplingMode}
-                onChange={(event) =>
-                  props.onUpdateDraft({
-                    autosave: {
-                      ...draft.autosave,
-                      samplingMode: event.target.value as
-                        | "auto_sinc_cutoff"
-                        | "explicit",
-                    },
-                  })
-                }
-              >
+            <FormField
+              disabled={disabled}
+              label="Sampling mode"
+              type="select"
+              value={draft.autosave.samplingMode}
+              onChange={(event) =>
+                props.onUpdateDraft({
+                  autosave: {
+                    ...draft.autosave,
+                    samplingMode: event.target.value as
+                      | "auto_sinc_cutoff"
+                      | "explicit",
+                  },
+                })
+              }
+            >
                 <option value="explicit">Explicit period</option>
                 <option value="auto_sinc_cutoff">Automatic from sinc cutoff</option>
-              </select>
-            </label>
-            <label className="fm-inspector-field">
-              <span>Every (s)</span>
-              <input
-                className="fm-inspector-input"
-                disabled={
-                  disabled || draft.autosave.samplingMode === "auto_sinc_cutoff"
-                }
-                min="0"
-                type="number"
-                value={draft.autosave.everySeconds}
-                onChange={(event) =>
-                  props.onUpdateDraft({
-                    autosave: {
-                      ...draft.autosave,
-                      everySeconds: event.target.value,
-                    },
-                  })
-                }
-              />
-            </label>
+            </FormField>
+            <FormField
+              disabled={
+                disabled || draft.autosave.samplingMode === "auto_sinc_cutoff"
+              }
+              label="Every"
+              min="0"
+              type="number"
+              unit="s"
+              value={draft.autosave.everySeconds}
+              onChange={(event) =>
+                props.onUpdateDraft({
+                  autosave: {
+                    ...draft.autosave,
+                    everySeconds: event.target.value,
+                  },
+                })
+              }
+            />
           </>
         ) : null}
         <FieldRow

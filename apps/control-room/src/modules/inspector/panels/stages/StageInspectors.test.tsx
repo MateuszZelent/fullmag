@@ -381,7 +381,7 @@ describe("Study stage inspectors", () => {
     expect(html).toContain(
       "The effective t_sampling satisfies Nyquist for the authored sinc cutoff.",
     );
-    expect(html).toContain("100.0 fs");
+    expect(html).toContain("100 fs");
   });
 
   it("renders automatic sinc sampling controls and complete next-Run FFT diagnostics", () => {
@@ -420,7 +420,7 @@ describe("Study stage inspectors", () => {
 
     expect(tableHtml).toContain("Sampling mode");
     expect(tableHtml).toContain("Automatic from sinc cutoff");
-    expect(tableHtml).toMatch(/t_sampling \(s\)[\s\S]*disabled=""/);
+    expect(tableHtml).toMatch(/t_sampling[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
     for (const label of [
       "Source drives",
       "Maximum sinc cutoff",
@@ -435,13 +435,13 @@ describe("Study stage inspectors", () => {
     ]) {
       expect(tableHtml).toContain(label);
     }
-    expect(tableHtml).toContain("40.00 GHz");
+    expect(tableHtml).toContain("40 GHz");
     expect(tableHtml).toContain("1.3 × cutoff (+30%)");
-    expect(tableHtml).toContain("52.00 GHz");
-    expect(tableHtml).toContain("104.0 GHz");
+    expect(tableHtml).toContain("52 GHz");
+    expect(tableHtml).toContain("104 GHz");
     expect(tableHtml).toContain("9.615 ps");
     expect(tableHtml).toContain("208");
-    expect(tableHtml).toContain("500.0 MHz");
+    expect(tableHtml).toContain("500 MHz");
 
     const autosaveHtml = render(
       <AutosaveStageInspector
@@ -452,7 +452,7 @@ describe("Study stage inspectors", () => {
       />,
     );
     expect(autosaveHtml).toContain("Automatic from sinc cutoff");
-    expect(autosaveHtml).toMatch(/Every \(s\)[\s\S]*disabled=""/);
+    expect(autosaveHtml).toMatch(/Every[\s\S]*disabled=""[\s\S]*fm-inspector-form-field__unit">s/);
 
     const antennaHtml = render(
       <AddFieldDriveStageInspector
@@ -462,8 +462,13 @@ describe("Study stage inspectors", () => {
         pipelineDrafts={pipeline}
       />,
     );
-    expect(antennaHtml).toContain("Automatic sampling diagnostics");
-    expect(antennaHtml).toContain("104.0 GHz");
+    expect(antennaHtml).toContain("Sampling plan");
+    expect(antennaHtml).toContain("104 GHz");
+    expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*fm-inspector-form-field__unit">Hz/);
+    expect(antennaHtml).toMatch(/Cutoff fc[\s\S]*value="4e10"/);
+    expect(antennaHtml).toMatch(/Center t0[\s\S]*fm-inspector-form-field__unit">s/);
+    expect(antennaHtml).toMatch(/Center t0[\s\S]*value="5e-11"/);
+    expect(antennaHtml).toContain("t0=50 ps");
 
     const fftHtml = render(
       <FftResponseStageInspector
@@ -473,8 +478,11 @@ describe("Study stage inspectors", () => {
         pipelineDrafts={pipeline}
       />,
     );
-    expect(fftHtml).toContain("Automatic sampling diagnostics");
-    expect(fftHtml).toContain("500.0 MHz");
+    expect(fftHtml).toContain("Sampling plan");
+    expect(fftHtml).toContain("500 MHz");
+    expect(fftHtml).toMatch(/Compute response FFT[\s\S]*fm-inspector-form-field/);
+    expect(fftHtml).toMatch(/Response component[\s\S]*fm-inspector-form-field/);
+    expect(fftHtml).toMatch(/Susceptibility floor fraction[\s\S]*fm-inspector-form-field/);
 
     const runHtml = render(
       <RunStageInspector
@@ -484,8 +492,9 @@ describe("Study stage inspectors", () => {
         pipelineDrafts={pipeline}
       />,
     );
-    expect(runHtml).toContain("Automatic sampling diagnostics");
+    expect(runHtml).toContain("Sampling plan");
     expect(runHtml).toContain("Run Progress");
+    expect(runHtml).not.toContain("fm-sinc-preview__metrics");
   });
 
   it("derives FFT clock source and warnings from the effective state at the next Run", () => {
@@ -545,11 +554,16 @@ describe("Study stage inspectors", () => {
     );
 
     expect(html).toContain("<small>N</small><strong>5</strong>");
+    expect(html).toContain('class="fm-sampling-plan fm-sampling-plan--manual"');
+    expect(html).toContain("Sampling plan");
+    expect(html).toContain("Clock");
+    expect(html).toContain("FFT limits");
+    expect(html).not.toContain("fm-sinc-preview__metrics");
     expect(html).toContain(
-      "<small>Highest represented FFT bin</small><strong>400.0 GHz</strong>",
+      "<small>Highest represented FFT bin</small><strong>400 GHz</strong>",
     );
     expect(html).toContain(
-      "<small>Nyquist limit</small><strong>500.0 GHz</strong>",
+      "<small>Nyquist limit</small><strong>500 GHz</strong>",
     );
   });
 

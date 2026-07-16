@@ -11,6 +11,7 @@ import { buildSincPulsePreview } from "@/shared/domain/physics/sincPulsePreview"
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
+import { FormField } from "../../primitives/FormField";
 import { InspectorSection } from "../../primitives/InspectorSection";
 import {
   regionalFieldDriveSamplingContext,
@@ -22,6 +23,7 @@ import {
   type StageInspectorFrameProps,
 } from "./StageInspectorFrame";
 import { SamplingDiagnostics } from "./SamplingDiagnostics";
+import { formatEditableNumber } from "./samplingPresentation";
 import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
 
 export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
@@ -129,23 +131,21 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             }
           />
         </label>
-        <label className="fm-inspector-field">
-          <span>Amplitude (mT)</span>
-          <input
-            className="fm-inspector-input"
-            disabled={!drive}
-            min="0"
-            step="0.001"
-            type="number"
-            value={drive ? teslaToMilliTesla(drive.amplitude_B_T) : ""}
-            onChange={(event) =>
-              updateDrive((current) => ({
-                ...current,
-                amplitude_B_T: milliTeslaToTesla(Number(event.target.value)),
-              }))
-            }
-          />
-        </label>
+        <FormField
+          disabled={!drive}
+          label="Amplitude"
+          min="0"
+          step="0.001"
+          type="number"
+          unit="mT"
+          value={drive ? teslaToMilliTesla(drive.amplitude_B_T) : ""}
+          onChange={(event) =>
+            updateDrive((current) => ({
+              ...current,
+              amplitude_B_T: milliTeslaToTesla(Number(event.target.value)),
+            }))
+          }
+        />
         <label className="fm-inspector-field">
           <span>Direction (x, y, z)</span>
           <div className="fm-inspector-vector-row">
@@ -401,49 +401,45 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         {drive?.waveform.kind === "sinc_pulse" ? (
           <>
             <FieldRow label="Definition" value="a sinc(2 fc (t - t0))" />
-            <label className="fm-inspector-field">
-              <span>Cutoff fc (Hz)</span>
-              <input
-                className="fm-inspector-input"
-                min="0"
-                type="number"
-                value={drive.waveform.cutoff_hz}
-                onChange={(event) =>
-                  updateDrive((current) =>
-                    current.waveform.kind === "sinc_pulse"
-                      ? {
-                          ...current,
-                          waveform: {
-                            ...current.waveform,
-                            cutoff_hz: Number(event.target.value),
-                          },
-                        }
-                      : current,
-                  )
-                }
-              />
-            </label>
-            <label className="fm-inspector-field">
-              <span>Center t0 (s)</span>
-              <input
-                className="fm-inspector-input"
-                type="number"
-                value={drive.waveform.t0 ?? 0}
-                onChange={(event) =>
-                  updateDrive((current) =>
-                    current.waveform.kind === "sinc_pulse"
-                      ? {
-                          ...current,
-                          waveform: {
-                            ...current.waveform,
-                            t0: Number(event.target.value),
-                          },
-                        }
-                      : current,
-                  )
-                }
-              />
-            </label>
+            <FormField
+              label="Cutoff fc"
+              min="0"
+              type="number"
+              unit="Hz"
+              value={formatEditableNumber(drive.waveform.cutoff_hz)}
+              onChange={(event) =>
+                updateDrive((current) =>
+                  current.waveform.kind === "sinc_pulse"
+                    ? {
+                        ...current,
+                        waveform: {
+                          ...current.waveform,
+                          cutoff_hz: Number(event.target.value),
+                        },
+                      }
+                    : current,
+                )
+              }
+            />
+            <FormField
+              label="Center t0"
+              type="number"
+              unit="s"
+              value={formatEditableNumber(drive.waveform.t0 ?? 0)}
+              onChange={(event) =>
+                updateDrive((current) =>
+                  current.waveform.kind === "sinc_pulse"
+                    ? {
+                        ...current,
+                        waveform: {
+                          ...current.waveform,
+                          t0: Number(event.target.value),
+                        },
+                      }
+                    : current,
+                )
+              }
+            />
             <label className="fm-inspector-field">
               <span>Waveform amplitude a</span>
               <input

@@ -472,21 +472,37 @@ async function verifyWorkflowActionInspectors() {
   await inspector
     .getByRole("img", { name: /Sampled source spectrum/ })
     .waitFor({ state: "visible", timeout: timeoutMs });
-  if ((await inspector.getByLabel("Cutoff fc (Hz)").inputValue()) !== "5000000000") {
+  if ((await inspector.getByLabel("Cutoff fc").inputValue()) !== "5e9") {
     throw new Error("Antenna inspector did not preserve the authored 5 GHz sinc cutoff.");
   }
-  if ((await inspector.getByLabel("Center t0 (s)").inputValue()) !== "5e-11") {
+  if ((await inspector.getByLabel("Center t0").inputValue()) !== "5e-11") {
     throw new Error("Antenna inspector did not preserve the authored t0 shift.");
   }
   await inspector
     .getByRole("listitem")
     .filter({ hasText: "solver dt" })
-    .getByText("100.0 fs", { exact: true })
+    .getByText("100 fs", { exact: true })
     .waitFor({ state: "visible", timeout: timeoutMs });
-  await inspector.getByText("table-on", { exact: true }).waitFor({
+  await inspector.getByLabel("Sampling plan").getByText("table-on", { exact: true }).waitFor({
     state: "visible",
     timeout: timeoutMs,
   });
+  await assertMeasurableLayout(
+    inspector.getByLabel("Sinc pulse and source FFT preview"),
+    "Sinc preview",
+  );
+  await assertMeasurableLayout(
+    inspector.getByLabel("Sampling plan"),
+    "Sampling plan",
+  );
+  await assertMeasurableLayout(
+    inspector.getByRole("img", { name: /Sinc waveform B\(t\)/ }),
+    "Sinc waveform",
+  );
+  await assertMeasurableLayout(
+    inspector.getByRole("img", { name: /Sampled source spectrum/ }),
+    "Source spectrum",
+  );
   for (const metric of [
     "t_sampling",
     "samples N",
@@ -514,7 +530,7 @@ async function verifyWorkflowActionInspectors() {
     state: "visible",
     timeout: timeoutMs,
   });
-  if ((await inspector.getByLabel("t_sampling (s)").inputValue()) !== "5e-13") {
+  if ((await inspector.getByLabel("t_sampling").inputValue()) !== "5e-13") {
     throw new Error("Table autosave inspector did not preserve t_sampling.");
   }
   await inspector.getByLabel("Sampling mode").selectOption("auto_sinc_cutoff");
@@ -531,7 +547,7 @@ async function verifyWorkflowActionInspectors() {
   if ((await inspector.getByLabel("Quantity", { exact: true }).inputValue()) !== "m") {
     throw new Error("Autosave inspector did not preserve quantity m.");
   }
-  if ((await inspector.getByLabel("Every (s)").inputValue()) !== "5e-13") {
+  if ((await inspector.getByLabel("Every").inputValue()) !== "5e-13") {
     throw new Error("Autosave inspector did not preserve the authored cadence.");
   }
   await inspector.getByLabel("Sampling mode").selectOption("auto_sinc_cutoff");
@@ -570,7 +586,7 @@ async function verifyWorkflowActionInspectors() {
     state: "visible",
     timeout: timeoutMs,
   });
-  if ((await inspector.getByLabel("t_sampling (s)").count()) !== 0) {
+  if ((await inspector.getByLabel("t_sampling").count()) !== 0) {
     throw new Error("Run inspector still owns a hidden t_sampling editor.");
   }
   if ((await inspector.getByLabel("Compute response FFT").count()) !== 0) {
@@ -584,16 +600,24 @@ async function verifyWorkflowActionInspectors() {
 
 async function assertAutomaticSamplingReadback(inspector) {
   await inspector
-    .locator(".fm-inspector-field-row")
+    .getByLabel("Sampling plan")
+    .getByRole("listitem")
     .filter({ hasText: "Target Nyquist" })
-    .getByText("6.500 GHz", { exact: true })
+    .getByText("6.5 GHz", { exact: true })
     .waitFor({ state: "visible", timeout: timeoutMs });
   await inspector
-    .getByLabel("Automatic sampling and response FFT parameters")
+    .getByLabel("Sampling plan")
     .getByRole("listitem")
     .filter({ hasText: "t_sampling" })
     .getByText("76.92 ps", { exact: true })
     .waitFor({ state: "visible", timeout: timeoutMs });
+}
+
+async function assertMeasurableLayout(locator, name) {
+  const box = await locator.boundingBox();
+  if (!box || box.width <= 0 || box.height <= 0) {
+    throw new Error(`${name} has no measurable layout.`);
+  }
 }
 
 function assertAutomaticSamplingPythonRoundTrip() {
