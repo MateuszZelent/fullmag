@@ -4265,4 +4265,44 @@ describe("buildModelTree", () => {
       status: "unsupported",
     });
   });
+
+  it("keeps exact surrounding-whitespace transport identities collision-free", () => {
+    const snapshot = modelTreeSnapshotFromScene(null, {
+      spinTransports: {
+        items: ["spin", " spin "].map((id) => ({
+          boundaries: [],
+          constitutive_version: "transport_constitutive.one_way.fullmag.v1",
+          current_source_id: "charge",
+          domain: [],
+          id,
+          interfaces: [],
+          materials: [],
+          mode: "steady" as const,
+          requested_execution: {
+            device: "cpu" as const,
+            discretization: "fdm" as const,
+            execution_mode: "strict" as const,
+            precision: "double" as const,
+          },
+          schema_version: "spin_transport.v1",
+          solver: {
+            default_external_boundary: "spin_insulating",
+            engine: "gmres",
+            linear: { absolute_tolerance: 1e-12, max_iterations: 10, relative_tolerance: 1e-8 },
+            operator_version: "fv_spin_upwind_v1",
+            physical_residual_version: "transport_balance_integrated_l2.v1",
+          },
+        })),
+        scene_revision: 10,
+      },
+    });
+    const nodes = flattenExplorerNodes(buildModelTree(snapshot))
+      .filter((node) => node.kind === "physics.spin-transport");
+
+    expect(nodes.map((node) => node.spinTransportId)).toEqual(["spin", " spin "]);
+    expect(nodes.map((node) => node.id)).toEqual([
+      "model:physics:spin-transports:id:spin",
+      "model:physics:spin-transports:id:%20spin%20",
+    ]);
+  });
 });

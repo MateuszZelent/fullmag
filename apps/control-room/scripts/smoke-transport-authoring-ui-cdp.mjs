@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  connectCdpSocket,
   runTransportAuthoringSmoke,
   startChromium,
 } from "./smoke-transport-authoring-ui-runtime.mjs";
@@ -343,54 +344,11 @@ async function stopChromium(child) {
 }
 
 async function connectCdp(wsUrl) {
-  const ws = new WebSocket(wsUrl);
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("CDP WebSocket timed out.")), 5_000);
-    ws.addEventListener("open", () => {
-      clearTimeout(timeout);
-      resolve();
-    }, { once: true });
-    ws.addEventListener("error", () => {
-      clearTimeout(timeout);
-      reject(new Error("CDP WebSocket failed to connect."));
-    }, { once: true });
+  return connectCdpSocket({
+    createWebSocket: (url) => new WebSocket(url),
+    timeoutMs: 5_000,
+    url: wsUrl,
   });
-  let nextId = 1;
-  const pending = new Map();
-  const listeners = new Map();
-  ws.addEventListener("message", (message) => {
-    const payload = JSON.parse(String(message.data));
-    if (payload.id && pending.has(payload.id)) {
-      const entry = pending.get(payload.id);
-      pending.delete(payload.id);
-      if (payload.error) entry.reject(new Error(payload.error.message));
-      else entry.resolve(payload.result ?? {});
-      return;
-    }
-    for (const handler of listeners.get(payload.method) ?? []) {
-      handler(payload.params ?? {});
-    }
-  });
-  return {
-    close: () => new Promise((resolve) => {
-      ws.addEventListener("close", resolve, { once: true });
-      ws.close();
-    }),
-    on: (method, handler) => {
-      const handlers = listeners.get(method) ?? [];
-      handlers.push(handler);
-      listeners.set(method, handlers);
-    },
-    send: (method, params = {}, session = null) => {
-      const id = nextId++;
-      ws.send(JSON.stringify(session
-        ? { id, method, params, sessionId: session }
-        : { id, method, params }));
-      return new Promise((resolve, reject) => {
-        pending.set(id, { reject, resolve });
-      });
-    },
-  };
 }
 
 async function evaluate(expression) {

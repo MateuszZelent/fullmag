@@ -9,6 +9,7 @@ import {
   readonlyTransportPayload,
   resolveTransportRecord,
   spinTransportDraft,
+  transportIdentity,
   transportSelectionKey,
 } from "./TransportAuthoringInspectorModel";
 
@@ -249,6 +250,20 @@ describe("transport authoring drafts", () => {
     expect(isKnownSpinTransport(spin)).toBe(false);
     expect(transportSelectionKey("current_transport", current, 3)).toBe("position:3");
     expect(transportSelectionKey("spin_transport", spin, 4)).toBe("position:4");
+  });
+
+  it("preserves exact non-blank identities without collapsing surrounding whitespace", () => {
+    const exact = { id: "spin", schema_version: "spin_transport.v1" };
+    const spaced = { id: " spin ", schema_version: "spin_transport.v1" };
+
+    expect(transportIdentity("spin_transport", exact)).toBe("spin");
+    expect(transportIdentity("spin_transport", spaced)).toBe(" spin ");
+    expect(transportSelectionKey("spin_transport", exact, 0)).toBe("id:spin");
+    expect(transportSelectionKey("spin_transport", spaced, 1)).toBe("id: spin ");
+    expect(resolveTransportRecord("spin_transport", [exact, spaced], {
+      resourceId: " spin ",
+      resourceIndex: 0,
+    })).toBe(spaced);
   });
 
   it("resolves a stable spin transport id before a stale list index", () => {

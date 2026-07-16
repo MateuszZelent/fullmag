@@ -2,9 +2,116 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  connectCdpSocket,
   runTransportAuthoringSmoke,
   startChromium,
 } from "./smoke-transport-authoring-ui-runtime.mjs";
+
+class FakeWebSocket extends EventTarget {
+  constructor({ closeOnRequest = true, readyState = 0 } = {}) {
+    super();
+    this.closeCalls = 0;
+    this.closeOnRequest = closeOnRequest;
+    this.readyState = readyState;
+    this.sent = [];
+  }
+
+  close() {
+    this.closeCalls += 1;
+    if (!this.closeOnRequest) {
+      this.readyState = 2;
+      return;
+    }
+    this.readyState = 3;
+    queueMicrotask(() => this.dispatchEvent(new Event("close")));
+  }
+
+  send(payload) {
+    this.sent.push(payload);
+  }
+}
+
+async function connectedClient(socket, options = {}) {
+  const connecting = connectCdpSocket({
+    closeTimeoutMs: 5,
+    createWebSocket: () => socket,
+    timeoutMs: 25,
+    url: "ws://browser",
+    ...options,
+  });
+  socket.readyState = 1;
+  socket.dispatchEvent(new Event("open"));
+  return connecting;
+}
+
+test("connectCdpSocket closes a partial socket after connection timeout", async () => {
+  const socket = new FakeWebSocket();
+
+  await assert.rejects(connectCdpSocket({
+    closeTimeoutMs: 5,
+    createWebSocket: () => socket,
+    timeoutMs: 1,
+    url: "ws://browser",
+  }), /timed out/);
+
+  assert.equal(socket.closeCalls, 1);
+  assert.equal(socket.readyState, 3);
+});
+
+test("connectCdpSocket closes a partial socket after connection error", async () => {
+  const socket = new FakeWebSocket();
+  const connecting = connectCdpSocket({
+    closeTimeoutMs: 5,
+    createWebSocket: () => socket,
+    timeoutMs: 25,
+    url: "ws://browser",
+  });
+  socket.dispatchEvent(new Event("error"));
+
+  await assert.rejects(connecting, /failed to connect/);
+  assert.equal(socket.closeCalls, 1);
+});
+
+test("connected CDP rejects pending requests and cleanup continues from CLOSED", async () => {
+  const events = [];
+  const socket = new FakeWebSocket();
+  const cdp = await connectedClient(socket);
+  const pending = cdp.send("Runtime.evaluate");
+  socket.readyState = 3;
+  socket.dispatchEvent(new Event("close"));
+
+  await assert.rejects(pending, /connection closed/);
+  await assert.rejects(runTransportAuthoringSmoke({
+    connectCdp: async () => cdp,
+    removeProfile: () => events.push("profile:remove"),
+    run: async () => { throw new Error("run failed"); },
+    startChromium: async () => ({ process: {}, userDataDir: "/tmp/profile", wsUrl: "ws://browser" }),
+    startFixtureServer: async () => ({ close: async () => events.push("server:close") }),
+    stopChromium: async () => events.push("browser:stop"),
+  }), /run failed/);
+  assert.deepEqual(events, ["browser:stop", "profile:remove", "server:close"]);
+});
+
+test("connected CDP rejects pending requests on a socket error", async () => {
+  const socket = new FakeWebSocket();
+  const cdp = await connectedClient(socket);
+  const pending = cdp.send("Runtime.evaluate");
+
+  socket.dispatchEvent(new Event("error"));
+
+  await assert.rejects(pending, /connection failed/);
+  await cdp.close();
+});
+
+test("connected CDP bounds cleanup while the socket remains CLOSING", async () => {
+  const socket = new FakeWebSocket({ closeOnRequest: false });
+  const cdp = await connectedClient(socket, { closeTimeoutMs: 1 });
+  socket.readyState = 2;
+
+  await cdp.close();
+
+  assert.equal(socket.closeCalls, 0);
+});
 
 test("runTransportAuthoringSmoke cleans partial acquisition in reverse order", async () => {
   const events = [];

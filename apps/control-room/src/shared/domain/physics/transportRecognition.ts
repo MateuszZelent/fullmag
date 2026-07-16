@@ -17,8 +17,7 @@ export function transportIdentity(
     ? (resource as { name?: unknown }).name
     : (resource as { id?: unknown }).id;
   if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  return value.trim().length > 0 ? value : null;
 }
 
 function isObject(value: unknown): value is JsonObject {

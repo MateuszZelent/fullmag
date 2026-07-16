@@ -4290,4 +4290,21 @@ describe("ControlRoomApi", () => {
       { body: { base_revision: 8 }, method: "DELETE", url: member },
     ]);
   });
+
+  it("preserves surrounding whitespace in an exact spin-transport member route", async () => {
+    const requests: string[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        requests.push(String(url));
+        return jsonResponse({ items: [], scene_revision: 7 });
+      },
+    });
+
+    await api.model.spinTransport(" spin ");
+
+    expect(requests).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/model/spin-transports/%20spin%20",
+    ]);
+  });
 });
