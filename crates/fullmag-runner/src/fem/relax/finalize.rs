@@ -85,6 +85,7 @@ pub(crate) fn finalize_native_fem_relaxation(
                     .wall_time_ns
                     .saturating_add(cached_preview_wall_time_ns);
                 let _ = (live.on_step)(StepUpdate {
+            coupled_checkpoint: None,
                     stats: live_stats,
                     grid: live.grid,
                     fem_mesh: None,

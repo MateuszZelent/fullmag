@@ -987,6 +987,10 @@ impl StepStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepUpdate {
     pub stats: StepStats,
+    /// Internal restart envelope published to the session persistence resource.
+    /// This is control-plane state, not a field/preview payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coupled_checkpoint: Option<serde_json::Value>,
     /// Grid dimensions [nx, ny, nz] for client-side reconstruction.
     pub grid: [u32; 3],
     /// Optional FEM mesh payload for mesh-native preview in the control room.
@@ -2250,6 +2254,7 @@ mod tests {
     #[test]
     fn to_v2_uses_registry_metadata_for_magnetization() {
         let update = StepUpdate {
+            coupled_checkpoint: None,
             stats: StepStats::default(),
             grid: [4, 1, 1],
             fem_mesh: None,
@@ -2281,6 +2286,7 @@ mod tests {
     #[test]
     fn to_v2_uses_registry_metadata_for_preview_fields() {
         let update = StepUpdate {
+            coupled_checkpoint: None,
             stats: StepStats::default(),
             grid: [4, 1, 1],
             fem_mesh: None,

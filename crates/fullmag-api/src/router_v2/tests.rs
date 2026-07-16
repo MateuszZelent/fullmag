@@ -696,6 +696,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         session,
         run: None,
         live_state: None,
+        coupled_checkpoint: None,
         runtime_status: RuntimeStatusView {
             kind: RuntimeStatus::AwaitingCommand,
             code: "awaiting_command".into(),
@@ -1281,6 +1282,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         session,
         run: None,
         live_state: None,
+        coupled_checkpoint: None,
         runtime_status: RuntimeStatusView {
             kind: RuntimeStatus::AwaitingCommand,
             code: "awaiting_command".into(),
@@ -1433,6 +1435,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
                 finished: false,
             },
         }),
+        coupled_checkpoint: None,
         runtime_status: RuntimeStatusView {
             kind: RuntimeStatus::AwaitingCommand,
             code: "awaiting_command".into(),
@@ -2530,6 +2533,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
             snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: snapshot.session.session_id.clone(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -5970,6 +5974,7 @@ async fn mesh_build_snapshot_for_current_scene_clears_mesh_dirty_tags() {
             snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: snapshot.session.session_id.clone(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -6023,6 +6028,7 @@ async fn fem_mesh_snapshot_for_current_scene_clears_mesh_dirty_tags() {
             snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: snapshot.session.session_id.clone(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -6075,6 +6081,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
             snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: snapshot.session.session_id.clone(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -6107,6 +6114,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
             snapshot,
             CurrentLiveSnapshotRequest {
                 session_id: snapshot.session.session_id.clone(),
+                coupled_checkpoint: None,
                 session: None,
                 session_status: None,
                 metadata: None,
@@ -16845,6 +16853,28 @@ async fn session_import_commit_round_trips_exported_session() {
 async fn session_checkpoint_create_captures_live_magnetization() {
     let (app, state, repo_root) = test_router_with_session_store_state().await;
     set_running_stage_execution(&state, 0).await;
+    let coupled_checkpoint = serde_json::json!({
+        "schema": "fullmag.fdm.coupled_m3_checkpoint.v1",
+        "problem_ir_abi": "fullmag.problem_ir.v1",
+        "scalar_layout": "f64",
+        "vector_layout": "aos_xyz",
+        "endianness": "little",
+        "formula_version": "transient_spin_balance.fullmag.v1",
+        "integrator_version": "coupled_imex_ark2.v1",
+        "magnetization": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        "previous_magnetization": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        "transient_states": {},
+        "accepted": {},
+        "thermal_seed": 17,
+        "thermal_counter": 42
+    });
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .unwrap()
+        .coupled_checkpoint = Some(coupled_checkpoint.clone());
 
     let response = app
         .clone()
@@ -16926,6 +16956,13 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     let detail = body_json(detail_response).await;
     assert_eq!(detail["checkpoint_id"], "cp-000042");
     assert_eq!(detail["vector_count"], 2);
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .unwrap()
+        .coupled_checkpoint = Some(serde_json::json!({"schema": "mutated-after-capture"}));
 
     let restore_response = app
         .clone()
@@ -16953,6 +16990,17 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     assert_eq!(restored["field_revision"], 2);
     assert_eq!(restored["checkpoint"]["stage_id"], "stage-001");
     assert_eq!(restored["checkpoint"]["command_id"], "cmd-stage-1");
+    assert_eq!(
+        state
+            .current_live_state
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .coupled_checkpoint
+            .as_ref(),
+        Some(&coupled_checkpoint)
+    );
 
     let stage_after_restore_response = app
         .clone()
@@ -17009,6 +17057,47 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     let listed = body_json(list_response).await;
     assert_eq!(listed["checkpoints"][0]["checkpoint_id"], "cp-000042");
 
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn legacy_checkpoint_fails_closed_for_active_coupled_m3_session() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/checkpoints")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({"profile": "resume"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+    state
+        .current_live_state
+        .write()
+        .await
+        .as_mut()
+        .unwrap()
+        .coupled_checkpoint = Some(serde_json::json!({"schema": "fullmag.fdm.coupled_m3_checkpoint.v1"}));
+
+    let restore = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/checkpoints/cp-000042/restore")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(restore.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(restore).await;
+    assert!(body.to_string().contains("legacy magnetization-only checkpoint"));
     let _ = fs::remove_dir_all(&repo_root);
 }
 

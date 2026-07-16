@@ -496,6 +496,12 @@ impl ExchangeLlgProblem {
         self.thermal_step_counter.load(Ordering::Relaxed)
     }
 
+    /// Restore the accepted counter-based thermal RNG position from an exact
+    /// compatible checkpoint before resuming execution.
+    pub fn restore_thermal_step(&self, step: u64) {
+        self.thermal_step_counter.store(step, Ordering::Relaxed);
+    }
+
     /// Advance the thermal step counter by one (call after each accepted step).
     pub fn advance_thermal_step(&self) {
         self.thermal_step_counter.fetch_add(1, Ordering::Relaxed);

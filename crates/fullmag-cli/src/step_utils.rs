@@ -120,6 +120,7 @@ pub(crate) fn live_state_manifest_from_update(
             preview_field: update.preview_field.clone(),
             finished: update.finished,
         },
+        coupled_checkpoint: update.coupled_checkpoint.clone(),
     }
 }
 
@@ -167,6 +168,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
 
     match backend_plan {
         BackendPlanIR::Fdm(fdm) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
             fem_mesh: None,
@@ -182,6 +184,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
             finished: false,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [
                 fdm.common_cells[0],
@@ -201,6 +204,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
             finished: false,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
             fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
@@ -216,6 +220,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
             finished: false,
         },
         BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
             fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
@@ -234,6 +239,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
             let mut stats = stats;
             stats.per_object_scalars = initial_frequency_response_progress_scalars(fem);
             fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
                 stats,
                 grid: [0, 0, 0],
                 fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
@@ -315,6 +321,7 @@ pub(crate) fn final_stage_step_update(
 
     Some(match backend_plan {
         BackendPlanIR::Fdm(fdm) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
             fem_mesh: None,
@@ -330,6 +337,7 @@ pub(crate) fn final_stage_step_update(
             finished,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [
                 fdm.common_cells[0],
@@ -349,6 +357,7 @@ pub(crate) fn final_stage_step_update(
             finished,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
             fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
@@ -364,6 +373,7 @@ pub(crate) fn final_stage_step_update(
             finished,
         },
         BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
             fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
@@ -379,6 +389,7 @@ pub(crate) fn final_stage_step_update(
             finished,
         },
         BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
             fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
@@ -404,6 +415,7 @@ pub(crate) fn snapshot_step_update_from_stats(
 ) -> fullmag_runner::StepUpdate {
     match backend_plan {
         BackendPlanIR::Fdm(fdm) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
             fem_mesh: None,
@@ -419,6 +431,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             finished,
         },
         BackendPlanIR::FdmMultilayer(fdm) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [
                 fdm.common_cells[0],
@@ -438,6 +451,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             finished,
         },
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
             fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
@@ -453,6 +467,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             finished,
         },
         BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
             fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
@@ -468,6 +483,7 @@ pub(crate) fn snapshot_step_update_from_stats(
             finished,
         },
         BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
+            coupled_checkpoint: None,
             stats,
             grid: [0, 0, 0],
             fem_mesh: Some(fullmag_runner::FemMeshPayload::from(fem)),
@@ -3369,7 +3385,6 @@ mod tests {
 
     fn minimal_frequency_response_plan() -> fullmag_ir::FemFrequencyResponsePlanIR {
         fullmag_ir::FemFrequencyResponsePlanIR {
-            mesh_build_report: None,
             mesh_name: "unit".to_string(),
             mesh_source: None,
             mesh: fullmag_ir::MeshIR {

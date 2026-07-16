@@ -805,6 +805,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             )?;
 
             (*on_step)(StepUpdate {
+            coupled_checkpoint: None,
                 stats: StepStats {
                     step: global_step_count,
                     mx: m_avg[0],
@@ -3111,6 +3112,7 @@ fn hysteresis_progress_update(
     stats: Option<&StepStats>,
 ) -> StepUpdate {
     StepUpdate {
+            coupled_checkpoint: None,
         stats: stats.cloned().unwrap_or_default(),
         grid: hysteresis_progress_grid(backend_plan, magnetization),
         fem_mesh: None,
@@ -6034,6 +6036,7 @@ mod tests {
             retry_max_attempts: None,
         };
         let update = StepUpdate {
+            coupled_checkpoint: None,
             stats: StepStats {
                 step: 42,
                 ..StepStats::default()

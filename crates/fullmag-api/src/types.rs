@@ -567,6 +567,8 @@ pub(crate) struct SessionStateResponse {
     pub session: SessionManifest,
     pub run: Option<RunManifest>,
     pub live_state: Option<LiveState>,
+    #[serde(skip, default)]
+    pub coupled_checkpoint: Option<Value>,
     pub runtime_status: RuntimeStatusView,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<BackendCapabilities>,
@@ -896,6 +898,8 @@ pub(crate) struct CurrentLiveSnapshotRequest {
     pub run: Option<RunManifest>,
     #[serde(default)]
     pub live_state: Option<LiveState>,
+    #[serde(default)]
+    pub coupled_checkpoint: Option<Value>,
     #[serde(default)]
     pub latest_scalar_row: Option<ScalarRow>,
     #[serde(default)]
@@ -1397,6 +1401,7 @@ mod tests {
         let response = SessionStateResponse {
             session_protocol_version: "1".to_string(),
             capability_profile_version: "2026-04-04".to_string(),
+            coupled_checkpoint: None,
             capabilities: None,
             session: SessionManifest {
                 session_id: "s1".to_string(),

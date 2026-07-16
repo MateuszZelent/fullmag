@@ -232,7 +232,7 @@
     },
     {
       "id":"transport.spin.transient_drift_diffusion.fullmag.v1", "capability_id":"transport.spin.transient_drift_diffusion", "operator_version":"coupled_imex_ark2.v1",
-      "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"M3 decay, temporal-order, rollback and restart workloads.", "validated_workloads":[], "notes":"PR-00 contract only."
+      "lanes":{"fdm_cpu_reference":"reference_executable","fdm_gpu_production":"semantic_only","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Single-grid one-way M3 decay, temporal-order, rollback and exact-restart workloads.", "validated_workloads":["just verify-fdm-transient-spin-m3-reference"], "notes":"FDM CPU double strict is reference-executable with public ProblemIR planning, session backend-state persistence, and explicit CLI exact resume. API restore does not automatically relaunch the separately owned CLI process."
     },
     {
       "id":"field.oersted.dynamic.legacy_fdm_cpu_fp64", "capability_id":"field.oersted.dynamic", "formula_version":"current_transport.prescribed_density.legacy_fullmag.v0", "realization_versions":["oersted_analytic_cylinder.v1","oersted_direct_biot_savart.v1"],

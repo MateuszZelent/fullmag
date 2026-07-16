@@ -40,6 +40,33 @@ pub struct ExternalStageTerms {
     pub direct_torque_per_s: Vec<Vector3>,
 }
 
+/// Stage identity emitted by the one canonical coupled ARS(2,3,2) tableau
+/// owner. Transport must solve only the indicated implicit stage and must not
+/// start a nested time-integrator step from this callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoupledImexArk2Stage {
+    ExplicitOrigin,
+    ImplicitStageOne,
+    ImplicitStageTwo,
+    AcceptedObservation,
+}
+
+/// Canonical ARS(2,3,2) additive tableau from physics note 0970.
+pub struct CoupledImexArk2Tableau;
+
+impl CoupledImexArk2Tableau {
+    pub const GAMMA: f64 = (2.0 - std::f64::consts::SQRT_2) / 2.0;
+    pub const DELTA: f64 = -2.0 * std::f64::consts::SQRT_2 / 3.0;
+    pub const EXPLICIT_A: [[f64; 3]; 3] = [
+        [0.0, 0.0, 0.0],
+        [Self::GAMMA, 0.0, 0.0],
+        [Self::DELTA, 1.0 - Self::DELTA, 0.0],
+    ];
+    pub const EXPLICIT_B: [f64; 3] = [0.0, 1.0 - Self::GAMMA, Self::GAMMA];
+    pub const IMPLICIT_A: [[f64; 2]; 2] = [[Self::GAMMA, 0.0], [1.0 - Self::GAMMA, Self::GAMMA]];
+    pub const IMPLICIT_B: [f64; 2] = [1.0 - Self::GAMMA, Self::GAMMA];
+}
+
 /// Embedded magnetic-step error available only for the corrected candidate.
 /// Coupled transport uses it to bound transport-induced torque error before
 /// either subsystem commits state.

@@ -1,11 +1,11 @@
 use super::spin_drift_diffusion::restarted_gmres;
 use super::SpinDriftDiffusionProblem;
-use crate::fdm::shared::types::{EngineError, Result};
+use crate::fdm::shared::types::{CoupledImexArk2Tableau, EngineError, Result};
 use serde::{Deserialize, Serialize};
 
 type Vector3 = [f64; 3];
 
-const ARS_GAMMA: f64 = 0.292_893_218_813_452_4;
+const ARS_GAMMA: f64 = CoupledImexArk2Tableau::GAMMA;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransientSpinMaterial {
@@ -65,6 +65,10 @@ pub struct TransientStepAttempt {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransientCoupledRestartIdentity {
+    pub problem_ir_abi_version: String,
+    pub scalar_layout: String,
+    pub vector_layout: String,
+    pub endianness: String,
     pub requested_discretization: String,
     pub requested_device: String,
     pub requested_precision: String,
@@ -81,6 +85,8 @@ pub struct TransientCoupledRestartIdentity {
     pub charge_cache_identity: String,
     pub spin_cache_identity: String,
     pub oersted_cache_identity: String,
+    pub source_identity: String,
+    pub thermal_rng_algorithm: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -92,6 +98,8 @@ pub struct TransientErrorControllerState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TransientCoupledState {
     pub magnetization: Vec<Vector3>,
+    pub previous_magnetization: Option<Vec<Vector3>>,
+    pub previous_magnetization_dt_s: Option<f64>,
     pub charge_potential_v: Vec<f64>,
     pub charge_current_density_apm2: Vec<Vector3>,
     pub spin: TransientSpinState,
@@ -104,10 +112,13 @@ pub struct TransientCoupledState {
     pub accepted_steps: u64,
     pub rejected_steps: u64,
     pub telemetry_cursor: u64,
+    pub thermal_rng_seed: u64,
+    pub thermal_rng_counter: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TransientSpinCheckpoint {
+    pub checkpoint_schema_version: String,
     pub state: TransientCoupledState,
     pub spin_capacitance_as_per_v_m3: Vec<f64>,
     pub capacitance_formula_version: String,
@@ -285,6 +296,78 @@ impl<'a> TransientSpinIntegrator<'a> {
         })
     }
 
+    /// Solve the first implicit row of the canonical ARS(2,3,2) tableau from
+    /// the committed spin state. The returned residual is evaluated with this
+    /// stage's operator and is the explicit input required by row two.
+    pub fn ars232_implicit_stage_one(
+        &self,
+        committed: &[Vector3],
+        dt_s: f64,
+    ) -> Result<(Vec<Vector3>, Vec<Vector3>, usize)> {
+        validate_vectors(
+            committed,
+            self.problem.grid().cell_count(),
+            "committed spin state",
+        )?;
+        validate_dt(dt_s)?;
+        let inverse_diagonal_time = 1.0 / (ARS_GAMMA * dt_s);
+        let rhs = mass_scale(
+            committed,
+            &self.material.spin_capacitance_as_per_v_m3,
+            inverse_diagonal_time,
+        );
+        let (stage, iterations) =
+            self.solve_mass_residual_stage(&rhs, 1.0, inverse_diagonal_time)?;
+        let residual = self.problem.steady_residual(&stage)?;
+        Ok((stage, residual, iterations))
+    }
+
+    /// Solve the second implicit row from the committed origin and the first
+    /// row residual. No nested complete time step is started here.
+    pub fn ars232_implicit_stage_two(
+        &self,
+        committed: &[Vector3],
+        stage_one_residual: &[Vector3],
+        dt_s: f64,
+    ) -> Result<(Vec<Vector3>, usize)> {
+        let count = self.problem.grid().cell_count();
+        validate_vectors(committed, count, "committed spin state")?;
+        validate_vectors(stage_one_residual, count, "ARS stage-one residual")?;
+        validate_dt(dt_s)?;
+        let inverse_diagonal_time = 1.0 / (ARS_GAMMA * dt_s);
+        let mut rhs = mass_scale(
+            committed,
+            &self.material.spin_capacitance_as_per_v_m3,
+            inverse_diagonal_time,
+        );
+        add_scaled(&mut rhs, stage_one_residual, -(1.0 - ARS_GAMMA) / ARS_GAMMA);
+        self.solve_mass_residual_stage(&rhs, 1.0, inverse_diagonal_time)
+    }
+
+    /// Attach accepted-step history and metadata to the second implicit row.
+    pub fn complete_fixed_step_state(
+        &self,
+        committed: &TransientSpinState,
+        stage_two: Vec<Vector3>,
+        dt_s: f64,
+    ) -> Result<TransientSpinState> {
+        self.validate_state(committed)?;
+        validate_vectors(
+            &stage_two,
+            self.problem.grid().cell_count(),
+            "ARS stage-two state",
+        )?;
+        validate_dt(dt_s)?;
+        let (time_s, state_revision) = next_state_metadata(committed, dt_s)?;
+        Ok(TransientSpinState {
+            spin_potential_v: stage_two,
+            previous_spin_potential_v: Some(committed.spin_potential_v.clone()),
+            time_s,
+            previous_dt_s: Some(dt_s),
+            state_revision,
+        })
+    }
+
     pub fn checkpoint(
         &self,
         state: &TransientCoupledState,
@@ -293,6 +376,7 @@ impl<'a> TransientSpinIntegrator<'a> {
         self.validate_coupled_state(state)?;
         validate_restart_identity(&restart_identity)?;
         Ok(TransientSpinCheckpoint {
+            checkpoint_schema_version: "fullmag.coupled_m3_checkpoint.v1".to_string(),
             state: state.clone(),
             spin_capacitance_as_per_v_m3: self.material.spin_capacitance_as_per_v_m3.clone(),
             capacitance_formula_version: self.material.capacitance_formula_version.clone(),
@@ -309,9 +393,10 @@ impl<'a> TransientSpinIntegrator<'a> {
         checkpoint: &TransientSpinCheckpoint,
         expected: &TransientCoupledRestartIdentity,
     ) -> Result<TransientCoupledState> {
-        validate_restart_identity(expected)?;
         compare_restart_identity(&checkpoint.restart_identity, expected)?;
+        validate_restart_identity(expected)?;
         if checkpoint.spin_capacitance_as_per_v_m3 != self.material.spin_capacitance_as_per_v_m3
+            || checkpoint.checkpoint_schema_version != "fullmag.coupled_m3_checkpoint.v1"
             || checkpoint.capacitance_formula_version != self.material.capacitance_formula_version
             || checkpoint.transient_formula_version != Self::FORMULA_VERSION
             || checkpoint.integrator_version != Self::INTEGRATOR_VERSION
@@ -330,6 +415,26 @@ impl<'a> TransientSpinIntegrator<'a> {
         self.validate_state(&state.spin)?;
         let count = self.problem.grid().cell_count();
         validate_vectors(&state.magnetization, count, "magnetization")?;
+        if let Some(previous) = &state.previous_magnetization {
+            validate_vectors(previous, count, "previous_magnetization")?;
+            if state.previous_magnetization_dt_s.is_none() {
+                return Err(EngineError::new(
+                    "previous magnetization requires previous_magnetization_dt_s",
+                ));
+            }
+        } else if state.previous_magnetization_dt_s.is_some() {
+            return Err(EngineError::new(
+                "previous_magnetization_dt_s requires previous magnetization",
+            ));
+        }
+        if state
+            .previous_magnetization_dt_s
+            .is_some_and(|dt| !dt.is_finite() || dt <= 0.0)
+        {
+            return Err(EngineError::new(
+                "previous magnetization timestep must be finite and positive",
+            ));
+        }
         validate_scalars(&state.charge_potential_v, count, "charge_potential_v")?;
         validate_vectors(
             &state.charge_current_density_apm2,
@@ -420,20 +525,10 @@ impl<'a> TransientSpinIntegrator<'a> {
     }
 
     fn ars232_step(&self, initial: &[Vector3], dt_s: f64) -> Result<(Vec<Vector3>, usize)> {
-        let capacitance = &self.material.spin_capacitance_as_per_v_m3;
-        let inverse_diagonal_time = 1.0 / (ARS_GAMMA * dt_s);
-        let first_rhs = mass_scale(initial, capacitance, inverse_diagonal_time);
-        let (stage_one, first_iterations) =
-            self.solve_mass_residual_stage(&first_rhs, 1.0, inverse_diagonal_time)?;
-        let first_residual = self.problem.steady_residual(&stage_one)?;
-        let mut second_rhs = first_rhs;
-        add_scaled(
-            &mut second_rhs,
-            &first_residual,
-            -(1.0 - ARS_GAMMA) / ARS_GAMMA,
-        );
+        let (_stage_one, first_residual, first_iterations) =
+            self.ars232_implicit_stage_one(initial, dt_s)?;
         let (stage_two, second_iterations) =
-            self.solve_mass_residual_stage(&second_rhs, 1.0, inverse_diagonal_time)?;
+            self.ars232_implicit_stage_two(initial, &first_residual, dt_s)?;
         Ok((stage_two, first_iterations + second_iterations))
     }
 
@@ -522,6 +617,10 @@ fn validate_scalars(values: &[f64], count: usize, name: &str) -> Result<()> {
 
 fn validate_restart_identity(identity: &TransientCoupledRestartIdentity) -> Result<()> {
     let strings = [
+        &identity.problem_ir_abi_version,
+        &identity.scalar_layout,
+        &identity.vector_layout,
+        &identity.endianness,
         &identity.requested_discretization,
         &identity.requested_device,
         &identity.requested_precision,
@@ -531,10 +630,21 @@ fn validate_restart_identity(identity: &TransientCoupledRestartIdentity) -> Resu
         &identity.charge_cache_identity,
         &identity.spin_cache_identity,
         &identity.oersted_cache_identity,
+        &identity.source_identity,
+        &identity.thermal_rng_algorithm,
     ];
     if strings.iter().any(|value| value.trim().is_empty()) {
         return Err(EngineError::new(
             "transient coupled restart identity strings must be non-empty",
+        ));
+    }
+    if identity.problem_ir_abi_version != "fullmag.problem_ir.v1"
+        || identity.scalar_layout != "f64"
+        || identity.vector_layout != "aos_xyz"
+        || identity.endianness != "little"
+    {
+        return Err(EngineError::new(
+            "transient coupled restart ABI/layout/endianness is unsupported",
         ));
     }
     Ok(())
@@ -556,6 +666,10 @@ fn compare_restart_identity(
         };
     }
     compare!(requested_discretization, "requested discretization");
+    compare!(problem_ir_abi_version, "ProblemIR ABI version");
+    compare!(scalar_layout, "scalar layout");
+    compare!(vector_layout, "vector layout");
+    compare!(endianness, "endianness");
     compare!(requested_device, "requested device");
     compare!(requested_precision, "requested precision");
     compare!(execution_mode, "execution mode");
@@ -571,6 +685,8 @@ fn compare_restart_identity(
     compare!(charge_cache_identity, "charge cache identity");
     compare!(spin_cache_identity, "spin cache identity");
     compare!(oersted_cache_identity, "oersted cache identity");
+    compare!(source_identity, "source identity");
+    compare!(thermal_rng_algorithm, "thermal RNG algorithm");
     Ok(())
 }
 
@@ -829,6 +945,35 @@ mod tests {
     }
 
     #[test]
+    fn ars232_stage_two_preserves_the_row_one_operator_residual() {
+        let row_one_problem = decay_problem(1.0, 4.0);
+        let row_two_problem = decay_problem(1.0, 9.0);
+        let row_one = integrator(&row_one_problem, 1.0e-13);
+        let row_two = integrator(&row_two_problem, 1.0e-13);
+        let initial = initial_state().spin_potential_v;
+        let (stage_one, row_one_residual, _) = row_one
+            .ars232_implicit_stage_one(&initial, 0.1)
+            .unwrap();
+        let (correct, _) = row_two
+            .ars232_implicit_stage_two(&initial, &row_one_residual, 0.1)
+            .unwrap();
+        let row_two_residual_at_stage_one = row_two_problem.steady_residual(&stage_one).unwrap();
+        let (wrongly_recomputed, _) = row_two
+            .ars232_implicit_stage_two(&initial, &row_two_residual_at_stage_one, 0.1)
+            .unwrap();
+        let separation = correct
+            .iter()
+            .flatten()
+            .zip(wrongly_recomputed.iter().flatten())
+            .map(|(correct, wrong)| (correct - wrong).abs())
+            .fold(0.0, f64::max);
+        assert!(
+            separation > 1.0e-6,
+            "recomputing the row-one residual with the row-two operator must be detectable"
+        );
+    }
+
+    #[test]
     fn ars232_matches_periodic_discrete_diffusion_eigenmode_decay() {
         let nx = 24;
         let length = 2.0 * std::f64::consts::PI;
@@ -985,6 +1130,8 @@ mod tests {
             .unwrap();
         let coupled_state = TransientCoupledState {
             magnetization: vec![[0.0, 0.0, 1.0]],
+            previous_magnetization: Some(vec![[1.0, 0.0, 0.0]]),
+            previous_magnetization_dt_s: Some(0.1),
             charge_potential_v: vec![0.25],
             charge_current_density_apm2: vec![[3.0, 0.0, 0.0]],
             spin: first.clone(),
@@ -1000,8 +1147,14 @@ mod tests {
             accepted_steps: 4,
             rejected_steps: 2,
             telemetry_cursor: 6,
+            thermal_rng_seed: 42,
+            thermal_rng_counter: 7,
         };
         let identity = TransientCoupledRestartIdentity {
+            problem_ir_abi_version: "fullmag.problem_ir.v1".into(),
+            scalar_layout: "f64".into(),
+            vector_layout: "aos_xyz".into(),
+            endianness: "little".into(),
             requested_discretization: "fdm".into(),
             requested_device: "cpu".into(),
             requested_precision: "double".into(),
@@ -1018,6 +1171,8 @@ mod tests {
             charge_cache_identity: "charge-cache.v1".into(),
             spin_cache_identity: "spin-cache.v1".into(),
             oersted_cache_identity: "oersted-cache.v1".into(),
+            source_identity: "current-source.v1".into(),
+            thermal_rng_algorithm: "philox4x32-10.v1".into(),
         };
         let checkpoint = integrator
             .checkpoint(&coupled_state, identity.clone())
@@ -1042,6 +1197,10 @@ mod tests {
         assert_eq!(restored, coupled_state);
         assert_eq!(checkpoint.integrator_version, "coupled_imex_ark2.v1");
         assert_eq!(
+            checkpoint.checkpoint_schema_version,
+            "fullmag.coupled_m3_checkpoint.v1"
+        );
+        assert_eq!(
             checkpoint.integrator_implementation_revision,
             "imex_ars_232_step_doubling.fullmag.v1"
         );
@@ -1054,6 +1213,14 @@ mod tests {
                 mismatches.push(($name, changed));
             }};
         }
+        mismatch!(
+            "ProblemIR ABI version",
+            problem_ir_abi_version,
+            "fullmag.problem_ir.v2".into()
+        );
+        mismatch!("scalar layout", scalar_layout, "f32".into());
+        mismatch!("vector layout", vector_layout, "soa_xyz".into());
+        mismatch!("endianness", endianness, "big".into());
         mismatch!(
             "requested discretization",
             requested_discretization,
@@ -1085,6 +1252,12 @@ mod tests {
             "oersted cache identity",
             oersted_cache_identity,
             "other-oersted".into()
+        );
+        mismatch!("source identity", source_identity, "other-source".into());
+        mismatch!(
+            "thermal RNG algorithm",
+            thermal_rng_algorithm,
+            "other-rng".into()
         );
         for (name, incompatible) in mismatches {
             let error = integrator

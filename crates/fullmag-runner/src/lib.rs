@@ -1099,6 +1099,7 @@ fn fem_eigen_progress_update(progress: fem_eigen::FemEigenProgress) -> StepUpdat
     per_object_scalars.insert("fem_eigen_progress".to_string(), progress_scalars);
 
     StepUpdate {
+            coupled_checkpoint: None,
         stats: StepStats {
             step: progress
                 .iteration
@@ -1323,6 +1324,7 @@ pub fn run_planned_problem_with_callback(
         | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
     };
     on_step(StepUpdate {
+            coupled_checkpoint: None,
         stats: final_stats,
         grid: final_grid,
         fem_mesh: match &plan.backend_plan {
@@ -1627,6 +1629,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
     };
     on_step(StepUpdate {
+            coupled_checkpoint: None,
         stats: final_stats,
         grid: final_grid,
         fem_mesh: match &plan.backend_plan {
@@ -1801,6 +1804,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         .flat_map(|vector| vector.iter().copied())
         .collect();
     on_step(StepUpdate {
+            coupled_checkpoint: None,
         stats: final_stats,
         grid: fdm.grid.cells,
         fem_mesh: None,
@@ -1922,6 +1926,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         ..StepStats::default()
     });
     on_step(StepUpdate {
+            coupled_checkpoint: None,
         stats: final_stats,
         grid: [0, 0, 0],
         fem_mesh: Some(FemMeshPayload::from(fem)),
@@ -2579,6 +2584,25 @@ pub fn run_reference_fdm(
     outputs: &[OutputIR],
 ) -> Result<RunResult, RunError> {
     Ok(cpu_reference::execute_reference_fdm(plan, until_seconds, outputs, None, None)?.result)
+}
+
+/// Resume the CPU-double coupled M3 reference runtime from the exact backend
+/// state captured in a session checkpoint.
+pub fn resume_reference_fdm_from_coupled_checkpoint(
+    plan: &FdmPlanIR,
+    checkpoint: serde_json::Value,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+) -> Result<RunResult, RunError> {
+    Ok(cpu_reference::execute_reference_fdm_with_coupled_checkpoint(
+        plan,
+        until_seconds,
+        outputs,
+        None,
+        None,
+        Some(checkpoint),
+    )?
+    .result)
 }
 
 pub fn run_reference_multilayer_fdm(

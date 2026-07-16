@@ -528,6 +528,7 @@ fn execute_cuda_assisted_multilayer_double(
 
         if let Some((grid, on_step)) = live.as_mut() {
             let action = on_step(StepUpdate {
+            coupled_checkpoint: None,
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
                 fem_mesh: None,
@@ -762,6 +763,7 @@ fn execute_cuda_assisted_multilayer_single(
 
         if let Some((grid, on_step)) = live.as_mut() {
             let action = on_step(StepUpdate {
+            coupled_checkpoint: None,
                 stats: latest_stats.clone(),
                 grid: [grid[0], grid[1], grid[2]],
                 fem_mesh: None,
@@ -1258,6 +1260,7 @@ fn execute_native_stacked_cuda_multilayer(
             )?;
             if let Some((_, on_step)) = live.as_mut() {
                 let action = on_step(StepUpdate {
+            coupled_checkpoint: None,
                     stats: stats.clone(),
                     grid: native.global_grid,
                     fem_mesh: None,
@@ -1284,6 +1287,7 @@ fn execute_native_stacked_cuda_multilayer(
             }
         } else if let Some((_, on_step)) = live.as_mut() {
             let action = on_step(StepUpdate {
+            coupled_checkpoint: None,
                 stats: stats.clone(),
                 grid: native.global_grid,
                 fem_mesh: None,

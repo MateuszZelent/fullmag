@@ -2075,6 +2075,7 @@ where
                 stage_execution: None,
                 run: None,
                 live_state: None,
+                coupled_checkpoint: None,
                 latest_scalar_row: None,
                 latest_fields: None,
                 preview_fields: None,

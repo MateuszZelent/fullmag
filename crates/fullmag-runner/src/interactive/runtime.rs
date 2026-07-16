@@ -289,6 +289,7 @@ impl InteractiveRuntime {
         };
 
         on_step(StepUpdate {
+            coupled_checkpoint: None,
             stats: final_stats,
             grid,
             fem_mesh,

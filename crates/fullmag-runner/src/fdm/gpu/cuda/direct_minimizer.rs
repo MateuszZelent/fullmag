@@ -115,6 +115,7 @@ pub(crate) fn execute_direct_minimizer(
                     None
                 };
                 let action = (live.on_step)(StepUpdate {
+            coupled_checkpoint: None,
                     stats: current_stats.clone(),
                     grid: live.grid,
                     fem_mesh: None,

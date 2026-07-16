@@ -455,6 +455,7 @@ fn dense_frequency_response_progress_update(
     );
 
     StepUpdate {
+            coupled_checkpoint: None,
         stats: StepStats {
             step: completed_frequency_count,
             time: 0.0,
@@ -549,6 +550,7 @@ fn native_frequency_response_progress_update(
     );
 
     StepUpdate {
+            coupled_checkpoint: None,
         stats: StepStats {
             step: progress.completed_frequency_count,
             time: 0.0,

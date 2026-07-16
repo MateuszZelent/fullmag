@@ -85,6 +85,17 @@ pub(crate) enum Command {
         #[arg(long, default_value = "run_output")]
         output_dir: PathBuf,
     },
+    /// Resume an exact FDM CPU coupled-M3 checkpoint.
+    ResumeJson {
+        /// Canonical ProblemIR JSON used to recreate and validate the plan.
+        path: PathBuf,
+        /// Raw coupled checkpoint JSON or a fullmag.backend_state.v1 envelope.
+        #[arg(long)]
+        checkpoint: PathBuf,
+        /// Absolute simulation end time in seconds.
+        #[arg(long)]
+        until: f64,
+    },
     #[command(hide = true)]
     ResolveRuntimeInvocation {
         #[arg(long, default_value_t = false)]

@@ -95,6 +95,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             session: value.session,
             run: value.run,
             live_state: value.live_state,
+            coupled_checkpoint: None,
             runtime_status: value.runtime_status,
             capabilities: value.capabilities,
             metadata: value.metadata,
@@ -732,6 +733,12 @@ pub(crate) async fn restore_checkpoint(
     let checkpoint = read_checkpoint_for_run(&store, &run_id, &checkpoint_id)?;
     let common_state = read_checkpoint_common_state(&store, &checkpoint)?;
     let magnetization = read_checkpoint_magnetization(&store, &common_state)?;
+    let coupled_checkpoint = read_checkpoint_coupled_state(&store, &checkpoint)?;
+    if snapshot.coupled_checkpoint.is_some() && coupled_checkpoint.is_none() {
+        return Err(ApiError::bad_request(
+            "legacy magnetization-only checkpoint cannot resume an active coupled M3 runtime",
+        ));
+    }
     validate_checkpoint_restore_shape(snapshot, magnetization.len())?;
 
     let restore_class = determine_restore_class(
@@ -753,6 +760,7 @@ pub(crate) async fn restore_checkpoint(
     live_state.latest_step.e_dmi = common_state.energies.dmi;
     live_state.latest_step.e_total = common_state.energies.total;
     live_state.latest_step.magnetization = Some(flat_magnetization);
+    snapshot.coupled_checkpoint = coupled_checkpoint;
     live_state.status = "paused".to_string();
     live_state.updated_at_unix_ms = now_unix_ms();
     let loaded_state_ref = checkpoint.common_state_ref.clone();
@@ -1111,6 +1119,7 @@ struct LiveCheckpointProvider {
     energies: SolverEnergies,
     magnetization: Vec<[f64; 3]>,
     compatibility: CheckpointCompatibility,
+    coupled_checkpoint: Option<serde_json::Value>,
 }
 
 impl LiveCheckpointProvider {
@@ -1140,6 +1149,9 @@ impl LiveCheckpointProvider {
             ));
         }
 
+        if let Some(checkpoint) = snapshot.coupled_checkpoint.as_ref() {
+            validate_coupled_checkpoint_value(checkpoint)?;
+        }
         Ok(Self {
             step: latest.step,
             time_s: latest.time,
@@ -1154,6 +1166,7 @@ impl LiveCheckpointProvider {
             },
             magnetization,
             compatibility: checkpoint_compatibility(snapshot),
+            coupled_checkpoint: snapshot.coupled_checkpoint.clone(),
         })
     }
 
@@ -1193,12 +1206,56 @@ impl CheckpointSnapshotProvider for LiveCheckpointProvider {
     fn backend_state_payload(
         &self,
     ) -> anyhow::Result<Option<fullmag_session::BackendStatePayload>> {
-        Ok(None)
+        let Some(checkpoint) = self.coupled_checkpoint.clone() else {
+            return Ok(None);
+        };
+        let rng_state = fullmag_session::RngState {
+            global_seed: checkpoint["thermal_seed"].as_u64().unwrap_or(0),
+            stream_family: checkpoint["thermal_rng_algorithm"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string(),
+            counter_base: checkpoint["thermal_counter"].as_u64().unwrap_or(0),
+            substream_per_cell: Some(true),
+            last_consumed_nonce: checkpoint["thermal_counter"].as_u64().unwrap_or(0),
+        };
+        Ok(Some(fullmag_session::BackendStatePayload {
+            format: "fullmag.backend_state.v1".into(),
+            backend_family: "fdm_cpu_reference".into(),
+            integrator_kind: Some("coupled_imex_ark2".into()),
+            integrator_state: Some(checkpoint),
+            rng_state: Some(rng_state),
+            extra: serde_json::json!({
+                "checkpoint_schema": "fullmag.fdm.coupled_m3_checkpoint.v1"
+            }),
+        }))
     }
 
     fn compatibility(&self) -> CheckpointCompatibility {
         self.compatibility.clone()
     }
+}
+
+fn validate_coupled_checkpoint_value(value: &serde_json::Value) -> Result<(), ApiError> {
+    let valid = value["schema"] == "fullmag.fdm.coupled_m3_checkpoint.v1"
+        && value["problem_ir_abi"] == "fullmag.problem_ir.v1"
+        && value["scalar_layout"] == "f64"
+        && value["vector_layout"] == "aos_xyz"
+        && value["endianness"] == "little"
+        && value["formula_version"] == "transient_spin_balance.fullmag.v1"
+        && value["integrator_version"] == "coupled_imex_ark2.v1"
+        && value["magnetization"].is_array()
+        && value["previous_magnetization"].is_array()
+        && value["transient_states"].is_object()
+        && value["accepted"].is_object()
+        && value["thermal_seed"].is_u64()
+        && value["thermal_counter"].is_u64();
+    if !valid {
+        return Err(ApiError::bad_request(
+            "unsupported coupled M3 checkpoint schema/ABI/layout/formula payload",
+        ));
+    }
+    Ok(())
 }
 
 struct CheckpointEntryContext {
@@ -1392,6 +1449,34 @@ fn read_checkpoint_common_state(
         .ok_or_else(|| ApiError::not_found("checkpoint state not found"))?;
     serde_json::from_slice(&raw)
         .map_err(|error| ApiError::internal(format!("parsing checkpoint state: {error}")))
+}
+
+fn read_checkpoint_coupled_state(
+    store: &SessionStore,
+    checkpoint: &fullmag_session::FmsCheckpoint,
+) -> Result<Option<serde_json::Value>, ApiError> {
+    let Some(reference) = checkpoint.backend_state_ref.as_deref() else {
+        return Ok(None);
+    };
+    let bytes = store
+        .read_document(reference)
+        .map_err(|error| ApiError::internal(format!("reading checkpoint backend state: {error}")))?
+        .ok_or_else(|| ApiError::not_found("checkpoint backend state not found"))?;
+    let payload: fullmag_session::BackendStatePayload = serde_json::from_slice(&bytes)
+        .map_err(|error| ApiError::bad_request(format!("invalid checkpoint backend state: {error}")))?;
+    if payload.format != "fullmag.backend_state.v1"
+        || payload.backend_family != "fdm_cpu_reference"
+        || payload.integrator_kind.as_deref() != Some("coupled_imex_ark2")
+    {
+        return Err(ApiError::bad_request(
+            "unsupported coupled M3 backend checkpoint envelope",
+        ));
+    }
+    let state = payload.integrator_state.ok_or_else(|| {
+        ApiError::bad_request("coupled M3 backend checkpoint has no integrator state")
+    })?;
+    validate_coupled_checkpoint_value(&state)?;
+    Ok(Some(state))
 }
 
 fn read_checkpoint_magnetization(

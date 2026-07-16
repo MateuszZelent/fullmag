@@ -151,6 +151,22 @@ verify-fdm-pbc-production:
     cargo test -p fullmag-runner --lib stale_resolved_periodic_workspace --no-fail-fast
     python3 scripts/verify_pbc_production_matrix.py --manifest scripts/pbc_production_matrix.v1.json
 
+# M3 CPU reference gate. This intentionally does not promote the public
+# capability: the final planner test proves transient M3 remains fail-closed
+# until public coupled checkpoint persistence is qualified.
+verify-fdm-transient-spin-m3-reference:
+    cargo test -p fullmag-engine --lib transient_spin --no-fail-fast
+    cargo test -p fullmag-runner --lib coupled_ars232 --no-fail-fast
+    cargo test -p fullmag-runner --lib adaptive_norm_detects_each_dimensional_observable_family --no-fail-fast
+    cargo test -p fullmag-runner --lib coupled_trial_failures_rollback_llg_transport_and_thermal_state --no-fail-fast
+    cargo test -p fullmag-runner --lib public_reference_resume_matches_uninterrupted_runner_artifact --no-fail-fast
+    cargo test -p fullmag-api session_checkpoint_create_captures_live_magnetization --no-fail-fast
+    cargo test -p fullmag-api legacy_checkpoint_fails_closed_for_active_coupled_m3_session --no-fail-fast
+    cargo test -p fullmag-plan --lib resolves_transient_fdm_cpu_double_with_physical_capacitance_and_versions --no-fail-fast
+    cargo test -p fullmag-cli cli_parses_exact_coupled_checkpoint_resume_entrypoint --no-fail-fast
+    cargo test -p fullmag-cli cli_resume_unwraps_only_the_exact_backend_state_envelope --no-fail-fast
+    PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_spin_drift_diffusion.py -q
+
 verify-fdm-prescribed-sot-native-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-prescribed-sot-build && cargo_target=/tmp/fullmag-fdm-prescribed-sot-cargo && cmake -S native -B "$build_dir" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target prescribed_sot_contract prescribed_sot_cuda_runtime && "$build_dir/backends/fdm/prescribed_sot_contract" && LD_LIBRARY_PATH="$build_dir/backends/fdm:${LD_LIBRARY_PATH:-}" "$build_dir/backends/fdm/prescribed_sot_cuda_runtime" && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" CARGO_TARGET_DIR="$cargo_target" cargo +nightly check -p fullmag-runner --features cuda'

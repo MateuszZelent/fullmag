@@ -37,14 +37,14 @@ pub use fdm::neighbor_index;
 pub use fdm::{
     compute_newell_kernel_spectra, compute_newell_kernel_spectra_thin_film_2d,
     compute_periodic_newell_kernel_spectra, run_reference_exchange_demo, AbmHistory, AbmHistorySoA,
-    AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, DemagKernelSpectra,
-    EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
-    ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, ExternalStageTerms,
-    FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
-    MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, ReferenceDemoReport,
-    ResolvedFdmPeriodicWorkspace, Result, RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig,
-    SolverSession, SotConfig, SotFormula, StepReport, TimeIntegrator, UniaxialAnisotropyConfig,
-    VectorFieldSoA, ZhangLiSttConfig,
+    AdaptiveStepConfig, AxisBoundary, CellSize, CoupledImexArk2Stage, CoupledImexArk2Tableau,
+    CubicAnisotropyConfig, DemagKernelSpectra, EffectiveFieldObservables, EffectiveFieldTerms,
+    EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
+    ExternalStageTerms, FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace, GridShape,
+    IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
+    OerstedCylinderConfig, ReferenceDemoReport, ResolvedFdmPeriodicWorkspace, Result,
+    RhsEvaluation, SlonczewskiFormula, SlonczewskiSttConfig, SolverSession, SotConfig, SotFormula,
+    StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA, ZhangLiSttConfig,
 };
 
 // ── Vector math utilities ─────────────────────────────────────────────
@@ -1007,6 +1007,43 @@ mod tests {
 
     #[test]
     fn coupled_ars232_fixed_step_is_transactional_and_refreshes_accepted_state() {
+        assert_eq!(
+            CoupledImexArk2Tableau::EXPLICIT_A,
+            [
+                [0.0, 0.0, 0.0],
+                [(2.0 - std::f64::consts::SQRT_2) / 2.0, 0.0, 0.0],
+                [
+                    -2.0 * std::f64::consts::SQRT_2 / 3.0,
+                    1.0 + 2.0 * std::f64::consts::SQRT_2 / 3.0,
+                    0.0
+                ],
+            ]
+        );
+        assert_eq!(
+            CoupledImexArk2Tableau::EXPLICIT_B,
+            [
+                0.0,
+                1.0 - CoupledImexArk2Tableau::GAMMA,
+                CoupledImexArk2Tableau::GAMMA
+            ]
+        );
+        assert_eq!(
+            CoupledImexArk2Tableau::IMPLICIT_A,
+            [
+                [CoupledImexArk2Tableau::GAMMA, 0.0],
+                [
+                    1.0 - CoupledImexArk2Tableau::GAMMA,
+                    CoupledImexArk2Tableau::GAMMA
+                ],
+            ]
+        );
+        assert_eq!(
+            CoupledImexArk2Tableau::IMPLICIT_B,
+            [
+                1.0 - CoupledImexArk2Tableau::GAMMA,
+                CoupledImexArk2Tableau::GAMMA
+            ]
+        );
         let problem = simple_problem(0.1, 1.0);
         let initial = problem
             .new_state(vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]])
@@ -1023,7 +1060,7 @@ mod tests {
                     &mut ws,
                     &mut bufs,
                     EvaluationRequest::Full,
-                    |_m, _time| {
+                    |_m, _time, _stage| {
                         calls += 1;
                         if calls == failure_call {
                             return Err(EngineError::new(format!("stage {failure_call} failed")));
@@ -1045,6 +1082,7 @@ mod tests {
         let mut ws = problem.create_workspace();
         let mut bufs = problem.create_integrator_buffers();
         let mut stage_times = Vec::new();
+        let mut stages = Vec::new();
         problem
             .coupled_imex_ark2_fixed_step_with_external_stage_terms(
                 &mut state,
@@ -1052,8 +1090,9 @@ mod tests {
                 &mut ws,
                 &mut bufs,
                 EvaluationRequest::Full,
-                |_m, time| {
+                |_m, time, stage| {
                     stage_times.push(time);
+                    stages.push(stage);
                     Ok(ExternalStageTerms {
                         additional_field_apm: vec![[0.0, 0.0, 1.0]; 3],
                         direct_torque_per_s: vec![[0.0; 3]; 3],
@@ -1066,6 +1105,15 @@ mod tests {
         assert!((stage_times[1] - 0.292_893_218_813_452_4e-3).abs() < 1e-15);
         assert_eq!(stage_times[2], 1e-3);
         assert_eq!(stage_times[3], 1e-3);
+        assert_eq!(
+            stages,
+            vec![
+                CoupledImexArk2Stage::ExplicitOrigin,
+                CoupledImexArk2Stage::ImplicitStageOne,
+                CoupledImexArk2Stage::ImplicitStageTwo,
+                CoupledImexArk2Stage::AcceptedObservation,
+            ]
+        );
         assert_eq!(state.time_seconds, 1e-3);
     }
 

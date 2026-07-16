@@ -5,9 +5,9 @@
 
 use crate::vector::{add, norm, normalized, scale};
 use crate::{
-    EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
-    ExternalStageTerms, FftWorkspace, IntegratorBuffers, Result, RhsEvaluation, StepReport,
-    Vector3, VectorFieldSoA,
+    CoupledImexArk2Stage, CoupledImexArk2Tableau, EvaluationRequest, ExchangeLlgProblem,
+    ExchangeLlgState, ExchangeLlgStateSoA, ExternalStageTerms, FftWorkspace, IntegratorBuffers,
+    Result, RhsEvaluation, StepReport, Vector3, VectorFieldSoA,
 };
 
 #[cfg(feature = "parallel")]
@@ -27,10 +27,10 @@ impl ExchangeLlgProblem {
         mut external_terms: F,
     ) -> Result<StepReport>
     where
-        F: FnMut(&[Vector3], f64) -> Result<ExternalStageTerms>,
+        F: FnMut(&[Vector3], f64, CoupledImexArk2Stage) -> Result<ExternalStageTerms>,
     {
-        const GAMMA: f64 = 0.292_893_218_813_452_4;
-        const DELTA: f64 = -0.942_809_041_582_063_4;
+        const GAMMA: f64 = CoupledImexArk2Tableau::GAMMA;
+        const DELTA: f64 = CoupledImexArk2Tableau::DELTA;
         self.ensure_state_matches_grid(state)?;
         if dt <= 0.0 || !dt.is_finite() {
             return Err(crate::EngineError::new("dt must be finite and positive"));
@@ -40,7 +40,7 @@ impl ExchangeLlgProblem {
         bufs.m0[..n].copy_from_slice(&state.magnetization);
 
         self.effective_field_into_ws_at_time(&bufs.m0[..n], ws, &mut bufs.h_eff[..n], t0);
-        let terms0 = external_terms(&bufs.m0[..n], t0)?;
+        let terms0 = external_terms(&bufs.m0[..n], t0, CoupledImexArk2Stage::ExplicitOrigin)?;
         apply_external_stage_terms(
             &bufs.m0[..n],
             &mut bufs.h_eff[..n],
@@ -58,7 +58,11 @@ impl ExchangeLlgProblem {
             &mut bufs.h_eff[..n],
             t0 + GAMMA * dt,
         );
-        let terms1 = external_terms(&bufs.m_stage[..n], t0 + GAMMA * dt)?;
+        let terms1 = external_terms(
+            &bufs.m_stage[..n],
+            t0 + GAMMA * dt,
+            CoupledImexArk2Stage::ImplicitStageOne,
+        )?;
         apply_external_stage_terms(
             &bufs.m_stage[..n],
             &mut bufs.h_eff[..n],
@@ -77,7 +81,11 @@ impl ExchangeLlgProblem {
             ))?;
         }
         self.effective_field_into_ws_at_time(&bufs.delta[..n], ws, &mut bufs.h_eff[..n], t0 + dt);
-        let terms2 = external_terms(&bufs.delta[..n], t0 + dt)?;
+        let terms2 = external_terms(
+            &bufs.delta[..n],
+            t0 + dt,
+            CoupledImexArk2Stage::ImplicitStageTwo,
+        )?;
         apply_external_stage_terms(
             &bufs.delta[..n],
             &mut bufs.h_eff[..n],
@@ -104,7 +112,11 @@ impl ExchangeLlgProblem {
             evaluation,
             t0 + dt,
         );
-        let final_terms = external_terms(&bufs.delta[..n], t0 + dt)?;
+        let final_terms = external_terms(
+            &bufs.delta[..n],
+            t0 + dt,
+            CoupledImexArk2Stage::AcceptedObservation,
+        )?;
         let dynamic_field = final_terms.additional_field_apm.clone();
         apply_external_stage_terms(
             &bufs.delta[..n],

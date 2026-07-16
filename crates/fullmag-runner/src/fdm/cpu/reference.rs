@@ -17,7 +17,9 @@ use fullmag_ir::{
     RelaxationControlIR, StageCompletionIR,
 };
 
-use super::spin_transport::{FdmSpinTransportEvaluation, FdmSpinTransportWorkflow};
+use super::spin_transport::{
+    FdmCoupledCheckpoint, FdmSpinTransportEvaluation, FdmSpinTransportWorkflow,
+};
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
@@ -625,7 +627,7 @@ pub(crate) fn build_snapshot_problem_and_state(
 ///
 /// Pass `live: Some(LiveStepConsumer { .. })` for per-step callbacks /
 /// live preview, and `artifact_writer: Some(sender)` for streaming artifacts.
-fn execute_coupled_ars_trial(
+pub(crate) fn execute_coupled_ars_trial(
     problem: &ExchangeLlgProblem,
     state: &mut ExchangeLlgState,
     workflow: &mut FdmSpinTransportWorkflow,
@@ -633,18 +635,20 @@ fn execute_coupled_ars_trial(
     fft_workspace: &mut FftWorkspace,
     integrator_bufs: &mut IntegratorBuffers,
 ) -> Result<StepReport, RunError> {
+    let mut trial_state = state.clone();
+    let mut trial_workflow = workflow.clone();
     let mut candidate: Option<FdmSpinTransportEvaluation> = None;
-    workflow.begin_attempt()?;
+    trial_workflow.begin_attempt()?;
     let result = problem.coupled_imex_ark2_fixed_step_with_external_stage_terms(
-        state,
+        &mut trial_state,
         dt,
         fft_workspace,
         integrator_bufs,
         EvaluationRequest::Full,
-        |magnetization, time_s| {
+        |magnetization, time_s, stage| {
             let previous_stage = candidate.as_ref();
-            let evaluation = workflow
-                .evaluate_stage_with_lte(magnetization, time_s, None, previous_stage)
+            let evaluation = trial_workflow
+                .evaluate_coupled_ars_stage(magnetization, time_s, dt, stage, previous_stage)
                 .map_err(|error| EngineError::new(error.message))?;
             let terms = ExternalStageTerms {
                 additional_field_apm: evaluation
@@ -662,40 +666,41 @@ fn execute_coupled_ars_trial(
             let accepted = candidate.ok_or_else(|| RunError {
                 message: "coupled ARS step produced no final spin-transport evaluation".into(),
             })?;
-            workflow.commit(accepted)?;
+            trial_workflow.commit(accepted)?;
+            *state = trial_state;
+            *workflow = trial_workflow;
             Ok(report)
         }
-        Err(error) => {
-            workflow.rollback();
-            Err(RunError {
-                message: error.to_string(),
-            })
-        }
+        Err(error) => Err(RunError {
+            message: error.to_string(),
+        }),
     }
-}
-
-fn normalized_step_doubling_difference(
-    full: &[[f64; 3]],
-    half: &[[f64; 3]],
-    atol: f64,
-    rtol: f64,
-) -> f64 {
-    let mut sum = 0.0;
-    let mut count = 0usize;
-    for (full, half) in full.iter().flatten().zip(half.iter().flatten()) {
-        let scale = atol + rtol * full.abs().max(half.abs());
-        sum += (((half - full) / 3.0) / scale).powi(2);
-        count += 1;
-    }
-    (sum / count.max(1) as f64).sqrt()
 }
 
 pub(crate) fn execute_reference_fdm(
     plan: &FdmPlanIR,
     until_seconds: f64,
     outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'_>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
+    execute_reference_fdm_with_coupled_checkpoint(
+        plan,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+        None,
+    )
+}
+
+pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
+    plan: &FdmPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
+    coupled_checkpoint: Option<serde_json::Value>,
 ) -> Result<ExecutedRun, RunError> {
     validate_single_grid_budget(plan)?;
     if until_seconds <= 0.0 {
@@ -862,14 +867,46 @@ pub(crate) fn execute_reference_fdm(
         .map_err(|e| RunError {
             message: format!("State: {}", e),
         })?;
+    let mut restored_checkpoint = coupled_checkpoint
+        .map(|value| {
+            serde_json::from_value::<FdmCoupledCheckpoint>(value).map_err(|error| RunError {
+                message: format!("invalid coupled M3 checkpoint payload: {error}"),
+            })
+        })
+        .transpose()?;
+    let mut resume_timestep = None;
+    let mut resume_previous_timestep = None;
+    let mut resume_step_count = None;
+    if let Some(checkpoint) = restored_checkpoint.take() {
+        let workflow = spin_transport.as_mut().ok_or_else(|| RunError {
+            message: "coupled M3 checkpoint requires a transient spin-transport plan".into(),
+        })?;
+        if checkpoint.thermal_seed != problem.thermal_seed {
+            return Err(RunError {
+                message: "coupled checkpoint thermal RNG seed does not match the planned problem"
+                    .into(),
+            });
+        }
+        let checkpoint = workflow.restore_coupled_checkpoint(checkpoint)?;
+        resume_timestep = Some(checkpoint.error_controller.next_dt_s);
+        resume_previous_timestep = Some(checkpoint.previous_dt_s);
+        resume_step_count = Some(checkpoint.accepted_steps);
+        state
+            .restore_exact_checkpoint(checkpoint.magnetization, checkpoint.time_s)
+            .map_err(|error| RunError {
+                message: format!("restoring coupled checkpoint magnetization: {error}"),
+            })?;
+        problem.restore_thermal_step(checkpoint.thermal_counter);
+    }
     let initial_magnetization = state.magnetization().to_vec();
 
-    let mut dt =
+    let mut dt = resume_timestep.unwrap_or_else(|| {
         crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-            .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
-    let mut last_solver_dt = 0.0;
+            .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL)
+    });
+    let mut last_solver_dt = resume_previous_timestep.unwrap_or(0.0);
     let mut steps: Vec<StepStats> = Vec::new();
-    let mut step_count: u64 = 0;
+    let mut step_count: u64 = resume_step_count.unwrap_or(0);
     let fft_backend = resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let mut provenance = ExecutionProvenance {
         execution_engine: "cpu_reference".to_string(),
@@ -1088,6 +1125,7 @@ pub(crate) fn execute_reference_fdm(
                         None
                     };
                     let action = (live.on_step)(StepUpdate {
+            coupled_checkpoint: None,
                         stats: current_stats.clone(),
                         scalar_row_due: preview_due && preview_targets_global_scalar,
                         grid: live.grid,
@@ -1132,6 +1170,7 @@ pub(crate) fn execute_reference_fdm(
                     resolved_per_node_external_field(plan, state.time_seconds);
             }
             let wall_start = Instant::now();
+            let previous_magnetization = state.magnetization().to_vec();
             let report = if let Some(workflow) = spin_transport.as_mut() {
                 let transient = workflow.has_transient();
                 if transient {
@@ -1171,18 +1210,13 @@ pub(crate) fn execute_reference_fdm(
                                 &mut fft_workspace,
                                 &mut integrator_bufs,
                             )?;
-                            let magnetic_error = normalized_step_doubling_difference(
+                            let error = full_workflow.normalized_coupled_difference(
+                                &half_workflow,
                                 full_state.magnetization(),
                                 half_state.magnetization(),
                                 adaptive.atol,
                                 adaptive.rtol,
-                            );
-                            let transport_error = full_workflow.normalized_transient_difference(
-                                &half_workflow,
-                                adaptive.atol,
-                                adaptive.rtol,
                             )?;
-                            let error = magnetic_error.max(transport_error);
                             let factor = if error == 0.0 {
                                 adaptive.growth_limit
                             } else {
@@ -1198,6 +1232,7 @@ pub(crate) fn execute_reference_fdm(
                                     accepted_before.saturating_add(1),
                                     rejected_before.saturating_add(rejected_trials),
                                 );
+                                workflow.set_error_controller(next_dt, error);
                                 state = half_state;
                                 half_report.dt_used = attempted_dt;
                                 half_report.suggested_next_dt = Some(next_dt);
@@ -1408,7 +1443,29 @@ pub(crate) fn execute_reference_fdm(
                 if due_scalar_row || scalar_outputs_request_average_m(&scalar_schedules) {
                     apply_average_m_to_step_stats(&mut update_stats, state.magnetization());
                 }
+                let coupled_checkpoint = spin_transport
+                    .as_ref()
+                    .filter(|workflow| workflow.has_transient())
+                    .map(|workflow| {
+                        workflow
+                            .coupled_checkpoint(
+                                state.magnetization(),
+                                &previous_magnetization,
+                                report.dt_used,
+                                problem.thermal_seed,
+                                problem.thermal_step(),
+                            )
+                            .and_then(|checkpoint| {
+                                serde_json::to_value(checkpoint).map_err(|error| RunError {
+                                    message: format!(
+                                        "serializing coupled M3 checkpoint: {error}"
+                                    ),
+                                })
+                            })
+                    })
+                    .transpose()?;
                 let action = (live.on_step)(StepUpdate {
+                    coupled_checkpoint,
                     stats: update_stats,
                     scalar_row_due: due_scalar_row,
                     grid: live.grid,

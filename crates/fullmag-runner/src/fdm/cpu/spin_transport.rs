@@ -8,22 +8,22 @@ use fullmag_engine::fdm::cpu::transport::{
     ReciprocalConstitutiveMaterial, SpinBoundaryCondition, SpinBoundaryConditions,
     SpinDriftDiffusionProblem, SpinFluxOperator, SpinInterfaceLaw, SpinMaterialFields,
     SpinReactionLengths, SpinSolverConfig, SpinTorqueTargets, StructuredChargeProblem,
-    StructuredSpinFace, TransientSpinIntegrator, TransientSpinMaterial, TransientSpinSolverConfig,
-    TransientSpinState,
+    StructuredSpinFace, TransientErrorControllerState, TransientSpinIntegrator,
+    TransientSpinMaterial, TransientSpinSolverConfig, TransientSpinState,
 };
 use fullmag_engine::fdm::TransportStageErrorBudget;
-use fullmag_engine::{CellSize, GridShape};
+use fullmag_engine::{CellSize, CoupledImexArk2Stage, GridShape};
 use fullmag_ir::{
     ChargePotentialGaugeIR, FdmPlanIR, ResolvedChargeBoundaryConditionIR,
     ResolvedFdmCoupledSpinTransportIR, ResolvedFdmSpinTransportIR,
     ResolvedFdmTransientSpinTransportIR, ResolvedSpinBoundaryConditionIR,
     ResolvedSpinInterfaceLawIR, StructuredBoundaryFaceIR,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::types::RunError;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FdmSpinTransportTelemetry {
     pub charge_iterations: usize,
     pub charge_residual_l2: f64,
@@ -58,7 +58,7 @@ pub(crate) struct FdmSpinTransportTelemetry {
     pub warm_start_used: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FdmSpinInterfaceFluxSnapshot {
     pub source_id: String,
     pub incoming_longitudinal_apm2: [f64; 3],
@@ -69,7 +69,7 @@ pub(crate) struct FdmSpinInterfaceFluxSnapshot {
     pub to_side_transmitted_apm2: [f64; 3],
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FdmSpinTransportModuleSnapshot {
     pub module_id: String,
     pub current_source_id: String,
@@ -90,7 +90,7 @@ pub(crate) struct FdmSpinTransportModuleSnapshot {
     pub operator_revision: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FdmSpinTransportEvaluation {
     pub revision: u64,
     pub evaluated_time_s: f64,
@@ -100,7 +100,7 @@ pub(crate) struct FdmSpinTransportEvaluation {
     pub combined_oersted_field_apm: Option<Vec<[f64; 3]>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FdmSpinTransportWorkflow {
     grid: GridShape,
     cell_size: CellSize,
@@ -112,8 +112,48 @@ pub(crate) struct FdmSpinTransportWorkflow {
     transient_states: BTreeMap<String, TransientSpinState>,
     transient_attempt_origin: Option<BTreeMap<String, TransientSpinState>>,
     transient_candidates: BTreeMap<String, TransientSpinState>,
+    transient_stage_one_residuals: BTreeMap<String, Vec<[f64; 3]>>,
     accepted_steps: u64,
     rejected_steps: u64,
+    error_controller: TransientErrorControllerState,
+    #[cfg(test)]
+    coupled_failure_injection: Option<CoupledFailureInjection>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CoupledFailureInjection {
+    ChargeSolve,
+    SpinSolve,
+    FinalObservation,
+    WorkflowCommit,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct FdmCoupledCheckpoint {
+    pub schema: String,
+    pub problem_ir_abi: String,
+    pub scalar_layout: String,
+    pub vector_layout: String,
+    pub endianness: String,
+    pub formula_version: String,
+    pub integrator_version: String,
+    pub integrator_implementation_revision: String,
+    pub plan_fingerprint: u64,
+    pub magnetization: Vec<[f64; 3]>,
+    pub previous_magnetization: Vec<[f64; 3]>,
+    pub time_s: f64,
+    pub previous_dt_s: f64,
+    pub accepted: FdmSpinTransportEvaluation,
+    pub transient_states: BTreeMap<String, TransientSpinState>,
+    pub next_revision: u64,
+    pub refresh_count: u64,
+    pub accepted_steps: u64,
+    pub rejected_steps: u64,
+    pub error_controller: TransientErrorControllerState,
+    pub thermal_rng_algorithm: String,
+    pub thermal_seed: u64,
+    pub thermal_counter: u64,
 }
 
 impl FdmSpinTransportWorkflow {
@@ -177,6 +217,12 @@ impl FdmSpinTransportWorkflow {
                 }
             }
         }
+        let next_dt_s = plan
+            .adaptive_timestep
+            .as_ref()
+            .and_then(|adaptive| adaptive.dt_initial)
+            .or(plan.fixed_timestep)
+            .unwrap_or(1.0e-15);
         Ok(Some(Self {
             grid,
             cell_size,
@@ -188,8 +234,15 @@ impl FdmSpinTransportWorkflow {
             transient_states,
             transient_attempt_origin: None,
             transient_candidates: BTreeMap::new(),
+            transient_stage_one_residuals: BTreeMap::new(),
             accepted_steps: 0,
             rejected_steps: 0,
+            error_controller: TransientErrorControllerState {
+                next_dt_s,
+                last_normalized_error: 0.0,
+            },
+            #[cfg(test)]
+            coupled_failure_injection: None,
         }))
     }
 
@@ -200,6 +253,7 @@ impl FdmSpinTransportWorkflow {
         self.attempt_checkpoint = Some((self.next_revision, self.refresh_count));
         self.transient_attempt_origin = Some(self.transient_states.clone());
         self.transient_candidates.clear();
+        self.transient_stage_one_residuals.clear();
         Ok(())
     }
 
@@ -224,6 +278,40 @@ impl FdmSpinTransportWorkflow {
         stage_time_s: f64,
         stage_error_budget: Option<TransportStageErrorBudget>,
         previous_stage: Option<&FdmSpinTransportEvaluation>,
+    ) -> Result<FdmSpinTransportEvaluation, RunError> {
+        self.evaluate_stage_internal(
+            magnetization,
+            stage_time_s,
+            stage_error_budget,
+            previous_stage,
+            None,
+        )
+    }
+
+    pub(crate) fn evaluate_coupled_ars_stage(
+        &mut self,
+        magnetization: &[[f64; 3]],
+        stage_time_s: f64,
+        dt_s: f64,
+        stage: CoupledImexArk2Stage,
+        previous_stage: Option<&FdmSpinTransportEvaluation>,
+    ) -> Result<FdmSpinTransportEvaluation, RunError> {
+        self.evaluate_stage_internal(
+            magnetization,
+            stage_time_s,
+            None,
+            previous_stage,
+            Some((stage, dt_s)),
+        )
+    }
+
+    fn evaluate_stage_internal(
+        &mut self,
+        magnetization: &[[f64; 3]],
+        stage_time_s: f64,
+        stage_error_budget: Option<TransportStageErrorBudget>,
+        previous_stage: Option<&FdmSpinTransportEvaluation>,
+        coupled_stage: Option<(CoupledImexArk2Stage, f64)>,
     ) -> Result<FdmSpinTransportEvaluation, RunError> {
         if magnetization.len() != self.grid.cell_count()
             || magnetization
@@ -252,6 +340,14 @@ impl FdmSpinTransportWorkflow {
                     .ok_or_else(|| {
                         run_error("transient stage evaluation requires an active transaction")
                     })?;
+                let (stage, dt_s) = coupled_stage.ok_or_else(|| {
+                    run_error("transient spin requires a canonical coupled ARS stage identity")
+                })?;
+                let stage_one_residual = self
+                    .transient_stage_one_residuals
+                    .get(&resolved.module_id)
+                    .cloned();
+                let prior_candidate = self.transient_candidates.get(&resolved.module_id).cloned();
                 let (snapshot, candidate) = solve_transient_module(
                     self.grid,
                     self.cell_size,
@@ -260,9 +356,21 @@ impl FdmSpinTransportWorkflow {
                     magnetization,
                     origin,
                     stage_time_s,
+                    dt_s,
+                    stage,
+                    stage_one_residual.as_deref(),
+                    prior_candidate.as_ref(),
+                    #[cfg(test)]
+                    self.coupled_failure_injection,
+                    #[cfg(not(test))]
+                    None,
                 )?;
+                if let Some(residual) = candidate.stage_one_residual {
+                    self.transient_stage_one_residuals
+                        .insert(resolved.module_id.clone(), residual);
+                }
                 self.transient_candidates
-                    .insert(resolved.module_id.clone(), candidate);
+                    .insert(resolved.module_id.clone(), candidate.state);
                 snapshot
             } else if let Some(descriptor) = resolved.fdm_cpu_double.as_ref() {
                 solve_module(
@@ -325,6 +433,10 @@ impl FdmSpinTransportWorkflow {
         &mut self,
         evaluation: FdmSpinTransportEvaluation,
     ) -> Result<(), RunError> {
+        #[cfg(test)]
+        if self.coupled_failure_injection == Some(CoupledFailureInjection::WorkflowCommit) {
+            return Err(run_error("injected coupled workflow commit failure"));
+        }
         if evaluation.revision == 0 || evaluation.revision >= self.next_revision {
             return Err(run_error(
                 "cannot commit a spin transport evaluation that was not produced by this workflow",
@@ -344,6 +456,7 @@ impl FdmSpinTransportWorkflow {
             self.transient_states.insert(module_id, state);
         }
         self.transient_attempt_origin = None;
+        self.transient_stage_one_residuals.clear();
         self.attempt_checkpoint = None;
         self.accepted_steps = self.accepted_steps.saturating_add(1);
         Ok(())
@@ -358,6 +471,7 @@ impl FdmSpinTransportWorkflow {
         }
         self.transient_attempt_origin = None;
         self.transient_candidates.clear();
+        self.transient_stage_one_residuals.clear();
     }
 
     pub(crate) fn accepted(&self) -> Option<&FdmSpinTransportEvaluation> {
@@ -377,9 +491,143 @@ impl FdmSpinTransportWorkflow {
         self.rejected_steps = rejected_steps;
     }
 
-    pub(crate) fn normalized_transient_difference(
+    pub(crate) fn set_error_controller(&mut self, next_dt_s: f64, normalized_error: f64) {
+        self.error_controller = TransientErrorControllerState {
+            next_dt_s,
+            last_normalized_error: normalized_error,
+        };
+    }
+
+    pub(crate) fn coupled_checkpoint(
+        &self,
+        magnetization: &[[f64; 3]],
+        previous_magnetization: &[[f64; 3]],
+        previous_dt_s: f64,
+        thermal_seed: u64,
+        thermal_counter: u64,
+    ) -> Result<FdmCoupledCheckpoint, RunError> {
+        let accepted = self
+            .accepted
+            .clone()
+            .ok_or_else(|| run_error("coupled checkpoint requires accepted transport state"))?;
+        if magnetization.len() != self.grid.cell_count()
+            || previous_magnetization.len() != self.grid.cell_count()
+            || !previous_dt_s.is_finite()
+            || previous_dt_s <= 0.0
+        {
+            return Err(run_error("coupled checkpoint magnetization/history shape is invalid"));
+        }
+        Ok(FdmCoupledCheckpoint {
+            schema: "fullmag.fdm.coupled_m3_checkpoint.v1".into(),
+            problem_ir_abi: "fullmag.problem_ir.v1".into(),
+            scalar_layout: "f64".into(),
+            vector_layout: "aos_xyz".into(),
+            endianness: "little".into(),
+            formula_version: "transient_spin_balance.fullmag.v1".into(),
+            integrator_version: "coupled_imex_ark2.v1".into(),
+            integrator_implementation_revision:
+                "imex_ars_232_step_doubling.fullmag.v1".into(),
+            plan_fingerprint: transient_plan_fingerprint(&self.plans)?,
+            magnetization: magnetization.to_vec(),
+            previous_magnetization: previous_magnetization.to_vec(),
+            time_s: accepted.evaluated_time_s,
+            previous_dt_s,
+            accepted,
+            transient_states: self.transient_states.clone(),
+            next_revision: self.next_revision,
+            refresh_count: self.refresh_count,
+            accepted_steps: self.accepted_steps,
+            rejected_steps: self.rejected_steps,
+            error_controller: self.error_controller,
+            thermal_rng_algorithm: "counter_hash_box_muller.fullmag.v1".into(),
+            thermal_seed,
+            thermal_counter,
+        })
+    }
+
+    pub(crate) fn restore_coupled_checkpoint(
+        &mut self,
+        checkpoint: FdmCoupledCheckpoint,
+    ) -> Result<FdmCoupledCheckpoint, RunError> {
+        if checkpoint.schema != "fullmag.fdm.coupled_m3_checkpoint.v1"
+            || checkpoint.problem_ir_abi != "fullmag.problem_ir.v1"
+            || checkpoint.scalar_layout != "f64"
+            || checkpoint.vector_layout != "aos_xyz"
+            || checkpoint.endianness != "little"
+            || checkpoint.formula_version != "transient_spin_balance.fullmag.v1"
+            || checkpoint.integrator_version != "coupled_imex_ark2.v1"
+            || checkpoint.integrator_implementation_revision
+                != "imex_ars_232_step_doubling.fullmag.v1"
+            || checkpoint.thermal_rng_algorithm != "counter_hash_box_muller.fullmag.v1"
+            || checkpoint.plan_fingerprint != transient_plan_fingerprint(&self.plans)?
+        {
+            return Err(run_error(
+                "coupled checkpoint schema/ABI/layout/formula/operator/plan mismatch",
+            ));
+        }
+        let count = self.grid.cell_count();
+        if checkpoint.magnetization.len() != count
+            || checkpoint.previous_magnetization.len() != count
+            || checkpoint
+                .magnetization
+                .iter()
+                .chain(&checkpoint.previous_magnetization)
+                .flatten()
+                .any(|value| !value.is_finite())
+            || !checkpoint.time_s.is_finite()
+            || !checkpoint.previous_dt_s.is_finite()
+            || checkpoint.previous_dt_s <= 0.0
+            || !checkpoint.error_controller.next_dt_s.is_finite()
+            || checkpoint.error_controller.next_dt_s <= 0.0
+            || !checkpoint.error_controller.last_normalized_error.is_finite()
+            || checkpoint.error_controller.last_normalized_error < 0.0
+            || checkpoint.transient_states.keys().ne(self.transient_states.keys())
+        {
+            return Err(run_error("coupled checkpoint state/history/controller is invalid"));
+        }
+        for (module_id, state) in &checkpoint.transient_states {
+            if state.spin_potential_v.len() != count
+                || state
+                    .spin_potential_v
+                    .iter()
+                    .flatten()
+                    .any(|value| !value.is_finite())
+                || state.time_s != checkpoint.time_s
+                || !checkpoint
+                    .accepted
+                    .modules
+                    .iter()
+                    .any(|module| module.module_id == *module_id)
+            {
+                return Err(run_error(
+                    "coupled checkpoint transient warm-start/module state is invalid",
+                ));
+            }
+        }
+        self.accepted = Some(checkpoint.accepted.clone());
+        self.transient_states = checkpoint.transient_states.clone();
+        self.next_revision = checkpoint.next_revision;
+        self.refresh_count = checkpoint.refresh_count;
+        self.accepted_steps = checkpoint.accepted_steps;
+        self.rejected_steps = checkpoint.rejected_steps;
+        self.error_controller = checkpoint.error_controller;
+        self.attempt_checkpoint = None;
+        self.transient_attempt_origin = None;
+        self.transient_candidates.clear();
+        self.transient_stage_one_residuals.clear();
+        Ok(checkpoint)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_coupled_failure(&mut self, failure: CoupledFailureInjection) {
+        self.coupled_failure_injection = Some(failure);
+    }
+
+    pub(crate) fn normalized_coupled_difference(
         &self,
         other: &Self,
+        left_magnetization: &[[f64; 3]],
+        right_magnetization: &[[f64; 3]],
         atol: f64,
         rtol: f64,
     ) -> Result<f64, RunError> {
@@ -391,27 +639,261 @@ impl FdmSpinTransportWorkflow {
             .accepted
             .as_ref()
             .ok_or_else(|| run_error("half-step transient trial has no accepted state"))?;
-        let mut sum = 0.0;
-        let mut count = 0usize;
+        let mut max_error = 0.0_f64;
+        if left_magnetization.len() != right_magnetization.len() {
+            return Err(run_error("coupled trial magnetization shape mismatch"));
+        }
+        max_error = max_error.max(normalized_observable_difference(
+            "magnetization",
+            &left_magnetization.iter().flatten().copied().collect::<Vec<_>>(),
+            &right_magnetization.iter().flatten().copied().collect::<Vec<_>>(),
+            1.0,
+            atol,
+            rtol,
+        )?);
+        if left.modules.len() != right.modules.len() {
+            return Err(run_error("coupled trial module count mismatch"));
+        }
         for left_module in &left.modules {
             let right_module = right
                 .modules
                 .iter()
                 .find(|module| module.module_id == left_module.module_id)
                 .ok_or_else(|| run_error("transient trial module identity mismatch"))?;
-            for (full, half) in left_module
-                .spin_potential_volts
-                .iter()
-                .flatten()
-                .zip(right_module.spin_potential_volts.iter().flatten())
+            if left_module.current_source_id != right_module.current_source_id
+                || left_module.constitutive_version != right_module.constitutive_version
+                || left_module.charge_operator_version != right_module.charge_operator_version
+                || left_module.spin_operator_version != right_module.spin_operator_version
+                || left_module.torque_formula_version != right_module.torque_formula_version
+                || left_module.operator_revision != right_module.operator_revision
             {
-                let scale = atol + rtol * full.abs().max(half.abs());
-                sum += (((half - full) / 3.0) / scale).powi(2);
-                count += 1;
+                return Err(run_error(
+                    "coupled trial operator/source/cache identity mismatch",
+                ));
+            }
+            macro_rules! compare_family {
+                ($left:expr, $right:expr, $label:literal, $unit_floor:expr) => {{
+                    let left_values: Vec<f64> = $left;
+                    let right_values: Vec<f64> = $right;
+                    max_error = max_error.max(normalized_observable_difference(
+                        $label,
+                        &left_values,
+                        &right_values,
+                        $unit_floor,
+                        atol,
+                        rtol,
+                    )?);
+                }};
+            }
+            compare_family!(
+                left_module.potential_volts.clone(),
+                right_module.potential_volts.clone(),
+                "charge potential V",
+                1.0e-15
+            );
+            compare_family!(
+                left_module
+                    .current_density_apm2
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect(),
+                right_module
+                    .current_density_apm2
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect(),
+                "charge current A_per_m2",
+                1.0e-12
+            );
+            compare_family!(
+                left_module
+                    .spin_potential_volts
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect(),
+                right_module
+                    .spin_potential_volts
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect(),
+                "spin potential V",
+                1.0e-15
+            );
+            compare_family!(
+                left_module
+                    .spin_current_tensor_apm2
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect(),
+                right_module
+                    .spin_current_tensor_apm2
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect(),
+                "spin current tensor A_per_m2",
+                1.0e-12
+            );
+            compare_family!(
+                left_module
+                    .transport_torque_per_s
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect(),
+                right_module
+                    .transport_torque_per_s
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect(),
+                "transport torque per_s",
+                1.0e-12
+            );
+            match (
+                &left_module.oersted_field_apm,
+                &right_module.oersted_field_apm,
+            ) {
+                (Some(left), Some(right)) => compare_family!(
+                    left.iter().flatten().copied().collect(),
+                    right.iter().flatten().copied().collect(),
+                    "Oersted field A_per_m",
+                    1.0e-12
+                ),
+                (None, None) => {}
+                _ => return Err(run_error("coupled trial Oersted cache presence mismatch")),
+            }
+            if left_module.interface_fluxes.len() != right_module.interface_fluxes.len() {
+                return Err(run_error("coupled trial interface flux shape mismatch"));
+            }
+            for (left_flux, right_flux) in left_module
+                .interface_fluxes
+                .iter()
+                .zip(&right_module.interface_fluxes)
+            {
+                if left_flux.source_id != right_flux.source_id {
+                    return Err(run_error(
+                        "coupled trial interface source identity mismatch",
+                    ));
+                }
+                compare_family!(
+                    left_flux
+                        .incoming_longitudinal_apm2
+                        .into_iter()
+                        .chain(left_flux.backflow_longitudinal_apm2)
+                        .chain(left_flux.absorbed_transverse_apm2)
+                        .chain(left_flux.spin_memory_loss_apm2)
+                        .chain(left_flux.from_side_outgoing_apm2)
+                        .chain(left_flux.to_side_transmitted_apm2)
+                        .collect(),
+                    right_flux
+                        .incoming_longitudinal_apm2
+                        .into_iter()
+                        .chain(right_flux.backflow_longitudinal_apm2)
+                        .chain(right_flux.absorbed_transverse_apm2)
+                        .chain(right_flux.spin_memory_loss_apm2)
+                        .chain(right_flux.from_side_outgoing_apm2)
+                        .chain(right_flux.to_side_transmitted_apm2)
+                        .collect(),
+                    "interface flux A_per_m2",
+                    1.0e-12
+                );
             }
         }
-        Ok((sum / count.max(1) as f64).sqrt())
+        if self
+            .transient_states
+            .keys()
+            .ne(other.transient_states.keys())
+        {
+            return Err(run_error(
+                "coupled trial transient history identity mismatch",
+            ));
+        }
+        for module_id in self.transient_states.keys() {
+            let full = &self.transient_states[module_id];
+            let half = &other.transient_states[module_id];
+            if full.spin_potential_v.len() != half.spin_potential_v.len()
+                || full.previous_spin_potential_v.is_some()
+                    != half.previous_spin_potential_v.is_some()
+                || (full.time_s - half.time_s).abs() > f64::EPSILON * full.time_s.abs().max(1.0)
+                || full.previous_dt_s.is_none()
+                || half.previous_dt_s.is_none()
+            {
+                return Err(run_error(
+                    "coupled trial transient history/controller consistency mismatch",
+                ));
+            }
+            let full_dt = full.previous_dt_s.expect("presence checked");
+            let half_dt = half.previous_dt_s.expect("presence checked");
+            if (full_dt - 2.0 * half_dt).abs()
+                > 64.0 * f64::EPSILON * full_dt.abs().max(1.0)
+                || half.state_revision != full.state_revision.saturating_add(1)
+                || full
+                    .previous_spin_potential_v
+                    .as_ref()
+                    .is_some_and(|values| values.iter().flatten().any(|value| !value.is_finite()))
+                || half
+                    .previous_spin_potential_v
+                    .as_ref()
+                    .is_some_and(|values| values.iter().flatten().any(|value| !value.is_finite()))
+            {
+                return Err(run_error(
+                    "coupled trial transient history timestep/revision consistency mismatch",
+                ));
+            }
+        }
+        if other.accepted_steps != self.accepted_steps.saturating_add(1)
+            || other.rejected_steps != self.rejected_steps
+            || other.refresh_count != self.refresh_count.saturating_add(4)
+            || other.next_revision != self.next_revision.saturating_add(4)
+            || other.error_controller != self.error_controller
+        {
+            return Err(run_error(
+                "coupled trial counters/controller/warm-start consistency mismatch",
+            ));
+        }
+        Ok(max_error)
     }
+}
+
+fn normalized_observable_difference(
+    label: &str,
+    full: &[f64],
+    half: &[f64],
+    unit_floor: f64,
+    atol: f64,
+    rtol: f64,
+) -> Result<f64, RunError> {
+    if full.len() != half.len() {
+        return Err(run_error(format!("coupled trial {label} shape mismatch")));
+    }
+    if !unit_floor.is_finite() || unit_floor <= 0.0 {
+        return Err(run_error(format!(
+            "coupled trial {label} unit scale is invalid"
+        )));
+    }
+    let rms_scale = (full
+        .iter()
+        .chain(half)
+        .map(|value| value * value)
+        .sum::<f64>()
+        / (full.len() + half.len()).max(1) as f64)
+        .sqrt()
+        .max(unit_floor);
+    let sum = full
+        .iter()
+        .zip(half)
+        .map(|(full, half)| {
+            let scale = atol * rms_scale + rtol * full.abs().max(half.abs());
+            (((half - full) / 3.0) / scale).powi(2)
+        })
+        .sum::<f64>();
+    Ok((sum / full.len().max(1) as f64).sqrt())
 }
 
 fn validate_transient_descriptor(
@@ -784,6 +1266,14 @@ fn descriptor_revision(descriptor: &ResolvedFdmCoupledSpinTransportIR) -> Result
     Ok(fnv1a(bytes.iter().copied()))
 }
 
+fn transient_plan_fingerprint(
+    plans: &[fullmag_ir::ResolvedSpinTransportPlanIR],
+) -> Result<u64, RunError> {
+    let bytes = serde_json::to_vec(plans)
+        .map_err(|error| run_error(format!("cannot fingerprint M3 transport plan: {error}")))?;
+    Ok(fnv1a(bytes))
+}
+
 fn state_revision(magnetization: &[[f64; 3]]) -> u64 {
     fn bytes(values: &[[f64; 3]]) -> impl Iterator<Item = u8> + '_ {
         values
@@ -821,6 +1311,11 @@ fn solve_module(
     )
 }
 
+struct TransientStageCandidate {
+    state: TransientSpinState,
+    stage_one_residual: Option<Vec<[f64; 3]>>,
+}
+
 fn solve_transient_module(
     grid: GridShape,
     cell_size: CellSize,
@@ -829,10 +1324,20 @@ fn solve_transient_module(
     magnetization: &[[f64; 3]],
     origin: &TransientSpinState,
     stage_time_s: f64,
-) -> Result<(FdmSpinTransportModuleSnapshot, TransientSpinState), RunError> {
+    dt_s: f64,
+    stage: CoupledImexArk2Stage,
+    stage_one_residual: Option<&[[f64; 3]]>,
+    prior_candidate: Option<&TransientSpinState>,
+    failure_injection: Option<CoupledFailureInjection>,
+) -> Result<(FdmSpinTransportModuleSnapshot, TransientStageCandidate), RunError> {
     let steady = &descriptor.steady_operator;
     let (charge_solution, current_density_apm2, spin_problem) =
         materialize_one_way_problem(grid, cell_size, steady, magnetization)?;
+    if failure_injection == Some(CoupledFailureInjection::ChargeSolve)
+        && stage == CoupledImexArk2Stage::ImplicitStageOne
+    {
+        return Err(run_error("injected coupled charge solve failure"));
+    }
     let capacitance_formula_version = format!(
         "per_cell:{}",
         descriptor.capacitance_formula_versions.join("|")
@@ -852,28 +1357,54 @@ fn solve_transient_module(
         },
     )
     .map_err(engine_error("transient spin integrator materialization"))?;
-    let elapsed = stage_time_s - origin.time_s;
-    if elapsed < 0.0 || !elapsed.is_finite() {
+    if stage_time_s < origin.time_s || !stage_time_s.is_finite() {
         return Err(run_error(
             "transient spin stage time precedes the committed transaction state",
         ));
     }
-    let (candidate, iterations) = if elapsed == 0.0 {
-        (origin.clone(), 0)
-    } else {
-        let attempt = integrator
-            .try_fixed_step(origin, elapsed)
-            .map_err(engine_error("transient ARS stage solve"))?;
-        (
-            attempt
-                .candidate
-                .ok_or_else(|| run_error("fixed transient ARS stage returned no candidate"))?,
-            attempt.telemetry.linear_iterations,
-        )
+    let (candidate, residual, iterations) = match stage {
+        CoupledImexArk2Stage::ExplicitOrigin => (origin.clone(), None, 0),
+        CoupledImexArk2Stage::ImplicitStageOne => {
+            let (spin_potential_v, residual, iterations) = integrator
+                .ars232_implicit_stage_one(&origin.spin_potential_v, dt_s)
+                .map_err(engine_error("transient ARS implicit stage one"))?;
+            let mut candidate = origin.clone();
+            candidate.spin_potential_v = spin_potential_v;
+            (candidate, Some(residual), iterations)
+        }
+        CoupledImexArk2Stage::ImplicitStageTwo => {
+            let residual = stage_one_residual
+                .ok_or_else(|| run_error("transient ARS stage two requires stage-one residual"))?;
+            let (spin_potential_v, iterations) = integrator
+                .ars232_implicit_stage_two(&origin.spin_potential_v, residual, dt_s)
+                .map_err(engine_error("transient ARS implicit stage two"))?;
+            let mut candidate = origin.clone();
+            candidate.spin_potential_v = spin_potential_v;
+            (candidate, None, iterations)
+        }
+        CoupledImexArk2Stage::AcceptedObservation => {
+            let stage_two = prior_candidate.ok_or_else(|| {
+                run_error("transient accepted observation requires ARS stage two")
+            })?;
+            let candidate = integrator
+                .complete_fixed_step_state(origin, stage_two.spin_potential_v.clone(), dt_s)
+                .map_err(engine_error("transient ARS accepted-state completion"))?;
+            (candidate, None, 0)
+        }
     };
+    if failure_injection == Some(CoupledFailureInjection::SpinSolve)
+        && stage == CoupledImexArk2Stage::ImplicitStageTwo
+    {
+        return Err(run_error("injected coupled spin solve failure"));
+    }
     let observation = spin_problem
         .observe_transient_state(&candidate.spin_potential_v)
         .map_err(engine_error("transient accepted-state observation"))?;
+    if failure_injection == Some(CoupledFailureInjection::FinalObservation)
+        && stage == CoupledImexArk2Stage::AcceptedObservation
+    {
+        return Err(run_error("injected coupled final observation failure"));
+    }
     let tensors = observation
         .cell_spin_current_tensor_apm2
         .iter()
@@ -975,7 +1506,13 @@ fn solve_transient_module(
         state_revision: candidate.state_revision,
         operator_revision: 0,
     };
-    Ok((snapshot, candidate))
+    Ok((
+        snapshot,
+        TransientStageCandidate {
+            state: candidate,
+            stage_one_residual: residual,
+        },
+    ))
 }
 
 fn materialize_one_way_problem(
@@ -1517,6 +2054,395 @@ mod tests {
             oersted_source_bound: false,
         });
         plan
+    }
+
+    fn fixed_transient_plan(dt_s: f64) -> FdmPlanIR {
+        let mut plan = plan();
+        let resolved = &mut plan.spin_transport_plans[0];
+        let mut steady_operator = resolved.fdm_cpu_double.take().unwrap();
+        let count = steady_operator.spin_active_cells.len();
+        steady_operator.theta_sh.fill(0.2);
+        resolved.capabilities = vec!["transport.spin.transient_drift_diffusion".into()];
+        resolved.fdm_cpu_double_transient = Some(ResolvedFdmTransientSpinTransportIR {
+            descriptor_schema: "fullmag.fdm.transient_spin_transport_descriptor.v1".into(),
+            steady_operator,
+            spin_capacitance_as_per_v_m3: vec![2.0; count],
+            capacitance_formula_versions: vec!["dos_constant.fullmag.v1".into(); count],
+            transient_formula_version: "transient_spin_balance.fullmag.v1".into(),
+            integrator: CoupledSpinIntegratorIR::CoupledImexArk2,
+            integrator_version: "coupled_imex_ark2.v1".into(),
+        });
+        plan.integrator = None;
+        plan.fixed_timestep = Some(dt_s);
+        plan.gyromagnetic_ratio = 2.211e5;
+        plan.material = FdmMaterialIR {
+            name: "Py".into(),
+            saturation_magnetisation: 8.0e5,
+            exchange_stiffness: 13.0e-12,
+            damping: 0.02,
+            ..Default::default()
+        };
+        plan.enable_exchange = false;
+        plan.enable_demag = false;
+        plan
+    }
+
+    fn accepted_coupled_vector(executed: &crate::types::ExecutedRun) -> Vec<f64> {
+        let artifact = executed
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "transport/spin_transport_accepted.json")
+            .expect("accepted coupled state artifact");
+        let document: serde_json::Value = serde_json::from_slice(&artifact.bytes).unwrap();
+        let module = &document["evaluation"]["modules"][0];
+        let mut values: Vec<f64> = executed
+            .result
+            .final_magnetization
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        for key in [
+            "potential_volts",
+            "current_density_apm2",
+            "spin_potential_volts",
+            "spin_current_tensor_apm2",
+            "transport_torque_per_s",
+        ] {
+            fn append(value: &serde_json::Value, values: &mut Vec<f64>) {
+                if let Some(number) = value.as_f64() {
+                    values.push(number);
+                } else if let Some(items) = value.as_array() {
+                    for item in items {
+                        append(item, values);
+                    }
+                }
+            }
+            append(&module[key], &mut values);
+        }
+        values
+    }
+
+    #[test]
+    fn coupled_ars232_has_second_order_temporal_convergence_for_complete_state() {
+        let until_s = 1.0e-3;
+        let run = |dt_s| {
+            let executed = super::super::reference::execute_reference_fdm(
+                &fixed_transient_plan(dt_s),
+                until_s,
+                &[],
+                None,
+                None,
+            )
+            .expect("coupled temporal-order run");
+            accepted_coupled_vector(&executed)
+        };
+        let coarse = run(2.5e-4);
+        let fine = run(1.25e-4);
+        let reference = run(1.5625e-5);
+        let error = |values: &[f64]| {
+            values
+                .iter()
+                .zip(&reference)
+                .map(|(value, reference)| (value - reference).powi(2))
+                .sum::<f64>()
+                .sqrt()
+        };
+        let ratio = error(&coarse) / error(&fine);
+        assert!(
+            ratio > 3.2,
+            "complete coupled state must converge at second order; ratio={ratio:.6}"
+        );
+    }
+
+    #[test]
+    fn coupled_trial_failures_rollback_llg_transport_and_thermal_state() {
+        let mut plan = fixed_transient_plan(1.0e-3);
+        plan.temperature = Some(300.0);
+        let (problem, initial_state) =
+            super::super::reference::build_snapshot_problem_and_state(&plan).unwrap();
+        let pristine_problem = problem.clone();
+        let initial_workflow = FdmSpinTransportWorkflow::from_plan(&plan).unwrap().unwrap();
+        for failure in [
+            CoupledFailureInjection::ChargeSolve,
+            CoupledFailureInjection::SpinSolve,
+            CoupledFailureInjection::FinalObservation,
+            CoupledFailureInjection::WorkflowCommit,
+        ] {
+            let mut state = initial_state.clone();
+            let mut workflow = initial_workflow.clone();
+            workflow.inject_coupled_failure(failure);
+            let expected_workflow = workflow.clone();
+            let thermal_before = problem.thermal_step();
+            let mut fft_workspace = problem.create_workspace();
+            let mut integrator_bufs = problem.create_integrator_buffers();
+            let error = super::super::reference::execute_coupled_ars_trial(
+                &problem,
+                &mut state,
+                &mut workflow,
+                1.0e-3,
+                &mut fft_workspace,
+                &mut integrator_bufs,
+            )
+            .expect_err("injected coupled failure must reject the whole transaction");
+            assert!(error.message.contains("injected coupled"));
+            assert_eq!(state, initial_state, "LLG state changed after {failure:?}");
+            assert_eq!(
+                workflow, expected_workflow,
+                "transport state changed after {failure:?}"
+            );
+            assert_eq!(
+                problem.thermal_step(),
+                thermal_before,
+                "thermal RNG counter changed after {failure:?}"
+            );
+        }
+        let mut after_failure_state = initial_state.clone();
+        let mut after_failure_workflow = initial_workflow.clone();
+        let mut after_failure_workspace = problem.create_workspace();
+        let mut after_failure_buffers = problem.create_integrator_buffers();
+        super::super::reference::execute_coupled_ars_trial(
+            &problem,
+            &mut after_failure_state,
+            &mut after_failure_workflow,
+            1.0e-3,
+            &mut after_failure_workspace,
+            &mut after_failure_buffers,
+        )
+        .unwrap();
+        let mut pristine_state = initial_state;
+        let mut pristine_workflow = initial_workflow;
+        let mut pristine_workspace = pristine_problem.create_workspace();
+        let mut pristine_buffers = pristine_problem.create_integrator_buffers();
+        super::super::reference::execute_coupled_ars_trial(
+            &pristine_problem,
+            &mut pristine_state,
+            &mut pristine_workflow,
+            1.0e-3,
+            &mut pristine_workspace,
+            &mut pristine_buffers,
+        )
+        .unwrap();
+        assert_eq!(after_failure_state, pristine_state);
+        assert_eq!(after_failure_workflow.accepted(), pristine_workflow.accepted());
+    }
+
+    #[test]
+    fn adaptive_norm_detects_each_dimensional_observable_family() {
+        let families: [(&str, f64, f64); 7] = [
+            ("m", 1.0, 0.25),
+            ("V", 1.0e-15, 2.0e-3),
+            ("J", 1.0e-12, 4.0e10),
+            ("mu", 1.0e-15, 8.0e-4),
+            ("Q", 1.0e-12, 7.0e9),
+            ("torque", 1.0e-12, 3.0e8),
+            ("H", 1.0e-12, 6.0e5),
+        ];
+        for (label, floor, magnitude) in families {
+            let baseline = [magnitude, -0.5 * magnitude, 0.25 * magnitude];
+            let mut perturbed = baseline;
+            perturbed[1] += magnitude.abs().max(floor) * 1.0e-3;
+            let error = normalized_observable_difference(
+                label,
+                &baseline,
+                &perturbed,
+                floor,
+                1.0e-6,
+                1.0e-4,
+            )
+            .unwrap();
+            assert!(error > 0.0, "{label} perturbation was ignored");
+
+            let conversion = 1.0e3;
+            let converted_baseline = baseline.map(|value| value * conversion);
+            let converted_perturbed = perturbed.map(|value| value * conversion);
+            let converted_error = normalized_observable_difference(
+                label,
+                &converted_baseline,
+                &converted_perturbed,
+                floor * conversion,
+                1.0e-6,
+                1.0e-4,
+            )
+            .unwrap();
+            assert!((converted_error - error).abs() <= 1.0e-12 * error.max(1.0));
+        }
+    }
+
+    #[test]
+    fn coupled_checkpoint_resume_matches_uninterrupted_artifact_and_thermal_sequence() {
+        let mut plan = fixed_transient_plan(1.0e-4);
+        plan.temperature = Some(300.0);
+        let (problem, mut state) =
+            super::super::reference::build_snapshot_problem_and_state(&plan).unwrap();
+        let initial_magnetization = state.magnetization().to_vec();
+        let mut workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .unwrap()
+            .unwrap();
+        let mut workspace = problem.create_workspace();
+        let mut buffers = problem.create_integrator_buffers();
+        super::super::reference::execute_coupled_ars_trial(
+            &problem,
+            &mut state,
+            &mut workflow,
+            1.0e-4,
+            &mut workspace,
+            &mut buffers,
+        )
+        .unwrap();
+        problem.commit_coupled_imex_ark2_step();
+        let checkpoint = workflow
+            .coupled_checkpoint(
+                state.magnetization(),
+                &initial_magnetization,
+                1.0e-4,
+                problem.thermal_seed,
+                problem.thermal_step(),
+            )
+            .unwrap();
+        let persisted = serde_json::to_vec(&checkpoint).unwrap();
+
+        super::super::reference::execute_coupled_ars_trial(
+            &problem,
+            &mut state,
+            &mut workflow,
+            1.0e-4,
+            &mut workspace,
+            &mut buffers,
+        )
+        .unwrap();
+        problem.commit_coupled_imex_ark2_step();
+        let uninterrupted_m = state.magnetization().to_vec();
+        let uninterrupted_artifact = serde_json::to_vec(workflow.accepted().unwrap()).unwrap();
+        let uninterrupted_thermal_counter = problem.thermal_step();
+
+        let checkpoint: FdmCoupledCheckpoint = serde_json::from_slice(&persisted).unwrap();
+        let (restored_problem, mut restored_state) =
+            super::super::reference::build_snapshot_problem_and_state(&plan).unwrap();
+        restored_state
+            .restore_exact_checkpoint(checkpoint.magnetization.clone(), checkpoint.time_s)
+            .unwrap();
+        restored_problem.restore_thermal_step(checkpoint.thermal_counter);
+        assert_eq!(restored_problem.thermal_seed, checkpoint.thermal_seed);
+        let mut restored_workflow = FdmSpinTransportWorkflow::from_plan(&plan)
+            .unwrap()
+            .unwrap();
+        restored_workflow
+            .restore_coupled_checkpoint(checkpoint)
+            .unwrap();
+        let mut restored_workspace = restored_problem.create_workspace();
+        let mut restored_buffers = restored_problem.create_integrator_buffers();
+        super::super::reference::execute_coupled_ars_trial(
+            &restored_problem,
+            &mut restored_state,
+            &mut restored_workflow,
+            1.0e-4,
+            &mut restored_workspace,
+            &mut restored_buffers,
+        )
+        .unwrap();
+        restored_problem.commit_coupled_imex_ark2_step();
+
+        for (restored, uninterrupted) in restored_state
+            .magnetization()
+            .iter()
+            .flatten()
+            .zip(uninterrupted_m.iter().flatten())
+        {
+            assert!((restored - uninterrupted).abs() <= 1.0e-24);
+        }
+        fn assert_json_close(left: &serde_json::Value, right: &serde_json::Value) {
+            match (left, right) {
+                (serde_json::Value::Number(left), serde_json::Value::Number(right)) => {
+                    let left = left.as_f64().unwrap();
+                    let right = right.as_f64().unwrap();
+                    assert!((left - right).abs() <= 1.0e-12 * left.abs().max(right.abs()).max(1.0));
+                }
+                (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+                    assert_eq!(left.len(), right.len());
+                    for (left, right) in left.iter().zip(right) {
+                        assert_json_close(left, right);
+                    }
+                }
+                (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+                    assert_eq!(left.keys().collect::<Vec<_>>(), right.keys().collect::<Vec<_>>());
+                    for (key, left) in left {
+                        assert_json_close(left, &right[key]);
+                    }
+                }
+                _ => assert_eq!(left, right),
+            }
+        }
+        assert_json_close(
+            &serde_json::to_value(restored_workflow.accepted().unwrap()).unwrap(),
+            &serde_json::from_slice(&uninterrupted_artifact).unwrap(),
+        );
+        assert_eq!(restored_problem.thermal_step(), uninterrupted_thermal_counter);
+    }
+
+    #[test]
+    fn public_reference_resume_matches_uninterrupted_runner_artifact() {
+        let mut plan = fixed_transient_plan(1.0e-4);
+        plan.temperature = Some(300.0);
+        let display = || crate::DisplaySelectionState::default();
+        let mut captured = None;
+        let first = super::super::reference::execute_reference_fdm(
+            &plan,
+            2.0e-4,
+            &[],
+            Some(crate::types::LiveStepConsumer {
+                grid: plan.grid.cells,
+                field_every_n: 1,
+                initial_snapshot: false,
+                display_selection: Some(&display),
+                interrupt_requested: None,
+                on_step: &mut |update| {
+                    if let Some(checkpoint) = update.coupled_checkpoint {
+                        captured = Some(checkpoint);
+                        crate::StepAction::Pause
+                    } else {
+                        crate::StepAction::Continue
+                    }
+                },
+            }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(first.result.status, crate::RunStatus::Paused);
+        let checkpoint = captured.expect("live session must publish the coupled backend state");
+
+        let uninterrupted = super::super::reference::execute_reference_fdm(
+            &plan,
+            2.0e-4,
+            &[],
+            None,
+            None,
+        )
+        .unwrap();
+        let resumed = super::super::reference::execute_reference_fdm_with_coupled_checkpoint(
+            &plan,
+            2.0e-4,
+            &[],
+            None,
+            None,
+            Some(checkpoint),
+        )
+        .unwrap();
+        assert_eq!(resumed.result.final_magnetization, uninterrupted.result.final_magnetization);
+        let accepted_artifact = |run: &crate::types::ExecutedRun| {
+            run.auxiliary_artifacts
+                .iter()
+                .find(|artifact| {
+                    artifact.relative_path == "transport/spin_transport_accepted.json"
+                })
+                .map(|artifact| artifact.bytes.clone())
+                .expect("accepted transport artifact")
+        };
+        assert_eq!(accepted_artifact(&resumed), accepted_artifact(&uninterrupted));
+        assert_eq!(
+            serde_json::to_value(resumed.result.steps.last()).unwrap(),
+            serde_json::to_value(uninterrupted.result.steps.last()).unwrap()
+        );
     }
 
     #[test]
