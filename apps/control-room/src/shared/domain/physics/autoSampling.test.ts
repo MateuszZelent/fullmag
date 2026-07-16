@@ -27,4 +27,15 @@ describe("resolveAutoSincSampling", () => {
       "unresolved",
     );
   });
+
+  it("fails closed when any applicable sinc cutoff is invalid", () => {
+    expect(resolveAutoSincSampling({ cutoffHz: [5e9, Number.NaN] })).toEqual({
+      reason:
+        "Every active sinc drive must have a finite positive cutoff for automatic sampling.",
+      status: "unresolved",
+    });
+    expect(resolveAutoSincSampling({ cutoffHz: [5e9, 0] }).status).toBe(
+      "unresolved",
+    );
+  });
 });

@@ -24,6 +24,7 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
   const effectiveState = nextRunIndex >= 0
     ? resolveStudyWorkflowStateBefore(pipelineDrafts, nextRunIndex)
     : stateBefore;
+  const effectiveSampling = effectiveState.tableAutosave;
   const durationS = positiveNumber(nextRun?.untilSeconds);
   const disabled = !draft || draft.fftResponse.readOnly;
 
@@ -135,18 +136,18 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
       <InspectorSection
         value="fft-response-clock"
         title="Effective Response Clock"
-        badge={stateBefore.tableAutosave?.sourceStageId ?? "missing t_sampling"}
+        badge={effectiveSampling?.sourceStageId ?? "missing t_sampling"}
       >
         <FieldRow
           label="t_sampling source"
-          value={stateBefore.tableAutosave?.sourceStageId ?? "no preceding Table autosave ON stage"}
+          value={effectiveSampling?.sourceStageId ?? "no Table autosave ON stage before the following Run"}
         />
         <FieldRow label="Following Run" value={nextRun?.stageId ?? "none"} />
         <SamplingDiagnostics
           durationS={durationS}
-          sampling={effectiveState.tableAutosave}
+          sampling={effectiveSampling}
         />
-        {draft?.fftResponse.enabled && !stateBefore.tableAutosave ? (
+        {draft?.fftResponse.enabled && !effectiveSampling ? (
           <FeedbackBanner
             kind="warning"
             message="FFT response needs a preceding Table autosave ON instruction to define t_sampling. The workflow remains invalid until that stage is added or enabled."

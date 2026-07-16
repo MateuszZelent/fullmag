@@ -430,7 +430,8 @@ describe("Study stage inspectors", () => {
       "t_sampling",
       "N",
       "df",
-      "Actual Nyquist",
+      "Highest represented FFT bin",
+      "Nyquist limit",
     ]) {
       expect(tableHtml).toContain(label);
     }
@@ -485,6 +486,71 @@ describe("Study stage inspectors", () => {
     );
     expect(runHtml).toContain("Automatic sampling diagnostics");
     expect(runHtml).toContain("Run Progress");
+  });
+
+  it("derives FFT clock source and warnings from the effective state at the next Run", () => {
+    const fft = createDefaultStudyStageDraft("fft_response", 0);
+    const tableBase = createDefaultStudyStageDraft("table_autosave", 1);
+    const table = {
+      ...tableBase,
+      tableAutosave: {
+        ...tableBase.tableAutosave,
+        samplePeriodS: "1e-12",
+      },
+    };
+    const run = {
+      ...createDefaultStudyStageDraft("run", 2),
+      untilSeconds: "5e-12",
+    };
+
+    const html = render(
+      <FftResponseStageInspector
+        {...props("fft_response")}
+        draft={fft}
+        draftIndex={0}
+        pipelineDrafts={[fft, table, run]}
+      />,
+    );
+
+    expect(html).toMatch(
+      new RegExp(`t_sampling source[\\s\\S]*${table.stageId}`),
+    );
+    expect(html).not.toContain(
+      "FFT response needs a preceding Table autosave ON instruction",
+    );
+  });
+
+  it("shows the highest represented FFT bin below the Nyquist limit for odd N", () => {
+    const fft = createDefaultStudyStageDraft("fft_response", 0);
+    const tableBase = createDefaultStudyStageDraft("table_autosave", 1);
+    const table = {
+      ...tableBase,
+      tableAutosave: {
+        ...tableBase.tableAutosave,
+        samplePeriodS: "1e-12",
+      },
+    };
+    const run = {
+      ...createDefaultStudyStageDraft("run", 2),
+      untilSeconds: "5e-12",
+    };
+
+    const html = render(
+      <FftResponseStageInspector
+        {...props("fft_response")}
+        draft={fft}
+        draftIndex={0}
+        pipelineDrafts={[fft, table, run]}
+      />,
+    );
+
+    expect(html).toContain("<small>N</small><strong>5</strong>");
+    expect(html).toContain(
+      "<small>Highest represented FFT bin</small><strong>400.0 GHz</strong>",
+    );
+    expect(html).toContain(
+      "<small>Nyquist limit</small><strong>500.0 GHz</strong>",
+    );
   });
 
   it("blocks automatic sampling without an applicable preceding sinc drive", () => {

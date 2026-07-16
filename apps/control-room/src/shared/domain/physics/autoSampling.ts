@@ -23,18 +23,22 @@ export function resolveAutoSincSampling({
 }: {
   cutoffHz: readonly number[];
 }): AutoSincSamplingResult {
-  const validCutoffs = cutoffHz.filter(
-    (cutoff) => Number.isFinite(cutoff) && cutoff > 0,
-  );
-  if (validCutoffs.length === 0) {
+  if (cutoffHz.length === 0) {
     return {
       reason:
         "No active sinc drive with a finite positive cutoff applies to this Run.",
       status: "unresolved",
     };
   }
+  if (cutoffHz.some((cutoff) => !Number.isFinite(cutoff) || cutoff <= 0)) {
+    return {
+      reason:
+        "Every active sinc drive must have a finite positive cutoff for automatic sampling.",
+      status: "unresolved",
+    };
+  }
 
-  const maximumCutoffHz = Math.max(...validCutoffs);
+  const maximumCutoffHz = Math.max(...cutoffHz);
   const targetNyquistHz =
     AUTO_SINC_NYQUIST_GUARD_FACTOR * maximumCutoffHz;
   const samplingFrequencyHz = 2 * targetNyquistHz;

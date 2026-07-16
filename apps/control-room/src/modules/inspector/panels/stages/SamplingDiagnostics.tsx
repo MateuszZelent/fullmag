@@ -90,7 +90,18 @@ export function SamplingDiagnostics({
           value={clock ? engineering(clock.frequencyResolutionHz, "Hz") : "not available"}
         />
         <Metric
-          label="Actual Nyquist"
+          label="Highest represented FFT bin"
+          value={
+            clock
+              ? engineering(
+                  Math.floor(clock.sampleCount / 2) * clock.frequencyResolutionHz,
+                  "Hz",
+                )
+              : "not available"
+          }
+        />
+        <Metric
+          label="Nyquist limit"
           value={clock ? engineering(clock.nyquistHz, "Hz") : "not available"}
         />
       </div>
