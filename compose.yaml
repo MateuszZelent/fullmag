@@ -51,6 +51,28 @@ services:
       - fem
       - fem-gpu
 
+  fem-cpu:
+    build:
+      context: .
+      dockerfile: docker/fem-cpu/Dockerfile
+    image: fullmag/fem-cpu:local
+    working_dir: /workspace
+    command: sleep infinity
+    volumes:
+      - ./:/workspace
+      - fem-cpu-cargo-cache:/usr/local/cargo/registry
+      - fem-cpu-target-cache:/workspace/target
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      FULLMAG_PYTHON: /usr/bin/python3
+      FULLMAG_USE_MFEM_STACK: "ON"
+      FULLMAG_FEM_REQUIRE_GPU: "0"
+      FULLMAG_FEM_REQUIRE_CEED: "0"
+      FULLMAG_FEM_WITH_SLEPC: "OFF"
+      FULLMAG_MANAGED_FEM_DEVICE: cpu
+      CMAKE_PREFIX_PATH: /opt/fullmag-deps
+      LD_LIBRARY_PATH: /opt/fullmag-deps/lib
+
   postgres:
     image: postgres:17-alpine
     environment:
@@ -83,6 +105,8 @@ services:
 volumes:
   cargo-cache:
   target-cache:
+  fem-cpu-cargo-cache:
+  fem-cpu-target-cache:
   pnpm-store:
   postgres-data:
   minio-data:

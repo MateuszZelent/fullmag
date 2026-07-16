@@ -11,7 +11,7 @@
 
 #include <cstdio>
 
-#if defined(FULLMAG_HAS_CUDA_RUNTIME) && defined(FULLMAG_HAS_CUSOLVER)
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_CUSOLVER
 #include <cuda_runtime.h>
 #include <cusolverDn.h>
 #endif
@@ -28,7 +28,7 @@ void eigen_dense_set_reason(fullmag_fem_eigen_dense_desc *desc, const char *msg)
 
 } // namespace
 
-#if defined(FULLMAG_HAS_CUDA_RUNTIME) && defined(FULLMAG_HAS_CUSOLVER)
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_CUSOLVER
 
 int solve_dense_generalized_eigenproblem(fullmag_fem_eigen_dense_desc *desc) {
     if (desc == nullptr) {

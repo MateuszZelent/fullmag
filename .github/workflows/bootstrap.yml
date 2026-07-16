@@ -112,6 +112,9 @@ jobs:
           cache: pip
           cache-dependency-path: packages/fullmag-py/pyproject.toml
 
+      - name: Audit managed FEM CPU-only verification configuration
+        run: python scripts/test_audit_fem_cpu_only_runtime.py -v
+
       - name: Install Python package
         run: python -m pip install -e 'packages/fullmag-py[meshing]'
 
