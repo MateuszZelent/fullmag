@@ -194,6 +194,57 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
         self.assertIn('study.stages.tableautosave("auto"', rendered)
         self.assertNotIn("7.6923e-11", rendered)
 
+    def test_table_autosave_override_rejects_invalid_numeric_ir_cadence(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("invalid-imported-sampling")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_run(stage_id="run", until=2e-9)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            loaded = _load_text(script, Path(tmp_dir), "source.py")
+            for invalid in (0.0, -1e-12, float("nan"), float("inf"), "1e-12", True):
+                with self.subTest(invalid=invalid):
+                    with self.assertRaises(ValueError):
+                        rewrite_loaded_problem_script(
+                            loaded,
+                            overrides={
+                                "table_autosave": {
+                                    "kind": "table_autosave",
+                                    "sample_period_s": invalid,
+                                }
+                            },
+                        )
+
+    def test_ordered_sampling_stages_reject_invalid_numeric_ir_cadence(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("invalid-ordered-sampling")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.tableautosave(1e-12, stage_id="table")
+        study.stages.autosave("m", every=1e-12, stage_id="field")
+        study.stages.add_run(stage_id="run", until=2e-9)
+        """
+        invalid_values = (0.0, -1e-12, float("nan"), float("inf"), "1e-12", True)
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            for stage_index, payload_key, cadence_key in (
+                (0, "table_autosave", "sample_period_s"),
+                (1, "output", "every_seconds"),
+            ):
+                for invalid in invalid_values:
+                    with self.subTest(stage_index=stage_index, invalid=invalid):
+                        loaded = _load_text(script, root, f"source-{stage_index}.py")
+                        loaded.stages[stage_index].action[payload_key][cadence_key] = invalid
+                        with self.assertRaises(ValueError):
+                            rewrite_loaded_problem_script(loaded)
+
     def test_canonical_rewrite_preserves_drives_and_stage_ids(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

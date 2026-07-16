@@ -6,7 +6,11 @@ import re
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from fullmag._validation import AUTO_SINC_NYQUIST_GUARD_FACTOR, SamplingPeriod
+from fullmag._validation import (
+    AUTO_SINC_NYQUIST_GUARD_FACTOR,
+    SamplingPeriod,
+    normalize_sampling_period,
+)
 from fullmag.init.magnetization import (
     RandomMagnetization,
     SampledMagnetization,
@@ -5262,10 +5266,9 @@ def _requested_sampling_period_from_ir(
             raise ValueError("automatic sampling intent must not contain an explicit cadence")
         return "auto"
 
-    numeric = value.get(numeric_key)
-    if isinstance(numeric, bool) or not isinstance(numeric, (int, float)):
+    if numeric_key not in value:
         return None
-    return float(numeric)
+    return normalize_sampling_period(value[numeric_key], numeric_key)
 
 
 def _override_string(overrides: dict[str, object], key: str, fallback: str | None) -> str | None:
