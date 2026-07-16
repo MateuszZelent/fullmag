@@ -125,10 +125,19 @@ bool initialize_demag_periodic_poisson_reduction(
         error = "Poisson BC operator is null when building periodic reduced system";
         return false;
     }
+    const mfem::SparseMatrix &A = *A_full;
+    if (A.Height() != static_cast<int>(ctx.mesh.n_nodes) ||
+        A.Width() != static_cast<int>(ctx.mesh.n_nodes)) {
+        error = "Periodic Poisson operator dimensions (" +
+            std::to_string(A.Height()) + "x" + std::to_string(A.Width()) +
+            ") do not match the complete periodic node-class map (" +
+            std::to_string(ctx.mesh.n_nodes) + " nodes)";
+        return false;
+    }
 
     try {
         ctx.poisson_demag.periodic_matrix =
-            reduce_sparse_matrix_by_periodic_classes(*A_full, ctx);
+            reduce_sparse_matrix_by_periodic_classes(A, ctx);
         ctx.poisson_demag.periodic_rhs =
             new mfem::Vector(static_cast<int>(ctx.mesh.periodic_reduced_node_count));
         auto *periodic_solution =

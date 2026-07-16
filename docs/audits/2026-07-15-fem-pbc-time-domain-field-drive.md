@@ -409,3 +409,28 @@ Nie uruchomiono testu `PBC + FEM + sinc + run`, ponieważ taki zarządzany test 
 - `apps/control-room/src/modules/inspector/panels/AntennaObjectPanel.tsx`
 - `apps/control-room/src/modules/inspector/panels/StudyStageAuthoringModel.ts`
 - `apps/control-room/src/modules/inspector/panels/stages/RunStageInspector.tsx`
+
+## 15. Aneks powdrożeniowy — stan `master` po realizacji planu
+
+Sekcje 1–14 dokumentują stan zastany przed implementacją. Poniższy stan je superseduje tam,
+gdzie opisują brak wykonywalnego regionalnego napędu czasowego.
+
+- canonical Python, ProblemIR, authoring API i Control Room obsługują globalny albo regionalny
+  napęd pola oraz przypisanie analitycznej funkcji czasu, w tym `sinc` z jawnymi `cutoff` i `t0`;
+- natywne FEM CPU i FEM GPU double konsumują napęd w etapach czasowych, publikują `H_drive`
+  i zachowują requested/resolved provenance;
+- harmonogram zdarzeń wyjściowych nie jest materializowany dla bezczasowego direct minimizer,
+  co usuwa przypadek OOM dla bardzo małego `t_sampling` i syntetycznego czasu relaksacji;
+- Control Room rysuje przebieg `sinc`, zaznacza `t0`, oblicza ograniczone widmo dyskretne źródła
+  oraz pokazuje `N`, `dt` solvera, `t_sampling`, czas obserwacji, `df`, Nyquista i cutoff;
+- analiza odpowiedzi wyznacza parametry FFT z rzeczywistych osi artefaktu i odrzuca
+  nieregularne próbkowanie bez niejawnej interpolacji;
+- walidacja liniowości używa różnicy względem biegu o zerowej amplitudzie, aby autonomiczny
+  transient zrelaksowanego układu nie zafałszowywał stosunku amplitud odpowiedzi.
+
+Dowody wykonane po implementacji obejmują managed FEM smoke, kontrakty regionalnego pola,
+zbieżność czasową RK, parity CPU/GPU, osobny przebieg GPU Γ, walidator widma różnicowego,
+test kontraktu demag PBC, pełny zestaw testów Control Room oraz końcowe typecheck/lint.
+Monolityczna, sześciowariantowa receptura Γ nie została ponownie wykonana od początku do końca
+po ostatniej korekcie: wcześniejszy przebieg przekroczył limit 15 minut w wariancie GPU, który
+następnie przeszedł osobno. Nie należy przedstawiać tego jako zielonego wyniku jednej receptury.

@@ -1247,6 +1247,7 @@ dependencies = [
  "fullmag-quantities",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1283,6 +1284,7 @@ dependencies = [
  "nalgebra",
  "num-complex",
  "rayon",
+ "rustfft",
  "serde",
  "serde_json",
  "sha2",

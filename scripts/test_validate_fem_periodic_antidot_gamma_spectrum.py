@@ -35,3 +35,18 @@ def test_rejects_nonuniform_time_axis():
 
 def test_dominant_peak_is_typed():
     assert MODULE.dominant_peak(gamma_artifact()) == (10e9, 1.0)
+
+
+def test_differential_peak_removes_zero_drive_background():
+    reference = gamma_artifact()
+    reference["source_trace"] = [0, 0, 0, 0]
+    baseline = gamma_artifact()
+    doubled = gamma_artifact()
+    background = [0.3, -0.2, 0.1, 0.4]
+    signal = [0.0, 1.0, 0.0, -1.0]
+    reference["response_trace"] = background
+    baseline["response_trace"] = [a + b for a, b in zip(background, signal)]
+    doubled["response_trace"] = [a + 2 * b for a, b in zip(background, signal)]
+    _, p1 = MODULE.differential_dominant_peak(baseline, reference)
+    _, p2 = MODULE.differential_dominant_peak(doubled, reference)
+    assert (p2 / p1) ** 0.5 == pytest.approx(2.0)

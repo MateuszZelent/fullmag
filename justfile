@@ -202,13 +202,13 @@ verify-fem-periodic-antidot-gamma-pulse-runtime:
     just ensure-managed-fem-runtime
     rm -rf .fullmag/reports/fem-periodic-antidot-gamma-pulse
     mkdir -p .fullmag/reports/fem-periodic-antidot-gamma-pulse
-    for variant in baseline half-dt refined double-amplitude gpu; do \
+    for variant in baseline half-dt refined double-amplitude zero-amplitude gpu; do \
       device=cpu; dt=1e-13; mesh_scale=2; amplitude=1e-3; \
-      case "$variant" in half-dt) dt=5e-14 ;; refined) mesh_scale=1.5 ;; double-amplitude) amplitude=2e-3 ;; gpu) device=gpu ;; esac; \
-      FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FEM_EXECUTION="$device" FULLMAG_FEM_MFEM_DEVICE="$([ "$device" = gpu ] && echo cuda || echo cpu)" \
+      case "$variant" in half-dt) dt=5e-14 ;; refined) mesh_scale=1.5 ;; double-amplitude) amplitude=2e-3 ;; zero-amplitude) amplitude=0 ;; gpu) device=gpu ;; esac; \
+      FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FEM_EXECUTION="$device" FULLMAG_FEM_MFEM_DEVICE="$([ "$device" = gpu ] && echo cuda || echo cpu)" FULLMAG_GMSH_THREADS=1 \
         FULLMAG_GAMMA_CELL_M=8e-8 FULLMAG_GAMMA_THICKNESS_M=8e-9 FULLMAG_GAMMA_HOLE_RADIUS_M=1e-8 \
         FULLMAG_GAMMA_DT_S="$dt" FULLMAG_GAMMA_SAMPLE_DT_S=5e-13 FULLMAG_GAMMA_UNTIL_S=1e-10 FULLMAG_GAMMA_T0_S=1e-11 \
-        FULLMAG_GAMMA_AMPLITUDE_B_T="$amplitude" FULLMAG_GAMMA_RELAX_STEPS=4 FULLMAG_GAMMA_MESH_SCALE="$mesh_scale" \
+        FULLMAG_GAMMA_AMPLITUDE_B_T="$amplitude" FULLMAG_GAMMA_RELAX_STEPS=500 FULLMAG_GAMMA_MESH_SCALE="$mesh_scale" \
         '{{gpu_runtime_bin}}' examples/fem_periodic_antidot_time_domain_gamma.py --backend fem --headless --json --output-dir ".fullmag/reports/fem-periodic-antidot-gamma-pulse/$variant"; \
     done
     python3 scripts/validate_fem_periodic_antidot_gamma_spectrum.py \
@@ -216,6 +216,7 @@ verify-fem-periodic-antidot-gamma-pulse-runtime:
       --half-dt .fullmag/reports/fem-periodic-antidot-gamma-pulse/half-dt/analysis/spin_wave_response.gamma.v1.json \
       --refined-mesh .fullmag/reports/fem-periodic-antidot-gamma-pulse/refined/analysis/spin_wave_response.gamma.v1.json \
       --double-amplitude .fullmag/reports/fem-periodic-antidot-gamma-pulse/double-amplitude/analysis/spin_wave_response.gamma.v1.json \
+      --zero-amplitude .fullmag/reports/fem-periodic-antidot-gamma-pulse/zero-amplitude/analysis/spin_wave_response.gamma.v1.json \
       --gpu .fullmag/reports/fem-periodic-antidot-gamma-pulse/gpu/analysis/spin_wave_response.gamma.v1.json
 
 verify-fem-antidot-waveguide-finite-k-runtime:

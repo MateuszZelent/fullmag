@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { regionalFieldDriveSelectorOptions, resolveRegionalFieldDrivePanelModel } from "./RegionalFieldDrivePanelModel";
+import { regionalFieldDriveSamplingContext, regionalFieldDriveSelectorOptions, resolveRegionalFieldDrivePanelModel } from "./RegionalFieldDrivePanelModel";
 
 describe("RegionalFieldDrivePanelModel", () => {
   it("derives only canonical object, region, and stable run-stage selectors", () => {
@@ -48,5 +48,21 @@ describe("RegionalFieldDrivePanelModel", () => {
     );
     expect(model.mode).toBe("found");
     expect(model.sceneRevision).toBe(7);
+  });
+
+  it("derives t_sampling and active run duration from canonical scene study data", () => {
+    const context = regionalFieldDriveSamplingContext(
+      {
+        outputs: { table_autosave: { sample_period_s: 0.5e-12 } },
+        study: {
+          solver: { dt: 0.1e-12 },
+          stages: [{ kind: "run", stage_id: "excite", until: 100e-12 }],
+        },
+      },
+      { kind: "stage_ids", stage_ids: ["excite"] },
+    );
+    expect(context.samplePeriodS).toBe(0.5e-12);
+    expect(context.solverDtS).toBe(0.1e-12);
+    expect(context.durationS).toBe(100e-12);
   });
 });

@@ -7,6 +7,7 @@ import {
   spinWaveGammaResponseTraceSeries,
   spinWaveGammaSeries,
   spinWaveGammaSourceTraceSeries,
+  spinWaveGammaSamplingSummary,
 } from "./spinWaveGammaModel";
 
 export function SpinWaveGammaView({
@@ -16,22 +17,31 @@ export function SpinWaveGammaView({
   resource: SpinWaveGammaResource | null;
   status: string;
 }) {
+  const sampling = spinWaveGammaSamplingSummary(resource);
   return (
     <section className="fm-analysis-plots__panel" aria-label="Gamma spin-wave response">
       <header className="fm-analysis-plots__header">
         <h3>Γ spin-wave response</h3>
         <span>{resource?.weighting ?? "moment weighted"} · {resource?.detrend ?? "detrend"} · {resource?.window ?? "window"}</span>
       </header>
+      <div className="fm-analysis-plots__status" role="list" aria-label="Response FFT sampling parameters">
+        <span role="listitem">N {sampling.sampleCount}</span>
+        <span role="listitem">t_sampling {formatScientific(sampling.samplePeriodS, "s")}</span>
+        <span role="listitem">duration {formatScientific(sampling.durationS, "s")}</span>
+        <span role="listitem">df {formatScientific(sampling.frequencyResolutionHz, "Hz")}</span>
+        <span role="listitem">Nyquist {formatScientific(sampling.nyquistHz, "Hz")}</span>
+      </div>
+      {sampling.message ? <p className="fm-analysis-plots__sampling-warning" role="status">{sampling.message}</p> : null}
       <div className="fm-analysis-plots__subchart">
         <header className="fm-analysis-plots__subchart-header"><h4>Response trace Δm(t)</h4><span>time [{resource?.time_unit ?? "s"}]</span></header>
         <EChartsSurface dataStatus={status} series={spinWaveGammaResponseTraceSeries(resource)} xAxisLabel={`time [${resource?.time_unit ?? "s"}]`} />
       </div>
       <div className="fm-analysis-plots__subchart">
-        <header className="fm-analysis-plots__subchart-header"><h4>Drive trace H(t)</h4><span>{resource?.source_unit ?? "A/m"}</span></header>
+        <header className="fm-analysis-plots__subchart-header"><h4>Drive / antenna trace H(t)</h4><span>{resource?.source_unit ?? "A/m"}</span></header>
         <EChartsSurface dataStatus={status} series={spinWaveGammaSourceTraceSeries(resource)} xAxisLabel={`time [${resource?.time_unit ?? "s"}]`} />
       </div>
       <div className="fm-analysis-plots__subchart">
-        <header className="fm-analysis-plots__subchart-header"><h4>One-sided power spectra</h4><span>frequency [{resource?.frequency_unit ?? "Hz"}]</span></header>
+        <header className="fm-analysis-plots__subchart-header"><h4>Response and antenna FFT spectra</h4><span>frequency [{resource?.frequency_unit ?? "Hz"}]</span></header>
         <EChartsSurface dataStatus={status} series={spinWaveGammaSeries(resource)} xAxisLabel={`frequency [${resource?.frequency_unit ?? "Hz"}]`} />
       </div>
       {resource && resource.peaks.length > 0 ? (
@@ -50,4 +60,8 @@ export function SpinWaveGammaView({
       </div>
     </section>
   );
+}
+
+function formatScientific(value: number | null, unit: string): string {
+  return value === null ? "unavailable" : `${value.toExponential(3)} ${unit}`;
 }

@@ -18,6 +18,12 @@ export interface RegionalFieldDriveSelectorOptions {
   timeEvolutionStages: Array<{ id: string; label: string }>;
 }
 
+export interface RegionalFieldDriveSamplingContext {
+  samplePeriodS: number | null;
+  solverDtS: number | null;
+  durationS: number | null;
+}
+
 type JsonRecord = Record<string, unknown>;
 
 export function regionalFieldDriveSelectorOptions(
@@ -59,6 +65,54 @@ export function regionalFieldDriveSelectorOptions(
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function regionalFieldDriveSamplingContext(
+  scene: SceneResource | null,
+  activation: RegionalFieldDriveResource["activation"] | null,
+): RegionalFieldDriveSamplingContext {
+  const study = isRecord(scene?.study) ? scene.study : null;
+  const outputs = isRecord(scene?.outputs) ? scene.outputs : null;
+  const sampling = isRecord(study?.sampling) ? study.sampling : null;
+  const tableAutosave = firstRecord(
+    outputs?.table_autosave,
+    outputs?.tableautosave,
+    sampling?.table_autosave,
+    sampling?.tableautosave,
+  );
+  const stages = Array.isArray(study?.stages) ? study.stages.filter(isRecord) : [];
+  const selectedStage = stages.find((stage) => {
+    if (stage.kind !== "run") return false;
+    if (activation?.kind !== "stage_ids") return true;
+    const id = typeof stage.stage_id === "string" ? stage.stage_id : stage.id;
+    return typeof id === "string" && activation.stage_ids.includes(id);
+  });
+  const solver = isRecord(study?.solver) ? study.solver : null;
+  return {
+    samplePeriodS: firstPositiveNumber(
+      tableAutosave?.sample_period_s,
+      tableAutosave?.every_seconds,
+      selectedStage?.output_every_seconds,
+      selectedStage?.output_every,
+    ),
+    solverDtS: firstPositiveNumber(solver?.dt_seconds, solver?.dt, study?.dt_seconds, study?.dt),
+    durationS: firstPositiveNumber(
+      selectedStage?.until_seconds,
+      selectedStage?.until,
+      selectedStage?.duration_s,
+    ),
+  };
+}
+
+function firstRecord(...values: unknown[]): JsonRecord | null {
+  return values.find(isRecord) ?? null;
+}
+
+function firstPositiveNumber(...values: unknown[]): number | null {
+  const value = values.find((candidate) =>
+    typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0,
+  );
+  return typeof value === "number" ? value : null;
 }
 
 export function resolveRegionalFieldDrivePanelModel(

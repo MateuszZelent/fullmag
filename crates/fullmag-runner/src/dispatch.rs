@@ -5372,16 +5372,16 @@ fn execute_native_fem(
             message: "until_seconds must be positive".to_string(),
         });
     }
-    let time_events = crate::time_events::build_resolved_stage_event_schedule(
+    let native_relaxation_step =
+        crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref());
+    let time_events = crate::time_events::build_native_fem_stage_event_schedule(
         &plan.field_drives,
         0.0,
         until_seconds,
         outputs,
         crate::schedules::OUTPUT_TIME_TOLERANCE,
+        native_relaxation_step.is_none(),
     );
-
-    let native_relaxation_step =
-        crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref());
     let needs_initial_snapshot = native_fem_requires_initial_snapshot(
         live.as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot),
@@ -5554,7 +5554,10 @@ fn execute_native_fem(
             engine,
             plan,
             plan.time_stage.start_time_s + until_seconds,
-            &time_events.times_s,
+            &time_events
+                .as_ref()
+                .expect("physical-time FEM relaxation requires an event schedule")
+                .times_s,
             node_count,
             dt,
             dt_is_fixed,

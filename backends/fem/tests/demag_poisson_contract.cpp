@@ -876,6 +876,12 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
             std::string::npos,
         "Poisson periodic module must reject reduced-node ids outside the class count");
     check(
+        periodic.find("A.Height() != static_cast<int>(ctx.mesh.n_nodes)") !=
+                std::string::npos &&
+            periodic.find("A.Width() != static_cast<int>(ctx.mesh.n_nodes)") !=
+                std::string::npos,
+        "Poisson periodic reduction must fail closed before indexing a matrix whose true-DOF dimensions do not match the complete node-class map");
+    check(
         periodic.find("periodic_workspace->solver.GetNumIterations()") != std::string::npos,
         "Poisson periodic reduced solve must publish actual CG iteration telemetry");
     check(

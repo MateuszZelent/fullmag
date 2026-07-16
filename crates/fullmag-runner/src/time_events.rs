@@ -115,6 +115,29 @@ pub(crate) fn build_resolved_stage_event_schedule(
     TimeEventSchedule { times_s: times }
 }
 
+/// Direct energy minimizers advance in accepted minimization steps, not in
+/// physical time. Building sub-picosecond output events across their synthetic
+/// `until_seconds` horizon can therefore allocate an unbounded vector that the
+/// minimizer never consumes.
+pub(crate) fn build_native_fem_stage_event_schedule(
+    drives: &[RegionalFieldDriveIR],
+    stage_start_s: f64,
+    stage_end_s: f64,
+    outputs: &[OutputIR],
+    tolerance_s: f64,
+    physical_time_events_required: bool,
+) -> Option<TimeEventSchedule> {
+    physical_time_events_required.then(|| {
+        build_resolved_stage_event_schedule(
+            drives,
+            stage_start_s,
+            stage_end_s,
+            outputs,
+            tolerance_s,
+        )
+    })
+}
+
 pub(crate) fn resolved_stage_drive_discontinuities(
     drives: &[RegionalFieldDriveIR],
     stage_start_s: f64,
@@ -204,6 +227,23 @@ mod tests {
         let outputs = vec![OutputIR::Scalar { name: "mx".into(), every_seconds: 0.75 }];
         let schedule = build_resolved_stage_event_schedule(&drives, 10.0, 13.0, &outputs, 1e-12);
         assert_eq!(schedule.times_s, vec![10.0, 10.75, 11.0, 11.5, 12.0, 12.25, 13.0]);
+    }
+
+    #[test]
+    fn direct_minimizer_skips_physical_time_event_materialization() {
+        let outputs = vec![OutputIR::Scalar {
+            name: "mx".into(),
+            every_seconds: 0.5e-12,
+        }];
+        let schedule = build_native_fem_stage_event_schedule(
+            &[],
+            0.0,
+            1.0,
+            &outputs,
+            crate::schedules::OUTPUT_TIME_TOLERANCE,
+            false,
+        );
+        assert!(schedule.is_none());
     }
 
 

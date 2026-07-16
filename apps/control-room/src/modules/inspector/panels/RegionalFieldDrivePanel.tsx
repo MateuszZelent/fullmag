@@ -8,6 +8,7 @@ import { useKernel } from "@/kernel/KernelContext";
 import { useFieldDrivesResource, MODEL_FIELD_DRIVES_RESOURCE_KEY } from "@/kernel/resources/fieldDriveResources";
 import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources";
 import { milliTeslaToTesla, teslaToMilliTesla, validateFieldDriveDraft } from "@/shared/domain/physics/fieldDrive";
+import { buildSincPulsePreview } from "@/shared/domain/physics/sincPulsePreview";
 import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
@@ -15,7 +16,8 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorSection } from "../primitives/InspectorSection";
-import { regionalFieldDriveSelectorOptions, resolveRegionalFieldDrivePanelModel } from "./RegionalFieldDrivePanelModel";
+import { regionalFieldDriveSamplingContext, regionalFieldDriveSelectorOptions, resolveRegionalFieldDrivePanelModel } from "./RegionalFieldDrivePanelModel";
+import { SincPulsePreview } from "./SincPulsePreview";
 
 export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
   const { api, resources } = useKernel();
@@ -59,6 +61,23 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
     });
   }
   const selectedStageIds = draft?.activation.kind === "stage_ids" ? draft.activation.stage_ids : [];
+  const samplingContext = useMemo(
+    () => regionalFieldDriveSamplingContext(scene.data ?? null, draft?.activation ?? null),
+    [draft?.activation, scene.data],
+  );
+  const sincPreview = useMemo(
+    () => draft?.waveform.kind === "sinc_pulse"
+      ? buildSincPulsePreview({
+          cutoffHz: draft.waveform.cutoff_hz,
+          t0S: draft.waveform.t0 ?? 0,
+          waveformAmplitude: draft.waveform.amplitude ?? 1,
+          fieldAmplitudeT: draft.amplitude_B_T,
+          samplePeriodS: samplingContext.samplePeriodS,
+          durationS: samplingContext.durationS,
+        })
+      : null,
+    [draft, samplingContext.durationS, samplingContext.samplePeriodS],
+  );
 
   async function save(): Promise<void> {
     if (!draft || model.sceneRevision === null) return;
@@ -123,6 +142,7 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
             <label className="fm-inspector-field"><span>Cutoff (Hz)</span><input className="fm-inspector-input" type="number" value={draft.waveform.cutoff_hz} onChange={(event) => setDraft((value) => value?.waveform.kind === "sinc_pulse" ? {...value,waveform:{...value.waveform,cutoff_hz:Number(event.target.value)}} : value)} /></label>
             <label className="fm-inspector-field"><span>Center t0 (s)</span><input className="fm-inspector-input" type="number" value={draft.waveform.t0 ?? 0} onChange={(event) => setDraft((value) => value?.waveform.kind === "sinc_pulse" ? {...value,waveform:{...value.waveform,t0:Number(event.target.value)}} : value)} /></label>
             <label className="fm-inspector-field"><span>Waveform amplitude</span><input className="fm-inspector-input" type="number" value={draft.waveform.amplitude ?? 1} onChange={(event) => setDraft((value) => value?.waveform.kind === "sinc_pulse" ? {...value,waveform:{...value.waveform,amplitude:Number(event.target.value)}} : value)} /></label>
+            {sincPreview ? <SincPulsePreview model={sincPreview} solverDtS={samplingContext.solverDtS} /> : null}
           </>
         ) : null}
         {draft?.waveform.kind === "sinusoidal" ? <><label className="fm-inspector-field"><span>Frequency (Hz)</span><input className="fm-inspector-input" type="number" value={draft.waveform.frequency_hz} onChange={(event) => setDraft((value) => value?.waveform.kind === "sinusoidal" ? {...value,waveform:{...value.waveform,frequency_hz:Number(event.target.value)}} : value)} /></label><label className="fm-inspector-field"><span>Phase (rad)</span><input className="fm-inspector-input" type="number" value={draft.waveform.phase_rad ?? 0} onChange={(event) => setDraft((value) => value?.waveform.kind === "sinusoidal" ? {...value,waveform:{...value.waveform,phase_rad:Number(event.target.value)}} : value)} /></label><label className="fm-inspector-field"><span>Offset</span><input className="fm-inspector-input" type="number" value={draft.waveform.offset ?? 0} onChange={(event) => setDraft((value) => value?.waveform.kind === "sinusoidal" ? {...value,waveform:{...value.waveform,offset:Number(event.target.value)}} : value)} /></label></> : null}

@@ -1576,3 +1576,21 @@ Po wdrożeniu użytkownik może:
 8. wyeksportować ten sam canonical Python;
 9. dla propagacji przejść do osobnego przykładu falowodu, lokalnej maski i `S(k,f)` — bez
    fałszywej interpretacji pojedynczej komórki PBC jako propagującego pakietu.
+
+## 18. Status wykonania na `master`
+
+Plan został zaimplementowany w zakresie globalnego/regionalnego analitycznego napędu czasowego,
+FEM CPU/GPU double, publikacji `H_drive`, authoringu Python/UI, round-trip API oraz analizy Γ.
+UI zawiera automatyczny podgląd `sinc` i widma źródła, wykorzystuje `t_sampling` z table autosave
+i pokazuje parametry FFT odpowiedzi wyprowadzone z rzeczywistych próbek artefaktu. Nieregularna
+oś czasu jest odrzucana bez ukrytego resamplingu.
+
+Końcowe poprawki obejmują także pominięcie materializacji fizycznego harmonogramu zdarzeń dla
+direct minimizer, canonical units dla artefaktu `H_drive`, fail-closed guard okresowej redukcji
+Poissona oraz różnicową walidację liniowości względem biegu zero-amplitude.
+
+Weryfikacja przeszła dla kontraktów regionalnego pola, RK time convergence, CPU/GPU parity,
+managed smoke, osobnego wariantu GPU Γ, walidatora widma, demag PBC oraz bramek Control Room.
+Pełna receptura Γ po rozszerzeniu do sześciu wariantów pozostaje kosztownym, niezamkniętym
+jednym przebiegiem gate: jej składowe i finalny walidator przeszły, ale całość nie została
+ponownie uruchomiona w jednym procesie po ostatniej zmianie.

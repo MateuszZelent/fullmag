@@ -2999,13 +2999,9 @@ pub(crate) fn field_unit(observable: &str) -> &'static str {
     let base_observable = observable
         .split_once('.')
         .map_or(observable, |(base, _)| base);
-    match base_observable {
-        "m" => "dimensionless",
-        "H_ex" | "H_demag" | "H_ext" | "H_oe" | "H_OE" | "H_eff" | "H_ani" | "H_dmi" | "H_dmi_bulk" | "H_therm" => "A/m",
-        "demag_phi" => "A",
-        "torque" => "T",
-        other => panic!("unsupported observable '{}'", other),
-    }
+    fullmag_quantities::quantity_spec(base_observable)
+        .map(|spec| spec.unit)
+        .unwrap_or_else(|| panic!("unsupported observable '{}'", base_observable))
 }
 
 #[cfg(test)]
@@ -3033,6 +3029,12 @@ mod tests {
         assert_eq!(field_unit("H_dmi.x"), "A/m");
         assert_eq!(field_unit("H_dmi_bulk"), "A/m");
         assert_eq!(field_unit("H_dmi_bulk.z"), "A/m");
+    }
+
+    #[test]
+    fn regional_drive_field_artifact_uses_magnetic_field_units() {
+        assert_eq!(field_unit("H_drive"), "A/m");
+        assert_eq!(field_unit("H_drive.y"), "A/m");
     }
 
     fn test_execution_plan(active_mask: Option<Vec<bool>>) -> ExecutionPlanIR {

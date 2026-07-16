@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { spinWaveGammaResponseTraceSeries, spinWaveGammaSeries, spinWaveGammaSourceTraceSeries } from "./spinWaveGammaModel";
+import { spinWaveGammaResponseTraceSeries, spinWaveGammaSamplingSummary, spinWaveGammaSeries, spinWaveGammaSourceTraceSeries } from "./spinWaveGammaModel";
 
 describe("spinWaveGammaModel", () => {
   it("builds unit-aware response and source spectra", () => {
@@ -47,5 +47,22 @@ describe("spinWaveGammaModel", () => {
     expect(spinWaveGammaResponseTraceSeries(seriesFixture)).toHaveLength(2);
     expect(spinWaveGammaResponseTraceSeries(seriesFixture)[0].unit).toBe("1");
     expect(spinWaveGammaSourceTraceSeries(seriesFixture)[0].unit).toBe("A/m");
+    expect(spinWaveGammaSamplingSummary(seriesFixture)).toMatchObject({
+      status: "ready",
+      sampleCount: 2,
+      samplePeriodS: 1,
+      frequencyResolutionHz: 1e9,
+      nyquistHz: 1e9,
+    });
+  });
+
+  it("fails closed for a nonuniform response time axis", () => {
+    const summary = spinWaveGammaSamplingSummary({
+      time_s: [0, 1e-12, 2.2e-12],
+      frequency_hz: [0, 1e9],
+      nyquist_hz: 5e11,
+    } as never);
+    expect(summary.status).toBe("nonuniform");
+    expect(summary.message).toContain("Nonuniform");
   });
 });

@@ -2825,6 +2825,244 @@
         ],
         "type": "object"
       },
+      "DriveActivationResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "all_time_evolution"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "stage_ids"
+                ],
+                "type": "string"
+              },
+              "stage_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "stage_ids",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DynamicStructureFactorResource": {
+        "properties": {
+          "artifact_ref": {
+            "type": "string"
+          },
+          "bounded": {
+            "type": "boolean"
+          },
+          "component": {
+            "type": "string"
+          },
+          "excluded_absorber_ranges_m": {
+            "items": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "frequency_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "frequency_hz": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "frequency_unit": {
+            "type": "string"
+          },
+          "invalid_probe_mask": {
+            "items": {
+              "type": "boolean"
+            },
+            "type": "array"
+          },
+          "k_rad_per_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "mesh_probe_signature": {
+            "type": "string"
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "original_frequency_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "original_wavevector_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "phase_convention": {
+            "type": "string"
+          },
+          "power": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "propagation_axis": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_observable": {
+            "type": "string"
+          },
+          "source_power": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_spectrum_imag": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_spectrum_real": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_unit": {
+            "type": "string"
+          },
+          "spatial_window": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "spatial_window_power_sum": {
+            "format": "double",
+            "type": "number"
+          },
+          "spectrum_imag": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "spectrum_real": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "temporal_window": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "temporal_window_power_sum": {
+            "format": "double",
+            "type": "number"
+          },
+          "time_s": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "wavevector_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wavevector_unit": {
+            "type": "string"
+          },
+          "x_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "artifact_ref",
+          "bounded",
+          "original_frequency_count",
+          "original_wavevector_count",
+          "wavevector_unit",
+          "frequency_unit",
+          "x_m",
+          "time_s",
+          "k_rad_per_m",
+          "frequency_hz",
+          "power",
+          "spectrum_real",
+          "spectrum_imag",
+          "source_power",
+          "source_spectrum_real",
+          "source_spectrum_imag",
+          "source_observable",
+          "source_unit",
+          "component",
+          "propagation_axis",
+          "phase_convention",
+          "normalization",
+          "spatial_window",
+          "temporal_window",
+          "spatial_window_power_sum",
+          "temporal_window_power_sum",
+          "mesh_probe_signature",
+          "invalid_probe_mask",
+          "excluded_absorber_ranges_m",
+          "frequency_count",
+          "wavevector_count"
+        ],
+        "type": "object"
+      },
       "EnergySummary": {
         "properties": {
           "anisotropy": {
@@ -3521,6 +3759,166 @@
         ],
         "type": "object"
       },
+      "FieldDriveCreateRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drive": {
+            "$ref": "#/components/schemas/RegionalFieldDriveResource"
+          }
+        },
+        "required": [
+          "drive"
+        ],
+        "type": "object"
+      },
+      "FieldDriveDeleteRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "FieldDriveKindResource": {
+        "enum": [
+          "regional"
+        ],
+        "type": "string"
+      },
+      "FieldDriveListResource": {
+        "properties": {
+          "drives": {
+            "items": {
+              "$ref": "#/components/schemas/RegionalFieldDriveResource"
+            },
+            "type": "array"
+          },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "scene_revision",
+          "drives"
+        ],
+        "type": "object"
+      },
+      "FieldDriveListStateResource": {
+        "additionalProperties": false,
+        "properties": {
+          "drives": {
+            "items": {
+              "$ref": "#/components/schemas/RegionalFieldDriveResource"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "FieldDriveMigrationResource": {
+        "additionalProperties": false,
+        "properties": {
+          "migrated_from": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "migrated_from"
+        ],
+        "type": "object"
+      },
+      "FieldDriveReplaceRequest": {
+        "properties": {
+          "base_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "drive": {
+            "$ref": "#/components/schemas/RegionalFieldDriveResource"
+          }
+        },
+        "required": [
+          "drive"
+        ],
+        "type": "object"
+      },
+      "FieldEnvelopeResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "uniform"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinc"
+                ],
+                "type": "string"
+              },
+              "period_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "width_m": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "window": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "axis",
+              "period_m",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "FieldMatrixResponse": {
         "properties": {
           "aggregation": {
@@ -4204,6 +4602,87 @@
         ],
         "type": "object"
       },
+      "FieldSpatialProfileResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "uniform"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "axis": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "center_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinc"
+                ],
+                "type": "string"
+              },
+              "period_m": {
+                "format": "double",
+                "type": "number"
+              },
+              "width_m": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "window": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "axis",
+              "period_m",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "envelope": {
+                "$ref": "#/components/schemas/FieldEnvelopeResource"
+              },
+              "kind": {
+                "enum": [
+                  "geometry_mask"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "envelope",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "FieldStateExportRequest": {
         "properties": {
           "file_name": {
@@ -4447,6 +4926,71 @@
           "mean"
         ],
         "type": "object"
+      },
+      "FieldTargetResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "global"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "region"
+                ],
+                "type": "string"
+              },
+              "object_id": {
+                "type": "string"
+              },
+              "region_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "object_id",
+              "region_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FieldTimeOriginResource": {
+        "enum": [
+          "stage_local",
+          "absolute"
+        ],
+        "type": "string"
       },
       "FieldVectorQuery": {
         "description": "Query parameters for the `/fields/{quantity_id}/vector` endpoint.",
@@ -12479,6 +13023,72 @@
         ],
         "type": "object"
       },
+      "RegionalFieldDriveResource": {
+        "additionalProperties": false,
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/DriveActivationResource"
+          },
+          "amplitude_B_T": {
+            "format": "double",
+            "type": "number"
+          },
+          "direction": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FieldDriveKindResource"
+          },
+          "migration": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FieldDriveMigrationResource"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "spatial_profile": {
+            "$ref": "#/components/schemas/FieldSpatialProfileResource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/FieldTargetResource"
+          },
+          "time_origin": {
+            "$ref": "#/components/schemas/FieldTimeOriginResource"
+          },
+          "waveform": {
+            "$ref": "#/components/schemas/TimeDependenceResource"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "target",
+          "amplitude_B_T",
+          "direction",
+          "spatial_profile",
+          "waveform",
+          "time_origin",
+          "activation"
+        ],
+        "type": "object"
+      },
       "RelaxationAlgorithm": {
         "enum": [
           "llg_overdamped",
@@ -14361,6 +14971,9 @@
               "null"
             ]
           },
+          "field_drives": {
+            "$ref": "#/components/schemas/FieldDriveListStateResource"
+          },
           "magnetization_assets": {
             "items": {
               "additionalProperties": {},
@@ -16004,6 +16617,252 @@
         ],
         "type": "object"
       },
+      "SpinWaveGammaResource": {
+        "properties": {
+          "detrend": {
+            "type": "string"
+          },
+          "frequency_hz": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "frequency_unit": {
+            "type": "string"
+          },
+          "normalization": {
+            "type": "string"
+          },
+          "nyquist_hz": {
+            "format": "double",
+            "type": "number"
+          },
+          "peaks": {
+            "items": {
+              "$ref": "#/components/schemas/SpinWavePeakResource"
+            },
+            "type": "array"
+          },
+          "primary_response_psd": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "reference_m0": {
+            "format": "double",
+            "type": "number"
+          },
+          "reference_m0_secondary": {
+            "format": "double",
+            "type": "number"
+          },
+          "response_component": {
+            "type": "string"
+          },
+          "response_psd": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "response_spectrum_imag": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "response_spectrum_real": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "response_trace": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "secondary_response_psd": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "secondary_response_spectrum_imag": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "secondary_response_spectrum_real": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "secondary_response_trace": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_psd": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_spectrum_imag": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_spectrum_real": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_trace": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "source_unit": {
+            "type": "string"
+          },
+          "susceptibility_abs": {
+            "items": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "type": "array"
+          },
+          "susceptibility_unit": {
+            "type": "string"
+          },
+          "time_s": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "time_unit": {
+            "type": "string"
+          },
+          "trace_unit": {
+            "type": "string"
+          },
+          "transverse_components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "weighting": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          },
+          "window_power_sum": {
+            "format": "double",
+            "type": "number"
+          },
+          "window_values": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "time_unit",
+          "frequency_unit",
+          "trace_unit",
+          "source_unit",
+          "susceptibility_unit",
+          "weighting",
+          "detrend",
+          "window",
+          "normalization",
+          "reference_m0",
+          "reference_m0_secondary",
+          "response_component",
+          "transverse_components",
+          "time_s",
+          "response_trace",
+          "secondary_response_trace",
+          "source_trace",
+          "frequency_hz",
+          "response_psd",
+          "primary_response_psd",
+          "secondary_response_psd",
+          "source_psd",
+          "response_spectrum_real",
+          "response_spectrum_imag",
+          "secondary_response_spectrum_real",
+          "secondary_response_spectrum_imag",
+          "source_spectrum_real",
+          "source_spectrum_imag",
+          "window_values",
+          "window_power_sum",
+          "nyquist_hz",
+          "susceptibility_abs",
+          "peaks"
+        ],
+        "type": "object"
+      },
+      "SpinWavePeakResource": {
+        "properties": {
+          "frequency_hz": {
+            "format": "double",
+            "type": "number"
+          },
+          "index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "power": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "index",
+          "frequency_hz",
+          "power"
+        ],
+        "type": "object"
+      },
       "StageExecutionRecordResource": {
         "properties": {
           "action": {
@@ -17152,6 +18011,127 @@
           "resync_required"
         ],
         "type": "object"
+      },
+      "TimeDependenceResource": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "constant"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "frequency_hz": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinusoidal"
+                ],
+                "type": "string"
+              },
+              "offset": {
+                "format": "double",
+                "type": "number"
+              },
+              "phase_rad": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "frequency_hz",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "pulse"
+                ],
+                "type": "string"
+              },
+              "t_off": {
+                "format": "double",
+                "type": "number"
+              },
+              "t_on": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "t_on",
+              "t_off",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "piecewise_linear"
+                ],
+                "type": "string"
+              },
+              "points": {
+                "items": {
+                  "items": {
+                    "format": "double",
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "points",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "amplitude": {
+                "format": "double",
+                "type": "number"
+              },
+              "cutoff_hz": {
+                "format": "double",
+                "type": "number"
+              },
+              "kind": {
+                "enum": [
+                  "sinc_pulse"
+                ],
+                "type": "string"
+              },
+              "t0": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "cutoff_hz",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "TopologicalChargeExecutionProvenance": {
         "properties": {
@@ -20872,6 +21852,52 @@
               }
             },
             "description": "Settle trace for a point"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_spin_wave_dynamic_structure_factor_v1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DynamicStructureFactorResource"
+                }
+              }
+            },
+            "description": "Finite-k dynamic structure factor"
+          },
+          "404": {
+            "description": "No finite-k spin-wave artifact"
+          }
+        },
+        "tags": [
+          "analysis"
+        ]
+      }
+    },
+    "/v2/sessions/current/analysis/spin-wave/gamma.v1": {
+      "get": {
+        "operationId": "analysis_get_sessions_current_analysis_spin_wave_gamma_v1",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpinWaveGammaResource"
+                }
+              }
+            },
+            "description": "Moment-weighted Γ time trace and spectrum"
+          },
+          "404": {
+            "description": "No Γ spin-wave response artifact"
           }
         },
         "tags": [
@@ -25805,6 +26831,158 @@
           },
           "404": {
             "description": "Coupling not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/field-drives": {
+      "get": {
+        "operationId": "model_get_sessions_current_model_field_drives",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldDriveListResource"
+                }
+              }
+            },
+            "description": "Canonical regional field drives"
+          },
+          "404": {
+            "description": "No active workspace or scene document"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "post": {
+        "operationId": "model_post_sessions_current_model_field_drives",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldDriveCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Created a regional field drive"
+          },
+          "400": {
+            "description": "Invalid field drive"
+          },
+          "409": {
+            "description": "Revision conflict or duplicate field drive"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      }
+    },
+    "/v2/sessions/current/model/field-drives/{drive_id}": {
+      "delete": {
+        "operationId": "model_delete_sessions_current_model_field_drives_drive_id",
+        "parameters": [
+          {
+            "description": "Stable field drive id",
+            "in": "path",
+            "name": "drive_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldDriveDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Deleted a regional field drive"
+          },
+          "404": {
+            "description": "Field drive not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          }
+        },
+        "tags": [
+          "model"
+        ]
+      },
+      "put": {
+        "operationId": "model_put_sessions_current_model_field_drives_drive_id",
+        "parameters": [
+          {
+            "description": "Stable field drive id",
+            "in": "path",
+            "name": "drive_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldDriveReplaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthoringTransactionResponse"
+                }
+              }
+            },
+            "description": "Replaced a regional field drive"
+          },
+          "400": {
+            "description": "Invalid field drive"
+          },
+          "404": {
+            "description": "Field drive not found"
           },
           "409": {
             "description": "Revision conflict"

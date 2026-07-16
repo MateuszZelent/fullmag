@@ -692,6 +692,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_spin_wave_dynamic_structure_factor_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/analysis/spin-wave/gamma.v1": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analysis_get_sessions_current_analysis_spin_wave_gamma_v1"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/artifacts": {
         parameters: {
             query?: never;
@@ -1874,6 +1906,38 @@ export interface paths {
         options?: never;
         head?: never;
         patch: operations["model_patch_sessions_current_model_couplings_coupling_id"];
+        trace?: never;
+    };
+    "/v2/sessions/current/model/field-drives": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["model_get_sessions_current_model_field_drives"];
+        put?: never;
+        post: operations["model_post_sessions_current_model_field_drives"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/model/field-drives/{drive_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["model_put_sessions_current_model_field_drives_drive_id"];
+        post?: never;
+        delete: operations["model_delete_sessions_current_model_field_drives_drive_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v2/sessions/current/model/geometry/capabilities": {
@@ -3551,6 +3615,50 @@ export interface components {
             object_id?: string | null;
             part_id?: string | null;
         };
+        DriveActivationResource: {
+            /** @enum {string} */
+            kind: "all_time_evolution";
+        } | {
+            /** @enum {string} */
+            kind: "stage_ids";
+            stage_ids: string[];
+        };
+        DynamicStructureFactorResource: {
+            artifact_ref: string;
+            bounded: boolean;
+            component: string;
+            excluded_absorber_ranges_m: number[][];
+            frequency_count: number;
+            frequency_hz: number[];
+            frequency_unit: string;
+            invalid_probe_mask: boolean[];
+            k_rad_per_m: number[];
+            mesh_probe_signature: string;
+            normalization: string;
+            original_frequency_count: number;
+            original_wavevector_count: number;
+            phase_convention: string;
+            power: number[];
+            propagation_axis: string;
+            schema_version: string;
+            source_observable: string;
+            source_power: number[];
+            source_spectrum_imag: number[];
+            source_spectrum_real: number[];
+            source_unit: string;
+            spatial_window: number[];
+            /** Format: double */
+            spatial_window_power_sum: number;
+            spectrum_imag: number[];
+            spectrum_real: number[];
+            temporal_window: number[];
+            /** Format: double */
+            temporal_window_power_sum: number;
+            time_s: number[];
+            wavevector_count: number;
+            wavevector_unit: string;
+            x_m: number[];
+        };
         EnergySummary: {
             /** Format: double */
             anisotropy?: number | null;
@@ -3732,6 +3840,48 @@ export interface components {
             location: string;
             quantity_id: string;
             unit: string;
+        };
+        FieldDriveCreateRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            drive: components["schemas"]["RegionalFieldDriveResource"];
+        };
+        FieldDriveDeleteRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+        };
+        /** @enum {string} */
+        FieldDriveKindResource: "regional";
+        FieldDriveListResource: {
+            drives: components["schemas"]["RegionalFieldDriveResource"][];
+            /** Format: int64 */
+            scene_revision: number;
+        };
+        FieldDriveListStateResource: {
+            drives?: components["schemas"]["RegionalFieldDriveResource"][];
+        };
+        FieldDriveMigrationResource: {
+            migrated_from: string;
+        };
+        FieldDriveReplaceRequest: {
+            /** Format: int64 */
+            base_revision?: number | null;
+            drive: components["schemas"]["RegionalFieldDriveResource"];
+        };
+        FieldEnvelopeResource: {
+            /** @enum {string} */
+            kind: "uniform";
+        } | {
+            axis: number[];
+            /** Format: double */
+            center_m?: number;
+            /** @enum {string} */
+            kind: "sinc";
+            /** Format: double */
+            period_m: number;
+            /** Format: double */
+            width_m?: number | null;
+            window?: string;
         };
         FieldMatrixResponse: {
             aggregation?: string | null;
@@ -3930,6 +4080,26 @@ export interface components {
              */
             y_pixels: number;
         };
+        FieldSpatialProfileResource: {
+            /** @enum {string} */
+            kind: "uniform";
+        } | {
+            axis: number[];
+            /** Format: double */
+            center_m?: number;
+            /** @enum {string} */
+            kind: "sinc";
+            /** Format: double */
+            period_m: number;
+            /** Format: double */
+            width_m?: number | null;
+            window?: string;
+        } | {
+            envelope: components["schemas"]["FieldEnvelopeResource"];
+            /** @enum {string} */
+            kind: "geometry_mask";
+            object_id: string;
+        };
         FieldStateExportRequest: {
             file_name?: string | null;
             format?: string;
@@ -3996,6 +4166,21 @@ export interface components {
             /** Format: double */
             min: number;
         };
+        FieldTargetResource: {
+            /** @enum {string} */
+            kind: "global";
+        } | {
+            /** @enum {string} */
+            kind: "object";
+            object_id: string;
+        } | {
+            /** @enum {string} */
+            kind: "region";
+            object_id: string;
+            region_id: string;
+        };
+        /** @enum {string} */
+        FieldTimeOriginResource: "stage_local" | "absolute";
         /** @description Query parameters for the `/fields/{quantity_id}/vector` endpoint. */
         FieldVectorQuery: {
             /**
@@ -6037,6 +6222,21 @@ export interface components {
             source_object_ids: string[];
             texture_override?: null | components["schemas"]["SceneTextureOverride"];
         };
+        RegionalFieldDriveResource: {
+            activation: components["schemas"]["DriveActivationResource"];
+            /** Format: double */
+            amplitude_B_T: number;
+            direction: number[];
+            enabled?: boolean;
+            id: string;
+            kind: components["schemas"]["FieldDriveKindResource"];
+            migration?: null | components["schemas"]["FieldDriveMigrationResource"];
+            name: string;
+            spatial_profile: components["schemas"]["FieldSpatialProfileResource"];
+            target: components["schemas"]["FieldTargetResource"];
+            time_origin: components["schemas"]["FieldTimeOriginResource"];
+            waveform: components["schemas"]["TimeDependenceResource"];
+        };
         /** @enum {string} */
         RelaxationAlgorithm: "llg_overdamped" | "projected_gradient_bb" | "nonlinear_cg" | "tangent_plane_implicit";
         ResolvedFallbackResource: {
@@ -6497,6 +6697,7 @@ export interface components {
             editor?: {
                 [key: string]: unknown;
             } | null;
+            field_drives?: components["schemas"]["FieldDriveListStateResource"];
             magnetization_assets?: {
                 [key: string]: unknown;
             }[];
@@ -6953,6 +7154,53 @@ export interface components {
             /** @description idle | running | paused | finished | error */
             state: string;
         };
+        SpinWaveGammaResource: {
+            detrend: string;
+            frequency_hz: number[];
+            frequency_unit: string;
+            normalization: string;
+            /** Format: double */
+            nyquist_hz: number;
+            peaks: components["schemas"]["SpinWavePeakResource"][];
+            primary_response_psd: number[];
+            /** Format: double */
+            reference_m0: number;
+            /** Format: double */
+            reference_m0_secondary: number;
+            response_component: string;
+            response_psd: number[];
+            response_spectrum_imag: number[];
+            response_spectrum_real: number[];
+            response_trace: number[];
+            schema_version: string;
+            secondary_response_psd: number[];
+            secondary_response_spectrum_imag: number[];
+            secondary_response_spectrum_real: number[];
+            secondary_response_trace: number[];
+            source_psd: number[];
+            source_spectrum_imag: number[];
+            source_spectrum_real: number[];
+            source_trace: number[];
+            source_unit: string;
+            susceptibility_abs: (number | null)[];
+            susceptibility_unit: string;
+            time_s: number[];
+            time_unit: string;
+            trace_unit: string;
+            transverse_components: string[];
+            weighting: string;
+            window: string;
+            /** Format: double */
+            window_power_sum: number;
+            window_values: number[];
+        };
+        SpinWavePeakResource: {
+            /** Format: double */
+            frequency_hz: number;
+            index: number;
+            /** Format: double */
+            power: number;
+        };
         StageExecutionRecordResource: {
             action?: string | null;
             artifact_refs?: string[];
@@ -7190,6 +7438,39 @@ export interface components {
             table_id: string;
             /** Format: int64 */
             total_rows: number;
+        };
+        TimeDependenceResource: {
+            /** @enum {string} */
+            kind: "constant";
+        } | {
+            /** Format: double */
+            frequency_hz: number;
+            /** @enum {string} */
+            kind: "sinusoidal";
+            /** Format: double */
+            offset?: number;
+            /** Format: double */
+            phase_rad?: number;
+        } | {
+            /** @enum {string} */
+            kind: "pulse";
+            /** Format: double */
+            t_off: number;
+            /** Format: double */
+            t_on: number;
+        } | {
+            /** @enum {string} */
+            kind: "piecewise_linear";
+            points: number[][];
+        } | {
+            /** Format: double */
+            amplitude?: number;
+            /** Format: double */
+            cutoff_hz: number;
+            /** @enum {string} */
+            kind: "sinc_pulse";
+            /** Format: double */
+            t0?: number;
         };
         TopologicalChargeExecutionProvenance: {
             backend: string;
@@ -8940,6 +9221,60 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HysteresisSettleTraceEntrySchema"][];
                 };
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_spin_wave_dynamic_structure_factor_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Finite-k dynamic structure factor */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DynamicStructureFactorResource"];
+                };
+            };
+            /** @description No finite-k spin-wave artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    analysis_get_sessions_current_analysis_spin_wave_gamma_v1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Moment-weighted Γ time trace and spectrum */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpinWaveGammaResource"];
+                };
+            };
+            /** @description No Γ spin-wave response artifact */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -12370,6 +12705,160 @@ export interface operations {
                 content?: never;
             };
             /** @description Coupling not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_get_sessions_current_model_field_drives: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical regional field drives */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldDriveListResource"];
+                };
+            };
+            /** @description No active workspace or scene document */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_post_sessions_current_model_field_drives: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldDriveCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created a regional field drive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Invalid field drive */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict or duplicate field drive */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_put_sessions_current_model_field_drives_drive_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable field drive id */
+                drive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldDriveReplaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Replaced a regional field drive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Invalid field drive */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Field drive not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revision conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    model_delete_sessions_current_model_field_drives_drive_id: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable field drive id */
+                drive_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FieldDriveDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Deleted a regional field drive */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthoringTransactionResponse"];
+                };
+            };
+            /** @description Field drive not found */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -11,6 +11,45 @@ function gammaSource() {
   };
 }
 
+export interface SpinWaveGammaSamplingSummary {
+  status: "ready" | "insufficient" | "nonuniform";
+  message: string | null;
+  sampleCount: number;
+  samplePeriodS: number | null;
+  durationS: number | null;
+  frequencyResolutionHz: number | null;
+  nyquistHz: number | null;
+}
+
+export function spinWaveGammaSamplingSummary(
+  resource: SpinWaveGammaResource | null,
+): SpinWaveGammaSamplingSummary {
+  const time = resource?.time_s ?? [];
+  if (time.length < 2) {
+    return { status: "insufficient", message: "At least two time samples are required for FFT diagnostics.", sampleCount: time.length, samplePeriodS: null, durationS: null, frequencyResolutionHz: null, nyquistHz: resource?.nyquist_hz ?? null };
+  }
+  const samplePeriodS = time[1] - time[0];
+  const tolerance = Math.abs(samplePeriodS) * 1e-9 + Number.EPSILON;
+  const uniform = samplePeriodS > 0 && time.slice(1).every((value, index) =>
+    Math.abs((value - time[index]) - samplePeriodS) <= tolerance,
+  );
+  if (!uniform) {
+    return { status: "nonuniform", message: "Nonuniform t_sampling: response FFT is not certified. Resampling must be requested explicitly.", sampleCount: time.length, samplePeriodS: null, durationS: time.at(-1)! - time[0], frequencyResolutionHz: null, nyquistHz: null };
+  }
+  const frequencyResolutionHz = resource && resource.frequency_hz.length > 1
+    ? resource.frequency_hz[1] - resource.frequency_hz[0]
+    : 1 / (time.length * samplePeriodS);
+  return {
+    status: "ready",
+    message: null,
+    sampleCount: time.length,
+    samplePeriodS,
+    durationS: time.at(-1)! - time[0],
+    frequencyResolutionHz,
+    nyquistHz: resource?.nyquist_hz ?? 1 / (2 * samplePeriodS),
+  };
+}
+
 export function spinWaveGammaSeries(
   resource: SpinWaveGammaResource | null,
 ): ChartSeries[] {
