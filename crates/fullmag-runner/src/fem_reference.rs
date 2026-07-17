@@ -326,7 +326,9 @@ pub(crate) fn build_problem_and_state(
         dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
             max_error: adaptive.atol,
             dt_min: adaptive.dt_min,
-            dt_max: adaptive.dt_max.unwrap_or(crate::DEFAULT_ADAPTIVE_DT_MAX),
+            dt_max: adaptive.dt_max.ok_or_else(|| RunError {
+                message: "adaptive timestep requires explicit dt_max".to_string(),
+            })?,
             headroom: adaptive.safety,
             rtol: adaptive.rtol,
             growth_limit: if adaptive.growth_limit == 0.0 {
@@ -462,16 +464,21 @@ pub(crate) fn build_problem_and_state(
     Ok((problem, state))
 }
 
-pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
+pub(crate) fn execution_provenance(plan: &FemPlanIR) -> Result<ExecutionProvenance, RunError> {
     let resolved_demag_realization = reference_demag_provenance_name(plan);
-    let dt_policy = if plan.adaptive_timestep.is_some() {
-        Some("adaptive".to_string())
-    } else if plan.fixed_timestep.is_some() {
-        Some("user".to_string())
-    } else {
-        // No fallback: execute_reference_fem_impl returns an error
-        // if neither fixed nor adaptive timestep is configured.
+    let timestep_policy = if crate::relaxation::direct_minimizer::direct_minimizer_control(
+        plan.relaxation.as_ref(),
+    )
+    .is_some()
+    {
         None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fem_cpu(plan.precision),
+        )?)
     };
     let mut provenance = ExecutionProvenance {
         execution_engine: FemBackendId::CpuBaseline.provenance_name().to_string(),
@@ -488,11 +495,11 @@ pub(crate) fn execution_provenance(plan: &FemPlanIR) -> ExecutionProvenance {
             .demag_realization
             .map(|r| r.provenance_name().to_string()),
         resolved_demag_realization,
-        dt_policy,
+        timestep_policy,
         ..Default::default()
     };
     crate::relaxation::apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
-    provenance
+    Ok(provenance)
 }
 
 fn reference_demag_provenance_name(plan: &FemPlanIR) -> Option<String> {
@@ -541,16 +548,16 @@ fn execute_reference_fem_impl(
     };
     let initial_magnetization = state.magnetization().to_vec();
 
-    let mut dt =
-        crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-            .ok_or_else(|| RunError {
-                message: "no fixed_timestep or adaptive_timestep specified; \
-                      please set an explicit timestep in your dynamics configuration"
-                    .to_string(),
-            })?;
+    let timestep_policy = crate::resolve_timestep_policy(
+        plan.integrator,
+        plan.fixed_timestep,
+        plan.adaptive_timestep.as_ref(),
+        crate::types::TimestepExecutionLane::fem_cpu(plan.precision),
+    )?;
+    let mut dt = timestep_policy.initial_dt();
     let mut steps = Vec::new();
     let mut step_count = 0u64;
-    let provenance = execution_provenance(plan);
+    let provenance = execution_provenance(plan)?;
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -2102,7 +2109,7 @@ mod tests {
         let plan = make_shared_domain_airbox_demag_plan();
         let (_problem, _state) = build_problem_and_state(&plan)
             .expect("shared-domain FEM airbox problem should build in reference runner");
-        let provenance = execution_provenance(&plan);
+        let provenance = execution_provenance(&plan).unwrap();
 
         assert_eq!(
             provenance.demag_operator_kind.as_deref(),
@@ -2123,7 +2130,7 @@ mod tests {
     #[test]
     fn baseline_provenance_defaults_implicit_demag_to_fem_poisson() {
         let plan = make_test_plan(true);
-        let provenance = execution_provenance(&plan);
+        let provenance = execution_provenance(&plan).unwrap();
 
         assert_eq!(provenance.execution_engine, "fem_cpu_baseline_internal");
         assert_eq!(provenance.requested_demag_realization, None);
@@ -2237,5 +2244,27 @@ mod tests {
             final_time < 1e-9,
             "FEM relaxation should stop early, got final_time={final_time}"
         );
+    }
+
+    #[test]
+    fn direct_minimizer_fem_provenance_has_no_physical_timestep_policy() {
+        let plan = FemPlanIR {
+            integrator: None,
+            fixed_timestep: None,
+            adaptive_timestep: None,
+            relaxation: Some(RelaxationControlIR {
+                algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+                stop: fullmag_ir::RelaxStopIR {
+                    torque_tolerance_apm: Some(1e-6),
+                    energy_tolerance_j: None,
+                    max_steps: Some(100),
+                    max_relaxation_time_s: None,
+                },
+            }),
+            ..make_test_plan(false)
+        };
+
+        let provenance = execution_provenance(&plan).expect("direct minimizer provenance");
+        assert!(provenance.timestep_policy.is_none());
     }
 }

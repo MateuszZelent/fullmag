@@ -47,24 +47,206 @@ mod time_dependence;
 mod time_events;
 mod types;
 
-// ── Shared runner defaults (FEM-040) ─────────────────────────────────────
-/// Default maximum timestep for adaptive stepping when the user provides none.
-const DEFAULT_ADAPTIVE_DT_MAX: f64 = 1e-10;
-/// Default initial timestep seed when adaptive stepping is enabled but no
-/// meaningful `dt_initial` was provided.
-pub(crate) const DEFAULT_ADAPTIVE_DT_INITIAL: f64 = 1e-13;
+use types::TimestepExecutionLane;
 
-pub(crate) fn resolve_initial_timestep(
+// ── Shared runner defaults (FEM-040) ─────────────────────────────────────
+#[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+pub(crate) const NON_LLG_RELAXATION_ABI_DT_PLACEHOLDER: f64 = 1e-13;
+
+pub(crate) fn resolve_timestep_policy(
+    integrator: Option<fullmag_ir::IntegratorChoice>,
     fixed_timestep: Option<f64>,
     adaptive_timestep: Option<&fullmag_ir::AdaptiveTimeStepIR>,
-) -> Option<f64> {
-    fixed_timestep.or_else(|| {
-        adaptive_timestep.map(|adaptive| {
-            adaptive
-                .dt_initial
-                .filter(|dt_initial| (*dt_initial - adaptive.dt_min).abs() > f64::EPSILON)
-                .unwrap_or(DEFAULT_ADAPTIVE_DT_INITIAL)
-        })
+    execution_lane: TimestepExecutionLane,
+) -> Result<TimestepPolicyProvenance, RunError> {
+    use fullmag_ir::IntegratorChoice;
+
+    let integrator = integrator.ok_or_else(|| RunError {
+        message: "timestep policy requires an explicit integrator".to_string(),
+    })?;
+    match (fixed_timestep, adaptive_timestep) {
+        (Some(_), Some(_)) | (None, None) => Err(RunError {
+            message: "timestep policy requires exactly one of fixed_timestep or adaptive_timestep"
+                .to_string(),
+        }),
+        (Some(timestep_s), None) => {
+            if !timestep_s.is_finite() || timestep_s <= 0.0 {
+                return Err(RunError {
+                    message: "fixed_timestep must be finite and positive".to_string(),
+                });
+            }
+            Ok(TimestepPolicyProvenance {
+                requested: RequestedTimestepPolicy::Fixed {
+                    integrator,
+                    timestep_s,
+                },
+                resolved: ResolvedTimestepPolicy::Fixed {
+                    integrator,
+                    timestep_s,
+                },
+                execution_identity: resolve_timestep_execution_identity(execution_lane, false)?,
+            })
+        }
+        (None, Some(adaptive)) => {
+            let estimator_order = match integrator {
+                IntegratorChoice::Rk23 => 2,
+                IntegratorChoice::Rk45 => 4,
+                _ => {
+                    return Err(RunError {
+                        message: format!(
+                            "adaptive timestep requires rk23 or rk45, got {integrator:?}"
+                        ),
+                    });
+                }
+            };
+            let dt_max_s = adaptive.dt_max.ok_or_else(|| RunError {
+                message: "adaptive timestep requires explicit dt_max".to_string(),
+            })?;
+            if !adaptive.dt_min.is_finite()
+                || adaptive.dt_min <= 0.0
+                || !dt_max_s.is_finite()
+                || dt_max_s < adaptive.dt_min
+            {
+                return Err(RunError {
+                    message: "adaptive timestep requires 0 < dt_min <= dt_max".to_string(),
+                });
+            }
+            if !adaptive.atol.is_finite()
+                || adaptive.atol < 0.0
+                || !adaptive.rtol.is_finite()
+                || adaptive.rtol < 0.0
+                || (adaptive.atol == 0.0 && adaptive.rtol == 0.0)
+            {
+                return Err(RunError {
+                    message: "adaptive tolerances must be finite, non-negative, and not both zero"
+                        .to_string(),
+                });
+            }
+            if matches!(
+                adaptive.tolerance_mode,
+                fullmag_ir::AdaptiveToleranceModeIR::MaxError
+            ) && (adaptive.atol <= 0.0 || adaptive.rtol != 0.0)
+            {
+                return Err(RunError {
+                    message: "max_error tolerance mode requires atol > 0 and rtol == 0"
+                        .to_string(),
+                });
+            }
+            if !adaptive.safety.is_finite()
+                || adaptive.safety <= 0.0
+                || adaptive.safety > 1.0
+                || !adaptive.growth_limit.is_finite()
+                || adaptive.growth_limit <= 1.0
+                || !adaptive.shrink_limit.is_finite()
+                || adaptive.shrink_limit <= 0.0
+                || adaptive.shrink_limit >= 1.0
+            {
+                return Err(RunError {
+                    message: "adaptive controller requires 0 < safety <= 1, growth_limit > 1, and 0 < shrink_limit < 1"
+                        .to_string(),
+                });
+            }
+            if adaptive
+                .max_spin_rotation
+                .is_some_and(|value| !value.is_finite() || value <= 0.0)
+                || adaptive
+                    .norm_tolerance
+                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
+            {
+                return Err(RunError {
+                    message: "adaptive guards must be finite and positive".to_string(),
+                });
+            }
+            let (dt_initial_s, dt_initial_reason) = match adaptive.dt_initial {
+                Some(value) => (value, InitialTimestepReason::Explicit),
+                None => (adaptive.dt_min, InitialTimestepReason::DtMinDefault),
+            };
+            if !dt_initial_s.is_finite()
+                || dt_initial_s < adaptive.dt_min
+                || dt_initial_s > dt_max_s
+            {
+                return Err(RunError {
+                    message: "adaptive dt_initial must satisfy dt_min <= dt_initial <= dt_max"
+                        .to_string(),
+                });
+            }
+            Ok(TimestepPolicyProvenance {
+                requested: RequestedTimestepPolicy::Adaptive {
+                    integrator,
+                    tolerance_mode: adaptive.tolerance_mode,
+                    atol: adaptive.atol,
+                    rtol: adaptive.rtol,
+                    dt_initial_s: adaptive.dt_initial,
+                    dt_min_s: adaptive.dt_min,
+                    dt_max_s,
+                    safety: adaptive.safety,
+                    growth_limit: adaptive.growth_limit,
+                    shrink_limit: adaptive.shrink_limit,
+                    max_spin_rotation: adaptive.max_spin_rotation,
+                    norm_tolerance: adaptive.norm_tolerance,
+                },
+                resolved: ResolvedTimestepPolicy::Adaptive {
+                    integrator,
+                    estimator_order,
+                    tolerance_mode: adaptive.tolerance_mode,
+                    atol: adaptive.atol,
+                    rtol: adaptive.rtol,
+                    dt_initial_s,
+                    dt_initial_reason,
+                    dt_min_s: adaptive.dt_min,
+                    dt_max_s,
+                    safety: adaptive.safety,
+                    growth_limit: adaptive.growth_limit,
+                    shrink_limit: adaptive.shrink_limit,
+                    max_spin_rotation: adaptive.max_spin_rotation,
+                    norm_tolerance: adaptive.norm_tolerance,
+                },
+                execution_identity: resolve_timestep_execution_identity(execution_lane, true)?,
+            })
+        }
+    }
+}
+
+fn resolve_timestep_execution_identity(
+    lane: TimestepExecutionLane,
+    adaptive: bool,
+) -> Result<TimestepExecutionIdentity, RunError> {
+    use fullmag_ir::ExecutionPrecision::{Double, Single};
+    use LlgTimestepQualificationId::*;
+    use TimestepBackend::{Fdm, Fem};
+    use TimestepDevice::{Cpu, Cuda, Gpu};
+
+    let qualification_id = match (
+        adaptive,
+        lane.backend,
+        lane.device,
+        lane.precision,
+    ) {
+        (false, Fdm, Cpu, Double) => ExplicitFixedFdmCpuDouble,
+        (false, Fdm, Cuda, Double) => ExplicitFixedFdmCudaDouble,
+        (false, Fdm, Cuda, Single) => ExplicitFixedFdmCudaSingle,
+        (false, Fem, Cpu, Double) => ExplicitFixedFemCpuDouble,
+        (false, Fem, Gpu, Double) => ExplicitFixedFemGpuDouble,
+        (true, Fdm, Cpu, Double) => ExplicitAdaptiveFdmCpuDouble,
+        (true, Fem, Cpu, Double) => ExplicitAdaptiveFemCpuDouble,
+        (true, Fem, Gpu, Double) => ExplicitAdaptiveFemGpuDouble,
+        _ => {
+            return Err(RunError {
+                message: format!(
+                    "no executable LLG timestep capability row for adaptive={adaptive}, backend={:?}, device={:?}, precision={:?}",
+                    lane.backend, lane.device, lane.precision
+                ),
+            });
+        }
+    };
+
+    Ok(TimestepExecutionIdentity {
+        capability_id: LlgTimestepCapabilityId::LlgTdPolicyV1,
+        qualification_id,
+        backend: lane.backend,
+        device: lane.device,
+        precision: lane.precision,
+        validation_state: TimestepValidationState::Unvalidated,
     })
 }
 
@@ -96,9 +278,12 @@ pub use solver_profile::{
 };
 pub use types::{
     fem_mesh_topology_fingerprint, ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment,
-    FemMeshPartPayload, FemMeshPayload, LivePreviewField, LivePreviewRequest,
-    LiveVectorFieldSnapshot, ResolvedFallback, RunError, RunResult, RunStatus, RuntimeEngineInfo,
-    StepAction, StepStats, StepUpdate,
+    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
+    LlgTimestepCapabilityId, LlgTimestepQualificationId, LivePreviewField, LivePreviewRequest,
+    LiveVectorFieldSnapshot, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
+    RunError, RunResult, RunStatus, RuntimeEngineInfo, StepAction, StepStats, StepUpdate,
+    TimestepBackend, TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
+    TimestepValidationState,
 };
 
 use crate::capabilities::{
@@ -748,82 +933,237 @@ fn explicit_selection_from_problem(problem: &ProblemIR) -> bool {
 #[cfg(test)]
 mod initial_timestep_tests {
     use super::{
-        is_native_fem_cpu_available, is_native_fem_time_domain_available, resolve_initial_timestep,
+        is_native_fem_cpu_available, is_native_fem_time_domain_available, resolve_timestep_policy,
+        InitialTimestepReason, LlgTimestepQualificationId, RequestedTimestepPolicy,
+        ResolvedTimestepPolicy, TimestepExecutionLane,
     };
 
-    #[test]
-    fn resolve_initial_timestep_prefers_fixed_value() {
-        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
+    fn adaptive(dt_initial: Option<f64>) -> fullmag_ir::AdaptiveTimeStepIR {
+        fullmag_ir::AdaptiveTimeStepIR {
             tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
             atol: 1e-6,
             rtol: 1e-3,
-            dt_initial: Some(5e-14),
+            dt_initial,
             dt_min: 1e-15,
-            dt_max: None,
+            dt_max: Some(1e-12),
             safety: 0.9,
             growth_limit: 2.0,
             shrink_limit: 0.2,
             max_spin_rotation: None,
             norm_tolerance: None,
-        };
-        assert_eq!(
-            resolve_initial_timestep(Some(2e-13), Some(&adaptive)),
-            Some(2e-13)
-        );
+        }
     }
 
     #[test]
-    fn resolve_initial_timestep_uses_adaptive_seed_when_meaningful() {
-        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
-            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
-            atol: 1e-6,
-            rtol: 1e-3,
-            dt_initial: Some(5e-14),
-            dt_min: 1e-15,
-            dt_max: None,
-            safety: 0.9,
-            growth_limit: 2.0,
-            shrink_limit: 0.2,
-            max_spin_rotation: None,
-            norm_tolerance: None,
-        };
-        assert_eq!(resolve_initial_timestep(None, Some(&adaptive)), Some(5e-14));
+    fn fixed_and_adaptive_together_fail_closed() {
+        let error = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            Some(2e-13),
+            Some(&adaptive(Some(5e-14))),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .expect_err("exactly-one policy must reject both");
+        assert!(error.message.contains("exactly one"));
     }
 
     #[test]
-    fn resolve_initial_timestep_falls_back_when_seed_matches_dt_min() {
-        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
-            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
-            atol: 1e-6,
-            rtol: 1e-3,
-            dt_initial: Some(1e-15),
-            dt_min: 1e-15,
-            dt_max: None,
-            safety: 0.9,
-            growth_limit: 2.0,
-            shrink_limit: 0.2,
-            max_spin_rotation: None,
-            norm_tolerance: None,
-        };
-        assert_eq!(resolve_initial_timestep(None, Some(&adaptive)), Some(1e-13));
+    fn explicit_initial_equal_to_min_remains_explicit() {
+        let policy = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            None,
+            Some(&adaptive(Some(1e-15))),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .unwrap();
+        assert!(matches!(
+            policy.requested,
+            RequestedTimestepPolicy::Adaptive {
+                dt_initial_s: Some(1e-15),
+                ..
+            }
+        ));
+        assert!(matches!(
+            policy.resolved,
+            ResolvedTimestepPolicy::Adaptive {
+                dt_initial_s: 1e-15,
+                dt_initial_reason: InitialTimestepReason::Explicit,
+                estimator_order: 4,
+                ..
+            }
+        ));
     }
 
     #[test]
-    fn resolve_initial_timestep_falls_back_when_seed_missing() {
-        let adaptive = fullmag_ir::AdaptiveTimeStepIR {
-            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
-            atol: 1e-6,
-            rtol: 1e-3,
-            dt_initial: None,
-            dt_min: 1e-15,
-            dt_max: None,
-            safety: 0.9,
-            growth_limit: 2.0,
-            shrink_limit: 0.2,
-            max_spin_rotation: None,
-            norm_tolerance: None,
-        };
-        assert_eq!(resolve_initial_timestep(None, Some(&adaptive)), Some(1e-13));
+    fn missing_initial_resolves_exactly_to_dt_min() {
+        let policy = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk23),
+            None,
+            Some(&adaptive(None)),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .unwrap();
+        assert!(matches!(
+            policy.requested,
+            RequestedTimestepPolicy::Adaptive {
+                dt_initial_s: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            policy.resolved,
+            ResolvedTimestepPolicy::Adaptive {
+                dt_initial_s: 1e-15,
+                dt_initial_reason: InitialTimestepReason::DtMinDefault,
+                estimator_order: 2,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn adaptive_missing_dt_max_fails_closed() {
+        let mut config = adaptive(None);
+        config.dt_max = None;
+        let error = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            None,
+            Some(&config),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("dt_max"));
+    }
+
+    #[test]
+    fn adaptive_policy_rejects_invalid_controller_values() {
+        let invalid_configs: Vec<(&str, Box<dyn Fn(&mut fullmag_ir::AdaptiveTimeStepIR)>)> = vec![
+            ("negative atol", Box::new(|config| config.atol = -1.0)),
+            ("non-finite rtol", Box::new(|config| config.rtol = f64::NAN)),
+            (
+                "both tolerances zero",
+                Box::new(|config| {
+                    config.atol = 0.0;
+                    config.rtol = 0.0;
+                }),
+            ),
+            ("safety above one", Box::new(|config| config.safety = 1.1)),
+            (
+                "growth not above one",
+                Box::new(|config| config.growth_limit = 1.0),
+            ),
+            (
+                "shrink not below one",
+                Box::new(|config| config.shrink_limit = 1.0),
+            ),
+            (
+                "invalid rotation guard",
+                Box::new(|config| config.max_spin_rotation = Some(0.0)),
+            ),
+            (
+                "invalid norm guard",
+                Box::new(|config| config.norm_tolerance = Some(f64::INFINITY)),
+            ),
+        ];
+
+        for (case, mutate) in invalid_configs {
+            let mut config = adaptive(None);
+            mutate(&mut config);
+            assert!(
+                resolve_timestep_policy(
+                    Some(fullmag_ir::IntegratorChoice::Rk45),
+                    None,
+                    Some(&config),
+                    TimestepExecutionLane::fdm_cpu(),
+                )
+                .is_err(),
+                "{case} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn max_error_policy_accepts_zero_rtol() {
+        let mut config = adaptive(None);
+        config.tolerance_mode = fullmag_ir::AdaptiveToleranceModeIR::MaxError;
+        config.atol = 1e-6;
+        config.rtol = 0.0;
+        resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            None,
+            Some(&config),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .expect("max_error uses atol and permits rtol=0");
+    }
+
+    #[test]
+    fn max_error_policy_rejects_nonzero_rtol() {
+        let mut config = adaptive(None);
+        config.tolerance_mode = fullmag_ir::AdaptiveToleranceModeIR::MaxError;
+        config.atol = 1e-6;
+        config.rtol = 1e-3;
+        let error = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            None,
+            Some(&config),
+            TimestepExecutionLane::fdm_cpu(),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("rtol == 0"));
+    }
+
+    #[test]
+    fn timestep_execution_identity_roundtrips_for_all_explicit_runtime_lanes() {
+        let cases = [
+            (
+                TimestepExecutionLane::fdm_cpu(),
+                LlgTimestepQualificationId::ExplicitFixedFdmCpuDouble,
+            ),
+            (
+                TimestepExecutionLane::fdm_cuda(fullmag_ir::ExecutionPrecision::Double),
+                LlgTimestepQualificationId::ExplicitFixedFdmCudaDouble,
+            ),
+            (
+                TimestepExecutionLane::fem_cpu(fullmag_ir::ExecutionPrecision::Double),
+                LlgTimestepQualificationId::ExplicitFixedFemCpuDouble,
+            ),
+            (
+                TimestepExecutionLane::fem_gpu(fullmag_ir::ExecutionPrecision::Double),
+                LlgTimestepQualificationId::ExplicitFixedFemGpuDouble,
+            ),
+        ];
+
+        for (lane, expected_qualification) in cases {
+            let policy = resolve_timestep_policy(
+                Some(fullmag_ir::IntegratorChoice::Rk45),
+                Some(1e-15),
+                None,
+                lane,
+            )
+            .expect("fixed timestep lane must resolve");
+            let roundtrip: super::TimestepPolicyProvenance =
+                serde_json::from_value(serde_json::to_value(&policy).unwrap()).unwrap();
+            assert_eq!(roundtrip, policy);
+            assert_eq!(
+                roundtrip.execution_identity.qualification_id,
+                expected_qualification
+            );
+            assert_eq!(roundtrip.execution_identity.backend, lane.backend);
+            assert_eq!(roundtrip.execution_identity.device, lane.device);
+            assert_eq!(roundtrip.execution_identity.precision, lane.precision);
+        }
+    }
+
+    #[test]
+    fn adaptive_fdm_cuda_identity_fails_closed_until_controller_abi_is_complete() {
+        let error = resolve_timestep_policy(
+            Some(fullmag_ir::IntegratorChoice::Rk45),
+            None,
+            Some(&adaptive(None)),
+            TimestepExecutionLane::fdm_cuda(fullmag_ir::ExecutionPrecision::Double),
+        )
+        .expect_err("adaptive CUDA must not acquire executable provenance");
+        assert!(error.message.contains("no executable LLG timestep capability row"));
     }
 
     #[test]

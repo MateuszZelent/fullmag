@@ -86,7 +86,13 @@ pub(crate) fn execute_reference_fdm_multilayer(
             .map(|state| state.magnetization().to_vec())
             .collect::<Vec<_>>(),
     );
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let timestep_policy = crate::resolve_timestep_policy(
+        Some(plan.integrator),
+        plan.fixed_timestep,
+        None,
+        crate::types::TimestepExecutionLane::fdm_cpu(),
+    )?;
+    let dt = timestep_policy.initial_dt();
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
     let fft_backend = super::reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
@@ -114,6 +120,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         energy_minimizer_realization: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
+        timestep_policy: Some(timestep_policy),
         dt_policy: None,
         llg_mode: None,
         mfem_device: None,
@@ -1030,14 +1037,24 @@ mod tests {
     }
 
     #[test]
-    fn direct_cpu_multilayer_entry_rejects_adaptive_before_materialization() {
-        let mut plan = make_plan(false);
-        plan.integrator = IntegratorChoice::Rk45;
-        plan.fixed_timestep = None;
-        assert!(execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
-            .unwrap_err()
-            .message
-            .contains("adaptive time stepping"));
+    fn direct_cpu_multilayer_entry_requires_fixed_timestep_for_every_integrator() {
+        for integrator in [
+            IntegratorChoice::Heun,
+            IntegratorChoice::Rk4,
+            IntegratorChoice::Rk23,
+            IntegratorChoice::Rk45,
+            IntegratorChoice::Abm3,
+        ] {
+            let mut plan = make_plan(false);
+            plan.integrator = integrator;
+            plan.fixed_timestep = None;
+            let error = execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
+                .unwrap_err();
+            assert!(
+                error.message.contains("explicit fixed_timestep"),
+                "{integrator:?} must fail closed without fixed_timestep"
+            );
+        }
     }
 
     #[test]

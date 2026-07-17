@@ -143,17 +143,20 @@ fn optional_slice_ptr<T>(slice: &[T]) -> *const T {
 
 #[cfg(feature = "fem-gpu")]
 fn resolve_native_fem_plan_dt_seconds(plan: &fullmag_ir::FemPlanIR) -> Result<f64, RunError> {
-    if let Some(dt) =
-        crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-    {
-        return Ok(dt);
-    }
     if crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref()).is_some() {
-        return Ok(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        return Ok(crate::NON_LLG_RELAXATION_ABI_DT_PLACEHOLDER);
     }
-    Err(RunError {
-        message: "native FEM: no fixed_timestep or adaptive_timestep specified".to_string(),
-    })
+    crate::resolve_timestep_policy(
+        plan.integrator,
+        plan.fixed_timestep,
+        plan.adaptive_timestep.as_ref(),
+        if native_fem_plan_requests_gpu_mfem_device(plan) {
+            crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+        } else {
+            crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+        },
+    )
+    .map(|policy| policy.initial_dt())
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1662,13 +1665,24 @@ impl NativeFemBackend {
             .adaptive_timestep
             .as_ref()
             .map(|a| -> Result<ffi::fullmag_fem_adaptive_config, RunError> {
+                let policy = crate::resolve_timestep_policy(
+                    plan.integrator,
+                    plan.fixed_timestep,
+                    Some(a),
+                    if native_fem_plan_requests_gpu_mfem_device(plan) {
+                        crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+                    } else {
+                        crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+                    },
+                )?;
                 Ok(ffi::fullmag_fem_adaptive_config {
                     atol: a.atol,
                     rtol: a.rtol,
-                    dt_initial: crate::resolve_initial_timestep(plan.fixed_timestep, Some(a))
-                        .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL),
+                    dt_initial: policy.initial_dt(),
                     dt_min: a.dt_min,
-                    dt_max: a.dt_max.unwrap_or(crate::DEFAULT_ADAPTIVE_DT_MAX),
+                    dt_max: a.dt_max.ok_or_else(|| RunError {
+                        message: "adaptive timestep requires explicit dt_max".to_string(),
+                    })?,
                     safety: a.safety,
                     growth_limit: a.growth_limit,
                     shrink_limit: a.shrink_limit,
@@ -3263,7 +3277,7 @@ mod tests {
 
         assert_eq!(
             resolve_native_fem_plan_dt_seconds(&plan).expect("direct minimizer seed dt"),
-            crate::DEFAULT_ADAPTIVE_DT_INITIAL
+            crate::NON_LLG_RELAXATION_ABI_DT_PLACEHOLDER
         );
     }
 
@@ -3284,7 +3298,7 @@ mod tests {
 
         assert_eq!(
             resolve_native_fem_plan_dt_seconds(&plan).expect("TPI internal ABI seed"),
-            crate::DEFAULT_ADAPTIVE_DT_INITIAL
+            crate::NON_LLG_RELAXATION_ABI_DT_PLACEHOLDER
         );
         assert_eq!(plan.fixed_timestep, None);
         assert_eq!(plan.adaptive_timestep, None);
@@ -4686,11 +4700,18 @@ mod tests {
         let mut backend = NativeFemBackend::create(plan).expect("native fem parity create");
         let stats = backend
             .step(
-                crate::resolve_initial_timestep(
+                crate::resolve_timestep_policy(
+                    plan.integrator,
                     plan.fixed_timestep,
                     plan.adaptive_timestep.as_ref(),
+                    if native_fem_plan_requests_gpu_mfem_device(plan) {
+                        crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+                    } else {
+                        crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+                    },
                 )
-                .expect("parity plan timestep"),
+                .expect("parity plan timestep")
+                .initial_dt(),
             )
             .expect("native fem parity step");
         let node_count = plan.mesh.nodes.len();

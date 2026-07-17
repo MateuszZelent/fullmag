@@ -24,12 +24,14 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
             .map(|state| state.magnetization().to_vec())
             .collect::<Vec<_>>(),
     );
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let dt = plan.fixed_timestep.ok_or_else(|| RunError {
+        message: "multilayer FDM requires an explicit fixed_timestep".to_string(),
+    })?;
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
     let native_demag_enabled = native_demag.is_some();
     let provenance =
-        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled);
+        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled)?;
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {

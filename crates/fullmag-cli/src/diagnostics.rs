@@ -162,7 +162,9 @@ pub(crate) fn diagnose_initial_fdm_plan(plan: &FdmPlanIR) -> Result<InitialState
         dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
             max_error: adaptive.atol,
             dt_min: adaptive.dt_min,
-            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            dt_max: adaptive
+                .dt_max
+                .ok_or_else(|| anyhow!("adaptive timestep requires explicit dt_max"))?,
             headroom: adaptive.safety,
             rtol: adaptive.rtol,
             growth_limit: if adaptive.growth_limit == 0.0 {
@@ -234,7 +236,9 @@ pub(crate) fn diagnose_initial_fem_plan(plan: &FemPlanIR) -> Result<InitialState
         dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
             max_error: adaptive.atol,
             dt_min: adaptive.dt_min,
-            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            dt_max: adaptive
+                .dt_max
+                .ok_or_else(|| anyhow!("adaptive timestep requires explicit dt_max"))?,
             headroom: adaptive.safety,
             rtol: adaptive.rtol,
             growth_limit: if adaptive.growth_limit == 0.0 {

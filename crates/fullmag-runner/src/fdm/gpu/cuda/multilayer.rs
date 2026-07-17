@@ -438,12 +438,14 @@ fn execute_cuda_assisted_multilayer_double(
             .map(|state| state.magnetization().to_vec())
             .collect::<Vec<_>>(),
     );
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let dt = plan.fixed_timestep.ok_or_else(|| RunError {
+        message: "multilayer FDM requires an explicit fixed_timestep".to_string(),
+    })?;
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
     let native_demag_enabled = native_demag.is_some();
     let provenance =
-        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled);
+        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled)?;
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -672,12 +674,14 @@ fn execute_cuda_assisted_multilayer_single(
         .and_then(|gpu| gpu.backend.device_info().ok());
 
     let initial_magnetization = flatten_layers_single(&states);
-    let dt = plan.fixed_timestep.unwrap_or(1e-13);
+    let dt = plan.fixed_timestep.ok_or_else(|| RunError {
+        message: "multilayer FDM requires an explicit fixed_timestep".to_string(),
+    })?;
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count = 0u64;
     let native_demag_enabled = native_demag.is_some();
     let provenance =
-        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled);
+        assisted_multilayer_provenance(plan, device_info.clone(), native_demag_enabled)?;
     let mut artifacts = if let Some(writer) = artifact_writer {
         ArtifactRecorder::streaming(provenance.clone(), writer)
     } else {
@@ -887,8 +891,14 @@ fn assisted_multilayer_provenance(
     plan: &FdmMultilayerPlanIR,
     device_info: Option<DeviceInfo>,
     native_demag_enabled: bool,
-) -> ExecutionProvenance {
-    ExecutionProvenance {
+) -> Result<ExecutionProvenance, RunError> {
+    let timestep_policy = crate::resolve_timestep_policy(
+        Some(plan.integrator),
+        plan.fixed_timestep,
+        None,
+        crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+    )?;
+    Ok(ExecutionProvenance {
         execution_engine: "cuda_assisted_multilayer".to_string(),
         precision: precision_name(plan.precision).to_string(),
         demag_operator_kind: if plan.enable_demag {
@@ -921,8 +931,9 @@ fn assisted_multilayer_provenance(
             .map(|info| info.compute_capability.clone()),
         cuda_driver_version: device_info.as_ref().map(|info| info.driver_version),
         cuda_runtime_version: device_info.as_ref().map(|info| info.runtime_version),
+        timestep_policy: Some(timestep_policy),
         ..Default::default()
-    }
+    })
 }
 
 fn build_native_stacked_cuda_plan(
@@ -1141,6 +1152,12 @@ fn execute_native_stacked_cuda_multilayer(
     let device_info = backend.device_info().ok();
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut steps: Vec<StepStats> = Vec::new();
+    let timestep_policy = crate::resolve_timestep_policy(
+        native.combined_plan.integrator,
+        native.combined_plan.fixed_timestep,
+        native.combined_plan.adaptive_timestep.as_ref(),
+        crate::types::TimestepExecutionLane::fdm_cuda(native.combined_plan.precision),
+    )?;
     let provenance = ExecutionProvenance {
         execution_engine: "cuda_native_multilayer_single_grid".to_string(),
         precision: precision_name(native.combined_plan.precision).to_string(),
@@ -1160,6 +1177,7 @@ fn execute_native_stacked_cuda_multilayer(
             .map(|info| info.compute_capability.clone()),
         cuda_driver_version: device_info.as_ref().map(|info| info.driver_version),
         cuda_runtime_version: device_info.as_ref().map(|info| info.runtime_version),
+        timestep_policy: Some(timestep_policy.clone()),
         ..Default::default()
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
@@ -1170,17 +1188,7 @@ fn execute_native_stacked_cuda_multilayer(
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;
     let default_scalar_trace = scalar_schedules.is_empty();
-    let mut dt = native
-        .combined_plan
-        .fixed_timestep
-        .or_else(|| {
-            native
-                .combined_plan
-                .adaptive_timestep
-                .as_ref()
-                .and_then(|a| a.dt_initial)
-        })
-        .unwrap_or(1e-13);
+    let mut dt = timestep_policy.initial_dt();
     let initial_magnetization = flatten_layers(
         &plan
             .layers

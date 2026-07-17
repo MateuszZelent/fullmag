@@ -76,12 +76,14 @@ pub fn pi_controller_dt(
     error_ratio: f64, // err / tol; < 1 means accept
     order_error_estimate: u32,
     cfg: &AdaptiveTimeStepIR,
-) -> f64 {
+) -> Result<f64, String> {
     let exponent = 1.0 / (order_error_estimate as f64 + 1.0);
     let factor = cfg.safety * error_ratio.powf(-exponent);
     let factor = factor.clamp(cfg.shrink_limit, cfg.growth_limit);
-    let dt_max = cfg.dt_max.unwrap_or(crate::DEFAULT_ADAPTIVE_DT_MAX);
-    (dt_current * factor).clamp(cfg.dt_min, dt_max)
+    let dt_max = cfg
+        .dt_max
+        .ok_or_else(|| "adaptive timestep requires explicit dt_max".to_string())?;
+    Ok((dt_current * factor).clamp(cfg.dt_min, dt_max))
 }
 
 /// Returns `true` if an error ratio ≤ 1.0 (step is accepted).
@@ -100,16 +102,18 @@ pub fn validate_adaptive_config(cfg: &AdaptiveTimeStepIR) -> Result<(), String> 
             cfg.dt_min
         ));
     }
-    let dt_max = cfg.dt_max.unwrap_or(crate::DEFAULT_ADAPTIVE_DT_MAX);
+    let dt_max = cfg
+        .dt_max
+        .ok_or_else(|| "adaptive timestep requires explicit dt_max".to_string())?;
     if dt_max <= cfg.dt_min {
         return Err(format!(
             "adaptive dt_max ({:.3e}) must exceed dt_min ({:.3e})",
             dt_max, cfg.dt_min
         ));
     }
-    if cfg.atol <= 0.0 || cfg.rtol <= 0.0 {
+    if cfg.atol < 0.0 || cfg.rtol < 0.0 || (cfg.atol == 0.0 && cfg.rtol == 0.0) {
         return Err(format!(
-            "adaptive atol and rtol must be positive, got atol={:.3e} rtol={:.3e}",
+            "adaptive atol and rtol must be non-negative and not both zero, got atol={:.3e} rtol={:.3e}",
             cfg.atol, cfg.rtol
         ));
     }

@@ -503,7 +503,9 @@ pub(crate) fn build_snapshot_problem_and_state(
         dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
             max_error: adaptive.atol,
             dt_min: adaptive.dt_min,
-            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            dt_max: adaptive.dt_max.ok_or_else(|| RunError {
+                message: "adaptive timestep requires explicit dt_max".to_string(),
+            })?,
             headroom: adaptive.safety,
             rtol: adaptive.rtol,
             growth_limit: if adaptive.growth_limit == 0.0 {
@@ -681,7 +683,9 @@ pub(crate) fn execute_reference_fdm(
         dynamics = dynamics.with_adaptive(AdaptiveStepConfig {
             max_error: adaptive.atol,
             dt_min: adaptive.dt_min,
-            dt_max: adaptive.dt_max.unwrap_or(1e-10),
+            dt_max: adaptive.dt_max.ok_or_else(|| RunError {
+                message: "adaptive timestep requires explicit dt_max".to_string(),
+            })?,
             headroom: adaptive.safety,
             rtol: adaptive.rtol,
             growth_limit: if adaptive.growth_limit == 0.0 {
@@ -766,9 +770,23 @@ pub(crate) fn execute_reference_fdm(
     let stage_end_time_s = plan.time_stage.start_time_s + until_seconds;
     let initial_magnetization = state.magnetization().to_vec();
 
-    let mut dt =
-        crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-            .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+    let is_direct_minimization = plan.relaxation.as_ref().is_some_and(|control| {
+        matches!(
+            control.algorithm,
+            RelaxationAlgorithmIR::ProjectedGradientBb | RelaxationAlgorithmIR::NonlinearCg
+        )
+    });
+    let timestep_policy = if is_direct_minimization {
+        None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cpu(),
+        )?)
+    };
+    let initial_dt = timestep_policy.as_ref().map(|policy| policy.initial_dt());
     let mut last_solver_dt = 0.0;
     let mut steps: Vec<StepStats> = Vec::new();
     let mut step_count: u64 = 0;
@@ -786,15 +804,10 @@ pub(crate) fn execute_reference_fdm(
         compute_capability: None,
         cuda_driver_version: None,
         cuda_runtime_version: None,
+        timestep_policy,
         ..Default::default()
     };
     apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
-    let is_direct_minimization = plan.relaxation.as_ref().is_some_and(|control| {
-        matches!(
-            control.algorithm,
-            RelaxationAlgorithmIR::ProjectedGradientBb | RelaxationAlgorithmIR::NonlinearCg
-        )
-    });
     if is_direct_minimization && problem.soa_fast_path_supported() {
         provenance.energy_minimizer_realization =
             Some(CPU_SOA_DIRECT_MINIMIZER_REALIZATION.to_string());
@@ -927,6 +940,7 @@ pub(crate) fn execute_reference_fdm(
         ));
     } else {
         // LLG overdamped (or no relaxation): existing time-stepping loop
+        let mut dt = initial_dt.expect("LLG execution requires a resolved timestep policy");
         let needs_initial_live_snapshot = live
             .as_ref()
             .is_some_and(|consumer| consumer.initial_snapshot);
@@ -4511,6 +4525,8 @@ mod tests {
     #[test]
     fn direct_minimization_provenance_names_cpu_minimizer_realization() {
         let plan = FdmPlanIR {
+            fixed_timestep: None,
+            adaptive_timestep: None,
             relaxation: Some(RelaxationControlIR {
                 algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
                 stop: fullmag_ir::RelaxStopIR {
@@ -4534,6 +4550,7 @@ mod tests {
             executed.provenance.resolved_energy_minimizer.as_deref(),
             Some("projected_gradient_bb")
         );
+        assert_eq!(executed.provenance.timestep_policy, None);
         assert_eq!(
             executed.provenance.energy_minimizer_realization.as_deref(),
             Some("cpu_soa_tangent_gradient")

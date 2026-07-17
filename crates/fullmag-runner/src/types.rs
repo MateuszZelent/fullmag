@@ -1715,6 +1715,184 @@ impl From<fullmag_plan::PlanError> for RunError {
 
 // ----- execution provenance -----
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InitialTimestepReason {
+    Explicit,
+    DtMinDefault,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RequestedTimestepPolicy {
+    Fixed {
+        integrator: fullmag_ir::IntegratorChoice,
+        timestep_s: f64,
+    },
+    Adaptive {
+        integrator: fullmag_ir::IntegratorChoice,
+        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR,
+        atol: f64,
+        rtol: f64,
+        dt_initial_s: Option<f64>,
+        dt_min_s: f64,
+        dt_max_s: f64,
+        safety: f64,
+        growth_limit: f64,
+        shrink_limit: f64,
+        max_spin_rotation: Option<f64>,
+        norm_tolerance: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ResolvedTimestepPolicy {
+    Fixed {
+        integrator: fullmag_ir::IntegratorChoice,
+        timestep_s: f64,
+    },
+    Adaptive {
+        integrator: fullmag_ir::IntegratorChoice,
+        estimator_order: u8,
+        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR,
+        atol: f64,
+        rtol: f64,
+        dt_initial_s: f64,
+        dt_initial_reason: InitialTimestepReason,
+        dt_min_s: f64,
+        dt_max_s: f64,
+        safety: f64,
+        growth_limit: f64,
+        shrink_limit: f64,
+        max_spin_rotation: Option<f64>,
+        norm_tolerance: Option<f64>,
+    },
+}
+
+impl ResolvedTimestepPolicy {
+    pub fn initial_dt(&self) -> f64 {
+        match self {
+            Self::Fixed { timestep_s, .. } => *timestep_s,
+            Self::Adaptive { dt_initial_s, .. } => *dt_initial_s,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TimestepPolicyProvenance {
+    pub requested: RequestedTimestepPolicy,
+    pub resolved: ResolvedTimestepPolicy,
+    pub execution_identity: TimestepExecutionIdentity,
+}
+
+impl TimestepPolicyProvenance {
+    pub fn initial_dt(&self) -> f64 {
+        self.resolved.initial_dt()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimestepBackend {
+    Fdm,
+    Fem,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimestepDevice {
+    Cpu,
+    Cuda,
+    Gpu,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LlgTimestepCapabilityId {
+    LlgTdPolicyV1,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LlgTimestepQualificationId {
+    ExplicitFixedFdmCpuDouble,
+    ExplicitFixedFdmCudaDouble,
+    ExplicitFixedFdmCudaSingle,
+    ExplicitFixedFemCpuDouble,
+    ExplicitFixedFemGpuDouble,
+    ExplicitAdaptiveFdmCpuDouble,
+    ExplicitAdaptiveFemCpuDouble,
+    ExplicitAdaptiveFemGpuDouble,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimestepValidationState {
+    Unvalidated,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimestepExecutionIdentity {
+    pub capability_id: LlgTimestepCapabilityId,
+    pub qualification_id: LlgTimestepQualificationId,
+    pub backend: TimestepBackend,
+    pub device: TimestepDevice,
+    pub precision: fullmag_ir::ExecutionPrecision,
+    pub validation_state: TimestepValidationState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TimestepExecutionLane {
+    pub backend: TimestepBackend,
+    pub device: TimestepDevice,
+    pub precision: fullmag_ir::ExecutionPrecision,
+}
+
+impl TimestepExecutionLane {
+    pub(crate) const fn fdm_cpu() -> Self {
+        Self {
+            backend: TimestepBackend::Fdm,
+            device: TimestepDevice::Cpu,
+            precision: fullmag_ir::ExecutionPrecision::Double,
+        }
+    }
+
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+    pub(crate) const fn fdm_cuda(precision: fullmag_ir::ExecutionPrecision) -> Self {
+        Self {
+            backend: TimestepBackend::Fdm,
+            device: TimestepDevice::Cuda,
+            precision,
+        }
+    }
+
+    pub(crate) const fn fem_cpu(precision: fullmag_ir::ExecutionPrecision) -> Self {
+        Self {
+            backend: TimestepBackend::Fem,
+            device: TimestepDevice::Cpu,
+            precision,
+        }
+    }
+
+    #[cfg_attr(not(feature = "fem-gpu"), allow(dead_code))]
+    pub(crate) const fn fem_gpu(precision: fullmag_ir::ExecutionPrecision) -> Self {
+        Self {
+            backend: TimestepBackend::Fem,
+            device: TimestepDevice::Gpu,
+            precision,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LegacyDtPolicy {
+    User,
+    Adaptive,
+    Fallback,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResolvedFallback {
     pub occurred: bool,
@@ -1804,9 +1982,12 @@ pub struct ExecutionProvenance {
     /// Demag realization actually used for execution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_demag_realization: Option<String>,
-    /// Timestep policy: "user", "adaptive", or "fallback".
+    /// Canonical requested and resolved timestep policy for LLG execution.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dt_policy: Option<String>,
+    pub timestep_policy: Option<TimestepPolicyProvenance>,
+    /// Read-only compatibility for artifacts written before `timestep_policy`.
+    #[serde(default, skip_serializing)]
+    pub dt_policy: Option<LegacyDtPolicy>,
     /// Resolved LLG RHS mode: "precessional" or "pure_damping".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub llg_mode: Option<String>,
@@ -2018,14 +2199,29 @@ pub(crate) struct StateObservables {
 #[cfg(test)]
 mod tests {
     use super::{
-        fem_mesh_topology_fingerprint, normalized_payload_element_markers, FemMeshPartPayload,
-        FemMeshPayload, LivePreviewField, StepStats, StepUpdate,
+        fem_mesh_topology_fingerprint, normalized_payload_element_markers, ExecutionProvenance,
+        FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
+        LlgTimestepCapabilityId, LlgTimestepQualificationId, LivePreviewField,
+        RequestedTimestepPolicy, ResolvedTimestepPolicy, StepStats, StepUpdate, TimestepBackend,
+        TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
+        TimestepValidationState,
     };
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FemDomainMeshModeIR, FemMeshPartIR,
         FemMeshPartRole, FemMeshPartSelector, FemPlanIR, IntegratorChoice, MaterialIR, MeshIR,
     };
     use std::collections::BTreeSet;
+
+    fn fdm_cpu_timestep_identity() -> TimestepExecutionIdentity {
+        TimestepExecutionIdentity {
+            capability_id: LlgTimestepCapabilityId::LlgTdPolicyV1,
+            qualification_id: LlgTimestepQualificationId::ExplicitFixedFdmCpuDouble,
+            backend: TimestepBackend::Fdm,
+            device: TimestepDevice::Cpu,
+            precision: ExecutionPrecision::Double,
+            validation_state: TimestepValidationState::Unvalidated,
+        }
+    }
 
     fn tiny_fem_plan() -> FemPlanIR {
         FemPlanIR {
@@ -2334,5 +2530,83 @@ mod tests {
         assert_eq!(frame.unit, spec.unit);
         assert_eq!(frame.n_comp, spec.n_comp);
         assert!(!frame.unit.is_empty());
+    }
+
+    #[test]
+    fn timestep_policy_serializes_without_legacy_dt_policy() {
+        let mut provenance = ExecutionProvenance::default();
+        provenance.timestep_policy = Some(TimestepPolicyProvenance {
+            requested: RequestedTimestepPolicy::Fixed {
+                integrator: IntegratorChoice::Heun,
+                timestep_s: 1e-15,
+            },
+            resolved: ResolvedTimestepPolicy::Fixed {
+                integrator: IntegratorChoice::Heun,
+                timestep_s: 1e-15,
+            },
+            execution_identity: fdm_cpu_timestep_identity(),
+        });
+        provenance.dt_policy = Some(LegacyDtPolicy::User);
+
+        let value = serde_json::to_value(provenance).unwrap();
+        assert!(value.get("timestep_policy").is_some());
+        assert!(value.get("dt_policy").is_none());
+    }
+
+    #[test]
+    fn legacy_dt_policy_is_read_only_and_bounded() {
+        let mut value = serde_json::to_value(ExecutionProvenance::default()).unwrap();
+        value["dt_policy"] = serde_json::json!("adaptive");
+        let provenance: ExecutionProvenance = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(provenance.dt_policy, Some(LegacyDtPolicy::Adaptive));
+
+        value["dt_policy"] = serde_json::json!("unknown_policy");
+        assert!(serde_json::from_value::<ExecutionProvenance>(value).is_err());
+    }
+
+    #[test]
+    fn adaptive_timestep_provenance_keeps_requested_and_resolved_values() {
+        let policy = TimestepPolicyProvenance {
+            requested: RequestedTimestepPolicy::Adaptive {
+                integrator: IntegratorChoice::Rk45,
+                tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+                atol: 1e-6,
+                rtol: 0.0,
+                dt_initial_s: None,
+                dt_min_s: 1e-16,
+                dt_max_s: 1e-14,
+                safety: 0.9,
+                growth_limit: 2.0,
+                shrink_limit: 0.2,
+                max_spin_rotation: None,
+                norm_tolerance: None,
+            },
+            resolved: ResolvedTimestepPolicy::Adaptive {
+                integrator: IntegratorChoice::Rk45,
+                estimator_order: 4,
+                tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+                atol: 1e-6,
+                rtol: 0.0,
+                dt_initial_s: 1e-16,
+                dt_initial_reason: InitialTimestepReason::DtMinDefault,
+                dt_min_s: 1e-16,
+                dt_max_s: 1e-14,
+                safety: 0.9,
+                growth_limit: 2.0,
+                shrink_limit: 0.2,
+                max_spin_rotation: None,
+                norm_tolerance: None,
+            },
+            execution_identity: TimestepExecutionIdentity {
+                qualification_id:
+                    LlgTimestepQualificationId::ExplicitAdaptiveFdmCpuDouble,
+                ..fdm_cpu_timestep_identity()
+            },
+        };
+
+        let value = serde_json::to_value(policy).unwrap();
+        assert_eq!(value["requested"]["dt_initial_s"], serde_json::Value::Null);
+        assert_eq!(value["resolved"]["dt_initial_s"], 1e-16);
+        assert_eq!(value["resolved"]["estimator_order"], 4);
     }
 }

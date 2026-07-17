@@ -217,8 +217,24 @@ fn execute_native_fem(
     }
     let node_count = plan.mesh.nodes.len();
     let initial_magnetization = backend.copy_m(node_count)?;
-    let dt = crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-        .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
+        plan.relaxation.as_ref(),
+    )
+    .is_some()
+    {
+        None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            if crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
+                crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+            } else {
+                crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+            },
+        )?)
+    };
     let dt_is_fixed = plan.fixed_timestep.is_some();
     let mut steps = Vec::new();
     let current_stats = if needs_initial_snapshot {
@@ -259,13 +275,8 @@ fn execute_native_fem(
         } else {
             None
         },
-        dt_policy: if plan.adaptive_timestep.is_some() {
-            Some("adaptive".to_string())
-        } else if plan.fixed_timestep.is_some() {
-            Some("user".to_string())
-        } else {
-            Some("fallback".to_string())
-        },
+        timestep_policy,
+        dt_policy: None,
         mfem_device: plan.mfem_device_string.clone(),
         demag_refresh_interval_s: plan
             .field_refresh
@@ -323,6 +334,11 @@ fn execute_native_fem(
         cancelled = outcome.cancelled;
         paused = outcome.paused;
     } else {
+        let dt = provenance
+            .timestep_policy
+            .as_ref()
+            .expect("LLG execution requires a resolved timestep policy")
+            .initial_dt();
         let outcome = crate::fem::relax::llg_overdamped::execute_llg_overdamped(
             &mut backend,
             plan,

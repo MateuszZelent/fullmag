@@ -336,8 +336,18 @@ fn run_native_parity_step(plan: &FemPlanIR) -> NativeParityStep {
     let mut backend = NativeFemBackend::create(plan).expect("native fem parity create");
     let stats = backend
         .step(
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .expect("parity plan timestep"),
+            crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                if native_fem_plan_requests_gpu_mfem_device(plan) {
+                    crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+                } else {
+                    crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+                },
+            )
+            .expect("parity plan timestep")
+            .initial_dt(),
         )
         .expect("native fem parity step");
     let node_count = plan.mesh.nodes.len();

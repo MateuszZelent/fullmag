@@ -220,6 +220,12 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
     let device_info = backend.device_info().ok();
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut steps: Vec<StepStats> = Vec::new();
+    let timestep_policy = crate::resolve_timestep_policy(
+        native.combined_plan.integrator,
+        native.combined_plan.fixed_timestep,
+        native.combined_plan.adaptive_timestep.as_ref(),
+        crate::types::TimestepExecutionLane::fdm_cuda(native.combined_plan.precision),
+    )?;
     let provenance = ExecutionProvenance {
         execution_engine: "cuda_native_multilayer_single_grid".to_string(),
         precision: precision_name(native.combined_plan.precision).to_string(),
@@ -239,6 +245,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
             .map(|info| info.compute_capability.clone()),
         cuda_driver_version: device_info.as_ref().map(|info| info.driver_version),
         cuda_runtime_version: device_info.as_ref().map(|info| info.runtime_version),
+        timestep_policy: Some(timestep_policy.clone()),
         ..Default::default()
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
@@ -249,17 +256,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
     let mut field_schedules = collect_field_schedules(outputs)?;
     let default_scalar_trace = scalar_schedules.is_empty();
-    let mut dt = native
-        .combined_plan
-        .fixed_timestep
-        .or_else(|| {
-            native
-                .combined_plan
-                .adaptive_timestep
-                .as_ref()
-                .and_then(|a| a.dt_initial)
-        })
-        .unwrap_or(1e-13);
+    let mut dt = timestep_policy.initial_dt();
     let initial_magnetization = flatten_layers(
         &plan
             .layers

@@ -70,9 +70,17 @@ pub(crate) fn execute_cuda_fdm(
         * (plan.grid.cells[1] as usize)
         * (plan.grid.cells[2] as usize);
     let initial_magnetization = backend.copy_m(cell_count)?;
-    let dt = crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-        .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
-
+    let timestep_policy = if direct_minimizer_control(plan.relaxation.as_ref()).is_some() {
+        None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+        )?)
+    };
+    let initial_dt = timestep_policy.as_ref().map(|policy| policy.initial_dt());
     let mut steps = Vec::new();
     let provenance = ExecutionProvenance {
         execution_engine: "cuda_fdm".to_string(),
@@ -94,6 +102,7 @@ pub(crate) fn execute_cuda_fdm(
         compute_capability: Some(device_info.compute_capability.clone()),
         cuda_driver_version: Some(device_info.driver_version),
         cuda_runtime_version: Some(device_info.runtime_version),
+        timestep_policy,
         ..Default::default()
     };
     let mut artifacts = if let Some(writer) = artifact_writer {
@@ -288,6 +297,7 @@ pub(crate) fn execute_cuda_fdm(
             }
         }
     } else {
+        let dt = initial_dt.expect("LLG execution requires a resolved timestep policy");
         while current_time < until_seconds {
             if let Some(live) = live.as_mut() {
                 if let Some(display_selection) = live.display_selection.map(|get| get()) {

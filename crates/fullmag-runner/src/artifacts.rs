@@ -3074,6 +3074,9 @@ mod tests {
     }
 
     fn test_execution_plan(active_mask: Option<Vec<bool>>) -> ExecutionPlanIR {
+        let active_cells = active_mask
+            .as_deref()
+            .map_or(8, |mask| mask.iter().filter(|active| **active).count() as u64);
         ExecutionPlanIR {
             common: CommonPlanMeta {
                 ir_version: "v0".to_string(),
@@ -3090,7 +3093,7 @@ mod tests {
                         [0.0, 0.0, 0.0],
                         [4, 2, 1],
                         [2e-9, 2e-9, 5e-9],
-                        8,
+                        active_cells,
                         8 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
                         active_mask.as_deref(),
                         &[0; 8],
@@ -4986,6 +4989,7 @@ mod tests {
             energy_minimizer_realization: None,
             requested_demag_realization: None,
             resolved_demag_realization: None,
+            timestep_policy: None,
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,
@@ -5848,6 +5852,7 @@ mod tests {
             energy_minimizer_realization: None,
             requested_demag_realization: None,
             resolved_demag_realization: None,
+            timestep_policy: None,
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,

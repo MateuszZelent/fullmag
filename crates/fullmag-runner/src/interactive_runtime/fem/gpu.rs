@@ -102,9 +102,13 @@ impl GpuInteractiveFemPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fem_gpu(plan.precision),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -342,9 +346,13 @@ impl GpuInteractiveFemPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fem_gpu(plan.precision),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,

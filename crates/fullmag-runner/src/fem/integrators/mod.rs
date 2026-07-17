@@ -6,7 +6,7 @@
 pub mod adaptive;
 pub mod fixed;
 
-use fullmag_ir::{AdaptiveTimeStepIR, IntegratorChoice};
+use fullmag_ir::IntegratorChoice;
 
 // ── Integrator families ───────────────────────────────────────────────────────
 
@@ -89,33 +89,5 @@ pub fn integrator_label(choice: IntegratorChoice) -> &'static str {
         IntegratorChoice::Rk23 => "rk23",
         IntegratorChoice::Rk45 => "rk45",
         IntegratorChoice::Abm3 => "abm3",
-    }
-}
-
-// ── Default adaptive configuration ───────────────────────────────────────────
-
-/// Returns default adaptive time-step parameters for a given integrator when
-/// the user has not specified them.
-///
-/// Values are conservative and suitable for LLG relaxation in the range
-/// α ∈ [0.05, 1.0].  Production scripts should supply explicit values.
-pub fn default_adaptive_config(choice: IntegratorChoice) -> AdaptiveTimeStepIR {
-    let (atol, rtol) = match choice {
-        IntegratorChoice::Rk23 => (1e-5, 1e-4),
-        IntegratorChoice::Rk45 => (1e-6, 1e-5),
-        _ => (1e-5, 1e-4),
-    };
-    AdaptiveTimeStepIR {
-        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
-        atol,
-        rtol,
-        dt_initial: Some(crate::DEFAULT_ADAPTIVE_DT_INITIAL),
-        dt_min: 1e-16,
-        dt_max: Some(crate::DEFAULT_ADAPTIVE_DT_MAX),
-        safety: 0.9,
-        growth_limit: 5.0,
-        shrink_limit: 0.1,
-        max_spin_rotation: None,
-        norm_tolerance: None,
     }
 }

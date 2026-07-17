@@ -8,7 +8,7 @@ use fullmag_engine::{
     EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FftWorkspace,
     IntegratorBuffers, StepReport,
 };
-use fullmag_ir::{BackendPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR, RelaxationAlgorithmIR};
+use fullmag_ir::{BackendPlanIR, FdmPlanIR, FemPlanIR, OutputIR, ProblemIR};
 
 use crate::dispatch::{self, FdmEngine, FemEngine};
 use crate::fdm::cpu::reference as cpu_reference;
@@ -99,6 +99,22 @@ fn interactive_time_event_schedule(
     times
 }
 
+fn reject_non_llg_interactive_relaxation(
+    relaxation: Option<&fullmag_ir::RelaxationControlIR>,
+    runtime: &str,
+) -> Result<(), RunError> {
+    if relaxation.is_some_and(|control| {
+        control.algorithm != fullmag_ir::RelaxationAlgorithmIR::LlgOverdamped
+    }) {
+        return Err(RunError {
+            message: format!(
+                "{runtime} does not support direct or implicit relaxation; use a batch relaxation stage"
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn build_cached_grid_preview_fields(
     display_state: &DisplaySelectionState,
     observables: &StateObservables,
@@ -182,7 +198,7 @@ fn attach_resolved_fallback_to_provenance(
 mod tests {
     use super::{
         attach_resolved_fallback_to_provenance, cached_display_refresh_due, display_refresh_due,
-        InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
+        cpu_execution_provenance, InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
     use crate::fdm::cpu::reference::{
@@ -193,7 +209,7 @@ mod tests {
     use crate::types::{LivePreviewRequest, StepAction};
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
-        IntegratorChoice,
+        IntegratorChoice, RelaxationAlgorithmIR, RelaxationControlIR,
     };
 
     fn make_soa_fdm_plan() -> FdmPlanIR {
@@ -229,6 +245,32 @@ mod tests {
             enable_demag: true,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn interactive_cpu_direct_minimizer_has_no_physical_timestep_provenance() {
+        let mut plan = make_soa_fdm_plan();
+        plan.integrator = None;
+        plan.fixed_timestep = None;
+        plan.relaxation = Some(RelaxationControlIR {
+            algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+            stop: fullmag_ir::RelaxStopIR {
+                torque_tolerance_apm: Some(1e-6),
+                energy_tolerance_j: None,
+                max_steps: Some(10),
+                max_relaxation_time_s: None,
+            },
+        });
+
+        let provenance = cpu_execution_provenance(&plan)
+            .expect("direct minimizer provenance must not require an LLG timestep policy");
+        assert_eq!(provenance.timestep_policy, None);
+        let error = super::reject_non_llg_interactive_relaxation(
+            plan.relaxation.as_ref(),
+            "interactive FDM CPU runtime",
+        )
+        .expect_err("interactive direct minimization must fail before physical-time stepping");
+        assert!(error.message.contains("use a batch relaxation stage"));
     }
 
     #[test]
@@ -561,7 +603,7 @@ impl InteractiveFdmPreviewRuntime {
                         backend,
                         original_grid: plan.grid.cells,
                         plan_signature: normalize_plan_signature(plan),
-                        provenance: cuda_execution_provenance(plan, &device_info),
+                        provenance: cuda_execution_provenance(plan, &device_info)?,
                         total_steps: 0,
                         total_time: 0.0,
                     })
@@ -777,7 +819,7 @@ impl InteractiveFemPreviewRuntime {
             let backend = NativeFemBackend::create(&effective_plan)?;
             let device_info = backend.device_info()?;
             let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
-            let mut provenance = fem_gpu_execution_provenance(&effective_plan, &device_info);
+            let mut provenance = fem_gpu_execution_provenance(&effective_plan, &device_info)?;
             attach_resolved_fallback_to_provenance(&mut provenance, fallback);
             let inner = InteractiveFemPreviewRuntimeInner::Gpu(GpuInteractiveFemPreviewRuntime {
                 backend,
@@ -1093,18 +1135,10 @@ impl CpuInteractiveFdmPreviewRuntime {
                 message: "interactive runtime until_seconds must be positive".to_string(),
             });
         }
-        if plan.relaxation.as_ref().is_some_and(|control| {
-            matches!(
-                control.algorithm,
-                RelaxationAlgorithmIR::ProjectedGradientBb | RelaxationAlgorithmIR::NonlinearCg
-            )
-        }) {
-            return Err(RunError {
-                message:
-                    "interactive CPU runtime does not yet support BB/NCG direct-minimization relaxation"
-                        .to_string(),
-            });
-        }
+        reject_non_llg_interactive_relaxation(
+            plan.relaxation.as_ref(),
+            "interactive FDM CPU runtime",
+        )?;
 
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
@@ -1114,9 +1148,13 @@ impl CpuInteractiveFdmPreviewRuntime {
         let time_events = interactive_time_event_schedule(
             &plan.field_drives, base_time, until_seconds, std::iter::empty(),
         );
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cpu(),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -1382,18 +1420,10 @@ impl CpuInteractiveFdmPreviewRuntime {
                 message: "interactive runtime until_seconds must be positive".to_string(),
             });
         }
-        if plan.relaxation.as_ref().is_some_and(|control| {
-            matches!(
-                control.algorithm,
-                RelaxationAlgorithmIR::ProjectedGradientBb | RelaxationAlgorithmIR::NonlinearCg
-            )
-        }) {
-            return Err(RunError {
-                message:
-                    "interactive CPU runtime does not yet support BB/NCG direct-minimization relaxation"
-                        .to_string(),
-            });
-        }
+        reject_non_llg_interactive_relaxation(
+            plan.relaxation.as_ref(),
+            "interactive FDM CPU runtime",
+        )?;
 
         let initial_magnetization = self.state.magnetization().to_vec();
         let mut artifacts = if let Some(writer) = artifact_writer {
@@ -1472,9 +1502,13 @@ impl CpuInteractiveFdmPreviewRuntime {
         let time_events = interactive_time_event_schedule(
             &plan.field_drives, base_time, until_seconds, output_periods,
         );
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cpu(),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -1856,9 +1890,17 @@ impl CudaInteractiveFdmPreviewRuntime {
         let time_events = interactive_time_event_schedule(
             &plan.field_drives, base_time, until_seconds, std::iter::empty(),
         );
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        reject_non_llg_interactive_relaxation(
+            plan.relaxation.as_ref(),
+            "interactive FDM CUDA runtime",
+        )?;
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
         let mut checkpoint = crate::interactive::CheckpointContext {
@@ -2161,9 +2203,17 @@ impl CudaInteractiveFdmPreviewRuntime {
         let time_events = interactive_time_event_schedule(
             &plan.field_drives, base_time, until_seconds, output_periods,
         );
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        reject_non_llg_interactive_relaxation(
+            plan.relaxation.as_ref(),
+            "interactive FDM CUDA runtime",
+        )?;
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -2536,9 +2586,17 @@ impl CpuInteractiveFemPreviewRuntime {
         let time_events = interactive_time_event_schedule(
             &plan.field_drives, base_time, until_seconds, std::iter::empty(),
         );
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        reject_non_llg_interactive_relaxation(
+            plan.relaxation.as_ref(),
+            "interactive FEM CPU runtime",
+        )?;
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fem_cpu(plan.precision),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -2862,9 +2920,17 @@ impl CpuInteractiveFemPreviewRuntime {
         let time_events = interactive_time_event_schedule(
             &plan.field_drives, base_time, until_seconds, output_periods,
         );
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        reject_non_llg_interactive_relaxation(
+            plan.relaxation.as_ref(),
+            "interactive FEM CPU runtime",
+        )?;
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fem_cpu(plan.precision),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -3248,9 +3314,17 @@ impl GpuInteractiveFemPreviewRuntime {
         let time_events = interactive_time_event_schedule(
             &plan.field_drives, base_time, until_seconds, std::iter::empty(),
         );
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        reject_non_llg_interactive_relaxation(
+            plan.relaxation.as_ref(),
+            "interactive FEM GPU runtime",
+        )?;
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fem_gpu(plan.precision),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -3513,9 +3587,17 @@ impl GpuInteractiveFemPreviewRuntime {
         let time_events = interactive_time_event_schedule(
             &plan.field_drives, base_time, until_seconds, output_periods,
         );
-        let mut dt =
-            crate::resolve_initial_timestep(plan.fixed_timestep, plan.adaptive_timestep.as_ref())
-                .unwrap_or(crate::DEFAULT_ADAPTIVE_DT_INITIAL);
+        reject_non_llg_interactive_relaxation(
+            plan.relaxation.as_ref(),
+            "interactive FEM GPU runtime",
+        )?;
+        let mut dt = crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fem_gpu(plan.precision),
+        )?
+        .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -4220,6 +4302,20 @@ fn copy_cuda_base_field_values(
 
 fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, RunError> {
     let fft_backend = cpu_reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
+    let timestep_policy = if crate::relaxation::direct_minimizer::direct_minimizer_control(
+        plan.relaxation.as_ref(),
+    )
+    .is_some()
+    {
+        None
+    } else {
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cpu(),
+        )?)
+    };
 
     Ok(ExecutionProvenance {
         execution_engine: "cpu_reference".to_string(),
@@ -4245,6 +4341,7 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         energy_minimizer_realization: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
+        timestep_policy,
         dt_policy: None,
         llg_mode: None,
         mfem_device: None,
@@ -4292,15 +4389,22 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
 fn cuda_execution_provenance(
     plan: &FdmPlanIR,
     device_info: &crate::fdm::gpu::cuda::native::DeviceInfo,
-) -> ExecutionProvenance {
-    let dt_policy = if plan.adaptive_timestep.is_some() {
-        Some("adaptive".to_string())
-    } else if plan.fixed_timestep.is_some() {
-        Some("user".to_string())
+) -> Result<ExecutionProvenance, RunError> {
+    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
+        plan.relaxation.as_ref(),
+    )
+    .is_some()
+    {
+        None
     } else {
-        Some("fallback".to_string())
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+        )?)
     };
-    ExecutionProvenance {
+    Ok(ExecutionProvenance {
         execution_engine: "cuda_fdm".to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
@@ -4331,7 +4435,8 @@ fn cuda_execution_provenance(
         energy_minimizer_realization: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
-        dt_policy,
+        timestep_policy,
+        dt_policy: None,
         llg_mode: Some(
             if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
                 "pure_damping"
@@ -4378,20 +4483,31 @@ fn cuda_execution_provenance(
         requested_fem_omp_threads: None,
         effective_fem_omp_threads: None,
         fem_poisson_demag: None,
-    }
+    })
 }
 
 #[cfg(feature = "fem-gpu")]
 fn fem_gpu_execution_provenance(
     plan: &FemPlanIR,
     device_info: &FemDeviceInfo,
-) -> ExecutionProvenance {
-    let dt_policy = if plan.adaptive_timestep.is_some() {
-        Some("adaptive".to_string())
-    } else if plan.fixed_timestep.is_some() {
-        Some("user".to_string())
+) -> Result<ExecutionProvenance, RunError> {
+    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
+        plan.relaxation.as_ref(),
+    )
+    .is_some()
+    {
+        None
     } else {
-        Some("fallback".to_string())
+        Some(crate::resolve_timestep_policy(
+            plan.integrator,
+            plan.fixed_timestep,
+            plan.adaptive_timestep.as_ref(),
+            if plan.mfem_device_string.as_deref() == Some("cpu") {
+                crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+            } else {
+                crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+            },
+        )?)
     };
     let execution_engine = native_fem_backend_id(plan).provenance_name();
     let resolved_demag_realization = resolved_native_fem_demag(plan);
@@ -4422,7 +4538,8 @@ fn fem_gpu_execution_provenance(
             .map(|r| r.provenance_name().to_string()),
         resolved_demag_realization: resolved_demag_realization
             .map(|realization| realization.provenance_name().to_string()),
-        dt_policy,
+        timestep_policy,
+        dt_policy: None,
         llg_mode: Some(
             if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
                 "pure_damping"
@@ -4518,7 +4635,7 @@ fn fem_gpu_execution_provenance(
         fem_poisson_demag: None,
     };
     crate::relaxation::apply_energy_minimizer_provenance(&mut provenance, plan.relaxation.as_ref());
-    provenance
+    Ok(provenance)
 }
 
 #[cfg(feature = "fem-gpu")]

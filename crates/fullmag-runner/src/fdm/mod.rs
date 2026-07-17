@@ -22,15 +22,9 @@ pub(crate) fn reject_adaptive_cuda_single_grid_plan(
 pub(crate) fn reject_adaptive_multilayer_plan(
     plan: &fullmag_ir::FdmMultilayerPlanIR,
 ) -> Result<(), RunError> {
-    if plan.fixed_timestep.is_none()
-        && matches!(
-            plan.integrator,
-            fullmag_ir::IntegratorChoice::Rk23 | fullmag_ir::IntegratorChoice::Rk45
-        )
-    {
+    if plan.fixed_timestep.is_none() {
         return Err(RunError {
-            message: "adaptive time stepping is not supported by multilayer FDM runtimes"
-                .to_string(),
+            message: "multilayer FDM runtimes require an explicit fixed_timestep".to_string(),
         });
     }
     Ok(())

@@ -570,7 +570,7 @@ fn fem_airbox_plan_uses_airbox_demag_operator_in_reference_runner() {
     let plan = make_shared_domain_airbox_demag_plan();
     let (_problem, _state) = build_problem_and_state(&plan)
         .expect("shared-domain FEM airbox problem should build in reference runner");
-    let provenance = execution_provenance(&plan);
+    let provenance = execution_provenance(&plan).unwrap();
 
     assert_eq!(
         provenance.demag_operator_kind.as_deref(),
@@ -590,7 +590,7 @@ fn fem_airbox_plan_uses_airbox_demag_operator_in_reference_runner() {
 #[test]
 fn baseline_provenance_defaults_implicit_demag_to_fem_poisson() {
     let plan = make_test_plan(true);
-    let provenance = execution_provenance(&plan);
+    let provenance = execution_provenance(&plan).unwrap();
 
     assert_eq!(provenance.execution_engine, "fem_cpu_baseline_internal");
     assert_eq!(provenance.requested_demag_realization, None);
