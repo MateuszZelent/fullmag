@@ -17,7 +17,7 @@
 | 4 | completed | hidden first-step/max sentinels, lossy `dt_policy`, fake physical time for direct minimizers, and unbound lane provenance | runner 558/558; all-features and CLI checks green; sentinel restricted to native FEM ABI; adaptive CUDA fails closed | spec APPROVED; quality APPROVED | `5a5c8781` |
 | 5 | completed | policy dropped across authoring/API/UI; raw solver JSON; incomplete/implicit stage policy; flat-relax scope regression; Rust/Python scene `algorithm` drift | authoring 47/47; focused API scene 1/1; Python focused 54/54 then 45/45; Control Room full 3482/3482, typecheck/lint green; full Python residual 3/717 reproduced at pre-Task-5 base | spec APPROVED; quality APPROVED after findings 1-25 | `817f18e7..ddca07f0` |
 | 6 | completed | q=2/q=4 order ignored; accepted steps could not shrink; dt_min force-retry; unsafe GPU candidate failure paths; max_err rtol=0 rejected | independent managed `verify-fem-time-domain-native-contract` exit 0; shared CPU/CUDA-host golden vectors and boundary/failure contracts green | spec APPROVED; quality APPROVED | `8c7b1d6c` |
-| 7 | pending | pending | pending | pending | pending |
+| 7 | completed | fixed RK23/RK45 emitted adaptive suggestions; adaptive floor could force-accept; CUDA ABI dropped authored controller policy; production CUDA loop reused immutable initial dt | engine 200/200; plan 230/230; runner 561/561; fdm-sys 1/1; CPU-only and CUDA managed native contracts PASS; feature-CUDA cargo check PASS | spec APPROVED; quality APPROVED after production dispatch correction | `cea7eb2b` |
 | 8 | pending | pending | pending | pending | pending |
 | 9 | pending | pending | pending | pending | pending |
 | 10 | pending | pending | pending | pending | pending |
@@ -44,3 +44,9 @@
 - Task 10 owns general post-backup `gpu_rk_run_stage_attempt` failure rollback;
   Task 6 closes adaptive reduction, readback, decision-failure, and retry
   candidate restoration only.
+- Task 8 owns enforcement of transported norm and per-spin rotation guards;
+  Task 7 deliberately fails guard-enabled native FDM v2 policies closed until
+  that enforcement exists.
+- Task 10 owns candidate H/work/demag-cache rollback and atomic publication;
+  Task 7 proves rejected-step rollback only for magnetization, time, and exact
+  pre-attempt FSAL validity.
