@@ -276,7 +276,9 @@ class CanonicalLlgSolverContractTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
         study.solver(integrator="rk45", fix_dt=1e-15)
-        study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped")
+        study.stages.add_relax(
+            stage_id="relax", algorithm="llg_overdamped", solver="rk45", dt=1e-15
+        )
         """
         with TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "stage_policy.py"
@@ -421,6 +423,45 @@ class CanonicalLlgSolverContractTests(unittest.TestCase):
                 ValueError, "dt_min and dt_max"
             ):
                 fm.relax_stage(**kwargs)
+
+    def test_llg_relax_stage_rejects_implicit_or_bounds_only_adaptive_policy(self) -> None:
+        study = self._configure_study()
+        before = len(flat_world._state._declared_stages)
+
+        for kwargs in (
+            {"solver": "rk45"},
+            {"solver": "rk45", "dt_min": 1e-16, "dt_max": 1e-13},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(
+                ValueError,
+                "explicit fixed or complete adaptive timestep policy",
+            ):
+                fm.relax_stage(**kwargs)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "explicit fixed or complete adaptive timestep policy",
+        ):
+            study.stages.add_relax(stage_id="implicit", solver="rk45")
+        self.assertEqual(len(flat_world._state._declared_stages), before)
+
+        for kwargs in (
+            {"max_err": 1e-6},
+            {"adaptive_timestep": fm.AdaptiveTimestep(dt_max=1e-13)},
+        ):
+            with self.subTest(build_kwargs=kwargs), self.assertRaisesRegex(
+                ValueError,
+                "explicit dt_min and dt_max",
+            ):
+                flat_world._build_relax_llg_dynamics(
+                    algorithm="llg_overdamped",
+                    solver="rk45",
+                    dt=None,
+                    max_error=None,
+                    dt_min=None,
+                    dt_max=None,
+                    **kwargs,
+                )
 
     def test_public_relax_stages_survive_builder_export_rewrite_and_reload(self) -> None:
         cases = {
@@ -648,6 +689,13 @@ class CanonicalLlgSolverContractTests(unittest.TestCase):
             auto_line = next(line for line in auto.splitlines() if ".stages.add_relax(" in line)
             self.assertNotIn("dt=", auto_line)
             self.assertNotIn("adaptive_timestep=", auto_line)
+            auto_path = Path(tmp_dir) / "stage_scene_auto.py"
+            auto_path.write_text(auto, encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError,
+                "explicit fixed or complete adaptive timestep policy",
+            ):
+                fm.load_problem_from_script(auto_path, lightweight_assets=True)
 
             missing_scene = build_scene_document_from_builder(export_builder_draft(loaded))
             missing_scene["study"]["stages"][0].pop("adaptive_timestep")

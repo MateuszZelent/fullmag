@@ -1799,7 +1799,12 @@ export function validateStudyStageDraft(
     }
     validatePositiveNumber(issues, draft.maxRelaxationTime, "Max relaxation time", false);
     validatePositiveNumber(issues, draft.relaxAlpha, "Relax alpha", false);
-    if (draft.timestepMode === "adaptive") {
+    if (draft.timestepMode === "auto") {
+      issues.push({
+        message: "LLG relaxation requires an explicit fixed or adaptive timestep policy.",
+        severity: "error",
+      });
+    } else if (draft.timestepMode === "adaptive") {
       validatePositiveNumber(issues, draft.dtMin, "dt_min", true);
       if (!draft.dtMax.trim()) {
         issues.push({

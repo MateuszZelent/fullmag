@@ -585,6 +585,12 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Field every");
     expect(html).toContain("RK45");
     expect(html).toContain("Timestep mode");
+    expect(html).toContain(
+      "LLG relaxation requires an explicit fixed or adaptive timestep policy.",
+    );
+    expect(html).toMatch(
+      /<button[^>]*disabled=""[^>]*title="Fix stage validation errors before saving\."[^>]*>.*Save stages<\/button>/,
+    );
     expect(html).not.toContain("Fixed dt");
     expect(html).not.toContain("Initial dt");
     expect(html).not.toContain("Adaptive dt min");

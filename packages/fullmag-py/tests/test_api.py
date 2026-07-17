@@ -4670,7 +4670,9 @@ class ProblemApiTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
         study.save("m", every=1e-12)
-        study.stages.add_stage(fm.relax_stage(max_steps=25, tol=1e-5, algorithm="llg_overdamped"))
+        study.stages.add_stage(fm.relax_stage(
+            max_steps=25, tol=1e-5, algorithm="llg_overdamped", dt=1e-15
+        ))
         study.stages.add_run(4e-12)
         """
 
@@ -4706,7 +4708,7 @@ class ProblemApiTests(unittest.TestCase):
         body.Aex = 13e-12
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
-        study.stages.add_relax(max_steps=25)
+        study.stages.add_relax(max_steps=25, dt=1e-15)
         study.stages.change_device("cpu")
         study.stages.add_eigenmodes(count=4)
         """

@@ -2249,24 +2249,6 @@ def relax_stage(
     field_refresh: FieldRefreshPolicy | None = None,
     stop: RelaxStop | None = None,
 ) -> RelaxStageSpec:
-    adaptive_controls_requested = any(
-        value is not None
-        for value in (dt_initial, dt_min, dt_max, max_err, max_error)
-    )
-    if adaptive_controls_requested and (dt_min is None or dt_max is None):
-        raise ValueError(
-            "executable adaptive relax stages require explicit dt_min and dt_max"
-        )
-    if (
-        isinstance(adaptive_timestep, AdaptiveTimestep)
-        and (
-            not adaptive_timestep._dt_min_explicit
-            or adaptive_timestep.dt_max is None
-        )
-    ):
-        raise ValueError(
-            "executable adaptive relax stages require explicit dt_min and dt_max"
-        )
     (
         resolved_stop,
         tol,
@@ -6631,6 +6613,10 @@ def _build_relax_llg_dynamics(
             )
         if integrator not in ADAPTIVE_INTEGRATORS:
             raise ValueError("adaptive_timestep requires an adaptive relax solver (rk23 or rk45)")
+        if not adaptive_timestep._dt_min_explicit or adaptive_timestep.dt_max is None:
+            raise ValueError(
+                "executable adaptive relax stages require explicit dt_min and dt_max"
+            )
     if dt_min is not None:
         if dt_min <= 0.0:
             raise ValueError("dt_min must be positive when provided")
@@ -6648,6 +6634,10 @@ def _build_relax_llg_dynamics(
         raise ValueError("dt_initial requires max_err for relax()")
     if resolved_max_err is not None:
         max_err_name = "max_err" if max_err is not None else "max_error"
+        if dt_min is None or dt_max is None:
+            raise ValueError(
+                "executable adaptive relax stages require explicit dt_min and dt_max"
+            )
         if resolved_max_err <= 0.0:
             raise ValueError(f"{max_err_name} must be positive when provided")
         if fixed_timestep is not None:
@@ -6662,16 +6652,11 @@ def _build_relax_llg_dynamics(
             dt_min=dt_min if dt_min is not None else 1e-15,
             dt_max=dt_max,
         )
-    elif resolved_adaptive_timestep is None and dt_is_auto and integrator in ADAPTIVE_INTEGRATORS:
-        # dt=None (default) with an adaptive integrator: use default adaptive
-        # stepping so the runner receives a valid AdaptiveTimeStepIR rather than
-        # both fixed_timestep=None and adaptive_timestep=None.
-        adaptive_kwargs = {}
-        if dt_min is not None:
-            adaptive_kwargs["dt_min"] = dt_min
-        if dt_max is not None:
-            adaptive_kwargs["dt_max"] = dt_max
-        resolved_adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
+    elif resolved_adaptive_timestep is None and fixed_timestep is None:
+        raise ValueError(
+            "LLG relaxation requires an explicit fixed or complete adaptive "
+            "timestep policy"
+        )
 
     if dt_is_auto and integrator not in ADAPTIVE_INTEGRATORS:
         raise ValueError(

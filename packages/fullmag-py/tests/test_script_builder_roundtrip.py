@@ -59,7 +59,7 @@ study.field_drives.add(fm.RegionalFieldDrive(
     time_origin="absolute",
     activation=fm.DriveActivation.all_time_evolution(),
 ))
-study.stages.add_relax(stage_id="relax", max_steps=2)
+study.stages.add_relax(stage_id="relax", max_steps=2, dt=1e-15)
 study.stages.add_run(stage_id="excite", until=4e-12)
 """
 

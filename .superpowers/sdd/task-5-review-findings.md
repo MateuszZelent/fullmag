@@ -46,3 +46,9 @@
 18. Public advanced staged relaxation must not rely on an implicit `AdaptiveTimestep.dt_min` default. Add a lossless way to know that executable stage bounds were explicitly supplied, while preserving backward compatibility for non-stage/global uses; add missing-explicit-dt_min RED/validation.
 19. Stage mode edits must clear stale loaded policy. Distinguish an absent `adaptive_timestep` override from an explicit JSON null: adaptive -> fixed/auto must not fall back to the original adaptive policy, and fixed -> adaptive must not retain fixed dt. Test real scene edit -> canonical rewrite -> reload transitions.
 20. Global advanced typed controls must render and validate `max_spin_rotation` and `norm_tolerance`, including positive finite validation and exact load/save preservation.
+
+## Final quality finding after `96902838`
+
+21. `adaptive_timestep: null` with stage mode `auto` must not reload into a synthesized incomplete adaptive policy. Until an explicit global-policy inheritance contract exists for `add_relax`, executable LLG relaxation without fixed or complete adaptive policy must fail closed in Python construction and Control Room validation. Add real rewrite/reload or expected-rejection proof; do not inject hidden `dt_min`/`dt_max` defaults.
+
+Status: resolved in the current worktree with Python construction/reload rejection and Control Room Save-blocking validation.

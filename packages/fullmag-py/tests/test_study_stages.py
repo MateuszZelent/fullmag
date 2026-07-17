@@ -33,7 +33,7 @@ class StudyStageIdTests(unittest.TestCase):
         loaded = _load(
             _PREAMBLE
             + """
-study.stages.add_relax(stage_id="relax", max_steps=2)
+study.stages.add_relax(stage_id="relax", max_steps=2, dt=1e-15)
 study.stages.add_minimize(stage_id="equilibrate", method="bb", max_steps=2)
 study.stages.add_run(stage_id="excite", until=4e-12)
 """
@@ -64,7 +64,7 @@ study.stages.add_run(stage_id="excite", until=4e-12)
         loaded = _load(
             _PREAMBLE
             + """
-study.stages.add_relax(max_steps=2)
+study.stages.add_relax(max_steps=2, dt=1e-15)
 study.stages.add_run(4e-12)
 """
         )
@@ -78,7 +78,7 @@ study.stages.add_run(4e-12)
             _load(
                 _PREAMBLE
                 + """
-study.stages.add_relax(stage_id="same", max_steps=2)
+study.stages.add_relax(stage_id="same", max_steps=2, dt=1e-15)
 study.stages.add_run(stage_id="same", until=4e-12)
 """
             )

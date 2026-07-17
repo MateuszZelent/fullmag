@@ -593,6 +593,19 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
+  it("rejects an implicit LLG relaxation timestep policy", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("relax", 0),
+      algorithm: "llg_overdamped",
+      solver: "rk45",
+      timestepMode: "auto" as const,
+    };
+
+    expect(validateStudyStageDraft(draft).map((issue) => issue.message)).toContain(
+      "LLG relaxation requires an explicit fixed or adaptive timestep policy.",
+    );
+  });
+
   it("gates tangent-plane implicit to the development FEM CPU lane", () => {
     const draft = {
       ...createDefaultStudyStageDraft("relax", 0),
@@ -619,7 +632,11 @@ describe("StudyStageAuthoringModel", () => {
   });
 
   it("distinguishes unknown capabilities from an explicitly unavailable algorithm", () => {
-    const draft = createDefaultStudyStageDraft("relax", 0);
+    const draft = {
+      ...createDefaultStudyStageDraft("relax", 0),
+      dt: "1e-15",
+      timestepMode: "fixed" as const,
+    };
     expect(validateStudyStageDraft(draft)).toEqual([]);
     expect(
       validateStudyStageDraft(draft, {
@@ -1427,6 +1444,8 @@ describe("StudyStageAuthoringModel", () => {
         ...createDefaultStudyStageDraft("relax", 0),
         maxSteps: "0",
         stageId: "",
+        dt: "1e-15",
+        timestepMode: "fixed",
         torqueTolerance: "-1",
       }).map((issue) => issue.message),
     ).toEqual([

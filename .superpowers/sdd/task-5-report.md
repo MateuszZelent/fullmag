@@ -260,3 +260,37 @@ No commit was created.
 ### Scope
 
 No OpenAPI, generated transport, command schema, endpoint, realtime event, resource hook, binary codec, ribbon, viewport, or backend runtime path changed in this round.
+
+## Final finding 21 after re-review of `96902838`
+
+Status: `DONE`
+
+No commit was created.
+
+### Resolution
+
+- Executable `llg_overdamped` relaxation now requires either an explicit fixed timestep or an explicit complete adaptive policy. `_build_relax_llg_dynamics` no longer synthesizes `AdaptiveTimestep(**{})`, default tolerances, or hidden bounds for solver-only, auto, or bounds-only calls.
+- `relax_stage(solver="rk45")` and `study.stages.add_relax(solver="rk45")` fail before a stage is appended. Explicit fixed, max-error adaptive, and advanced adaptive policies remain valid.
+- A real adaptive-stage scene edit to `adaptive_timestep: null` rewrites to policy-free public Python, and reload is proven to fail closed instead of recreating an incomplete policy.
+- Control Room `llg_overdamped` stage drafts in `timestepMode: "auto"` report an error. The existing production validation boundary therefore disables `Save stages` until fixed or adaptive is selected.
+- Legacy tests whose unrelated stage-ID, field-drive, change-device, or capability assertions relied on the invalid implicit policy now declare a fixed timestep explicitly.
+
+### Exact RED evidence
+
+- Python LLG contract: 4 failures with `AssertionError: ValueError not raised` for solver-only construction, bounds-only construction, `add_relax` mutation, and explicit-null scene rewrite/reload.
+- Direct builder completeness follow-up: 2 failures with `AssertionError: ValueError not raised` for max-error without explicit bounds and advanced policy with implicit `dt_min`; the centralized builder check now rejects both.
+- Control Room stage model/panel: 2 failures. Validation returned `[]` for auto LLG, and rendered Save remained enabled without the required error.
+
+### Exact GREEN evidence
+
+- Python focused authoring: `PYTHONPATH=packages/fullmag-py/src python3 -m unittest packages/fullmag-py/tests/test_llg_solver_contract.py packages/fullmag-py/tests/test_script_builder_roundtrip.py packages/fullmag-py/tests/test_study_stages.py packages.fullmag-py.tests.test_api.ProblemApiTests.test_study_builder_stage_authoring_captures_without_execution packages.fullmag-py.tests.test_api.ProblemApiTests.test_study_stage_builder_change_device_roundtrips_as_pipeline_action`
+  - 54 passed.
+- Control Room focused stage model/panel: 2 files passed, 83 tests passed.
+- Control Room full suite: 359 files passed, 3482 tests passed.
+- Control Room `typecheck`: exit 0.
+- Control Room `lint --max-warnings=0`: exit 0.
+- `git diff --check`: exit 0.
+
+### Scope
+
+No defaults, global solver inheritance semantics, OpenAPI, generated client, command transport, API route, resource hook, realtime event, binary codec, ribbon, viewport, or backend runtime behavior was added or changed.
