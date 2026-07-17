@@ -44,6 +44,7 @@ ANIS_U = (0.0, 0.0, 1.0)
 DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
 ADAPTIVE_MAX_ERROR = 1e-3
 ADAPTIVE_DT_MIN = 1e-15
+ADAPTIVE_DT_MAX = 1e-14
 RELAX_MAX_STEPS = int(os.environ.get("FULLMAG_ARCH_RELAX_MAX_STEPS", "5000"))
 
 study = fm.study("arch_waveguide_relax_50nm")
@@ -151,6 +152,7 @@ study.solver(
     integrator="rk23",
     max_error=ADAPTIVE_MAX_ERROR,
     dt_min=ADAPTIVE_DT_MIN,
+    dt_max=ADAPTIVE_DT_MAX,
     gamma=GAMMA,
 )
 
@@ -162,6 +164,7 @@ study.stages.add_relax(
     solver="rk23",
     max_error=ADAPTIVE_MAX_ERROR,
     dt_min=ADAPTIVE_DT_MIN,
+    dt_max=ADAPTIVE_DT_MAX,
     tol=RELAX_TORQUE_TOLERANCE_APM,
     max_steps=RELAX_MAX_STEPS,
 )

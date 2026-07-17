@@ -52,6 +52,7 @@ study.stages.add_relax(
     solver="rk23",
     max_error=1e-6,
     dt_min=1e-17,
+    dt_max=1e-14,
     max_steps=200,
     tol=1e-4,
 )

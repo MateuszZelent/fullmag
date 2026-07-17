@@ -2289,6 +2289,7 @@ def relax_stage(
         adaptive_timestep=adaptive_timestep,
         field_refresh=field_refresh,
         relax_alpha=resolved_relax_alpha,
+        require_explicit_timestep=True,
     )
     return RelaxStageSpec(
         tol=tol,
@@ -2472,6 +2473,7 @@ def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
         adaptive_timestep=spec.adaptive_timestep,
         field_refresh=spec.field_refresh,
         relax_alpha=spec.relax_alpha,
+        require_explicit_timestep=True,
     )
     problem = _build_problem(
         study_kind="relaxation",
@@ -3548,11 +3550,12 @@ class StudyStagesBuilder:
         self,
         *,
         field_values_t: Sequence[float],
+        timestep: float | AdaptiveTimestep,
         direction: Sequence[float] = (0.0, 0.0, 1.0),
         settle: RelaxStop | None = None,
         save_state: bool = False,
     ) -> "StudyStagesBuilder":
-        """Add a branch sweep that settles each field point with relaxation."""
+        """Add a branch sweep with an explicit fixed or adaptive settle policy."""
         values = [float(value) for value in field_values_t]
         if not values:
             raise ValueError("field_values_t must not be empty")
@@ -3574,10 +3577,18 @@ class StudyStagesBuilder:
                 magnitude_t * direction_unit[1],
                 magnitude_t * direction_unit[2],
             )
-            self.add_relax(
-                algorithm="llg_overdamped",
-                stop=settle_stop,
-            )
+            if isinstance(timestep, AdaptiveTimestep):
+                self.add_relax(
+                    algorithm="llg_overdamped",
+                    adaptive_timestep=timestep,
+                    stop=settle_stop,
+                )
+            else:
+                self.add_relax(
+                    algorithm="llg_overdamped",
+                    dt=timestep,
+                    stop=settle_stop,
+                )
             if save_state:
                 self.add_save_state(
                     artifact_name=f"hysteresis_branch_point_{point_index + 1:03d}"
@@ -6570,6 +6581,7 @@ def _build_relax_llg_dynamics(
     adaptive_timestep: AdaptiveTimestep | None = None,
     field_refresh: FieldRefreshPolicy | None = None,
     relax_alpha: float | None = None,
+    require_explicit_timestep: bool = False,
 ) -> LLG | None:
     if algorithm != "llg_overdamped":
         if (
@@ -6613,7 +6625,10 @@ def _build_relax_llg_dynamics(
             )
         if integrator not in ADAPTIVE_INTEGRATORS:
             raise ValueError("adaptive_timestep requires an adaptive relax solver (rk23 or rk45)")
-        if not adaptive_timestep._dt_min_explicit or adaptive_timestep.dt_max is None:
+        if require_explicit_timestep and (
+            not adaptive_timestep._dt_min_explicit
+            or adaptive_timestep.dt_max is None
+        ):
             raise ValueError(
                 "executable adaptive relax stages require explicit dt_min and dt_max"
             )
@@ -6634,7 +6649,7 @@ def _build_relax_llg_dynamics(
         raise ValueError("dt_initial requires max_err for relax()")
     if resolved_max_err is not None:
         max_err_name = "max_err" if max_err is not None else "max_error"
-        if dt_min is None or dt_max is None:
+        if require_explicit_timestep and (dt_min is None or dt_max is None):
             raise ValueError(
                 "executable adaptive relax stages require explicit dt_min and dt_max"
             )
@@ -6653,10 +6668,18 @@ def _build_relax_llg_dynamics(
             dt_max=dt_max,
         )
     elif resolved_adaptive_timestep is None and fixed_timestep is None:
-        raise ValueError(
-            "LLG relaxation requires an explicit fixed or complete adaptive "
-            "timestep policy"
-        )
+        if require_explicit_timestep:
+            raise ValueError(
+                "LLG relaxation requires an explicit fixed or complete adaptive "
+                "timestep policy"
+            )
+        if dt_is_auto and integrator in ADAPTIVE_INTEGRATORS:
+            adaptive_kwargs = {}
+            if dt_min is not None:
+                adaptive_kwargs["dt_min"] = dt_min
+            if dt_max is not None:
+                adaptive_kwargs["dt_max"] = dt_max
+            resolved_adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
 
     if dt_is_auto and integrator not in ADAPTIVE_INTEGRATORS:
         raise ValueError(

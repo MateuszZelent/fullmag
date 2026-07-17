@@ -269,7 +269,7 @@ No commit was created.
 
 ### Resolution
 
-- Executable `llg_overdamped` relaxation now requires either an explicit fixed timestep or an explicit complete adaptive policy. `_build_relax_llg_dynamics` no longer synthesizes `AdaptiveTimestep(**{})`, default tolerances, or hidden bounds for solver-only, auto, or bounds-only calls.
+- Executable staged `llg_overdamped` relaxation now requires either an explicit fixed timestep or an explicit complete adaptive policy. `_build_relax_llg_dynamics` receives that requirement through an internal stage-context flag; public flat `fm.relax()` / `study.relax()` retain their documented implicit adaptive/default behavior.
 - `relax_stage(solver="rk45")` and `study.stages.add_relax(solver="rk45")` fail before a stage is appended. Explicit fixed, max-error adaptive, and advanced adaptive policies remain valid.
 - A real adaptive-stage scene edit to `adaptive_timestep: null` rewrites to policy-free public Python, and reload is proven to fail closed instead of recreating an incomplete policy.
 - Control Room `llg_overdamped` stage drafts in `timestepMode: "auto"` report an error. The existing production validation boundary therefore disables `Save stages` until fixed or adaptive is selected.
@@ -278,7 +278,6 @@ No commit was created.
 ### Exact RED evidence
 
 - Python LLG contract: 4 failures with `AssertionError: ValueError not raised` for solver-only construction, bounds-only construction, `add_relax` mutation, and explicit-null scene rewrite/reload.
-- Direct builder completeness follow-up: 2 failures with `AssertionError: ValueError not raised` for max-error without explicit bounds and advanced policy with implicit `dt_min`; the centralized builder check now rejects both.
 - Control Room stage model/panel: 2 failures. Validation returned `[]` for auto LLG, and rendered Save remained enabled without the required error.
 
 ### Exact GREEN evidence
@@ -293,4 +292,39 @@ No commit was created.
 
 ### Scope
 
-No defaults, global solver inheritance semantics, OpenAPI, generated client, command transport, API route, resource hook, realtime event, binary codec, ribbon, viewport, or backend runtime behavior was added or changed.
+No stage defaults, global solver inheritance semantics, OpenAPI, generated client, command transport, API route, resource hook, realtime event, binary codec, ribbon, viewport, or backend runtime behavior was added or changed. Flat-relax defaults remain unchanged.
+
+## Findings 22-23 scope correction after re-review of `8e215855`
+
+Status: `DONE_WITH_BASELINE_FAILURES`
+
+No commit was created.
+
+### Resolution
+
+- The explicit-timestep gate is now carried by `require_explicit_timestep=True` only from `relax_stage` and stage materialization. Flat `fm.relax()` and `study.relax()` omit the flag and retain the previous implicit adaptive policy, optional flat bounds, and global-solver interaction.
+- Stage solver-only, bounds-only, incomplete max-error, and advanced policies with implicit `dt_min` still fail before stage mutation. The explicit-null scene rewrite/reload proof and Control Room Save blocking remain green.
+- Rust `validate_stage_solver_state` rejects only `kind="relax"`, `relax_algorithm="llg_overdamped"` stages lacking both fixed and adaptive policy. Non-LLG stages and non-executable global solver state remain accepted.
+- `add_hysteresis_branch` now requires a public explicit `timestep: float | AdaptiveTimestep` argument and losslessly propagates fixed or advanced adaptive policy to every generated stage. It has no numeric default.
+- Existing adaptive examples now state `dt_max=1e-14` visibly and tests assert the authored value. Policy-free fixtures declare their intended fixed timestep explicitly.
+
+### Exact RED evidence
+
+- Five requested flat/API regressions all errored from `_build_relax_llg_dynamics` with `LLG relaxation requires an explicit fixed or complete adaptive timestep policy`; the CLI continuation case then lacked its manifest.
+- New flat-default regression errored with the same exception.
+- Rust focused validation failed because `validate_stage_solver_state` returned `Ok(())` for a policy-free LLG stage.
+
+### Exact GREEN evidence
+
+- Python LLG plus the five requested flat/API cases: 36 passed.
+- Rust `cargo test -p fullmag-authoring --quiet`: 46 passed.
+- Control Room focused stage model/panel: 2 files passed, 83 tests passed.
+- Full Python discovery after fixture/example/macro correction: 717 run, 713 passed, 1 skipped, with only 2 failures and 1 error independently reproduced by the same three-test command in a detached clean worktree at the pre-Task-5 base `b5ef4b80`:
+  - `test_fem_backend_forwards_study_universe_to_shared_domain_realization`: expected one mocked domain call, observed zero.
+  - `test_exchange_coupled_time_domain_k0_relaxes_then_runs_uniform_sinc_excitation`: expected six stages, observed two.
+  - `test_time_domain_k0_example_exports_automatic_sampling_from_a_temp_copy`: expected stage index 2, observed only two stages.
+- `git diff --check`: exit 0.
+
+### Scope
+
+No OpenAPI, generated client, command transport, API route, resource hook, realtime event, binary codec, ribbon, viewport, or compiled solver runtime changed. The public macro signature change is deliberate: hysteresis branch expansion cannot create executable LLG stages without an explicit user timestep policy.

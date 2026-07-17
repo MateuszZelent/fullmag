@@ -37,6 +37,7 @@ SKYRMION_WALL_WIDTH = float(os.environ.get("FULLMAG_ARCH_SKYRMION_WALL_WIDTH", "
 DEMAG_PRINT_LEVEL = max(int(os.environ.get("FULLMAG_DEMAG_PRINT_LEVEL", "0")), 0)
 ADAPTIVE_MAX_ERROR = 1e-4
 ADAPTIVE_DT_MIN = float(os.environ.get("FULLMAG_ARCH_ADAPTIVE_DT_MIN", "1e-17"))
+ADAPTIVE_DT_MAX = 1e-14
 
 study = fm.study("arch_skyrmion_relax_50nm")
 
@@ -122,6 +123,7 @@ study.solver(
     integrator="rk45",
     max_error=ADAPTIVE_MAX_ERROR,
     dt_min=ADAPTIVE_DT_MIN,
+    dt_max=ADAPTIVE_DT_MAX,
     gamma=GAMMA,
 )
 
@@ -133,6 +135,7 @@ study.stages.add_relax(
     solver="rk45",
     max_error=ADAPTIVE_MAX_ERROR,
     dt_min=ADAPTIVE_DT_MIN,
+    dt_max=ADAPTIVE_DT_MAX,
     tol=RELAX_TORQUE_TOLERANCE_APM,
     max_steps=5000,
 )

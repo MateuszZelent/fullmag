@@ -1191,7 +1191,7 @@ class ProblemApiTests(unittest.TestCase):
         body.alpha = 0.1
         body.m = fm.texture.uniform(1, 0, 0)
         study.pbc(x=True, y=True, demag="periodic_airbox_k0")
-        study.relax(max_steps=2)
+        study.relax(max_steps=2, dt=1e-15)
         """
 
         with TemporaryDirectory() as tmp_dir:
@@ -2452,6 +2452,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(len(loaded.stages), 1)
         relax_ir = loaded.stages[0].problem.study.to_ir()
         self.assertEqual(relax_ir["kind"], "relaxation")
+        self.assertEqual(relax_ir["dynamics"]["adaptive_timestep"]["dt_max"], 1e-14)
         self.assertAlmostEqual(
             relax_ir["stop"]["torque_tolerance_apm"],
             1e-4 / 1.2566e-6,
@@ -2528,6 +2529,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(relax_dynamics["integrator"], "rk45")
         self.assertEqual(relax_dynamics["adaptive_timestep"]["atol"], 1e-4)
         self.assertEqual(relax_dynamics["adaptive_timestep"]["dt_min"], 1e-17)
+        self.assertEqual(relax_dynamics["adaptive_timestep"]["dt_max"], 1e-14)
 
     def test_region_owned_gradient_ms_example_keeps_one_physical_object(self) -> None:
         example_path = (
@@ -2550,6 +2552,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(field_ir["parameter"], "ms")
         self.assertEqual(field_ir["value"]["kind"], "linear")
         self.assertEqual(ir["couplings"], [])
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["dynamics"]["adaptive_timestep"]["dt_max"],
+            1e-14,
+        )
 
     def test_two_object_couplings_example_uses_explicit_exchange_and_rkky(self) -> None:
         example_path = (
@@ -2580,6 +2586,10 @@ class ProblemApiTests(unittest.TestCase):
             {"kind": "surface", "object": "reference_layer", "selector": "bottom"},
         )
         self.assertEqual(rkky["parameters"], {"kind": "rkky", "j1": -0.0003})
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["dynamics"]["adaptive_timestep"]["dt_max"],
+            1e-14,
+        )
 
     def test_skyrmion_core_mesh_refinement_example_scopes_region_mesh_policy(self) -> None:
         example_path = (
@@ -2604,6 +2614,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(core_region["mesh_policy"]["maximum_element_size"], 1e-9)
         self.assertEqual(core_region["mesh_policy"]["minimum_element_size"], 1e-9)
         self.assertEqual(core_region["mesh_policy"]["transition_distance"], 40e-9)
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["dynamics"]["adaptive_timestep"]["dt_max"],
+            1e-14,
+        )
 
     def test_study_builder_sets_surface_and_universe_metadata(self) -> None:
         fm.reset()
@@ -4881,6 +4895,12 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         study.stages.add_hysteresis_branch(
             field_values_t=[-20e-3, 0.0, 20e-3],
+            timestep=fm.AdaptiveTimestep(
+                atol=1e-7,
+                rtol=2e-5,
+                dt_min=1e-16,
+                dt_max=1e-13,
+            ),
             direction=(1.0, 0.0, 0.0),
             settle=fm.RelaxStop(torque_tolerance_apm=5e-6, max_steps=40),
         )
@@ -4900,6 +4920,11 @@ class ProblemApiTests(unittest.TestCase):
                 stage.problem.study.to_ir()["stop"]["torque_tolerance_apm"],
                 5e-6,
             )
+            adaptive = stage.problem.study.to_ir()["dynamics"]["adaptive_timestep"]
+            self.assertEqual(adaptive["atol"], 1e-7)
+            self.assertEqual(adaptive["rtol"], 2e-5)
+            self.assertEqual(adaptive["dt_min"], 1e-16)
+            self.assertEqual(adaptive["dt_max"], 1e-13)
 
         zeeman_fields = []
         for stage in loaded.stages:
@@ -5836,6 +5861,7 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         study.stages.add_hysteresis_branch(
             field_values_t=[-10e-3, 10e-3],
+            timestep=1e-15,
             direction=(0.0, 0.0, 1.0),
             settle=fm.RelaxStop(torque_tolerance_apm=1e-5, max_steps=25),
             save_state=True,
@@ -5852,6 +5878,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(loaded.stages[1].entrypoint_kind, "flat_save_state")
         self.assertEqual(loaded.stages[2].entrypoint_kind, "flat_relax")
         self.assertEqual(loaded.stages[3].entrypoint_kind, "flat_save_state")
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["dynamics"]["fixed_timestep"],
+            1e-15,
+        )
         self.assertEqual(
             loaded.stages[1].action,
             {
@@ -6326,6 +6356,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(metadata["demag_kind"], "periodic_airbox_k0")
         self.assertEqual(metadata["model"], "thin_film_in_plane")
         self.assertEqual(metadata["material"]["effective_magnetisation"], 800e3)
+        self.assertEqual(
+            loaded.stages[0].problem.study.to_ir()["dynamics"]["fixed_timestep"],
+            1e-15,
+        )
 
     def test_script_rewrite_preserves_windowed_dispersion_k_path(self) -> None:
         loaded = fm.load_problem_from_script(
@@ -8935,6 +8969,7 @@ class ProblemApiTests(unittest.TestCase):
         body.m = fm.texture.uniform(1, 0, 0)
         study.stages.add_hysteresis_branch(
             field_values_t=[-5e-3, 5e-3],
+            timestep=1e-15,
             settle=fm.RelaxStop(torque_tolerance_apm=1e-5, max_steps=20),
             save_state=True,
         )

@@ -144,6 +144,15 @@ fn validate_stage_solver_state(
             "{context} fixed and adaptive timestep policies are mutually exclusive"
         )));
     }
+    if stage.kind == "relax"
+        && stage.relax_algorithm == "llg_overdamped"
+        && stage.fixed_timestep.trim().is_empty()
+        && stage.adaptive_timestep.is_none()
+    {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context} LLG relaxation requires an explicit fixed or adaptive timestep policy"
+        )));
+    }
     validate_present_positive(&stage.fixed_timestep, &format!("{context}.fixed_timestep"))?;
     if let Some(adaptive) = stage.adaptive_timestep.as_ref() {
         validate_adaptive_state(adaptive, true, &context, &stage.integrator)?;
@@ -532,6 +541,35 @@ fn validate_study_pipeline_nodes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn llg_stage_requires_explicit_timestep_policy() {
+        let mut stage: crate::ScriptBuilderStageState = serde_json::from_value(
+            serde_json::json!({
+                "kind": "relax",
+                "entrypoint_kind": "flat_relax",
+                "relax_algorithm": "llg_overdamped"
+            }),
+        )
+        .expect("stage fixture should deserialize");
+
+        let error = validate_stage_solver_state(&stage, 0)
+            .expect_err("LLG stage without a timestep policy must fail closed");
+        assert!(
+            error.message.contains("explicit fixed or adaptive timestep policy"),
+            "{}",
+            error.message
+        );
+
+        stage.relax_algorithm = "projected_gradient_bb".to_string();
+        validate_stage_solver_state(&stage, 0)
+            .expect("direct minimization does not require an LLG timestep policy");
+
+        let mut global_solver = crate::ScriptBuilderSolverState::default();
+        global_solver.fixed_timestep.clear();
+        validate_solver_state(&global_solver, false, "study.solver")
+            .expect("non-executable global solver state may omit a timestep policy");
+    }
 
     #[test]
     fn regional_field_drive_rejects_missing_scene_target() {

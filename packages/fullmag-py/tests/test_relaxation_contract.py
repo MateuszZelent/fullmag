@@ -89,7 +89,7 @@ class RelaxationContractTests(unittest.TestCase):
             max_steps=None,
             max_relaxation_time_s=None,
         )
-        spec = fm.relax_stage(stop=stop, max_relaxation_time_s=None)
+        spec = fm.relax_stage(stop=stop, max_relaxation_time_s=None, dt=1e-15)
         self.assertIsNone(spec.stop.max_relaxation_time_s)
 
         with self.assertRaisesRegex(ValueError, "max_pseudotime_s conflicts"):
@@ -135,7 +135,7 @@ class RelaxationContractTests(unittest.TestCase):
             energy_tolerance_j=1e-20,
             max_steps=None,
         )
-        spec = fm.relax_stage(stop=stop)
+        spec = fm.relax_stage(stop=stop, dt=1e-15)
         self.assertIsNone(spec.stop.torque_tolerance_apm)
         self.assertIsNone(spec.stop.max_steps)
 

@@ -52,3 +52,10 @@
 21. `adaptive_timestep: null` with stage mode `auto` must not reload into a synthesized incomplete adaptive policy. Until an explicit global-policy inheritance contract exists for `add_relax`, executable LLG relaxation without fixed or complete adaptive policy must fail closed in Python construction and Control Room validation. Add real rewrite/reload or expected-rejection proof; do not inject hidden `dt_min`/`dt_max` defaults.
 
 Status: resolved in the current worktree with Python construction/reload rejection and Control Room Save-blocking validation.
+
+## Final quality regression after `8e215855`
+
+22. Scope the fail-closed explicit timestep requirement to executable staged relaxation (`relax_stage` / `add_relax`). The shared `_build_relax_llg_dynamics` path also serves public flat `fm.relax()` / `study.relax()`, whose documented default/global-solver behavior must remain intact. Add regression proof separating the staged and flat-relax contracts, and correct the report's scope statement.
+23. Enforce the same stage-only fixed-or-complete-adaptive requirement at the Rust authoring validation boundary. `validate_stage_solver_state` must reject an `llg_overdamped` relaxation stage with neither policy so direct scene/API authoring cannot bypass the Control Room guard and persist an incomplete executable stage.
+
+Status: findings 22 and 23 are resolved in the current worktree with an explicit Python stage-context flag, flat-relax regression coverage, and Rust scene validation.

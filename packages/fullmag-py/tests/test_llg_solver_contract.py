@@ -445,23 +445,28 @@ class CanonicalLlgSolverContractTests(unittest.TestCase):
             study.stages.add_relax(stage_id="implicit", solver="rk45")
         self.assertEqual(len(flat_world._state._declared_stages), before)
 
-        for kwargs in (
-            {"max_err": 1e-6},
-            {"adaptive_timestep": fm.AdaptiveTimestep(dt_max=1e-13)},
-        ):
-            with self.subTest(build_kwargs=kwargs), self.assertRaisesRegex(
-                ValueError,
-                "explicit dt_min and dt_max",
-            ):
-                flat_world._build_relax_llg_dynamics(
-                    algorithm="llg_overdamped",
-                    solver="rk45",
-                    dt=None,
-                    max_error=None,
-                    dt_min=None,
-                    dt_max=None,
-                    **kwargs,
-                )
+    def test_flat_relax_preserves_implicit_default_policy(self) -> None:
+        source = """
+        import fullmag as fm
+
+        fm.engine("fdm")
+        fm.cell(5e-9, 5e-9, 5e-9)
+        body = fm.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        fm.relax(max_steps=2)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "flat_relax_default.py"
+            path.write_text(textwrap.dedent(source), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+        dynamics = loaded.problem.study.dynamics
+        self.assertEqual(dynamics.integrator, "rk23")
+        self.assertIsNone(dynamics.fixed_timestep)
+        self.assertEqual(dynamics.adaptive_timestep.dt_min, 1e-15)
+        self.assertIsNone(dynamics.adaptive_timestep.dt_max)
 
     def test_public_relax_stages_survive_builder_export_rewrite_and_reload(self) -> None:
         cases = {
