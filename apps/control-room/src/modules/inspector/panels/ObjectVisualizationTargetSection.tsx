@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Info, RotateCcw } from "lucide-react";
+import { Check, RotateCcw } from "lucide-react";
 import React, { useState, useId } from "react";
 import { type FieldCatalogResource, type FieldMetaResource } from "@/kernel/api/apiTypes";
 import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
@@ -10,15 +10,6 @@ import { Slider } from "@/shared/ui/Slider";
 import { Switch } from "@/shared/ui/Switch";
 import { controlVariants } from "@/shared/ui/controlVariants";
 import { cn } from "@/shared/utils/className";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/shared/ui/Dialog";
 import {
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
@@ -32,8 +23,6 @@ import {
   useFieldMetaResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
-  buildAirboxVectorDiagnostic,
-  buildAirboxVisibilityDiagnostic,
   buildVisualizationPanelSections,
   displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
@@ -91,67 +80,24 @@ type SectionDisabled = (
 ) => boolean;
 
 export function VisualizationDisplayPassesSection({
-  airboxPartIds,
   displaySettings,
-  fieldCatalog,
-  onFieldCatalogRequest,
   passControlsDisabled,
   patch,
   pending,
   renderWarning,
   settings,
-  targetKind,
   primitiveDisplayToggleVisible,
-  vectorDomain,
 }: {
-  airboxPartIds: readonly string[];
   displaySettings: VisualizationTargetSettings;
-  fieldCatalog: { data: FieldCatalogResource | null; status: string };
-  onFieldCatalogRequest: () => void;
   passControlsDisabled: boolean;
   patch: PatchVisualizationTarget;
   pending: boolean;
   renderWarning: string | null;
   settings: VisualizationTargetSettings;
-  targetKind: VisualizationTargetKind;
   primitiveDisplayToggleVisible: boolean;
-  vectorDomain: string;
 }) {
-  const [airboxDiagnosticOpen, setAirboxDiagnosticOpen] = useState(false);
-  const airboxDiagnostic =
-    targetKind === "airbox"
-      ? buildAirboxVisibilityDiagnostic({
-          displaySettings,
-          renderWarning,
-          settings,
-        })
-      : null;
-  const airboxVectorDiagnostic =
-    targetKind === "airbox"
-      ? buildAirboxVectorDiagnostic({
-          airboxPartIds,
-          displaySettings,
-          fieldCatalog: fieldCatalog.data,
-          fieldCatalogStatus: fieldCatalog.status,
-          renderWarning,
-          settings,
-          vectorDomain,
-        })
-      : null;
-
   function handleVisibleClick(): void {
-    const nextVisible = !settings.visible;
-    void patch({ visible: nextVisible });
-    if (targetKind === "airbox" && nextVisible) {
-      setAirboxDiagnosticOpen(true);
-    } else if (targetKind === "airbox") {
-      setAirboxDiagnosticOpen(false);
-    }
-  }
-
-  function handleDiagnosticClick(): void {
-    onFieldCatalogRequest();
-    setAirboxDiagnosticOpen(true);
+    void patch({ visible: !settings.visible });
   }
 
   return (
@@ -239,73 +185,8 @@ export function VisualizationDisplayPassesSection({
             }
           />
         ) : null}
-        {targetKind === "airbox" ? (
-          <Button
-            aria-label="Airbox visualization diagnostics"
-            className="fm-visualization-toggle"
-            size="sm"
-            title="Airbox visualization diagnostics"
-            type="button"
-            variant="ghost"
-            onClick={handleDiagnosticClick}
-          >
-            <Info aria-hidden="true" size={13} />
-            Diagnostic
-          </Button>
-        ) : null}
       </div>
       {primitiveDisplayToggleVisible ? <ViewportPreferenceScopeNote /> : null}
-      <Dialog
-        open={
-          airboxDiagnosticOpen &&
-          (airboxDiagnostic !== null || airboxVectorDiagnostic !== null)
-        }
-        onOpenChange={setAirboxDiagnosticOpen}
-      >
-        <DialogContent aria-describedby="fm-airbox-diagnostic-description">
-          <DialogHeader>
-            <DialogTitle>
-              Airbox visualization diagnostic
-            </DialogTitle>
-            <DialogDescription id="fm-airbox-diagnostic-description">
-              {airboxVectorDiagnostic?.message ??
-                airboxDiagnostic?.message ??
-                "Airbox visibility state is not available."}
-            </DialogDescription>
-          </DialogHeader>
-          <div>
-            {airboxVectorDiagnostic ? (
-              <>
-                <FieldRow label="Vector status" value={airboxVectorDiagnostic.title} />
-                {airboxVectorDiagnostic.details.map((detail) => (
-                  <FieldRow
-                    key={`vector:${detail.label}`}
-                    label={detail.label}
-                    value={detail.value}
-                  />
-                ))}
-              </>
-            ) : null}
-            {airboxDiagnostic ? (
-              <FieldRow label="Visibility status" value={airboxDiagnostic.title} />
-            ) : null}
-            {airboxDiagnostic?.details.map((detail) => (
-              <FieldRow
-                key={`visibility:${detail.label}`}
-                label={detail.label}
-                value={detail.value}
-              />
-            ))}
-          </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button size="sm" type="button" variant="secondary">
-                Close
-              </Button>
-            </DialogClose>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

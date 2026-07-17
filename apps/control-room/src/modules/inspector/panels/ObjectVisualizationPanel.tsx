@@ -815,18 +815,13 @@ function ObjectVisualizationPanelView({
             display={
               <>
                 <VisualizationDisplayPassesSection
-              airboxPartIds={airboxPartIds}
               displaySettings={displaySettings}
-              fieldCatalog={fieldCatalog}
-              onFieldCatalogRequest={onFieldCatalogRequest}
               passControlsDisabled={passControlsDisabled}
               patch={patch}
               pending={pending}
               renderWarning={renderWarning}
               settings={settings}
-              targetKind={target.kind}
               primitiveDisplayToggleVisible={primitiveDisplayToggleVisible}
-              vectorDomain={vectorDomain}
                 />
                 <VisualizationRenderModeSection
               displaySettings={displaySettings}

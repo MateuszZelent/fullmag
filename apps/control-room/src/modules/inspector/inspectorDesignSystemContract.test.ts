@@ -63,5 +63,7 @@ describe("Inspector design-system reference contract", () => {
     expect(targetSections).not.toContain("fm-inspector-segmented");
     expect(targetSections).not.toContain("fm-radio-group");
     expect(targetSections).not.toContain("fm-visualization-range");
+    expect(targetSections).not.toContain("Airbox visualization diagnostic");
+    expect(targetSections).not.toContain("setAirboxDiagnosticOpen");
   });
 });

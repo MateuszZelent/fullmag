@@ -148,6 +148,10 @@ try {
     await visibleToggle.click();
     await page.waitForTimeout(150);
   }
+  assert(
+    (await page.getByRole("dialog", { name: "Airbox visualization diagnostic" }).count()) === 0,
+    "Visible must not open the removed Airbox diagnostic dialog.",
+  );
   const screenshotFiles = [];
   for (const width of [360, 416, 560]) {
     const handleBox = await resizeHandle.boundingBox();
@@ -235,6 +239,10 @@ try {
     await vectorsToggle.click();
     await page.waitForTimeout(150);
   }
+  assert(
+    (await page.getByRole("dialog", { name: "Airbox visualization diagnostic" }).count()) === 0,
+    "Vectors must not open the removed Airbox diagnostic dialog.",
+  );
   const vectorsDisclosure = overview
     .locator('[data-slot="inspector-group-trigger"]')
     .filter({ hasText: "Vectors" });
