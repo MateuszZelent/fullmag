@@ -25,6 +25,16 @@ describe("resolveInspectorDescriptor", () => {
     expect(descriptor.typeLabel).toBe("Display");
   });
 
+  it("uses task-oriented mesh navigation", () => {
+    const descriptor = resolveInspectorDescriptor(selection("object.mesh"));
+
+    expect(descriptor.tabs).toEqual([
+      { id: "policy", label: "Policy" },
+      { id: "quality", label: "Quality" },
+      { id: "history", label: "History" },
+    ]);
+  });
+
   it.each([
     "object.material",
     "object.mesh",

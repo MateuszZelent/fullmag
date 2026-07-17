@@ -36,9 +36,9 @@ export interface InspectorDescriptor {
 }
 
 const MESH_TABS: InspectorTabDescriptor[] = [
-  { id: "overview", label: "Overview" },
-  { id: "properties", label: "Properties" },
-  { id: "diagnostics", label: "Diagnostics" },
+  { id: "policy", label: "Policy" },
+  { id: "quality", label: "Quality" },
+  { id: "history", label: "History" },
 ];
 
 const RESULT_TABS: InspectorTabDescriptor[] = [

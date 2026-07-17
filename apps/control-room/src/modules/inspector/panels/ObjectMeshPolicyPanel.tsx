@@ -832,7 +832,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     <div className="fm-inspector-panel">
       <Tabs value={activeTab} className="fm-inspector-tabs">
 
-        <TabsContent value="overview" className="fm-tabs-content">
+        <TabsContent value="policy" className="fm-tabs-content">
           <ObjectMeshPolicySummarySection
             hasConfig={Boolean(resource.config)}
             objectId={objectId}
@@ -845,9 +845,6 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
             effectiveTarget={effectiveTarget}
             reportStatus={report.status}
           />
-        </TabsContent>
-
-        <TabsContent value="properties" className="fm-tabs-content">
           <ObjectMeshPresetSection draft={draft} updateDraft={updateDraft} />
           <ObjectMeshSizeSemanticsSection draft={draft} updateDraft={updateDraft} />
           <ObjectMeshSweepStrategySection draft={draft} updateDraft={updateDraft} />
@@ -865,7 +862,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
           <ObjectMeshAdvancedJsonSection draft={draft} updateDraft={updateDraft} />
         </TabsContent>
 
-        <TabsContent value="diagnostics" className="fm-tabs-content">
+        <TabsContent value="quality" className="fm-tabs-content">
           <ObjectMeshTopologyQualitySection
             qualityRecord={qualityRecord}
             qualityRevision={quality.data?.revision}
@@ -876,6 +873,9 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
             statistics={qualityStatistics}
             onHoverSizeDistributionBin={hoverSizeDistributionBin}
           />
+        </TabsContent>
+
+        <TabsContent value="history" className="fm-tabs-content">
           <ObjectMeshTransactionsSection
             buildLabel={isDirty ? "Apply & Build Mesh" : "Build Mesh"}
             feedback={feedback}
