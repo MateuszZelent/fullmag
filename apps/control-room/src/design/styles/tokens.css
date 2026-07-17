@@ -32,8 +32,45 @@
   --fm-font-size-lg: 15px;
   --fm-line-height-tight: 1.1;
 
+  /* Font weights */
+  --fm-font-weight-normal: 400;
+  --fm-font-weight-medium: 500;
+  --fm-font-weight-semibold: 600;
+  --fm-font-weight-bold: 650;
+  --fm-font-weight-extrabold: 700;
+
+  /* Shadows */
+  --fm-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --fm-shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.2), 0 2px 6px -1px rgba(0, 0, 0, 0.1);
+  --fm-shadow-lg: 0 6px 16px -2px rgba(0, 0, 0, 0.25), 0 4px 8px -1px rgba(0, 0, 0, 0.15);
+  --fm-shadow-elevated: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+  --fm-shadow-panel: 0 8px 32px -6px rgba(0, 0, 0, 0.45), 0 4px 12px -4px rgba(0, 0, 0, 0.2);
+
   /* Effects */
   --fm-focus-ring: 0 0 0 2px var(--fm-bg-app), 0 0 0 4px var(--fm-accent);
   --fm-transition-fast: 120ms ease-out;
   --fm-transition-normal: 180ms ease-out;
+}
+
+/* ── Spacing utilities ── */
+.fm-mt-1 { margin-top: var(--fm-space-1); }
+.fm-mt-2 { margin-top: var(--fm-space-2); }
+.fm-mt-3 { margin-top: var(--fm-space-3); }
+.fm-mt-4 { margin-top: var(--fm-space-4); }
+.fm-mb-2 { margin-bottom: var(--fm-space-2); }
+.fm-mb-3 { margin-bottom: var(--fm-space-3); }
+
+/* ── Common structural utilities ── */
+.fm-section-separator {
+  border-top: 1px solid var(--fm-border-subtle);
+  padding-top: var(--fm-space-3);
+  margin-top: var(--fm-space-3);
+}
+
+.fm-toolbar-top {
+  margin-top: var(--fm-space-2);
+}
+
+.fm-toolbar-top-lg {
+  margin-top: var(--fm-space-3);
 }

@@ -378,7 +378,7 @@ function PhysicsInteractionSelectionSection({
       {selectedRegionId ? (
         <FieldRow label="Region ID" value={selectedRegionId} />
       ) : null}
-      <div className="fm-region-inherited-parameters" style={{ marginBottom: "8px" }}>
+      <div className="fm-region-inherited-parameters fm-mb-2">
         {options.map((option) => (
           <PhysicsInteractionChecklistRow
             key={option.id}

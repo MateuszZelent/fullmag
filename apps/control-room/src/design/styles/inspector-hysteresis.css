@@ -1,0 +1,113 @@
+/* ── Hysteresis inspector ── */
+.fm-hysteresis-inspector-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fm-space-1);
+  width: 100%;
+  margin-top: var(--fm-space-2);
+}
+
+.fm-hysteresis-inspector-step {
+  padding: var(--fm-space-2);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-surface);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-hysteresis-inspector-step__header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  margin-bottom: var(--fm-space-1);
+  font-weight: 600;
+}
+
+.fm-hysteresis-inspector-step__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fm-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-hysteresis-inspector-step__method {
+  flex: none;
+  color: var(--fm-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-hysteresis-inspector-step__meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--fm-space-1);
+  color: var(--fm-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-hysteresis-inspector-empty {
+  margin-top: var(--fm-space-1);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  font-style: italic;
+}
+
+.fm-hysteresis-inspector-table-wrap {
+  width: 100%;
+  margin-top: var(--fm-space-2);
+  overflow-x: auto;
+}
+
+.fm-hysteresis-inspector-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+  text-align: left;
+}
+
+.fm-hysteresis-inspector-table th,
+.fm-hysteresis-inspector-table td {
+  padding: var(--fm-space-1) var(--fm-space-2);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.fm-hysteresis-inspector-table th {
+  border-bottom-color: var(--fm-border-strong);
+  color: var(--fm-text-muted);
+  font-weight: 600;
+}
+
+.fm-hysteresis-inspector-table tr[data-status="warning"] {
+  background: color-mix(in srgb, var(--fm-warning) 7%, transparent);
+}
+
+.fm-hysteresis-inspector-point-source {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--fm-accent) 35%, var(--fm-border-subtle));
+  border-radius: var(--fm-radius-xs);
+  color: var(--fm-accent-strong);
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 0 var(--fm-space-1);
+}
+
+.fm-hysteresis-inspector-table__actions-heading {
+  text-align: right;
+}
+
+.fm-hysteresis-inspector-table__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--fm-space-1);
+}
+
+.fm-hysteresis-inspector-action.fm-button {
+  min-height: 20px;
+  padding: 0 var(--fm-space-1);
+  font-size: 10px;
+}
+

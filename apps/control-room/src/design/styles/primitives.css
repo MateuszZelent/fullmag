@@ -1,0 +1,257 @@
+/* ── Tooltip ── */
+.fm-tooltip {
+  z-index: 140;
+  max-width: 280px;
+  overflow: hidden;
+  border: 1px solid var(--fm-border-default);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-overlay);
+  box-shadow: var(--fm-shadow-md);
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.4;
+  padding: var(--fm-space-2) var(--fm-space-3);
+  animation: fm-tooltip-in 100ms ease-out;
+  pointer-events: none;
+}
+
+@keyframes fm-tooltip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fm-tooltip {
+    animation: none;
+  }
+}
+
+/* ── Switch ── */
+.fm-switch {
+  display: inline-flex;
+  height: 18px;
+  width: 32px;
+  flex-shrink: 0;
+  cursor: pointer;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--fm-border-default);
+  background: var(--fm-bg-canvas);
+  padding: 1px;
+  transition:
+    background-color var(--fm-transition-fast),
+    border-color var(--fm-transition-fast);
+}
+
+.fm-switch:hover:not(:disabled) {
+  border-color: var(--fm-border-strong);
+}
+
+.fm-switch[data-state="checked"] {
+  border-color: var(--fm-accent);
+  background: var(--fm-accent);
+}
+
+.fm-switch:focus-visible {
+  outline: none;
+  box-shadow: var(--fm-focus-ring);
+}
+
+.fm-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.fm-switch__thumb {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--fm-text-muted);
+  transition: transform var(--fm-transition-fast), background-color var(--fm-transition-fast);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.fm-switch[data-state="checked"] .fm-switch__thumb {
+  transform: translateX(14px);
+  background: white;
+}
+
+/* ── Progress ── */
+.fm-progress {
+  position: relative;
+  height: 6px;
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--fm-radius-sm);
+  background: var(--fm-bg-canvas);
+}
+
+.fm-progress__indicator {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--fm-accent);
+  transition: transform var(--fm-transition-fast);
+}
+
+/* ── Separator ── */
+.fm-separator--horizontal {
+  height: 1px;
+  width: 100%;
+  background: var(--fm-border-subtle);
+}
+
+.fm-separator--vertical {
+  width: 1px;
+  height: 100%;
+  background: var(--fm-border-subtle);
+}
+
+/* ── Badge ── */
+.fm-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--fm-radius-xs);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  padding: 2px var(--fm-space-1);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.fm-badge--default {
+  border: 1px solid var(--fm-border-subtle);
+  background: transparent;
+  color: var(--fm-text-muted);
+}
+
+.fm-badge--secondary {
+  border: 1px solid var(--fm-border-default);
+  background: var(--fm-bg-panel-raised);
+  color: var(--fm-text-secondary);
+}
+
+.fm-badge--success {
+  border: 1px solid color-mix(in srgb, var(--fm-success) 35%, var(--fm-border-subtle));
+  background: color-mix(in srgb, var(--fm-success) 10%, transparent);
+  color: var(--fm-success);
+}
+
+.fm-badge--warning {
+  border: 1px solid color-mix(in srgb, var(--fm-warning) 35%, var(--fm-border-subtle));
+  background: color-mix(in srgb, var(--fm-warning) 10%, transparent);
+  color: var(--fm-warning);
+}
+
+.fm-badge--danger {
+  border: 1px solid color-mix(in srgb, var(--fm-danger) 35%, var(--fm-border-subtle));
+  background: color-mix(in srgb, var(--fm-danger) 10%, transparent);
+  color: var(--fm-danger);
+}
+
+.fm-badge--accent {
+  border: 1px solid color-mix(in srgb, var(--fm-accent) 35%, var(--fm-border-subtle));
+  background: color-mix(in srgb, var(--fm-accent) 10%, transparent);
+  color: var(--fm-accent);
+}
+
+/* ── Panel Header ── */
+.fm-panel-header {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  background: var(--fm-bg-chrome);
+  padding: var(--fm-space-2) var(--fm-space-3);
+}
+
+.fm-panel-header__left {
+  display: flex;
+  align-items: baseline;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-panel-header__title {
+  margin: 0;
+  color: var(--fm-text-primary);
+  font-size: var(--fm-font-size-md);
+  font-weight: var(--fm-font-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-panel-header__subtitle {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  flex-shrink: 0;
+}
+
+.fm-panel-header__trailing {
+  display: flex;
+  align-items: center;
+  gap: var(--fm-space-1);
+  flex-shrink: 0;
+}
+
+/* ── Status Badge ── */
+.fm-status-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--fm-radius-xs);
+  border: 1px solid var(--fm-border-subtle);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 2px var(--fm-space-1);
+  text-transform: uppercase;
+  white-space: nowrap;
+  user-select: none;
+  color: var(--fm-text-muted);
+}
+
+.fm-status-badge[data-status="ready"],
+.fm-status-badge[data-status="completed"],
+.fm-status-badge[data-status="success"] {
+  border-color: color-mix(in srgb, var(--fm-success) 35%, var(--fm-border-subtle));
+  color: var(--fm-success);
+}
+
+.fm-status-badge[data-status="running"],
+.fm-status-badge[data-status="building"],
+.fm-status-badge[data-status="pending"] {
+  border-color: color-mix(in srgb, var(--fm-accent) 35%, var(--fm-border-subtle));
+  color: var(--fm-accent);
+}
+
+.fm-status-badge[data-status="stale"],
+.fm-status-badge[data-status="queued"],
+.fm-status-badge[data-status="warning"] {
+  border-color: color-mix(in srgb, var(--fm-warning) 35%, var(--fm-border-subtle));
+  color: var(--fm-warning);
+}
+
+.fm-status-badge[data-status="failed"],
+.fm-status-badge[data-status="error"],
+.fm-status-badge[data-status="degraded"] {
+  border-color: color-mix(in srgb, var(--fm-danger) 35%, var(--fm-border-subtle));
+  color: var(--fm-danger);
+}
+
+.fm-status-badge[data-status="info"] {
+  border-color: color-mix(in srgb, var(--fm-accent) 25%, var(--fm-border-subtle));
+  color: var(--fm-text-secondary);
+}

@@ -1,0 +1,44 @@
+.fm-notifications {
+  position: fixed;
+  right: var(--fm-space-4);
+  bottom: calc(var(--fm-space-4) + 28px);
+  z-index: 120;
+  display: grid;
+  gap: var(--fm-space-2);
+  width: min(360px, calc(100vw - (var(--fm-space-4) * 2)));
+  pointer-events: none;
+}
+
+.fm-notifications__toast {
+  display: grid;
+  gap: var(--fm-space-1);
+  padding: var(--fm-space-3);
+  border: 1px solid var(--fm-border-default);
+  border-left: 3px solid var(--fm-success);
+  border-radius: var(--fm-radius-md);
+  background: color-mix(in srgb, var(--fm-success) 8%, var(--fm-bg-panel));
+  box-shadow: var(--fm-shadow-panel);
+  color: var(--fm-text-primary);
+  pointer-events: auto;
+}
+
+.fm-notifications__toast-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--fm-space-2);
+}
+
+.fm-notifications__close {
+  flex: 0 0 auto;
+  color: var(--fm-text-muted);
+}
+
+.fm-notifications__toast strong {
+  font-size: var(--fm-font-size-sm);
+}
+
+.fm-notifications__toast span {
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}

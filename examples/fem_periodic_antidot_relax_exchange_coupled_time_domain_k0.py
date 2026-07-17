@@ -142,9 +142,10 @@ study.stages.add_minimize(
 # study.stages.fft_response("my", stage_id="analyse-k0-response")
 study.solver(
     integrator="rk45",
-    # dt=1e-13,
+    dt_initial=1e-15,  # opcjonalne; bez tego startuje dokładnie od dt_min
     dt_min=1e-16,
-    max_error=1e-6,
+    dt_max=1e-14,
+    max_err=1e-6,
     g=2.115,
 )
 study.stages.add_run(until=t_run)

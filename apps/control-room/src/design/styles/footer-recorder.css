@@ -1,0 +1,55 @@
+.fm-footer-recorder {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--fm-space-2);
+  align-items: start;
+  min-width: 0;
+  padding: var(--fm-space-2);
+  overflow: auto;
+}
+
+.fm-footer-recorder__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-footer-recorder__metric {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
+  padding: var(--fm-space-2);
+}
+
+.fm-footer-recorder__metric > span {
+  color: var(--fm-text-muted);
+}
+
+.fm-footer-recorder__metric > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fm-text-primary);
+  font-family: var(--fm-font-mono);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-footer-recorder__metric[data-tone="critical"] > strong {
+  color: var(--fm-danger);
+}
+
+.fm-footer-recorder__actions {
+  display: inline-flex;
+  gap: var(--fm-space-1);
+}
+
+.fm-footer-recorder__actions .fm-button {
+  gap: var(--fm-space-1);
+  white-space: nowrap;
+}
+

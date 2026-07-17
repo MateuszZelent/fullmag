@@ -293,7 +293,7 @@ function useObjectRegionMagneticParametersPanelView({
         <FieldRow label="Parameter fields" value={model.materialFieldCount} />
 
         {inheritedParams.length > 0 && (
-          <div className="fm-region-inherited-parameters" style={{ marginTop: "8px", marginBottom: "8px" }}>
+          <div className="fm-region-inherited-parameters fm-mt-2 fm-mb-2">
             {inheritedParams.map((param) => {
               const info = getParentParamInfo(param, model.objectId, model.materialRef, materialFields, sceneData);
               return (
@@ -320,7 +320,7 @@ function useObjectRegionMagneticParametersPanelView({
             sceneData,
           );
           return (
-            <div className="fm-region-override" key={`override:${index}`} style={{ borderTop: "1px solid var(--fm-border-subtle)", paddingTop: "12px", marginTop: "12px" }}>
+            <div className="fm-region-override fm-section-separator" key={`override:${index}`}>
               <FormField
                 label={`Override ${index + 1}`}
                 type="select"
@@ -377,7 +377,7 @@ function useObjectRegionMagneticParametersPanelView({
                 <option value="error">Error</option>
                 <option value="higher_priority_wins">Higher Priority Wins</option>
               </FormField>
-              <div className="fm-inspector-toolbar" style={{ marginTop: "8px" }}>
+              <div className="fm-inspector-toolbar fm-toolbar-top">
                 <Button
                   size="sm"
                   type="button"
@@ -390,7 +390,7 @@ function useObjectRegionMagneticParametersPanelView({
             </div>
           );
         })}
-        <div className="fm-inspector-toolbar" style={{ marginTop: "12px" }}>
+        <div className="fm-inspector-toolbar fm-toolbar-top-lg">
           <Button
             size="sm"
             type="button"
@@ -415,9 +415,8 @@ function useObjectRegionMagneticParametersPanelView({
           );
           return (
           <div
-            className="fm-region-override"
+            className="fm-region-override fm-section-separator"
             key={field.assignmentId}
-            style={{ borderTop: "1px solid var(--fm-border-subtle)", marginTop: "12px", paddingTop: "12px" }}
           >
             <FormField
               label={`Field ${index + 1}`}
@@ -579,7 +578,7 @@ function useObjectRegionMagneticParametersPanelView({
               <option value="higher_priority_wins">Higher Priority Wins</option>
               <option value="min_mesh_size_wins">Min Mesh Size Wins</option>
             </FormField>
-            <div className="fm-inspector-toolbar" style={{ marginTop: "8px" }}>
+            <div className="fm-inspector-toolbar fm-toolbar-top">
               <Button
                 disabled={fieldPending}
                 size="sm"
@@ -593,7 +592,7 @@ function useObjectRegionMagneticParametersPanelView({
           </div>
           );
         })}
-        <div className="fm-inspector-toolbar" style={{ marginTop: "12px" }}>
+        <div className="fm-inspector-toolbar fm-toolbar-top-lg">
           <Button
             disabled={fieldPending || !canWriteRegion}
             size="sm"

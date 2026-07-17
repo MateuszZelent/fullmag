@@ -1,23 +1,60 @@
 @import "tailwindcss";
+
+/* ── Tokens & Theme ── */
 @import "../src/design/styles/tokens.css";
 @import "../src/design/styles/theme.css";
+
+/* ── Base & Layout ── */
 @import "../src/design/styles/base.css";
 @import "../src/design/styles/layout.css";
 @import "../src/design/styles/slots.css";
+
+/* ── Shared Primitives ── */
 @import "../src/design/styles/dropdown.css";
 @import "../src/design/styles/dialog.css";
+@import "../src/design/styles/dialog-mesh-build.css";
+@import "../src/design/styles/dialog-data-preview.css";
+@import "../src/design/styles/dialog-simulation-startup.css";
+@import "../src/design/styles/dialog-communication-policy.css";
+@import "../src/design/styles/dialog-notifications.css";
 @import "../src/design/styles/accordion.css";
 @import "../src/design/styles/context-menu.css";
 @import "../src/design/styles/tabs.css";
 @import "../src/design/styles/command.css";
+@import "../src/design/styles/primitives.css";
+
+/* ── Shell ── */
 @import "../src/design/styles/header.css";
 @import "../src/design/styles/ribbon.css";
+
+/* ── Explorer ── */
 @import "../src/design/styles/explorer.css";
+
+/* ── Inspector (base + domain splits) ── */
 @import "../src/design/styles/inspector.css";
+@import "../src/design/styles/inspector-sinc.css";
+@import "../src/design/styles/inspector-topological-charge.css";
+@import "../src/design/styles/inspector-hysteresis.css";
+@import "../src/design/styles/inspector-regions.css";
+@import "../src/design/styles/inspector-mesh.css";
+@import "../src/design/styles/inspector-frequency-domain.css";
+@import "../src/design/styles/inspector-study.css";
+@import "../src/design/styles/inspector-visualization.css";
+
+/* ── Viewport & Analysis ── */
 @import "../src/design/styles/viewport-3d.css";
 @import "../src/design/styles/cross-section-image.css";
 @import "../src/design/styles/analysis-plots.css";
+
+/* ── Footer (base + domain splits) ── */
 @import "../src/design/styles/footer.css";
+@import "../src/design/styles/footer-command-audit.css";
+@import "../src/design/styles/footer-transport-log.css";
+@import "../src/design/styles/footer-diagnostics.css";
+@import "../src/design/styles/footer-telemetry.css";
+@import "../src/design/styles/footer-recorder.css";
+
+/* ── Auxiliary ── */
 @import "../src/design/styles/command-palette.css";
 @import "../src/design/styles/registry-inspector.css";
 @import "../src/design/styles/thread-manager.css";
