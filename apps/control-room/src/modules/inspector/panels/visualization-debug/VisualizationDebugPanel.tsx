@@ -7,7 +7,7 @@ import { Button } from "@/shared/ui/Button";
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { VisualizationDebugSampleTable, formatScientific } from "./VisualizationDebugSampleTable";
 import type {
   VisualizationDebugPanelModel,
@@ -119,7 +119,7 @@ export function VisualizationDebugPanelView({
 
   return (
     <div className="fm-visualization-debug-panel" data-state={model.state}>
-      <InspectorSection title="Health" badge={disposition}>
+      <InspectorGroup title="Health" badge={disposition}>
         {emptyMessage ? (
           <div className="fm-visualization-debug-state" role="status">
             <strong>{emptyMessage.title}</strong>
@@ -140,18 +140,18 @@ export function VisualizationDebugPanelView({
         {!emptyMessage && scanning ? <FeedbackBanner kind="warning" message="Statistics scan in progress." /> : null}
         {!emptyMessage && noFieldRequested ? <FeedbackBanner kind="warning" message="No field requested for this target." /> : null}
         {!emptyMessage && requestFailed ? <FeedbackBanner kind="error" message="Matched field request failed." /> : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Active target">
+      <InspectorGroup title="Active target">
         <FieldRow label="Selection kind" value={model.target?.selectionKind ?? "unknown"} />
         <FieldRow label="Target kind" value={model.target?.kind ?? "—"} />
         <FieldRow label="Target ID" value={model.target?.id ?? "—"} />
         <FieldRow label="Target label" value={snapshots[0]?.target.label ?? "—"} />
         <FieldRow label="Carrier IDs" value={snapshots.flatMap((snapshot) => snapshot.target.carrierIds).join(", ") || "—"} />
         <FieldRow label="Registry source" value="canonical visualization registry" />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Viewport & carriers" badge={`${model.viewports.length}`}>
+      <InspectorGroup title="Viewport & carriers" badge={`${model.viewports.length}`}>
         {model.viewports.flatMap((viewport) => [
           <div className="fm-visualization-debug-subsection" key={`${viewport.viewportId}:viewport`}>
             <h4>{viewport.viewportId}</h4>
@@ -168,9 +168,9 @@ export function VisualizationDebugPanelView({
             </div>
           )),
         ])}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Request & transport" badge={`${model.transport.length}`}>
+      <InspectorGroup title="Request & transport" badge={`${model.transport.length}`}>
         {observations.map(({ carrier, query }, index) => (
           <div className="fm-visualization-debug-subsection" key={`request:${carrier.carrierId}:${index}`}>
             <h4>{carrier.carrierId}</h4>
@@ -190,9 +190,9 @@ export function VisualizationDebugPanelView({
             ))}</tbody>
           </table>
         </div>
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Backend metadata">
+      <InspectorGroup title="Backend metadata">
         {observations.map((observation, index) => (
           <div className="fm-visualization-debug-subsection" key={`meta:${observation.carrier.carrierId}:${index}`}>
             <h4>{observation.carrier.carrierId}</h4>
@@ -206,9 +206,9 @@ export function VisualizationDebugPanelView({
             </> : <p className="fm-visualization-debug-empty">Backend metadata is not available for this exact query.</p>}
           </div>
         ))}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Decoded payload">
+      <InspectorGroup title="Decoded payload">
         {observations.map(({ carrier }, index) => (
           <div className="fm-visualization-debug-subsection" key={`payload:${carrier.carrierId}:${index}`}>
             <h4>{carrier.carrierId}</h4>
@@ -223,22 +223,22 @@ export function VisualizationDebugPanelView({
             </> : <p className="fm-visualization-debug-empty">No decoded field payload is available.</p>}
           </div>
         ))}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Statistics">
+      <InspectorGroup title="Statistics">
         <div className="fm-visualization-debug-table-wrap">
           <table className="fm-visualization-debug-table" aria-label="Statistics by evidence source">
             <thead><tr><th scope="col">Carrier</th><th scope="col">Source</th><th scope="col">Min</th><th scope="col">Max</th><th scope="col">Mean</th><th scope="col">p01 / p99</th><th scope="col">Unit</th><th scope="col">Finite / non-finite / zero</th></tr></thead>
             <tbody>{statisticsRows(observations).map((row) => <tr key={row.key}><th scope="row">{row.carrierId}</th><td>{row.source}</td><td>{formatScientific(row.min)}</td><td>{formatScientific(row.max)}</td><td>{formatScientific(row.mean)}</td><td>{`${formatScientific(row.p01)} / ${formatScientific(row.p99)}`}</td><td>{row.unit}</td><td>{row.counts}</td></tr>)}</tbody>
           </table>
         </div>
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Sample values">
+      <InspectorGroup title="Sample values">
         <VisualizationDebugSampleTable model={model} />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Memory">
+      <InspectorGroup title="Memory">
         {memoryGroups(model).map((group) => (
           <div className="fm-visualization-debug-subsection" key={group.ownership}>
             <h4>{group.ownership}</h4>
@@ -247,9 +247,9 @@ export function VisualizationDebugPanelView({
           </div>
         ))}
         <p className="fm-visualization-debug-caption">Shared bytes are excluded from target-owned total.</p>
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Render passes">
+      <InspectorGroup title="Render passes">
         {observations.map(({ carrier }, index) => (
           <div className="fm-visualization-debug-subsection" key={`render:${carrier.carrierId}:${index}`}>
             <h4>{carrier.carrierId}</h4>
@@ -260,9 +260,9 @@ export function VisualizationDebugPanelView({
             <FieldRow label="Vectors" value={`${carrier.render.vectors.buildKey ?? "not built"} · ${carrier.render.vectors.segmentCount?.toLocaleString("en-US") ?? "0"} segments · ${carrier.render.vectors.degradation ?? "not degraded"}`} />
           </div>
         ))}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Revisions & provenance">
+      <InspectorGroup title="Revisions & provenance">
         {observations.map(({ carrier, snapshot }, index) => (
           <div className="fm-visualization-debug-subsection" key={`revision:${carrier.carrierId}:${index}`}>
             <h4>{carrier.carrierId}</h4>
@@ -273,25 +273,25 @@ export function VisualizationDebugPanelView({
             <FieldRow label="Rendered acknowledgement" value={carrier.render.adoption.frameCommitId ?? snapshot.viewport.frameCommitId} />
           </div>
         ))}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Detected inconsistencies" badge={`${allIssues(model).length}`}>
+      <InspectorGroup title="Detected inconsistencies" badge={`${allIssues(model).length}`}>
         {allIssues(model).length > 0 ? <ul className="fm-visualization-debug-issues">{allIssues(model).map((issue, index) => (
           <li data-severity={issue.severity} key={`${issue.code}:${index}`}><strong>{issue.severity}: {issue.code}</strong><span>{issue.source} — {issue.message}</span><code>{issue.evidence.join(" · ") || "No additional evidence"}</code></li>
         ))}</ul> : <p className="fm-visualization-debug-empty">No inconsistencies were detected.</p>}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Evidence export">
+      <InspectorGroup title="Evidence export">
         <div className="fm-visualization-debug-actions" role="group" aria-label="Visualization evidence actions">
           <Button className="fm-visualization-debug-action" size="sm" aria-label="Copy snapshot" onClick={() => void actions.copySnapshot()}>Copy snapshot</Button>
           <Button className="fm-visualization-debug-action" size="sm" aria-label="Copy resource key" onClick={() => void actions.copyResourceKey()}>Copy resource key</Button>
           <Button className="fm-visualization-debug-action" size="sm" aria-label="Export JSON" onClick={() => actions.exportJson()}>Export JSON</Button>
         </div>
         {feedback ? <FeedbackBanner kind={feedback.kind} message={feedback.message} /> : null}
-        <InspectorSection title="Raw bounded JSON" collapsible defaultCollapsed>
+        <InspectorGroup title="Raw bounded JSON" collapsible defaultOpen={false}>
           <pre className="fm-visualization-debug-json"><code>{rawJson}</code></pre>
-        </InspectorSection>
-      </InspectorSection>
+        </InspectorGroup>
+      </InspectorGroup>
     </div>
   );
 }

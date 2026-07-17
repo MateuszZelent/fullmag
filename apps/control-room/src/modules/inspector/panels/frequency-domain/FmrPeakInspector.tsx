@@ -2,6 +2,8 @@
 
 import type { ReactNode } from "react";
 
+import { Badge } from "@/shared/ui/Badge";
+
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 
@@ -42,9 +44,9 @@ export function FmrPeakInspector({
         <div className="fm-frequency-domain-active-peak">
           <div className="fm-frequency-domain-active-peak__header">
             <h4>{summary.frequency}</h4>
-            <span className="fm-inspector-section__badge">
+            <Badge variant="secondary">
               {summary.sourceBadge}
-            </span>
+            </Badge>
           </div>
           <FieldRow label="Frequency" value={summary.frequency} />
           <FieldRow label="Physical source" value={summary.source} />

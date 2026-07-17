@@ -4,7 +4,7 @@ import { Calculator } from "lucide-react";
 import { useObjectTopologicalChargeResource } from "@/kernel/resources/studyRuntimeResources";
 import { FeedbackBanner } from "@/modules/inspector/primitives/FeedbackBanner";
 import { FieldRow } from "@/modules/inspector/primitives/FieldRow";
-import { InspectorSection } from "@/modules/inspector/primitives/InspectorSection";
+import { InspectorGroup } from "@/modules/inspector/primitives/InspectorGroup";
 import { Button } from "@/shared/ui/Button";
 import { Tabs, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
 
@@ -90,7 +90,7 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
 
   return (
     <div className="fm-inspector-panel">
-      <InspectorSection title="Topological Charge">
+      <InspectorGroup title="Topological Charge">
         <TopologicalChargeMethodSummary method={model.method} />
         <TopologicalChargeControls
           busy={busy}
@@ -117,7 +117,7 @@ export function TopologicalChargeExtensionPanel({ selection }: InspectorPanelPro
           <FieldRow key={row.label} label={row.label} value={row.value} />
         ))}
         <TopologicalChargeProfileTable profile={resource.data?.profile ?? []} />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }

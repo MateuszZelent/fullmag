@@ -272,4 +272,17 @@ describe("Inspector design-system reference contract", () => {
     expect(panel).not.toMatch(/<\/?InspectorSection\b/);
     expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
   });
+
+  it.each([
+    "PlaceholderPanel.tsx",
+    "boundary-faces/BoundaryFacesOverviewPanel.tsx",
+    "visualization-debug/VisualizationDebugPanel.tsx",
+    "../extensions/topological-charge/TopologicalChargeExtensionPanel.tsx",
+  ])("keeps remaining Inspector surface %s on compact groups", (fileName) => {
+    const panel = read(`src/modules/inspector/panels/${fileName}`);
+
+    expect(panel).toContain("InspectorGroup");
+    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
+    expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
+  });
 });

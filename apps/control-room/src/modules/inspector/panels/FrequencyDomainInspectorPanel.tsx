@@ -54,6 +54,7 @@ import {
 import {
   formatFrequencyRangeBoundsHz,
 } from "@/shared/domain/analysis/frequencyUnits";
+import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -2875,9 +2876,9 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           >
             <div className="fm-frequency-domain-active-peak__header">
               <h4>Active FMR Peak</h4>
-              <span className="fm-inspector-section__badge">
+              <Badge variant="secondary">
                 {activeFmrPeak.source}
-              </span>
+              </Badge>
             </div>
             <FieldRow
               label="Active peak"
