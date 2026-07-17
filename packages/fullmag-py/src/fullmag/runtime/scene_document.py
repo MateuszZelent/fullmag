@@ -49,6 +49,30 @@ _INTERACTION_ORDER = (
 )
 
 
+def _stage_relax_algorithm(stage: dict[str, Any]) -> object:
+    has_canonical = "algorithm" in stage
+    has_legacy = "relax_algorithm" in stage
+    if has_canonical and has_legacy:
+        raise ValueError(
+            "stage must not contain both 'algorithm' and legacy 'relax_algorithm'"
+        )
+    if has_canonical:
+        return stage.get("algorithm")
+    return stage.get("relax_algorithm")
+
+
+def _canonical_scene_stage(raw_stage: object) -> object:
+    if not isinstance(raw_stage, dict):
+        return raw_stage
+    stage = dict(raw_stage)
+    algorithm = _stage_relax_algorithm(stage)
+    had_algorithm = "algorithm" in stage or "relax_algorithm" in stage
+    stage.pop("relax_algorithm", None)
+    if had_algorithm:
+        stage["algorithm"] = algorithm
+    return stage
+
+
 def _normalize_axis3(value: object) -> list[float]:
     if isinstance(value, list) and len(value) == 3:
         try:
@@ -289,7 +313,10 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
             "universe_mesh": builder.get("universe"),
             "shared_domain_mesh": builder.get("mesh") or {},
             "mesh_defaults": builder.get("mesh") or {},
-            "stages": builder.get("stages") or [],
+            "stages": [
+                _canonical_scene_stage(stage)
+                for stage in (builder.get("stages") or [])
+            ],
             "study_pipeline": builder.get("study_pipeline"),
             "table_autosave": builder.get("table_autosave"),
             "initial_state": builder.get("initial_state"),
@@ -532,7 +559,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                     else {}
                 ),
                 "until_seconds": _number_or_none(stage.get("until_seconds")),
-                "relax_algorithm": stage.get("relax_algorithm") or None,
+                "relax_algorithm": _stage_relax_algorithm(stage) or None,
                 "torque_tolerance": _number_or_none(stage.get("torque_tolerance")),
                 "energy_tolerance": _number_or_none(stage.get("energy_tolerance")),
                 "max_steps": _int_or_none(stage.get("max_steps")),

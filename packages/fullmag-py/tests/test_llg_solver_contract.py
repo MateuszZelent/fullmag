@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import inspect
 import pickle
@@ -749,6 +750,80 @@ class CanonicalLlgSolverContractTests(unittest.TestCase):
             self.assertEqual(reloaded_policy.dt_min, 1e-15)
             self.assertEqual(reloaded_policy.dt_max, 8e-14)
             self.assertEqual(reloaded_policy.atol, 4e-8)
+
+    def test_rust_canonical_scene_stage_algorithm_edit_rewrites_and_reloads(self) -> None:
+        source = """
+        import fullmag as fm
+
+        study = fm.study("canonical_algorithm_edit")
+        study.engine("fdm")
+        study.cell(5e-9, 5e-9, 5e-9)
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        study.stages.add_relax(
+            stage_id="relax",
+            algorithm="projected_gradient_bb",
+        )
+        """
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "canonical_algorithm_edit.py"
+            path.write_text(textwrap.dedent(source), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+            scene = json.loads(
+                json.dumps(
+                    build_scene_document_from_builder(export_builder_draft(loaded))
+                )
+            )
+            stage = scene["study"]["stages"][0]
+            self.assertEqual(stage["algorithm"], "projected_gradient_bb")
+            self.assertNotIn("relax_algorithm", stage)
+            stage["algorithm"] = "nonlinear_cg"
+            overrides = builder_overrides_from_scene_document(scene)
+            self.assertEqual(overrides["stages"][0]["relax_algorithm"], "nonlinear_cg")
+
+            rendered = rewrite_loaded_problem_script(loaded, overrides=overrides)[
+                "rendered_source"
+            ]
+            self.assertIn('algorithm="nonlinear_cg"', rendered)
+            rewritten_path = Path(tmp_dir) / "canonical_algorithm_rewritten.py"
+            rewritten_path.write_text(rendered, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(
+                rewritten_path, lightweight_assets=True
+            )
+            self.assertEqual(
+                reloaded.stages[0].problem.study.algorithm,
+                "nonlinear_cg",
+            )
+
+            rebuilt_scene = build_scene_document_from_builder(
+                export_builder_draft(reloaded)
+            )
+            rebuilt_stage = rebuilt_scene["study"]["stages"][0]
+            self.assertEqual(rebuilt_stage["algorithm"], "nonlinear_cg")
+            self.assertNotIn("relax_algorithm", rebuilt_stage)
+
+            legacy_scene = build_scene_document_from_builder(
+                export_builder_draft(loaded)
+            )
+            legacy_stage = legacy_scene["study"]["stages"][0]
+            legacy_stage["relax_algorithm"] = legacy_stage.pop("algorithm")
+            legacy_overrides = builder_overrides_from_scene_document(legacy_scene)
+            self.assertEqual(
+                legacy_overrides["stages"][0]["relax_algorithm"],
+                "projected_gradient_bb",
+            )
+
+            ambiguous_scene = build_scene_document_from_builder(
+                export_builder_draft(loaded)
+            )
+            ambiguous_scene["study"]["stages"][0]["relax_algorithm"] = (
+                "projected_gradient_bb"
+            )
+            with self.assertRaisesRegex(ValueError, "algorithm.*relax_algorithm"):
+                builder_overrides_from_scene_document(ambiguous_scene)
 
     def test_partial_advanced_scene_override_merges_and_preserves_presence(self) -> None:
         source = """

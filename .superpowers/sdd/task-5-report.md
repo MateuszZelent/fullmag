@@ -358,3 +358,34 @@ No commit was created.
 ### Scope
 
 No OpenAPI schema, generated client, command transport, API route, resource hook, realtime event, binary codec, ribbon, viewport, Python DSL, planner, or compiled solver runtime changed.
+
+## Finding 25 Python scene algorithm vocabulary
+
+Status: `DONE`
+
+No commit was created.
+
+### Resolution
+
+- Python SceneDocument emission now copies each builder stage and replaces the internal `relax_algorithm` key with canonical `algorithm` without mutating the builder draft.
+- SceneDocument override projection reads canonical `algorithm` first and accepts `relax_algorithm` only when it is the sole legacy spelling. Any payload containing both keys fails closed, matching Rust serde duplicate-field behavior.
+- A real loaded PG-BB stage is edited through a Rust-reserialized canonical SceneDocument payload to `algorithm="nonlinear_cg"`; the Python override, canonical rewrite, reload, and re-export all preserve nonlinear CG instead of falling back to the loaded stage.
+- The same proof covers legacy-only input compatibility and ambiguous dual-key rejection.
+
+### Exact RED evidence
+
+- `PYTHONPATH=packages/fullmag-py/src python3 -m unittest packages.fullmag-py.tests.test_llg_solver_contract.CanonicalLlgSolverContractTests.test_rust_canonical_scene_stage_algorithm_edit_rewrites_and_reloads`
+  - RED: canonical `algorithm="nonlinear_cg"` projected to `overrides["stages"][0]["relax_algorithm"] == None`, proving that rewrite would retain the loaded PG-BB algorithm.
+
+### Exact GREEN evidence
+
+- Focused canonical SceneDocument rewrite/reload: 1 passed.
+- Python LLG plus script-builder round-trip: 45 passed.
+- Focused Python API scene/stage cases: 4 passed.
+- Rust authoring regression: `cargo test -p fullmag-authoring --quiet` — 47 passed.
+- API scene commit boundary: `cargo test -p fullmag-api authoring_scene_put_commits_scene_document --quiet` — 1 passed, 624 filtered out.
+- `git diff --check`: exit 0.
+
+### Scope
+
+No OpenAPI schema, generated client, command transport, API route, resource hook, realtime event, binary codec, Control Room component, planner, or compiled solver runtime changed.

@@ -65,3 +65,9 @@ Status: findings 22 and 23 are resolved in the current worktree with an explicit
 24. Rust stage validation must consume the real scene/UI algorithm vocabulary. Control Room emits `algorithm`, while `ScriptBuilderStageState` currently validates only `relax_algorithm` and flattens `algorithm` into `extra`; omitted relax algorithm also means the public LLG default. Resolve one canonical/compatible value before validation and add a full `SceneDocument` deserialization/validation test for both explicit `algorithm="llg_overdamped"` and the omitted default, rather than testing only the private internal spelling.
 
 Status: resolved in the current worktree. Public SceneDocument JSON now serializes `algorithm`, accepts legacy `relax_algorithm` on input, rejects duplicate/conflicting spellings, and validates omitted relax algorithms as the public `llg_overdamped` default.
+
+## Final Python scene-vocabulary gap after `3ffc339e`
+
+25. Normalize Python SceneDocument conversion to the same canonical `algorithm` key: emit `algorithm`, read it preferentially, accept `relax_algorithm` only as legacy fallback, and add a Rust-reserialized SceneDocument -> Python canonical rewrite/reload proof so algorithm edits cannot be dropped or fall back to the loaded stage.
+
+Status: resolved in the current worktree. Python emits canonical `algorithm`, accepts only an unambiguous legacy `relax_algorithm` fallback, and preserves canonical Rust/UI algorithm edits through rewrite and reload.
