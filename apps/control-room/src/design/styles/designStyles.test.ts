@@ -40,6 +40,24 @@ describe("control-room design styles", () => {
     expect(themeCss).not.toContain("--background");
   });
 
+  it("bridges canonical Fullmag tokens into Tailwind without palette copies", () => {
+    const globalsCss = readAppFile("app/globals.css");
+    const bridgeCss = readAppFile("src/design/styles/tailwind-theme.css");
+
+    expect(globalsCss.indexOf('tailwind-theme.css"')).toBeGreaterThan(
+      globalsCss.indexOf('@import "tailwindcss";'),
+    );
+    expect(globalsCss.indexOf('tailwind-theme.css"')).toBeLessThan(
+      globalsCss.indexOf('tokens.css"'),
+    );
+    expect(bridgeCss).toContain("@theme inline");
+    expect(bridgeCss).toContain("--color-fm-panel: var(--fm-bg-panel);");
+    expect(bridgeCss).toContain(
+      "--spacing-fm-control-sm: var(--fm-control-height-sm);",
+    );
+    expect(bridgeCss).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(/i);
+  });
+
   it("maps dark and light themes to Catppuccin Mocha and Latte", () => {
     const themeCss = readAppFile("src/design/styles/theme.css");
 

@@ -21,6 +21,9 @@
   --fm-ribbon-tabs-height: 34px;
   --fm-status-height: 26px;
   --fm-panel-header-height: 32px;
+  --fm-control-height-sm: 32px;
+  --fm-control-height-md: 36px;
+  --fm-field-row-min-height: 36px;
 
   /* Typography */
   --fm-font-ui: "Inter", "Aptos", sans-serif;
@@ -32,6 +35,15 @@
   --fm-font-size-md: 13px;
   --fm-font-size-lg: 15px;
   --fm-line-height-tight: 1.1;
+  --fm-font-size-field-label: 12px;
+  --fm-font-size-control: 12px;
+  --fm-font-size-help: 11px;
+  --fm-line-height-control: 1.35;
+
+  /* Control geometry and states */
+  --fm-radius-control: 6px;
+  --fm-radius-surface: 8px;
+  --fm-disabled-opacity: 1;
 
   /* Font weights */
   --fm-font-weight-normal: 400;

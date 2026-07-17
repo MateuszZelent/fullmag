@@ -15,15 +15,18 @@
   --fm-bg-elevated: #313244;
   --fm-bg-muted: #262739;
   --fm-bg-hover: #3b3c4f;
+  --fm-bg-disabled: var(--fm-bg-muted);
 
   --fm-border-subtle: #313244;
   --fm-border-default: #45475a;
   --fm-border-strong: #585b70;
   --fm-border-muted: #292a3a;
+  --fm-border-disabled: var(--fm-border-muted);
 
   --fm-text-primary: #cdd6f4;
   --fm-text-secondary: #bac2de;
   --fm-text-muted: #6c7086;
+  --fm-text-disabled: var(--fm-text-muted);
   --fm-text-inverse: #11111b;
 
   --fm-accent: #89b4fa;
@@ -79,15 +82,18 @@
   --fm-bg-elevated: #e6e9ef;
   --fm-bg-muted: #e9ecf2;
   --fm-bg-hover: #dce0e8;
+  --fm-bg-disabled: var(--fm-bg-muted);
 
   --fm-border-subtle: #ccd0da;
   --fm-border-default: #bcc0cc;
   --fm-border-strong: #acb0be;
   --fm-border-muted: #d7dae2;
+  --fm-border-disabled: var(--fm-border-muted);
 
   --fm-text-primary: #4c4f69;
   --fm-text-secondary: #5c5f77;
   --fm-text-muted: #9ca0b0;
+  --fm-text-disabled: var(--fm-text-muted);
   --fm-text-inverse: #eff1f5;
 
   --fm-accent: #1e66f5;
