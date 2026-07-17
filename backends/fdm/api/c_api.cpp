@@ -430,11 +430,21 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
     const bool has_oersted_field = plan->oersted_field_xyz != nullptr && plan->oersted_field_len != 0;
     ctx->has_oersted_field = ctx->has_oersted_cylinder || has_oersted_field;
 
-    // Adaptive step config (DP45)
-    ctx->adaptive_max_error = plan->adaptive_max_error > 0 ? plan->adaptive_max_error : 1e-5;
+    // Legacy v1 compatibility: embedded RK retained its historical adaptive
+    // interpretation. Canonical fixed/adaptive semantics use the v2 symbol.
+    ctx->adaptive_enabled =
+        plan->integrator == FULLMAG_FDM_INTEGRATOR_DP45 ||
+        plan->integrator == FULLMAG_FDM_INTEGRATOR_RK23;
+    ctx->adaptive_tolerance_mode = FULLMAG_FDM_ADAPTIVE_MAX_ERROR;
+    ctx->adaptive_atol = plan->adaptive_max_error > 0 ? plan->adaptive_max_error : 1e-5;
+    ctx->adaptive_rtol = 0.0;
     ctx->adaptive_dt_min    = plan->adaptive_dt_min > 0    ? plan->adaptive_dt_min    : 1e-18;
     ctx->adaptive_dt_max    = plan->adaptive_dt_max > 0    ? plan->adaptive_dt_max    : 1e-10;
-    ctx->adaptive_headroom  = plan->adaptive_headroom > 0  ? plan->adaptive_headroom  : 0.8;
+    ctx->adaptive_safety = plan->adaptive_headroom > 0  ? plan->adaptive_headroom  : 0.8;
+    // Legacy v1 had no ratio clamp beyond dt_min/dt_max.
+    ctx->adaptive_growth_limit = 1.0e300;
+    ctx->adaptive_shrink_limit = 1.0e-300;
+    ctx->adaptive_canonical_controller = false;
 
     // Validate
     if (ctx->cell_count == 0) {
@@ -750,6 +760,79 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 #endif
 }
 
+fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
+    const fullmag_fdm_plan_desc_v2 *plan)
+{
+#if FULLMAG_HAS_CUDA
+    if (!plan) return nullptr;
+    fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan->base);
+    if (!handle) return nullptr;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (!ctx->last_error.empty()) return handle;
+
+    const auto &policy = plan->time_policy;
+    ctx->adaptive_enabled = policy.adaptive_enabled != 0;
+    if (!ctx->adaptive_enabled) {
+        ctx->fsal_valid = false;
+        return handle;
+    }
+    const bool compatible_integrator =
+        plan->base.integrator == FULLMAG_FDM_INTEGRATOR_RK23 ||
+        plan->base.integrator == FULLMAG_FDM_INTEGRATOR_DP45;
+    const bool valid_mode =
+        policy.adaptive_tolerance_mode == FULLMAG_FDM_ADAPTIVE_MAX_ERROR ||
+        policy.adaptive_tolerance_mode == FULLMAG_FDM_ADAPTIVE_ADVANCED;
+    const bool valid_tolerances =
+        std::isfinite(policy.adaptive_atol) && policy.adaptive_atol >= 0.0 &&
+        std::isfinite(policy.adaptive_rtol) && policy.adaptive_rtol >= 0.0 &&
+        (policy.adaptive_atol > 0.0 || policy.adaptive_rtol > 0.0);
+    const bool compatible_tolerance_mode =
+        (policy.adaptive_tolerance_mode == FULLMAG_FDM_ADAPTIVE_MAX_ERROR &&
+         policy.adaptive_atol > 0.0 && policy.adaptive_rtol == 0.0) ||
+        (policy.adaptive_tolerance_mode == FULLMAG_FDM_ADAPTIVE_ADVANCED &&
+         (policy.adaptive_atol > 0.0 || policy.adaptive_rtol > 0.0));
+    const bool valid_bounds =
+        std::isfinite(policy.adaptive_dt_min) && policy.adaptive_dt_min > 0.0 &&
+        std::isfinite(policy.adaptive_dt_max) &&
+        policy.adaptive_dt_max >= policy.adaptive_dt_min;
+    const bool valid_controller =
+        std::isfinite(policy.adaptive_safety) && policy.adaptive_safety > 0.0 &&
+        policy.adaptive_safety <= 1.0 &&
+        std::isfinite(policy.adaptive_growth_limit) && policy.adaptive_growth_limit > 1.0 &&
+        std::isfinite(policy.adaptive_shrink_limit) && policy.adaptive_shrink_limit > 0.0 &&
+        policy.adaptive_shrink_limit < 1.0;
+    const bool guards_disabled_until_enforced =
+        !policy.has_adaptive_max_spin_rotation && !policy.has_adaptive_norm_tolerance;
+    if (!compatible_integrator || !valid_mode || !valid_tolerances ||
+        !compatible_tolerance_mode || !valid_bounds || !valid_controller ||
+        !guards_disabled_until_enforced)
+    {
+        ctx->last_error = "invalid complete adaptive timestep policy in fullmag_fdm_plan_desc_v2";
+        return handle;
+    }
+
+    ctx->adaptive_tolerance_mode = policy.adaptive_tolerance_mode;
+    ctx->adaptive_atol = policy.adaptive_atol;
+    ctx->adaptive_rtol = policy.adaptive_rtol;
+    ctx->adaptive_dt_min = policy.adaptive_dt_min;
+    ctx->adaptive_dt_max = policy.adaptive_dt_max;
+    ctx->adaptive_safety = policy.adaptive_safety;
+    ctx->adaptive_growth_limit = policy.adaptive_growth_limit;
+    ctx->adaptive_shrink_limit = policy.adaptive_shrink_limit;
+    ctx->adaptive_canonical_controller = true;
+    ctx->adaptive_has_previous_error = false;
+    ctx->adaptive_previous_error = 0.0;
+    ctx->has_adaptive_max_spin_rotation = policy.has_adaptive_max_spin_rotation != 0;
+    ctx->adaptive_max_spin_rotation = policy.adaptive_max_spin_rotation;
+    ctx->has_adaptive_norm_tolerance = policy.has_adaptive_norm_tolerance != 0;
+    ctx->adaptive_norm_tolerance = policy.adaptive_norm_tolerance;
+    return handle;
+#else
+    (void)plan;
+    return nullptr;
+#endif
+}
+
 fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     const fullmag_fdm_multilayer_plan_desc_v2 *plan)
 {
@@ -911,6 +994,13 @@ int fullmag_fdm_backend_step(
         out_stats->dt_seconds = 0.0;
         fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
         return FULLMAG_FDM_ERR_INTERRUPTED;
+    }
+
+    if (ctx->last_error == "dt_min_exhausted") {
+        return FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED;
+    }
+    if (!ctx->last_error.empty()) {
+        return FULLMAG_FDM_ERR_CUDA;
     }
 
     // Check for CUDA errors

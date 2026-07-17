@@ -2,6 +2,6 @@
 
 #include "fullmag_adaptive_step_decision.hpp"
 
-namespace fullmag::fem {
+namespace fullmag::fdm {
 namespace adaptive = ::fullmag::adaptive;
 }

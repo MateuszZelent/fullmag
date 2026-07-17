@@ -103,6 +103,7 @@ struct AdaptiveErrorPolicy {
     double error = 0.0;
     double dt_candidate = 0.0;
     int accepted = 0;
+    bool dt_min_exhausted = false;
 };
 
 struct DeviceMultilayerFftWorkspace {
@@ -253,11 +254,23 @@ struct Context {
     DeviceVectorField k_fsal; // FSAL: k7 from prev accepted step = k1 for next
     bool              fsal_valid = false;
 
-    // Adaptive step config (DP45)
-    double adaptive_max_error = 1e-5;
+    // Complete v2 timestep policy (fixed unless explicitly enabled).
+    bool adaptive_enabled = false;
+    fullmag_fdm_adaptive_tolerance_mode adaptive_tolerance_mode = FULLMAG_FDM_ADAPTIVE_MAX_ERROR;
+    double adaptive_atol = 0.0;
+    double adaptive_rtol = 0.0;
     double adaptive_dt_min    = 1e-18;
     double adaptive_dt_max    = 1e-10;
-    double adaptive_headroom  = 0.8;
+    double adaptive_safety = 0.8;
+    double adaptive_growth_limit = 2.0;
+    double adaptive_shrink_limit = 0.2;
+    bool adaptive_canonical_controller = false;
+    bool adaptive_has_previous_error = false;
+    double adaptive_previous_error = 0.0;
+    bool has_adaptive_max_spin_rotation = false;
+    double adaptive_max_spin_rotation = 0.0;
+    bool has_adaptive_norm_tolerance = false;
+    double adaptive_norm_tolerance = 0.0;
 
     // --- ABM3-specific history buffers ---
     DeviceVectorField abm_f_n;       // RHS at step n

@@ -4852,7 +4852,7 @@ fn execute_cuda_fdm(
         cancelled = outcome.cancelled;
         numerical_stagnation = outcome.numerical_stagnation;
     } else {
-        let dt = provenance
+        let mut dt = provenance
             .timestep_policy
             .as_ref()
             .expect("LLG execution requires a resolved timestep policy")
@@ -4917,6 +4917,11 @@ fn execute_cuda_fdm(
             };
             ensure_single_object_scalars(&mut stats, "free");
             current_time = stats.time;
+            dt = crate::fdm::next_fdm_attempt_dt(
+                plan.adaptive_timestep.is_some(),
+                dt,
+                stats.dt_suggested,
+            );
             latest_stats = Some(stats.clone());
             current_stats = stats.clone();
             let due_scalar_row = scalar_row_due(&scalar_schedules, stats.time);

@@ -23,6 +23,7 @@ fn permalloy_problem(
     let dyn_ = LlgConfig {
         gyromagnetic_ratio: DEFAULT_GYROMAGNETIC_RATIO,
         integrator,
+        adaptive_enabled: false,
         adaptive: AdaptiveStepConfig::default(),
         precession_enabled: true,
     };

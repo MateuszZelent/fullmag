@@ -12,6 +12,7 @@
  */
 
 #include "context.hpp"
+#include "adaptive_step_decision.hpp"
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -102,23 +103,31 @@ __global__ void adaptive_error_policy_kernel(
     const double *max_error_sq,
     double *policy_out,
     double dt,
-    double adaptive_max_error,
+    double adaptive_threshold,
     double adaptive_dt_min,
     double adaptive_dt_max,
-    double adaptive_headroom,
+    double adaptive_safety,
+    double adaptive_growth_limit,
+    double adaptive_shrink_limit,
     double exponent)
 {
     double max_sq = max_error_sq != nullptr ? max_error_sq[0] : 0.0;
     double error = max_sq > 0.0 ? sqrt(max_sq) : 0.0;
     double dt_candidate = dt;
     if (error > 0.0) {
-        dt_candidate = adaptive_headroom * dt * pow(adaptive_max_error / error, exponent);
+        dt_candidate = adaptive_safety * dt * pow(adaptive_threshold / error, exponent);
+        double ratio = dt_candidate / dt;
+        ratio = fmin(ratio, adaptive_growth_limit);
+        ratio = fmax(ratio, adaptive_shrink_limit);
+        dt_candidate = dt * ratio;
         dt_candidate = fmin(dt_candidate, adaptive_dt_max);
         dt_candidate = fmax(dt_candidate, adaptive_dt_min);
     } else {
         dt_candidate = adaptive_dt_max;
     }
-    double accepted = (error <= adaptive_max_error || dt <= adaptive_dt_min) ? 1.0 : 0.0;
+    // A failed attempt at the lower bound is terminal: dt_min_exhausted.
+    double accepted = error <= adaptive_threshold ? 1.0
+        : (dt <= adaptive_dt_min ? -1.0 : 0.0);
     policy_out[0] = error;
     policy_out[1] = dt_candidate;
     policy_out[2] = accepted;
@@ -771,14 +780,53 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
         dst = tmp;
     }
 
+    if (ctx.adaptive_canonical_controller) {
+        double max_sq = 0.0;
+        cudaError_t err = cudaMemcpyAsync(&max_sq, src, sizeof(double), cudaMemcpyDeviceToHost, stream);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemcpyAsync(reduce_adaptive_error_policy)", err);
+            context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
+            return policy;
+        }
+        fullmag_fdm_record_control_scalar_d2h(ctx, sizeof(double));
+        err = cudaStreamSynchronize(stream);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaStreamSynchronize(reduce_adaptive_error_policy)", err);
+            context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy");
+            return policy;
+        }
+        fullmag_fdm_record_control_scalar_host_sync(ctx);
+        if (!context_end_compute_stream_work(ctx, "reduce_adaptive_error_policy")) return policy;
+        policy.error = max_sq > 0.0 ? std::sqrt(max_sq) : 0.0;
+        const int order_est = exponent == 0.2 ? 4 : 2;
+        const auto decision = adaptive::decide_adaptive_step(
+            {order_est, ctx.adaptive_dt_min, ctx.adaptive_dt_max, ctx.adaptive_safety,
+             ctx.adaptive_growth_limit, ctx.adaptive_shrink_limit},
+            {dt, policy.error, ctx.adaptive_previous_error, ctx.adaptive_has_previous_error});
+        policy.dt_candidate = decision.dt_next;
+        policy.accepted = decision.kind == adaptive::AdaptiveDecisionKind::accepted ? 1 : 0;
+        policy.dt_min_exhausted =
+            decision.reason == adaptive::AdaptiveDecisionReason::dt_min_exhausted;
+        if (policy.accepted) {
+            ctx.adaptive_has_previous_error = policy.error > 0.0;
+            ctx.adaptive_previous_error = policy.error > 0.0 ? policy.error : 0.0;
+        }
+        if (decision.kind == adaptive::AdaptiveDecisionKind::failed && !policy.dt_min_exhausted) {
+            ctx.last_error = adaptive::adaptive_decision_reason_id(decision.reason);
+        }
+        return policy;
+    }
+
     adaptive_error_policy_kernel<<<1, 1, 0, stream>>>(
         src,
         ctx.adaptive_policy_scratch,
         dt,
-        ctx.adaptive_max_error,
+        1.0,
         ctx.adaptive_dt_min,
         ctx.adaptive_dt_max,
-        ctx.adaptive_headroom,
+        ctx.adaptive_safety,
+        ctx.adaptive_growth_limit,
+        ctx.adaptive_shrink_limit,
         exponent);
 
     double host_values[3] = {0.0, dt, 0.0};
@@ -802,6 +850,7 @@ AdaptiveErrorPolicy reduce_adaptive_error_policy(
     policy.error = host_values[0];
     policy.dt_candidate = host_values[1];
     policy.accepted = host_values[2] >= 0.5 ? 1 : 0;
+    policy.dt_min_exhausted = host_values[2] < -0.5;
     return policy;
 }
 

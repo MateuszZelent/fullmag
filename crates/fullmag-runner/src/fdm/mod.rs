@@ -7,16 +7,29 @@ pub(crate) mod schedules;
 use crate::types::RunError;
 use std::collections::BTreeSet;
 
-#[cfg(feature = "cuda")]
-pub(crate) fn reject_adaptive_cuda_single_grid_plan(
-    plan: &fullmag_ir::FdmPlanIR,
-) -> Result<(), RunError> {
-    if plan.adaptive_timestep.is_some() {
-        return Err(RunError {
-            message: "adaptive time stepping is not supported by the FDM CUDA runtime until its ABI preserves the complete controller contract".to_string(),
-        });
+#[cfg(any(feature = "cuda", test))]
+pub(crate) fn next_fdm_attempt_dt(
+    adaptive: bool,
+    current_dt: f64,
+    suggested_dt: Option<f64>,
+) -> f64 {
+    if adaptive {
+        suggested_dt.unwrap_or(current_dt)
+    } else {
+        current_dt
     }
-    Ok(())
+}
+
+#[cfg(test)]
+mod timestep_tests {
+    use super::next_fdm_attempt_dt;
+
+    #[test]
+    fn cuda_batch_consumes_accepted_dt_suggested_only_for_adaptive_policy() {
+        assert_eq!(next_fdm_attempt_dt(true, 1.0e-15, Some(4.0e-16)), 4.0e-16);
+        assert_eq!(next_fdm_attempt_dt(true, 1.0e-15, None), 1.0e-15);
+        assert_eq!(next_fdm_attempt_dt(false, 1.0e-15, Some(4.0e-16)), 1.0e-15);
+    }
 }
 
 pub(crate) fn reject_adaptive_multilayer_plan(
@@ -24,7 +37,7 @@ pub(crate) fn reject_adaptive_multilayer_plan(
 ) -> Result<(), RunError> {
     if plan.fixed_timestep.is_none() {
         return Err(RunError {
-            message: "multilayer FDM runtimes require an explicit fixed_timestep".to_string(),
+            message: "adaptive time stepping is unsupported for multilayer FDM runtimes; an explicit fixed_timestep is required before native materialization".to_string(),
         });
     }
     Ok(())

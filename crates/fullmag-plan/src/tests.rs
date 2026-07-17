@@ -5808,6 +5808,24 @@ fn staged_multilayer_rejects_adaptive_rk23() {
         .any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep")));
 }
 
+#[test]
+fn staged_multilayer_rejects_adaptive_rk23_max_error_convenience() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.problem_meta.runtime_metadata.insert("runtime_selection".to_string(), serde_json::json!({"device": "cpu"}));
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else { unreachable!() };
+    let fullmag_ir::DynamicsIR::Llg { integrator, fixed_timestep, adaptive_timestep, .. } = dynamics;
+    *integrator = "rk23".to_string();
+    *fixed_timestep = None;
+    *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+        atol: 1e-6, rtol: 0.0, dt_initial: Some(1e-15), dt_min: 1e-16,
+        dt_max: Some(1e-14), safety: 0.9, growth_limit: 2.0, shrink_limit: 0.2,
+        max_spin_rotation: None, norm_tolerance: None,
+    });
+    let err = plan(&ir).expect_err("staged CPU multilayer must reject max-error RK23");
+    assert!(err.reasons.iter().any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep")));
+}
+
 fn set_adaptive_rk45(problem: &mut ProblemIR, mode: fullmag_ir::AdaptiveToleranceModeIR) {
     let dynamics = match &mut problem.study {
         fullmag_ir::StudyIR::TimeEvolution { dynamics, .. }
@@ -5840,8 +5858,8 @@ fn set_adaptive_rk45(problem: &mut ProblemIR, mode: fullmag_ir::AdaptiveToleranc
 }
 
 #[test]
-fn adaptive_fdm_requires_explicit_cpu_and_rejects_auto_cuda_routes() {
-    for device in [None, Some("auto"), Some("cuda"), Some("gpu")] {
+fn adaptive_fdm_requires_explicit_cpu_or_cuda_and_rejects_auto_routes() {
+    for device in [None, Some("auto")] {
         let mut ir = ProblemIR::bootstrap_example();
         set_adaptive_rk45(
             &mut ir,
@@ -5853,12 +5871,12 @@ fn adaptive_fdm_requires_explicit_cpu_and_rejects_auto_cuda_routes() {
                 serde_json::json!({"device": device}),
             );
         }
-        let err = plan(&ir).expect_err("non-explicit CPU adaptive FDM must fail");
+        let err = plan(&ir).expect_err("automatic adaptive FDM route must fail");
         assert!(err
             .reasons
             .iter()
             .any(|reason| reason.contains("requires explicit")
-                && reason.contains("device='cpu'")));
+                && reason.contains("device='cuda'")));
     }
     let mut cpu = ProblemIR::bootstrap_example();
     set_adaptive_rk45(
@@ -5870,6 +5888,12 @@ fn adaptive_fdm_requires_explicit_cpu_and_rejects_auto_cuda_routes() {
         serde_json::json!({"device": "cpu"}),
     );
     plan(&cpu).expect("explicit CPU adaptive FDM should remain legal");
+    for device in ["cuda", "gpu"] {
+        let mut cuda = ProblemIR::bootstrap_example();
+        set_adaptive_rk45(&mut cuda, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
+        cuda.problem_meta.runtime_metadata.insert("runtime_selection".into(), serde_json::json!({"device": device}));
+        plan(&cuda).unwrap_or_else(|err| panic!("explicit {device} adaptive FDM should be legal: {:?}", err.reasons));
+    }
 }
 
 #[test]
@@ -10703,6 +10727,7 @@ fn fem_sharp_assignment_requires_conformal_in_strict() {
         "unexpected planner errors: {:?}",
         err.reasons
     );
+
 }
 
 #[test]
@@ -10946,7 +10971,6 @@ fn fem_sharp_conformal_ms_rejects_conflicting_nodal_and_element_realizations() {
         "unexpected planner errors: {:?}",
         err.reasons
     );
-
 }
 
 #[test]

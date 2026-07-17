@@ -233,6 +233,9 @@ use crate::DEFAULT_GYROMAGNETIC_RATIO;
 pub struct LlgConfig {
     pub gyromagnetic_ratio: f64,
     pub integrator: TimeIntegrator,
+    /// True only when the public problem selected an adaptive timestep policy.
+    /// Embedded RK tableaus remain fixed-step when this is false.
+    pub adaptive_enabled: bool,
     pub adaptive: AdaptiveStepConfig,
     pub precession_enabled: bool,
 }
@@ -242,6 +245,7 @@ impl Default for LlgConfig {
         Self {
             gyromagnetic_ratio: DEFAULT_GYROMAGNETIC_RATIO,
             integrator: TimeIntegrator::Heun,
+            adaptive_enabled: false,
             adaptive: AdaptiveStepConfig::default(),
             precession_enabled: true,
         }
@@ -256,12 +260,14 @@ impl LlgConfig {
         Ok(Self {
             gyromagnetic_ratio,
             integrator,
+            adaptive_enabled: false,
             adaptive: AdaptiveStepConfig::default(),
             precession_enabled: true,
         })
     }
 
     pub fn with_adaptive(mut self, config: AdaptiveStepConfig) -> Self {
+        self.adaptive_enabled = true;
         self.adaptive = config;
         self
     }

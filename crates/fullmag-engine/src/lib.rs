@@ -39,11 +39,11 @@ pub use fdm::{
     compute_periodic_newell_kernel_spectra, run_reference_exchange_demo, AbmHistory, AbmHistorySoA,
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, DemagKernelSpectra,
     EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
-    ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy,
-    FdmDemagBoundary, FftWorkspace, ResolvedFdmPeriodicWorkspace,
-    GridShape, IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig, MaterialParameters,
-    OerstedCylinderConfig, ReferenceDemoReport, RegionalFieldDriveTerm, Result, RhsEvaluation, SlonczewskiSttConfig,
-    SolverSession, SotConfig, StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA,
+    ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FdmDemagBoundary,
+    FftWorkspace, GridShape, IntegratorBuffers, LlgConfig, MagnetoelasticTermConfig,
+    MaterialParameters, OerstedCylinderConfig, ReferenceDemoReport, RegionalFieldDriveTerm,
+    ResolvedFdmPeriodicWorkspace, Result, RhsEvaluation, SlonczewskiSttConfig, SolverSession,
+    SotConfig, StepReport, TimeIntegrator, UniaxialAnisotropyConfig, VectorFieldSoA,
     ZhangLiSttConfig,
 };
 
@@ -1216,6 +1216,111 @@ mod tests {
             assert_vector_close(*actual, *expected, 1e-12);
         }
         assert_step_report_close(soa_report, aos_report, 1e-12);
+    }
+
+    #[test]
+    fn fixed_rk23_rk45_aos_and_soa_use_exact_dt_without_adaptive_suggestion() {
+        for integrator in [TimeIntegrator::RK23, TimeIntegrator::RK45] {
+            let problem = ExchangeLlgProblem::with_terms(
+                GridShape::new(1, 1, 1).expect("valid grid"),
+                CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+                MaterialParameters::new(1.0, 1.0e-30, 0.2).expect("valid material"),
+                LlgConfig::new(1.0, integrator).expect("valid fixed LLG config"),
+                EffectiveFieldTerms {
+                    exchange: false,
+                    demag: false,
+                    external_field: Some([0.0, 1.0, 0.0]),
+                    ..Default::default()
+                },
+            );
+            let dt = 2.0e-3;
+
+            let mut aos = problem.uniform_state([1.0, 0.0, 0.0]).expect("AoS state");
+            let mut aos_ws = problem.create_workspace();
+            let mut aos_bufs = problem.create_integrator_buffers();
+            let aos_report = problem
+                .step_with_buffers(&mut aos, dt, &mut aos_ws, &mut aos_bufs)
+                .expect("fixed AoS embedded RK step");
+            assert_eq!(aos_report.dt_used, dt);
+            assert_eq!(aos_report.time_seconds, dt);
+            assert_eq!(aos_report.suggested_next_dt, None);
+
+            let mut soa = problem
+                .uniform_state([1.0, 0.0, 0.0])
+                .expect("SoA seed")
+                .to_soa();
+            let mut soa_ws = problem.create_workspace();
+            let mut soa_bufs = problem.create_integrator_buffers();
+            let soa_report = problem
+                .step_soa_with_buffers_evaluation(
+                    &mut soa,
+                    dt,
+                    &mut soa_ws,
+                    &mut soa_bufs,
+                    EvaluationRequest::Full,
+                )
+                .expect("fixed SoA embedded RK step");
+            assert_eq!(soa_report.dt_used, dt);
+            assert_eq!(soa_report.time_seconds, dt);
+            assert_eq!(soa_report.suggested_next_dt, None);
+        }
+    }
+
+    #[test]
+    fn adaptive_rk23_rk45_aos_and_soa_fail_dt_min_exhausted_without_state_commit() {
+        for integrator in [TimeIntegrator::RK23, TimeIntegrator::RK45] {
+            let problem = ExchangeLlgProblem::with_terms(
+                GridShape::new(1, 1, 1).expect("valid grid"),
+                CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+                MaterialParameters::new(1.0, 1.0e-30, 0.2).expect("valid material"),
+                LlgConfig::new(10.0, integrator)
+                    .expect("valid adaptive LLG config")
+                    .with_adaptive(AdaptiveStepConfig {
+                        max_error: 1.0e-30,
+                        dt_min: 0.2,
+                        dt_max: 0.2,
+                        headroom: 0.9,
+                        rtol: 0.0,
+                        growth_limit: 2.0,
+                        shrink_limit: 0.2,
+                    }),
+                EffectiveFieldTerms {
+                    exchange: false,
+                    demag: false,
+                    external_field: Some([0.0, 1.0, 0.0]),
+                    ..Default::default()
+                },
+            );
+
+            let initial = [1.0, 0.0, 0.0];
+            let mut aos = problem.uniform_state(initial).expect("AoS state");
+            let mut aos_ws = problem.create_workspace();
+            let mut aos_bufs = problem.create_integrator_buffers();
+            let aos_error = problem
+                .step_with_buffers(&mut aos, 0.2, &mut aos_ws, &mut aos_bufs)
+                .expect_err("AoS adaptive step must fail at dt_min");
+            assert!(aos_error.to_string().contains("dt_min_exhausted"));
+            assert_eq!(aos.time_seconds, 0.0);
+            assert_eq!(aos.magnetization(), &[initial]);
+
+            let mut soa = problem.uniform_state(initial).expect("SoA seed").to_soa();
+            let mut soa_ws = problem.create_workspace();
+            let mut soa_bufs = problem.create_integrator_buffers();
+            let soa_error = problem
+                .step_soa_with_buffers_evaluation(
+                    &mut soa,
+                    0.2,
+                    &mut soa_ws,
+                    &mut soa_bufs,
+                    EvaluationRequest::Full,
+                )
+                .expect_err("SoA adaptive step must fail at dt_min");
+            assert!(soa_error.to_string().contains("dt_min_exhausted"));
+            assert_eq!(soa.time_seconds, 0.0);
+            assert_eq!(soa.magnetization.x, vec![initial[0]]);
+            assert_eq!(soa.magnetization.y, vec![initial[1]]);
+            assert_eq!(soa.magnetization.z, vec![initial[2]]);
+        }
     }
 
     #[test]

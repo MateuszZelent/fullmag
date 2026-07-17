@@ -309,6 +309,36 @@ use each accepted `dt_next`; it may not keep an immutable initial `dt`.
 Unsupported multilayer adaptive execution fails before native
 materialization. FP32 capability remains separate from FP64 qualification.
 
+The Task 7 implementation establishes fixed-versus-adaptive separation for
+the CPU reference AoS/SoA paths and source-visible CUDA FP64/FP32 paths. A
+versioned `fullmag_fdm_backend_create_time_policy_v2` ABI carries tolerance
+mode, `atol`, `rtol`, timestep bounds, safety and growth/shrink limits, plus
+optional norm and rotation guard intent without reinterpreting the legacy ABI.
+Guard-enabled execution fails closed until those guards are enforced.
+Adaptive v2 execution is restricted to RK23/RK45, and maximum-error mode
+requires `rtol=0`. Advanced mode accepts absolute-only, relative-only, or
+combined control, provided at least one of `atol` and `rtol` is positive;
+incompatible intent is rejected before stepping.
+Rejected attempts above tolerance at `dt_min` report
+`dt_min_exhausted`; CPU behavioral tests also prove pre-attempt state is not
+committed. CUDA batch orchestration consumes the accepted `dt_suggested` on
+the following attempt. The legacy create symbol retains its historical
+embedded-adaptive proportional controller, including the absence of a ratio
+clamp beyond the historical timestep bounds.
+
+This is implementation and contract evidence, not scientific qualification.
+The managed `verify-fdm-time-domain-native-contract` gate compiles the native
+FDM library, including the RK23/RK45 CUDA FP64 and FP32 translation units, and
+runs the v2 ABI/source contract. It does not execute trajectory parity on GPU
+hardware, so no CUDA FP64 or FP32 runtime qualification claim follows.
+The canonical scalar decision has one backend-neutral native owner used by
+FEM and FDM. FDM CPU mirrors and tests the same immutable q=2/q=4 vectors,
+accepted-error PI history, startup rule, accepted shrink, zero-error growth
+limit, and terminal floor failure. Device guard enforcement and complete
+attempt-trace evidence remain later work. Multilayer adaptive intent remains unsupported and
+fails closed for both maximum-error and advanced modes before native
+materialization.
+
 ### 3.8 FEM interpretation
 
 FEM CPU/MFEM and FEM GPU/CUDA use separate performance realizations but the

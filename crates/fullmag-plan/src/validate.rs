@@ -474,8 +474,10 @@ pub(crate) fn planned_study_controls(
                 .get("runtime_selection")
                 .and_then(|selection| selection.get("device"))
                 .and_then(serde_json::Value::as_str);
-            if resolved_backend == BackendTarget::Fdm && requested_device != Some("cpu") {
-                errors.push("adaptive_timestep on FDM requires explicit runtime_selection.device='cpu'; auto/gpu/cuda may select the non-lossless CUDA ABI".to_string());
+            if resolved_backend == BackendTarget::Fdm
+                && !matches!(requested_device, Some("cpu" | "cuda" | "gpu"))
+            {
+                errors.push("adaptive_timestep on FDM requires explicit runtime_selection.device='cpu' or device='cuda'; auto selection cannot silently change the qualified adaptive lane".to_string());
             }
             if resolved_backend == BackendTarget::Fem {
                 if adaptive.tolerance_mode == fullmag_ir::AdaptiveToleranceModeIR::MaxError {

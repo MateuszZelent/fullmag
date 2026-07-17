@@ -2066,7 +2066,7 @@ fn project_component(
 mod tests {
     use super::*;
     use fullmag_ir::{
-        DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR,
+        AdaptiveTimeStepIR, AdaptiveToleranceModeIR, DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR,
         FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, GridDimensions,
         IntegratorChoice, RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR, StageStopReason,
         RegionalFieldDriveIR, ResolvedRegionalFieldDriveBasisIR, TimeDependenceIR,
@@ -2123,6 +2123,28 @@ mod tests {
             bulk_dmi: None,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn reference_construction_preserves_fixed_vs_adaptive_embedded_rk_policy() {
+        let fixed = FdmPlanIR { integrator: Some(IntegratorChoice::Rk45), ..make_test_plan() };
+        let (fixed_problem, _) = build_snapshot_problem_and_state(&fixed).expect("fixed problem");
+        assert!(!fixed_problem.dynamics.adaptive_enabled);
+
+        let adaptive = FdmPlanIR {
+            fixed_timestep: None,
+            adaptive_timestep: Some(AdaptiveTimeStepIR {
+                tolerance_mode: AdaptiveToleranceModeIR::MaxError,
+                atol: 1e-6, rtol: 0.0, dt_initial: Some(1e-15), dt_min: 1e-16,
+                dt_max: Some(1e-14), safety: 0.9, growth_limit: 2.0, shrink_limit: 0.2,
+                max_spin_rotation: None, norm_tolerance: None,
+            }),
+            ..fixed
+        };
+        let (adaptive_problem, _) = build_snapshot_problem_and_state(&adaptive).expect("adaptive problem");
+        assert!(adaptive_problem.dynamics.adaptive_enabled);
+        assert_eq!(adaptive_problem.dynamics.adaptive.dt_min, 1e-16);
+        assert_eq!(adaptive_problem.dynamics.adaptive.dt_max, 1e-14);
     }
 
     #[test]

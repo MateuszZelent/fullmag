@@ -245,18 +245,18 @@ and validation remain separate evidence axes.
 
 | Policy | Backend | Device | Precision | Product status | implementation_state | validation_state | validated_scope |
 |---|---|---|---|---|---|---|---|
-| explicit fixed | FDM | CPU | double | `reference_executable` | executable | unvalidated | CPU reference semantics; new `fix_dt` round-trip pending |
+| explicit fixed | FDM | CPU | double | `reference_executable` | executable | unvalidated | RK23/RK45 AoS/SoA exact fixed-step contract tests pass; no adaptive retry or next-step suggestion; scientific qualification pending |
 | explicit fixed | FDM | CPU | single | `unsupported` | absent | unvalidated | CPU reference is double-only |
-| explicit fixed | FDM | CUDA | double | `production_executable` | executable | unvalidated | existing single-grid fixed execution; Task 12 qualification pending |
-| explicit fixed | FDM | CUDA | single | `production_executable` | executable | unvalidated | existing calibrated fixed execution only; no adaptive promotion |
+| explicit fixed | FDM | CUDA | double | `production_executable` | executable | unvalidated | source contract preserves exact fixed RK23/RK45 semantics; no CUDA runtime evidence in Task 7; Task 12 qualification pending |
+| explicit fixed | FDM | CUDA | single | `production_executable` | executable | unvalidated | source contract preserves exact fixed RK23/RK45 semantics; FP32 runtime budget remains separate and unproven |
 | explicit fixed | FEM | CPU | double | `production_executable` | executable | unvalidated | native explicit fixed execution; full interaction matrix not implied |
 | explicit fixed | FEM | CPU | single | `unsupported` | absent | unvalidated | native FEM CPU is double-only |
 | explicit fixed | FEM | GPU | double | `production_executable` | executable | unvalidated | native explicit fixed execution; no FP32 implication |
 | explicit fixed | FEM | GPU | single | `unsupported` | absent | unvalidated | no qualified native FEM GPU FP32 lane |
-| explicit adaptive | FDM | CPU | double | `source_visible` | executable | unvalidated | blocked by P0/P1 audit findings and canonical policy migration |
+| explicit adaptive | FDM | CPU | double | `reference_executable` | executable | unvalidated | AoS/SoA contract tests reject above-tolerance attempts at `dt_min` with no state commit; scientific trajectory and guard qualification pending |
 | explicit adaptive | FDM | CPU | single | `unsupported` | absent | unvalidated | CPU reference is double-only |
-| explicit adaptive | FDM | CUDA | double | `source_visible` | executable | unvalidated | controller, ABI propagation, floor failure, and trace qualification pending |
-| explicit adaptive | FDM | CUDA | single | `source_visible` | executable | unvalidated | separate FP32 accuracy and controller qualification pending; no FP64 promotion |
+| explicit adaptive | FDM | CUDA | double | `source_visible` | executable | unvalidated | v2 ABI behavior, canonical PI vectors, fixed/adaptive separation, typed floor failure, and batch `dt_next` consumption are contract evidence; guard-enabled policies fail closed; trajectory/trace qualification pending |
+| explicit adaptive | FDM | CUDA | single | `source_visible` | executable | unvalidated | shared PI controller and FP32 compile/contract budget only; guards fail closed; separate runtime accuracy/trajectory qualification pending and no FP64 promotion |
 | explicit adaptive | FEM | CPU | double | `source_visible` | executable | unvalidated | controller, guards, demag convergence, atomicity, and qualification pending |
 | explicit adaptive | FEM | CPU | single | `unsupported` | absent | unvalidated | native FEM CPU is double-only |
 | explicit adaptive | FEM | GPU | double | `source_visible` | executable | unvalidated | CPU/GPU policy parity and managed scientific qualification pending |
