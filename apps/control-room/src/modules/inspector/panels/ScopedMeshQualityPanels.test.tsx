@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { Accordion } from "@/shared/ui/Accordion";
 
+vi.mock("../InspectorTabState", () => ({
+  useInspectorActiveTab: () => "policy",
+}));
+
 vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
     api: {
@@ -576,15 +580,15 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("region:film:core");
   });
 
-  it("keeps object mesh diagnostics unmounted while Overview is active", () => {
+  it("keeps object mesh quality unmounted while Policy is active", () => {
     const html = renderToStaticMarkup(
       <ObjectMeshPolicyPanel selection={objectSelection} />,
     );
 
     expect(html).toContain("Object Mesh Policy");
     expect(html).toContain("Effective Target");
+    expect(html).toContain("Object Core Relaxation");
     expect(html).not.toContain("Object Quality Distributions");
-    expect(html).not.toContain("Object Core Relaxation");
   });
 
   it("warns when object mesh policy edits are not applied", () => {

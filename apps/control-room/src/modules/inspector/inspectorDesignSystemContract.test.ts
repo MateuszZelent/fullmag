@@ -105,4 +105,14 @@ describe("Inspector design-system reference contract", () => {
     expect(extensions).not.toMatch(/<\/?InspectorSection\b/);
     expect(extensions).not.toContain('value="extensions"');
   });
+
+  it("keeps migrated mesh policy sections on compact Inspector groups", () => {
+    const meshPolicy = read(
+      "src/modules/inspector/panels/ObjectMeshPolicyPanel.tsx",
+    );
+
+    expect(meshPolicy).toContain("InspectorGroup");
+    expect(meshPolicy).not.toMatch(/<\/?InspectorSection\b/);
+    expect(meshPolicy).not.toContain("defaultCollapsed");
+  });
 });
