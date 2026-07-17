@@ -136,6 +136,7 @@ void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
     ctx.thermal_brown.h_xyz.assign(6, 6.0);
     ctx.stepper.workspace.fsal_valid = true;
     ctx.adaptive_dt.prev_error_norm = 0.5;
+    ctx.adaptive_dt.has_prev_error_norm = true;
     ctx.demag.cache_valid = true;
     ctx.demag.last_refresh_time = 4.0;
     ctx.thermal_brown.sigma = 5.0;
@@ -158,6 +159,7 @@ void upload_magnetization_updates_host_state_and_invalidates_runtime_caches() {
     check(ctx.state.m_xyz == expected_m, "magnetization normalized and periodic-projected");
     check(!ctx.stepper.workspace.fsal_valid, "FSAL cache invalidated");
     check(ctx.adaptive_dt.prev_error_norm == 1.0, "adaptive previous error reset");
+    check(!ctx.adaptive_dt.has_prev_error_norm, "adaptive PI history activation reset");
     check(!ctx.demag.cache_valid, "demag cache invalidated");
     check(ctx.demag.last_refresh_time == -1.0, "demag refresh timestamp reset");
     check(ctx.exchange.h_xyz == std::vector<double>(6, 0.0), "disabled exchange field zeroed");

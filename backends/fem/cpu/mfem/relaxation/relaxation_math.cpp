@@ -84,6 +84,7 @@ int set_relaxation_magnetization_state(
     ctx.relaxation.cached_current_stats_valid = false;
     ctx.stepper.workspace.fsal_valid = false;
     ctx.adaptive_dt.prev_error_norm = 1.0;
+    ctx.adaptive_dt.has_prev_error_norm = false;
     ctx.demag.cache_valid = false;
     ctx.demag.last_refresh_time = -1.0;
     ctx.thermal_brown.sigma = 0.0;

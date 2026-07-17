@@ -24,12 +24,16 @@ bool initialize_adaptive_dt_plan_fields(
     }
 
     const auto &adaptive = *plan.adaptive_config;
-    if (!std::isfinite(adaptive.atol) || adaptive.atol <= 0.0) {
-        error = "adaptive_config.atol must be finite and > 0";
+    if (!std::isfinite(adaptive.atol) || adaptive.atol < 0.0) {
+        error = "adaptive_config.atol must be finite and >= 0";
         return false;
     }
-    if (!std::isfinite(adaptive.rtol) || adaptive.rtol <= 0.0) {
-        error = "adaptive_config.rtol must be finite and > 0";
+    if (!std::isfinite(adaptive.rtol) || adaptive.rtol < 0.0) {
+        error = "adaptive_config.rtol must be finite and >= 0";
+        return false;
+    }
+    if (adaptive.atol == 0.0 && adaptive.rtol == 0.0) {
+        error = "adaptive_config requires at least one of atol or rtol to be > 0";
         return false;
     }
     if (!std::isfinite(adaptive.dt_initial) || adaptive.dt_initial < 0.0) {
@@ -46,8 +50,8 @@ bool initialize_adaptive_dt_plan_fields(
     }
     if (!std::isfinite(adaptive.safety) ||
         adaptive.safety <= 0.0 ||
-        adaptive.safety >= 1.0) {
-        error = "adaptive_config.safety must be finite and satisfy 0 < safety < 1";
+        adaptive.safety > 1.0) {
+        error = "adaptive_config.safety must be finite and satisfy 0 < safety <= 1";
         return false;
     }
     if (!std::isfinite(adaptive.growth_limit) || adaptive.growth_limit <= 1.0) {
@@ -78,6 +82,8 @@ bool initialize_adaptive_dt_plan_fields(
     ctx.adaptive_dt.dt_grow_max = adaptive.growth_limit;
     ctx.adaptive_dt.dt_shrink_min = adaptive.shrink_limit;
     ctx.adaptive_dt.max_reject = adaptive.max_reject;
+    ctx.adaptive_dt.prev_error_norm = 1.0;
+    ctx.adaptive_dt.has_prev_error_norm = false;
     return true;
 }
 
@@ -107,33 +113,55 @@ double compute_adaptive_error_norm(
     return max_scaled;
 }
 
-AdaptiveResult adaptive_pi_step(Context &ctx, double error_norm)
+adaptive::AdaptiveStepDecision cpu_adaptive_step_decision(
+    const adaptive::AdaptiveStepPolicy &policy,
+    const adaptive::AdaptiveStepInput &input)
 {
-    if (!ctx.adaptive_dt.enabled || error_norm <= 0.0) {
-        return {true, ctx.base_plan.dt_seconds};
+    return adaptive::decide_adaptive_step(policy, input);
+}
+
+AdaptiveResult adaptive_pi_step(
+    Context &ctx,
+    double dt_attempt,
+    double error_norm,
+    int order_est)
+{
+    if (!ctx.adaptive_dt.enabled) {
+        return {
+            adaptive::AdaptiveDecisionKind::accepted,
+            adaptive::AdaptiveDecisionReason::within_tolerance,
+            dt_attempt,
+            1.0,
+        };
     }
 
-    const double clamped_error = std::max(error_norm, 1e-15);
-
-    if (clamped_error <= 1.0) {
-        double ratio = ctx.adaptive_dt.safety_factor *
-                       std::pow(1.0 / clamped_error, ctx.adaptive_dt.pi_alpha) *
-                       std::pow(ctx.adaptive_dt.prev_error_norm / clamped_error, ctx.adaptive_dt.pi_beta);
-        ratio = std::min(ratio, ctx.adaptive_dt.dt_grow_max);
-        ratio = std::max(ratio, 1.0);
-
-        const double dt_new = std::min(ctx.base_plan.dt_seconds * ratio, ctx.adaptive_dt.dt_max);
-        ctx.adaptive_dt.prev_error_norm = clamped_error;
-        return {true, dt_new};
+    const adaptive::AdaptiveStepPolicy policy{
+        order_est,
+        ctx.adaptive_dt.dt_min,
+        ctx.adaptive_dt.dt_max,
+        ctx.adaptive_dt.safety_factor,
+        ctx.adaptive_dt.dt_grow_max,
+        ctx.adaptive_dt.dt_shrink_min,
+    };
+    const adaptive::AdaptiveStepInput input{
+        dt_attempt,
+        error_norm,
+        ctx.adaptive_dt.prev_error_norm,
+        ctx.adaptive_dt.has_prev_error_norm,
+    };
+    const AdaptiveResult decision = cpu_adaptive_step_decision(policy, input);
+    if (decision.kind == adaptive::AdaptiveDecisionKind::accepted) {
+        if (error_norm > 0.0) {
+            ctx.adaptive_dt.prev_error_norm = error_norm;
+            ctx.adaptive_dt.has_prev_error_norm = true;
+        } else {
+            ctx.adaptive_dt.has_prev_error_norm = false;
+        }
+    } else if (decision.kind == adaptive::AdaptiveDecisionKind::retry ||
+               decision.reason == adaptive::AdaptiveDecisionReason::dt_min_exhausted) {
+        ctx.adaptive_dt.rejected_steps += 1;
     }
-
-    double ratio = ctx.adaptive_dt.safety_factor *
-                   std::pow(1.0 / clamped_error, ctx.adaptive_dt.pi_alpha);
-    ratio = std::max(ratio, ctx.adaptive_dt.dt_shrink_min);
-
-    const double dt_new = std::max(ctx.base_plan.dt_seconds * ratio, ctx.adaptive_dt.dt_min);
-    ctx.adaptive_dt.rejected_steps += 1;
-    return {false, dt_new};
+    return decision;
 }
 
 } // namespace fullmag::fem

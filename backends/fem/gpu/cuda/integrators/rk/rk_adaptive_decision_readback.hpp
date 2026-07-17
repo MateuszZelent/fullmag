@@ -27,6 +27,8 @@ struct GpuAdaptiveDecisionReadback {
 bool gpu_rk_read_adaptive_error_norm_decision_host(
     Context &ctx,
     cudaStream_t stream,
+    double dt_attempt,
+    int order_est,
     GpuAdaptiveDecisionReadback &decision,
     std::string &reason);
 

@@ -85,22 +85,40 @@ bool gpu_rk_run_accepted_attempt_loop(
                     n,
                     blocks,
                     reason)) {
-                gpu.rk.fsal_valid = false;
+                const std::string failure_reason = reason;
+                if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
+                    return false;
+                }
+                reason = failure_reason;
                 return false;
             }
             GpuAdaptiveDecisionReadback adaptive_decision{};
             if (!gpu_rk_read_adaptive_error_norm_decision_host(
                     ctx,
                     stream,
+                    active_dt,
+                    tableau.order_est,
                     adaptive_decision,
                     reason)) {
-                gpu.rk.fsal_valid = false;
+                const std::string failure_reason = reason;
+                if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
+                    return false;
+                }
+                reason = failure_reason;
                 return false;
             }
             error_estimate = adaptive_decision.error_norm;
             const auto adaptive_result = adaptive_decision.adaptive_result;
             suggested_dt = adaptive_result.dt_next;
-            if (!adaptive_result.accepted) {
+            if (adaptive_result.kind == adaptive::AdaptiveDecisionKind::failed) {
+                if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
+                    return false;
+                }
+                reason = std::string("GPU adaptive RK decision failed: ") +
+                    adaptive::adaptive_decision_reason_id(adaptive_result.reason);
+                return false;
+            }
+            if (adaptive_result.kind == adaptive::AdaptiveDecisionKind::retry) {
                 if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
                     return false;
                 }

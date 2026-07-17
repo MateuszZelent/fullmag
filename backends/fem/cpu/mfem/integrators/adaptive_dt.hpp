@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/adaptive_step_decision.hpp"
 #include "fullmag_fem.h"
 
 #include <cstdint>
@@ -13,14 +14,10 @@ struct Context;
 /*
  * Result of one adaptive PI-controller decision.
  *
- * `accepted=false` means the current explicit RK step must be retried with
- * `dt_next`. `accepted=true` means the step may be committed and `dt_next`
- * becomes the proposed following time step.
+ * The typed kind distinguishes commit, retry, and terminal failure. The typed
+ * reason preserves tolerance, exhaustion, and invalid-input outcomes.
  */
-struct AdaptiveResult {
-    bool accepted = true;
-    double dt_next = 0.0;
-};
+using AdaptiveResult = adaptive::AdaptiveStepDecision;
 
 /*
  * Runtime state for the native FEM adaptive PI time-step controller.
@@ -37,13 +34,12 @@ struct AdaptiveDtRuntimeState {
     double dt_max = 1e-10;
     double atol = 1e-6;
     double rtol = 1e-3;
-    double pi_alpha = 0.7;
-    double pi_beta = 0.4;
     double safety_factor = 0.9;
     double dt_grow_max = 2.0;
     double dt_shrink_min = 0.2;
     uint32_t max_reject = 50;
     double prev_error_norm = 1.0;
+    bool has_prev_error_norm = false;
     uint64_t rejected_steps = 0;
 };
 
@@ -65,13 +61,21 @@ bool initialize_adaptive_dt_plan_fields(
 /*
  * Compute the next native FEM adaptive time step using the PI controller.
  *
- * The input `error_norm` is normalized so `1` is exactly at tolerance. Accepted
- * steps clamp growth by `dt_grow_max`, store the current error in
- * `prev_error_norm`, and never shrink the accepted next step. Rejected steps
- * clamp shrinkage by `dt_shrink_min`, respect `dt_min`, and increment
- * `rejected_steps`.
+ * The input `error_norm` is normalized so `1` is exactly at tolerance. The
+ * selected tableau's embedded estimator order controls the startup/P-I
+ * exponents. Invalid inputs return typed terminal decisions before history or
+ * counters change. `dt_min` exhaustion is terminal and counts one rejected
+ * numerical attempt without changing accepted-error history.
  */
-AdaptiveResult adaptive_pi_step(Context &ctx, double error_norm);
+AdaptiveResult adaptive_pi_step(
+    Context &ctx,
+    double dt_attempt,
+    double error_norm,
+    int order_est);
+
+adaptive::AdaptiveStepDecision cpu_adaptive_step_decision(
+    const adaptive::AdaptiveStepPolicy &policy,
+    const adaptive::AdaptiveStepInput &input);
 
 /*
  * Compute the nodewise vector-normalized error for an adaptive explicit RK step.

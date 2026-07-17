@@ -206,6 +206,53 @@ growth/shrink limits. The proportional exponent depends on `q`; a PI history
 term may be used, but its coefficients and startup rule must be documented
 and tested with shared golden vectors.
 
+The canonical controller uses the embedded estimator order `q = order_est`
+from the selected tableau, with the defensive scalar-contract range
+`1 <= q <= 16`; current RK23 and RK45 use `q=2` and `q=4`. On startup, after a reset, or after an exactly zero
+accepted error, no PI history is active and
+
+\[
+r=s\,\eta_n^{-1/(q+1)}.
+\]
+
+For an accepted step with positive current error and positive accepted-step
+history `eta_(n-1)`, the PI ratio is
+
+\[
+r=s\,\eta_n^{-0.7/(q+1)}\eta_{n-1}^{0.4/(q+1)}.
+\]
+
+Rejected steps use the startup proportional expression and never publish
+their error as accepted history. The ratio is clamped to
+`[shrink_limit, growth_limit]`, then the proposed timestep is clamped to
+`[dt_min, dt_max]`. The decision reports the resulting bounded ratio
+`dt_next/dt_attempt`. This rule intentionally permits an accepted step to
+suggest a smaller next timestep.
+
+Controller limits require finite `0 < safety <= 1`, `growth_limit > 1`, and
+`0 < shrink_limit < 1`. Exactly `safety=1` is legal and is not a sentinel.
+Acceptance and timestep bounds are inclusive: `eta=1` is accepted, and
+attempts exactly at `dt_min` or `dt_max` are valid. The previous-error scalar
+must always be finite, even while history is inactive; it must additionally be
+positive when history is active. Finite zero is the canonical inactive-history
+placeholder and is ignored by the startup expression.
+
+The bounded decision vocabulary is `accepted`, `retry`, and `failed`. The
+bounded reason vocabulary is `within_tolerance`, `error_above_tolerance`,
+`dt_min_exhausted`, `invalid_order`, `invalid_bounds`,
+`invalid_controller_limits`, `invalid_timestep`, `invalid_current_error`, and
+`invalid_previous_error`. Invalid input returns `failed` before controller
+history or counters change. An error above one at `dt_min` returns
+`failed/dt_min_exhausted`; it is neither accepted nor retried, but the failed
+numerical attempt increments the rejection counter exactly once. CPU and GPU
+restore candidate magnetization before returning this terminal failure.
+
+FEM CPU and the transitional FEM CUDA host-control adapter consume the same
+immutable scalar golden vectors. Their FP64 scalar parity budget is
+`2e-15` for dimensionless ratios; FP32-rounded input parity uses `8e-6`.
+This host scalar parity is not evidence of a device-resident adaptive control
+loop or full FEM GPU scientific qualification.
+
 The decision contract must permit an accepted step to suggest
 `dt_next < dt_attempt`. It must not clamp every accepted ratio to one or
 larger. A rejected attempt at `dt_min` returns typed `dt_min_exhausted`; it is

@@ -7,6 +7,8 @@
  */
 #pragma once
 
+#include "gpu/cuda/integrators/rk/rk_adaptive_host_decision.hpp"
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include "gpu/cuda/state/gpu_state.hpp"
 
@@ -18,12 +20,13 @@ namespace fullmag::fem {
 
 struct Context;
 
-struct GpuAdaptiveResult {
-    bool accepted;
-    double dt_next;
-};
+using GpuAdaptiveResult = adaptive::AdaptiveStepDecision;
 
-GpuAdaptiveResult gpu_rk_adaptive_pi_step(Context &ctx, double error_norm);
+GpuAdaptiveResult gpu_rk_adaptive_pi_step(
+    Context &ctx,
+    double dt_attempt,
+    double error_norm,
+    int order_est);
 
 bool gpu_rk_restore_adaptive_reject_magnetization_device(
     FemGpuState &gpu,

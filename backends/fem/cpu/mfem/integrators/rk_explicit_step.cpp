@@ -223,8 +223,15 @@ bool context_step_explicit_rk_mfem(
                 ctx.state.m_xyz,
                 ctx.adaptive_dt.atol,
                 ctx.adaptive_dt.rtol);
-            auto result = adaptive_pi_step(ctx, err_norm);
-            if (!result.accepted) {
+            auto result = adaptive_pi_step(ctx, dt, err_norm, tab.order_est);
+            if (result.kind == adaptive::AdaptiveDecisionKind::failed) {
+                ctx.state.m_xyz = ws.m_backup;
+                ws.fsal_valid = false;
+                error = std::string("adaptive RK decision failed: ") +
+                    adaptive::adaptive_decision_reason_id(result.reason);
+                return false;
+            }
+            if (result.kind == adaptive::AdaptiveDecisionKind::retry) {
                 ctx.state.m_xyz = ws.m_backup;
                 dt = result.dt_next;
                 ctx.base_plan.dt_seconds = dt;

@@ -2475,6 +2475,7 @@ int fullmag_fem_backend_begin_stage(
     ctx.zeeman.regional_drive_revision += 1;
     ctx.stepper.workspace.fsal_valid = false;
     ctx.adaptive_dt.prev_error_norm = 1.0;
+    ctx.adaptive_dt.has_prev_error_norm = false;
     std::fill(ctx.zeeman.h_drive_xyz.begin(), ctx.zeeman.h_drive_xyz.end(), 0.0);
     std::fill(ctx.effective_field.h_xyz.begin(), ctx.effective_field.h_xyz.end(), 0.0);
     handle->last_error.clear();
@@ -2513,6 +2514,7 @@ int fullmag_fem_backend_reconfigure_regional_field_drives(
     ctx.zeeman.regional_drive_revision += 1;
     ctx.stepper.workspace.fsal_valid = false;
     ctx.adaptive_dt.prev_error_norm = 1.0;
+    ctx.adaptive_dt.has_prev_error_norm = false;
     std::fill(ctx.effective_field.h_xyz.begin(), ctx.effective_field.h_xyz.end(), 0.0);
     handle->last_error.clear();
     return FULLMAG_FEM_OK;
@@ -2529,6 +2531,7 @@ int fullmag_fem_backend_invalidate_fsal(fullmag_fem_backend *handle)
     ctx.gpu_state.device.rk.fsal_valid = false;
 #endif
     ctx.adaptive_dt.prev_error_norm = 1.0;
+    ctx.adaptive_dt.has_prev_error_norm = false;
     handle->last_error.clear();
     return FULLMAG_FEM_OK;
 }

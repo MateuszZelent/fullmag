@@ -15,6 +15,8 @@ namespace fullmag::fem {
 bool gpu_rk_read_adaptive_error_norm_decision_host(
     Context &ctx,
     cudaStream_t stream,
+    double dt_attempt,
+    int order_est,
     GpuAdaptiveDecisionReadback &decision,
     std::string &reason)
 {
@@ -30,7 +32,7 @@ bool gpu_rk_read_adaptive_error_norm_decision_host(
     }
 
     decision.error_norm = error_norm;
-    decision.adaptive_result = gpu_rk_adaptive_pi_step(ctx, error_norm);
+    decision.adaptive_result = gpu_rk_adaptive_pi_step(ctx, dt_attempt, error_norm, order_est);
     return true;
 }
 
