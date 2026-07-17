@@ -2,8 +2,6 @@
 
 import { useCallback } from "react";
 
-import { Accordion } from "@/shared/ui/Accordion";
-
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 
@@ -117,54 +115,13 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
   };
 
   return (
-    <Accordion
-      className="fm-inspector-panel"
+    <div
+      className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]"
       data-scene-has-payload={sceneHasPayload}
       data-scene-revision={sceneRevision ?? ""}
       data-scene-stage-count={sceneStageCount}
       data-scene-status={scene.status}
       data-stage-draft-count={state.stageDrafts.length}
-      type="multiple"
-      defaultValue={[
-        "identity",
-        "authoring",
-        "telemetry",
-        "add-field-drive",
-        "add-field-waveform",
-        "add-field-activation",
-        "table-autosave-state",
-        "table-autosave-fft-clock",
-        "autosave-state",
-        "fft-response-state",
-        "fft-response-clock",
-        "unsupported-stage",
-        "eigenmodes-command-center",
-        "frequency-response-command-center",
-        "relax-results",
-        "run-progress",
-        "run-time-integration",
-        "run-drive",
-        "run-workflow-state",
-        "run-results",
-        "hysteresis-results",
-        "eigenmodes-results",
-        "frequency-response-results",
-        "save-state-results",
-        "hysteresis-plan",
-        "hysteresis-protocol",
-        "hysteresis-orientation",
-        "hysteresis-saturation",
-        "hysteresis-adaptive-refinement",
-        "hysteresis-angular-family",
-        "hysteresis-settle",
-        "hysteresis-settle-trace",
-        "hysteresis-live-progress",
-        "hysteresis-branches",
-        "hysteresis-metrics",
-        "hysteresis-points",
-        "hysteresis-snapshots",
-        "hysteresis-current-field",
-      ]}
     >
       {inspectorKind === "unsupported" ? (
         <UnsupportedStageInspector
@@ -242,7 +199,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
           kindLabel="Relax"
         />
       )}
-    </Accordion>
+    </div>
   );
 }
 

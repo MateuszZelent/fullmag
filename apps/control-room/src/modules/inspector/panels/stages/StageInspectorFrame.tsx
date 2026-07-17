@@ -7,7 +7,7 @@ import type { SceneResource } from "@/kernel/api/apiTypes";
 
 import { FieldRow } from "../../primitives/FieldRow";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { StudyProgressBar } from "../StudyProgressBar";
 import {
   StudyStageDraftEditor,
@@ -128,8 +128,7 @@ export function StageInspectorFrame({
 
   return (
     <>
-      <InspectorSection
-        value="identity"
+      <InspectorGroup
         title="Identity"
         badge={stage?.status ?? "not selected"}
       >
@@ -141,9 +140,9 @@ export function StageInspectorFrame({
           label="Execution revision"
           value={stageExecutionRevision ?? "not available"}
         />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection value="authoring" title="Authoring" badge={kindLabel}>
+      <InspectorGroup title="Authoring" badge={kindLabel}>
         {draft && isExpectedDraft ? (
           <StudyStageDraftEditor
             algorithmsAvailable={algorithmsAvailable}
@@ -180,10 +179,9 @@ export function StageInspectorFrame({
             {authoringBusy ? "Saving" : "Save stage"}
           </Button>
         </div>
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="telemetry"
+      <InspectorGroup
         title="Telemetry & Results"
         badge={stage?.runtimeMetric?.name ?? "stage"}
       >
@@ -286,7 +284,7 @@ export function StageInspectorFrame({
             stage?.artifactRefs.length ? stage.artifactRefs.join(", ") : "none"
           }
         />
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }

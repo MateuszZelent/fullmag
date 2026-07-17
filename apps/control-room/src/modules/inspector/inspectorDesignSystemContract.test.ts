@@ -176,4 +176,17 @@ describe("Inspector design-system reference contract", () => {
 
     expect(panel).not.toContain("<Accordion");
   });
+
+  it("uses compact groups in the shared Study stage frame", () => {
+    const frame = read(
+      "src/modules/inspector/panels/stages/StageInspectorFrame.tsx",
+    );
+    const router = read(
+      "src/modules/inspector/panels/StudyStageInspectorRouter.tsx",
+    );
+
+    expect(frame).toContain("InspectorGroup");
+    expect(frame).not.toMatch(/<\/?InspectorSection\b/);
+    expect(router).not.toContain("<Accordion");
+  });
 });
