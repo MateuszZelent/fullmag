@@ -443,6 +443,7 @@ To nie jest pełny reproducer konkretnej siatki MFEM. Jest to kontrolowany orake
 | `LLG-TD-TEST-011` | P1 | potwierdzony | canonical gate nie obejmuje adaptive contract i obecnie nie jest zielony | brak dowodu produkcyjnego |
 | `LLG-TD-RELAX-012` | P2 | konfiguracja | `tol=500 A/m`, `max_steps=500` nie certyfikuje bardzo ścisłej równowagi | może zasiać szybkie residual modes |
 | `LLG-TD-PERF-013` | P2 | potwierdzony | GPU nie wykorzystuje FSAL w pełni i ponownie liczy final RHS/demag | koszt, nie źródło złej fizyki |
+| `LLG-TD-OBS-014` | P0 | naprawiony; test CUDA i E2E GPU | asynchroniczny snapshot FEM GPU publikował maskowane bufory LLG jako pełnodomenowe `H_demag`/`H_eff` | błędny airbox i diagnostyka; bez wpływu na RHS LLG |
 
 ### 6.1 Interpretacja P0
 
@@ -603,6 +604,37 @@ Ukierunkowane uruchomienie executable zbudowało się, lecz test zakończył si�
 ### 10.5 Czego nie wykonano
 
 Nie wykonano pełnego 0.5 ns przebiegu dokładnej geometrii na zarządzanym GPU, ponieważ aktualny plik roboczy nie przechodzi DSL, a audyt nie miał zmieniać kodu użytkownika. Nie ma więc dynamicznego artefaktu z dokładną historią `E(t), dt(t), eta(t), residual_demag(t)`. Mechanizm rozbieżności jest potwierdzony statycznie i niezależnym oraklem, ale aktywacja demag nonconvergence w konkretnym run pozostaje do rozstrzygnięcia telemetrią.
+
+### 10.6 Pełnodomenowe `H_demag` i `H_eff` w airboxie
+
+Odpytanie aktywnego runtime na etapie `flat_run` potwierdziło osobny błąd obserwowalności. Katalog ilości deklarował `H_demag` i `H_eff` jako `full_domain`, ale dla scope `part:__air__` metadane zwracały:
+
+```text
+H_demag: min=max=mean=0
+H_eff:   max=7957.747154594767 A/m, mean=2652.58238486459 A/m
+H_ext:   max=7957.747154594767 A/m, mean=2652.58238486459 A/m
+```
+
+W obiekcie magnetycznym `H_demag` było niezerowe. Źródłem błędu był asynchroniczny snapshot GPU w `backends/fem/src/api.cpp`: dla publicznego `H_demag` i `H_eff` kopiował robocze bufory LLG, które celowo są maskowane poza materiałem magnetycznym. Solver Poissona i pole używane w RHS pozostawały aktywne; błąd dotyczył publikowanego obrazu pola, a nie dowodzi wyzerowania demag w równaniu LLG.
+
+Poprawiona architektura utrzymuje dwa jawne kontrakty tego samego pola fizycznego:
+
+1. maskowany widok roboczy `H_demag` dla RHS LLG na stopniach swobody magnetyzacji;
+2. pełnodomenowy `-grad(phi)` odzyskiwany z aktualnego rozwiązania Poissona do istniejącego bufora urządzenia i publikowany dla airboxu.
+
+Snapshot `H_eff` jest składany w buforze staging jako `H_eff_magnetic + H_demag_full - H_demag_magnetic`. Nie modyfikuje to stanu solvera i nie wymaga utrzymywania drugiego trwałego pełnodomenowego `H_eff`. Test kontraktowy wykonuje rzeczywisty kernel CUDA i sprawdza zarówno wybór pełnodomenowego źródła, jak i wynik kompozycji.
+
+Test end-to-end wykonany na przebudowanym zarządzanym runtime i dokładnym przykładzie antidotu przeszedł dla 10 531 węzłów airboxu. Po zatrzymaniu solvera na kroku 473 (`t=2.653771779034747 ps`) otrzymano:
+
+```text
+max |H_demag|                         = 184347.15933212088 A/m
+max |H_eff - H_ext - H_demag|         = 2.9103830456733704e-11 A/m
+relative identity residual            = 1.513421107575546e-16
+```
+
+Po wznowieniu i ponownym zatrzymaniu na kroku 516 (`t=3.058771779034747 ps`) hash pełnego pola `H_demag` zmienił się z `daafa77b...` na `334fe678...`, a tożsamość nadal miała względny residual `1.513428594077658e-16`. Potwierdza to niezerowe pole w airboxie, zgodność fizyczną `H_eff=H_ext+H_demag` i świeżość snapshotu po kolejnych krokach.
+
+Odczyt trzech pól podczas pracy solvera może chwilowo porównać różne rewizje cache i nie powinien być używany jako ścisły orakel tożsamości. W takim odczycie zaobserwowano rewizje `H_demag=17`, `H_eff=12`, `H_ext=1`; po pauzie wszystkie wartości odpowiadały jednemu zamrożonemu stanowi i residual spadł do precyzji maszynowej. To jest osobna własność spójności czasowej API, nie błąd pola ani kernela CUDA.
 
 ## 11. Braki testowe
 

@@ -79,6 +79,18 @@ __global__ void add_field_inplace_kernel(
     }
 }
 
+__global__ void apply_full_domain_demag_correction_kernel(
+    const double *__restrict__ h_demag_full,
+    const double *__restrict__ h_demag_magnetic,
+    double *__restrict__ h_eff_full,
+    int N)
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) {
+        h_eff_full[i] += h_demag_full[i] - h_demag_magnetic[i];
+    }
+}
+
 bool fullmag_cuda_normalize_vectors(
     double *mx, double *my, double *mz,
     const uint8_t *magnetic_node_mask,
@@ -167,6 +179,21 @@ void fullmag_cuda_add_field_inplace(
     add_field_inplace_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
         h_add,
         h_accum,
+        N);
+}
+
+void fullmag_cuda_apply_full_domain_demag_correction(
+    const double *h_demag_full,
+    const double *h_demag_magnetic,
+    double *h_eff_full,
+    int N,
+    cudaStream_t stream)
+{
+    const int num_blocks = (N + kBlockSize - 1) / kBlockSize;
+    apply_full_domain_demag_correction_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
+        h_demag_full,
+        h_demag_magnetic,
+        h_eff_full,
         N);
 }
 

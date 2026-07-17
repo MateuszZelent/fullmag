@@ -391,7 +391,7 @@ bool compute_device_demag_for_device_stage_fresh(
         reason);
 }
 
-bool recover_device_demag_visual_field(
+bool recover_device_demag_full_domain_field_device(
     Context &ctx,
     void *raw_stream,
     std::string &reason)
@@ -401,12 +401,12 @@ bool recover_device_demag_visual_field(
     auto &gpu = ctx.gpu_state.device;
     auto &visual = gpu.demag_poisson.poisson_gradient;
     if (workspace == nullptr || !workspace->ready) {
-        reason = "full-domain GPU demag visualization requires a ready device Poisson workspace";
+        reason = "full-domain GPU demag observable requires a ready device Poisson workspace";
         return false;
     }
     if (gpu.demag_poisson.poisson_solution == nullptr ||
         visual.x == nullptr || visual.y == nullptr || visual.z == nullptr) {
-        reason = "full-domain GPU demag visualization requires the Poisson solution and gradient buffers";
+        reason = "full-domain GPU demag observable requires the Poisson solution and gradient buffers";
         return false;
     }
 
@@ -438,7 +438,7 @@ bool recover_device_demag_visual_field(
         visual.z,
         static_cast<int>(workspace->recovery_z.rows),
         stream);
-    if (!cuda_ok(cudaGetLastError(), "launch full-domain GPU demag visual recovery", reason)) {
+    if (!cuda_ok(cudaGetLastError(), "launch full-domain GPU demag observable recovery", reason)) {
         return false;
     }
     const int n = static_cast<int>(gpu.lifecycle.node_count);
@@ -454,12 +454,31 @@ bool recover_device_demag_visual_field(
             return false;
         }
     }
+    return true;
+#else
+    (void)ctx;
+    (void)raw_stream;
+        reason = "full-domain GPU demag observable requires CUDA, MFEM, and MPI support";
+    return false;
+#endif
+}
+
+bool recover_device_demag_visual_field(
+    Context &ctx,
+    void *raw_stream,
+    std::string &reason)
+{
+#if FULLMAG_HAS_CUDA_RUNTIME && FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    if (!recover_device_demag_full_domain_field_device(ctx, raw_stream, reason)) {
+        return false;
+    }
+    cudaStream_t stream = reinterpret_cast<cudaStream_t>(raw_stream);
     if (!cuda_ok(cudaStreamSynchronize(stream), "synchronize full-domain GPU demag visual recovery", reason)) {
         return false;
     }
     return gpu_state_download_component_aos(
-        gpu,
-        visual,
+        ctx.gpu_state.device,
+        ctx.gpu_state.device.demag_poisson.poisson_gradient,
         ctx.demag.h_visual_xyz,
         ctx.transfer_audit.audit,
         "H_demag visual",

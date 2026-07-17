@@ -702,6 +702,9 @@ add_test(NAME fem_state_io_contract COMMAND fem_state_io_contract)
 
 add_executable(fem_snapshot_contract tests/snapshot_contract.cpp)
 target_link_libraries(fem_snapshot_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA)
+    target_link_libraries(fem_snapshot_contract PRIVATE CUDA::cudart)
+endif()
 target_include_directories(fem_snapshot_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include

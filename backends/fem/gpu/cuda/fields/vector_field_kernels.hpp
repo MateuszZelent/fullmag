@@ -43,5 +43,13 @@ void fullmag_cuda_add_field_inplace(
     int N,
     cudaStream_t stream = nullptr);
 
+/// h_eff_full = h_eff_magnetic + h_demag_full - h_demag_magnetic.
+void fullmag_cuda_apply_full_domain_demag_correction(
+    const double *h_demag_full,
+    const double *h_demag_magnetic,
+    double *h_eff_full,
+    int N,
+    cudaStream_t stream = nullptr);
+
 } // namespace fullmag::fem
 #endif // FULLMAG_HAS_CUDA_RUNTIME

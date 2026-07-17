@@ -31,6 +31,7 @@
 #include "frequency_domain/tangent_frame.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/demag_poisson/stage_compute.hpp"
+#include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 #include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
@@ -330,7 +331,12 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
     case FULLMAG_FEM_OBSERVABLE_H_EX:
         return &context.gpu_state.device.fields.h_ex;
     case FULLMAG_FEM_OBSERVABLE_H_DEMAG:
-        return &context.gpu_state.device.fields.h_demag;
+        if (context.demag.enabled &&
+            context.poisson_demag.gpu_demag_mode ==
+                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+            return &context.gpu_state.device.demag_poisson.poisson_gradient;
+        }
+        return nullptr;
     case FULLMAG_FEM_OBSERVABLE_H_EXT:
         return &context.gpu_state.device.fields.h_ext;
     case FULLMAG_FEM_OBSERVABLE_H_ANI:
@@ -348,7 +354,12 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
     case FULLMAG_FEM_OBSERVABLE_H_MEL:
         return &context.gpu_state.device.fields.h_mel;
     case FULLMAG_FEM_OBSERVABLE_H_EFF:
-        return &context.gpu_state.device.fields.h_eff;
+        if (!context.demag.enabled ||
+            context.poisson_demag.gpu_demag_mode ==
+                FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+            return &context.gpu_state.device.fields.h_eff;
+        }
+        return nullptr;
     case FULLMAG_FEM_OBSERVABLE_DEMAG_PHI:
         return nullptr;
     default:
@@ -357,6 +368,32 @@ const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
 }
 
 #if FULLMAG_HAS_CUDA_RUNTIME
+bool prepare_gpu_full_domain_snapshot(
+    fullmag_fem_backend &handle,
+    fullmag_fem_observable observable)
+{
+    auto &context = handle.context;
+    const bool needs_full_domain_demag =
+        observable == FULLMAG_FEM_OBSERVABLE_H_DEMAG ||
+        observable == FULLMAG_FEM_OBSERVABLE_H_EFF;
+    if (!context.gpu_state.device.lifecycle.allocated ||
+        !context.demag.enabled ||
+        !needs_full_domain_demag ||
+        context.poisson_demag.gpu_demag_mode !=
+            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON) {
+        return true;
+    }
+    if (!fullmag::fem::recover_device_demag_full_domain_field_device(
+            context,
+            context.gpu_state.cuda.compute_stream,
+            handle.last_error)) {
+        handle.last_error = "GPU full-domain snapshot demag recovery failed: " +
+            handle.last_error;
+        return false;
+    }
+    return true;
+}
+
 bool schedule_gpu_snapshot_payload(
     fullmag_fem_backend &handle,
     fullmag_fem_observable observable,
@@ -375,6 +412,10 @@ bool schedule_gpu_snapshot_payload(
     const uint64_t node_count = context.gpu_state.device.lifecycle.node_count;
     if (node_count == 0 || node_count != context.mesh.n_nodes) {
         handle.last_error = "FEM GPU snapshot node count mismatch";
+        return false;
+    }
+    if (node_count > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        handle.last_error = "FEM GPU snapshot node count exceeds CUDA kernel index range";
         return false;
     }
     const size_t component_bytes = static_cast<size_t>(node_count) * sizeof(double);
@@ -433,6 +474,44 @@ bool schedule_gpu_snapshot_payload(
         snapshot.staging.z, source->z, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
     if (err != cudaSuccess) return fail("cudaMemcpyAsync(FEM snapshot.z)", err);
 
+    const bool compose_full_domain_h_eff =
+        observable == FULLMAG_FEM_OBSERVABLE_H_EFF &&
+        context.demag.enabled &&
+        context.poisson_demag.gpu_demag_mode ==
+            FULLMAG_FEM_GPU_DEMAG_DEVICE_HYPRE_POISSON;
+    if (compose_full_domain_h_eff) {
+        const auto &h_demag_full = context.gpu_state.device.demag_poisson.poisson_gradient;
+        const auto &h_demag_magnetic = context.gpu_state.device.fields.h_demag;
+        if (h_demag_full.x == nullptr || h_demag_full.y == nullptr ||
+            h_demag_full.z == nullptr || h_demag_magnetic.x == nullptr ||
+            h_demag_magnetic.y == nullptr || h_demag_magnetic.z == nullptr) {
+            handle.last_error =
+                "FEM GPU full-domain H_eff snapshot requires allocated demag component buffers";
+            destroy_snapshot_payload(snapshot);
+            return false;
+        }
+        fullmag::fem::fullmag_cuda_apply_full_domain_demag_correction(
+            h_demag_full.x,
+            h_demag_magnetic.x,
+            snapshot.staging.x,
+            static_cast<int>(node_count),
+            io_stream);
+        fullmag::fem::fullmag_cuda_apply_full_domain_demag_correction(
+            h_demag_full.y,
+            h_demag_magnetic.y,
+            snapshot.staging.y,
+            static_cast<int>(node_count),
+            io_stream);
+        fullmag::fem::fullmag_cuda_apply_full_domain_demag_correction(
+            h_demag_full.z,
+            h_demag_magnetic.z,
+            snapshot.staging.z,
+            static_cast<int>(node_count),
+            io_stream);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) return fail("launch FEM full-domain H_eff snapshot", err);
+    }
+
     err = cudaEventRecord(staging_done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(FEM snapshot.staging_done_event)", err);
 
@@ -486,6 +565,12 @@ FemSnapshotPayload *begin_snapshot_payload(
         return nullptr;
     }
     handle->last_error.clear();
+#if FULLMAG_HAS_CUDA_RUNTIME
+    if (!prepare_gpu_full_domain_snapshot(*handle, observable)) {
+        fullmag_fem_set_handle_error(handle, handle->last_error);
+        return nullptr;
+    }
+#endif
     if (observable == FULLMAG_FEM_OBSERVABLE_TORQUE &&
         !fullmag::fem::context_sync_gpu_magnetization_to_host(
             handle->context,
