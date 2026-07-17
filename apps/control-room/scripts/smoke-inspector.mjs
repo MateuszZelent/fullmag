@@ -81,8 +81,8 @@ try {
     "Visualization Overview must expose exactly one Display group.",
   );
   assert(
-    (await inspector.locator(".fm-inspector-section .fm-inspector-section").count()) === 0,
-    "Visualization Inspector contains nested compatibility cards.",
+    (await inspector.locator(".fm-inspector-section").count()) === 0,
+    "Visualization Inspector contains obsolete compatibility sections.",
   );
   assert(
     (await inspector.locator("img, canvas").count()) === 0,

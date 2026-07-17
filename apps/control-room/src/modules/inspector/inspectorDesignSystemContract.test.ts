@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -284,5 +284,21 @@ describe("Inspector design-system reference contract", () => {
     expect(panel).toContain("InspectorGroup");
     expect(panel).not.toMatch(/<\/?InspectorSection\b/);
     expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
+  });
+
+  it("removes the obsolete InspectorSection compatibility layer", () => {
+    const inspectorCss = read("src/design/styles/inspector.css");
+    const studyCss = read("src/design/styles/inspector-study.css");
+
+    expect(
+      existsSync(
+        join(
+          appRoot,
+          "src/modules/inspector/primitives/InspectorSection.tsx",
+        ),
+      ),
+    ).toBe(false);
+    expect(inspectorCss).not.toContain(".fm-inspector-section");
+    expect(studyCss).not.toContain(".fm-inspector-section");
   });
 });
