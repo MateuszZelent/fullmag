@@ -19,7 +19,6 @@ import {
   useObjectTopologyResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
-import { Accordion } from "@/shared/ui/Accordion";
 import { Tabs, TabsContent } from "@/shared/ui/Tabs";
 import { Button } from "@/shared/ui/Button";
 
@@ -895,11 +894,11 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
             pending={pending}
           />
 
-          <Accordion type="multiple">
+          <div className="grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
             <JsonResourceSection sectionValue="json-report" title="Object Mesh Report JSON" value={report.data} />
             <JsonResourceSection sectionValue="json-quality" title="Object Mesh Quality JSON" value={quality.data} />
             <JsonResourceSection sectionValue="json-size-field" title="Object Size Field JSON" value={sizeField.data} />
-          </Accordion>
+          </div>
         </TabsContent>
       </Tabs>
     </div>

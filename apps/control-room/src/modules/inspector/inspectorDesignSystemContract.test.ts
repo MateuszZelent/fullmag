@@ -113,6 +113,7 @@ describe("Inspector design-system reference contract", () => {
 
     expect(meshPolicy).toContain("InspectorGroup");
     expect(meshPolicy).not.toMatch(/<\/?InspectorSection\b/);
+    expect(meshPolicy).not.toContain("<Accordion");
     expect(meshPolicy).not.toContain("defaultCollapsed");
   });
 
