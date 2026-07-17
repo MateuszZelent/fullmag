@@ -109,6 +109,39 @@ describe("Inspector visual contract", () => {
     expect(visualizationPanel).toContain("restoreAppliedBaseline");
   });
 
+  it("keeps migrated Visualization composition out of compatibility cards", () => {
+    const overview = readFileSync(
+      join(
+        inspectorRoot,
+        "panels/ObjectVisualizationOverview.tsx",
+      ),
+      "utf8",
+    );
+    const targetSections = readFileSync(
+      join(
+        inspectorRoot,
+        "panels/ObjectVisualizationTargetSection.tsx",
+      ),
+      "utf8",
+    );
+    const visualizationCss = readFileSync(
+      join(stylesRoot, "inspector-visualization.css"),
+      "utf8",
+    );
+    const tailwindTheme = readFileSync(
+      join(stylesRoot, "tailwind-theme.css"),
+      "utf8",
+    );
+
+    expect(overview).not.toContain("InspectorSection");
+    expect(overview).not.toContain("fm-inspector-section");
+    expect(targetSections).not.toContain("fm-inspector-segmented");
+    expect(visualizationCss).not.toMatch(
+      /\.fm-(?:inspector-section|inspector-input|inspector-select|tabs-trigger|button)\b/,
+    );
+    expect(tailwindTheme).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(/i);
+  });
+
   it("keeps every retained Inspector CSS class reachable from source", () => {
     const css = readdirSync(stylesRoot)
       .filter((name) => /^inspector.*\.css$/.test(name))
