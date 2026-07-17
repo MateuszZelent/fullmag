@@ -1,3 +1,4 @@
+/* ── Explorer panel shell ── */
 .fm-explorer {
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
@@ -6,9 +7,10 @@
   background: var(--fm-bg-panel);
 }
 
+/* ── Header ── */
 .fm-explorer__header {
   display: flex;
-  min-height: 38px;
+  min-height: 42px;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--fm-border-subtle);
@@ -18,33 +20,81 @@
 .fm-explorer__header h2 {
   margin: 0;
   color: var(--fm-text-primary);
-  font-size: var(--fm-font-size-md);
+  font-size: var(--fm-font-size-xs);
+  font-weight: 700;
+  font-family: var(--fm-font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.fm-explorer__header span {
+/* ── Tab bar: underline style scoped to Explorer ── */
+.fm-explorer-tabs {
+  border-bottom: 1px solid var(--fm-border-subtle);
+  padding: 0 var(--fm-space-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.fm-explorer-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* Override the shared fm-tabs-list inside explorer */
+.fm-explorer-tabs .fm-tabs-list {
+  gap: 0;
+  min-height: 38px;
+  border: 0;
+  background: transparent;
+}
+
+.fm-explorer-tabs .fm-tabs-trigger {
+  height: 38px;
+  padding-inline: var(--fm-space-2);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-xs);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  transition:
+    color var(--fm-transition-fast),
+    border-color var(--fm-transition-fast);
 }
 
-.fm-explorer-tabs {
-  overflow-x: auto;
-  border-bottom: 1px solid var(--fm-border-subtle);
-  padding: var(--fm-space-1) var(--fm-space-2);
+.fm-explorer-tabs .fm-tabs-trigger:hover {
+  background: transparent;
+  color: var(--fm-text-secondary);
 }
 
+.fm-explorer-tabs .fm-tabs-trigger[data-state="active"] {
+  border-bottom-color: var(--fm-accent);
+  background: transparent;
+  color: var(--fm-accent);
+  font-weight: 600;
+}
+
+/* ── Filter bar ── */
 .fm-explorer-filter {
   display: flex;
-  height: 30px;
   align-items: center;
   gap: var(--fm-space-2);
-  border-bottom: 1px solid var(--fm-border-subtle);
-  color: var(--fm-text-muted);
+  margin: var(--fm-space-2) var(--fm-space-2);
+  height: 30px;
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-md);
+  background: var(--fm-bg-panel-raised);
   padding-inline: var(--fm-space-2);
-  transition: border-color var(--fm-transition-fast);
+  color: var(--fm-text-muted);
+  transition:
+    border-color var(--fm-transition-fast),
+    box-shadow var(--fm-transition-fast);
 }
 
 .fm-explorer-filter:focus-within {
-  border-bottom-color: var(--fm-accent);
+  border-color: var(--fm-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 12%, transparent);
   color: var(--fm-text-secondary);
 }
 
@@ -58,29 +108,56 @@
   outline: none;
 }
 
+.fm-explorer-filter input::placeholder {
+  color: var(--fm-text-muted);
+}
+
+/* Hide native search cancel button */
+.fm-explorer-filter input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.fm-explorer-filter__search-icon {
+  flex-shrink: 0;
+  color: var(--fm-text-muted);
+}
+
+.fm-explorer-filter__options-icon {
+  flex-shrink: 0;
+  color: var(--fm-text-muted);
+  cursor: pointer;
+  transition: color var(--fm-transition-fast);
+}
+
+.fm-explorer-filter__options-icon:hover {
+  color: var(--fm-text-secondary);
+}
+
+/* ── Tree container ── */
 .fm-explorer-tree {
   min-height: 0;
   overflow: auto;
-  padding: var(--fm-space-1);
+  padding: var(--fm-space-1) var(--fm-space-1);
   scrollbar-width: thin;
   scrollbar-color: var(--fm-border-default) transparent;
 }
 
-
-
+/* ── Tree rows ── */
 .fm-explorer-tree-row {
   --fm-tree-depth: 0;
 
+  position: relative;
   display: grid;
   grid-template-columns: 16px 18px minmax(0, 1fr) auto auto;
-  min-height: 28px;
+  min-height: 30px;
   align-items: center;
   gap: var(--fm-space-1);
   border: 1px solid transparent;
   border-radius: var(--fm-radius-sm);
   color: var(--fm-text-secondary);
   cursor: default;
-  font-size: var(--fm-font-size-sm);
+  font-size: var(--fm-font-size-xs);
+  font-family: var(--fm-font-ui);
   padding-left: calc(var(--fm-space-1) + var(--fm-tree-depth) * 15px);
   padding-right: var(--fm-space-1);
   transition:
@@ -96,13 +173,14 @@
   background: var(--fm-bg-panel-raised);
   color: var(--fm-text-primary);
   outline: none;
-  box-shadow: var(--fm-focus-ring);
 }
 
+/* Selected state: blue left accent + stronger tint — matches reference */
 .fm-explorer-tree-row[data-active="true"] {
-  border-color: var(--fm-border-default);
-  background: var(--fm-bg-selected);
+  background: color-mix(in srgb, var(--fm-accent) 10%, var(--fm-bg-panel));
+  border-color: color-mix(in srgb, var(--fm-accent) 24%, transparent);
   color: var(--fm-text-primary);
+  box-shadow: inset 2px 0 0 var(--fm-accent);
 }
 
 .fm-explorer-tree-row--active-analysis-field {
@@ -116,6 +194,7 @@
   background: color-mix(in srgb, var(--fm-accent) 16%, var(--fm-bg-selected));
 }
 
+/* ── Node status color classes ── */
 .fm-explorer-tree-row[data-status="stale"] {
   color: var(--fm-stale);
 }
@@ -180,6 +259,7 @@
   color: var(--fm-danger);
 }
 
+/* ── Row parts ── */
 .fm-explorer-tree-row__branch,
 .fm-explorer-tree-row__icon {
   display: inline-flex;
@@ -199,22 +279,106 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: var(--fm-font-size-xs);
+  font-family: var(--fm-font-ui);
 }
 
-.fm-explorer-tree-row__badge,
-.fm-explorer-tree-row__active-field,
+/* ── Status badge: semantic colors ── */
 .fm-explorer-tree-row__status {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-family: var(--fm-font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+  /* Default: neutral outline */
   border: 1px solid var(--fm-border-subtle);
+  background: transparent;
+  color: var(--fm-text-muted);
+}
+
+/* Neutral plain badge (e.g. "problem.mf3", count) */
+.fm-explorer-tree-row__badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
   border-radius: var(--fm-radius-xs);
+  border: 1px solid var(--fm-border-subtle);
+  background: transparent;
   color: var(--fm-text-muted);
   font-family: var(--fm-font-mono);
   font-size: 10px;
-  padding: 1px var(--fm-space-1);
   white-space: nowrap;
 }
 
+/* Active field badge */
 .fm-explorer-tree-row__active-field {
-  border-color: color-mix(in srgb, var(--fm-accent) 54%, var(--fm-border-subtle));
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--fm-accent) 54%, var(--fm-border-subtle));
   background: color-mix(in srgb, var(--fm-accent) 14%, transparent);
   color: var(--fm-accent);
+  font-family: var(--fm-font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Semantic status badge colors — applied via data-status on parent row */
+/* Green: mesh-ready, completed */
+.fm-explorer-tree-row[data-status="mesh-ready"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="completed"] .fm-explorer-tree-row__status {
+  border-color: color-mix(in srgb, var(--fm-success) 40%, transparent);
+  background: color-mix(in srgb, var(--fm-success) 12%, transparent);
+  color: var(--fm-success);
+}
+
+/* Blue: running, display, current, mesh-building */
+.fm-explorer-tree-row[data-status="running"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="mesh-building"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="display"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="current"] .fm-explorer-tree-row__status {
+  border-color: color-mix(in srgb, var(--fm-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--fm-accent) 12%, transparent);
+  color: var(--fm-accent);
+}
+
+/* Amber: warning, stale, primitive-only, mesh-stale */
+.fm-explorer-tree-row[data-status="warning"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="stale"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="mesh-stale"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="primitive-only"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="degraded"] .fm-explorer-tree-row__status {
+  border-color: color-mix(in srgb, var(--fm-warning) 40%, transparent);
+  background: color-mix(in srgb, var(--fm-warning) 10%, transparent);
+  color: var(--fm-warning);
+}
+
+/* Red: failed, unsupported, mesh-failed, validation-blocked */
+.fm-explorer-tree-row[data-status="failed"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="unsupported"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="mesh-failed"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="validation-blocked"] .fm-explorer-tree-row__status {
+  border-color: color-mix(in srgb, var(--fm-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--fm-danger) 10%, transparent);
+  color: var(--fm-danger);
+}
+
+/* Muted: queued, skipped, cancelled, unavailable */
+.fm-explorer-tree-row[data-status="queued"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="skipped"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="cancelled"] .fm-explorer-tree-row__status,
+.fm-explorer-tree-row[data-status="unavailable"] .fm-explorer-tree-row__status {
+  border-color: var(--fm-border-subtle);
+  background: transparent;
+  color: var(--fm-text-muted);
+  opacity: 0.7;
 }

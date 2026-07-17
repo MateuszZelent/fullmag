@@ -1,4 +1,12 @@
 import type { ReactNode } from "react";
+import {
+  Box,
+  Palette,
+  ArrowUpRight,
+  Scissors,
+  Camera,
+  Settings2,
+} from "lucide-react";
 
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { InspectorMetricStrip } from "../primitives/InspectorMetricStrip";
@@ -30,12 +38,16 @@ export function ObjectVisualizationOverview({
 }: ObjectVisualizationOverviewProps) {
   return (
     <div
-      className="fm-object-visualization-overview grid min-w-0 gap-[var(--fm-inspector-group-gap)] [container-type:inline-size]"
+      className="fm-object-visualization-overview grid min-w-0 gap-3 [container-type:inline-size]"
       data-slot="object-visualization-overview"
     >
+      {/* 4-column metric strip */}
       <InspectorMetricStrip
         metrics={[
-          { label: "Display Passes", value: `${enabledPassCount} enabled` },
+          {
+            label: "Display Passes",
+            value: `${enabledPassCount} enabled`,
+          },
           { label: "Quantity Source", value: quantitySource },
           {
             label: "Mesh Readiness",
@@ -50,19 +62,54 @@ export function ObjectVisualizationOverview({
         ]}
       />
 
-      <InspectorGroup title="Display">{display}</InspectorGroup>
-      {surfaceColoring}
-      {vectors}
+      {/* Display section as a bordered card */}
+      <div className="fm-viz-display-card">
+        <InspectorGroup
+          icon={<Box size={18} strokeWidth={1.5} />}
+          title="Display"
+          collapsible
+          defaultOpen
+        >
+          {display}
+        </InspectorGroup>
+      </div>
 
-      <InspectorGroup badge="Section: Off" collapsible defaultOpen={false} title="Clipping & Section">
-        {clipping}
-      </InspectorGroup>
-      <InspectorGroup badge="Perspective: Auto" collapsible defaultOpen={false} title="Camera & View">
-        {camera}
-      </InspectorGroup>
-      <InspectorGroup badge="Rendering" collapsible defaultOpen={false} title="Advanced">
-        {advanced}
-      </InspectorGroup>
+      {/* Nav rows for remaining sections */}
+      <div className="fm-viz-nav-sections">
+        {surfaceColoring}
+        {vectors}
+
+        <InspectorGroup
+          collapsible
+          defaultOpen={false}
+          icon={<Scissors size={16} strokeWidth={1.75} />}
+          summary="Section: Off"
+          title="Clipping & Section"
+          variant="nav"
+        >
+          {clipping}
+        </InspectorGroup>
+        <InspectorGroup
+          collapsible
+          defaultOpen={false}
+          icon={<Camera size={16} strokeWidth={1.75} />}
+          summary="Perspective • Auto"
+          title="Camera & View"
+          variant="nav"
+        >
+          {camera}
+        </InspectorGroup>
+        <InspectorGroup
+          collapsible
+          defaultOpen={false}
+          icon={<Settings2 size={16} strokeWidth={1.75} />}
+          summary="Rendering • Performance"
+          title="Advanced"
+          variant="nav"
+        >
+          {advanced}
+        </InspectorGroup>
+      </div>
     </div>
   );
 }

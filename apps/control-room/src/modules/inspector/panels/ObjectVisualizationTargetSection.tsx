@@ -1,6 +1,13 @@
 "use client";
 
-import { Check, RotateCcw } from "lucide-react";
+import {
+  Check,
+  RotateCcw,
+  Palette,
+  ArrowUpRight,
+  Eye,
+  ArrowRightLeft,
+} from "lucide-react";
 import React, { useState, useId } from "react";
 import { type FieldCatalogResource, type FieldMetaResource } from "@/kernel/api/apiTypes";
 import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
@@ -69,10 +76,10 @@ const RENDER_MODES: Array<SegmentedControlOption<VisualizationDisplayMode>> = [
   { label: "Shaded", value: "surface" },
   {
     accessibleLabel: "Shaded plus wireframe",
-    label: "Shaded+",
+    label: "Shaded +\nWireframe",
     value: "surface+edges",
   },
-  { label: "Wire", value: "wireframe" },
+  { label: "Wireframe", value: "wireframe" },
   { label: "Points", value: "points" },
   { label: "Off", value: "off" },
 ];
@@ -113,56 +120,64 @@ export function VisualizationDisplayPassesSection({
       {renderWarning ? (
         <FeedbackBanner kind="warning" message={renderWarning} />
       ) : null}
-      <div className="fm-visualization-toggle-grid">
-        <ToggleButton
-          active={displaySettings.visible}
-          disabled={pending}
-          disabledDescription={pending ? "Saving display changes." : undefined}
-          label="Visible"
-          onClick={handleVisibleClick}
-        />
-        <ToggleButton
-          active={displaySettings.vectorsVisible}
-          disabled={passControlsDisabled}
-          disabledDescription={displayControlDisabledDescription(
-            passControlsDisabled,
-            settings.visible,
-            pending,
-          )}
-          label="Vectors"
-          onClick={() => void patch(displayPassTogglePatch(settings, "vectorsVisible"))}
-        />
-        <ToggleButton
-          active={displaySettings.boundsVisible}
-          disabled={passControlsDisabled}
-          disabledDescription={displayControlDisabledDescription(
-            passControlsDisabled,
-            settings.visible,
-            pending,
-          )}
-          label="Frame"
-          onClick={() => void patch(displayPassTogglePatch(settings, "boundsVisible"))}
-        />
-        {primitiveDisplayToggleVisible ? (
-          <ToggleButton
-            active={Boolean(displaySettings.primitiveVisible)}
+
+      {/* Surface row */}
+      <div className="fm-viz-display-row">
+        <span className="fm-viz-display-row__icon">
+          <Eye size={15} strokeWidth={1.75} />
+        </span>
+        <span className="fm-viz-display-row__label">Surface</span>
+        <span className="fm-viz-display-row__controls">
+          <button
+            aria-pressed={displaySettings.visible}
+            className={`fm-viz-visible-pill${!displaySettings.visible ? " fm-viz-visible-pill--inactive" : ""}`}
+            disabled={pending}
+            type="button"
+            onClick={handleVisibleClick}
+          >
+            <span className="fm-viz-visible-pill__dot" aria-hidden="true" />
+            Visible
+          </button>
+        </span>
+      </div>
+
+      {/* Vectors row */}
+      <div className="fm-viz-display-row">
+        <span className="fm-viz-display-row__icon">
+          <ArrowRightLeft size={15} strokeWidth={1.75} />
+        </span>
+        <span className="fm-viz-display-row__label">Vectors</span>
+        <span className="fm-viz-display-row__controls fm-viz-display-row__controls--vectors">
+          <span className="fm-viz-display-row__enabled-label">Enabled</span>
+          <Switch
+            aria-label="Toggle vectors"
+            checked={displaySettings.vectorsVisible}
             disabled={passControlsDisabled}
-            disabledDescription={displayControlDisabledDescription(
-              passControlsDisabled,
-              settings.visible,
-              pending,
-            )}
-            label="Primitive"
-            onClick={() =>
-              void patch(displayPassTogglePatch(settings, "primitiveVisible"))
+            onCheckedChange={() =>
+              void patch(displayPassTogglePatch(settings, "vectorsVisible"))
             }
           />
-        ) : null}
+          <SegmentedControl
+            aria-label="Vectors geometry scope"
+            className="fm-viz-display-row__scope"
+            disabled={passControlsDisabled}
+            options={[
+              { label: "Surface", value: "surface" },
+              { label: "Volume", value: "full" },
+            ]}
+            value={settings.geometryScope === "full" ? "full" : "surface"}
+            onValueChange={(value) =>
+              void patch({ geometryScope: value as "surface" | "full" })
+            }
+          />
+        </span>
       </div>
+
       {primitiveDisplayToggleVisible ? <ViewportPreferenceScopeNote /> : null}
     </div>
   );
 }
+
 
 export function VisualizationRenderModeSection({
   displaySettings,
@@ -175,28 +190,88 @@ export function VisualizationRenderModeSection({
   pending: boolean;
   patch: PatchVisualizationTarget;
 }) {
+  const currentMode = resolveVisualizationDisplayMode(displaySettings);
+  const renderModeOptions = [
+    { value: "surface" as const, label: "Shaded", subLabel: undefined },
+    { value: "surface+edges" as const, label: "Shaded +", subLabel: "Wireframe" },
+    { value: "wireframe" as const, label: "Wireframe", subLabel: undefined },
+    { value: "points" as const, label: "Points", subLabel: undefined },
+  ] satisfies Array<{ value: VisualizationDisplayMode; label: string; subLabel?: string }>;
   return (
-    <InspectorPropertyRow
-      description={
-        displayControlDisabledDescription(
-          passControlsDisabled,
-          displaySettings.visible,
-          pending,
-        )
-      }
-      label="Display mode"
-      layout="stacked"
-    >
-      <SegmentedControl
-        aria-label="Display mode"
-        disabled={passControlsDisabled}
-        options={RENDER_MODES}
-        value={resolveVisualizationDisplayMode(displaySettings)}
-        onValueChange={(value) => void patch(renderModeDisplayPatch(value))}
-      />
-    </InspectorPropertyRow>
+    <div className="grid min-w-0 gap-1.5">
+      <span className="fm-viz-render-mode-label">Render Mode</span>
+      <div
+        className="fm-viz-render-mode-grid"
+        role="radiogroup"
+        aria-label="Render mode"
+      >
+        {renderModeOptions.map((option) => {
+          const isActive = currentMode === option.value;
+          return (
+            <button
+              key={option.value}
+              aria-checked={isActive}
+              aria-label={option.label}
+              className={`fm-viz-render-mode-tile ${isActive ? "fm-viz-render-mode-tile--active" : ""}`}
+              disabled={passControlsDisabled}
+              role="radio"
+              type="button"
+              onClick={() => void patch(renderModeDisplayPatch(option.value))}
+            >
+              <span className="fm-viz-render-mode-tile__icon" aria-hidden="true">
+                {option.value === "surface" && (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" fill={isActive ? "currentColor" : "none"} fillOpacity={isActive ? "0.15" : "0"} />
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                    <line x1="12" y1="22.08" x2="12" y2="12" />
+                  </svg>
+                )}
+                {option.value === "surface+edges" && (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" fill={isActive ? "currentColor" : "none"} fillOpacity={isActive ? "0.15" : "0"} />
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                    <line x1="12" y1="22.08" x2="12" y2="12" />
+                    <polyline points="7 9.5 12 12 17 9.5" />
+                    <polyline points="12 12 12 16.5" />
+                  </svg>
+                )}
+                {option.value === "wireframe" && (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+                    <line x1="12" y1="22.08" x2="12" y2="12" />
+                    <line x1="7" y1="3.5" x2="12" y2="6.01" />
+                    <line x1="17" y1="3.5" x2="12" y2="6.01" />
+                  </svg>
+                )}
+                {option.value === "points" && (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+                    <circle cx="7" cy="9" r="1.5" fill="currentColor" />
+                    <circle cx="17" cy="9" r="1.5" fill="currentColor" />
+                    <circle cx="7" cy="15" r="1.5" fill="currentColor" />
+                    <circle cx="17" cy="15" r="1.5" fill="currentColor" />
+                    <circle cx="12" cy="6" r="1" fill="currentColor" />
+                    <circle cx="12" cy="18" r="1" fill="currentColor" />
+                    <circle cx="4" cy="12" r="1" fill="currentColor" />
+                    <circle cx="20" cy="12" r="1" fill="currentColor" />
+                  </svg>
+                )}
+              </span>
+              <span className="fm-viz-render-mode-tile__label">
+                {option.label}
+                {option.subLabel ? (
+                  <span className="fm-viz-render-mode-tile__sub-label">{option.subLabel}</span>
+                ) : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
+
 
 export function VisualizationSurfaceColoringSection({
   patch,
@@ -251,8 +326,18 @@ export function VisualizationSurfaceColoringSection({
     quantityId: settings.activeQuantityId,
     ...fieldMetaScopeQuery,
   });
+  const surfaceSummary = settings.surfaceColorSource === "solid"
+    ? "Solid color"
+    : `By Quantity • ${settings.activeQuantityId ?? "H_eff"} (Auto)`;
   return (
-    <InspectorGroup collapsible defaultOpen={false} title="Surface Coloring">
+    <InspectorGroup
+      collapsible
+      defaultOpen={false}
+      icon={<Palette size={16} strokeWidth={1.75} />}
+      summary={surfaceSummary}
+      title="Surface Coloring"
+      variant="nav"
+    >
       {regionFieldWarning ? (
         <FeedbackBanner
           kind="warning"
@@ -510,7 +595,8 @@ export function VisualizationQuantitySection({
   return (
     <FormField
       disabled={pending || !settings.visible}
-      label="Quantity source"
+      inline
+      label="Quantity Source"
       type="select"
       value={settings.activeQuantityId}
       onChange={(event) => {
@@ -625,8 +711,18 @@ export function VisualizationVectorsSection({
   );
   const vectorsDisabled = pending || sectionDisabled("vectors");
 
+  const vectorsSummary = settings.geometryScope
+    ? `${settings.geometryScope === "surface" ? "Surface" : "Volume"} • Density Auto`
+    : "Surface • Density Auto";
   return (
-    <InspectorGroup collapsible defaultOpen={false} title="Vectors">
+    <InspectorGroup
+      collapsible
+      defaultOpen={false}
+      icon={<ArrowUpRight size={16} strokeWidth={1.75} />}
+      summary={vectorsSummary}
+      title="Vectors"
+      variant="nav"
+    >
       <ViewportPreferenceScopeNote />
       <VisualizationRadioGroup
         disabled={vectorsDisabled}
@@ -650,12 +746,12 @@ export function VisualizationVectorsSection({
           onChange={(value) => patchColor("vectorMonoColor", value)}
         />
       ) : null}
-      <div className="grid min-w-0 gap-2 border-t border-fm-subtle pt-3">
+      <div className="fm-viz-vector-subgroup">
         <NumberField disabled={vectorsDisabled} label="Opacity" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
         <NumberField disabled={vectorsDisabled} label="Thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
         <NumberField disabled={vectorsDisabled} label="Arrow length" max={5} min={0.1} step={0.1} unit="×" value={settings.vectorLengthScale} onChange={(value) => patchNumber("vectorLengthScale", value)} />
       </div>
-      <div className="grid min-w-0 gap-2 border-t border-fm-subtle pt-3">
+      <div className="fm-viz-vector-subgroup">
         <NumberField
           disabled={vectorsDisabled}
           label="Arrow budget"
@@ -666,12 +762,14 @@ export function VisualizationVectorsSection({
           onChange={(value) => patchNumber("vectorBudget", value)}
         />
       </div>
-      <VisualizationVectorAccountingRows
-        availableNodeCount={vectorBudgetRange.availableNodeCount}
-        currentTopologyHash={vectorTopologyHash}
-        exact={vectorBudgetRange.exact}
-        targetKind={targetKind}
-      />
+      <div className="fm-viz-vector-accounting">
+        <VisualizationVectorAccountingRows
+          availableNodeCount={vectorBudgetRange.availableNodeCount}
+          currentTopologyHash={vectorTopologyHash}
+          exact={vectorBudgetRange.exact}
+          targetKind={targetKind}
+        />
+      </div>
       <div className="fm-visualization-toggle-grid fm-visualization-toggle-grid--vectors">
         {targetKind === "airbox" ? (
           <ToggleButton
@@ -1033,10 +1131,10 @@ export function VisualizationToggleButton({
       disabled={disabled}
       size="sm"
       type="button"
-      variant={active ? "primary" : "secondary"}
+      variant="ghost"
       onClick={onClick}
     >
-      {active ? <Check aria-hidden="true" size={13} /> : null}
+      {active ? <Check aria-hidden="true" size={12} /> : null}
       {label}
       {disabledDescription ? (
         <span className="fm-visually-hidden" id={descriptionId}>

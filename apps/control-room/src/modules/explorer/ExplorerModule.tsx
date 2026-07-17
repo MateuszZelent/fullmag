@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { Search } from "lucide-react";
+import { Search, SlidersHorizontal } from "lucide-react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -457,26 +457,22 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     <WorkspaceRenderProfiler id="ExplorerModule">
       <section className="fm-explorer" aria-label="Explorer">
       <header className="fm-explorer__header">
-        <div>
-          <h2>Explorer</h2>
-          <span data-resource-status={modelResource.status}>
-            {modelResource.status === "ready" ? "model resource" : modelResource.status}
-          </span>
-        </div>
+        <h2>Explorer</h2>
       </header>
       <ExplorerTabBar
         activeTab={activeTab}
         onTabChange={setExplorerActiveTab}
       />
       <label className="fm-explorer-filter">
-        <Search size={13} aria-hidden="true" />
+        <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
         <input
           aria-label="Filter explorer"
           value={filterText}
           onChange={(event) => setExplorerFilterText(event.target.value)}
-          placeholder="Filter"
+          placeholder="Filter nodes..."
           type="search"
         />
+        <SlidersHorizontal size={13} aria-hidden="true" className="fm-explorer-filter__options-icon" />
       </label>
       <ExplorerTreeView
         activeNodeId={selectedNodeId}

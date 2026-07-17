@@ -1,6 +1,13 @@
 "use client";
 
-import { MoreHorizontal, ScanSearch } from "lucide-react";
+import {
+  Box,
+  Focus,
+  MoreHorizontal,
+  RotateCcw,
+  BarChart2,
+  Check,
+} from "lucide-react";
 import { useId, useLayoutEffect, type ReactNode } from "react";
 
 import { Badge } from "@/shared/ui/Badge";
@@ -94,7 +101,7 @@ export function InspectorShell({
         ) : null}
         <div className="fm-inspector__identity">
           <span className="fm-inspector__identity-icon" aria-hidden="true">
-            <ScanSearch size={16} strokeWidth={1.75} />
+            <Box size={22} strokeWidth={1.5} />
           </span>
           <div className="fm-inspector__identity-copy">
             <h2 className="fm-inspector__title">{descriptor.title}</h2>
@@ -161,9 +168,22 @@ export function InspectorShell({
       </ScrollArea>
 
       <footer className="fm-inspector__action-bar">
-        <Button size="sm" variant="secondary" onClick={onFocus}>
-          Focus
-        </Button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                className="fm-inspector__action-btn"
+                size="sm"
+                variant="secondary"
+                onClick={onFocus}
+              >
+                <Focus size={14} aria-hidden="true" />
+                Focus
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Focus viewport on this selection</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -173,7 +193,13 @@ export function InspectorShell({
                 role="note"
                 tabIndex={0}
               >
-                <Button size="sm" variant="secondary" disabled>
+                <Button
+                  className="fm-inspector__action-btn"
+                  size="sm"
+                  variant="secondary"
+                  disabled
+                >
+                  <BarChart2 size={14} aria-hidden="true" />
                   Isolate
                 </Button>
               </span>
@@ -181,7 +207,6 @@ export function InspectorShell({
             <TooltipContent id={isolateReasonId}>Isolation is not available for this selection.</TooltipContent>
           </Tooltip>
         </TooltipProvider>
-        <span className="fm-inspector__action-spacer" />
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -191,11 +216,13 @@ export function InspectorShell({
                 tabIndex={!actions.canReset ? 0 : -1}
               >
                 <Button
+                  className="fm-inspector__action-btn"
                   disabled={!actions.canReset}
                   size="sm"
                   variant="secondary"
                   onClick={() => void editSession?.reset()}
                 >
+                  <RotateCcw size={14} aria-hidden="true" />
                   Reset
                 </Button>
               </span>
@@ -204,6 +231,8 @@ export function InspectorShell({
               {actions.canReset ? "Reset to the last applied state" : actions.applyReason}
             </TooltipContent>
           </Tooltip>
+        </TooltipProvider>
+        <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
               <span
@@ -212,11 +241,13 @@ export function InspectorShell({
                 tabIndex={!actions.canApply ? 0 : -1}
               >
                 <Button
+                  className="fm-inspector__action-btn fm-inspector__action-btn--apply"
                   disabled={!actions.canApply}
                   size="sm"
                   variant="primary"
                   onClick={() => void editSession?.apply()}
                 >
+                  <Check size={14} aria-hidden="true" />
                   {editSession?.applying ? "Applying…" : "Apply"}
                 </Button>
               </span>
