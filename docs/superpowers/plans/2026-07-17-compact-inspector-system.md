@@ -15,6 +15,7 @@
 - Use compact controls with 26 px visible height, 28 px minimum slider interaction rows, 4–6 px internal rhythm, and 10 px Inspector horizontal padding.
 - Use 7 px input/select radii, 8 px button/segment radii, and 10 px disclosure/raised-region radii.
 - Segmented controls use one rounded track and inset selections; migrated panels must not show grids of separately outlined square controls.
+- Render tabs only for genuinely distinct task views; simple authoring inspectors and Visualization use one continuous surface.
 - Full capsules are limited to short filters and status pills; scientific fields remain softly rounded rectangles.
 - Keep `--fm-*` tokens as visual truth; raw Catppuccin colors stay in central token/theme files.
 - Use only `fm-*` custom classes. Tailwind utilities remain allowed.
@@ -192,12 +193,15 @@ pnpm --dir apps/control-room typecheck
 
 Commit as `feat: compact inspector composition`.
 
-### Task 4: Finish Visualization as the visual reference
+### Task 4: Repair Inspector navigation and finish Visualization as the visual reference
 
 **Files:**
 - Modify: `apps/control-room/src/modules/inspector/panels/ObjectVisualizationOverview.tsx`
 - Modify: `apps/control-room/src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx`
 - Modify: `apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanel.tsx`
+- Modify: `apps/control-room/src/modules/inspector/inspectorDescriptor.ts`
+- Modify: `apps/control-room/src/modules/inspector/InspectorShell.tsx`
+- Modify: `apps/control-room/src/modules/inspector/inspectorDescriptor.test.ts`
 - Modify: `apps/control-room/src/design/styles/inspector-visualization.css`
 - Modify: `apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanel.accessibility.test.tsx`
 - Modify: `apps/control-room/src/modules/inspector/panels/ObjectVisualizationPanel.performance.test.ts`
@@ -208,23 +212,31 @@ Commit as `feat: compact inspector composition`.
 - Consumes: compact controls/composition.
 - Preserves: live viewport patching, staged interaction boundaries, exact reset baseline, lazy diagnostics, and no preview requests.
 
-- [ ] **Step 1: Repair behavior-focused tests before styling**
+- [ ] **Step 1: Add failing navigation tests**
+
+Assert that Visualization and simple authoring families declare no shell tabs, Mesh declares `Policy / Quality / History`, Results retains task tabs, and the shell omits the tab row when no tabs are declared.
+
+- [ ] **Step 2: Repair behavior-focused tests before styling**
 
 Replace source-string assertions for removed implementation details with mounted behavior assertions: slider changes update locally, commit occurs on interaction boundary, viewport preferences stay out of backend transactions, and ordinary Visualization does not load Debug evidence.
 
-- [ ] **Step 2: Migrate the Overview and expanded groups**
+- [ ] **Step 3: Flatten Visualization into one continuous surface**
+
+Remove its internal `TabsContent` split. Render target identity as a compact metric/property summary, then Display, Surface Coloring, Vectors, conditional Points/Wireframe, Geometry Scope and Opacity, followed by collapsed Diagnostics/Overrides. Keep diagnostics resource demand lazy until its disclosure is opened.
+
+- [ ] **Step 4: Migrate the Overview and expanded groups**
 
 Render Display toggles as softly filled cells without individual hard borders; Render Mode and Vector Coloring use shared rounded tracks; Surface and Vectors use compact property rows; monochrome color appears only in monochrome mode; slider labels and values share one line.
 
-- [ ] **Step 3: Delete Visualization generic CSS**
+- [ ] **Step 5: Delete Visualization generic CSS**
 
 Keep only vector accounting, domain-specific grids and visualization data layouts. Delete native-range, radio-group, generic field, generic disclosure and generic segmented styling.
 
-- [ ] **Step 4: Extend browser proof**
+- [ ] **Step 6: Extend browser proof**
 
 Capture Overview, expanded Surface, expanded Vectors, slider controls, disabled, degraded, light and dark states at 360/416/560 px. Assert no horizontal overflow, no legacy classes, slider hit rows at least 28 px, zero console errors and zero preview requests.
 
-- [ ] **Step 5: Verify and commit**
+- [ ] **Step 7: Verify and commit**
 
 ```bash
 pnpm --dir apps/control-room exec vitest run \

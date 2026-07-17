@@ -105,6 +105,18 @@ The migration is incremental but the end state covers the complete Inspector:
 
 Each step must be independently usable and must not leave a panel half-migrated between old and compact generic controls.
 
+## 6.1 Inspector navigation model
+
+Tabs are reserved for genuinely different user tasks. They are not a mandatory shell decoration and must never be rendered when the panel does not provide distinct tab content.
+
+- Visualization uses one continuous settings surface. Target identity is a compact summary; display, surface, vectors, wireframe, points, geometry scope and opacity are sections; diagnostics and overrides are collapsed at the end.
+- Material, Geometry, Physics, Regions and ordinary Study/stage inspectors use one continuous surface with compact disclosure groups.
+- Mesh uses task tabs `Policy`, `Quality`, and `History` where those resources exist as distinct views.
+- Results use `Overview`, `Data`, `Provenance`, and optional `Diagnostics` only when each tab has real content.
+- Dedicated diagnostics may use `Overview`, `Evidence`, and `Raw data`.
+- Axis, calculation mode, support mode, sample count and similar value choices use `SegmentedControl`, not navigation tabs.
+- The shell derives tabs from the selected panel's declared content. It does not assign generic `Overview / Properties / Diagnostics` tabs to every selection kind.
+
 ## 7. Verification
 
 Each migrated family requires:
