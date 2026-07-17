@@ -102,6 +102,9 @@ try {
       element.querySelectorAll('[data-slot="inspector-group"]'),
     );
     const segmented = element.querySelector('[data-slot="segmented-control"]');
+    const segmentedItems = Array.from(
+      element.querySelectorAll('[data-slot="segmented-control-item"]'),
+    );
     const overviewRect = element.getBoundingClientRect();
     const segmentedRect = segmented?.getBoundingClientRect();
     return {
@@ -119,6 +122,11 @@ try {
       ),
       segmentedFits:
         !segmentedRect || segmentedRect.right <= overviewRect.right + 0.5,
+      segmentedItemsFit: segmentedItems.every(
+        (item) =>
+          item.scrollWidth <= item.clientWidth &&
+          item.scrollHeight <= item.clientHeight,
+      ),
     };
   });
   assert(
@@ -138,6 +146,10 @@ try {
     `Ordinary Inspector groups must not have shadows: ${JSON.stringify(geometry.groupShadows)}`,
   );
   assert(geometry.segmentedFits, "Render Mode segmented control is clipped.");
+  assert(
+    geometry.segmentedItemsFit,
+    "Display mode label overflows its segmented-control item.",
+  );
 
   const panel = page.getByTestId("panel-right");
   const resizeHandle = page.getByRole("separator", { name: /Inspector/ }).last();
