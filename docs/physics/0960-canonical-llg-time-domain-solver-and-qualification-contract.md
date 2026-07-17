@@ -197,6 +197,13 @@ retain that the user requested maximum-error mode. At least one of `atol` and
 `max_error` is a deprecated alias of `max_err`, with identical semantics, and
 must be rejected when mixed with `max_err` or advanced tolerances.
 
+For each active node, the advanced relative-error scale is
+`atol + rtol * max(||m_old||, ||m_hi||)`, where `m_old` is the accepted
+pre-attempt state and `m_hi` is the unnormalized high-order candidate. Neither
+post-normalization state alone nor an artificial unit floor may replace this
+scale. Invalid sizes, nonfinite values, or a nonpositive resolved scale fail
+the attempt closed.
+
 ### 3.3 Order-aware adaptive controller
 
 One backend-neutral scalar decision contract governs all adaptive lanes. For
@@ -271,10 +278,10 @@ Acceptance requires all enabled guards to pass:
 - field-solve convergence;
 - optional autonomous energy/stability diagnostic.
 
-Normalization is not a repair for a zero or nonfinite stage vector. Such a
-stage fails the attempt. Norm defect is measured before normalization, and
-normalization of a valid candidate occurs only within the candidate
-transaction.
+Normalization is not a repair for a zero, subnormal-norm, or nonfinite active
+stage vector. Such a stage fails the attempt. Norm defect is measured before
+normalization, and normalization of a valid candidate occurs only within the
+candidate transaction.
 
 Local error control cannot detect every explicit-stability violation. The
 planner and runtime must therefore expose stiffness diagnostics, and the
@@ -346,7 +353,16 @@ same equations, tolerance modes, scalar decision semantics, attempt reasons,
 and artifact schema. Error, norm, rotation, and nonfinite reductions are
 node/block based; GPU reductions remain device-resident until bounded scalar
 results are copied to the host. `order_est` comes from the selected RK
-tableau.
+tableau. Error and guard reductions include active magnetic nodes only;
+nonmagnetic shared-domain/airbox nodes cannot create a zero relative scale or
+otherwise influence acceptance.
+
+The legacy `fullmag_fem_adaptive_config` layout and
+`fullmag_fem_backend_create` symbol remain unchanged. Guard-capable callers use
+`fullmag_fem_adaptive_config_v2`, whose `abi_version` and `struct_size` precede
+the complete legacy base plus optional norm/rotation guards, together with
+`fullmag_fem_backend_create_v2`. A stale version or size fails before any v2
+field is interpreted; the legacy entrypoint never reads the v2 tail.
 
 ### 3.9 Stiff tangent-plane time-integration lane
 

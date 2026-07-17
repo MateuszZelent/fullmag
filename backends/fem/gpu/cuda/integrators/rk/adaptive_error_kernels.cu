@@ -5,8 +5,10 @@
 
 #include "gpu/cuda/integrators/rk/adaptive_error_kernels.hpp"
 
+#include <cfloat>
 #include <cmath>
 #include <cub/cub.cuh>
+#include <math_constants.h>
 
 namespace fullmag::fem {
 
@@ -15,6 +17,7 @@ static constexpr int kBlockSize = 256;
 __global__ void adaptive_error_norm_blocks_kernel(
     const double *__restrict__ old_mx, const double *__restrict__ old_my, const double *__restrict__ old_mz,
     const double *__restrict__ new_mx, const double *__restrict__ new_my, const double *__restrict__ new_mz,
+    const uint8_t *__restrict__ magnetic_node_mask,
     const double *__restrict__ k0x, const double *__restrict__ k0y, const double *__restrict__ k0z,
     const double *__restrict__ k1x, const double *__restrict__ k1y, const double *__restrict__ k1z,
     const double *__restrict__ k2x, const double *__restrict__ k2y, const double *__restrict__ k2z,
@@ -27,17 +30,15 @@ __global__ void adaptive_error_norm_blocks_kernel(
     double b_lo0, double b_lo1, double b_lo2, double b_lo3,
     double b_lo4, double b_lo5, double b_lo6,
     double dt, double adaptive_atol, double adaptive_rtol,
+    bool has_norm_tolerance, double norm_tolerance,
+    bool has_max_spin_rotation, double max_spin_rotation,
     double *__restrict__ block_max_scaled_error,
     int stages,
     int N)
 {
-    (void)old_mx;
-    (void)old_my;
-    (void)old_mz;
-
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     double local_max = 0.0;
-    if (i < N) {
+    if (i < N && (magnetic_node_mask == nullptr || magnetic_node_mask[i] != 0u)) {
         const double c0 = stages > 0 ? b_hi0 - b_lo0 : 0.0;
         const double c1 = stages > 1 ? b_hi1 - b_lo1 : 0.0;
         const double c2 = stages > 2 ? b_hi2 - b_lo2 : 0.0;
@@ -84,9 +85,30 @@ __global__ void adaptive_error_norm_blocks_kernel(
         err_z *= dt;
 
         const double error_norm = sqrt(err_x * err_x + err_y * err_y + err_z * err_z);
-        const double state_norm = sqrt(new_mx[i] * new_mx[i] + new_my[i] * new_my[i] + new_mz[i] * new_mz[i]);
-        const double scale = adaptive_atol + adaptive_rtol * fmax(state_norm, 1.0);
-        local_max = scale > 0.0 ? error_norm / scale : 0.0;
+        const double old_state_norm = sqrt(
+            old_mx[i] * old_mx[i] + old_my[i] * old_my[i] + old_mz[i] * old_mz[i]);
+        const double high_order_state_norm = sqrt(
+            new_mx[i] * new_mx[i] + new_my[i] * new_my[i] + new_mz[i] * new_mz[i]);
+        const double scale = adaptive_atol + adaptive_rtol *
+            fmax(old_state_norm, high_order_state_norm);
+        if (!isfinite(error_norm) || !isfinite(old_state_norm) ||
+            !isfinite(high_order_state_norm) || !isfinite(scale) || scale <= 0.0 ||
+            old_state_norm < DBL_MIN || high_order_state_norm < DBL_MIN) {
+            local_max = CUDART_INF;
+        } else {
+            local_max = error_norm / scale;
+            if (has_norm_tolerance) {
+                const double norm_defect = fabs(high_order_state_norm - 1.0);
+                local_max = fmax(local_max, norm_defect / norm_tolerance);
+            }
+            if (has_max_spin_rotation) {
+                const double normalized_dot = fmin(1.0, fmax(-1.0,
+                    ((old_mx[i] * new_mx[i] + old_my[i] * new_my[i] +
+                      old_mz[i] * new_mz[i]) / old_state_norm) /
+                    high_order_state_norm));
+                local_max = fmax(local_max, acos(normalized_dot) / max_spin_rotation);
+            }
+        }
     }
 
     typedef cub::BlockReduce<double, 256> BlockReduce;
@@ -100,6 +122,7 @@ __global__ void adaptive_error_norm_blocks_kernel(
 void fullmag_cuda_adaptive_error_norm_blocks(
     const double *old_mx, const double *old_my, const double *old_mz,
     const double *new_mx, const double *new_my, const double *new_mz,
+    const uint8_t *magnetic_node_mask,
     const double *k0x, const double *k0y, const double *k0z,
     const double *k1x, const double *k1y, const double *k1z,
     const double *k2x, const double *k2y, const double *k2z,
@@ -112,6 +135,8 @@ void fullmag_cuda_adaptive_error_norm_blocks(
     double b_lo0, double b_lo1, double b_lo2, double b_lo3,
     double b_lo4, double b_lo5, double b_lo6,
     double dt, double adaptive_atol, double adaptive_rtol,
+    bool has_norm_tolerance, double norm_tolerance,
+    bool has_max_spin_rotation, double max_spin_rotation,
     double *block_max_scaled_error,
     int stages,
     int N,
@@ -121,6 +146,7 @@ void fullmag_cuda_adaptive_error_norm_blocks(
     adaptive_error_norm_blocks_kernel<<<num_blocks, kBlockSize, 0, stream>>>(
         old_mx, old_my, old_mz,
         new_mx, new_my, new_mz,
+        magnetic_node_mask,
         k0x, k0y, k0z,
         k1x, k1y, k1z,
         k2x, k2y, k2z,
@@ -131,6 +157,8 @@ void fullmag_cuda_adaptive_error_norm_blocks(
         b_hi0, b_hi1, b_hi2, b_hi3, b_hi4, b_hi5, b_hi6,
         b_lo0, b_lo1, b_lo2, b_lo3, b_lo4, b_lo5, b_lo6,
         dt, adaptive_atol, adaptive_rtol,
+        has_norm_tolerance, norm_tolerance,
+        has_max_spin_rotation, max_spin_rotation,
         block_max_scaled_error,
         stages,
         N);

@@ -38,9 +38,18 @@ struct AdaptiveDtRuntimeState {
     double dt_grow_max = 2.0;
     double dt_shrink_min = 0.2;
     uint32_t max_reject = 50;
+    bool has_max_spin_rotation = false;
+    double max_spin_rotation = 0.0;
+    bool has_norm_tolerance = false;
+    double norm_tolerance = 0.0;
     double prev_error_norm = 1.0;
     bool has_prev_error_norm = false;
     uint64_t rejected_steps = 0;
+};
+
+struct AdaptiveAttemptGuardMetrics {
+    double max_norm_defect = 0.0;
+    double max_spin_rotation = 0.0;
 };
 
 /*
@@ -56,6 +65,11 @@ struct AdaptiveDtRuntimeState {
 bool initialize_adaptive_dt_plan_fields(
     Context &ctx,
     const fullmag_fem_plan_desc &plan,
+    std::string &error);
+
+bool apply_adaptive_dt_v2_guard_fields(
+    Context &ctx,
+    const fullmag_fem_adaptive_config_v2 *adaptive,
     std::string &error);
 
 /*
@@ -81,15 +95,27 @@ adaptive::AdaptiveStepDecision cpu_adaptive_step_decision(
  * Compute the nodewise vector-normalized error for an adaptive explicit RK step.
  *
  * Inputs are AoS magnetization vectors. For each node, the scale is
- * `atol + rtol * max(||m_new||_2, 1)`; the returned norm is the maximum
- * vector error norm divided by that scale. A value of `1` is exactly at
- * tolerance.
+ * `atol + rtol * max(||m_old||_2, ||m_new||_2)`; the returned norm is the
+ * maximum vector error norm divided by that scale. A value of `1` is exactly
+ * at tolerance. Invalid sizes and nonfinite values return infinity so the
+ * attempt fails closed.
  */
 double compute_adaptive_error_norm(
     const std::vector<double> &err,
     const std::vector<double> &m_old,
     const std::vector<double> &m_new,
+    const std::vector<uint8_t> &magnetic_node_mask,
     double atol,
     double rtol);
+
+bool compute_adaptive_attempt_guard_metric(
+    const AdaptiveDtRuntimeState &policy,
+    double embedded_error_metric,
+    const std::vector<double> &m_old,
+    const std::vector<double> &m_candidate,
+    const std::vector<uint8_t> &magnetic_node_mask,
+    double &acceptance_metric,
+    AdaptiveAttemptGuardMetrics &metrics,
+    std::string &error);
 
 } // namespace fullmag::fem

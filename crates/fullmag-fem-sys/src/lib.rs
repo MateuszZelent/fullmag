@@ -53,6 +53,20 @@ pub struct fullmag_fem_adaptive_config {
     pub max_reject: u32,
 }
 
+pub const FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION: u32 = 2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct fullmag_fem_adaptive_config_v2 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub base: fullmag_fem_adaptive_config,
+    pub has_max_spin_rotation: i32,
+    pub max_spin_rotation: f64,
+    pub has_norm_tolerance: i32,
+    pub norm_tolerance: f64,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum fullmag_fem_observable {
@@ -1224,6 +1238,10 @@ extern "C" {
     pub fn fullmag_fem_backend_create(
         plan: *const fullmag_fem_plan_desc,
     ) -> *mut fullmag_fem_backend;
+    pub fn fullmag_fem_backend_create_v2(
+        plan: *const fullmag_fem_plan_desc,
+        adaptive_config: *const fullmag_fem_adaptive_config_v2,
+    ) -> *mut fullmag_fem_backend;
     pub fn fullmag_fem_backend_begin_stage(
         handle: *mut fullmag_fem_backend,
         stage_start_time_s: f64,
@@ -1410,6 +1428,19 @@ extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adaptive_v2_keeps_legacy_layout_as_a_versioned_base() {
+        assert_eq!(
+            std::mem::size_of::<fullmag_fem_adaptive_config>(),
+            8 * std::mem::size_of::<f64>() + 2 * std::mem::size_of::<u32>()
+        );
+        assert_eq!(
+            std::mem::offset_of!(fullmag_fem_adaptive_config_v2, base),
+            2 * std::mem::size_of::<u32>()
+        );
+        assert_eq!(FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION, 2);
+    }
 
     /// Verify the Rust observable enum has the expected number of variants
     /// matching the C header (M=1 .. DEMAG_PHI=14 -> 14 variants).

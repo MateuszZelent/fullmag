@@ -161,7 +161,12 @@ bool context_step_explicit_rk_mfem(
                 }
                 ws.m_stage[i] = ws.m_backup[i] + dt * accum;
             }
-            normalize_aos_field(ws.m_stage);
+            if (!normalize_active_magnetization_aos(ctx, ws.m_stage, error)) {
+                ctx.state.m_xyz = ws.m_backup;
+                ws.fsal_valid = false;
+                error = "explicit RK stage candidate normalization failed: " + error;
+                return false;
+            }
             project_static_periodic_aos(ctx, ws.m_stage);
 
             double *stage_exchange_energy = nullptr;
@@ -201,14 +206,10 @@ bool context_step_explicit_rk_mfem(
             }
             ctx.state.m_xyz[i] = ws.m_backup[i] + dt * accum;
         }
-        normalize_aos_field(ctx.state.m_xyz);
         project_static_periodic_aos(ctx, ctx.state.m_xyz);
-        if (poll_interrupt(ctx)) {
-            ctx.state.m_xyz = ws.m_backup;
-            ws.fsal_valid = false;
-            return true;
-        }
 
+        AdaptiveAttemptGuardMetrics guard_metrics{};
+        double acceptance_metric = 0.0;
         if (adaptive) {
             for (size_t i = 0; i < dof_len; ++i) {
                 double err_accum = 0.0;
@@ -221,9 +222,24 @@ bool context_step_explicit_rk_mfem(
                 ws.err,
                 ws.m_backup,
                 ctx.state.m_xyz,
+                ctx.mesh.magnetic_node_mask,
                 ctx.adaptive_dt.atol,
                 ctx.adaptive_dt.rtol);
-            auto result = adaptive_pi_step(ctx, dt, err_norm, tab.order_est);
+            if (!compute_adaptive_attempt_guard_metric(
+                    ctx.adaptive_dt,
+                    err_norm,
+                    ws.m_backup,
+                    ctx.state.m_xyz,
+                    ctx.mesh.magnetic_node_mask,
+                    acceptance_metric,
+                    guard_metrics,
+                    error)) {
+                ctx.state.m_xyz = ws.m_backup;
+                ws.fsal_valid = false;
+                error = "adaptive RK candidate guard failed: " + error;
+                return false;
+            }
+            auto result = adaptive_pi_step(ctx, dt, acceptance_metric, tab.order_est);
             if (result.kind == adaptive::AdaptiveDecisionKind::failed) {
                 ctx.state.m_xyz = ws.m_backup;
                 ws.fsal_valid = false;
@@ -249,12 +265,39 @@ bool context_step_explicit_rk_mfem(
                 ws.fsal_valid = false;
                 return true;
             }
-            stats.error_estimate = err_norm;
+            stats.error_estimate = acceptance_metric;
             stats.dt_suggested = result.dt_next;
             ctx.base_plan.dt_seconds = result.dt_next;
         } else {
+            if (!compute_adaptive_attempt_guard_metric(
+                    ctx.adaptive_dt,
+                    0.0,
+                    ws.m_backup,
+                    ctx.state.m_xyz,
+                    ctx.mesh.magnetic_node_mask,
+                    acceptance_metric,
+                    guard_metrics,
+                    error)) {
+                ctx.state.m_xyz = ws.m_backup;
+                ws.fsal_valid = false;
+                error = "fixed RK candidate guard failed: " + error;
+                return false;
+            }
             stats.error_estimate = 0.0;
             stats.dt_suggested = dt;
+        }
+
+        if (!normalize_active_magnetization_aos(ctx, ctx.state.m_xyz, error)) {
+            ctx.state.m_xyz = ws.m_backup;
+            ws.fsal_valid = false;
+            error = "explicit RK high-order candidate normalization failed: " + error;
+            return false;
+        }
+        project_static_periodic_aos(ctx, ctx.state.m_xyz);
+        if (poll_interrupt(ctx)) {
+            ctx.state.m_xyz = ws.m_backup;
+            ws.fsal_valid = false;
+            return true;
         }
 
         if (tab.fsal && fsal_reuse_allowed) {

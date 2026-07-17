@@ -194,7 +194,7 @@ void upload_rejects_zero_active_magnetization() {
             FULLMAG_FEM_ERR_INVALID,
         "zero active upload must be rejected");
     check(
-        error.find("zero or invalid magnetization norm") != std::string::npos,
+        error.find("zero, subnormal, or invalid magnetization norm") != std::string::npos,
         "zero active upload error string");
 }
 

@@ -91,7 +91,15 @@ bool gpu_rk_prepare_stage_attempt(
         is_heun ? active_dt : (is_rk45 ? 0.2 * active_dt : 0.5 * active_dt),
         n,
         stream);
-    fullmag_cuda_normalize_vectors(gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z, n, stream);
+    if (!fullmag_cuda_normalize_vectors(
+            gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
+            gpu.mesh_regions.magnetic_node_mask,
+            gpu.reductions.scalar_result,
+            n,
+            stream,
+            reason)) {
+        return false;
+    }
     if (!cuda_launch_ok("launch GPU RK predictor/normalize", reason)) {
         return false;
     }
@@ -110,6 +118,21 @@ bool gpu_rk_prepare_stage_attempt(
     }
     stage_rhs_evaluations += 1;
     return true;
+}
+
+bool gpu_rk_capture_pre_normalization_candidate(
+    Context &ctx,
+    cudaStream_t stream,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    return gpu_rk_copy_component_device(
+        gpu.magnetization.m,
+        gpu.rk.m_stage,
+        gpu.lifecycle.node_count,
+        stream,
+        "cudaMemcpyAsync GPU RK pre-normalization high-order candidate copy",
+        reason);
 }
 
 } // namespace fullmag::fem

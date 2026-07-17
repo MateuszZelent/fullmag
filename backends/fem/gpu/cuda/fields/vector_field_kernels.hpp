@@ -8,13 +8,20 @@
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
 #include <cstdint>
+#include <string>
 
 namespace fullmag::fem {
 
-/// Normalize each (mx,my,mz) to unit length (SoA layout).
-void fullmag_cuda_normalize_vectors(
+/// Validate and normalize each active (mx,my,mz) to unit length (SoA layout).
+/// Zero, subnormal-norm, NaN, and Inf active vectors fail through one bounded
+/// scalar readback; inactive nodes are left unchanged.
+bool fullmag_cuda_normalize_vectors(
     double *mx, double *my, double *mz,
-    int N, cudaStream_t stream = nullptr);
+    const uint8_t *magnetic_node_mask,
+    double *device_invalid_flag,
+    int N,
+    cudaStream_t stream,
+    std::string &reason);
 
 /// h_eff = h_ex + h_demag [+ h_ext] (element-wise, SoA component).
 void fullmag_cuda_accumulate_heff(

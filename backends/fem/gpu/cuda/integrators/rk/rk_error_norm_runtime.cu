@@ -52,7 +52,8 @@ bool gpu_rk_reduce_adaptive_error_norm_device(
 
     fullmag_cuda_adaptive_error_norm_blocks(
         gpu.rk.m_backup.x, gpu.rk.m_backup.y, gpu.rk.m_backup.z,
-        gpu.magnetization.m.x, gpu.magnetization.m.y, gpu.magnetization.m.z,
+        gpu.rk.m_stage.x, gpu.rk.m_stage.y, gpu.rk.m_stage.z,
+        gpu.mesh_regions.magnetic_node_mask,
         gpu.rk.k[0].x, gpu.rk.k[0].y, gpu.rk.k[0].z,
         gpu.rk.k[1].x, gpu.rk.k[1].y, gpu.rk.k[1].z,
         gpu.rk.k[2].x, gpu.rk.k[2].y, gpu.rk.k[2].z,
@@ -67,6 +68,10 @@ bool gpu_rk_reduce_adaptive_error_norm_device(
         dt_seconds,
         ctx.adaptive_dt.atol,
         ctx.adaptive_dt.rtol,
+        ctx.adaptive_dt.has_norm_tolerance,
+        ctx.adaptive_dt.norm_tolerance,
+        ctx.adaptive_dt.has_max_spin_rotation,
+        ctx.adaptive_dt.max_spin_rotation,
         gpu.reductions.scalar_workspace,
         tableau.stages,
         n,

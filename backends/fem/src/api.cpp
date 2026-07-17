@@ -15,6 +15,7 @@
 #include "cpu/mfem/interactions/magnetoelastic.hpp"
 #include "cpu/mfem/runtime/availability.hpp"
 #include "cpu/mfem/runtime/backend_lifecycle.hpp"
+#include "cpu/mfem/integrators/adaptive_dt.hpp"
 #include "cpu/mfem/runtime/backend_step.hpp"
 #include "cpu/mfem/runtime/eigen_dense.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
@@ -2424,6 +2425,47 @@ fullmag_fem_backend *fullmag_fem_backend_create(const fullmag_fem_plan_desc *pla
 
     std::string error;
     if (!fullmag::fem::initialize_backend_runtime(handle->context, *plan, error)) {
+        fullmag_fem_set_global_error(error);
+        fullmag_fem_set_handle_error(handle, error);
+        delete handle;
+        return nullptr;
+    }
+
+    handle->last_error.clear();
+    fullmag_fem_clear_global_error();
+    return handle;
+}
+
+fullmag_fem_backend *fullmag_fem_backend_create_v2(
+    const fullmag_fem_plan_desc *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config)
+{
+    if (plan == nullptr) {
+        fullmag_fem_set_global_error("fullmag_fem_backend_create_v2 received null plan");
+        return nullptr;
+    }
+    if (adaptive_config == nullptr) {
+        return fullmag_fem_backend_create(plan);
+    }
+
+    auto *handle = new (std::nothrow) fullmag_fem_backend();
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error("failed to allocate fullmag_fem_backend");
+        return nullptr;
+    }
+
+    std::string error;
+    if (!fullmag::fem::apply_adaptive_dt_v2_guard_fields(
+            handle->context, adaptive_config, error)) {
+        fullmag_fem_set_global_error(error);
+        fullmag_fem_set_handle_error(handle, error);
+        delete handle;
+        return nullptr;
+    }
+
+    fullmag_fem_plan_desc plan_v2 = *plan;
+    plan_v2.adaptive_config = &adaptive_config->base;
+    if (!fullmag::fem::initialize_backend_runtime(handle->context, plan_v2, error)) {
         fullmag_fem_set_global_error(error);
         fullmag_fem_set_handle_error(handle, error);
         delete handle;

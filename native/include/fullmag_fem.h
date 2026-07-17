@@ -40,6 +40,18 @@ typedef struct {
     uint32_t max_reject;
 } fullmag_fem_adaptive_config;
 
+#define FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION 2u
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    fullmag_fem_adaptive_config base;
+    int has_max_spin_rotation;
+    double max_spin_rotation;
+    int has_norm_tolerance;
+    double norm_tolerance;
+} fullmag_fem_adaptive_config_v2;
+
 typedef enum {
     FULLMAG_FEM_OBSERVABLE_M = 1,
     FULLMAG_FEM_OBSERVABLE_H_EX = 2,
@@ -1134,6 +1146,11 @@ void fullmag_fem_frequency_domain_result_destroy(
 
 fullmag_fem_backend *fullmag_fem_backend_create(
     const fullmag_fem_plan_desc *plan
+);
+
+fullmag_fem_backend *fullmag_fem_backend_create_v2(
+    const fullmag_fem_plan_desc *plan,
+    const fullmag_fem_adaptive_config_v2 *adaptive_config
 );
 
 int fullmag_fem_get_regional_field_drive_abi_layout(

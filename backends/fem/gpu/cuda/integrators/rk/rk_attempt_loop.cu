@@ -71,6 +71,11 @@ bool gpu_rk_run_accepted_attempt_loop(
                 active_dt,
                 stage_attempt,
                 reason)) {
+            const std::string failure_reason = reason;
+            if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
+                return false;
+            }
+            reason = failure_reason;
             return false;
         }
         total_stage_rhs_evaluations += stage_attempt.rhs_evaluations;

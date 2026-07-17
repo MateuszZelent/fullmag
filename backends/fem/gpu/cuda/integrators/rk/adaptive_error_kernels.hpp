@@ -6,6 +6,8 @@
  */
 #pragma once
 
+#include <cstdint>
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
 
@@ -13,10 +15,11 @@ namespace fullmag::fem {
 
 /// Per-block max adaptive embedded error norm:
 /// max_i |dt * sum_s (b_hi_s - b_lo_s) * k_s| /
-///       (atol + rtol * max(||m_new_i||_2, 1)).
+///       (atol + rtol * max(||m_old_i||_2, ||m_new_i||_2)).
 void fullmag_cuda_adaptive_error_norm_blocks(
     const double *old_mx, const double *old_my, const double *old_mz,
     const double *new_mx, const double *new_my, const double *new_mz,
+    const uint8_t *magnetic_node_mask,
     const double *k0x, const double *k0y, const double *k0z,
     const double *k1x, const double *k1y, const double *k1z,
     const double *k2x, const double *k2y, const double *k2z,
@@ -31,6 +34,10 @@ void fullmag_cuda_adaptive_error_norm_blocks(
     double dt,
     double adaptive_atol,
     double adaptive_rtol,
+    bool has_norm_tolerance,
+    double norm_tolerance,
+    bool has_max_spin_rotation,
+    double max_spin_rotation,
     double *block_max_scaled_error,
     int stages,
     int N,

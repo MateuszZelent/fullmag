@@ -8,6 +8,7 @@
 #include "gpu/cuda/integrators/rk/rk_adaptive_host_decision.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -22,6 +23,7 @@ double compute_adaptive_error_norm(
     const std::vector<double> &err,
     const std::vector<double> &m_old,
     const std::vector<double> &m_new,
+    const std::vector<uint8_t> &magnetic_node_mask,
     double atol,
     double rtol);
 } // namespace fullmag::fem
@@ -509,29 +511,140 @@ void rejected_error_shrinks_dt_and_counts_rejection() {
 void adaptive_error_norm_uses_nodewise_vector_l2_scale() {
     const std::vector<double> err{
         0.3, 0.4, 0.0,
-        0.01, 0.02, 0.02,
     };
     const std::vector<double> m_old{
-        0.0, 0.0, 0.0,
         4.0, 0.0, 0.0,
     };
     const std::vector<double> m_new{
         0.6, 0.8, 0.0,
-        0.0, 0.0, 0.0,
     };
 
     const double norm = fullmag::fem::compute_adaptive_error_norm(
         err,
         m_old,
         m_new,
+        {1u},
         0.01,
         0.1);
 
     check_near(
         norm,
-        0.5 / 0.11,
+        0.5 / 0.41,
         1e-15,
-        "adaptive error norm uses nodewise vector l2 scale");
+        "adaptive error norm scales by max old/high-order vector norm");
+}
+
+void adaptive_relative_only_error_ignores_inactive_airbox_nodes() {
+    const std::vector<double> err{
+        0.0, 0.0, 0.0,
+        1.0e-7, 0.0, 0.0,
+    };
+    const std::vector<double> m_old{
+        0.0, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    const std::vector<double> m_new = m_old;
+    const std::vector<uint8_t> mask{0u, 1u};
+
+    const double norm = fullmag::fem::compute_adaptive_error_norm(
+        err, m_old, m_new, mask, 0.0, 1.0e-6);
+
+    check_near(norm, 0.1, 1.0e-15, "relative-only error ignores inactive airbox node");
+}
+
+void adaptive_attempt_guards_measure_pre_normalization_geometry() {
+    fullmag::fem::AdaptiveDtRuntimeState policy{};
+    policy.enabled = true;
+    policy.has_norm_tolerance = true;
+    policy.norm_tolerance = 0.2;
+    policy.has_max_spin_rotation = true;
+    policy.max_spin_rotation = 0.5;
+    const std::vector<double> old_m{
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+    };
+    const std::vector<double> candidate{
+        1.1, 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    const std::vector<uint8_t> mask{1u, 1u};
+    fullmag::fem::AdaptiveAttemptGuardMetrics metrics{};
+    double acceptance_metric = 0.0;
+    std::string error;
+
+    check(
+        fullmag::fem::compute_adaptive_attempt_guard_metric(
+            policy,
+            0.25,
+            old_m,
+            candidate,
+            mask,
+            acceptance_metric,
+            metrics,
+            error),
+        error.c_str());
+    check_near(metrics.max_norm_defect, 0.1, 2e-16, "pre-normalization norm defect");
+    check_near(
+        metrics.max_spin_rotation,
+        0.5 * std::acos(-1.0),
+        2e-15,
+        "rotation against pre-attempt state");
+    check_near(
+        acceptance_metric,
+        metrics.max_spin_rotation / policy.max_spin_rotation,
+        2e-15,
+        "rotation independently rejects when embedded eta is below one");
+}
+
+void adaptive_attempt_guards_fail_closed_on_invalid_active_vectors() {
+    fullmag::fem::AdaptiveDtRuntimeState policy{};
+    policy.enabled = true;
+    const std::vector<double> old_m{1.0, 0.0, 0.0};
+    const std::vector<uint8_t> mask{1u};
+    for (double invalid : {
+             0.0,
+             std::numeric_limits<double>::denorm_min(),
+             std::numeric_limits<double>::quiet_NaN(),
+             std::numeric_limits<double>::infinity(),
+         }) {
+        const std::vector<double> candidate{invalid, 0.0, 0.0};
+        fullmag::fem::AdaptiveAttemptGuardMetrics metrics{};
+        double acceptance_metric = 0.0;
+        std::string error;
+        check(
+            !fullmag::fem::compute_adaptive_attempt_guard_metric(
+                policy,
+                0.25,
+                old_m,
+                candidate,
+                mask,
+                acceptance_metric,
+                metrics,
+                error),
+            "zero, subnormal, NaN, and Inf candidates must fail closed");
+        check(!error.empty(), "invalid candidate guard failure carries a reason");
+    }
+
+    const std::vector<double> old_with_airbox{
+        std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0,
+        1.0, 0.0, 0.0,
+    };
+    const std::vector<double> candidate_with_airbox = old_with_airbox;
+    const std::vector<uint8_t> airbox_mask{0u, 1u};
+    fullmag::fem::AdaptiveAttemptGuardMetrics metrics{};
+    double acceptance_metric = 0.0;
+    std::string error;
+    check(
+        fullmag::fem::compute_adaptive_attempt_guard_metric(
+            policy,
+            0.25,
+            old_with_airbox,
+            candidate_with_airbox,
+            airbox_mask,
+            acceptance_metric,
+            metrics,
+            error),
+        "nonfinite inactive airbox vector must not affect geometry guards");
 }
 
 void gpu_adaptive_error_norm_uses_nodewise_vector_l2_scale() {
@@ -540,20 +653,20 @@ void gpu_adaptive_error_norm_uses_nodewise_vector_l2_scale() {
         root / "gpu" / "cuda" / "integrators" / "rk" / "adaptive_error_kernels.cu");
     const std::string physics = read_text_file(
         repo_root() / "docs" / "physics" /
-        "0490-fem-higher-order-and-adaptive-time-integrators-mfem-gpu.md");
+        "0960-canonical-llg-time-domain-solver-and-qualification-contract.md");
 
     check(
-        physics.find("\\|e_a\\|_2") != std::string::npos &&
-            physics.find("\\|u^{hi}_a\\|_2") != std::string::npos,
-        "physics note must define nodewise vector l2 adaptive error control");
+        physics.find("max(||m_old||, ||m_hi||)") != std::string::npos,
+        "canonical physics note must define old/high-order relative scaling");
     check(
         kernels.find("const double error_norm = sqrt(err_x * err_x + err_y * err_y + err_z * err_z);") !=
             std::string::npos,
         "GPU adaptive error norm must reduce the vector l2 embedded error per node");
     check(
-        kernels.find("const double state_norm = sqrt(new_mx[i] * new_mx[i] + new_my[i] * new_my[i] + new_mz[i] * new_mz[i]);") !=
-            std::string::npos,
-        "GPU adaptive error norm must scale by the high-order vector state norm");
+        kernels.find("const double old_state_norm =") != std::string::npos &&
+            kernels.find("const double high_order_state_norm =") != std::string::npos &&
+            kernels.find("fmax(old_state_norm, high_order_state_norm)") != std::string::npos,
+        "GPU adaptive error norm must scale by max old/high-order vector norm");
     check(
         kernels.find("const double scale_x = adaptive_atol") == std::string::npos &&
             kernels.find("const double scaled_x =") == std::string::npos,
@@ -573,12 +686,21 @@ void adaptive_plan_import_validates_and_copies_config() {
     adaptive.growth_limit = 2.5;
     adaptive.shrink_limit = 0.25;
     adaptive.max_reject = 17;
+    fullmag_fem_adaptive_config_v2 adaptive_v2{};
+    adaptive_v2.abi_version = FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION;
+    adaptive_v2.struct_size = sizeof(adaptive_v2);
+    adaptive_v2.base = adaptive;
+    adaptive_v2.has_max_spin_rotation = 1;
+    adaptive_v2.max_spin_rotation = 0.3;
+    adaptive_v2.has_norm_tolerance = 1;
+    adaptive_v2.norm_tolerance = 1.0e-3;
     fullmag_fem_plan_desc plan{};
     plan.dt_seconds = 2.0e-12;
     plan.adaptive_config = &adaptive;
 
     std::string error;
     check(fullmag::fem::initialize_adaptive_dt_plan_fields(ctx, plan, error), error.c_str());
+    check(fullmag::fem::apply_adaptive_dt_v2_guard_fields(ctx, &adaptive_v2, error), error.c_str());
     check(ctx.adaptive_dt.enabled, "adaptive plan import enables adaptive dt");
     check_near(ctx.adaptive_dt.atol, 1.0e-6, 0.0, "adaptive atol copied");
     check_near(ctx.adaptive_dt.rtol, 1.0e-4, 0.0, "adaptive rtol copied");
@@ -590,6 +712,10 @@ void adaptive_plan_import_validates_and_copies_config() {
     check_near(ctx.adaptive_dt.dt_grow_max, 2.5, 0.0, "adaptive growth limit copied");
     check_near(ctx.adaptive_dt.dt_shrink_min, 0.25, 0.0, "adaptive shrink limit copied");
     check(ctx.adaptive_dt.max_reject == 17u, "adaptive max_reject copied");
+    check(ctx.adaptive_dt.has_max_spin_rotation, "adaptive rotation guard enabled");
+    check_near(ctx.adaptive_dt.max_spin_rotation, 0.3, 0.0, "adaptive rotation guard copied");
+    check(ctx.adaptive_dt.has_norm_tolerance, "adaptive norm guard enabled");
+    check_near(ctx.adaptive_dt.norm_tolerance, 1.0e-3, 0.0, "adaptive norm guard copied");
 
     adaptive.max_reject = 0;
     check(
@@ -598,6 +724,54 @@ void adaptive_plan_import_validates_and_copies_config() {
     check(
         error.find("adaptive_config.max_reject must be > 0") != std::string::npos,
         "adaptive max_reject error string");
+
+    adaptive.max_reject = 17;
+    adaptive_v2.max_spin_rotation = 0.0;
+    check(
+        !fullmag::fem::apply_adaptive_dt_v2_guard_fields(ctx, &adaptive_v2, error),
+        "enabled zero rotation guard must fail");
+    adaptive_v2.max_spin_rotation = 0.3;
+    adaptive_v2.norm_tolerance = std::numeric_limits<double>::infinity();
+    check(
+        !fullmag::fem::apply_adaptive_dt_v2_guard_fields(ctx, &adaptive_v2, error),
+        "enabled nonfinite norm guard must fail");
+    adaptive_v2.norm_tolerance = 1.0e-3;
+    adaptive_v2.struct_size -= 1u;
+    check(
+        !fullmag::fem::apply_adaptive_dt_v2_guard_fields(ctx, &adaptive_v2, error),
+        "adaptive v2 import rejects stale struct size before guard reads");
+}
+
+void adaptive_v2_preserves_legacy_c_abi_layout() {
+    struct LegacyAdaptiveConfig {
+        double atol;
+        double rtol;
+        double dt_initial;
+        double dt_min;
+        double dt_max;
+        double safety;
+        double growth_limit;
+        double shrink_limit;
+        uint32_t max_reject;
+    };
+    check(
+        sizeof(fullmag_fem_adaptive_config) == sizeof(LegacyAdaptiveConfig),
+        "legacy FEM adaptive config size must remain unchanged");
+    check(
+        offsetof(fullmag_fem_adaptive_config_v2, base) == 2u * sizeof(uint32_t),
+        "adaptive v2 carries version and size before the legacy base");
+
+    fullmag::fem::Context ctx;
+    fullmag_fem_adaptive_config_v2 config{};
+    config.abi_version = FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION;
+    config.struct_size = sizeof(config);
+    config.has_norm_tolerance = 1;
+    config.norm_tolerance = 1.0e-4;
+    std::string error;
+    check(
+        fullmag::fem::apply_adaptive_dt_v2_guard_fields(ctx, &config, error),
+        error.c_str());
+    check(ctx.adaptive_dt.has_norm_tolerance, "adaptive v2 guard reaches runtime");
 }
 
 void adaptive_plan_import_accepts_canonical_tolerance_modes() {
@@ -663,8 +837,12 @@ int main() {
     runtime_adapter_uses_attempted_dt_not_stale_plan_dt();
     rejected_error_shrinks_dt_and_counts_rejection();
     adaptive_error_norm_uses_nodewise_vector_l2_scale();
+    adaptive_relative_only_error_ignores_inactive_airbox_nodes();
+    adaptive_attempt_guards_measure_pre_normalization_geometry();
+    adaptive_attempt_guards_fail_closed_on_invalid_active_vectors();
     gpu_adaptive_error_norm_uses_nodewise_vector_l2_scale();
     adaptive_plan_import_validates_and_copies_config();
+    adaptive_v2_preserves_legacy_c_abi_layout();
     adaptive_plan_import_accepts_canonical_tolerance_modes();
     return 0;
 }

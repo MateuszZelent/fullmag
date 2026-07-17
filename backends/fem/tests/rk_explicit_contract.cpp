@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -651,6 +652,84 @@ void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
         2e-12,
         "accepted retry must start from the pre-attempt magnetization");
 }
+
+void cpu_rk_guard_failures_preserve_committed_state() {
+    const auto assert_unchanged = [](const fullmag::fem::Context &ctx,
+                                     const std::vector<double> &m_before,
+                                     double time_before,
+                                     uint64_t step_before,
+                                     const char *message) {
+        check_vector_near(ctx.state.m_xyz, m_before, 0.0, message);
+        check_near(ctx.state.current_time, time_before, 0.0, message);
+        check(ctx.state.step_count == step_before, message);
+    };
+
+    for (bool rotation_guard : {false, true}) {
+        auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK23_BS);
+        const auto &tableau = fullmag::fem::tableau_for_integrator(
+            FULLMAG_FEM_INTEGRATOR_RK23_BS);
+        ctx.adaptive_dt.enabled = true;
+        ctx.adaptive_dt.atol = 1.0;
+        ctx.adaptive_dt.rtol = 0.0;
+        ctx.adaptive_dt.dt_min = 0.2;
+        ctx.adaptive_dt.dt_max = 0.2;
+        ctx.adaptive_dt.safety_factor = 0.9;
+        ctx.adaptive_dt.dt_grow_max = 2.0;
+        ctx.adaptive_dt.dt_shrink_min = 0.2;
+        ctx.adaptive_dt.max_reject = 2;
+        ctx.adaptive_dt.has_max_spin_rotation = rotation_guard;
+        ctx.adaptive_dt.max_spin_rotation = 1.0e-12;
+        ctx.adaptive_dt.has_norm_tolerance = !rotation_guard;
+        ctx.adaptive_dt.norm_tolerance = 1.0e-16;
+        const auto m_before = ctx.state.m_xyz;
+        const double time_before = ctx.state.current_time;
+        const uint64_t step_before = ctx.state.step_count;
+        fullmag_fem_step_stats stats{};
+        std::string error;
+        check(
+            !fullmag::fem::context_step_explicit_rk_mfem(
+                ctx, tableau, 0.2, stats, error),
+            "production CPU RK guard must reject at dt_min");
+        check(!error.empty(), "production CPU RK guard failure must carry a reason");
+        assert_unchanged(
+            ctx,
+            m_before,
+            time_before,
+            step_before,
+            rotation_guard ? "rotation guard rollback" : "norm guard rollback");
+    }
+
+    const auto &rk4 = fullmag::fem::tableau_for_integrator(FULLMAG_FEM_INTEGRATOR_RK4);
+    for (int invalid_stage = 1; invalid_stage < rk4.stages; ++invalid_stage) {
+        auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK4);
+        auto injected = rk4;
+        injected.a[invalid_stage][0] = std::numeric_limits<double>::infinity();
+        const auto m_before = ctx.state.m_xyz;
+        const double time_before = ctx.state.current_time;
+        const uint64_t step_before = ctx.state.step_count;
+        fullmag_fem_step_stats stats{};
+        std::string error;
+        check(
+            !fullmag::fem::context_step_explicit_rk_mfem(
+                ctx, injected, 0.2, stats, error),
+            "nonfinite intermediate RK stage must fail closed");
+        assert_unchanged(
+            ctx, m_before, time_before, step_before, "intermediate-stage rollback");
+    }
+
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK4);
+    auto injected = rk4;
+    injected.b_hi[0] = std::numeric_limits<double>::quiet_NaN();
+    const auto m_before = ctx.state.m_xyz;
+    const double time_before = ctx.state.current_time;
+    const uint64_t step_before = ctx.state.step_count;
+    fullmag_fem_step_stats stats{};
+    std::string error;
+    check(
+        !fullmag::fem::context_step_explicit_rk_mfem(ctx, injected, 0.2, stats, error),
+        "nonfinite high-order RK candidate must fail closed");
+    assert_unchanged(ctx, m_before, time_before, step_before, "high-order rollback");
+}
 #endif
 
 void gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal() {
@@ -720,6 +799,7 @@ int main() {
     executed_cpu_rk_steps_sample_all_stage_times_and_publish_endpoint_field();
     deterministic_oersted_fsal_requires_an_identical_next_source_state();
     rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal();
+    cpu_rk_guard_failures_preserve_committed_state();
 #endif
     return 0;
 }

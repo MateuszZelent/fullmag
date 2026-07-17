@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <cmath>
+#include <limits>
 
 namespace fullmag::fem {
 namespace {
@@ -119,6 +120,11 @@ bool normalize_active_magnetization_aos(
 
     for (size_t node = 0; node < nodes; ++node) {
         const size_t base = node * 3u;
+        const bool active = ctx.mesh.magnetic_node_mask.empty() ||
+            ctx.mesh.magnetic_node_mask[node] != 0u;
+        if (!active) {
+            continue;
+        }
         const double x = m_xyz[base + 0u];
         const double y = m_xyz[base + 1u];
         const double z = m_xyz[base + 2u];
@@ -127,14 +133,9 @@ bool normalize_active_magnetization_aos(
                 magnetization_node_context(ctx, node, nodes, x, y, z);
             return false;
         }
-        const bool active = ctx.mesh.magnetic_node_mask.empty() ||
-            ctx.mesh.magnetic_node_mask[node] != 0u;
-        if (!active) {
-            continue;
-        }
         const double norm = vector_norm3(x, y, z);
-        if (!(norm > 0.0) || !std::isfinite(norm)) {
-            error = "active magnetic node has zero or invalid magnetization norm" +
+        if (!(norm >= std::numeric_limits<double>::min()) || !std::isfinite(norm)) {
+            error = "active magnetic node has zero, subnormal, or invalid magnetization norm" +
                 magnetization_node_context(ctx, node, nodes, x, y, z);
             return false;
         }

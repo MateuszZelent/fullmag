@@ -1640,31 +1640,11 @@ impl NativeFemBackend {
             stage_start_time_s: plan.time_stage.start_time_s,
         };
 
-        // Build adaptive config if present
-        if let Some(ref a) = plan.adaptive_timestep {
-            // Reject adaptive fields not supported by the native FEM backend FFI.
-            let mut unsupported = Vec::new();
-            if a.max_spin_rotation.is_some() {
-                unsupported.push("max_spin_rotation".to_string());
-            }
-            if a.norm_tolerance.is_some() {
-                unsupported.push("norm_tolerance".to_string());
-            }
-            if !unsupported.is_empty() {
-                return Err(RunError {
-                    message: format!(
-                        "native FEM backend does not support adaptive parameters: {}; \
-                         supported: atol, rtol, dt_initial, dt_min, dt_max, safety, \
-                         growth_limit, shrink_limit",
-                        unsupported.join(", ")
-                    ),
-                });
-            }
-        }
+        // Build adaptive config if present.
         let adaptive_cfg = plan
             .adaptive_timestep
             .as_ref()
-            .map(|a| -> Result<ffi::fullmag_fem_adaptive_config, RunError> {
+            .map(|a| -> Result<ffi::fullmag_fem_adaptive_config_v2, RunError> {
                 let policy = crate::resolve_timestep_policy(
                     plan.integrator,
                     plan.fixed_timestep,
@@ -1675,23 +1655,32 @@ impl NativeFemBackend {
                         crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
                     },
                 )?;
-                Ok(ffi::fullmag_fem_adaptive_config {
-                    atol: a.atol,
-                    rtol: a.rtol,
-                    dt_initial: policy.initial_dt(),
-                    dt_min: a.dt_min,
-                    dt_max: a.dt_max.ok_or_else(|| RunError {
-                        message: "adaptive timestep requires explicit dt_max".to_string(),
-                    })?,
-                    safety: a.safety,
-                    growth_limit: a.growth_limit,
-                    shrink_limit: a.shrink_limit,
-                    max_reject: 50,
+                Ok(ffi::fullmag_fem_adaptive_config_v2 {
+                    abi_version: ffi::FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION,
+                    struct_size: std::mem::size_of::<ffi::fullmag_fem_adaptive_config_v2>()
+                        as u32,
+                    base: ffi::fullmag_fem_adaptive_config {
+                        atol: a.atol,
+                        rtol: a.rtol,
+                        dt_initial: policy.initial_dt(),
+                        dt_min: a.dt_min,
+                        dt_max: a.dt_max.ok_or_else(|| RunError {
+                            message: "adaptive timestep requires explicit dt_max".to_string(),
+                        })?,
+                        safety: a.safety,
+                        growth_limit: a.growth_limit,
+                        shrink_limit: a.shrink_limit,
+                        max_reject: 50,
+                    },
+                    has_max_spin_rotation: i32::from(a.max_spin_rotation.is_some()),
+                    max_spin_rotation: a.max_spin_rotation.unwrap_or(0.0),
+                    has_norm_tolerance: i32::from(a.norm_tolerance.is_some()),
+                    norm_tolerance: a.norm_tolerance.unwrap_or(0.0),
                 })
             })
             .transpose()?;
         if let Some(ref cfg) = adaptive_cfg {
-            plan_desc.adaptive_config = cfg as *const ffi::fullmag_fem_adaptive_config;
+            plan_desc.adaptive_config = &cfg.base as *const ffi::fullmag_fem_adaptive_config;
         }
 
         // Set up prescribed strain if present
@@ -1713,7 +1702,13 @@ impl NativeFemBackend {
             plan_desc.mfem_device_string = cs.as_ptr();
         }
 
-        let handle = unsafe { ffi::fullmag_fem_backend_create(&plan_desc) };
+        let handle = unsafe {
+            if let Some(ref cfg) = adaptive_cfg {
+                ffi::fullmag_fem_backend_create_v2(&plan_desc, cfg)
+            } else {
+                ffi::fullmag_fem_backend_create(&plan_desc)
+            }
+        };
         if handle.is_null() {
             let availability = native_availability();
             return Err(RunError {
