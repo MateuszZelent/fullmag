@@ -61,6 +61,7 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
     });
   }
   const selectedStageIds = draft?.activation.kind === "stage_ids" ? draft.activation.stage_ids : [];
+  const selectedStageIdSet = new Set(selectedStageIds);
   const samplingContext = useMemo(
     () => regionalFieldDriveSamplingContext(scene.data ?? null, draft?.activation ?? null),
     [draft?.activation, scene.data],
@@ -158,7 +159,7 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
       </InspectorGroup>
       <InspectorGroup title="Stage activation" collapsible defaultOpen>
         <FormField label="Mode" type="select" disabled={!draft || pending} value={draft?.activation.kind ?? "all_time_evolution"} onChange={(event) => setDraft((value) => value ? { ...value, activation: event.target.value === "stage_ids" ? { kind: "stage_ids", stage_ids: [] } : { kind: "all_time_evolution" } } : value)}><option value="all_time_evolution">All time stages</option><option value="stage_ids">Selected stages</option></FormField>
-        {draft?.activation.kind === "stage_ids" ? <div className="grid min-w-0 gap-[var(--fm-inspector-row-gap)]">{selectorOptions.timeEvolutionStages.map((stage) => <FormField key={stage.id} label={stage.label} type="checkbox" disabled={pending} checked={selectedStageIds.includes(stage.id)} onChange={(event) => setDraft((value) => { if (value?.activation.kind !== "stage_ids") return value; const stageIds = event.target.checked ? [...value.activation.stage_ids, stage.id] : value.activation.stage_ids.filter((id) => id !== stage.id); return { ...value, activation: { kind: "stage_ids", stage_ids: stageIds } }; })} />)}{selectorOptions.timeEvolutionStages.length === 0 ? <FeedbackBanner kind="warning" message="No run stage with a stable ID is available. Add a run stage before assigning this drive." /> : null}</div> : <FieldRow label="Stages" value="all time-evolution stages" />}
+        {draft?.activation.kind === "stage_ids" ? <div className="grid min-w-0 gap-[var(--fm-inspector-row-gap)]">{selectorOptions.timeEvolutionStages.map((stage) => <FormField key={stage.id} label={stage.label} type="checkbox" disabled={pending} checked={selectedStageIdSet.has(stage.id)} onChange={(event) => setDraft((value) => { if (value?.activation.kind !== "stage_ids") return value; const stageIds = event.target.checked ? [...value.activation.stage_ids, stage.id] : value.activation.stage_ids.filter((id) => id !== stage.id); return { ...value, activation: { kind: "stage_ids", stage_ids: stageIds } }; })} />)}{selectorOptions.timeEvolutionStages.length === 0 ? <FeedbackBanner kind="warning" message="No run stage with a stable ID is available. Add a run stage before assigning this drive." /> : null}</div> : <FieldRow label="Stages" value="all time-evolution stages" />}
       </InspectorGroup>
     </div>
   );
