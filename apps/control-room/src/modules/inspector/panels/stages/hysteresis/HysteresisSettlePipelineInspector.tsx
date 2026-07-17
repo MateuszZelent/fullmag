@@ -4,10 +4,6 @@ import { FieldRow } from "../../../primitives/FieldRow";
 import { FormField } from "../../../primitives/FormField";
 import { InspectorSection } from "../../../primitives/InspectorSection";
 import {
-  HysteresisSettleAlgorithmsEditor,
-  HysteresisSettleBranchesEditor,
-} from "../../StudyPipelineSection";
-import {
   displayValue,
   isRecord,
   parseJsonArray,
@@ -123,10 +119,6 @@ export function HysteresisSettlePipelineInspector({
             <option value="sequence">Sequence</option>
             <option value="tree">Tree</option>
           </FormField>
-          <HysteresisSettleAlgorithmsEditor
-            draft={draft}
-            onUpdate={onUpdateDraft}
-          />
           <FormField
             label="Settle steps JSON"
             rows={5}
@@ -138,10 +130,6 @@ export function HysteresisSettlePipelineInspector({
           />
           {draft.settlePipelineMode === "tree" ? (
             <>
-              <HysteresisSettleBranchesEditor
-                draft={draft}
-                onUpdate={onUpdateDraft}
-              />
               <FormField
                 label="Fallback branches JSON"
                 rows={4}

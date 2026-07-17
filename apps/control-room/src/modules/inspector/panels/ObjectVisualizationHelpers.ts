@@ -196,7 +196,7 @@ export function surfaceFieldStatus(
   if (source === "solid") return "not required";
   const revision =
     fieldCatalog?.quantities.reduce(
-      (latest: number, quantity: any) =>
+      (latest, quantity) =>
         quantity.available ? Math.max(latest, quantity.field_revision) : latest,
       0,
     ) ?? 0;

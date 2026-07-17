@@ -15,7 +15,7 @@ import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 
 import {
-  relaxationAlgorithmAvailability,
+  validateStudyStageDraft,
   type StudyStageDraft,
 } from "./StudyStageAuthoringModel";
 import type {
@@ -130,15 +130,19 @@ export function StudySolverPolicyFields({
 export function StudyPipelineSection({
   activeStageIndex,
   algorithmsAvailable = [],
+  authoringBusy = false,
   authoringFeedback,
   demagEnabled = false,
   draft,
   draftIndex,
   drafts,
-  localValidation,
   model,
-  showDraftEditor,
+  showDraftEditor = true,
   onAddStage,
+  onCommit,
+  onDuplicateStage,
+  onMoveStage,
+  onRemoveStage,
   onSelectDraft,
   onUpdateDraft,
   runCommand,
@@ -146,20 +150,34 @@ export function StudyPipelineSection({
 }: {
   activeStageIndex: number | null;
   algorithmsAvailable?: readonly string[];
-  authoringFeedback: { kind: "success" | "danger" | "warning"; message: string } | null;
+  authoringBusy?: boolean;
+  authoringFeedback: { kind: "success" | "danger" | "error" | "warning"; message: string } | null;
   demagEnabled?: boolean;
   draft: StudyStageDraft | null;
   draftIndex: number;
   drafts: readonly StudyStageDraft[];
-  localValidation: readonly { message: string; severity: "error" | "warning" }[];
   model: StudyInspectorModel;
-  showDraftEditor: boolean;
+  showDraftEditor?: boolean;
   onAddStage: (kind: StudyStageDraft["kind"]) => void;
+  onCommit?: () => void;
+  onDuplicateStage?: (index: number) => void;
+  onMoveStage?: (index: number, direction: -1 | 1) => void;
+  onRemoveStage?: (index: number) => void;
   onSelectDraft: (index: number) => void;
   onUpdateDraft: (index: number, patch: Partial<StudyStageDraft>) => void;
   runCommand: StudyCommandRunner;
   commandDisabledReason: StudyCommandDisabledReason;
 }) {
+  const localValidation = draft
+    ? validateStudyStageDraft(draft, {
+        algorithmsAvailable,
+        backend: model.requested.backend,
+        demagEnabled,
+        device: model.requested.device,
+        mode: model.requested.mode,
+        precision: model.requested.precision,
+      })
+    : [];
   const validation = [
     ...localValidation,
     ...validateStudyWorkflow(drafts)
@@ -185,18 +203,61 @@ export function StudyPipelineSection({
         ))}
       </div>
       {showDraftEditor && draft ? (
-        <StudyStageDraftEditor
-          draft={draft}
-          demagEnabled={demagEnabled}
-          algorithmsAvailable={algorithmsAvailable}
-          index={draftIndex}
-          requestedBackend={model.requested.backend}
-          requestedDevice={model.requested.device}
-          requestedMode={model.requested.mode}
-          requestedPrecision={model.requested.precision}
-          validation={validation}
-          onUpdate={(patch) => onUpdateDraft(draftIndex, patch)}
-        />
+        <>
+          <StudyStageDraftEditor
+            draft={draft}
+            demagEnabled={demagEnabled}
+            algorithmsAvailable={algorithmsAvailable}
+            index={draftIndex}
+            requestedBackend={model.requested.backend}
+            requestedDevice={model.requested.device}
+            requestedMode={model.requested.mode}
+            requestedPrecision={model.requested.precision}
+            validation={validation}
+            onUpdate={(patch) => onUpdateDraft(draftIndex, patch)}
+          />
+          <div className="fm-inspector-toolbar">
+            {onDuplicateStage ? (
+              <Button disabled={authoringBusy} size="sm" type="button" variant="ghost" onClick={() => onDuplicateStage(draftIndex)}>
+                Duplicate
+              </Button>
+            ) : null}
+            {onMoveStage ? (
+              <>
+                <Button aria-label="Move stage up" disabled={authoringBusy || draftIndex <= 0} size="sm" type="button" variant="ghost" onClick={() => onMoveStage(draftIndex, -1)}>
+                  Move up
+                </Button>
+                <Button aria-label="Move stage down" disabled={authoringBusy || draftIndex >= drafts.length - 1} size="sm" type="button" variant="ghost" onClick={() => onMoveStage(draftIndex, 1)}>
+                  Move down
+                </Button>
+              </>
+            ) : null}
+            {onRemoveStage ? (
+              <Button disabled={authoringBusy} size="sm" type="button" variant="danger" onClick={() => onRemoveStage(draftIndex)}>
+                Remove
+              </Button>
+            ) : null}
+            <span className="fm-inspector-toolbar__spacer" />
+            {onCommit ? (
+              <Button
+                disabled={authoringBusy || hasDraftErrors}
+                size="sm"
+                title={
+                  hasDraftErrors
+                    ? "Fix stage validation errors before saving."
+                    : authoringBusy
+                      ? "Saving stages."
+                      : "Save stages"
+                }
+                type="button"
+                variant="primary"
+                onClick={onCommit}
+              >
+                {authoringBusy ? "Saving…" : "Save stages"}
+              </Button>
+            ) : null}
+          </div>
+        </>
       ) : !showDraftEditor ? null : (
         <div className="fm-study-stage-empty">No stages configured.</div>
       )}

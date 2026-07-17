@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
+import { ChevronRight } from "lucide-react";
 import {
-  Accordion,
   AccordionItem,
   AccordionTrigger,
   AccordionContent,
@@ -23,7 +23,7 @@ interface InspectorSectionProps {
  *
  * Rendering modes:
  * 1. `value` prop → renders as AccordionItem (requires parent <Accordion>)
- * 2. `collapsible` without `value` → wraps itself in a standalone Accordion
+ * 2. `collapsible` without `value` → renders a standalone disclosure section
  * 3. Neither → static section header (no collapse)
  */
 export function InspectorSection({
@@ -34,6 +34,7 @@ export function InspectorSection({
   title,
   value,
 }: InspectorSectionProps) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const headerContent = (
     <>
       <div className="fm-inspector-section__title-row">
@@ -59,24 +60,25 @@ export function InspectorSection({
 
   // Mode 2: Standalone collapsible (auto-wrapped Accordion)
   if (collapsible) {
-    const sectionValue = "section";
-    const defaultValue = defaultCollapsed ? undefined : sectionValue;
     return (
-      <Accordion
-        type="single"
-        collapsible
-        defaultValue={defaultValue}
+      <section
         className="fm-inspector-section fm-inspector-section--standalone"
+        data-collapsed={collapsed}
       >
-        <AccordionItem value={sectionValue} className="fm-inspector-section__item">
-          <AccordionTrigger className="fm-inspector-section__header">
-            {headerContent}
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="fm-inspector-section__body">{children}</div>
-          </AccordionContent>
-        </AccordionItem>
-      </Accordion>
+        <button
+          aria-expanded={!collapsed}
+          className="fm-inspector-section__header"
+          data-collapsible="true"
+          type="button"
+          onClick={() => setCollapsed((current) => !current)}
+        >
+          {headerContent}
+          <ChevronRight className="fm-inspector-section__chevron" aria-hidden="true" />
+        </button>
+        <div className="fm-inspector-section__body" hidden={collapsed}>
+          {children}
+        </div>
+      </section>
     );
   }
 

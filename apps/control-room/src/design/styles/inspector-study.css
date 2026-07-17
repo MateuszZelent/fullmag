@@ -6,7 +6,7 @@
   overflow: hidden;
   align-items: center;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   background: var(--fm-bg-canvas);
   margin: var(--fm-space-1) var(--fm-space-2);
 }
@@ -54,7 +54,7 @@
   display: grid;
   gap: var(--fm-space-1);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   background: var(--fm-bg-canvas);
   color: inherit;
   padding: var(--fm-space-2);
@@ -132,7 +132,7 @@ button.fm-study-stage-card:focus-visible {
 .fm-study-stage-empty {
   margin: var(--fm-space-1);
   border: 1px dashed var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-xs);
   padding: var(--fm-space-3);
@@ -141,10 +141,10 @@ button.fm-study-stage-card:focus-visible {
 
 .fm-study-stage-editor {
   display: grid;
-  gap: 1px;
+  gap: var(--fm-space-1);
   margin: var(--fm-space-1);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   background: color-mix(in srgb, var(--fm-bg-panel-raised) 74%, transparent);
   padding-block: var(--fm-space-1);
 }
@@ -181,27 +181,6 @@ button.fm-study-stage-card:focus-visible {
   line-height: 1.45;
 }
 
-.fm-study-run-output-list {
-  display: grid;
-  gap: var(--fm-space-1);
-}
-
-.fm-study-run-output-row {
-  display: grid;
-  grid-template-columns: auto minmax(4.5rem, 0.7fr) minmax(0, 1fr) minmax(5.5rem, 0.8fr) auto;
-  align-items: center;
-  gap: var(--fm-space-1);
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
-  padding: var(--fm-space-1);
-}
-
-.fm-study-run-output-row small {
-  grid-column: 2 / -1;
-  color: var(--fm-warning);
-  font-size: var(--fm-font-size-xs);
-}
-
 .fm-study-checkpoint-list {
   display: grid;
   gap: var(--fm-space-1);
@@ -211,9 +190,9 @@ button.fm-study-stage-card:focus-visible {
 .fm-study-checkpoint-list__item {
   display: grid;
   min-width: 0;
-  gap: 2px;
+  gap: var(--fm-space-1);
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   background: var(--fm-bg-panel-raised);
   color: var(--fm-text-primary);
   padding: var(--fm-space-2);
@@ -241,7 +220,7 @@ button.fm-study-stage-card:focus-visible {
 .fm-study-file-input {
   width: 100%;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   background: var(--fm-bg-panel-raised);
   color: var(--fm-text-primary);
   padding: var(--fm-space-2);
@@ -257,7 +236,7 @@ button.fm-study-stage-card:focus-visible {
 
 .fm-study-select select {
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   background: var(--fm-bg-panel-raised);
   color: var(--fm-text-primary);
   padding: var(--fm-space-2);

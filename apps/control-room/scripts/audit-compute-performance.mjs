@@ -120,6 +120,14 @@ const objectVisualizationPanelPath = path.join(
   appRoot,
   "src/modules/inspector/panels/ObjectVisualizationPanel.tsx",
 );
+const objectVisualizationHelpersPath = path.join(
+  appRoot,
+  "src/modules/inspector/panels/ObjectVisualizationHelpers.ts",
+);
+const objectVisualizationTargetSectionPath = path.join(
+  appRoot,
+  "src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx",
+);
 const objectGeneralPanelPath = path.join(
   appRoot,
   "src/modules/inspector/panels/ObjectGeneralPanel.tsx",
@@ -722,6 +730,12 @@ function checkFieldCatalogResourceSeparation() {
     objectVisualizationPanelPath,
     "utf8",
   );
+  const objectVisualizationTargetSection = readFileSync(
+    objectVisualizationTargetSectionPath,
+    "utf8",
+  );
+  const objectVisualizationSources =
+    objectVisualizationPanel + objectVisualizationTargetSection;
 
   requireTokens(controlRoomApi, "ControlRoomApi field catalog facade", [
     "DATA_FIELDS_PATH",
@@ -734,7 +748,7 @@ function checkFieldCatalogResourceSeparation() {
     "api.data.fields.catalog({ signal })",
     "resourceKey: DATA_FIELDS_PATH",
   ]);
-  requireTokens(objectVisualizationPanel, "ObjectVisualizationPanel field catalog separation", [
+  requireTokens(objectVisualizationSources, "ObjectVisualizationPanel field catalog separation", [
     "useFieldCatalogResource",
     "fieldCatalog.data",
     "fieldCatalog.status",
@@ -764,13 +778,17 @@ function checkObjectVisualizationPanelSessionStatusSelector() {
 
 function checkObjectVisualizationPanelVisualizationSelector() {
   const source = readFileSync(objectVisualizationPanelPath, "utf8");
+  const helperSource = readFileSync(objectVisualizationHelpersPath, "utf8");
   requireTokens(source, "ObjectVisualizationPanel visualization selector", [
     "useObjectVisualizationController",
     "useObjectVisualizationSelector",
     "selectObjectVisualizationPanelSnapshot",
     "objectVisualizationPanelSnapshotEquals",
-    "visualizationTargetPatchEquals",
     "visualizationTargetKey",
+  ]);
+  requireTokens(helperSource, "ObjectVisualizationPanel selector equality", [
+    "visualizationTargetPatchEquals",
+    "objectVisualizationPanelSnapshotEquals",
   ]);
   forbidTokens(source, "ObjectVisualizationPanel visualization selector", [
     "useObjectVisualizationRegistry()",
@@ -778,26 +796,26 @@ function checkObjectVisualizationPanelVisualizationSelector() {
 }
 
 function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
-  const source = readFileSync(objectVisualizationPanelPath, "utf8");
+  const source = readFileSync(objectVisualizationTargetSectionPath, "utf8");
   const numberField = blockBetween(
     source,
-    "function NumberField",
-    "function displayControlDisabledDescription",
+    "export function NumberField",
+    "export function VisualizationToggleButton",
   );
   const wireframeSection = blockBetween(
     source,
-    "function VisualizationWireframeSection",
-    "function VisualizationVectorsSection",
+    "export function VisualizationWireframeSection",
+    "export function VisualizationVectorsSection",
   );
   const vectorsSection = blockBetween(
     source,
-    "function VisualizationVectorsSection",
-    "function VisualizationGeometryScopeSection",
+    "export function VisualizationVectorsSection",
+    "function displayControlDisabledDescription",
   );
   const opacitySection = blockBetween(
     source,
-    "function VisualizationOpacitySection",
-    "function VisualizationOverridesSection",
+    "export function VisualizationOpacitySection",
+    "export function VisualizationOverridesSection",
   );
 
   requireTokens(numberField, "ObjectVisualizationPanel NumberField commit boundary", [
@@ -1047,7 +1065,7 @@ function checkSelectionComparatorHotPath() {
     "export { selectionSnapshotEquals }",
   ]);
   requireTokens(selectionController, "SelectionController selection comparator", [
-    "selectionRefEquals(prev.ref, this.state.ref)",
+    "selectionRefEquals(prev.ref, next.ref)",
   ]);
   forbidTokens(selectionTypes, "selection ref comparator", ["JSON.stringify"]);
   forbidTokens(useSelection, "useSelection selection comparator", [

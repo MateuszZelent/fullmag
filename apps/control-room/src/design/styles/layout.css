@@ -96,7 +96,7 @@
 }
 
 .fm-resize-handle--vertical {
-  width: 5px;
+  width: 6px;
   cursor: col-resize;
 }
 

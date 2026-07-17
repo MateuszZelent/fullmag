@@ -103,4 +103,31 @@ describe("SelectionController", () => {
     controller.set({ objectId: "body-4" }, "test");
     expect(listener).toHaveBeenCalledTimes(1);
   });
+
+  it("lets a selection guard reject a change before state is updated", () => {
+    const { bus, controller } = setup();
+    controller.set({ kind: "object.material", nodeId: "material:a" }, "explorer");
+    const eventListener = vi.fn();
+    bus.on("workspace:selection-changed", eventListener);
+    const guard = vi.fn(() => false);
+    const removeGuard = controller.addChangeGuard(guard);
+
+    controller.set({ kind: "object.mesh", nodeId: "mesh:b" }, "explorer");
+
+    expect(guard).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "object.mesh", nodeId: "mesh:b" }),
+      expect.objectContaining({ kind: "object.material", nodeId: "material:a" }),
+      "explorer",
+    );
+    expect(controller.get()).toEqual(
+      expect.objectContaining({ kind: "object.material", nodeId: "material:a" }),
+    );
+    expect(eventListener).not.toHaveBeenCalled();
+
+    removeGuard();
+    controller.set({ kind: "object.mesh", nodeId: "mesh:b" }, "explorer");
+    expect(controller.get()).toEqual(
+      expect.objectContaining({ kind: "object.mesh", nodeId: "mesh:b" }),
+    );
+  });
 });

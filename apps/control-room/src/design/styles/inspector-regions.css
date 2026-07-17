@@ -7,7 +7,7 @@
 
 .fm-region-list__empty {
   border: 1px dashed var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-xs);
   padding: var(--fm-space-2);
@@ -21,7 +21,7 @@
   align-items: start;
   appearance: none;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   background: var(--fm-bg-panel);
   color: inherit;
   cursor: pointer;
@@ -92,7 +92,7 @@
 .fm-region-card__body {
   display: grid;
   min-width: 0;
-  gap: 2px;
+  gap: var(--fm-space-1);
 }
 
 .fm-region-card__title-row {
@@ -131,7 +131,7 @@
   display: flex;
   align-items: flex-start;
   gap: var(--fm-space-2);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   border-left: 2px solid var(--fm-border-subtle);
   background: transparent;
   color: var(--fm-text-secondary);

@@ -1,23 +1,13 @@
 "use client";
 
-import { Info, RotateCcw } from "lucide-react";
 import React, {
   useCallback,
-  useEffect,
-  useId,
   useMemo,
-  useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 
-import type {
-  FieldCatalogResource,
-  FieldMetaResource,
-  LiveStatusResource,
-} from "@/kernel/api/apiTypes";
-import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
 import { useKernel } from "@/kernel/KernelContext";
+import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import {
   airboxLocalVisualizationPatchFromTargetPatch,
   airboxVisualizationStatePatchFromTargetPatch,
@@ -32,19 +22,15 @@ import {
   visualizationTargetKey,
   type ObjectVisualizationSnapshot,
   type VisualizationGeometryScope,
-  type VisualizationRenderMode,
-  type SurfaceColorSource,
-  type VisualizationStoredTargetPatch,
-  type VisualizationTargetKind,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
+  type ViewportTargetRenderingPreferences,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import {
   shouldLoadRuntimeMeshManifest,
   useFieldCatalogResource,
-  useFieldMetaResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   useObjectVisualizationController,
@@ -53,16 +39,7 @@ import {
 import {
   useVisualizationStateResource,
 } from "@/kernel/visualization/useVisualizationStateResource";
-import { Button } from "@/shared/ui/Button";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/shared/ui/Dialog";
+import { Tabs, TabsContent } from "@/shared/ui/Tabs";
 import {
   useMeshSharedDomainManifestResource,
   useMeshRegionMembershipsResource,
@@ -77,19 +54,12 @@ import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import { manifestRenderableCarriers } from "@/modules/viewport-3d/public";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { FeedbackBanner } from "../primitives/FeedbackBanner";
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+import { useInspectorActiveTab } from "../InspectorTabState";
 import { FieldRow } from "../primitives/FieldRow";
-import { FormField } from "../primitives/FormField";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
-  buildAirboxVectorDiagnostic,
-  buildAirboxVisibilityDiagnostic,
   buildVisualizationPanelSections,
-  colorPickerInputValue,
-  displayPassTogglePatch,
-  fieldMetaScopeQueryForVisualizationTarget,
-  formatScalarColorbarValueWithDisplayUnit,
-  geometryScopeVectorBudgetPatch,
   resolveVisualizationVectorBudgetRange,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
@@ -97,43 +67,18 @@ import {
   removeOwnerChildRegionVisualizationOverrides,
   resolveRegionVisualizationCarrier,
   resolveVisualizationRenderResolution,
-  resolveSurfaceColorSourceItems,
-  scalarColorPaletteGradientCss,
-  scalarColorPalettePatch,
-  scalarColorbarDisplayUnitItems,
-  scalarColorbarSupportsDisplayUnits,
-  SCALAR_COLOR_PALETTE_ITEMS,
-  shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
-  shouldShowSurfaceFieldColorbar,
-  SURFACE_FIELD_PROJECTION_ITEMS,
-  surfaceFieldProjectionModePatch,
-  surfaceColorSourceFieldMetaComponent,
-  geometryScopeDisplayPatch,
-  quantitySourcePatch,
+  shouldShowPrimitiveDisplayToggle,
+  surfaceSolidColorPatch,
   queueTargetVectorVisibilityPatch,
   resolveObjectVisualizationPanelTarget,
   resolveSelectedTargetVectorMeshPartRows,
   resolveObjectVisualizationPanelSelectionTarget,
-  regionVisualizationCarrierSupportsFieldMeta,
-  regionVisualizationFieldWarning,
-  renderModeDisplayPatch,
-  surfaceDisplayPassPatch,
-  surfaceSolidColorPatch,
   visualizationOverrideStateLabel,
-  VISUALIZATION_COLOR_MODE_ITEMS,
   type VisualizationVectorBudgetRange,
-  type RegionVisualizationCarrier,
-  visualizationQuantityItems,
   visualizationResetActionLabel,
   parseRegionVisualizationTargetId,
-  type ScalarColorbarDisplayUnit,
 } from "./ObjectVisualizationPanelModel";
-import { VisualizationVectorAccountingRows } from "./VisualizationVectorAccountingRows";
-import {
-  nextVisualizationRadioValue,
-  visualizationSectionDisabledDescription,
-} from "./ObjectVisualizationPanelAccessibility";
 import {
   selectObjectVisualizationManifestStatus,
   objectVisualizationManifestStatusEquals,
@@ -141,6 +86,15 @@ import {
   objectVisualizationPanelSnapshotEquals,
   viewportRenderingPreferencesPatch,
 } from "./ObjectVisualizationHelpers";
+
+interface ObjectVisualizationAppliedBaseline {
+  overrides: VisualizationStateResource["overrides"];
+  targets: Array<{
+    preferences: ViewportTargetRenderingPreferences | null;
+    settings: VisualizationTargetSettings;
+    target: VisualizationTargetRef;
+  }>;
+}
 import {
   VisualizationDisplayPassesSection,
   VisualizationRenderModeSection,
@@ -152,119 +106,10 @@ import {
   VisualizationGeometryScopeSection,
   VisualizationOpacitySection,
   VisualizationOverridesSection,
-  ViewportPreferenceScopeNote,
   ColorField,
-  NumberField,
-  VisualizationToggleButton,
   VisualizationRadioGroup,
+  VisualizationToggleButton,
 } from "./ObjectVisualizationTargetSection";
-
-const ToggleButton = VisualizationToggleButton;
-
-const RENDER_MODES: Array<{
-  label: string;
-  value: VisualizationRenderMode;
-}> = [
-  { label: "Shaded", value: "surface" },
-  { label: "Shaded + wireframe", value: "surface+edges" },
-  { label: "Wire", value: "wireframe" },
-  { label: "Points", value: "points" },
-];
-
-const GEOMETRY_SCOPES: Array<{
-  label: string;
-  value: VisualizationGeometryScope;
-}> = [
-  { label: "Surface", value: "surface" },
-  { label: "Full", value: "full" },
-];
-
-const OBJECT_VISUALIZATION_TARGET_KINDS: readonly VisualizationTargetKind[] = [
-  "airbox",
-  "object",
-  "part",
-  "region",
-];
-
-function visualizationTargetPatchEquals(
-  previous: VisualizationStoredTargetPatch | undefined,
-  next: VisualizationStoredTargetPatch | undefined,
-): boolean {
-  if (previous === next) return true;
-  if (!previous || !next) return previous === next;
-
-  const keys = new Set([
-    ...Object.keys(previous),
-    ...Object.keys(next),
-  ] as Array<keyof VisualizationStoredTargetPatch>);
-  for (const key of keys) {
-    if (!Object.is(previous[key], next[key])) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function surfaceFieldStatus(
-  source: SurfaceColorSource,
-  fieldCatalog: FieldCatalogResource | null | undefined,
-  fetchStatus: string,
-): string {
-  if (source === "solid") return "not required";
-  const revision =
-    fieldCatalog?.quantities.reduce(
-      (latest, quantity) =>
-        quantity.available ? Math.max(latest, quantity.field_revision) : latest,
-      0,
-    ) ?? 0;
-  if (revision > 0) {
-    return `available r${revision}`;
-  }
-  return fetchStatus === "ready" ? "none" : fetchStatus;
-}
-
-type PatchVisualizationTarget = (patchValue: VisualizationTargetPatch) => Promise<void>;
-type SectionDisabled = (
-  id: ReturnType<typeof buildVisualizationPanelSections>[number]["id"],
-) => boolean;
-
-const SCALAR_COLORBAR_RANGE_CACHE_MAX = 32;
-const scalarColorbarRangeCache = new Map<string, FieldMetaResource>();
-const scalarColorbarRangeListeners = new Set<() => void>();
-
-function subscribeScalarColorbarRangeCache(listener: () => void): () => void {
-  scalarColorbarRangeListeners.add(listener);
-  return () => {
-    scalarColorbarRangeListeners.delete(listener);
-  };
-}
-
-function rememberScalarColorbarRange(
-  identity: string,
-  data: FieldMetaResource,
-): void {
-  scalarColorbarRangeCache.delete(identity);
-  scalarColorbarRangeCache.set(identity, data);
-  while (scalarColorbarRangeCache.size > SCALAR_COLORBAR_RANGE_CACHE_MAX) {
-    const oldest = scalarColorbarRangeCache.keys().next().value;
-    if (!oldest) break;
-    scalarColorbarRangeCache.delete(oldest);
-  }
-  for (const listener of scalarColorbarRangeListeners) {
-    listener();
-  }
-}
-
-function useScalarColorbarRangeCache(
-  identity: string,
-): FieldMetaResource | null {
-  return useSyncExternalStore(
-    subscribeScalarColorbarRangeCache,
-    () => scalarColorbarRangeCache.get(identity) ?? null,
-    () => null,
-  );
-}
 
 function useObjectVisualizationPanelState(
   selection: InspectorPanelProps["selection"],
@@ -417,6 +262,32 @@ function useObjectVisualizationPanelState(
   const settings = targetVisualization?.settings ?? null;
   const effectiveSettings = targetVisualization?.effectiveSettings ?? null;
   const hasTargetOverride = Boolean(targetVisualization?.override);
+  const appliedBaselineTargets = resolvedTarget
+    ? [resolvedTarget, ...childRegionTargets]
+    : [];
+  const appliedBaseline: ObjectVisualizationAppliedBaseline = {
+    overrides: (visualizationState.data?.overrides ?? []).filter((entry) =>
+      appliedBaselineTargets.some((baselineTarget) =>
+        visualizationStateOverrideMatchesTarget(entry, baselineTarget),
+      ),
+    ),
+    targets: appliedBaselineTargets.map((baselineTarget) => {
+      const baselineSettings = resolveTargetVisualization({
+          snapshot,
+          target: baselineTarget,
+          visualizationState: visualizationState.data,
+        }).settings;
+      return {
+        preferences: structuredClone(
+          snapshot.viewportPreferences?.[
+            visualizationTargetKey(baselineTarget)
+          ] ?? null,
+        ),
+        settings: baselineSettings,
+        target: baselineTarget,
+      };
+    }),
+  };
   const childRegionOverrideCount = resolveChildRegionOverrideTargetIds({
     backendOverrides: visualizationState.data?.overrides ?? [],
     childTargets: childRegionTargets,
@@ -594,6 +465,28 @@ function useObjectVisualizationPanelState(
     setFeedback(null);
   }
 
+  async function restoreAppliedBaseline(
+    baseline: ObjectVisualizationAppliedBaseline,
+  ): Promise<void> {
+    const baselineTargets = baseline.targets.map((entry) => entry.target);
+    const retainedOverrides = (visualizationState.data?.overrides ?? []).filter(
+      (entry) =>
+        !baselineTargets.some((baselineTarget) =>
+          visualizationStateOverrideMatchesTarget(entry, baselineTarget),
+        ),
+    );
+    visualizationSync.queuePatch({
+      overrides: [...retainedOverrides, ...structuredClone(baseline.overrides)],
+    });
+    for (const { preferences, target: baselineTarget } of baseline.targets) {
+      visualization.clearTarget(baselineTarget);
+      if (preferences) {
+        visualization.patchViewportPreferences(baselineTarget, preferences);
+      }
+    }
+    setFeedback(null);
+  }
+
   function sectionDisabled(
     id: ReturnType<typeof buildVisualizationPanelSections>[number]["id"],
   ): boolean {
@@ -712,6 +605,7 @@ function useObjectVisualizationPanelState(
   }
 
   return {
+    appliedBaseline,
     displaySettings,
     effectiveSettings,
     airboxPartIds,
@@ -733,6 +627,7 @@ function useObjectVisualizationPanelState(
     regionCarrier,
     resetChildRegionTargets,
     resetTarget,
+    restoreAppliedBaseline,
     revision,
     sectionDisabled,
     settings: panelSettings,
@@ -775,6 +670,7 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
 
   return (
     <ObjectVisualizationPanelView
+      key={visualizationTargetKey(target)}
       panel={{ ...panel, displaySettings, settings, target }}
     />
   );
@@ -786,6 +682,7 @@ function ObjectVisualizationPanelView({
   panel: ResolvedObjectVisualizationPanelState;
 }) {
   const {
+    appliedBaseline: currentAppliedBaseline,
     displaySettings,
     airboxPartIds,
     childRegionOverrideCount,
@@ -806,6 +703,7 @@ function ObjectVisualizationPanelView({
     regionCarrier,
     resetChildRegionTargets,
     resetTarget,
+    restoreAppliedBaseline,
     revision,
     sectionDisabled,
     settings,
@@ -818,130 +716,231 @@ function ObjectVisualizationPanelView({
     vectorMeshParts,
     vectorTopologyHash,
   } = panel;
+  const [appliedBaseline] = useState<ObjectVisualizationAppliedBaseline>(() =>
+    structuredClone(currentAppliedBaseline),
+  );
+  const visualizationDirty =
+    JSON.stringify(currentAppliedBaseline) !== JSON.stringify(appliedBaseline);
+  useRegisterInspectorEditSession(
+    "liveViewport",
+    pending,
+    visualizationDirty,
+    true,
+    undefined,
+    () => true,
+    () => restoreAppliedBaseline(appliedBaseline),
+  );
+  const activeTab = useInspectorActiveTab();
+
+  const enabledPassCount = [
+    settings.visible,
+    settings.shaderVisible,
+    settings.wireframeVisible,
+    settings.vectorsVisible,
+    settings.pointsVisible,
+  ].filter(Boolean).length;
+  const meshState = renderResolution?.degradedReasons.length
+    ? "Degraded"
+    : "Ready";
+  const dataState =
+    settings.surfaceColorSource === "solid"
+      ? "Not required"
+      : fieldCatalog.status === "ready"
+        ? "Live"
+        : fieldCatalog.status;
 
   return (
     <div className="fm-inspector-panel" data-visualization-revision={revision}>
-      <InspectorSection title="Visualization Target">
-        <FieldRow label="Name" value={displayLabelForVisualizationTarget(target)} />
-        <FieldRow label="Target ID" value={target.kind === "airbox" ? "airbox" : target.id} />
-        <FieldRow label="Kind" value={target.kind} />
-        <FieldRow
-          label="Override"
-          value={visualizationOverrideStateLabel({
-            hasOverride: hasTargetOverride,
-            targetKind: target.kind,
-          })}
-        />
-        {target.kind === "object" && childRegionTargets.length > 0 ? (
-          <>
-            <FieldRow
-              label="Child overrides"
-              value={`${childRegionOverrideCount}/${childRegionTargets.length}`}
-            />
-            <label className="fm-visualization-part-toggle">
-              <input
-                checked={patchChildRegions}
-                type="checkbox"
-                onChange={(event) => setPatchChildRegions(event.target.checked)}
-              />
-              <span>Apply edits to child regions</span>
-            </label>
-          </>
-        ) : null}
-        <FieldRow
-          label="Render state"
-          value={
-            renderResolution?.degradedReasons[0]?.message ??
-            (settings.renderMode === "surface+edges"
-              ? "Shaded + wireframe"
-              : settings.renderMode)
-          }
-        />
-      </InspectorSection>
-      <VisualizationDisplayPassesSection
-        airboxPartIds={airboxPartIds}
-        displaySettings={displaySettings}
-        fieldCatalog={fieldCatalog}
-        onFieldCatalogRequest={onFieldCatalogRequest}
-        passControlsDisabled={passControlsDisabled}
-        patch={patch}
-        pending={pending}
-        renderWarning={renderWarning}
-        settings={settings}
-        targetKind={target.kind}
-        primitiveDisplayToggleVisible={primitiveDisplayToggleVisible}
-        vectorDomain={vectorDomain}
-      />
+      <Tabs value={activeTab} className="fm-inspector-tabs">
 
-      <VisualizationRenderModeSection
-        displaySettings={displaySettings}
-        passControlsDisabled={passControlsDisabled}
-        pending={pending}
-        patch={patch}
-      />
-      <VisualizationQuantitySection
-        onFieldCatalogRequest={onFieldCatalogRequest}
-        patch={patch}
-        pending={pending}
-        settings={settings}
-        targetKind={target.kind}
-      />
-      <VisualizationSurfaceColoringSection
-        patch={patch}
-        patchColor={patchColor}
-        pending={pending}
-        sectionDisabled={sectionDisabled}
-        fieldCatalog={fieldCatalog}
-        onFieldCatalogRequest={onFieldCatalogRequest}
-        regionCarrier={regionCarrier}
-        settings={settings}
-        target={target}
-      />
-      <VisualizationPointsSection
-        patchColor={patchColor}
-        pending={pending}
-        sectionDisabled={sectionDisabled}
-        settings={settings}
-      />
-      <VisualizationWireframeSection
-        patchColor={patchColor}
-        patchNumber={patchNumber}
-        pending={pending}
-        sectionDisabled={sectionDisabled}
-        settings={settings}
-      />
-      <VisualizationVectorsSection
-        meshParts={vectorMeshParts}
-        onTogglePartVectors={onTogglePartVectors}
-        patch={patch}
-        patchColor={patchColor}
-        patchNumber={patchNumber}
-        pending={pending}
-        sectionDisabled={sectionDisabled}
-        settings={settings}
-        targetKind={target.kind}
-        vectorBudgetRange={vectorBudgetRange}
-        vectorBudgetRanges={vectorBudgetRanges}
-        vectorTopologyHash={vectorTopologyHash}
-      />
-      <VisualizationGeometryScopeSection
-        passControlsDisabled={passControlsDisabled}
-        pending={pending}
-        patch={patch}
-        settings={settings}
-        vectorBudgetRange={vectorBudgetRange}
-        vectorBudgetRanges={vectorBudgetRanges}
-      />
-      <VisualizationOpacitySection patch={patch} settings={settings} />
-      <VisualizationOverridesSection
-        childRegionOverrideCount={childRegionOverrideCount}
-        childRegionTargets={Math.max(childRegionTargets.length, childRegionOverrideCount)}
-        feedback={feedback}
-        onReset={() => void resetTarget()}
-        onResetChildRegions={() => void resetChildRegionTargets()}
-        pending={pending}
-        resetLabel={visualizationResetActionLabel(target.kind)}
-      />
+        <TabsContent value="overview" className="fm-tabs-content">
+          <div className="fm-inspector-summary-section">
+            <div className="fm-inspector-summary-grid">
+              <div className="fm-inspector-summary-tile">
+                <span className="fm-inspector-summary-tile__label">Display Passes</span>
+                <span className="fm-inspector-summary-tile__value">
+                  {enabledPassCount} enabled
+                </span>
+              </div>
+              <div className="fm-inspector-summary-tile">
+                <span className="fm-inspector-summary-tile__label">Quantity Source</span>
+                <span className="fm-inspector-summary-tile__value">
+                  {settings.activeQuantityId || "H_eff"}
+                </span>
+              </div>
+              <div className="fm-inspector-summary-tile">
+                <span className="fm-inspector-summary-tile__label">Mesh Readiness</span>
+                <span className="fm-inspector-summary-tile__value" data-state={meshState.toLowerCase()}>
+                  <span className="fm-inspector-summary-tile__dot" /> {meshState}
+                </span>
+              </div>
+              <div className="fm-inspector-summary-tile">
+                <span className="fm-inspector-summary-tile__label">Data State</span>
+                <span className="fm-inspector-summary-tile__value" data-state={dataState.toLowerCase()}>
+                  <span className="fm-inspector-summary-tile__dot" /> {dataState}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <InspectorSection title="Display Settings" defaultCollapsed={false}>
+            <VisualizationDisplayPassesSection
+              airboxPartIds={airboxPartIds}
+              displaySettings={displaySettings}
+              fieldCatalog={fieldCatalog}
+              onFieldCatalogRequest={onFieldCatalogRequest}
+              passControlsDisabled={passControlsDisabled}
+              patch={patch}
+              pending={pending}
+              renderWarning={renderWarning}
+              settings={settings}
+              targetKind={target.kind}
+              primitiveDisplayToggleVisible={primitiveDisplayToggleVisible}
+              vectorDomain={vectorDomain}
+            />
+            <VisualizationRenderModeSection
+              displaySettings={displaySettings}
+              passControlsDisabled={passControlsDisabled}
+              pending={pending}
+              patch={patch}
+            />
+            <VisualizationQuantitySection
+              onFieldCatalogRequest={onFieldCatalogRequest}
+              patch={patch}
+              pending={pending}
+              settings={settings}
+              targetKind={target.kind}
+            />
+            <VisualizationSurfaceColoringSection
+              patch={patch}
+              patchColor={patchColor}
+              pending={pending}
+              sectionDisabled={sectionDisabled}
+              fieldCatalog={fieldCatalog}
+              onFieldCatalogRequest={onFieldCatalogRequest}
+              regionCarrier={regionCarrier}
+              settings={settings}
+              target={target}
+            />
+            <VisualizationVectorsSection
+              meshParts={vectorMeshParts}
+              onTogglePartVectors={onTogglePartVectors}
+              patch={patch}
+              patchColor={patchColor}
+              patchNumber={patchNumber}
+              pending={pending}
+              sectionDisabled={sectionDisabled}
+              settings={settings}
+              targetKind={target.kind}
+              vectorBudgetRange={vectorBudgetRange}
+              vectorBudgetRanges={vectorBudgetRanges}
+              vectorTopologyHash={vectorTopologyHash}
+            />
+          </InspectorSection>
+
+          <InspectorSection title="Clipping & Section" defaultCollapsed={true} badge="Section: Off">
+            <p className="fm-inspector-section__empty-copy">
+              No clipping plane is configured for this target.
+            </p>
+          </InspectorSection>
+
+          <InspectorSection title="Camera & View" defaultCollapsed={true} badge="Perspective: Auto">
+            <p className="fm-inspector-section__empty-copy">
+              Camera framing follows the active viewport.
+            </p>
+          </InspectorSection>
+
+          <InspectorSection title="Advanced" defaultCollapsed={true} badge="Rendering">
+            <p className="fm-inspector-section__empty-copy">
+              Advanced rendering uses the active viewport quality profile.
+            </p>
+          </InspectorSection>
+        </TabsContent>
+
+        <TabsContent value="properties" className="fm-tabs-content">
+          <InspectorSection title="Visualization Target">
+            <FieldRow label="Name" value={displayLabelForVisualizationTarget(target)} />
+            <FieldRow label="Target ID" value={target.kind === "airbox" ? "airbox" : target.id} />
+            <FieldRow label="Kind" value={target.kind} />
+            <FieldRow
+              label="Override"
+              value={visualizationOverrideStateLabel({
+                hasOverride: hasTargetOverride,
+                targetKind: target.kind,
+              })}
+            />
+            {target.kind === "object" && childRegionTargets.length > 0 ? (
+              <>
+                <FieldRow
+                  label="Child overrides"
+                  value={`${childRegionOverrideCount}/${childRegionTargets.length}`}
+                />
+                <label className="fm-visualization-part-toggle">
+                  <input
+                    checked={patchChildRegions}
+                    type="checkbox"
+                    onChange={(event) => setPatchChildRegions(event.target.checked)}
+                  />
+                  <span>Apply edits to child regions</span>
+                </label>
+              </>
+            ) : null}
+            <FieldRow
+              label="Render state"
+              value={
+                renderResolution?.degradedReasons[0]?.message ??
+                (settings.renderMode === "surface+edges"
+                  ? "Shaded + wireframe"
+                  : settings.renderMode)
+              }
+            />
+          </InspectorSection>
+        </TabsContent>
+
+        <TabsContent value="display" className="fm-tabs-content">
+          <VisualizationPointsSection
+            patchColor={patchColor}
+            pending={pending}
+            sectionDisabled={sectionDisabled}
+            settings={settings}
+          />
+          <VisualizationWireframeSection
+            patchColor={patchColor}
+            patchNumber={patchNumber}
+            pending={pending}
+            sectionDisabled={sectionDisabled}
+            settings={settings}
+          />
+          <VisualizationGeometryScopeSection
+            passControlsDisabled={passControlsDisabled}
+            pending={pending}
+            patch={patch}
+            settings={settings}
+            vectorBudgetRange={vectorBudgetRange}
+            vectorBudgetRanges={vectorBudgetRanges}
+          />
+          <VisualizationOpacitySection patch={patch} settings={settings} />
+        </TabsContent>
+
+        <TabsContent value="diagnostics" className="fm-tabs-content">
+          {renderWarning && (
+            <div className="fm-inspector__diagnostic-warning">
+              {renderWarning}
+            </div>
+          )}
+          <VisualizationOverridesSection
+            childRegionOverrideCount={childRegionOverrideCount}
+            childRegionTargets={Math.max(childRegionTargets.length, childRegionOverrideCount)}
+            feedback={feedback}
+            onReset={() => void resetTarget()}
+            onResetChildRegions={() => void resetChildRegionTargets()}
+            pending={pending}
+            resetLabel={visualizationResetActionLabel(target.kind)}
+          />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
+
+export { ColorField, VisualizationRadioGroup, VisualizationToggleButton };

@@ -10,8 +10,8 @@ import { useSceneResource } from "@/kernel/resources/geometryLifecycleResources"
 import { milliTeslaToTesla, teslaToMilliTesla, validateFieldDriveDraft } from "@/shared/domain/physics/fieldDrive";
 import { buildSincPulsePreview } from "@/shared/domain/physics/sincPulsePreview";
 import { Accordion } from "@/shared/ui/Accordion";
-import { Button } from "@/shared/ui/Button";
 
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
@@ -78,13 +78,14 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
       : null,
     [draft, samplingContext.durationS, samplingContext.samplePeriodS],
   );
+  const validationErrors = draft ? validateFieldDriveDraft(draft) : [];
+  const dirty = Boolean(draft && drive && JSON.stringify(draft) !== JSON.stringify(drive));
 
-  async function save(): Promise<void> {
-    if (!draft || model.sceneRevision === null) return;
-    const validationErrors = validateFieldDriveDraft(draft);
+  async function save(): Promise<boolean> {
+    if (!draft || model.sceneRevision === null) return false;
     if (validationErrors.length > 0) {
       setFeedback(validationErrors.join(" "));
-      return;
+      return false;
     }
     setPending(true);
     setFeedback(null);
@@ -95,12 +96,30 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
       });
       resources.invalidate(MODEL_FIELD_DRIVES_RESOURCE_KEY, response.scene_revision);
       setFeedback("Field drive saved.");
+      return true;
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : String(error));
+      return false;
     } finally {
       setPending(false);
     }
   }
+
+  useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    dirty,
+    Boolean(draft && model.sceneRevision !== null && validationErrors.length === 0),
+    undefined,
+    save,
+    () => {
+      setDraftState({
+        key: draftKey,
+        value: drive ? structuredClone(drive) : null,
+      });
+      setFeedback(null);
+    },
+  );
 
   return (
     <Accordion className="fm-inspector-panel" type="multiple" defaultValue={["drive", "waveform", "activation"]}>
@@ -128,9 +147,6 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
         <label className="fm-inspector-field"><span>Spatial profile</span><select className="fm-inspector-input" disabled={!draft || pending} value={draft?.spatial_profile.kind ?? "uniform"} onChange={(event) => setDraft((value) => value ? {...value,spatial_profile:event.target.value === "uniform" ? {kind:"uniform"} : event.target.value === "sinc" ? {kind:"sinc",axis:[1,0,0],period_m:1e-7,center_m:0,window:"none"} : {kind:"geometry_mask",object_id:"",envelope:{kind:"uniform"}}} : value)}><option value="uniform">Uniform</option><option value="sinc">Spatial sinc</option><option value="geometry_mask">Geometry mask</option></select></label>
         {draft?.spatial_profile.kind === "geometry_mask" ? <><label className="fm-inspector-field"><span>Mask geometry</span><select className="fm-inspector-input" value={draft.spatial_profile.object_id} onChange={(event) => setDraft((value) => value?.spatial_profile.kind === "geometry_mask" ? {...value,spatial_profile:{...value.spatial_profile,object_id:event.target.value}} : value)}><option value="">Select an object</option>{selectorOptions.objects.map((object) => <option key={object.id} value={object.id}>{object.label}</option>)}</select></label><label className="fm-inspector-field"><span>Envelope</span><select className="fm-inspector-input" value={draft.spatial_profile.envelope.kind} onChange={(event) => setDraft((value) => value?.spatial_profile.kind === "geometry_mask" ? {...value,spatial_profile:{...value.spatial_profile,envelope:event.target.value === "sinc" ? {kind:"sinc",axis:[1,0,0],period_m:1e-7,center_m:0,window:"none"} : {kind:"uniform"}}} : value)}><option value="uniform">Uniform</option><option value="sinc">Spatial sinc</option></select></label>{draft.spatial_profile.envelope.kind === "sinc" ? <SpatialSincFields profile={draft.spatial_profile.envelope} onChange={(profile) => setDraft((value) => value?.spatial_profile.kind === "geometry_mask" ? {...value,spatial_profile:{...value.spatial_profile,envelope:profile}} : value)} /> : null}</> : null}
         {draft?.spatial_profile.kind === "sinc" ? <SpatialSincFields profile={draft.spatial_profile} onChange={(profile) => setDraft((value) => value ? {...value,spatial_profile:profile} : value)} /> : null}
-        <Button disabled={!draft || pending} size="sm" type="button" onClick={() => void save()}>
-          {pending ? "Saving" : "Save drive"}
-        </Button>
         {feedback ? <FeedbackBanner kind={feedback === "Field drive saved." ? "success" : "error"} message={feedback} /> : null}
       </InspectorSection>
       <InspectorSection value="waveform" title="Waveform">

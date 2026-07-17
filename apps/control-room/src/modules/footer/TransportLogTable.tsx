@@ -62,6 +62,9 @@ export function TransportLogTable({
     [entries],
   );
   const parentRef = useRef<HTMLDivElement>(null);
+  // TanStack Virtual intentionally returns imperative callbacks; React Compiler
+  // must leave this hook boundary unmemoized.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: sortedEntries.length,
     getScrollElement: () => parentRef.current,

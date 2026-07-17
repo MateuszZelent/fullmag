@@ -76,7 +76,7 @@
 
 .fm-frequency-domain-chart__mode {
   display: grid;
-  gap: 2px;
+  gap: var(--fm-space-1);
   color: var(--fm-text-muted);
   cursor: pointer;
   font: inherit;
@@ -204,7 +204,7 @@
 }
 
 .fm-frequency-domain-peak-card__actions .fm-inspector-action-button {
-  min-height: 22px;
+  min-height: 32px;
   padding: 0 var(--fm-space-2);
   font-size: 10px;
 }
@@ -263,7 +263,7 @@
 }
 
 .fm-frequency-domain-resonance-card__actions .fm-inspector-action-button {
-  min-height: 22px;
+  min-height: 32px;
   padding: 0 var(--fm-space-2);
   font-size: 10px;
 }
@@ -322,7 +322,7 @@
 }
 
 .fm-frequency-domain-response-card__actions .fm-inspector-action-button {
-  min-height: 22px;
+  min-height: 32px;
   padding: 0 var(--fm-space-2);
   font-size: 10px;
 }
@@ -381,7 +381,7 @@
 }
 
 .fm-frequency-domain-comparison-card__actions .fm-inspector-action-button {
-  min-height: 22px;
+  min-height: 32px;
   padding: 0 var(--fm-space-2);
   font-size: 10px;
 }
@@ -430,7 +430,7 @@
 }
 
 .fm-frequency-domain-table__actions .fm-inspector-action-button {
-  min-height: 22px;
+  min-height: 32px;
   padding: 0 var(--fm-space-2);
   font-size: 10px;
 }
@@ -449,7 +449,7 @@
 .fm-frequency-domain-visualization-actions
   .fm-frequency-domain-mode-data-preview-button {
   flex: 0 0 auto;
-  min-height: 24px;
+  min-height: 32px;
 }
 
 .fm-frequency-domain-table-empty {

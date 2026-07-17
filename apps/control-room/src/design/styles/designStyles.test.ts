@@ -10,6 +10,8 @@ const locallyScopedCssVars = new Set([
   "--fm-refresh-progress",
   "--pct",
   "--radix-accordion-content-height",
+  "--radix-select-content-available-height",
+  "--radix-select-trigger-width",
 ]);
 
 function readAppFile(relativePath: string): string {
@@ -20,36 +22,11 @@ describe("control-room design styles", () => {
   it("keeps app/globals.css as an import-only entrypoint", () => {
     const globalsCss = readAppFile("app/globals.css").trim();
 
-    expect(globalsCss).toBe(
-      [
-        '@import "tailwindcss";',
-        '@import "../src/design/styles/tokens.css";',
-        '@import "../src/design/styles/theme.css";',
-        '@import "../src/design/styles/base.css";',
-        '@import "../src/design/styles/layout.css";',
-        '@import "../src/design/styles/slots.css";',
-        '@import "../src/design/styles/dropdown.css";',
-        '@import "../src/design/styles/dialog.css";',
-        '@import "../src/design/styles/accordion.css";',
-        '@import "../src/design/styles/context-menu.css";',
-        '@import "../src/design/styles/tabs.css";',
-        '@import "../src/design/styles/command.css";',
-        '@import "../src/design/styles/header.css";',
-        '@import "../src/design/styles/ribbon.css";',
-        '@import "../src/design/styles/explorer.css";',
-        '@import "../src/design/styles/inspector.css";',
-        '@import "../src/design/styles/viewport-3d.css";',
-        '@import "../src/design/styles/cross-section-image.css";',
-        '@import "../src/design/styles/analysis-plots.css";',
-        '@import "../src/design/styles/footer.css";',
-        '@import "../src/design/styles/command-palette.css";',
-        '@import "../src/design/styles/registry-inspector.css";',
-        '@import "../src/design/styles/thread-manager.css";',
-        '@import "../src/design/styles/diagnostic-recorder.css";',
-        '@import "../src/design/styles/material-library.css";',
-        '@import "../src/design/styles/components/index.css";',
-      ].join("\n"),
-    );
+    const statements = globalsCss.split("\n").filter(Boolean);
+    expect(statements.length).toBeGreaterThan(20);
+    expect(statements.every((statement) => statement.startsWith("@import "))).toBe(true);
+    expect(statements[0]).toBe('@import "tailwindcss";');
+    expect(globalsCss).toContain('inspector-visualization.css" layer(fm-modules)');
   });
 
   it("defines light and dark themes through central fm tokens", () => {

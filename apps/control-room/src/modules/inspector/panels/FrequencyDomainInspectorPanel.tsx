@@ -51,9 +51,7 @@ import {
   responseFieldResourcesFromManifest,
   routeFrequencyDomainCalculationMode,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
-import type { FmrPeakPoint } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import {
-  formatFrequencyHz,
   formatFrequencyRangeBoundsHz,
 } from "@/shared/domain/analysis/frequencyUnits";
 import { Button } from "@/shared/ui/Button";
@@ -94,7 +92,6 @@ import {
   formatFrequency,
   arrayLength,
   formatRecordField,
-  numberArray,
   susceptibilityPairCount,
   maxAbsComplexPairs,
   formatScalar,
@@ -179,7 +176,7 @@ const EIGEN_MODE_BROWSER_ACTIONS: readonly {
 
 // Helper functions extracted to ./frequency-domain/FrequencyDomainHelpers.ts
 
-type FrequencyDomainInspectorState = {
+export type FrequencyDomainInspectorState = {
   calculationModeValidationMessage: string | null;
   commandMessage: string | null;
   draftCalculationMode: string | null;
@@ -580,14 +577,6 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
     "study.stage.eigenmodes.k_path",
     "study.stage.frequency_response.k_grid",
   );
-  const showExcitationWorkflow = isExactFrequencyDomainKind(
-    kind,
-    "study.stage.frequency_response.excitation",
-  );
-  const showFrequencySweepWorkflow = isExactFrequencyDomainKind(
-    kind,
-    "study.stage.frequency_response.sweep",
-  );
   const showSetupAuthoring = isExactFrequencyDomainKind(
     kind,
     "study.stage.eigenmodes.setup",
@@ -604,21 +593,6 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
     "study.stage.frequency_response.operator",
   );
   const isEigenmodesAuthoringNode = kind.startsWith("study.stage.eigenmodes");
-  const showDrivenSolver = isExactFrequencyDomainKind(
-    kind,
-    "results.frequency_response.root",
-    "results.frequency_response.study",
-    "results.frequency_response.diagnostics",
-    "results.frequency_response.provenance",
-    "resources.analysis.frequency_response.diagnostics",
-    "resources.analysis.frequency_response",
-    "results.frequency_domain.fmr_response_sweep",
-    "study.stage.frequency_response",
-    "study.stage.frequency_response.setup",
-    "study.stage.frequency_response.excitation",
-    "study.stage.frequency_response.sweep",
-    "study.stage.frequency_response.solver",
-  );
   const showResponseFields = isFrequencyDomainKind(
     kind,
     "resources.analysis.frequency_response.field",
@@ -632,33 +606,6 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
     "resources.analysis.frequency_response.progress",
     "resources.analysis.frequency_response.cancel_requested",
     "jobs.frequency_domain.response_progress",
-  );
-  const showModalSolver = isExactFrequencyDomainKind(
-    kind,
-    "results.eigen.root",
-    "results.eigen.study",
-    "results.eigen.diagnostics",
-    "results.eigen.provenance",
-    "resources.analysis.eigen.diagnostics",
-    "results.frequency_domain.fmr_modal_spectrum",
-    "study.stage.eigenmodes",
-    "study.stage.eigenmodes.setup",
-    "study.stage.eigenmodes.solver",
-    "study.stage.eigenmodes.outputs",
-    "study.stage.eigenmodes.diagnostics",
-  );
-  const showPlotReadiness = isExactFrequencyDomainKind(
-    kind,
-    "results.frequency_domain.root",
-    "results.frequency_domain.run",
-    "results.frequency_domain.calculation_modes",
-    "results.frequency_domain.fmr",
-    "results.frequency_domain.fmr_modal_spectrum",
-    "results.frequency_domain.fmr_response_sweep",
-    "results.frequency_domain.dispersion",
-    "results.frequency_domain.response_map",
-    "results.frequency_domain.comparison",
-    "diagnostics.frequency_domain.visualization",
   );
   const showCalculationModeWorkflow = isFrequencyDomainKind(
     kind,
@@ -1550,9 +1497,6 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
         setInspectorState={setInspectorState}
         data={data}
         responseSweep={responseSweep}
-        responseProgress={responseProgress}
-        responseCancelRequested={responseCancelRequested}
-        manifestPhysics={manifestPhysics}
       />
 
       {showResponseFields ? (
@@ -1641,9 +1585,6 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
         spectrum={spectrum}
         branches={branches}
         dispersion={dispersion}
-        manifestPhysics={manifestPhysics}
-        plotSelectedSpectrumMode={plotSelectedSpectrumMode}
-        EIGEN_MODE_BROWSER_ACTIONS={EIGEN_MODE_BROWSER_ACTIONS}
       />
 
       {showCalculationModeWorkflow ? (

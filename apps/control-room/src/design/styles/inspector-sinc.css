@@ -64,7 +64,7 @@
 .fm-sinc-preview__metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
+  gap: var(--fm-space-1);
   overflow: hidden;
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-md);
@@ -73,7 +73,7 @@
 
 .fm-sinc-preview__metrics > span {
   display: grid;
-  gap: 2px;
+  gap: var(--fm-space-1);
   padding: var(--fm-space-2);
   background: var(--fm-bg-panel-raised);
 }
@@ -193,16 +193,16 @@
 .fm-sampling-plan__metrics {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1px;
+  gap: var(--fm-space-1);
   overflow: hidden;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-sm);
+  border-radius: var(--fm-radius-md);
   background: var(--fm-border-subtle);
 }
 
 .fm-sampling-plan__metrics > span {
   display: grid;
-  gap: 2px;
+  gap: var(--fm-space-1);
   min-width: 0;
   padding: var(--fm-space-2);
   background: color-mix(in srgb, var(--fm-bg-canvas) 68%, var(--fm-bg-panel-raised));

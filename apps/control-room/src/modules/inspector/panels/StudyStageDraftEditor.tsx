@@ -1,7 +1,6 @@
 "use client";
 
-import React, { type ReactNode } from "react";
-import { Cpu, Save } from "lucide-react";
+import React from "react";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 import { FormField } from "../primitives/FormField";
 import {
@@ -11,11 +10,6 @@ import {
 } from "./StudyStageAuthoringModel";
 import {
   HysteresisStageDraftFields,
-  HysteresisSettleBranchesEditor,
-  HysteresisMinorLoopsEditor,
-  HysteresisFieldSegmentsEditor,
-  HysteresisDenseWindowsEditor,
-  HysteresisSettleAlgorithmsEditor,
 } from "./HysteresisStageDraftFields";
 import { type FrequencyDomainAuthoringView } from "./stages/StageInspectorFrame";
 

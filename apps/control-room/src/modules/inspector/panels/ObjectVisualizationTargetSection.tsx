@@ -15,7 +15,6 @@ import {
   DialogTitle,
 } from "@/shared/ui/Dialog";
 import {
-  displayLabelForVisualizationTarget,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
   type SurfaceColorSource,
@@ -30,18 +29,17 @@ import {
 import {
   buildAirboxVectorDiagnostic,
   buildAirboxVisibilityDiagnostic,
+  buildVisualizationPanelSections,
   displayPassTogglePatch,
   fieldMetaScopeQueryForVisualizationTarget,
   formatScalarColorbarValueWithDisplayUnit,
   geometryScopeVectorBudgetPatch,
-  resolveSelectedTargetVectorMeshPartRows,
   resolveSurfaceColorSourceItems,
   scalarColorPaletteGradientCss,
   scalarColorPalettePatch,
   scalarColorbarDisplayUnitItems,
   scalarColorbarSupportsDisplayUnits,
   SCALAR_COLOR_PALETTE_ITEMS,
-  shouldShowPrimitiveDisplayToggle,
   shouldShowSurfaceFieldColorbar,
   SURFACE_FIELD_PROJECTION_ITEMS,
   surfaceFieldProjectionModePatch,
@@ -52,7 +50,6 @@ import {
   regionVisualizationFieldWarning,
   renderModeDisplayPatch,
   surfaceDisplayPassPatch,
-  surfaceSolidColorPatch,
   VISUALIZATION_COLOR_MODE_ITEMS,
   type VisualizationVectorBudgetRange,
   type RegionVisualizationCarrier,
@@ -83,7 +80,9 @@ const GEOMETRY_SCOPES = [
 ];
 
 type PatchVisualizationTarget = (patchValue: VisualizationTargetPatch) => Promise<void>;
-type SectionDisabled = (id: any) => boolean;
+type SectionDisabled = (
+  id: ReturnType<typeof buildVisualizationPanelSections>[number]["id"],
+) => boolean;
 
 export function VisualizationDisplayPassesSection({
   airboxPartIds,
@@ -1048,6 +1047,7 @@ export function ColorField({
       </label>
       <div className="fm-form-field__control-row">
         <input
+          aria-label={`${label} picker`}
           className="fm-color-picker-input"
           disabled={disabled}
           id={inputId}
@@ -1056,7 +1056,7 @@ export function ColorField({
           onChange={(event) => onChange(event.currentTarget.value)}
         />
         <input
-          aria-label={`${label} text input`}
+          aria-label={`${label} value`}
           className="fm-inspector-input"
           disabled={disabled}
           type="text"

@@ -17,10 +17,12 @@ import {
   useObjectInteractionResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { Accordion } from "@/shared/ui/Accordion";
+import { Tabs, TabsContent } from "@/shared/ui/Tabs";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+import { useInspectorActiveTab } from "../InspectorTabState";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
@@ -177,22 +179,22 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     }));
   }
 
-  async function applyAnisotropy(): Promise<void> {
+  async function applyAnisotropy(): Promise<boolean> {
     if (!object.objectId || object.mode !== "committed") {
       setFeedback({ kind: "error", message: "No committed scene object." });
-      return;
+      return false;
     }
     const ku1 = Number(anisotropyDraft.ku1);
     if (!Number.isFinite(ku1)) {
       setFeedback({ kind: "error", message: "Ku1 must be a finite number." });
-      return;
+      return false;
     }
     const axisX = Number(anisotropyDraft.axisX);
     const axisY = Number(anisotropyDraft.axisY);
     const axisZ = Number(anisotropyDraft.axisZ);
     if (!Number.isFinite(axisX) || !Number.isFinite(axisY) || !Number.isFinite(axisZ)) {
       setFeedback({ kind: "error", message: "Anisotropy axis components must be finite numbers." });
-      return;
+      return false;
     }
     setPending(true);
     try {
@@ -207,8 +209,10 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
       );
       invalidateMagneticParameterResources(revision);
       setFeedback({ kind: "success", message: "Uniaxial anisotropy updated." });
+      return true;
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
+      return false;
     } finally {
       setPending(false);
     }
@@ -227,10 +231,10 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
     );
   }
 
-  async function applyMaterial(): Promise<void> {
+  async function applyMaterial(): Promise<boolean> {
     if (object.mode !== "committed") {
       setFeedback({ kind: "error", message: "No committed scene object." });
-      return;
+      return false;
     }
 
     setPending(true);
@@ -248,33 +252,35 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         kind: "success",
         message: "Object material assignment updated.",
       });
+      return true;
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
+      return false;
     } finally {
       setPending(false);
     }
   }
 
-  async function applyParameters(): Promise<void> {
+  async function applyParameters(): Promise<boolean> {
     if (!materialId || !material.data) {
       setFeedback({
         kind: "error",
         message: "No committed material asset is assigned to this object.",
       });
-      return;
+      return false;
     }
     if (parametersTargetChanged) {
       setFeedback({
         kind: "error",
         message: "Apply the material assignment before editing its parameters.",
       });
-      return;
+      return false;
     }
 
     const result = buildMaterialParametersPatch(draft);
     if ("error" in result) {
       setFeedback({ kind: "error", message: result.error });
-      return;
+      return false;
     }
 
     setPending(true);
@@ -287,8 +293,10 @@ function useObjectMaterialPanelState(selection: InspectorPanelProps["selection"]
         kind: "success",
         message: "Magnetic parameters updated.",
       });
+      return true;
     } catch (error) {
       setFeedback({ kind: "error", message: errorMessage(error) });
+      return false;
     } finally {
       setPending(false);
     }
@@ -344,19 +352,15 @@ export function ObjectMaterialPanel({ selection }: InspectorPanelProps) {
   const panel = useObjectMaterialPanelState(selection);
   const sections = materialInspectorSections(selection.kind);
   const showSection = (section: string) => sections.includes(section);
-  return <ObjectMaterialPanelView panel={panel} sections={sections} showSection={showSection} selectionKind={selection.kind} />;
+  return <ObjectMaterialPanelView panel={panel} showSection={showSection} />;
 }
 
 function ObjectMaterialPanelView({
   panel,
-  sections,
   showSection,
-  selectionKind,
 }: {
   panel: ObjectMaterialPanelState;
-  sections: string[];
   showSection: (section: string) => boolean;
-  selectionKind: string | null;
 }) {
   const {
     anisotropyDraft,
@@ -381,198 +385,250 @@ function ObjectMaterialPanelView({
     updateAnisotropyDraft,
     updateDraft,
   } = panel;
+  const draftDirty = magneticParametersDraftDirty(draft, baseDraft);
+  const parametersDirty = magneticParametersDraftDirty(
+    { ...draft, materialRef: baseDraft.materialRef },
+    baseDraft,
+  );
+  const anisotropyDirty = JSON.stringify(anisotropyDraft) !== JSON.stringify(baseAnisotropyDraft);
+  const parametersValidation = buildMaterialParametersPatch(draft);
+  const anisotropyValid = [
+    anisotropyDraft.ku1,
+    anisotropyDraft.axisX,
+    anisotropyDraft.axisY,
+    anisotropyDraft.axisZ,
+  ].every((value) => Number.isFinite(Number(value)));
+  useRegisterInspectorEditSession(
+    "staged",
+    pending,
+    draftDirty || anisotropyDirty,
+    !("error" in parametersValidation) && anisotropyValid,
+    undefined,
+    async () => {
+      if (parametersTargetChanged) {
+        if (!(await applyMaterial())) return false;
+        if (parametersDirty) {
+          setFeedback({
+            kind: "success",
+            message: "Material assignment saved. Apply again after the assigned material loads to save its parameters.",
+          });
+          return false;
+        }
+      } else if (parametersDirty && !(await applyParameters())) {
+        return false;
+      }
+      if (anisotropyDirty && !(await applyAnisotropy())) return false;
+      return true;
+    },
+    () => {
+      setDraftState(
+        initialInspectorDraftState({
+          baseDraft,
+          baseKey: draftKey,
+          identityKey: draftIdentityKey,
+        }),
+      );
+      setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
+      setFeedback(null);
+    },
+  );
+  const activeTab = useInspectorActiveTab();
 
   return (
-    <Accordion
-      key={selectionKind ?? "default"}
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={sections}
-    >
-      {showSection("parameters") ? (
-        <InspectorSection value="parameters" title="Magnetic Parameters" collapsible defaultCollapsed={false}>
-          <FieldRow label="Object ID" value={object.objectId} />
-          <FieldRow label="Current material" value={object.material} />
-          <FieldRow
-            label="Material resource"
-            value={material.data?.name ?? materialId ?? "unassigned"}
-          />
-          <FieldRow label="Mode" value={object.mode} />
-          <FieldRow
-            label="Scene revision"
-            value={object.baseRevision === null ? "unknown" : String(object.baseRevision)}
-          />
-          <FieldRow label="Scene fetch" value={scene.status} />
-          <FieldRow label="Material fetch" value={material.status} />
-        </InspectorSection>
-      ) : null}
+    <div className="fm-inspector-panel">
+      <Tabs value={activeTab} className="fm-inspector-tabs">
 
-      {showSection("assignment") ? (
-        <InspectorSection value="assignment" title="Assignment">
-          <FormField
-            label="Material"
-            type="select"
-            value={draft.materialRef}
-            onChange={(event) => updateDraft({ materialRef: event.target.value })}
-          >
-            <option value="">Unassigned</option>
-            {scene.data?.materials?.map((material) => (
-              <option key={material.id} value={material.id}>
-                {material.name} ({material.id})
-              </option>
-            ))}
-          </FormField>
-          <FieldRow
-            label="Selected"
-            value={
-              scene.data?.materials?.find((material) => material.id === draft.materialRef)
-                ?.name ?? draft.materialRef ?? "unassigned"
-            }
-          />
-        </InspectorSection>
-      ) : null}
+        <TabsContent value="overview" className="fm-tabs-content">
+          {showSection("parameters") ? (
+            <InspectorSection title="Magnetic Parameters" collapsible defaultCollapsed={false}>
+              <FieldRow label="Object ID" value={object.objectId} />
+              <FieldRow label="Current material" value={object.material} />
+              <FieldRow
+                label="Material resource"
+                value={material.data?.name ?? materialId ?? "unassigned"}
+              />
+              <FieldRow label="Mode" value={object.mode} />
+              <FieldRow
+                label="Scene revision"
+                value={object.baseRevision === null ? "unknown" : String(object.baseRevision)}
+              />
+              <FieldRow label="Scene fetch" value={scene.status} />
+              <FieldRow label="Material fetch" value={material.status} />
+            </InspectorSection>
+          ) : null}
 
-      {showSection("uniaxial-anisotropy") ? (
-        <InspectorSection value="uniaxial-anisotropy" title="Uniaxial Anisotropy">
-          <FormField
-            label="Present"
-            type="checkbox"
-            checked={anisotropyDraft.present}
-            onChange={(event) =>
-              updateAnisotropyDraft({ present: (event.target as HTMLInputElement).checked })
-            }
-          />
-          <FormField
-            label="Ku1"
-            type="number"
-            unit="J/m³"
-            disabled={!anisotropyDraft.present}
-            value={anisotropyDraft.ku1}
-            onChange={(event) => updateAnisotropyDraft({ ku1: event.target.value })}
-          />
-          <Vector3Field
-            label="Axis"
-            disabled={!anisotropyDraft.present}
-            values={[anisotropyDraft.axisX, anisotropyDraft.axisY, anisotropyDraft.axisZ]}
-            onChange={(index, value) => {
-              const fields = ["axisX", "axisY", "axisZ"] as const;
-              updateAnisotropyDraft({ [fields[index]]: value });
-            }}
-          />
-        </InspectorSection>
-      ) : null}
-
-      {showSection("material-parameters") ? (
-        <InspectorSection value="material-parameters" title="Material Parameters">
-          <FormField
-            label="Name"
-            mono={false}
-            type="text"
-            disabled={!material.data}
-            value={draft.materialName}
-            onChange={(event) => updateDraft({ materialName: event.target.value })}
-          />
-          <FormField
-            label="Ms"
-            type="number"
-            unit="A/m"
-            disabled={!material.data}
-            value={draft.ms}
-            onChange={(event) => updateDraft({ ms: event.target.value })}
-          />
-          <FormField
-            label="Aex"
-            type="number"
-            unit="J/m"
-            disabled={!material.data}
-            value={draft.aex}
-            onChange={(event) => updateDraft({ aex: event.target.value })}
-          />
-          <FormField
-            label="alpha"
-            type="number"
-            disabled={!material.data}
-            value={draft.alpha}
-            onChange={(event) => updateDraft({ alpha: event.target.value })}
-          />
-          <FormField
-            label="Dind"
-            type="number"
-            unit="J/m²"
-            disabled={!material.data}
-            value={draft.dind}
-            onChange={(event) => updateDraft({ dind: event.target.value })}
-          />
-          <FormField
-            label="Dbulk"
-            type="number"
-            unit="J/m³"
-            disabled={!material.data}
-            value={draft.dbulk}
-            onChange={(event) => updateDraft({ dbulk: event.target.value })}
-          />
-        </InspectorSection>
-      ) : null}
-
-      {showSection("actions") ? (
-        <InspectorSection value="actions" title="Actions">
-          <div className="fm-inspector-toolbar">
-            {showSection("assignment") ? (
-              <Button
-                disabled={pending || object.mode !== "committed"}
-                size="sm"
-                type="button"
-                variant="primary"
-                onClick={() => void applyMaterial()}
+          {showSection("assignment") ? (
+            <InspectorSection title="Assignment">
+              <FormField
+                label="Material"
+                type="select"
+                value={draft.materialRef}
+                onChange={(event) => updateDraft({ materialRef: event.target.value })}
               >
-                Apply Assignment
-              </Button>
-            ) : null}
-            {showSection("material-parameters") ? (
-              <Button
-                disabled={pending || !material.data || parametersTargetChanged}
-                size="sm"
-                type="button"
-                variant="primary"
-                onClick={() => void applyParameters()}
-              >
-                Apply Parameters
-              </Button>
-            ) : null}
-            {showSection("uniaxial-anisotropy") ? (
-              <Button
-                disabled={pending || object.mode !== "committed"}
-                size="sm"
-                type="button"
-                variant="primary"
-                onClick={() => void applyAnisotropy()}
-              >
-                Apply Anisotropy
-              </Button>
-            ) : null}
-            <Button
-              disabled={pending}
-              size="sm"
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                setDraftState(
-                  initialInspectorDraftState({
-                    baseDraft,
-                    baseKey: draftKey,
-                    identityKey: draftIdentityKey,
-                  }),
-                );
-                setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
-                setFeedback(null);
-              }}
-            >
-              Revert
-            </Button>
-          </div>
-          {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
-        </InspectorSection>
-      ) : null}
-    </Accordion>
+                <option value="">Unassigned</option>
+                {scene.data?.materials?.map((material) => (
+                  <option key={material.id} value={material.id}>
+                    {material.name} ({material.id})
+                  </option>
+                ))}
+              </FormField>
+              <FieldRow
+                label="Selected"
+                value={
+                  scene.data?.materials?.find((material) => material.id === draft.materialRef)
+                    ?.name ?? draft.materialRef ?? "unassigned"
+                }
+              />
+            </InspectorSection>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="properties" className="fm-tabs-content">
+          {showSection("material-parameters") ? (
+            <InspectorSection title="Material Parameters">
+              <FormField
+                label="Name"
+                mono={false}
+                type="text"
+                disabled={!material.data}
+                value={draft.materialName}
+                onChange={(event) => updateDraft({ materialName: event.target.value })}
+              />
+              <FormField
+                label="Ms"
+                type="number"
+                unit="A/m"
+                disabled={!material.data}
+                value={draft.ms}
+                onChange={(event) => updateDraft({ ms: event.target.value })}
+              />
+              <FormField
+                label="Aex"
+                type="number"
+                unit="J/m"
+                disabled={!material.data}
+                value={draft.aex}
+                onChange={(event) => updateDraft({ aex: event.target.value })}
+              />
+              <FormField
+                label="alpha"
+                type="number"
+                disabled={!material.data}
+                value={draft.alpha}
+                onChange={(event) => updateDraft({ alpha: event.target.value })}
+              />
+              <FormField
+                label="Dind"
+                type="number"
+                unit="J/m²"
+                disabled={!material.data}
+                value={draft.dind}
+                onChange={(event) => updateDraft({ dind: event.target.value })}
+              />
+              <FormField
+                label="Dbulk"
+                type="number"
+                unit="J/m³"
+                disabled={!material.data}
+                value={draft.dbulk}
+                onChange={(event) => updateDraft({ dbulk: event.target.value })}
+              />
+            </InspectorSection>
+          ) : null}
+
+          {showSection("uniaxial-anisotropy") ? (
+            <InspectorSection title="Uniaxial Anisotropy">
+              <FormField
+                label="Present"
+                type="checkbox"
+                checked={anisotropyDraft.present}
+                onChange={(event) =>
+                  updateAnisotropyDraft({ present: (event.target as HTMLInputElement).checked })
+                }
+              />
+              <FormField
+                label="Ku1"
+                type="number"
+                unit="J/m³"
+                disabled={!anisotropyDraft.present}
+                value={anisotropyDraft.ku1}
+                onChange={(event) => updateAnisotropyDraft({ ku1: event.target.value })}
+              />
+              <Vector3Field
+                label="Axis"
+                disabled={!anisotropyDraft.present}
+                values={[anisotropyDraft.axisX, anisotropyDraft.axisY, anisotropyDraft.axisZ]}
+                onChange={(index, value) => {
+                  const fields = ["axisX", "axisY", "axisZ"] as const;
+                  updateAnisotropyDraft({ [fields[index]]: value });
+                }}
+              />
+            </InspectorSection>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="diagnostics" className="fm-tabs-content">
+          {showSection("actions") ? (
+            <InspectorSection title="Actions">
+              <div className="fm-inspector-toolbar">
+                {showSection("assignment") ? (
+                  <Button
+                    disabled={pending || object.mode !== "committed"}
+                    size="sm"
+                    type="button"
+                    variant="primary"
+                    onClick={() => void applyMaterial()}
+                  >
+                    Apply Assignment
+                  </Button>
+                ) : null}
+                {showSection("material-parameters") ? (
+                  <Button
+                    disabled={pending || !material.data || parametersTargetChanged}
+                    size="sm"
+                    type="button"
+                    variant="primary"
+                    onClick={() => void applyParameters()}
+                  >
+                    Apply Parameters
+                  </Button>
+                ) : null}
+                {showSection("uniaxial-anisotropy") ? (
+                  <Button
+                    disabled={pending || object.mode !== "committed"}
+                    size="sm"
+                    type="button"
+                    variant="primary"
+                    onClick={() => void applyAnisotropy()}
+                  >
+                    Apply Anisotropy
+                  </Button>
+                ) : null}
+                <Button
+                  disabled={pending}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    setDraftState(
+                      initialInspectorDraftState({
+                        baseDraft,
+                        baseKey: draftKey,
+                        identityKey: draftIdentityKey,
+                      }),
+                    );
+                    setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
+                    setFeedback(null);
+                  }}
+                >
+                  Revert
+                </Button>
+              </div>
+              {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
+            </InspectorSection>
+          ) : null}
+        </TabsContent>
+      </Tabs>
+    </div>
   );
 }

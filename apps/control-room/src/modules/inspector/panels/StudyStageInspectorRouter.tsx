@@ -3,6 +3,7 @@
 import { Accordion } from "@/shared/ui/Accordion";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 
 import { validateStudyStageDraft } from "./StudyStageAuthoringModel";
 import { useStudyInspectorPanelController } from "./StudyInspectorPanel";
@@ -54,6 +55,30 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
       .filter((issue) => issue.index === selectedIndex)
       .map(({ message, severity }) => ({ message, severity })),
   ];
+  const workflowValidation = validateStudyWorkflow(state.stageDrafts);
+  const allStageValidation = state.stageDrafts.flatMap((stageDraft, index) => [
+    ...validateStudyStageDraft(stageDraft, {
+      algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+      backend: model.requested.backend,
+      demagEnabled: state.globalDraft.demagEnabled,
+      device: model.requested.device,
+      mode: model.requested.mode,
+      precision: state.globalDraft.requestedPrecision,
+    }),
+    ...workflowValidation.flatMap(({ index: issueIndex, message, severity }) =>
+      issueIndex === index ? [{ message, severity }] : [],
+    ),
+  ]);
+  useRegisterInspectorEditSession(
+    "staged",
+    state.authoringBusy,
+    JSON.stringify(state.stageDrafts) !==
+      JSON.stringify(state.baselineStageDrafts),
+    !allStageValidation.some((issue) => issue.severity === "error"),
+    state.authoringBusy ? "Study stage changes are being saved." : undefined,
+    commitStageDrafts,
+    () => dispatch({ type: "revertStageDrafts" }),
+  );
   const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
   const inspectorKind = resolveStudyStageInspectorKind(selection.kind, selectedStageKind);
   const frequencyDomainAuthoringView =

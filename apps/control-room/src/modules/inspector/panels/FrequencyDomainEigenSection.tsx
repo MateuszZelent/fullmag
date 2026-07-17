@@ -1,31 +1,49 @@
 "use client";
 
-import React from "react";
-import { type InspectorPanelProps } from "../inspectorRegistry";
+import type { InspectorPanelProps } from "../inspectorTypes";
 import { InspectorSection } from "../primitives/InspectorSection";
 import { FieldRow } from "../primitives/FieldRow";
 import { Button } from "@/shared/ui/Button";
-import { Activity } from "lucide-react";
 import {
   formatBoolean,
-  formatRecordField,
   formatScalar,
   isExactFrequencyDomainKind,
   modePointKey,
-  modePointLabel,
 } from "./frequency-domain/FrequencyDomainHelpers";
+import type { FrequencyDomainInspectorState } from "./FrequencyDomainInspectorPanel";
+import {
+  useFrequencyDomainEigenBranchesResource,
+  useFrequencyDomainEigenDispersionResource,
+  useFrequencyDomainEigenSpectrumResource,
+  useFrequencyDomainManifestResource,
+} from "@/kernel/resources/studyRuntimeResources";
+
+type SpectrumResource = ReturnType<typeof useFrequencyDomainEigenSpectrumResource>;
+type BranchesResource = ReturnType<typeof useFrequencyDomainEigenBranchesResource>;
+type SpectrumMode = {
+  damping_factor?: number | null;
+  frequency_hz?: number | null;
+  mode_index: number;
+  sample_index?: number;
+};
+type EigenBranch = {
+  branch_id: string;
+  max_frequency_hz?: number | null;
+  min_frequency_hz?: number | null;
+  modes?: readonly unknown[];
+};
+type SpectrumData = { modes?: SpectrumMode[]; status?: string };
+type BranchesData = { branches?: EigenBranch[] };
+type DispersionData = { k_path?: readonly unknown[]; k_points?: readonly unknown[] };
 
 interface FrequencyDomainEigenSectionProps {
   selection: InspectorPanelProps["selection"];
-  inspectorState: any;
-  setInspectorState: (patch: any) => void;
-  data: any;
-  spectrum: any;
-  branches: any;
-  dispersion: any;
-  manifestPhysics: any;
-  plotSelectedSpectrumMode: (action: string) => void;
-  EIGEN_MODE_BROWSER_ACTIONS: any[];
+  inspectorState: FrequencyDomainInspectorState;
+  setInspectorState: (patch: Partial<FrequencyDomainInspectorState>) => void;
+  data: ReturnType<typeof useFrequencyDomainManifestResource>["data"];
+  spectrum: SpectrumResource;
+  branches: BranchesResource;
+  dispersion: ReturnType<typeof useFrequencyDomainEigenDispersionResource>;
 }
 
 export function FrequencyDomainEigenSection({
@@ -36,12 +54,12 @@ export function FrequencyDomainEigenSection({
   spectrum,
   branches,
   dispersion,
-  manifestPhysics,
-  plotSelectedSpectrumMode,
-  EIGEN_MODE_BROWSER_ACTIONS,
 }: FrequencyDomainEigenSectionProps) {
-  const { kind } = selection;
+  const kind = selection.kind ?? "";
   const { selectedEigenBranchId, selectedSpectrumModeKey } = inspectorState;
+  const spectrumData = spectrum.data as unknown as SpectrumData | null;
+  const branchesData = branches.data as unknown as BranchesData | null;
+  const dispersionData = dispersion.data as unknown as DispersionData | null;
 
   const showModalSolver = isExactFrequencyDomainKind(
     kind,
@@ -81,13 +99,8 @@ export function FrequencyDomainEigenSection({
     "results.frequency_domain.dispersion",
   );
 
-  const selectedEigenBranch = branches?.data?.branches?.find(
-    (branch: any) => branch.branch_id === selectedEigenBranchId,
-  );
-
-  const modalSpectrumModes = spectrum?.data?.modes ?? [];
-  const selectedSpectrumMode = modalSpectrumModes.find(
-    (mode: any) => modePointKey(mode) === selectedSpectrumModeKey,
+  const selectedEigenBranch = branchesData?.branches?.find(
+    (branch: EigenBranch) => branch.branch_id === selectedEigenBranchId,
   );
 
   return (
@@ -148,11 +161,19 @@ export function FrequencyDomainEigenSection({
         <InspectorSection title="Bloch k-Path Parameters" badge={dispersion.status}>
           <FieldRow
             label="Reciprocal path"
-            value={dispersion.data ? String(dispersion.data.k_path.length) : "not loaded"}
+            value={
+              dispersionData
+                ? String(dispersionData.k_path?.length ?? 0)
+                : "not loaded"
+            }
           />
           <FieldRow
             label="k-point count"
-            value={dispersion.data ? String(dispersion.data.k_points.length) : "not loaded"}
+            value={
+              dispersionData
+                ? String(dispersionData.k_points?.length ?? 0)
+                : "not loaded"
+            }
           />
           <FieldRow
             label="Selected branch"
@@ -166,9 +187,9 @@ export function FrequencyDomainEigenSection({
                 }
               >
                 <option value="">(all branches)</option>
-                {branches.data?.branches.map((branch: any) => (
+                {branchesData?.branches?.map((branch: EigenBranch) => (
                   <option key={branch.branch_id} value={branch.branch_id}>
-                    {branch.branch_id} ({branch.modes.length} modes)
+                    {branch.branch_id} ({branch.modes?.length ?? 0} modes)
                   </option>
                 ))}
               </select>
@@ -176,7 +197,7 @@ export function FrequencyDomainEigenSection({
           />
           {selectedEigenBranch ? (
             <>
-              <FieldRow label="Branch modes" value={String(selectedEigenBranch.modes.length)} />
+              <FieldRow label="Branch modes" value={String(selectedEigenBranch.modes?.length ?? 0)} />
               <FieldRow
                 label="Branch frequency"
                 value={`${formatScalar(selectedEigenBranch.min_frequency_hz, " Hz")} to ${formatScalar(selectedEigenBranch.max_frequency_hz, " Hz")}`}
@@ -186,8 +207,8 @@ export function FrequencyDomainEigenSection({
         </InspectorSection>
       ) : null}
 
-      {spectrum.data?.modes && spectrum.data.modes.length > 0 ? (
-        <InspectorSection title="Modal Spectrum" badge={spectrum.data?.status ?? spectrum.status}>
+      {spectrumData?.modes && spectrumData.modes.length > 0 ? (
+        <InspectorSection title="Modal Spectrum" badge={spectrumData.status ?? spectrum.status}>
           <div className="fm-frequency-domain-table-wrap">
             <table className="fm-frequency-domain-table">
               <thead>
@@ -199,8 +220,11 @@ export function FrequencyDomainEigenSection({
                 </tr>
               </thead>
               <tbody>
-                {spectrum.data.modes.map((mode: any) => {
-                  const key = modePointKey(mode);
+                {spectrumData.modes.map((mode: SpectrumMode) => {
+                  const key = modePointKey({
+                    rawModeIndex: mode.mode_index,
+                    sampleIndex: mode.sample_index ?? 0,
+                  });
                   const isSelected = key === selectedSpectrumModeKey;
                   return (
                     <tr key={key} data-selected={isSelected ? "true" : undefined}>
@@ -228,22 +252,6 @@ export function FrequencyDomainEigenSection({
         </InspectorSection>
       ) : null}
 
-      {dispersion.data && (
-        <InspectorSection title="Dispersion Chart" badge={dispersion.status}>
-          <div className="fm-frequency-domain-chart">
-            <div className="fm-frequency-domain-chart__header">
-              <span>Dispersion Chart</span>
-              <small>{dispersion.data.k_points.length} points</small>
-            </div>
-            <div className="fm-frequency-domain-chart__canvas">
-              <div className="flex items-center justify-center h-full text-muted-foreground">
-                <Activity className="mr-2 animate-pulse" size={16} />
-                Dispersion curves plotted.
-              </div>
-            </div>
-          </div>
-        </InspectorSection>
-      )}
     </>
   );
 }

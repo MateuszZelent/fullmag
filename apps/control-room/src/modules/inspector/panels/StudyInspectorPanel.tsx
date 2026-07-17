@@ -77,6 +77,7 @@ import {
 } from "@/shared/ui/Dialog";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
@@ -119,6 +120,8 @@ interface StudyInspectorPanelState {
     message: string;
   } | null;
   authoringFeedbackScope: "global" | "stages" | null;
+  baselineGlobalDraft: StudyGlobalDraft;
+  baselineStageDrafts: StudyStageDraft[];
   draftSceneRevision: number | string | null;
   draftSceneSignature: string;
   globalDraft: StudyGlobalDraft;
@@ -145,6 +148,10 @@ type StudyInspectorPanelAction =
       selectedIndex: number;
       signature: string;
     }
+  | { type: "acceptGlobalDraft" }
+  | { type: "acceptStageDrafts" }
+  | { type: "revertGlobalDraft" }
+  | { type: "revertStageDrafts" }
   | {
       type: "updateGlobalDraft";
       patch: Partial<StudyGlobalDraft>;
@@ -183,6 +190,8 @@ const STUDY_INSPECTOR_INITIAL_STATE: StudyInspectorPanelState = {
   authoringDraftsInitialized: false,
   authoringFeedback: null,
   authoringFeedbackScope: null,
+  baselineGlobalDraft: createStudyGlobalDraft(null),
+  baselineStageDrafts: [],
   draftSceneRevision: null,
   draftSceneSignature: "",
   globalDraft: createStudyGlobalDraft(null),
@@ -219,11 +228,35 @@ function studyInspectorPanelReducer(
         authoringDraftsInitialized: true,
         authoringFeedback: null,
         authoringFeedbackScope: null,
+        baselineGlobalDraft: action.globalDraft,
+        baselineStageDrafts: action.drafts,
         draftSceneRevision: action.revision,
         draftSceneSignature: action.signature,
         globalDraft: action.globalDraft,
         selectedDraftIndex: action.selectedIndex,
         stageDrafts: action.drafts,
+      };
+    case "acceptGlobalDraft":
+      return { ...state, baselineGlobalDraft: state.globalDraft };
+    case "acceptStageDrafts":
+      return { ...state, baselineStageDrafts: state.stageDrafts };
+    case "revertGlobalDraft":
+      return {
+        ...state,
+        authoringFeedback: null,
+        authoringFeedbackScope: null,
+        globalDraft: state.baselineGlobalDraft,
+      };
+    case "revertStageDrafts":
+      return {
+        ...state,
+        authoringFeedback: null,
+        authoringFeedbackScope: null,
+        selectedDraftIndex: clampIndex(
+          state.selectedDraftIndex,
+          state.baselineStageDrafts,
+        ),
+        stageDrafts: state.baselineStageDrafts,
       };
     case "updateGlobalDraft":
       return {
@@ -662,7 +695,7 @@ export function useStudyInspectorPanelController(
           message: errors.map((issue) => issue.message).join(" "),
         },
       });
-      return;
+      return false;
     }
 
     dispatch({ type: "setAuthoringBusy", busy: true });
@@ -684,6 +717,8 @@ export function useStudyInspectorPanelController(
           message: `Committed ${state.stageDrafts.length} study stage${state.stageDrafts.length === 1 ? "" : "s"}.`,
         },
       });
+      dispatch({ type: "acceptStageDrafts" });
+      return true;
     } catch (error) {
       dispatch({
         type: "setAuthoringFeedback",
@@ -696,6 +731,7 @@ export function useStudyInspectorPanelController(
               : "Failed to commit study stages.",
         },
       });
+      return false;
     } finally {
       dispatch({ type: "setAuthoringBusy", busy: false });
     }
@@ -715,7 +751,7 @@ export function useStudyInspectorPanelController(
           message: errors.map((issue) => issue.message).join(" "),
         },
       });
-      return;
+      return false;
     }
 
     dispatch({ type: "setAuthoringBusy", busy: true });
@@ -737,6 +773,8 @@ export function useStudyInspectorPanelController(
           message: "Committed global study settings.",
         },
       });
+      dispatch({ type: "acceptGlobalDraft" });
+      return true;
     } catch (error) {
       dispatch({
         type: "setAuthoringFeedback",
@@ -749,6 +787,7 @@ export function useStudyInspectorPanelController(
               : "Failed to commit global study settings.",
         },
       });
+      return false;
     } finally {
       dispatch({ type: "setAuthoringBusy", busy: false });
     }
@@ -811,6 +850,45 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     stageExecution,
     state,
   } = useStudyInspectorPanelController(selection);
+  const globalValidation = validateStudyGlobalDraft(state.globalDraft, {
+    algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+  });
+  const workflowValidation = validateStudyWorkflow(state.stageDrafts);
+  const stageValidation = state.stageDrafts.flatMap((draft, index) => [
+    ...validateStudyStageDraft(draft, {
+      algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+      backend: model.requested.backend,
+      demagEnabled: state.globalDraft.demagEnabled,
+      device: model.requested.device,
+      mode: model.requested.mode,
+      precision: state.globalDraft.requestedPrecision,
+    }),
+    ...workflowValidation.flatMap(({ index: issueIndex, message, severity }) =>
+      issueIndex === index ? [{ message, severity }] : [],
+    ),
+  ]);
+  const globalDirty =
+    JSON.stringify(state.globalDraft) !== JSON.stringify(state.baselineGlobalDraft);
+  const stagesDirty =
+    JSON.stringify(state.stageDrafts) !== JSON.stringify(state.baselineStageDrafts);
+  useRegisterInspectorEditSession(
+    "staged",
+    state.authoringBusy,
+    globalDirty || stagesDirty,
+    ![...globalValidation, ...stageValidation].some(
+      (issue) => issue.severity === "error",
+    ),
+    state.authoringBusy ? "Study changes are being saved." : undefined,
+    async () => {
+      if (globalDirty && !(await commitGlobalDraft())) return false;
+      if (stagesDirty && !(await commitStageDrafts())) return false;
+      return true;
+    },
+    () => {
+      dispatch({ type: "revertGlobalDraft" });
+      dispatch({ type: "revertStageDrafts" });
+    },
+  );
 
   return (
     <>

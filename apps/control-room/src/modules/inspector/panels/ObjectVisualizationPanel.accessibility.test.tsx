@@ -95,9 +95,8 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
     expect(html).toContain('role="radiogroup"');
     expect(html).toContain('aria-label="Projection"');
     expect(html).toContain('aria-label="Vector coloring"');
-    expect(html).toContain('role="radio"');
-    expect(html).toContain('aria-checked="true"');
-    expect(html).toContain('aria-checked="false"');
+    expect(html).toContain('type="radio"');
+    expect(html).toContain('checked=""');
   });
 
   it("moves radio selection with horizontal arrow keys", () => {

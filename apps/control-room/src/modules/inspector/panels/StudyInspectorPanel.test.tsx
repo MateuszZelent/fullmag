@@ -908,7 +908,7 @@ describe("StudyInspectorPanel", () => {
       />,
     );
 
-    expect(html).toContain("Minor loop branches");
+    expect(html).toContain("Minor loops");
     expect(html).toContain("Loop 1");
     expect(html).toContain("Reversal field");
     expect(html).toContain("Return field");
@@ -946,7 +946,7 @@ describe("StudyInspectorPanel", () => {
       />,
     );
 
-    expect(html).toContain("Settle tree branches");
+    expect(html).toContain("Settle branches");
     expect(html).toContain("Branch 1");
     expect(html).toContain("Branch ID");
     expect(html).toContain("Trigger");

@@ -1,4 +1,3 @@
-import { createElement } from "react";
 import {
   FileText,
   Save,
@@ -9,7 +8,6 @@ import {
   Columns2,
   Monitor,
   PanelRight,
-  RotateCcw,
   Play,
   Pause,
   SkipForward,
@@ -26,27 +24,23 @@ import {
   Move3D,
   Download,
   Triangle,
-  Move,
   BoxSelect,
   Activity,
   Blend,
   Maximize2,
 } from "lucide-react";
 
-import type { RibbonTabContent, RibbonMenuNode, RibbonAction } from "./ribbonTypes";
+import type { RibbonTabContent } from "./ribbonTypes";
 import {
   icon,
   C,
   menu,
-  radioMenu,
-  separator,
 } from "./ribbonCommon";
-
-import { RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND } from "./ribbonCommands";
 
 import {
   isMagneticOnlyQuantityId,
 } from "@/kernel/api/quantityIds";
+import { RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND } from "./ribbonCommands";
 
 import type {
   VisualizationStatePatch,

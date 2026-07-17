@@ -380,7 +380,7 @@ export function HysteresisSettleBranchesEditor({
   return (
     <div className="fm-inspector-form-section">
       <div className="fm-inspector-form-section__header">
-        <strong>Settle tree branches</strong>
+        <strong>Settle branches</strong>
       </div>
       {branches.map((branch, index) => (
         <div
@@ -485,7 +485,7 @@ export function HysteresisMinorLoopsEditor({
   return (
     <div className="fm-inspector-form-section">
       <div className="fm-inspector-form-section__header">
-        <strong>Minor loop branches</strong>
+        <strong>Minor loops</strong>
       </div>
       {loops.map((loop, index) => (
         <div
@@ -810,7 +810,6 @@ export function HysteresisDenseWindowsEditor({
 }
 
 export function HysteresisSettleAlgorithmsEditor({
-  algorithmsAvailable = [],
   draft,
   onUpdate,
 }: {
@@ -991,7 +990,7 @@ export function HysteresisSettleAlgorithmsEditor({
             >
               {hysteresisSettleMethodOptions(stepKind).map((option) => (
                 <option key={option} value={option}>
-                  {option}
+                  {hysteresisSettleMethodLabel(option)}
                 </option>
               ))}
             </FormField>
@@ -1200,7 +1199,7 @@ export function parseHysteresisSettleSteps(value: string | null | undefined): Hy
         return step;
       });
     }
-  } catch (_err) {
+  } catch {
     // Return default fallback below
   }
   return [{ ...DEFAULT_RELAX_SETTLE_STEP, step_id: "relax-1" }];
@@ -1464,10 +1463,6 @@ function copyDefinedSettleStepValue(
   }
 }
 
-function defaultHysteresisSettleMethod(kind?: string): string {
-  return kind === "minimize" ? "projected_gradient_bb" : "llg_overdamped";
-}
-
 function hysteresisSettleMethodOptions(kind?: string) {
   if (kind === "minimize") {
     return [
@@ -1485,6 +1480,10 @@ function hysteresisSettleMethodOptions(kind?: string) {
     ];
   }
   return ["llg_overdamped", "llg_critically_damped", "direct_relaxation"];
+}
+
+function hysteresisSettleMethodLabel(method: string): string {
+  return method === "projected_gradient_bb" ? "Projected gradient BB" : method;
 }
 
 function formatHysteresisSettleJsonishValue(value: unknown): string {

@@ -29,6 +29,7 @@
     "smoke:airbox-field-routing": "node scripts/smoke-airbox-field-routing.mjs",
     "smoke:study-authoring-ui": "node scripts/smoke-study-authoring-ui.mjs",
     "smoke:study-runtime-control": "node scripts/smoke-study-runtime-control.mjs",
+    "smoke:inspector": "node scripts/smoke-inspector.mjs",
     "smoke:analysis-plots": "node scripts/smoke-analysis-plots.mjs",
     "screenshot:viewport-3d": "node scripts/screenshot-viewport-3d.mjs",
     "smoke:viewport-3d": "node scripts/smoke-viewport-3d.mjs",

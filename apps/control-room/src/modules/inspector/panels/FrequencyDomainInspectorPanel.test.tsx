@@ -4163,30 +4163,6 @@ describe("FrequencyDomainInspectorPanel", () => {
         "Canonical stage draft",
       ],
     ],
-    [
-      "study.stage.frequency_response.excitation",
-      [
-        "Frequency Response excitation authoring",
-        "Drive vector hx",
-        "Drive vector hy",
-        "Drive vector hz",
-        "Drive phase",
-        "Phasor convention",
-        "Canonical stage draft",
-      ],
-    ],
-    [
-      "study.stage.frequency_response.sweep",
-      [
-        "Frequency Response sweep authoring",
-        "Explicit frequency list",
-        "Start frequency",
-        "Stop frequency",
-        "Frequency samples",
-        "Stored values_hz",
-        "Canonical stage draft",
-      ],
-    ],
   ] as const)("renders a canonical authoring panel for %s", (kind, expectedLabels) => {
     const selection: Selection = {
       kind,
@@ -4256,31 +4232,6 @@ describe("FrequencyDomainInspectorPanel", () => {
         "Status",
       ],
     ],
-    [
-      "study.stage.frequency_response.excitation",
-      [
-        "Excitation Workflow",
-        "Drive type",
-        "Drive amplitude",
-        "Drive phase",
-        "Drive axis",
-        "Drive projection",
-        "Canonical stage draft",
-      ],
-    ],
-    [
-      "study.stage.frequency_response.sweep",
-      [
-        "Frequency Sweep Workflow",
-        "Sweep type",
-        "Start frequency",
-        "Stop frequency",
-        "Frequency samples",
-        "Spacing",
-        "Partial artifact policy",
-        "Canonical stage draft",
-      ],
-    ],
   ] as const)("renders authoring controls for %s", (kind, expectedLabels) => {
     const selection: Selection = {
       kind,
@@ -4304,6 +4255,39 @@ describe("FrequencyDomainInspectorPanel", () => {
     for (const label of expectedLabels) {
       expect(html).toContain(label);
     }
+  });
+
+  it.each([
+    "study.stage.frequency_response.excitation",
+    "study.stage.frequency_response.sweep",
+  ] as const)("keeps %s as metadata-only fallback outside the canonical Study router", (kind) => {
+    const selection: Selection = {
+      kind,
+      label: kind,
+      moduleSource: "explorer",
+      nodeId: `test:${kind}`,
+      objectId: null,
+      ref: {
+        kind,
+        nodeId: `test:${kind}`,
+        stageId: "stage-frequency-domain",
+        stageIndex: 0,
+        type: "study-stage",
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <FrequencyDomainInspectorPanel selection={selection} />,
+    );
+
+    expect(html).toContain("Node focus");
+    expect(html).toContain("Node resource");
+    expect(html).toContain("Visualization contract");
+    expect(html).not.toContain("Use the Study stage inspector draft editor");
+    expect(html).not.toContain("Frequency Response excitation authoring");
+    expect(html).not.toContain("Frequency Response sweep authoring");
+    expect(html).not.toContain("Excitation Workflow");
+    expect(html).not.toContain("Frequency Sweep Workflow");
   });
 
   it.each([

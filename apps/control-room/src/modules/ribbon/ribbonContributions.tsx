@@ -16,7 +16,6 @@ import {
   Disc,
   Download,
   Eye,
-  FileText,
   FlaskConical,
   Focus,
   FunctionSquare,
@@ -33,7 +32,6 @@ import {
   Move,
   Move3D,
   MousePointer2,
-  PanelRight,
   Pause,
   Play,
   Plus,
@@ -53,7 +51,6 @@ import {
   Upload,
   Zap,
 } from "lucide-react";
-import { createElement } from "react";
 
 import {
   MESHING_CAPABILITIES_PATH,
@@ -70,7 +67,6 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import {
-  isMagneticOnlyQuantityId,
   isScalarSpatialQuantityId,
   normalizeQuantityIdOrDefault,
   sameQuantityId,
@@ -98,7 +94,6 @@ import {
   type VisualizationColorMode,
   type VisualizationGeometryScope,
   type VisualizationRenderMode,
-  type VisualizationTargetKind,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
 } from "@/kernel/visualization/ObjectVisualizationController";
@@ -119,7 +114,6 @@ import {
   statusMenu,
 } from "./ribbonCommon";
 import {
-  RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
   RIBBON_PHYSICS_SELECT_INTERACTION_COMMAND,
   RIBBON_SELECTION_FOCUS_AIRBOX_COMMAND,
   RIBBON_VISUALIZATION_APPLY_GLOBAL_QUANTITY_COMMAND,

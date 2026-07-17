@@ -791,6 +791,12 @@ function installInteractiveTestDom(): {
   const previous = new Map<string, PropertyDescriptor | undefined>();
   const document = new TestDocument();
   class TestHtmlIFrameElement extends TestElement {}
+  const getComputedStyle = () => ({ direction: "ltr" });
+  const requestAnimationFrame = (callback: FrameRequestCallback) => {
+    callback(0);
+    return 1;
+  };
+  const cancelAnimationFrame = () => undefined;
   const window = {
     document,
     Element: TestElement,
@@ -799,6 +805,9 @@ function installInteractiveTestDom(): {
     HTMLIFrameElement: TestHtmlIFrameElement,
     KeyboardEvent: TestEvent,
     Node: TestNode,
+    cancelAnimationFrame,
+    getComputedStyle,
+    requestAnimationFrame,
     addEventListener() {},
     removeEventListener() {},
   };
@@ -810,6 +819,9 @@ function installInteractiveTestDom(): {
     HTMLElement: TestElement,
     KeyboardEvent: TestEvent,
     Node: TestNode,
+    cancelAnimationFrame,
+    getComputedStyle,
+    requestAnimationFrame,
     window,
     IS_REACT_ACT_ENVIRONMENT: true,
   })) {

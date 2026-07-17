@@ -576,25 +576,15 @@ describe("scoped mesh quality panels", () => {
     expect(html).toContain("region:film:core");
   });
 
-  it("renders object quality histograms in the object mesh panel", () => {
+  it("keeps object mesh diagnostics unmounted while Overview is active", () => {
     const html = renderToStaticMarkup(
       <ObjectMeshPolicyPanel selection={objectSelection} />,
     );
 
-    expect(html).toContain("Object Quality Distributions");
-    expect(html).toContain("SICN");
-    expect(html).toContain("Gamma");
-    expect(html).toContain("Below target");
-    expect(html).toContain("Element size distributions");
-    expect(html).toContain("Tetra size");
-    expect(html).toContain("object:waveguide");
-    expect(html).toContain("Size from curvature");
-    expect(html).toContain("Narrow regions");
-    expect(html).toContain("Object Core Relaxation");
-    expect(html).toContain("Core maximum element size");
-    expect(html).toContain("Edge distance");
-    expect(html).toContain("Size-field kinds");
-    expect(html).toContain("ObjectCoreRelaxation");
+    expect(html).toContain("Object Mesh Policy");
+    expect(html).toContain("Effective Target");
+    expect(html).not.toContain("Object Quality Distributions");
+    expect(html).not.toContain("Object Core Relaxation");
   });
 
   it("warns when object mesh policy edits are not applied", () => {
