@@ -96,6 +96,20 @@ fn auto_sampling_uses_maximum_active_sinc_cutoff_with_guard() {
 }
 
 #[test]
+fn auto_sampling_accepts_all_time_evolution_drive_for_anonymous_run_stage() {
+    let mut problem = auto_sampling_problem(&[3.0e9], Some("run-1"));
+    problem.field_drives[0].activation = DriveActivationIR::AllTimeEvolution {};
+
+    let resolution = resolve_auto_sampling_for_stage(&mut problem)
+        .expect("all-time-evolution drive must be active for an anonymous Run stage")
+        .expect("automatic policy should produce provenance");
+
+    assert_eq!(resolution.maximum_cutoff_hz, 3.0e9);
+    assert_eq!(resolution.source_drive_ids, ["drive-1"]);
+    assert_eq!(resolution.target_stage_id, "run-1");
+}
+
+#[test]
 fn auto_sampling_filters_disabled_inactive_and_non_sinc_drives() {
     let mut problem = auto_sampling_problem(&[3.0e9, 5.0e9], Some("excite"));
     problem.field_drives[0].enabled = false;

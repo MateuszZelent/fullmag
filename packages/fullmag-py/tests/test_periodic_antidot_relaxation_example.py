@@ -330,7 +330,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         )
         self.assertEqual(
             payload["stages"][5]["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"],
-            "excite",
+            "run-1",
         )
 
         self.assertEqual(payload["ir"]["field_drives"], [])
@@ -342,7 +342,7 @@ class PeriodicAntidotRelaxationExampleTests(unittest.TestCase):
         self.assertEqual(drive["waveform"]["kind"], "sinc_pulse")
         self.assertEqual(
             drive["activation"],
-            {"kind": "stage_ids", "stage_ids": ["excite"]},
+            {"kind": "all_time_evolution"},
         )
         self.assertEqual(
             [drive["id"] for drive in payload["stages"][5]["ir"]["field_drives"]],
