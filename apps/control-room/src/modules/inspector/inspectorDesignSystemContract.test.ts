@@ -201,4 +201,18 @@ describe("Inspector design-system reference contract", () => {
     expect(panel).toContain("InspectorGroup");
     expect(panel).not.toMatch(/<\/?InspectorSection\b/);
   });
+
+  it.each([
+    "RunStageInspector.tsx",
+    "AutosaveStageInspector.tsx",
+    "TableAutosaveStageInspector.tsx",
+    "FftResponseStageInspector.tsx",
+    "AddFieldDriveStageInspector.tsx",
+    "FrequencyDomainCalculationModeSection.tsx",
+  ])("keeps stages/%s controls on compact Inspector groups", (fileName) => {
+    const panel = read(`src/modules/inspector/panels/stages/${fileName}`);
+
+    expect(panel).toContain("InspectorGroup");
+    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
+  });
 });

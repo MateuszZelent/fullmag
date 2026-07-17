@@ -2,7 +2,7 @@
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { regionalFieldDriveSamplingContext } from "../RegionalFieldDrivePanelModel";
 import { StudyProgressBar } from "../StudyProgressBar";
 import type { StudyStageDraft } from "../StudyStageAuthoringModel";
@@ -36,8 +36,7 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
   return (
     <>
       <StageInspectorFrame {...props} expectedKind="run" kindLabel="Run" />
-      <InspectorSection
-        value="run-progress"
+      <InspectorGroup
         title="Run Progress"
         badge={stage?.status ?? "not started"}
       >
@@ -66,10 +65,9 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
           value={stage?.runtimeMetric?.threshold ?? "not available"}
         />
         <FieldRow label="Stop reason" value={stage?.stopReason ?? "not available"} />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="run-time-integration"
+      <InspectorGroup
         title="Time Integration"
         badge={stage?.status ?? "draft"}
       >
@@ -94,9 +92,9 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
           }
         />
         <FieldRow label="Dynamics" value="full LLG time evolution" />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection value="run-drive" title="Drive & Dynamics">
+      <InspectorGroup title="Drive & Dynamics">
         <FieldRow label="Start state" value="current magnetization state" />
         <FieldRow
           label="Active antenna"
@@ -106,10 +104,9 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
           label="Field evaluation"
           value="all currently active drives are evaluated by the time solver"
         />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="run-workflow-state"
+      <InspectorGroup
         title="Active Autosave & FFT State"
         badge={workflow.tableAutosave ? "sampling enabled" : "sampling disabled"}
       >
@@ -167,9 +164,9 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
         <p className="fm-sinc-preview__message fm-sinc-preview__message--ready">
           Effective state is resolved strictly from preceding workflow stages. This Run does not own or silently modify autosave, table sampling, or FFT analysis.
         </p>
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection value="run-results" title="Run Results">
+      <InspectorGroup title="Run Results">
         <FieldRow label="Status" value={stage?.status ?? "not started"} />
         <FieldRow
           label="Elapsed"
@@ -180,7 +177,7 @@ export function RunStageInspector(props: StageInspectorFrameProps) {
           label="Artifacts"
           value={stage?.artifactRefs.length ? stage.artifactRefs.join(", ") : "none"}
         />
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }

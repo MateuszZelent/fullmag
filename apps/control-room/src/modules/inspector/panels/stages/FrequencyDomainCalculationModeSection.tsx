@@ -7,7 +7,7 @@ import { useFrequencyDomainManifestResource } from "@/kernel/resources/studyRunt
 import { Button } from "@/shared/ui/Button";
 
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   buildFrequencyDomainCalculationModeRows,
   type FrequencyDomainCalculationModeRow,
@@ -54,8 +54,7 @@ export function FrequencyDomainCalculationModeSection({
       : validation.map((issue) => `${issue.severity}: ${issue.message}`).join("; ");
 
   return (
-    <InspectorSection
-      value={`${family}-calculation-mode`}
+    <InspectorGroup
       title={
         family === "eigenmodes"
           ? "Eigenmodes Calculation Mode"
@@ -161,7 +160,7 @@ export function FrequencyDomainCalculationModeSection({
           Validate requirements
         </Button>
       </div>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

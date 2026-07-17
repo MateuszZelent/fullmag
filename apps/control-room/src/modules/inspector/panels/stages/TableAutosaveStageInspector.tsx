@@ -3,7 +3,7 @@
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
@@ -37,8 +37,7 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
         expectedKind="table_autosave"
         kindLabel="Table Autosave"
       />
-      <InspectorSection
-        value="table-autosave-state"
+      <InspectorGroup
         title="Table Autosave State"
         badge={draft?.tableAutosave.enabled ? "ON" : "OFF"}
       >
@@ -128,10 +127,9 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
             message="This imported table sampling policy is unsupported by the editor. Its payload is preserved losslessly and remains read-only."
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="table-autosave-fft-clock"
+      <InspectorGroup
         title="Response FFT Clock"
         badge={nextRun?.stageId ?? "no following Run"}
       >
@@ -144,7 +142,7 @@ export function TableAutosaveStageInspector(props: StageInspectorFrameProps) {
         <p className="fm-sinc-preview__message fm-sinc-preview__message--ready">
           FFT parameters use the half-open clock t_n = n t_sampling, t_n &lt; T, for the next Run. Runtime certification still uses the timestamps actually written.
         </p>
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }

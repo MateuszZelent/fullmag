@@ -3,7 +3,7 @@
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
@@ -36,8 +36,7 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
         expectedKind="fft_response"
         kindLabel="FFT Response"
       />
-      <InspectorSection
-        value="fft-response-state"
+      <InspectorGroup
         title="Gamma Response FFT"
         badge={draft?.fftResponse.enabled ? "ON" : "OFF"}
       >
@@ -123,10 +122,9 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
             message="This imported analysis request is unsupported by the Gamma editor. Its payload is preserved losslessly and remains read-only."
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="fft-response-clock"
+      <InspectorGroup
         title="Effective Response Clock"
         badge={effectiveSampling?.sourceStageId ?? "missing t_sampling"}
       >
@@ -145,7 +143,7 @@ export function FftResponseStageInspector(props: StageInspectorFrameProps) {
             message="FFT response needs a preceding Table autosave ON instruction to define t_sampling. The workflow remains invalid until that stage is added or enabled."
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }

@@ -3,7 +3,7 @@
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
@@ -38,8 +38,7 @@ export function AutosaveStageInspector(props: StageInspectorFrameProps) {
         expectedKind="autosave"
         kindLabel="Autosave"
       />
-      <InspectorSection
-        value="autosave-state"
+      <InspectorGroup
         title="Autosave Output State"
         badge={draft?.autosave.enabled ? "ON" : "OFF"}
       >
@@ -177,7 +176,7 @@ export function AutosaveStageInspector(props: StageInspectorFrameProps) {
         {draft?.autosave.enabled ? (
           <SamplingDiagnostics durationS={durationS} sampling={effectiveOutput} />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }

@@ -12,7 +12,7 @@ import { buildSincPulsePreview } from "@/shared/domain/physics/sincPulsePreview"
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   regionalFieldDriveSamplingContext,
   regionalFieldDriveSelectorOptions,
@@ -85,8 +85,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         expectedKind="add_field_drive"
         kindLabel="Add Antenna"
       />
-      <InspectorSection
-        value="add-field-drive"
+      <InspectorGroup
         title="Regional Field Drive"
         badge="configuration instruction"
       >
@@ -354,10 +353,9 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             ) : null}
           </>
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="add-field-waveform"
+      <InspectorGroup
         title="Waveform & Source FFT"
         badge={drive?.waveform.kind ?? "not configured"}
       >
@@ -572,10 +570,9 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             />
           </label>
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="add-field-activation"
+      <InspectorGroup
         title="Activation & State Handoff"
         badge={samplingRun?.stageId ?? "no following run"}
       >
@@ -638,7 +635,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             message="Add a following Run instruction. The antenna changes configuration but time integration starts only in that next action."
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }
