@@ -23,6 +23,10 @@ import {
   type VisualizationDebugEvidenceActionEnvironment,
 } from "./visualizationDebugExport";
 
+vi.mock("@/shared/ui/Slider", () => ({
+  Slider: () => null,
+}));
+
 describe("VisualizationDebugPanel mounted interaction", () => {
   afterEach(() => {
     vi.useRealTimers();

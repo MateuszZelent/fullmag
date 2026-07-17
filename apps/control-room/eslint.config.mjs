@@ -13,6 +13,7 @@ const eslintConfig = defineConfig([
     ".fullmag/**",
     "out/**",
     "build/**",
+    "storybook-static/**",
     "next-env.d.ts",
     "target-host/**",
   ]),

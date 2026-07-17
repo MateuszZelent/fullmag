@@ -1,6 +1,6 @@
 .fm-inspector__body {
   min-height: 0;
-  padding: var(--fm-space-3);
+  padding: var(--fm-inspector-group-gap) var(--fm-inspector-padding-inline);
 }
 
 .fm-inspector__empty {
@@ -15,7 +15,7 @@
 /* ── Panel container ── */
 .fm-inspector-panel {
   display: grid;
-  gap: var(--fm-space-3);
+  gap: var(--fm-inspector-group-gap);
 }
 
 
@@ -650,11 +650,15 @@
 /* ── Redesigned Inspector Shell ── */
 .fm-inspector {
   display: grid;
-  grid-template-rows: auto 40px minmax(0, 1fr) 56px;
+  grid-template-rows: auto 30px minmax(0, 1fr) 38px;
   height: 100%;
   min-height: 0;
   background: var(--fm-bg-panel);
   container-type: inline-size;
+}
+
+.fm-inspector:not(:has(> .fm-inspector__tabs)) {
+  grid-template-rows: auto minmax(0, 1fr) 38px;
 }
 
 .fm-inspector__header {
@@ -662,8 +666,8 @@
   align-items: stretch;
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-chrome);
-  padding: var(--fm-space-3) var(--fm-space-4);
-  gap: var(--fm-space-3);
+  padding: 8px var(--fm-inspector-padding-inline);
+  gap: 6px;
 }
 
 /* Breadcrumbs */
@@ -697,18 +701,18 @@
 .fm-inspector__identity {
   display: flex;
   align-items: center;
-  gap: var(--fm-space-3);
+  gap: 8px;
   min-width: 0;
 }
 
 .fm-inspector__identity-icon {
   display: grid;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   place-items: center;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
+  border-radius: var(--fm-radius-segment);
   background: var(--fm-bg-panel-raised);
   color: var(--fm-accent);
   box-shadow: var(--fm-shadow-sm);
@@ -724,7 +728,7 @@
 .fm-inspector__title {
   margin: 0;
   color: var(--fm-text-primary);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: -0.01em;
   overflow: hidden;
@@ -746,7 +750,7 @@
 .fm-inspector__metadata-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--fm-space-2) var(--fm-space-4);
+  gap: 4px 12px;
   margin: 0;
 }
 
@@ -775,7 +779,7 @@
 /* Fixed shell-owned tab row. */
 .fm-inspector__tabs {
   min-width: 0;
-  min-height: 40px;
+  min-height: 30px;
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-chrome);
 }
@@ -784,8 +788,8 @@
   display: grid;
   grid-template-columns: repeat(var(--fm-inspector-tab-count, 4), minmax(0, 1fr));
   width: 100%;
-  height: 40px;
-  padding: 0 var(--fm-space-3);
+  height: 30px;
+  padding: 0 var(--fm-inspector-padding-inline);
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -801,7 +805,7 @@
 
 .fm-inspector__tab-list .fm-tabs-trigger {
   min-width: 0;
-  height: 40px;
+  height: 30px;
   border-radius: 0;
 }
 
@@ -821,59 +825,6 @@
   padding: var(--fm-space-3);
 }
 
-/* Segmented controls (fm-radio-group) */
-.fm-radio-group {
-  display: flex;
-  align-items: center;
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-md);
-  background: var(--fm-bg-canvas);
-  padding: 2px;
-  width: 100%;
-}
-
-.fm-radio-item {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.fm-radio-item__input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  border: 0;
-}
-
-.fm-radio-item__label {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 32px;
-  border-radius: calc(var(--fm-radius-md) - 2px);
-  color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-xs);
-  font-weight: 560;
-  cursor: pointer;
-  user-select: none;
-  transition: background-color var(--fm-transition-fast), color var(--fm-transition-fast);
-}
-
-.fm-radio-item__label:hover {
-  color: var(--fm-text-primary);
-}
-
-.fm-radio-item__input:checked + .fm-radio-item__label {
-  background: var(--fm-accent);
-  color: var(--fm-bg-panel); /* high contrast tab text */
-}
-
 .fm-inspector__content {
   min-height: 0;
 }
@@ -887,8 +838,8 @@
   align-items: center;
   gap: var(--fm-space-2);
   min-width: 0;
-  min-height: 56px;
-  padding: var(--fm-space-2) var(--fm-space-3);
+  min-height: 38px;
+  padding: 6px var(--fm-inspector-padding-inline);
   border-top: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-chrome);
 }

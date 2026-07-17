@@ -9,15 +9,10 @@ const panelSource =
 
 describe("ObjectVisualizationPanel performance contracts", () => {
   it("stages range-field commits until interaction boundaries", () => {
-    expect(panelSource).toContain("pendingValueRef");
-    expect(panelSource).toContain("queuedDraftValueRef");
-    expect(panelSource).toContain("window.requestAnimationFrame");
-    expect(panelSource).toContain("window.cancelAnimationFrame");
+    expect(panelSource).toContain("draftOverride");
+    expect(panelSource).toContain("onValueChange");
+    expect(panelSource).toContain("onValueCommit");
     expect(panelSource).not.toContain("window.setTimeout(");
-    expect(panelSource).toContain("onPointerUp={flushDraft}");
-    expect(panelSource).toContain("onPointerCancel={flushDraft}");
-    expect(panelSource).toContain("onKeyUp={flushDraft}");
-    expect(panelSource).toContain("onBlur={flushDraft}");
   });
 
   it("uses the field catalog resource instead of session status field revisions", () => {
@@ -60,7 +55,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
   it("labels and keeps viewport-only rendering preferences out of pending backend transactions", () => {
     expect(panelSource).toContain("visualization.patchViewportPreferences(");
     expect(panelSource).toContain("viewportPreferencesPatch");
-    expect(panelSource).toContain("This viewport only");
+    expect(panelSource).toContain("Viewport-only settings");
   });
 
   it("disables every pass control while a target is hidden but preserves Visible and reset", () => {

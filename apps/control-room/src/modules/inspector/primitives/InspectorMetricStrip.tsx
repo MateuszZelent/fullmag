@@ -46,7 +46,7 @@ export function InspectorMetricStrip({
   return (
     <ul
       className={cn(
-        "fm-inspector-metric-strip m-0 grid min-w-0 list-none grid-cols-2 gap-x-5 gap-y-3 border-b border-fm-subtle p-0 pb-4",
+        "fm-inspector-metric-strip m-0 grid min-w-0 list-none grid-cols-2 gap-x-3 gap-y-1.5 border-b border-fm-subtle p-0 pb-2",
         className,
       )}
       data-count={metrics.length}
@@ -65,7 +65,7 @@ export function InspectorMetricStrip({
             </span>
             <span
               className={cn(
-                "mt-1 block min-w-0 truncate text-fm-control font-semibold leading-snug",
+                "mt-0.5 block min-w-0 truncate text-fm-control font-medium leading-tight",
                 toneClasses[tone],
               )}
               data-state={tone}

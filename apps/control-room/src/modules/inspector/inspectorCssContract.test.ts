@@ -22,7 +22,7 @@ describe("Inspector visual contract", () => {
       .join("\n");
 
     expect(css).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(/i);
-    expect(css).not.toMatch(/(?:min-)?height:\s*2[0-8]px/);
+    expect(css).not.toMatch(/(?:min-)?height:\s*2[0-5]px/);
     expect(css).not.toMatch(/gap:\s*[12]px(?:;|\s)/);
     expect(css.match(/^\.fm-inspector\s*\{/gm)).toHaveLength(1);
     expect(css.match(/^\.fm-inspector__header\s*\{/gm)).toHaveLength(1);

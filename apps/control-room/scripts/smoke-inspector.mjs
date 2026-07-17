@@ -59,7 +59,7 @@ try {
   await visualizationNode.click();
   await page.waitForTimeout(500);
 
-  const expectedTabs = ["Overview", "Properties", "Display", "Diagnostics"];
+  const expectedTabs = [];
   const tabLabels = await inspector.locator('[role="tab"]').allTextContents();
   assert(
     JSON.stringify(tabLabels) === JSON.stringify(expectedTabs),
@@ -122,16 +122,16 @@ try {
     };
   });
   assert(
-    geometry.labelSizes.length > 0 && geometry.labelSizes.every((size) => size >= 12),
+    geometry.labelSizes.length > 0 && geometry.labelSizes.every((size) => size >= 10.5),
     `Inspector field labels are too small: ${JSON.stringify(geometry.labelSizes)}`,
   );
   assert(
-    geometry.minControlHeight >= 32,
-    `Inspector control height is below 32px: ${JSON.stringify(geometry.controlHeights)}.`,
+    geometry.minControlHeight >= 26,
+    `Inspector control height is below 26px: ${JSON.stringify(geometry.controlHeights)}.`,
   );
   assert(
-    geometry.groupSpacing >= 12,
-    `Inspector group spacing is below 12px: ${geometry.groupSpacing}px.`,
+    geometry.groupSpacing >= 10,
+    `Inspector group spacing is below 10px: ${geometry.groupSpacing}px.`,
   );
   assert(
     geometry.groupShadows.every((shadow) => shadow === "none"),
@@ -215,10 +215,82 @@ try {
     element.scrollTop = 0;
   });
 
+  const surfaceDisclosure = overview
+    .locator('[data-slot="inspector-group-trigger"]')
+    .filter({ hasText: "Surface Coloring" });
+  await surfaceDisclosure.click();
+  await surfaceDisclosure.evaluate((element) => {
+    element.scrollIntoView({ block: "start" });
+  });
+  await page.waitForTimeout(100);
+  const surfaceFile = "visualization-surface-coloring-light-416.png";
+  await panel.screenshot({ path: resolve(outputDir, surfaceFile) });
+  screenshotFiles.push(surfaceFile);
+  await surfaceDisclosure.click();
+
+  const vectorsToggle = overview
+    .locator(".fm-visualization-toggle")
+    .filter({ hasText: /^Vectors$/ });
+  if ((await vectorsToggle.getAttribute("aria-pressed")) !== "true") {
+    await vectorsToggle.click();
+    await page.waitForTimeout(150);
+  }
+  const vectorsDisclosure = overview
+    .locator('[data-slot="inspector-group-trigger"]')
+    .filter({ hasText: "Vectors" });
+  await vectorsDisclosure.click();
+  await vectorsDisclosure.evaluate((element) => {
+    element.scrollIntoView({ block: "start" });
+  });
+  await page.waitForTimeout(100);
+  assert(
+    (await overview.locator(".fm-radio-group, .fm-visualization-range").count()) === 0,
+    "Vectors still renders legacy radio or range controls.",
+  );
+  const vectorSliders = overview.locator(
+    '[data-slot="visualization-number-control"]:visible',
+  );
+  assert((await vectorSliders.count()) >= 4, "Vectors must expose shared numeric sliders.");
+  const vectorSliderHeights = await vectorSliders.evaluateAll((elements) =>
+    elements.map((element) => element.getBoundingClientRect().height),
+  );
+  assert(
+    vectorSliderHeights.every((height) => height >= 28),
+    `Vector slider hit area is below 28px: ${JSON.stringify(vectorSliderHeights)}`,
+  );
+  const vectorsTopFile = "visualization-vectors-light-416.png";
+  await panel.screenshot({ path: resolve(outputDir, vectorsTopFile) });
+  screenshotFiles.push(vectorsTopFile);
+
+  const vectorThicknessSlider = overview.getByRole("slider", { name: "Thickness" });
+  const vectorThicknessRow = vectorThicknessSlider.locator(
+    'xpath=ancestor::*[@data-slot="inspector-property-row"]',
+  );
+  await vectorThicknessRow.evaluate((element) => {
+    element.scrollIntoView({ block: "start" });
+  });
+  await page.waitForTimeout(100);
+  const vectorsControlsFile = "visualization-vectors-controls-light-416.png";
+  await panel.screenshot({ path: resolve(outputDir, vectorsControlsFile) });
+  screenshotFiles.push(vectorsControlsFile);
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = "dark";
+  });
+  await page.waitForTimeout(100);
+  const vectorsDarkFile = "visualization-vectors-controls-dark-416.png";
+  await panel.screenshot({ path: resolve(outputDir, vectorsDarkFile) });
+  screenshotFiles.push(vectorsDarkFile);
+  await overviewContent.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+
   await page.evaluate(() => {
     document.documentElement.dataset.theme = "light";
   });
-  const initialRenderMode = await overview
+  const renderModeControl = overview.locator(
+    '[data-slot="segmented-control"][aria-label="Render mode"]',
+  );
+  const initialRenderMode = await renderModeControl
     .locator('[data-slot="segmented-control-item"][data-state="checked"]')
     .getAttribute("data-value");
   if ((await visibleToggle.getAttribute("aria-pressed")) === "true") {
@@ -242,7 +314,7 @@ try {
   await page.waitForTimeout(150);
   assert(await resetButton.isDisabled(), "Visualization Reset did not restore the applied baseline.");
   assert(
-    (await overview
+    (await renderModeControl
       .locator('[data-slot="segmented-control-item"][data-state="checked"]')
       .getAttribute("data-value")) === initialRenderMode,
     "Visualization Reset changed the initial render mode.",
@@ -260,7 +332,7 @@ try {
   await panel.screenshot({ path: resolve(outputDir, degradedFile) });
   screenshotFiles.push(degradedFile);
 
-  const segmentedItem = overview
+  const segmentedItem = renderModeControl
     .locator('[data-slot="segmented-control-item"][data-state="checked"]')
     .first();
   const initialFocusedMode = await segmentedItem.getAttribute("data-value");
@@ -276,31 +348,22 @@ try {
   await resetButton.click();
 
   const headerTop = await inspector.locator(".fm-inspector__header").boundingBox();
-  const tabsTop = await inspector.locator(".fm-inspector__tabs").boundingBox();
   const actionsTop = await inspector.locator(".fm-inspector__action-bar").boundingBox();
-  for (const tabName of expectedTabs) {
-    const tab = inspector.getByRole("tab", { name: tabName, exact: true });
-    await tab.click();
-    await page.waitForTimeout(250);
-    assert((await tab.getAttribute("aria-selected")) === "true", `${tabName} did not become active.`);
-    assert(
-      (await inspector.locator('[role="tabpanel"]:visible').count()) === 1,
-      `${tabName} must expose exactly one mounted visible tab panel.`,
-    );
-    await page.screenshot({
-      path: resolve(outputDir, `visualization-${tabName.toLowerCase()}-416.png`),
-    });
-  }
+  assert(
+    (await inspector.locator(".fm-inspector__tabs").count()) === 0,
+    "Visualization must use one continuous surface without shell tabs.",
+  );
+  const continuousFile = "visualization-continuous-light-416.png";
+  await panel.screenshot({ path: resolve(outputDir, continuousFile) });
+  screenshotFiles.push(continuousFile);
 
   const content = inspector.locator(".fm-inspector__content");
   await content.hover();
   await page.mouse.wheel(0, 800);
   await page.waitForTimeout(100);
   const stableHeader = await inspector.locator(".fm-inspector__header").boundingBox();
-  const stableTabs = await inspector.locator(".fm-inspector__tabs").boundingBox();
   const stableActions = await inspector.locator(".fm-inspector__action-bar").boundingBox();
   assert(stableHeader?.y === headerTop?.y, "Inspector header moved with content scroll.");
-  assert(stableTabs?.y === tabsTop?.y, "Inspector tabs moved with content scroll.");
   assert(stableActions?.y === actionsTop?.y, "Inspector action bar moved with content scroll.");
 
   await page.reload({ waitUntil: "networkidle", timeout: 60_000 });

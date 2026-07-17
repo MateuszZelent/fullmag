@@ -21,12 +21,7 @@ describe("resolveInspectorDescriptor", () => {
       selection("object.visualization", "Visualization"),
     );
 
-    expect(descriptor.tabs.map((tab) => tab.label)).toEqual([
-      "Overview",
-      "Properties",
-      "Display",
-      "Diagnostics",
-    ]);
+    expect(descriptor.tabs).toEqual([]);
     expect(descriptor.typeLabel).toBe("Display");
   });
 

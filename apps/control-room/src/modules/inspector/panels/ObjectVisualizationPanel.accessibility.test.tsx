@@ -7,6 +7,9 @@ import {
   VisualizationToggleButton,
 } from "./ObjectVisualizationPanel";
 import {
+  NumberField,
+} from "./ObjectVisualizationTargetSection";
+import {
   nextVisualizationRadioValue,
   visualizationSectionDisabledDescription,
 } from "./ObjectVisualizationPanelAccessibility";
@@ -95,8 +98,10 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
     expect(html).toContain('role="radiogroup"');
     expect(html).toContain('aria-label="Projection"');
     expect(html).toContain('aria-label="Vector coloring"');
-    expect(html).toContain('type="radio"');
-    expect(html).toContain('checked=""');
+    expect(html).toContain('data-slot="inspector-property-row"');
+    expect(html).toContain('data-slot="segmented-control"');
+    expect(html).toContain('role="radio"');
+    expect(html).toContain('aria-checked="true"');
   });
 
   it("moves radio selection with horizontal arrow keys", () => {
@@ -123,5 +128,28 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
 
     expect(html).toContain('aria-label="Wireframe color picker"');
     expect(html).toContain('aria-label="Wireframe color value"');
+    expect(html).toContain('data-slot="inspector-property-row"');
+    expect(html).toContain('data-slot="visualization-color-control"');
+  });
+
+  it("renders numeric visualization controls as labelled Radix sliders", () => {
+    const html = renderToStaticMarkup(
+      <NumberField
+        label="Vector alpha"
+        max={100}
+        min={0}
+        unit="%"
+        value={72}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('data-slot="inspector-property-row"');
+    expect(html).toContain('data-slot="visualization-number-control"');
+    expect(html).toContain('aria-label="Vector alpha"');
+    expect(html).toContain('role="slider"');
+    expect(html).toContain('aria-valuemin="0"');
+    expect(html).toContain('aria-valuemax="100"');
+    expect(html).toContain("72%");
   });
 });

@@ -154,7 +154,7 @@ export function InspectorShell({
             ))}
           </TabsList>
         </Tabs>
-      ) : <div className="fm-inspector__tabs" />}
+      ) : null}
 
       <ScrollArea className="fm-inspector__content">
         <div className="fm-inspector__body">{children}</div>

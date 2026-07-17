@@ -39,7 +39,6 @@ import {
 import {
   useVisualizationStateResource,
 } from "@/kernel/visualization/useVisualizationStateResource";
-import { Tabs, TabsContent } from "@/shared/ui/Tabs";
 import {
   useMeshSharedDomainManifestResource,
   useMeshRegionMembershipsResource,
@@ -55,8 +54,8 @@ import { manifestRenderableCarriers } from "@/modules/viewport-3d/public";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
-import { useInspectorActiveTab } from "../InspectorTabState";
 import { FieldRow } from "../primitives/FieldRow";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
   buildVisualizationPanelSections,
@@ -736,8 +735,6 @@ function ObjectVisualizationPanelView({
     acceptLiveViewportChanges,
     resetLiveViewportChanges,
   );
-  const activeTab = useInspectorActiveTab();
-
   const enabledPassCount = [
     settings.visible,
     settings.shaderVisible,
@@ -756,11 +753,49 @@ function ObjectVisualizationPanelView({
         : fieldCatalog.status;
 
   return (
-    <div className="fm-inspector-panel" data-visualization-revision={revision}>
-      <Tabs value={activeTab} className="fm-inspector-tabs">
+    <div
+      className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]"
+      data-visualization-revision={revision}
+    >
+      <InspectorGroup collapsible defaultOpen={false} title="Target">
+        <FieldRow label="Name" value={displayLabelForVisualizationTarget(target)} />
+        <FieldRow label="Target ID" value={target.kind === "airbox" ? "airbox" : target.id} />
+        <FieldRow label="Kind" value={target.kind} />
+        <FieldRow
+          label="Override"
+          value={visualizationOverrideStateLabel({
+            hasOverride: hasTargetOverride,
+            targetKind: target.kind,
+          })}
+        />
+        {target.kind === "object" && childRegionTargets.length > 0 ? (
+          <>
+            <FieldRow
+              label="Child overrides"
+              value={`${childRegionOverrideCount}/${childRegionTargets.length}`}
+            />
+            <label className="fm-visualization-part-toggle">
+              <input
+                checked={patchChildRegions}
+                type="checkbox"
+                onChange={(event) => setPatchChildRegions(event.target.checked)}
+              />
+              <span>Apply edits to child regions</span>
+            </label>
+          </>
+        ) : null}
+        <FieldRow
+          label="Render state"
+          value={
+            renderResolution?.degradedReasons[0]?.message ??
+            (settings.renderMode === "surface+edges"
+              ? "Shaded + wireframe"
+              : settings.renderMode)
+          }
+        />
+      </InspectorGroup>
 
-        <TabsContent value="overview" className="fm-tabs-content">
-          <ObjectVisualizationOverview
+      <ObjectVisualizationOverview
             advanced={
               <p className="m-0 text-fm-help leading-snug text-fm-muted">
                 Advanced rendering uses the active viewport quality profile.
@@ -840,91 +875,46 @@ function ObjectVisualizationPanelView({
               vectorTopologyHash={vectorTopologyHash}
               />
             }
-          />
-        </TabsContent>
+      />
 
-        <TabsContent value="properties" className="fm-tabs-content">
-          <InspectorSection title="Visualization Target">
-            <FieldRow label="Name" value={displayLabelForVisualizationTarget(target)} />
-            <FieldRow label="Target ID" value={target.kind === "airbox" ? "airbox" : target.id} />
-            <FieldRow label="Kind" value={target.kind} />
-            <FieldRow
-              label="Override"
-              value={visualizationOverrideStateLabel({
-                hasOverride: hasTargetOverride,
-                targetKind: target.kind,
-              })}
-            />
-            {target.kind === "object" && childRegionTargets.length > 0 ? (
-              <>
-                <FieldRow
-                  label="Child overrides"
-                  value={`${childRegionOverrideCount}/${childRegionTargets.length}`}
-                />
-                <label className="fm-visualization-part-toggle">
-                  <input
-                    checked={patchChildRegions}
-                    type="checkbox"
-                    onChange={(event) => setPatchChildRegions(event.target.checked)}
-                  />
-                  <span>Apply edits to child regions</span>
-                </label>
-              </>
-            ) : null}
-            <FieldRow
-              label="Render state"
-              value={
-                renderResolution?.degradedReasons[0]?.message ??
-                (settings.renderMode === "surface+edges"
-                  ? "Shaded + wireframe"
-                  : settings.renderMode)
-              }
-            />
-          </InspectorSection>
-        </TabsContent>
-
-        <TabsContent value="display" className="fm-tabs-content">
-          <VisualizationPointsSection
+      {settings.pointsVisible ? (
+        <VisualizationPointsSection
             patchColor={patchColor}
             pending={pending}
             sectionDisabled={sectionDisabled}
             settings={settings}
-          />
-          <VisualizationWireframeSection
+        />
+      ) : null}
+      {settings.wireframeVisible ? (
+        <VisualizationWireframeSection
             patchColor={patchColor}
             patchNumber={patchNumber}
             pending={pending}
             sectionDisabled={sectionDisabled}
             settings={settings}
-          />
-          <VisualizationGeometryScopeSection
-            passControlsDisabled={passControlsDisabled}
-            pending={pending}
-            patch={patch}
-            settings={settings}
-            vectorBudgetRange={vectorBudgetRange}
-            vectorBudgetRanges={vectorBudgetRanges}
-          />
-          <VisualizationOpacitySection patch={patch} settings={settings} />
-        </TabsContent>
-
-        <TabsContent value="diagnostics" className="fm-tabs-content">
-          {renderWarning && (
-            <div className="fm-inspector__diagnostic-warning">
-              {renderWarning}
-            </div>
-          )}
-          <VisualizationOverridesSection
-            childRegionOverrideCount={childRegionOverrideCount}
-            childRegionTargets={Math.max(childRegionTargets.length, childRegionOverrideCount)}
-            feedback={feedback}
-            onReset={() => void resetTarget()}
-            onResetChildRegions={() => void resetChildRegionTargets()}
-            pending={pending}
-            resetLabel={visualizationResetActionLabel(target.kind)}
-          />
-        </TabsContent>
-      </Tabs>
+        />
+      ) : null}
+      <VisualizationGeometryScopeSection
+        passControlsDisabled={passControlsDisabled}
+        pending={pending}
+        patch={patch}
+        settings={settings}
+        vectorBudgetRange={vectorBudgetRange}
+        vectorBudgetRanges={vectorBudgetRanges}
+      />
+      <VisualizationOpacitySection patch={patch} settings={settings} />
+      {renderWarning ? (
+        <div className="fm-inspector__diagnostic-warning">{renderWarning}</div>
+      ) : null}
+      <VisualizationOverridesSection
+        childRegionOverrideCount={childRegionOverrideCount}
+        childRegionTargets={Math.max(childRegionTargets.length, childRegionOverrideCount)}
+        feedback={feedback}
+        onReset={() => void resetTarget()}
+        onResetChildRegions={() => void resetChildRegionTargets()}
+        pending={pending}
+        resetLabel={visualizationResetActionLabel(target.kind)}
+      />
     </div>
   );
 }

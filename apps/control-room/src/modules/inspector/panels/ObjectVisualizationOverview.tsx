@@ -30,7 +30,7 @@ export function ObjectVisualizationOverview({
 }: ObjectVisualizationOverviewProps) {
   return (
     <div
-      className="fm-object-visualization-overview grid min-w-0 gap-5 [container-type:inline-size]"
+      className="fm-object-visualization-overview grid min-w-0 gap-[var(--fm-inspector-group-gap)] [container-type:inline-size]"
       data-slot="object-visualization-overview"
     >
       <InspectorMetricStrip

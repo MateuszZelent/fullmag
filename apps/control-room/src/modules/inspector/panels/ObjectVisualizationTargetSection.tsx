@@ -1,11 +1,15 @@
 "use client";
 
 import { Check, Info, RotateCcw } from "lucide-react";
-import React, { useState, useId, useRef, useCallback, useEffect } from "react";
+import React, { useState, useId } from "react";
 import { type FieldCatalogResource, type FieldMetaResource } from "@/kernel/api/apiTypes";
 import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
 import { Button } from "@/shared/ui/Button";
 import { SegmentedControl } from "@/shared/ui/SegmentedControl";
+import { Slider } from "@/shared/ui/Slider";
+import { Switch } from "@/shared/ui/Switch";
+import { controlVariants } from "@/shared/ui/controlVariants";
+import { cn } from "@/shared/utils/className";
 import {
   Dialog,
   DialogClose,
@@ -449,18 +453,16 @@ export function VisualizationSurfaceColoringSection({
         />
       ) : null}
       {showColorbar && !regionFieldMetaUnavailable ? (
-        <label className="fm-inspector-checkbox-row">
-          <input
-            className="fm-inspector-checkbox"
+        <InspectorPropertyRow label="Viewport colorbar">
+          <Switch
+            aria-label="Add colorbar to viewport"
             checked={settings.viewportColorbarVisible}
             disabled={pending || sectionDisabled("surface-coloring")}
-            type="checkbox"
-            onChange={(event) =>
-              void patch({ viewportColorbarVisible: event.target.checked })
+            onCheckedChange={(checked) =>
+              void patch({ viewportColorbarVisible: checked })
             }
           />
-          <span>Add colorbar to viewport</span>
-        </label>
+        </InspectorPropertyRow>
       ) : null}
       {settings.surfaceColorSource === "solid" ? (
         <ColorField
@@ -470,14 +472,15 @@ export function VisualizationSurfaceColoringSection({
           onChange={(value) => patchColor("shaderMonoColor", value)}
         />
       ) : null}
-      <FieldRow
-        label="Field status"
-        value={surfaceFieldStatus(
-          settings.surfaceColorSource,
-          fieldCatalog.data,
-          fieldCatalog.status,
-        )}
-      />
+      <InspectorPropertyRow label="Field status">
+        <span className="font-fm-mono text-fm-control text-fm-secondary">
+          {surfaceFieldStatus(
+            settings.surfaceColorSource,
+            fieldCatalog.data,
+            fieldCatalog.status,
+          )}
+        </span>
+      </InspectorPropertyRow>
     </InspectorGroup>
   );
 }
@@ -785,26 +788,37 @@ export function VisualizationVectorsSection({
         value={settings.vectorColorMode}
         onValueChange={(value) => void patch({ vectorColorMode: value })}
       />
-      <ColorField disabled={pending || sectionDisabled("vectors")} label="Vector mono color" value={settings.vectorMonoColor} onChange={(value) => patchColor("vectorMonoColor", value)} />
-      <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector alpha" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
-      <NumberField disabled={pending || sectionDisabled("vectors")} label="Vector thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
-      <NumberField disabled={pending || sectionDisabled("vectors")} label="Arrow length" max={5} min={0.1} step={0.1} unit="×" value={settings.vectorLengthScale} onChange={(value) => patchNumber("vectorLengthScale", value)} />
-      <NumberField
-        disabled={pending || sectionDisabled("vectors")}
-        label="Arrow budget"
-        max={vectorBudgetRange.max}
-        min={vectorBudgetRange.min}
-        step={vectorBudgetRange.step}
-        value={vectorBudgetValue}
-        onChange={(value) => patchNumber("vectorBudget", value)}
-      />
+      {settings.vectorColorMode === "monochrome" ? (
+        <ColorField
+          disabled={vectorsDisabled}
+          label="Vector color"
+          value={settings.vectorMonoColor}
+          onChange={(value) => patchColor("vectorMonoColor", value)}
+        />
+      ) : null}
+      <div className="grid min-w-0 gap-2 border-t border-fm-subtle pt-3">
+        <NumberField disabled={vectorsDisabled} label="Opacity" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
+        <NumberField disabled={vectorsDisabled} label="Thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
+        <NumberField disabled={vectorsDisabled} label="Arrow length" max={5} min={0.1} step={0.1} unit="×" value={settings.vectorLengthScale} onChange={(value) => patchNumber("vectorLengthScale", value)} />
+      </div>
+      <div className="grid min-w-0 gap-2 border-t border-fm-subtle pt-3">
+        <NumberField
+          disabled={vectorsDisabled}
+          label="Arrow budget"
+          max={vectorBudgetRange.max}
+          min={vectorBudgetRange.min}
+          step={vectorBudgetRange.step}
+          value={vectorBudgetValue}
+          onChange={(value) => patchNumber("vectorBudget", value)}
+        />
+      </div>
       <VisualizationVectorAccountingRows
         availableNodeCount={vectorBudgetRange.availableNodeCount}
         currentTopologyHash={vectorTopologyHash}
         exact={vectorBudgetRange.exact}
         targetKind={targetKind}
       />
-      <div className="fm-visualization-toggle-grid">
+      <div className="fm-visualization-toggle-grid fm-visualization-toggle-grid--vectors">
         {targetKind === "airbox" ? (
           <ToggleButton
             active={settings.airboxSyntheticVectorsEnabled}
@@ -915,7 +929,7 @@ export function VisualizationVectorsSection({
 function ViewportPreferenceScopeNote() {
   return (
     <p className="fm-visualization-scope-note" role="note">
-      This viewport only — not saved to the simulation or shared with other clients.
+      Viewport-only settings. Not saved or shared.
     </p>
   );
 }
@@ -1014,7 +1028,7 @@ export function VisualizationOverridesSection({
   resetLabel: string;
 }) {
   return (
-    <InspectorGroup title="Overrides">
+    <InspectorGroup collapsible defaultOpen={false} title="Diagnostics & overrides">
       <div className="fm-inspector-toolbar">
         <Button size="sm" type="button" disabled={pending} variant="ghost" onClick={onReset}>
           <RotateCcw size={12} aria-hidden="true" />
@@ -1051,14 +1065,14 @@ export function ColorField({
 }) {
   const inputId = useId();
   return (
-    <div className="fm-form-field">
-      <label className="fm-form-field__label" htmlFor={inputId}>
-        {label}
-      </label>
-      <div className="fm-form-field__control-row">
+    <InspectorPropertyRow label={label}>
+      <div
+        className="flex min-w-0 w-full items-center justify-end gap-2"
+        data-slot="visualization-color-control"
+      >
         <input
           aria-label={`${label} picker`}
-          className="fm-color-picker-input"
+          className="h-fm-control-sm w-fm-control-sm shrink-0 cursor-pointer rounded-fm-control border border-fm-subtle bg-fm-canvas p-1 disabled:cursor-not-allowed disabled:border-fm-disabled-border disabled:bg-fm-disabled disabled:opacity-100"
           disabled={disabled}
           id={inputId}
           type="color"
@@ -1067,14 +1081,17 @@ export function ColorField({
         />
         <input
           aria-label={`${label} value`}
-          className="fm-inspector-input"
+          className={cn(
+            "min-w-0 flex-1 font-fm-mono",
+            controlVariants({ density: "compact" }),
+          )}
           disabled={disabled}
           type="text"
           value={value}
           onChange={(event) => onChange(event.currentTarget.value)}
         />
       </div>
-    </div>
+    </InspectorPropertyRow>
   );
 }
 
@@ -1098,85 +1115,45 @@ export function NumberField({
   onChange: (value: number) => void;
 }) {
   const [draftOverride, setDraftOverride] = useState<number | null>(null);
-  const latestOnChangeRef = useRef(onChange);
-  const draftFrameRef = useRef<number | null>(null);
-  const pendingValueRef = useRef<number | null>(null);
-  const queuedDraftValueRef = useRef<number | null>(null);
   const displayValue = draftOverride ?? value;
-
-  useEffect(() => {
-    latestOnChangeRef.current = onChange;
-  }, [onChange]);
-
-  useEffect(
-    () => () => {
-      if (draftFrameRef.current !== null) {
-        window.cancelAnimationFrame(draftFrameRef.current);
-        draftFrameRef.current = null;
-      }
-    },
-    [],
-  );
-
-  const flushDraft = useCallback(() => {
-    const pendingValue = pendingValueRef.current;
-    pendingValueRef.current = null;
-    queuedDraftValueRef.current = null;
-    if (draftFrameRef.current !== null) {
-      window.cancelAnimationFrame(draftFrameRef.current);
-      draftFrameRef.current = null;
-    }
-    setDraftOverride(null);
-    if (pendingValue !== null) {
-      latestOnChangeRef.current(pendingValue);
-    }
-  }, []);
-
-  const scheduleDraft = useCallback(
-    (nextValue: number) => {
-      pendingValueRef.current = nextValue;
-      queuedDraftValueRef.current = nextValue;
-      if (draftFrameRef.current !== null) return;
-
-      draftFrameRef.current = window.requestAnimationFrame(() => {
-        draftFrameRef.current = null;
-        const queuedValue = queuedDraftValueRef.current;
-        queuedDraftValueRef.current = null;
-        if (queuedValue !== null) {
-          setDraftOverride(queuedValue);
-        }
-      });
-    },
-    [],
-  );
-
-  const valueRange = max - min;
-  const pct =
-    valueRange > 0
-      ? Math.max(0, Math.min(100, ((displayValue - min) / valueRange) * 100))
-      : 0;
+  const displayLabel = `${formatNumericControlValue(displayValue, step)}${unit ?? ""}`;
 
   return (
-    <label className="fm-visualization-range">
-      <span>
-        {unit ? `${label}: ${displayValue}${unit}` : `${label}: ${displayValue}`}
-      </span>
-      <input
+    <InspectorPropertyRow
+      label={
+        <span className="flex w-full min-w-0 items-baseline justify-between gap-3">
+          <span>{label}</span>
+          <output className="shrink-0 font-fm-mono text-fm-control font-semibold text-fm-primary">
+            {displayLabel}
+          </output>
+        </span>
+      }
+      layout="stacked"
+    >
+      <Slider
+        aria-label={label}
+        className="w-full"
+        data-slot="visualization-number-control"
         disabled={disabled}
         max={max}
         min={min}
         step={step}
-        style={{ "--pct": `${pct}%` } as React.CSSProperties}
-        type="range"
-        value={displayValue}
-        onBlur={flushDraft}
-        onChange={(event) => scheduleDraft(Number(event.target.value))}
-        onKeyUp={flushDraft}
-        onPointerCancel={flushDraft}
-        onPointerUp={flushDraft}
+        value={[displayValue]}
+        onValueChange={([nextValue]) => {
+          if (nextValue !== undefined) setDraftOverride(nextValue);
+        }}
+        onValueCommit={([nextValue]) => {
+          setDraftOverride(null);
+          if (nextValue !== undefined) onChange(nextValue);
+        }}
       />
-    </label>
+    </InspectorPropertyRow>
   );
+}
+
+function formatNumericControlValue(value: number, step: number): string {
+  const decimals = step >= 1 ? 0 : Math.min(3, Math.ceil(-Math.log10(step)));
+  return value.toFixed(decimals);
 }
 
 export function VisualizationToggleButton({
@@ -1233,34 +1210,21 @@ export function VisualizationRadioGroup<T extends string>({
   value: T;
   onValueChange: (next: T) => void;
 }) {
-  const name = useId();
   return (
-    <div className="fm-radio-group" role="radiogroup" aria-label={label}>
-      {items.map((item) => {
-        const itemId = `${name}-${item.value}`;
-        const isChecked = item.value === value;
-        return (
-          <div className="fm-radio-item" key={item.value}>
-            <input
-              checked={isChecked}
-              className="fm-radio-item__input"
-              disabled={disabled}
-              id={itemId}
-              name={name}
-              type="radio"
-              value={item.value}
-              onChange={() => onValueChange(item.value)}
-            />
-            <label
-              className="fm-radio-item__label"
-              htmlFor={itemId}
-              title={disabledDescription}
-            >
-              {item.label}
-            </label>
-          </div>
-        );
-      })}
-    </div>
+    <InspectorPropertyRow
+      description={disabled ? disabledDescription : undefined}
+      label={label}
+      layout="stacked"
+    >
+      <SegmentedControl
+        aria-label={label}
+        className="w-full"
+        columns={items.length <= 2 ? 2 : items.length > 4 ? 3 : 4}
+        disabled={disabled}
+        options={items}
+        value={value}
+        onValueChange={onValueChange}
+      />
+    </InspectorPropertyRow>
   );
 }

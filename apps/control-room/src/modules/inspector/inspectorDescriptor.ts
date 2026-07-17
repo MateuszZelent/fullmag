@@ -35,13 +35,6 @@ export interface InspectorDescriptor {
   typeLabel: string;
 }
 
-const VISUALIZATION_TABS: InspectorTabDescriptor[] = [
-  { id: "overview", label: "Overview" },
-  { id: "properties", label: "Properties" },
-  { id: "display", label: "Display" },
-  { id: "diagnostics", label: "Diagnostics" },
-];
-
 const AUTHORING_TABS: InspectorTabDescriptor[] = [
   { id: "overview", label: "Overview" },
   { id: "properties", label: "Properties" },
@@ -77,7 +70,7 @@ function titleCase(value: string): string {
 
 function resolveFamily(kind: string): FamilyDescriptor {
   if (kind.endsWith(".visualization") || kind.includes(".visualization.")) {
-    return { tabs: VISUALIZATION_TABS, typeLabel: "Display" };
+    return { tabs: [], typeLabel: "Display" };
   }
   if (kind.startsWith("diagnostics.")) {
     return {
