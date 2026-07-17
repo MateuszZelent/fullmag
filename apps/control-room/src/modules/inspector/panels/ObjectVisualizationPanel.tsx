@@ -722,14 +722,19 @@ function ObjectVisualizationPanelView({
   );
   const visualizationDirty =
     JSON.stringify(currentAppliedBaseline) !== JSON.stringify(appliedBaseline);
+  const acceptLiveViewportChanges = useCallback(() => true, []);
+  const resetLiveViewportChanges = useCallback(
+    () => restoreAppliedBaseline(appliedBaseline),
+    [appliedBaseline, restoreAppliedBaseline],
+  );
   useRegisterInspectorEditSession(
     "liveViewport",
     pending,
     visualizationDirty,
     true,
     undefined,
-    () => true,
-    () => restoreAppliedBaseline(appliedBaseline),
+    acceptLiveViewportChanges,
+    resetLiveViewportChanges,
   );
   const activeTab = useInspectorActiveTab();
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import {
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
@@ -398,39 +398,48 @@ function ObjectMaterialPanelView({
     anisotropyDraft.axisY,
     anisotropyDraft.axisZ,
   ].every((value) => Number.isFinite(Number(value)));
+  const applyInspectorDraft = useCallback(async () => {
+    if (parametersTargetChanged) {
+      if (!(await applyMaterial())) return false;
+      if (parametersDirty) {
+        setFeedback({
+          kind: "success",
+          message: "Material assignment saved. Apply again after the assigned material loads to save its parameters.",
+        });
+        return false;
+      }
+    } else if (parametersDirty && !(await applyParameters())) {
+      return false;
+    }
+    if (anisotropyDirty && !(await applyAnisotropy())) return false;
+    return true;
+  }, [
+    anisotropyDirty,
+    applyAnisotropy,
+    applyMaterial,
+    applyParameters,
+    parametersDirty,
+    parametersTargetChanged,
+  ]);
+  const resetInspectorDraft = useCallback(() => {
+    setDraftState(
+      initialInspectorDraftState({
+        baseDraft,
+        baseKey: draftKey,
+        identityKey: draftIdentityKey,
+      }),
+    );
+    setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
+    setFeedback(null);
+  }, [baseAnisotropyDraft, baseDraft, draftIdentityKey, draftKey]);
   useRegisterInspectorEditSession(
     "staged",
     pending,
     draftDirty || anisotropyDirty,
     !("error" in parametersValidation) && anisotropyValid,
     undefined,
-    async () => {
-      if (parametersTargetChanged) {
-        if (!(await applyMaterial())) return false;
-        if (parametersDirty) {
-          setFeedback({
-            kind: "success",
-            message: "Material assignment saved. Apply again after the assigned material loads to save its parameters.",
-          });
-          return false;
-        }
-      } else if (parametersDirty && !(await applyParameters())) {
-        return false;
-      }
-      if (anisotropyDirty && !(await applyAnisotropy())) return false;
-      return true;
-    },
-    () => {
-      setDraftState(
-        initialInspectorDraftState({
-          baseDraft,
-          baseKey: draftKey,
-          identityKey: draftIdentityKey,
-        }),
-      );
-      setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
-      setFeedback(null);
-    },
+    applyInspectorDraft,
+    resetInspectorDraft,
   );
   const activeTab = useInspectorActiveTab();
 

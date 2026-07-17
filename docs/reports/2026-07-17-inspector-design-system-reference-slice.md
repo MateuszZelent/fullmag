@@ -110,11 +110,11 @@ Manual review findings after the second visual pass:
 | Pre-change full Vitest baseline | pass | 362 files, 3506 tests |
 | Reference contract RED | pass | 4 expected failures: missing token bridge, missing Overview component, and legacy target controls |
 | Focused component tests | pass | 72 files, 982 tests across Inspector and shared controls |
-| TypeScript | pass | `typecheck` after reference composition |
-| ESLint | pass | zero warnings after reference composition |
-| Full Vitest | pending | Task 9 |
+| TypeScript | pass | `typecheck`, zero errors after final callback stabilization |
+| ESLint | pass | zero warnings with `--max-warnings=0` |
+| Full Vitest | pass | 366 files, 3522 tests |
 | Storybook build | pass | Storybook 10.5.2 static build |
-| React Doctor | pending | Task 9 |
+| React Doctor | pass with reviewed warnings | score improved 76 → 84; zero errors, four stable React-setter false positives, six pre-existing mixed-export warnings |
 | Inspector browser smoke | pass | 0 console errors, 0 preview requests, widths 360/416/560, light/dark, Reset verified |
 
 ## Known issues

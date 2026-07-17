@@ -803,23 +803,28 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
   }
 
   const validation = buildObjectMeshPolicyReplaceRequest(draft);
+  const applyInspectorDraft = useCallback(
+    async () => (await applyPolicy()).ok,
+    [applyPolicy],
+  );
+  const resetInspectorDraft = useCallback(() => {
+    setDraftState(
+      initialInspectorDraftState({
+        baseDraft,
+        baseKey: draftKey,
+        identityKey: draftIdentityKey,
+      }),
+    );
+    setFeedback(null);
+  }, [baseDraft, draftIdentityKey, draftKey]);
   useRegisterInspectorEditSession(
     "staged",
     pending,
     isDirty,
     !("error" in validation),
     undefined,
-    async () => (await applyPolicy()).ok,
-    () => {
-      setDraftState(
-        initialInspectorDraftState({
-          baseDraft,
-          baseKey: draftKey,
-          identityKey: draftIdentityKey,
-        }),
-      );
-      setFeedback(null);
-    },
+    applyInspectorDraft,
+    resetInspectorDraft,
   );
   const activeTab = useInspectorActiveTab();
 

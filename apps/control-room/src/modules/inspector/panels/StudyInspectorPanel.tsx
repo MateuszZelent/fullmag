@@ -12,7 +12,7 @@ import {
   Square,
   Upload,
 } from "lucide-react";
-import { useEffect, useReducer, type ReactNode } from "react";
+import { useCallback, useEffect, useReducer, type ReactNode } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
@@ -871,6 +871,15 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
     JSON.stringify(state.globalDraft) !== JSON.stringify(state.baselineGlobalDraft);
   const stagesDirty =
     JSON.stringify(state.stageDrafts) !== JSON.stringify(state.baselineStageDrafts);
+  const applyInspectorDraft = useCallback(async () => {
+    if (globalDirty && !(await commitGlobalDraft())) return false;
+    if (stagesDirty && !(await commitStageDrafts())) return false;
+    return true;
+  }, [commitGlobalDraft, commitStageDrafts, globalDirty, stagesDirty]);
+  const resetInspectorDraft = useCallback(() => {
+    dispatch({ type: "revertGlobalDraft" });
+    dispatch({ type: "revertStageDrafts" });
+  }, []);
   useRegisterInspectorEditSession(
     "staged",
     state.authoringBusy,
@@ -879,15 +888,8 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
       (issue) => issue.severity === "error",
     ),
     state.authoringBusy ? "Study changes are being saved." : undefined,
-    async () => {
-      if (globalDirty && !(await commitGlobalDraft())) return false;
-      if (stagesDirty && !(await commitStageDrafts())) return false;
-      return true;
-    },
-    () => {
-      dispatch({ type: "revertGlobalDraft" });
-      dispatch({ type: "revertStageDrafts" });
-    },
+    applyInspectorDraft,
+    resetInspectorDraft,
   );
 
   return (

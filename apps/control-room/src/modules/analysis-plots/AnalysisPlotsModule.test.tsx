@@ -2055,7 +2055,9 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain('class="fm-analysis-plots__legend"');
     expect(html).toContain('<button');
     expect(html).toContain('type="button"');
-    expect(html).toContain("fm-button fm-button--secondary fm-button--sm");
+    expect(html).toMatch(
+      /class="[^"]*fm-button[^"]*fm-button--secondary[^"]*fm-button--sm[^"]*"/,
+    );
     expect(html).toContain('aria-label="Series mx unit 1 latest 0.2"');
     expect(html).toContain('class="fm-analysis-plots__legend-swatch fm-analysis-plots__legend-swatch--0"');
     expect(html).toContain('class="fm-analysis-plots__legend-latest"');

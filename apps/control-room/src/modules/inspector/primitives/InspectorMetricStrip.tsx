@@ -44,23 +44,21 @@ export function InspectorMetricStrip({
   metrics,
 }: InspectorMetricStripProps) {
   return (
-    <div
+    <ul
       className={cn(
-        "fm-inspector-metric-strip grid min-w-0 grid-cols-2 gap-x-5 gap-y-3 border-b border-fm-subtle pb-4",
+        "fm-inspector-metric-strip m-0 grid min-w-0 list-none grid-cols-2 gap-x-5 gap-y-3 border-b border-fm-subtle p-0 pb-4",
         className,
       )}
       data-count={metrics.length}
       data-slot="inspector-metric-strip"
-      role="list"
     >
       {metrics.map((metric) => {
         const tone = metric.tone ?? "neutral";
         return (
-          <div
+          <li
             className="min-w-0"
             data-slot="inspector-metric"
             key={metric.label}
-            role="listitem"
           >
             <span className="block text-fm-help font-medium leading-tight text-fm-muted">
               {metric.label}
@@ -75,9 +73,9 @@ export function InspectorMetricStrip({
             >
               {metric.value}
             </span>
-          </div>
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }

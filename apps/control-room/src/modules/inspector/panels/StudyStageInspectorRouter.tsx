@@ -1,5 +1,7 @@
 "use client";
 
+import { useCallback } from "react";
+
 import { Accordion } from "@/shared/ui/Accordion";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -69,6 +71,10 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
       issueIndex === index ? [{ message, severity }] : [],
     ),
   ]);
+  const resetStageDrafts = useCallback(
+    () => dispatch({ type: "revertStageDrafts" }),
+    [dispatch],
+  );
   useRegisterInspectorEditSession(
     "staged",
     state.authoringBusy,
@@ -77,7 +83,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     !allStageValidation.some((issue) => issue.severity === "error"),
     state.authoringBusy ? "Study stage changes are being saved." : undefined,
     commitStageDrafts,
-    () => dispatch({ type: "revertStageDrafts" }),
+    resetStageDrafts,
   );
   const selectedStageKind = model.selectedStage?.kind ?? draft?.kind ?? null;
   const inspectorKind = resolveStudyStageInspectorKind(selection.kind, selectedStageKind);

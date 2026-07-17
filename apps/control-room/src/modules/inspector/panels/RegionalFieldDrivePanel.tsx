@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import type { RegionalFieldDriveResource } from "@/kernel/api/apiTypes";
 
@@ -105,6 +105,14 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
     }
   }
 
+  const resetInspectorDraft = useCallback(() => {
+    setDraftState({
+      key: draftKey,
+      value: drive ? structuredClone(drive) : null,
+    });
+    setFeedback(null);
+  }, [draftKey, drive]);
+
   useRegisterInspectorEditSession(
     "staged",
     pending,
@@ -112,13 +120,7 @@ export function RegionalFieldDrivePanel({ selection }: InspectorPanelProps) {
     Boolean(draft && model.sceneRevision !== null && validationErrors.length === 0),
     undefined,
     save,
-    () => {
-      setDraftState({
-        key: draftKey,
-        value: drive ? structuredClone(drive) : null,
-      });
-      setFeedback(null);
-    },
+    resetInspectorDraft,
   );
 
   return (
