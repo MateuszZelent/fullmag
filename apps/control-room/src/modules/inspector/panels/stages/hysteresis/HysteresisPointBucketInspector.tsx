@@ -10,7 +10,7 @@ import {
 } from "@/shared/domain/study/HysteresisChart";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 import { HysteresisPointTable } from "./HysteresisPointTable";
 
@@ -88,8 +88,7 @@ export function HysteresisPointBucketInspector({
   );
 
   return (
-    <InspectorSection
-      value={`hysteresis-points-${bucket}`}
+    <InspectorGroup
       title={pointBucketTitle(bucket)}
       badge={pointBucketBadge(bucket, points.length, queuedCount, totalCount)}
     >
@@ -125,7 +124,7 @@ export function HysteresisPointBucketInspector({
             : plannedPointMessage(totalCount, completedCount)}
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

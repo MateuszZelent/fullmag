@@ -12,7 +12,7 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import {
   hysteresisInitialStateActionPresentation,
   hysteresisReplayActionPresentation,
@@ -82,8 +82,7 @@ export function HysteresisSnapshotsInspector({
   );
 
   return (
-    <InspectorSection
-      value="hysteresis-snapshots"
+    <InspectorGroup
       title="Snapshots"
       badge={`${savedPoints.length} saved`}
     >
@@ -163,7 +162,7 @@ export function HysteresisSnapshotsInspector({
           No magnetization snapshots have been saved for this hysteresis stage.
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

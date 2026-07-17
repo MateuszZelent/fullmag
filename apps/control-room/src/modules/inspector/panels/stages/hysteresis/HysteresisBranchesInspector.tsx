@@ -1,7 +1,7 @@
 "use client";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisBranchesInspector({
@@ -10,8 +10,7 @@ export function HysteresisBranchesInspector({
   minorLoops,
 }: Pick<HysteresisInspectorCommonProps, "branches" | "draft" | "minorLoops">) {
   return (
-    <InspectorSection
-      value="hysteresis-branches"
+    <InspectorGroup
       title="Branches"
       badge={`${branches.length} branch(es)`}
     >
@@ -41,6 +40,6 @@ export function HysteresisBranchesInspector({
           Branch metadata is not available yet.
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

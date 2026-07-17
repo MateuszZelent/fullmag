@@ -6,7 +6,7 @@ import { createCommandContext } from "@/kernel/commands/commandContext";
 import { Button } from "@/shared/ui/Button";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import { hysteresisInitialStateActionPresentation } from "./HysteresisInspectorUtils";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
@@ -61,8 +61,7 @@ export function HysteresisTransitionsInspector({
   }, [commandContext, kernel, points, stageId]);
 
   return (
-    <InspectorSection
-      value="hysteresis-transitions"
+    <InspectorGroup
       title="Transitions"
       badge={progress?.status === "completed" ? "available" : "after completion"}
     >
@@ -134,6 +133,6 @@ export function HysteresisTransitionsInspector({
           field state as the next initial magnetization.
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

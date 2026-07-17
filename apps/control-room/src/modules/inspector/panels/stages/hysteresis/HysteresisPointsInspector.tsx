@@ -13,7 +13,7 @@ import {
 } from "@/shared/domain/study/HysteresisChart";
 import { Button } from "@/shared/ui/Button";
 
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 import { HysteresisPointTable } from "./HysteresisPointTable";
 
@@ -98,8 +98,7 @@ export function HysteresisPointsInspector({
   const hasMissingHistory = points.length === 0 && completedPoints > 0;
 
   return (
-    <InspectorSection
-      value="hysteresis-points"
+    <InspectorGroup
       title="Hysteresis Points"
       badge={
         progress?.total_points != null
@@ -176,6 +175,6 @@ export function HysteresisPointsInspector({
             : "No calculated points available."}
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

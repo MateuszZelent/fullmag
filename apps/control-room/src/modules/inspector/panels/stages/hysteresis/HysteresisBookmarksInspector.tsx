@@ -7,7 +7,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisBookmarksInspector({
@@ -19,8 +19,7 @@ export function HysteresisBookmarksInspector({
   const markers = collectPointMarkers(bookmarks, executionTree?.nodes ?? []);
 
   return (
-    <InspectorSection
-      value="hysteresis-points-bookmarks"
+    <InspectorGroup
       title="Point Markers"
       badge={`${markers.length} ${markers.length === 1 ? "marker" : "markers"}`}
     >
@@ -51,7 +50,7 @@ export function HysteresisBookmarksInspector({
           No point markers are available for this hysteresis stage yet.
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

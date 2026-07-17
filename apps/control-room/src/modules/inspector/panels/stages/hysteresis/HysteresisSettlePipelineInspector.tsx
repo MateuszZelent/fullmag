@@ -2,7 +2,7 @@
 
 import { FieldRow } from "../../../primitives/FieldRow";
 import { FormField } from "../../../primitives/FormField";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import {
   displayValue,
   isRecord,
@@ -93,8 +93,7 @@ export function HysteresisSettlePipelineInspector({
   const activeStep = activeNode?.children?.find((node) => node.status === "active");
 
   return (
-    <InspectorSection
-      value="hysteresis-settle"
+    <InspectorGroup
       title="Settle Pipeline"
       badge={`${settleSteps.length} step(s)`}
     >
@@ -230,6 +229,6 @@ export function HysteresisSettlePipelineInspector({
           ))}
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

@@ -7,7 +7,7 @@ import { HysteresisChart, clearHysteresisPointSelectionForLive } from "@/shared/
 import { Button } from "@/shared/ui/Button";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisLiveProgressInspector({
@@ -34,8 +34,7 @@ export function HysteresisLiveProgressInspector({
   }, [commandContext, kernel, stageId]);
 
   return (
-    <InspectorSection
-      value="hysteresis-live-progress"
+    <InspectorGroup
       title="Live Progress"
       badge={
         progress?.active
@@ -106,6 +105,6 @@ export function HysteresisLiveProgressInspector({
       ) : (
         <div className="fm-hysteresis-inspector-empty">Stage id is unavailable.</div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

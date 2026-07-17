@@ -2,7 +2,7 @@
 
 import type { HysteresisSettleTraceEntrySchema } from "@/kernel/api/apiTypes";
 
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
 export function HysteresisSettleTraceInspector({
@@ -14,8 +14,7 @@ export function HysteresisSettleTraceInspector({
   "activePoint" | "settleTrace" | "settleTraceStatus"
 >) {
   return (
-    <InspectorSection
-      value="hysteresis-settle-trace"
+    <InspectorGroup
       title="Settle Trace"
       badge={
         activePoint?.pointId == null
@@ -49,7 +48,7 @@ export function HysteresisSettleTraceInspector({
           No settle trace is available for the selected point.
         </div>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

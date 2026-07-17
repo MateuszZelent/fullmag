@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -237,5 +237,22 @@ describe("Inspector design-system reference contract", () => {
     expect(study).not.toContain("<Accordion");
     expect(pipeline).toContain("InspectorGroup");
     expect(pipeline).not.toMatch(/<\/?InspectorSection\b/);
+  });
+
+  it("keeps every hysteresis stage inspector on compact groups", () => {
+    const directory = "src/modules/inspector/panels/stages/hysteresis";
+    const panels = readdirSync(join(appRoot, directory)).filter((fileName) =>
+      fileName.endsWith("Inspector.tsx"),
+    );
+
+    expect(panels.length).toBeGreaterThan(0);
+    for (const fileName of panels) {
+      const panel = read(`${directory}/${fileName}`);
+      expect(panel, fileName).toContain("InspectorGroup");
+      expect(panel, fileName).not.toMatch(/<\/?InspectorSection\b/);
+      expect(panel, fileName).not.toMatch(
+        /import\s+\{\s*InspectorSection\s*\}/,
+      );
+    }
   });
 });

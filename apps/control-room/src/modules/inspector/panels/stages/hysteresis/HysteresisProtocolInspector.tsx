@@ -1,7 +1,7 @@
 "use client";
 
 import { FieldRow } from "../../../primitives/FieldRow";
-import { InspectorSection } from "../../../primitives/InspectorSection";
+import { InspectorGroup } from "../../../primitives/InspectorGroup";
 import { displayValue, isRecord } from "./HysteresisInspectorUtils";
 import type { HysteresisInspectorCommonProps } from "./HysteresisInspectorTypes";
 
@@ -13,8 +13,7 @@ export function HysteresisProtocolInspector({
   const storage = isRecord(protocol?.storage) ? protocol.storage : null;
 
   return (
-    <InspectorSection
-      value="hysteresis-protocol"
+    <InspectorGroup
       title="Protocol"
       badge={protocol?.initial_protocol ?? draft?.initialStatePolicy ?? "as_authored"}
     >
@@ -34,6 +33,6 @@ export function HysteresisProtocolInspector({
         value={displayValue(storage?.magnetization) ?? "n/a"}
       />
       <FieldRow label="Settle pipeline" value={draft?.settlePipelineMode ?? "n/a"} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
