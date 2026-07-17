@@ -79,6 +79,7 @@ describe("Inspector design-system reference contract", () => {
     "GeometryObjectPanel.tsx",
     "ObjectMagneticTexturePanel.tsx",
     "PhysicsInteractionPanel.tsx",
+    "RegionalFieldDrivePanel.tsx",
     "AntennaObjectPanel.tsx",
     "CouplingInspectorPanel.tsx",
     "CrossSectionInspectorPanel.tsx",
@@ -90,6 +91,9 @@ describe("Inspector design-system reference contract", () => {
     expect(panel).not.toMatch(/<\/?InspectorSection\b/);
     expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
     expect(panel).not.toContain("fm-inspector-section");
+    if (fileName === "RegionalFieldDrivePanel.tsx") {
+      expect(panel).not.toMatch(/<(?:label|input|select|textarea)\b/);
+    }
   });
 
   it("keeps object extensions independent from legacy Accordion sections", () => {
