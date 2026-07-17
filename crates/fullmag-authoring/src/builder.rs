@@ -287,7 +287,7 @@ pub struct ScriptBuilderStageState {
     pub adaptive_timestep: Option<ScriptBuilderAdaptiveTimestepState>,
     #[serde(default)]
     pub until_seconds: String,
-    #[serde(default)]
+    #[serde(default, rename = "algorithm", alias = "relax_algorithm")]
     pub relax_algorithm: String,
     #[serde(default)]
     pub torque_tolerance: String,

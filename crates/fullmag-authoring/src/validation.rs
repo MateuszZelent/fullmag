@@ -144,8 +144,9 @@ fn validate_stage_solver_state(
             "{context} fixed and adaptive timestep policies are mutually exclusive"
         )));
     }
+    let relax_algorithm = stage.relax_algorithm.trim();
     if stage.kind == "relax"
-        && stage.relax_algorithm == "llg_overdamped"
+        && (relax_algorithm.is_empty() || relax_algorithm == "llg_overdamped")
         && stage.fixed_timestep.trim().is_empty()
         && stage.adaptive_timestep.is_none()
     {
@@ -569,6 +570,101 @@ mod tests {
         global_solver.fixed_timestep.clear();
         validate_solver_state(&global_solver, false, "study.solver")
             .expect("non-executable global solver state may omit a timestep policy");
+    }
+
+    #[test]
+    fn public_scene_stage_algorithm_vocabulary_enforces_llg_timestep_policy() {
+        let explicit_llg: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "study": { "stages": [{
+                "kind": "relax",
+                "entrypoint_kind": "flat_relax",
+                "algorithm": "llg_overdamped",
+                "fixed_timestep": "",
+                "adaptive_timestep": null
+            }]}
+        }))
+        .expect("public scene algorithm fixture should deserialize");
+        assert_eq!(
+            explicit_llg.study.stages[0].relax_algorithm,
+            "llg_overdamped"
+        );
+        assert!(!explicit_llg.study.stages[0].extra.contains_key("algorithm"));
+        let serialized = serde_json::to_value(&explicit_llg)
+            .expect("the public scene should serialize with the canonical algorithm spelling");
+        assert_eq!(
+            serialized["study"]["stages"][0]["algorithm"],
+            "llg_overdamped"
+        );
+        assert!(
+            serialized["study"]["stages"][0]
+                .get("relax_algorithm")
+                .is_none(),
+            "legacy relax_algorithm must not be emitted"
+        );
+        let error = validate_scene_document(&explicit_llg)
+            .expect_err("public LLG stage without a timestep policy must fail closed");
+        assert!(
+            error.message.contains("explicit fixed or adaptive timestep policy"),
+            "{}",
+            error.message
+        );
+        crate::scene_document_to_script_builder_overrides(&explicit_llg)
+            .expect_err("public adaptation must enforce the same LLG policy requirement");
+
+        let omitted_algorithm: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "study": { "stages": [{
+                "kind": "relax",
+                "entrypoint_kind": "flat_relax",
+                "fixed_timestep": "",
+                "adaptive_timestep": null
+            }]}
+        }))
+        .expect("omitted algorithm fixture should deserialize");
+        let error = validate_scene_document(&omitted_algorithm)
+            .expect_err("the public default LLG stage must also require a timestep policy");
+        assert!(
+            error.message.contains("explicit fixed or adaptive timestep policy"),
+            "{}",
+            error.message
+        );
+        crate::scene_document_to_script_builder_overrides(&omitted_algorithm)
+            .expect_err("public adaptation must resolve an omitted algorithm as LLG");
+
+        let direct_minimizer: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "study": { "stages": [{
+                "kind": "relax",
+                "entrypoint_kind": "flat_relax",
+                "algorithm": "projected_gradient_bb",
+                "fixed_timestep": "",
+                "adaptive_timestep": null
+            }]}
+        }))
+        .expect("direct-minimizer fixture should deserialize");
+        validate_scene_document(&direct_minimizer)
+            .expect("a direct minimizer does not require an LLG timestep policy");
+        let overrides = crate::scene_document_to_script_builder_overrides(&direct_minimizer)
+            .expect("a valid direct minimizer should adapt");
+        assert_eq!(
+            overrides["stages"][0]["relax_algorithm"],
+            "projected_gradient_bb"
+        );
+
+        let conflicting_spellings = serde_json::from_value::<SceneDocument>(serde_json::json!({
+            "version": "scene.v2",
+            "study": { "stages": [{
+                "kind": "relax",
+                "entrypoint_kind": "flat_relax",
+                "algorithm": "projected_gradient_bb",
+                "relax_algorithm": "llg_overdamped"
+            }]}
+        }));
+        assert!(
+            conflicting_spellings.is_err(),
+            "conflicting public and legacy algorithm spellings must fail closed"
+        );
     }
 
     #[test]

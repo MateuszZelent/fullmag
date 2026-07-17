@@ -59,3 +59,9 @@ Status: resolved in the current worktree with Python construction/reload rejecti
 23. Enforce the same stage-only fixed-or-complete-adaptive requirement at the Rust authoring validation boundary. `validate_stage_solver_state` must reject an `llg_overdamped` relaxation stage with neither policy so direct scene/API authoring cannot bypass the Control Room guard and persist an incomplete executable stage.
 
 Status: findings 22 and 23 are resolved in the current worktree with an explicit Python stage-context flag, flat-relax regression coverage, and Rust scene validation.
+
+## Final scene-vocabulary gap after `23a00b64`
+
+24. Rust stage validation must consume the real scene/UI algorithm vocabulary. Control Room emits `algorithm`, while `ScriptBuilderStageState` currently validates only `relax_algorithm` and flattens `algorithm` into `extra`; omitted relax algorithm also means the public LLG default. Resolve one canonical/compatible value before validation and add a full `SceneDocument` deserialization/validation test for both explicit `algorithm="llg_overdamped"` and the omitted default, rather than testing only the private internal spelling.
+
+Status: resolved in the current worktree. Public SceneDocument JSON now serializes `algorithm`, accepts legacy `relax_algorithm` on input, rejects duplicate/conflicting spellings, and validates omitted relax algorithms as the public `llg_overdamped` default.

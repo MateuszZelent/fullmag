@@ -328,3 +328,33 @@ No commit was created.
 ### Scope
 
 No OpenAPI, generated client, command transport, API route, resource hook, realtime event, binary codec, ribbon, viewport, or compiled solver runtime changed. The public macro signature change is deliberate: hysteresis branch expansion cannot create executable LLG stages without an explicit user timestep policy.
+
+## Finding 24 scene algorithm vocabulary
+
+Status: `DONE`
+
+No commit was created.
+
+### Resolution
+
+- `ScriptBuilderStageState` now uses public `algorithm` as its canonical serialized SceneDocument field and accepts the legacy internal `relax_algorithm` spelling only as a deserialization alias.
+- Supplying both spellings is rejected by serde as a duplicate field, so ambiguous or conflicting payloads fail closed.
+- An omitted relaxation algorithm is resolved at validation time as the public `llg_overdamped` default. Policy-free explicit or default LLG stages are rejected by both full-scene validation and public script-builder adaptation; policy-free direct minimizers remain valid.
+- The full SceneDocument proof uses the real Control Room payload shape with `algorithm`, blank `fixed_timestep`, and null `adaptive_timestep`, and verifies canonical reserialization.
+
+### Exact RED evidence
+
+- `cargo test -p fullmag-authoring public_scene_stage_algorithm_vocabulary_enforces_llg_timestep_policy --quiet`
+  - RED: the full SceneDocument deserialized `algorithm="llg_overdamped"` to an empty internal algorithm (`left: ""`, `right: "llg_overdamped"`), demonstrating that validation ignored the public field.
+
+### Exact GREEN evidence
+
+- Focused public SceneDocument contract: 1 passed, 46 filtered out.
+- Full authoring crate: `cargo test -p fullmag-authoring --quiet` — 47 passed.
+- API scene commit boundary: `cargo test -p fullmag-api authoring_scene_put_commits_scene_document --quiet` — 1 passed, 624 filtered out.
+- Control Room stage model/panel: 2 files passed, 83 tests passed.
+- `git diff --check`: exit 0.
+
+### Scope
+
+No OpenAPI schema, generated client, command transport, API route, resource hook, realtime event, binary codec, ribbon, viewport, Python DSL, planner, or compiled solver runtime changed.
