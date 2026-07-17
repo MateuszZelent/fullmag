@@ -3,7 +3,7 @@
 **Date:** 2026-07-17  
 **Branch:** `codex/inspector-2-refactor`  
 **Reference surface:** Visualization Inspector, Overview tab  
-**User approval:** pending
+**User approval:** accepted; rollout to the remaining Inspector families completed
 
 ## Baseline
 
@@ -117,10 +117,12 @@ Manual review findings after the second visual pass:
 | React Doctor | pass with reviewed warnings | score improved 76 → 84; zero errors, four stable React-setter false positives, six pre-existing mixed-export warnings |
 | Inspector browser smoke | pass | 0 console errors, 0 preview requests, widths 360/416/560, light/dark, Reset verified |
 
-## Known issues
+## Approved follow-up evolution
 
-Storybook isolation, browser screenshots, and the final full-suite gates remain outstanding. Broader Inspector families intentionally retain their compatibility styling until the reference slice is approved.
+After accepting the reference direction, the user approved flattening Visualization into one continuous task surface. The former `Overview`, `Properties`, `Display`, and `Diagnostics` shell tabs were removed because they split closely related display controls across artificial views. Diagnostics and advanced groups remain demand-driven disclosures. This supersedes the original four-tab navigation proposal without changing live viewport or reset semantics.
 
-## Recommendation
+The approved rollout subsequently migrated object authoring, mesh, airbox, regions, Study, hysteresis, frequency-domain results, diagnostics, and extensions. The obsolete `InspectorSection` compatibility primitive and its CSS were deleted after source-reachability tests proved no production consumer remained.
 
-Pending implementation and visual review. Broader Inspector migration is prohibited until the reference screenshots receive explicit user approval.
+## Current status
+
+The reference slice and approved rollout are implemented. Current production-gate evidence is recorded in `docs/reports/2026-07-17-compact-inspector-system.md`.
