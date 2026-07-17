@@ -104,6 +104,7 @@ export function createStudyGlobalDraft(scene: unknown): StudyGlobalDraft {
 
 export function validateStudyGlobalDraft(
   draft: StudyGlobalDraft,
+  capabilities?: { algorithmsAvailable?: readonly string[] },
 ): StudyGlobalDraftValidation[] {
   const issues: StudyGlobalDraftValidation[] = [];
   if (!draft.requestedBackend.trim()) {
@@ -133,7 +134,7 @@ export function validateStudyGlobalDraft(
       });
     }
   }
-  validateSolverDraft(issues, draft.solver);
+  validateSolverDraft(issues, draft.solver, draft, capabilities);
   validateOptionalJsonObject(
     issues,
     draft.femDemagSolverPolicy,
@@ -181,12 +182,12 @@ function createSolverDraft(value: unknown): StudySolverDraft {
           dtInitial: scalarText(advanced.dt_initial, ""),
           dtMax: scalarText(advanced.dt_max, ""),
           dtMin: scalarText(advanced.dt_min, ""),
-          growthLimit: scalarText(advanced.growth_limit, ""),
+          growthLimit: scalarText(advanced.growth_limit, "2"),
           maxSpinRotation: scalarText(advanced.max_spin_rotation, ""),
           normTolerance: scalarText(advanced.norm_tolerance, ""),
           rtol: scalarText(advanced.rtol, ""),
-          safety: scalarText(advanced.safety, ""),
-          shrinkLimit: scalarText(advanced.shrink_limit, ""),
+          safety: scalarText(advanced.safety, "0.9"),
+          shrinkLimit: scalarText(advanced.shrink_limit, "0.2"),
         }
       : null,
     demagInterval: scalarText(solver?.demag_interval_s, ""),
@@ -265,20 +266,24 @@ function solverDraftToScene(draft: StudySolverDraft): JsonObject {
 function validateSolverDraft(
   issues: StudyGlobalDraftValidation[],
   draft: StudySolverDraft,
+  execution: Pick<StudyGlobalDraft, "requestedBackend" | "requestedDevice">,
+  capabilities?: { algorithmsAvailable?: readonly string[] },
 ): void {
   if (draft.timestepMode === "fixed") {
     validatePositiveText(issues, draft.fixDt, "Fixed dt");
     return;
   }
   if (draft.timestepMode === "adaptive_max_error") {
+    validateAdaptiveExecution(issues, draft.integrator, execution, capabilities);
     validatePositiveText(issues, draft.dtMin, "Adaptive dt min");
-    validateOptionalPositiveText(issues, draft.dtMax, "Adaptive dt max");
+    validatePositiveText(issues, draft.dtMax, "Adaptive dt max");
     validatePositiveText(issues, draft.maxErr, "Maximum embedded vector error");
     validateOptionalPositiveText(issues, draft.dtInitial, "Initial dt");
     validateAdaptiveBounds(issues, draft.dtInitial, draft.dtMin, draft.dtMax);
     return;
   }
   if (draft.timestepMode === "adaptive_advanced") {
+    validateAdaptiveExecution(issues, draft.integrator, execution, capabilities);
     if (!draft.adaptiveTimestep) {
       issues.push({ message: "Advanced adaptive policy is required.", severity: "error" });
       return;
@@ -290,9 +295,62 @@ function validateSolverDraft(
       issues.push({ message: "At least one advanced tolerance must be positive.", severity: "error" });
     }
     validatePositiveText(issues, advanced.dtMin, "Adaptive dt min");
-    validateOptionalPositiveText(issues, advanced.dtMax, "Adaptive dt max");
+    validatePositiveText(issues, advanced.dtMax, "Adaptive dt max");
     validateOptionalPositiveText(issues, advanced.dtInitial, "Initial dt");
     validateAdaptiveBounds(issues, advanced.dtInitial, advanced.dtMin, advanced.dtMax);
+    validateController(issues, advanced);
+  }
+}
+
+function validateAdaptiveExecution(
+  issues: StudyGlobalDraftValidation[],
+  integrator: string,
+  execution: Pick<StudyGlobalDraft, "requestedBackend" | "requestedDevice">,
+  capabilities?: { algorithmsAvailable?: readonly string[] },
+): void {
+  if (!matchesAdaptiveIntegrator(integrator)) {
+    issues.push({ message: "Adaptive policy requires RK23 or RK45.", severity: "error" });
+  }
+  if (
+    capabilities?.algorithmsAvailable !== undefined &&
+    !capabilities.algorithmsAvailable.includes("llg_overdamped")
+  ) {
+    issues.push({ message: "LLG is not advertised by the active session.", severity: "error" });
+  }
+  if (
+    execution.requestedBackend.trim() &&
+    execution.requestedBackend !== "fem" &&
+    execution.requestedDevice !== "cpu"
+  ) {
+    issues.push({
+      message: "Adaptive FDM execution requires an explicit CPU device.",
+      severity: "error",
+    });
+  }
+}
+
+function matchesAdaptiveIntegrator(integrator: string): boolean {
+  return integrator === "rk23" || integrator === "rk45";
+}
+
+function validateController(
+  issues: StudyGlobalDraftValidation[],
+  adaptive: StudyAdaptiveTimestepDraft,
+): void {
+  validatePositiveText(issues, adaptive.safety, "Adaptive safety");
+  validatePositiveText(issues, adaptive.growthLimit, "Adaptive growth limit");
+  validatePositiveText(issues, adaptive.shrinkLimit, "Adaptive shrink limit");
+  const safety = Number(adaptive.safety);
+  const growth = Number(adaptive.growthLimit);
+  const shrink = Number(adaptive.shrinkLimit);
+  if (Number.isFinite(safety) && safety > 1) {
+    issues.push({ message: "Adaptive safety must be at most one.", severity: "error" });
+  }
+  if (Number.isFinite(growth) && growth <= 1) {
+    issues.push({ message: "Adaptive growth limit must be greater than one.", severity: "error" });
+  }
+  if (Number.isFinite(shrink) && shrink >= 1) {
+    issues.push({ message: "Adaptive shrink limit must be less than one.", severity: "error" });
   }
 }
 

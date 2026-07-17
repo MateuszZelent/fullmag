@@ -238,4 +238,49 @@ describe("StudyGlobalAuthoringModel", () => {
       "FEM demag policy must be a JSON object.",
     ]);
   });
+
+  it("defaults advanced controller fields and fails closed for incomplete or unsupported execution", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        requested_device: "gpu",
+        requested_precision: "double",
+        solver: {
+          integrator: "rk45",
+          adaptive_timestep: {
+            atol: 1e-8,
+            rtol: 1e-5,
+            dt_min: 1e-16,
+            dt_max: 1e-13,
+          },
+        },
+      },
+    });
+    expect(draft.solver.adaptiveTimestep).toMatchObject({
+      safety: "0.9",
+      growthLimit: "2",
+      shrinkLimit: "0.2",
+    });
+    expect(validateStudyGlobalDraft(draft, {
+      algorithmsAvailable: ["llg_overdamped"],
+    }).map((issue) => issue.message)).toContain(
+      "Adaptive FDM execution requires an explicit CPU device.",
+    );
+
+    const incomplete = {
+      ...draft,
+      requestedDevice: "cpu",
+      solver: {
+        ...draft.solver,
+        integrator: "heun",
+        adaptiveTimestep: {
+          ...draft.solver.adaptiveTimestep!,
+          dtMax: "",
+        },
+      },
+    };
+    const messages = validateStudyGlobalDraft(incomplete).map((issue) => issue.message);
+    expect(messages).toContain("Adaptive dt max must be finite and positive.");
+    expect(messages).toContain("Adaptive policy requires RK23 or RK45.");
+  });
 });

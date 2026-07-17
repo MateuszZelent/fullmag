@@ -262,6 +262,146 @@ class CanonicalLlgSolverContractTests(unittest.TestCase):
 
         self.assertEqual(self._solver_state(), before)
 
+    def test_stage_overrides_export_convenience_and_advanced_adaptive_policies(self) -> None:
+        source = """
+        import fullmag as fm
+
+        study = fm.study("stage_policy_export")
+        study.engine("fdm")
+        study.cell(5e-9, 5e-9, 5e-9)
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        body.m = fm.texture.uniform(1, 0, 0)
+        study.solver(integrator="rk45", fix_dt=1e-15)
+        study.stages.add_relax(stage_id="relax", algorithm="llg_overdamped")
+        """
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "stage_policy.py"
+            path.write_text(textwrap.dedent(source), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+            convenience = rewrite_loaded_problem_script(
+                loaded,
+                overrides={
+                    "stages": [
+                        {
+                            "kind": "relax",
+                            "integrator": "rk45",
+                            "fixed_timestep": None,
+                            "adaptive_timestep": {
+                                "tolerance_mode": "max_error",
+                                "atol": 1e-6,
+                                "rtol": 0.0,
+                                "dt_initial": 2e-15,
+                                "dt_min": 1e-16,
+                                "dt_max": 1e-13,
+                                "safety": 0.9,
+                                "growth_limit": 2.0,
+                                "shrink_limit": 0.2,
+                            },
+                        }
+                    ]
+                },
+            )["rendered_source"]
+            self.assertIn("max_err=1e-06", convenience)
+            self.assertIn("dt_initial=2e-15", convenience)
+            self.assertIn("dt_min=1e-16", convenience)
+            self.assertIn("dt_max=1e-13", convenience)
+            self.assertNotIn("_from_max_error", convenience)
+            convenience_path = Path(tmp_dir) / "stage_policy_convenience.py"
+            convenience_path.write_text(convenience, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(
+                convenience_path, lightweight_assets=True
+            )
+            stage_policy = reloaded.stages[0].problem.study.to_ir()["dynamics"][
+                "adaptive_timestep"
+            ]
+            self.assertEqual(stage_policy["tolerance_mode"], "max_error")
+            self.assertEqual(stage_policy["dt_initial"], 2e-15)
+            self.assertEqual(stage_policy["dt_min"], 1e-16)
+            self.assertEqual(stage_policy["atol"], 1e-6)
+            self.assertEqual(stage_policy["rtol"], 0.0)
+
+            advanced = rewrite_loaded_problem_script(
+                loaded,
+                overrides={
+                    "stages": [
+                        {
+                            "kind": "relax",
+                            "integrator": "rk45",
+                            "fixed_timestep": None,
+                            "adaptive_timestep": {
+                                "tolerance_mode": "advanced",
+                                "atol": 1e-8,
+                                "rtol": 1e-5,
+                                "dt_initial": None,
+                                "dt_min": 1e-16,
+                                "dt_max": 1e-13,
+                                "safety": 0.9,
+                                "growth_limit": 2.0,
+                                "shrink_limit": 0.2,
+                            },
+                        }
+                    ]
+                },
+            )["rendered_source"]
+            self.assertIn("adaptive_timestep=fm.AdaptiveTimestep(", advanced)
+            self.assertIn("rtol=1e-05", advanced)
+            advanced_path = Path(tmp_dir) / "stage_policy_advanced.py"
+            advanced_path.write_text(advanced, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(advanced_path, lightweight_assets=True)
+            stage_policy = reloaded.stages[0].problem.study.to_ir()["dynamics"][
+                "adaptive_timestep"
+            ]
+            self.assertEqual(stage_policy["tolerance_mode"], "advanced")
+            self.assertEqual(stage_policy["atol"], 1e-8)
+            self.assertEqual(stage_policy["rtol"], 1e-5)
+
+    def test_stage_convenience_policy_constructs_lowers_and_rejects_legacy_mixing(self) -> None:
+        study = self._configure_study()
+        stage = fm.relax_stage(
+            solver="rk45",
+            dt_initial=2e-15,
+            dt_min=1e-16,
+            dt_max=1e-13,
+            max_err=1e-6,
+        )
+        self.assertEqual(stage.dt_initial, 2e-15)
+        self.assertEqual(stage.max_err, 1e-6)
+        study.stages.add_relax(
+            stage_id="relax",
+            solver="rk45",
+            dt_initial=2e-15,
+            dt_min=1e-16,
+            dt_max=1e-13,
+            max_err=1e-6,
+        )
+
+        adaptive = flat_world._state._declared_stages[0].problem.study.to_ir()[
+            "dynamics"
+        ]["adaptive_timestep"]
+        self.assertEqual(adaptive["tolerance_mode"], "max_error")
+        self.assertEqual(adaptive["dt_initial"], 2e-15)
+        self.assertEqual(adaptive["dt_min"], 1e-16)
+        self.assertEqual(adaptive["dt_max"], 1e-13)
+        self.assertEqual(adaptive["atol"], 1e-6)
+
+        conflicts = (
+            {"solver": "rk45", "dt_initial": 2e-15, "dt": 1e-15, "max_err": 1e-6},
+            {"solver": "rk45", "max_err": 1e-6, "max_error": 1e-6},
+            {"solver": "rk45", "dt_initial": 2e-15, "max_error": 1e-6},
+            {
+                "solver": "rk45",
+                "max_err": 1e-6,
+                "adaptive_timestep": fm.AdaptiveTimestep(atol=1e-6),
+            },
+        )
+        for kwargs in conflicts:
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                fm.relax_stage(**kwargs)
+
     def test_explicit_advanced_policy_is_not_rewritten_as_convenience_mode(self) -> None:
         study = self._configure_study()
         study.solver(

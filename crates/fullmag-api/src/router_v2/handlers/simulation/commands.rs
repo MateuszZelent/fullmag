@@ -50,6 +50,15 @@ pub(crate) async fn submit_structured_command_impl(
 ) -> Result<CommandResponse, ApiError> {
     validate_relax_command_controls(&req)?;
     validate_solver_policy_controls(&req)?;
+    if request_has_adaptive_solver_policy(&req) {
+        if let Some(scene) = current_authoring_gate_scene(&state).await? {
+            validate_solver_policy_lane(
+                &req,
+                &scene.study.requested_backend,
+                &scene.study.requested_device,
+            )?;
+        }
+    }
     if let Some((scene, realization)) = validate_authoring_gate_for_command(&state, &req).await? {
         attach_geometry_realization_to_mesh_request(&mut req, &scene, &realization)?;
     }
@@ -61,6 +70,41 @@ pub(crate) async fn submit_structured_command_impl(
     let command = command_from_structured(req, command_id, now);
     validate_runtime_command_contract(&state, &command).await?;
     enqueue_session_command_impl(state, headers, command).await
+}
+
+fn request_has_adaptive_solver_policy(req: &StructuredCommandRequest) -> bool {
+    matches!(
+        req,
+        StructuredCommandRequest::Run {
+            solver_policy: Some(
+                SolverPolicyRequest::AdaptiveMaxError { .. }
+                    | SolverPolicyRequest::AdaptiveAdvanced { .. }
+            ),
+            ..
+        } | StructuredCommandRequest::Relax {
+            solver_policy: Some(
+                SolverPolicyRequest::AdaptiveMaxError { .. }
+                    | SolverPolicyRequest::AdaptiveAdvanced { .. }
+            ),
+            ..
+        }
+    )
+}
+
+fn validate_solver_policy_lane(
+    req: &StructuredCommandRequest,
+    requested_backend: &str,
+    requested_device: &str,
+) -> Result<(), ApiError> {
+    if request_has_adaptive_solver_policy(req)
+        && requested_backend != "fem"
+        && requested_device != "cpu"
+    {
+        return Err(ApiError::bad_request(
+            "Adaptive FDM execution requires an explicit CPU device; auto/gpu may select the non-lossless CUDA ABI",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_solver_policy_controls(req: &StructuredCommandRequest) -> Result<(), ApiError> {
@@ -92,12 +136,20 @@ fn validate_solver_policy_controls(req: &StructuredCommandRequest) -> Result<(),
         SolverPolicyRequest::Fixed { fix_dt, .. } => {
             require_positive_finite("solver_policy.fix_dt", *fix_dt)?;
         }
-        SolverPolicyRequest::Adaptive {
-            integrator,
+        SolverPolicyRequest::AdaptiveMaxError {
             dt_initial,
             dt_min,
             dt_max,
             max_err,
+            ..
+        } => {
+            validate_adaptive_bounds(*dt_initial, *dt_min, *dt_max)?;
+            require_positive_finite("solver_policy.max_err", *max_err)?;
+        }
+        SolverPolicyRequest::AdaptiveAdvanced {
+            dt_initial,
+            dt_min,
+            dt_max,
             atol,
             rtol,
             safety,
@@ -105,65 +157,33 @@ fn validate_solver_policy_controls(req: &StructuredCommandRequest) -> Result<(),
             shrink_limit,
             max_spin_rotation,
             norm_tolerance,
+            ..
         } => {
-            if !matches!(integrator.as_str(), "rk23" | "rk45" | "auto") {
+            validate_adaptive_bounds(*dt_initial, *dt_min, *dt_max)?;
+            if !atol.is_finite()
+                || !rtol.is_finite()
+                || *atol < 0.0
+                || *rtol < 0.0
+                || (*atol == 0.0 && *rtol == 0.0)
+            {
                 return Err(ApiError::bad_request(
-                    "adaptive solver_policy integrator must be rk23, rk45, or auto",
+                    "advanced solver_policy requires finite nonnegative atol/rtol with at least one positive tolerance",
                 ));
             }
-            require_positive_finite("solver_policy.dt_min", *dt_min)?;
-            if let Some(value) = dt_max {
-                require_positive_finite("solver_policy.dt_max", *value)?;
-                if value < dt_min {
-                    return Err(ApiError::bad_request(
-                        "solver_policy.dt_max must be greater than or equal to dt_min",
-                    ));
-                }
+            if !safety.is_finite() || *safety <= 0.0 || *safety > 1.0 {
+                return Err(ApiError::bad_request(
+                    "solver_policy.safety must be finite and in (0, 1]",
+                ));
             }
-            if let Some(value) = dt_initial {
-                require_positive_finite("solver_policy.dt_initial", *value)?;
-                if value < dt_min || dt_max.is_some_and(|maximum| value > &maximum) {
-                    return Err(ApiError::bad_request(
-                        "solver_policy.dt_initial must be >= dt_min and <= dt_max when bounded",
-                    ));
-                }
+            if !growth_limit.is_finite() || *growth_limit <= 1.0 {
+                return Err(ApiError::bad_request(
+                    "solver_policy.growth_limit must be finite and greater than one",
+                ));
             }
-            match (max_err, atol, rtol) {
-                (Some(value), None, None) => {
-                    require_positive_finite("solver_policy.max_err", *value)?;
-                }
-                (None, Some(atol), Some(rtol))
-                    if atol.is_finite()
-                        && rtol.is_finite()
-                        && *atol >= 0.0
-                        && *rtol >= 0.0
-                        && (*atol > 0.0 || *rtol > 0.0) => {}
-                _ => {
-                    return Err(ApiError::bad_request(
-                        "adaptive solver_policy requires exactly one tolerance mode: max_err or advanced atol/rtol",
-                    ));
-                }
-            }
-            if let Some(value) = safety {
-                if !value.is_finite() || *value <= 0.0 || *value > 1.0 {
-                    return Err(ApiError::bad_request(
-                        "solver_policy.safety must be finite and in (0, 1]",
-                    ));
-                }
-            }
-            if let Some(value) = growth_limit {
-                if !value.is_finite() || *value <= 1.0 {
-                    return Err(ApiError::bad_request(
-                        "solver_policy.growth_limit must be finite and greater than one",
-                    ));
-                }
-            }
-            if let Some(value) = shrink_limit {
-                if !value.is_finite() || *value <= 0.0 || *value >= 1.0 {
-                    return Err(ApiError::bad_request(
-                        "solver_policy.shrink_limit must be finite and in (0, 1)",
-                    ));
-                }
+            if !shrink_limit.is_finite() || *shrink_limit <= 0.0 || *shrink_limit >= 1.0 {
+                return Err(ApiError::bad_request(
+                    "solver_policy.shrink_limit must be finite and in (0, 1)",
+                ));
             }
             for (name, value) in [
                 ("solver_policy.max_spin_rotation", max_spin_rotation),
@@ -173,6 +193,29 @@ fn validate_solver_policy_controls(req: &StructuredCommandRequest) -> Result<(),
                     require_positive_finite(name, *value)?;
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_adaptive_bounds(
+    dt_initial: Option<f64>,
+    dt_min: f64,
+    dt_max: f64,
+) -> Result<(), ApiError> {
+    require_positive_finite("solver_policy.dt_min", dt_min)?;
+    require_positive_finite("solver_policy.dt_max", dt_max)?;
+    if dt_max < dt_min {
+        return Err(ApiError::bad_request(
+            "solver_policy.dt_max must be greater than or equal to dt_min",
+        ));
+    }
+    if let Some(value) = dt_initial {
+        require_positive_finite("solver_policy.dt_initial", value)?;
+        if value < dt_min || value > dt_max {
+            return Err(ApiError::bad_request(
+                "solver_policy.dt_initial must lie within [dt_min, dt_max]",
+            ));
         }
     }
     Ok(())
@@ -201,6 +244,7 @@ fn validate_relax_command_controls(req: &StructuredCommandRequest) -> Result<(),
         relax_alpha,
         fixed_timestep,
         max_error,
+        solver_policy,
         ..
     } = req
     else {
@@ -286,10 +330,11 @@ fn validate_relax_command_controls(req: &StructuredCommandRequest) -> Result<(),
             || max_relaxation_time_s.is_some()
             || relax_alpha.is_some()
             || fixed_timestep.is_some()
-            || max_error.is_some())
+            || max_error.is_some()
+            || solver_policy.is_some())
     {
         return Err(ApiError::bad_request(
-            "max_relaxation_time_s, relax_alpha, fixed_timestep, and max_error are valid only for llg_overdamped relaxation",
+            "max_relaxation_time_s, relax_alpha, fixed_timestep, max_error, and solver_policy are valid only for llg_overdamped relaxation",
         ));
     }
     Ok(())
@@ -1459,29 +1504,62 @@ mod tests {
     }
 
     #[test]
-    fn relax_command_preserves_omitted_adaptive_bounds_and_rejects_legacy_mixing() {
+    fn relax_command_requires_complete_typed_adaptive_policy_and_rejects_legacy_mixing() {
         let request: StructuredCommandRequest = serde_json::from_value(serde_json::json!({
             "kind": "relax",
             "solver_policy": {
-                "kind": "adaptive",
+                "kind": "adaptive_max_error",
                 "integrator": "rk45",
                 "dt_min": 1e-16,
+                "dt_max": 1e-14,
                 "max_err": 1e-6
             }
         }))
         .expect("canonical adaptive policy should deserialize");
         validate_solver_policy_controls(&request)
-            .expect("omitted dt_initial and dt_max must remain a valid adaptive request");
+            .expect("omitted dt_initial must remain a valid adaptive request");
+        assert!(validate_solver_policy_lane(&request, "fdm", "gpu")
+            .expect_err("adaptive FDM GPU must fail before enqueue")
+            .message
+            .contains("explicit CPU"));
         let command = command_from_structured(request, "cmd-adaptive".to_string(), 123);
         assert_eq!(
             serde_json::to_value(command.solver_policy).unwrap(),
             serde_json::json!({
-                "kind": "adaptive",
+                "kind": "adaptive_max_error",
                 "integrator": "rk45",
                 "dt_min": 1e-16,
+                "dt_max": 1e-14,
                 "max_err": 1e-6
             })
         );
+
+        assert!(serde_json::from_value::<StructuredCommandRequest>(serde_json::json!({
+            "kind": "relax",
+            "solver_policy": {
+                "kind": "adaptive_max_error",
+                "integrator": "rk45",
+                "dt_min": 1e-16,
+                "max_err": 1e-6
+            }
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<StructuredCommandRequest>(serde_json::json!({
+            "kind": "run",
+            "until_seconds": 1e-9,
+            "solver_policy": {
+                "kind": "adaptive_advanced",
+                "integrator": "rk4",
+                "dt_min": 1e-16,
+                "dt_max": 1e-14,
+                "atol": 1e-8,
+                "rtol": 1e-5,
+                "safety": 0.9,
+                "growth_limit": 2.0,
+                "shrink_limit": 0.2
+            }
+        }))
+        .is_err());
 
         let mixed: StructuredCommandRequest = serde_json::from_value(serde_json::json!({
             "kind": "relax",

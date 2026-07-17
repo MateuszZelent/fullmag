@@ -586,6 +586,80 @@ impl ResolvedScriptStage {
 pub(crate) type CurrentDisplaySelection = fullmag_runner::DisplaySelectionState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum FixedSolverIntegratorRequest {
+    Auto,
+    Heun,
+    Rk4,
+    Rk23,
+    Rk45,
+    Abm3,
+}
+
+impl FixedSolverIntegratorRequest {
+    pub(crate) const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Heun => "heun",
+            Self::Rk4 => "rk4",
+            Self::Rk23 => "rk23",
+            Self::Rk45 => "rk45",
+            Self::Abm3 => "abm3",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AdaptiveSolverIntegratorRequest {
+    Rk23,
+    Rk45,
+}
+
+impl AdaptiveSolverIntegratorRequest {
+    pub(crate) const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Rk23 => "rk23",
+            Self::Rk45 => "rk45",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum SolverPolicyRequest {
+    Fixed {
+        #[serde(default)]
+        integrator: Option<FixedSolverIntegratorRequest>,
+        fix_dt: f64,
+    },
+    AdaptiveMaxError {
+        integrator: AdaptiveSolverIntegratorRequest,
+        #[serde(default)]
+        dt_initial: Option<f64>,
+        dt_min: f64,
+        dt_max: f64,
+        max_err: f64,
+    },
+    AdaptiveAdvanced {
+        integrator: AdaptiveSolverIntegratorRequest,
+        #[serde(default)]
+        dt_initial: Option<f64>,
+        dt_min: f64,
+        dt_max: f64,
+        atol: f64,
+        rtol: f64,
+        safety: f64,
+        growth_limit: f64,
+        shrink_limit: f64,
+        #[serde(default)]
+        max_spin_rotation: Option<f64>,
+        #[serde(default)]
+        norm_tolerance: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SessionCommand {
     #[serde(default)]
     pub seq: u64,
@@ -616,6 +690,8 @@ pub(crate) struct SessionCommand {
     pub fixed_timestep: Option<f64>,
     #[serde(default)]
     pub max_error: Option<f64>,
+    #[serde(default)]
+    pub solver_policy: Option<SolverPolicyRequest>,
     #[serde(default)]
     pub relax_algorithm: Option<String>,
     #[serde(default)]

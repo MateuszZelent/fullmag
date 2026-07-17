@@ -432,7 +432,7 @@ describe("StudyStageAuthoringModel", () => {
       0,
     );
     expect(draft).toMatchObject({
-      dt: "auto",
+      dt: "",
       dtMax: "1e-13",
       dtMin: "1e-17",
       maxError: "0.000001",
@@ -453,6 +453,45 @@ describe("StudyStageAuthoringModel", () => {
         .dt_initial,
     ).toBeUndefined();
     expect(studyStageDraftToSceneStage(draft)).not.toHaveProperty("fixed_timestep");
+  });
+
+  it("keeps omitted adaptive dt_initial valid and rejects incomplete or CUDA FDM execution", () => {
+    const draft = createStudyStageDraft(
+      {
+        adaptive_timestep: {
+          atol: 1e-6,
+          dt_min: 1e-16,
+          dt_max: 1e-13,
+          rtol: 0,
+          tolerance_mode: "max_error",
+        },
+        algorithm: "llg_overdamped",
+        integrator: "rk45",
+        kind: "relax",
+        max_steps: 50000,
+        stage_id: "adaptive",
+        torque_tolerance_apm: 1e-4,
+      },
+      0,
+    );
+    expect(draft.dt).toBe("");
+    expect(validateStudyStageDraft(draft, {
+      algorithmsAvailable: ["llg_overdamped"],
+      backend: "fdm",
+      device: "cpu",
+      mode: "strict",
+    }).map((issue) => issue.message)).not.toContain("dt must be finite and positive.");
+
+    const incomplete = { ...draft, dtMax: "" };
+    expect(validateStudyStageDraft(incomplete, {
+      algorithmsAvailable: ["llg_overdamped"],
+      backend: "fdm",
+      device: "gpu",
+      mode: "strict",
+    }).map((issue) => issue.message)).toEqual(expect.arrayContaining([
+      "dt_max is required and must be finite and positive.",
+      "Adaptive FDM execution requires an explicit CPU device.",
+    ]));
   });
 
   it("preserves advanced adaptive atol and rtol separately", () => {

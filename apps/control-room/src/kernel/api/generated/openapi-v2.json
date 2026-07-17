@@ -1,6 +1,13 @@
 {
   "components": {
     "schemas": {
+      "AdaptiveSolverIntegratorRequest": {
+        "enum": [
+          "rk23",
+          "rk45"
+        ],
+        "type": "string"
+      },
       "AirboxLayerPatch": {
         "properties": {
           "bounds": {
@@ -5144,6 +5151,17 @@
           }
         },
         "type": "object"
+      },
+      "FixedSolverIntegratorRequest": {
+        "enum": [
+          "auto",
+          "heun",
+          "rk4",
+          "rk23",
+          "rk45",
+          "abm3"
+        ],
+        "type": "string"
       },
       "FrequencyDomainAvailabilitySummaryResource": {
         "properties": {
@@ -16034,9 +16052,13 @@
                 "type": "number"
               },
               "integrator": {
-                "type": [
-                  "string",
-                  "null"
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/FixedSolverIntegratorRequest"
+                  }
                 ]
               },
               "kind": {
@@ -16054,12 +16076,49 @@
           },
           {
             "properties": {
-              "atol": {
+              "dt_initial": {
                 "format": "double",
                 "type": [
                   "number",
                   "null"
                 ]
+              },
+              "dt_max": {
+                "format": "double",
+                "type": "number"
+              },
+              "dt_min": {
+                "format": "double",
+                "type": "number"
+              },
+              "integrator": {
+                "$ref": "#/components/schemas/AdaptiveSolverIntegratorRequest"
+              },
+              "kind": {
+                "enum": [
+                  "adaptive_max_error"
+                ],
+                "type": "string"
+              },
+              "max_err": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "integrator",
+              "dt_min",
+              "dt_max",
+              "max_err",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "atol": {
+                "format": "double",
+                "type": "number"
               },
               "dt_initial": {
                 "format": "double",
@@ -16070,10 +16129,7 @@
               },
               "dt_max": {
                 "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
+                "type": "number"
               },
               "dt_min": {
                 "format": "double",
@@ -16081,26 +16137,16 @@
               },
               "growth_limit": {
                 "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
+                "type": "number"
               },
               "integrator": {
-                "type": "string"
+                "$ref": "#/components/schemas/AdaptiveSolverIntegratorRequest"
               },
               "kind": {
                 "enum": [
-                  "adaptive"
+                  "adaptive_advanced"
                 ],
                 "type": "string"
-              },
-              "max_err": {
-                "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
               },
               "max_spin_rotation": {
                 "format": "double",
@@ -16118,29 +16164,26 @@
               },
               "rtol": {
                 "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
+                "type": "number"
               },
               "safety": {
                 "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
+                "type": "number"
               },
               "shrink_limit": {
                 "format": "double",
-                "type": [
-                  "number",
-                  "null"
-                ]
+                "type": "number"
               }
             },
             "required": [
               "integrator",
               "dt_min",
+              "dt_max",
+              "atol",
+              "rtol",
+              "safety",
+              "growth_limit",
+              "shrink_limit",
               "kind"
             ],
             "type": "object"

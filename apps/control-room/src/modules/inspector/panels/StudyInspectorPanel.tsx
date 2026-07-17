@@ -1411,6 +1411,8 @@ export function StudyBoundarySection({
         onUpdate={(patch) =>
           onUpdate({ solver: { ...draft.solver, ...patch } })
         }
+        requestedBackend={draft.requestedBackend}
+        requestedDevice={draft.requestedDevice}
       />
       <FormField
         label="FEM demag policy"

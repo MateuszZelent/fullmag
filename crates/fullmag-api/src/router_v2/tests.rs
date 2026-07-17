@@ -14082,7 +14082,11 @@ async fn relax_command_rejects_llg_only_controls_for_direct_minimizer() {
                     serde_json::json!({
                         "kind": "relax",
                         "relax_algorithm": "projected_gradient_bb",
-                        "max_relaxation_time_s": 1.0
+                        "solver_policy": {
+                            "kind": "fixed",
+                            "integrator": "heun",
+                            "fix_dt": 1e-15
+                        }
                     })
                     .to_string(),
                 ))

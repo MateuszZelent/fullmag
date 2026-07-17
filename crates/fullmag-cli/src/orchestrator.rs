@@ -7292,6 +7292,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     integrator: None,
                     fixed_timestep: None,
                     max_error: None,
+                    solver_policy: None,
                     relax_algorithm: None,
                     relax_alpha: None,
                     mesh_options: None,

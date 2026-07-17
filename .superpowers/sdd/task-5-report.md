@@ -83,3 +83,100 @@ Do not trust the generated transport until regeneration succeeds. The reviewing 
 - Control Room `typecheck`, `lint`, and `check:api-hygiene`: passed.
 - `git diff --check`: passed.
 - The remaining semantic question for review is whether an execution command may preserve omitted `dt_max` or must reject it before enqueue, while scene/UI draft round-trip remains lossless.
+
+## Fix round after review findings
+
+Status: `DONE_WITH_CONCERNS`
+
+Base commit: `817f18e704e62aeaeeb560ebd673cf804386a363`
+
+No commit was created.
+
+### Binding contract resolved
+
+- Scene and UI draft state preserves omitted `dt_max` losslessly.
+- Executable run/relax command and executable stage policy requires finite positive `dt_min` and `dt_max`, ordered bounds, and exactly one typed tolerance mode.
+- Omitted `dt_initial` remains valid and is preserved as `None`; the established IR/runtime rule resolves the first attempted step to `dt_min`.
+- Adaptive FDM command/UI authoring fails closed unless CPU is explicit. FEM remains subject to the existing planner's native-controller restrictions.
+
+### Fixes for all Critical and Important findings
+
+1. Added matching typed solver-policy transport to `fullmag-cli`, mapped canonical fixed/max-error/advanced policies into `AdaptiveTimeStepIR`, and included canonical policy in direct-minimizer rejection. CLI does not redefine physics signs or units; API validates transport and existing IR/planner validation remains authoritative downstream.
+2. Replaced the loose API adaptive object with three tagged variants: `fixed`, `adaptive_max_error`, and `adaptive_advanced`. Executable adaptive variants require `dt_max` at deserialization.
+3. Omitted stage `dt_initial` now loads as an empty optional value instead of the invalid string `auto`.
+4. Extended Rust stage builder/projection with typed adaptive policy, including edited bounds, tolerance mode, controller values, and optional guards.
+5. Advanced global UI policy now supplies and exposes canonical controller defaults (`safety=0.9`, `growth_limit=2`, `shrink_limit=0.2`) and validates their ranges.
+6. Authoring validation now rejects fixed/convenience/advanced conflicts and malformed present numerics instead of precedence-normalizing them or converting them to null.
+7. Global and stage validation now enforces finite values, ordered bounds, optional initial-step range, RK23/RK45 compatibility, exact tolerance rules, and complete executable upper bounds.
+8. UI capability gating combines active-session LLG availability with requested backend/device. API consults the active authoring scene when an adaptive command is submitted and rejects FDM auto/GPU lanes before enqueue.
+9. OpenAPI now exposes typed fixed and embedded-RK integrator enums and disjoint policy shapes, preventing mixed or incomplete tolerance objects at the type boundary.
+10. Added command-to-CLI resolution proof and scene/stage-to-canonical-Python export proof. Python stage authoring now accepts an advanced `AdaptiveTimestep` and reloaded generated scripts preserve advanced tolerances.
+
+### TDD RED evidence
+
+- `cargo test -p fullmag-cli interactive_command_resolves_canonical_adaptive_solver_policy --quiet`
+  - RED: failed at `canonical adaptive policy must reach execution`; canonical queue payload was ignored.
+- `cargo test -p fullmag-api relax_command_requires_complete_typed_adaptive_policy_and_rejects_legacy_mixing --quiet`
+  - RED: `unknown variant adaptive_max_error, expected fixed or adaptive`; API type boundary was loose.
+- `cargo test -p fullmag-authoring scene_projection_ --quiet`
+  - RED: 2 failed / 1 passed; fixed+adaptive conflict was accepted and stage adaptive projection returned null.
+- Focused Control Room global/stage model tests
+  - RED: advanced controller defaults were blank and omitted adaptive `dt_initial` loaded as `auto`.
+- `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_llg_solver_contract.py -q -k stage_overrides_export`
+  - RED: canonical rewritten stage omitted `max_error`, `dt_min`, `dt_max`, and advanced adaptive policy.
+
+### GREEN verification evidence
+
+- `cargo test -p fullmag-authoring --quiet`
+  - 44 passed, 0 failed.
+- Fresh final focused authoring run: `cargo test -p fullmag-authoring scene_projection_ --quiet`
+  - 3 passed, 0 failed.
+- `cargo test -p fullmag-cli --quiet`
+  - 157 passed, 0 failed.
+- Fresh final CLI canonical resolution: `cargo test -p fullmag-cli canonical_solver_policy --quiet`
+  - 1 passed, 0 failed.
+- API fixed policy: `cargo test -p fullmag-api solver_policy --quiet`
+  - 1 passed, 0 failed.
+- API typed adaptive policy: `cargo test -p fullmag-api typed_adaptive_policy --quiet`
+  - 1 passed, 0 failed.
+- API HTTP direct-minimizer rejection: `cargo test -p fullmag-api relax_command_rejects_llg_only_controls_for_direct_minimizer --quiet`
+  - 1 passed, 0 failed.
+- Focused Control Room models/panel: `vitest run StudyGlobalAuthoringModel.test.ts StudyStageAuthoringModel.test.ts StudyInspectorPanel.test.tsx`
+  - 3 files passed, 86 tests passed.
+- `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_llg_solver_contract.py -q`
+  - 25 tests passed and 24 subtests passed.
+- Repository generators:
+  - `generate:openapi-v2`: exit 0.
+  - `generate:api-v2-types`: exit 0.
+  - `generate:api-v2-client`: exit 0.
+- `corepack pnpm --dir apps/control-room typecheck`: exit 0.
+- `corepack pnpm --dir apps/control-room lint`: exit 0 with `--max-warnings=0`.
+- `corepack pnpm --dir apps/control-room check:api-hygiene`: exit 0.
+- `git diff --check`: exit 0 before the report update; repeated at handoff.
+
+### Generated transport and architecture
+
+- OpenAPI v2 JSON and generated TypeScript types were regenerated from backend schema through repository scripts; the generated client script also completed.
+- HTTP v2 remains the authoritative command transport. No route, resource hook, WebSocket payload, endpoint string, direct component `fetch()`, binary codec, ribbon, or viewport path changed.
+- Inspector state remains transaction-local draft state; server resource ownership and module boundaries are unchanged.
+
+### Remaining concerns / unchanged environment blockers
+
+- The known full `fullmag-api` suite snapshot previously had four failures outside the Task 5 diff; the fix round intentionally used focused API gates and does not relabel those failures as baseline.
+- Full frontend test/browser smoke was not repeated: the previously confirmed sandbox `spawnSync ... EPERM` and unavailable Playwright environment did not change, and no dependency was installed.
+- Repo-wide `rustfmt --check` still reports existing formatting drift across large CLI/authoring files. `git diff --check`, compilation, focused tests, typecheck, and lint are clean; no broad formatting rewrite was applied.
+
+## Follow-up: staged max-error `dt_initial` round-trip
+
+The stage max-error exporter previously discarded an explicit `dt_initial` and emitted the deprecated `max_error` spelling. The public staged-relaxation contract now accepts canonical keyword-only `dt_initial` and `max_err` on both `relax_stage` and `study.stages.add_relax`. Their values are retained in `RelaxStageSpec`, lowered into max-error-mode `AdaptiveTimestepIR`, and rendered as human-editable public Python. Generated scripts do not expose the private `_from_max_error` constructor and do not convert max-error mode into advanced mode. Mixing canonical controls with legacy `dt`/`max_error`, or convenience controls with `adaptive_timestep`, fails deterministically.
+
+### Follow-up TDD evidence
+
+- RED: `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_llg_solver_contract.py -q -k 'stage_overrides_export or stage_convenience_policy'`
+  - 2 failed: `relax_stage` rejected `dt_initial`, while exported stage Python emitted `max_error` and omitted the explicit initial timestep.
+- GREEN focused rerun of the same command:
+  - 2 passed, 24 deselected, 3 subtests passed.
+- Final Python LLG contract: `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_llg_solver_contract.py -q`
+  - 26 passed, 28 subtests passed.
+- Final authoring stage projection: `cargo test -p fullmag-authoring scene_projection_ --quiet`
+  - 3 passed, 0 failed, 41 filtered out.

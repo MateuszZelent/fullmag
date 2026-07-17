@@ -1452,6 +1452,9 @@ fn reject_direct_minimizer_llg_command(
     if command.max_error.is_some() {
         rejected.push("max_error");
     }
+    if command.solver_policy.is_some() {
+        rejected.push("solver_policy");
+    }
     if command.relax_alpha.is_some() {
         rejected.push("relax_alpha");
     }
@@ -3294,6 +3297,79 @@ fn resolve_interactive_llg_policy(
         adaptive_timestep,
         ..
     } = dynamics;
+    if let Some(policy) = command.solver_policy.as_ref() {
+        if command.integrator.is_some()
+            || command.fixed_timestep.is_some()
+            || command.max_error.is_some()
+        {
+            bail!("canonical solver_policy cannot be mixed with legacy integrator/fixed_timestep/max_error controls");
+        }
+        match policy {
+            crate::types::SolverPolicyRequest::Fixed {
+                integrator: requested_integrator,
+                fix_dt,
+            } => {
+                if let Some(requested_integrator) = requested_integrator {
+                    *integrator = requested_integrator.as_str().to_string();
+                }
+                *fixed_timestep = Some(*fix_dt);
+                *adaptive_timestep = None;
+            }
+            crate::types::SolverPolicyRequest::AdaptiveMaxError {
+                integrator: requested_integrator,
+                dt_initial,
+                dt_min,
+                dt_max,
+                max_err,
+            } => {
+                *integrator = requested_integrator.as_str().to_string();
+                *fixed_timestep = None;
+                *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+                    tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+                    atol: *max_err,
+                    rtol: 0.0,
+                    dt_initial: *dt_initial,
+                    dt_min: *dt_min,
+                    dt_max: Some(*dt_max),
+                    safety: 0.9,
+                    growth_limit: 2.0,
+                    shrink_limit: 0.2,
+                    max_spin_rotation: None,
+                    norm_tolerance: None,
+                });
+            }
+            crate::types::SolverPolicyRequest::AdaptiveAdvanced {
+                integrator: requested_integrator,
+                dt_initial,
+                dt_min,
+                dt_max,
+                atol,
+                rtol,
+                safety,
+                growth_limit,
+                shrink_limit,
+                max_spin_rotation,
+                norm_tolerance,
+            } => {
+                *integrator = requested_integrator.as_str().to_string();
+                *fixed_timestep = None;
+                *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+                    tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+                    atol: *atol,
+                    rtol: *rtol,
+                    dt_initial: *dt_initial,
+                    dt_min: *dt_min,
+                    dt_max: Some(*dt_max),
+                    safety: *safety,
+                    growth_limit: *growth_limit,
+                    shrink_limit: *shrink_limit,
+                    max_spin_rotation: *max_spin_rotation,
+                    norm_tolerance: *norm_tolerance,
+                });
+            }
+        }
+        return Ok(());
+    }
     if let Some(value) = command.integrator.as_ref() {
         *integrator = serde_json::from_value(serde_json::json!(value))
             .with_context(|| format!("invalid integrator '{value}'"))?;
@@ -3498,6 +3574,7 @@ pub(crate) fn sequence_stage_to_session_command(
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: None,
             relax_alpha: None,
             mesh_options: None,
@@ -3536,6 +3613,7 @@ pub(crate) fn sequence_stage_to_session_command(
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: None,
             relax_alpha: None,
             mesh_options: None,
@@ -3688,6 +3766,64 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("complete adaptive policy"));
+    }
+
+    #[test]
+    fn interactive_command_resolves_canonical_adaptive_solver_policy() {
+        let command: crate::types::SessionCommand = serde_json::from_value(json!({
+            "command_id": "cmd-canonical-adaptive",
+            "kind": "run",
+            "created_at_unix_ms": 0,
+            "until_seconds": 1e-12,
+            "solver_policy": {
+                "kind": "adaptive_max_error",
+                "integrator": "rk45",
+                "dt_min": 1e-16,
+                "dt_max": 1e-13,
+                "max_err": 1e-6
+            }
+        }))
+        .expect("canonical solver policy command should deserialize");
+
+        let stage = build_interactive_command_stage(&sample_problem_ir(), &command)
+            .expect("canonical adaptive command should resolve")
+            .expect("run command should materialize a stage");
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = stage.ir.study else {
+            panic!("run command should materialize time evolution");
+        };
+        let fullmag_ir::DynamicsIR::Llg {
+            integrator,
+            fixed_timestep,
+            adaptive_timestep,
+            ..
+        } = dynamics;
+        let adaptive = adaptive_timestep.expect("canonical adaptive policy must reach execution");
+        assert_eq!(integrator, "rk45");
+        assert!(fixed_timestep.is_none());
+        assert_eq!(adaptive.dt_initial, None);
+        assert_eq!(adaptive.dt_min, 1e-16);
+        assert_eq!(adaptive.dt_max, Some(1e-13));
+        assert_eq!(adaptive.atol, 1e-6);
+        assert_eq!(adaptive.rtol, 0.0);
+    }
+
+    #[test]
+    fn direct_minimizer_rejects_canonical_solver_policy() {
+        let command: crate::types::SessionCommand = serde_json::from_value(json!({
+            "command_id": "cmd-direct-minimizer-policy",
+            "kind": "relax",
+            "created_at_unix_ms": 0,
+            "relax_algorithm": "projected_gradient_bb",
+            "solver_policy": {
+                "kind": "fixed",
+                "integrator": "heun",
+                "fix_dt": 1e-15
+            }
+        }))
+        .expect("canonical fixed policy should deserialize");
+        let error = build_interactive_command_stage(&sample_problem_ir(), &command)
+            .expect_err("direct minimizer must reject canonical LLG policy");
+        assert!(error.to_string().contains("solver_policy"));
     }
 
     fn primitive_node(id: &str, stage_kind: &str, payload: Value) -> StudyPipelineNode {
@@ -4631,6 +4767,7 @@ mod tests {
             integrator: Some("rk23".to_string()),
             fixed_timestep: Some(1e-13),
             max_error: Some(1e-5),
+            solver_policy: None,
             relax_algorithm: Some("projected_gradient_bb".to_string()),
             relax_alpha: Some(0.5),
             mesh_options: None,
@@ -4713,6 +4850,7 @@ mod tests {
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: Some("llg_overdamped".to_string()),
             relax_alpha: None,
             mesh_options: None,
@@ -4756,6 +4894,7 @@ mod tests {
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: Some("llg_overdamped".to_string()),
             relax_alpha: None,
             mesh_options: None,
@@ -4799,6 +4938,7 @@ mod tests {
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: Some("llg_overdamped".to_string()),
             relax_alpha: None,
             mesh_options: None,
@@ -4842,6 +4982,7 @@ mod tests {
             integrator: None,
             fixed_timestep: Some(6e-13),
             max_error: None,
+            solver_policy: None,
             relax_algorithm: Some("llg_overdamped".to_string()),
             relax_alpha: None,
             mesh_options: None,

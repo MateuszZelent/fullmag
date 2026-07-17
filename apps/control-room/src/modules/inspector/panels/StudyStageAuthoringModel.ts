@@ -1071,12 +1071,12 @@ export function createStudyStageDraft(
       record?.demag_interval_s ?? asRecord(record?.field_refresh)?.demag_interval_s,
       "",
     ),
-    dt: scalarText(
-      record?.fixed_timestep ??
-        asRecord(record?.adaptive_timestep)?.dt_initial ??
-        record?.dt,
-      DEFAULT_RELAX_STAGE_DRAFT.dt,
-    ),
+    dt: hasAdaptiveTimestep
+      ? scalarText(asRecord(record?.adaptive_timestep)?.dt_initial, "")
+      : scalarText(
+          record?.fixed_timestep ?? record?.dt,
+          DEFAULT_RELAX_STAGE_DRAFT.dt,
+        ),
     dtMin: scalarText(
       adaptiveTimestep?.dt_min ?? record?.dt_min,
       "",
@@ -1502,6 +1502,11 @@ export function studyStageDraftToSceneStage(
       }
       setOptionalNumber(adaptive, "dt_min", draft.dtMin);
       setOptionalNumber(adaptive, "dt_max", draft.dtMax);
+      if (draft.toleranceMode === "advanced") {
+        adaptive.safety = 0.9;
+        adaptive.growth_limit = 2;
+        adaptive.shrink_limit = 0.2;
+      }
       stage.adaptive_timestep = adaptive;
     }
     const fieldRefresh: JsonObject = {};
@@ -1763,7 +1768,24 @@ export function validateStudyStageDraft(
     validatePositiveNumber(issues, draft.relaxAlpha, "Relax alpha", false);
     if (draft.timestepMode === "adaptive") {
       validatePositiveNumber(issues, draft.dtMin, "dt_min", true);
-      validatePositiveNumber(issues, draft.dtMax, "dt_max", false);
+      if (!draft.dtMax.trim()) {
+        issues.push({
+          message: "dt_max is required and must be finite and positive.",
+          severity: "error",
+        });
+      } else {
+        validatePositiveNumber(issues, draft.dtMax, "dt_max", true);
+      }
+      if (draft.solver !== "rk23" && draft.solver !== "rk45") {
+        issues.push({ message: "Adaptive policy requires RK23 or RK45.", severity: "error" });
+      }
+      if (execution && execution.backend !== "fem" && execution.device !== "cpu") {
+        issues.push({
+          message: "Adaptive FDM execution requires an explicit CPU device.",
+          severity: "error",
+        });
+      }
+      validateStageAdaptiveBounds(issues, draft);
       if (draft.toleranceMode === "max_error") {
         validatePositiveNumber(issues, draft.maxError, "Maximum embedded vector error", true);
       } else {
@@ -1784,6 +1806,34 @@ export function validateStudyStageDraft(
     }
   }
   return issues;
+}
+
+function validateStageAdaptiveBounds(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  const minimum = Number(draft.dtMin);
+  const maximum = Number(draft.dtMax);
+  if (
+    draft.dtMin.trim() &&
+    draft.dtMax.trim() &&
+    Number.isFinite(minimum) &&
+    Number.isFinite(maximum) &&
+    maximum < minimum
+  ) {
+    issues.push({ message: "dt_max must be greater than or equal to dt_min.", severity: "error" });
+  }
+  if (draft.dt.trim()) {
+    const initial = Number(draft.dt);
+    if (
+      Number.isFinite(initial) &&
+      Number.isFinite(minimum) &&
+      Number.isFinite(maximum) &&
+      (initial < minimum || initial > maximum)
+    ) {
+      issues.push({ message: "dt_initial must lie within adaptive bounds.", severity: "error" });
+    }
+  }
 }
 
 function validateNonnegativeNumber(

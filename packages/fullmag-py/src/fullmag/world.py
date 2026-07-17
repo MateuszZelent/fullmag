@@ -1914,6 +1914,9 @@ class RelaxStageSpec:
     max_error: float | None = None
     dt_min: float | None = None
     dt_max: float | None = None
+    dt_initial: float | None = None
+    max_err: float | None = None
+    adaptive_timestep: AdaptiveTimestep | None = None
     field_refresh: FieldRefreshPolicy | None = None
     stop: RelaxStop | None = None
 
@@ -2240,6 +2243,9 @@ def relax_stage(
     max_error: float | None = None,
     dt_min: float | None = None,
     dt_max: float | None = None,
+    dt_initial: float | None = None,
+    max_err: float | None = None,
+    adaptive_timestep: AdaptiveTimestep | None = None,
     field_refresh: FieldRefreshPolicy | None = None,
     stop: RelaxStop | None = None,
 ) -> RelaxStageSpec:
@@ -2278,6 +2284,9 @@ def relax_stage(
         max_error=max_error,
         dt_min=dt_min,
         dt_max=dt_max,
+        dt_initial=dt_initial,
+        max_err=max_err,
+        adaptive_timestep=adaptive_timestep,
         field_refresh=field_refresh,
         relax_alpha=resolved_relax_alpha,
     )
@@ -2295,6 +2304,9 @@ def relax_stage(
         max_error=max_error,
         dt_min=dt_min,
         dt_max=dt_max,
+        dt_initial=dt_initial,
+        max_err=max_err,
+        adaptive_timestep=adaptive_timestep,
         field_refresh=field_refresh,
         stop=resolved_stop,
     )
@@ -2455,6 +2467,9 @@ def _relax_problem_from_spec(spec: RelaxStageSpec) -> Problem:
         max_error=spec.max_error,
         dt_min=spec.dt_min,
         dt_max=spec.dt_max,
+        dt_initial=spec.dt_initial,
+        max_err=spec.max_err,
+        adaptive_timestep=spec.adaptive_timestep,
         field_refresh=spec.field_refresh,
         relax_alpha=spec.relax_alpha,
     )
@@ -3015,6 +3030,9 @@ class StudyStagesBuilder:
         max_error: float | None = None,
         dt_min: float | None = None,
         dt_max: float | None = None,
+        dt_initial: float | None = None,
+        max_err: float | None = None,
+        adaptive_timestep: AdaptiveTimestep | None = None,
         field_refresh: FieldRefreshPolicy | None = None,
         stop: RelaxStop | None = None,
     ) -> "StudyStagesBuilder":
@@ -3033,6 +3051,9 @@ class StudyStagesBuilder:
                 max_error=max_error,
                 dt_min=dt_min,
                 dt_max=dt_max,
+                dt_initial=dt_initial,
+                max_err=max_err,
+                adaptive_timestep=adaptive_timestep,
                 field_refresh=field_refresh,
                 stop=stop,
             ),
@@ -6544,6 +6565,9 @@ def _build_relax_llg_dynamics(
     max_error: float | None,
     dt_min: float | None,
     dt_max: float | None,
+    dt_initial: float | None = None,
+    max_err: float | None = None,
+    adaptive_timestep: AdaptiveTimestep | None = None,
     field_refresh: FieldRefreshPolicy | None = None,
     relax_alpha: float | None = None,
 ) -> LLG | None:
@@ -6554,17 +6578,41 @@ def _build_relax_llg_dynamics(
             or max_error is not None
             or dt_min is not None
             or dt_max is not None
+            or dt_initial is not None
+            or max_err is not None
+            or adaptive_timestep is not None
             or field_refresh is not None
             or relax_alpha is not None
         ):
             raise TypeError(
-                "solver/dt/max_error/dt_min/dt_max/field_refresh/relax_alpha "
+                "solver/dt/max_error/dt_initial/max_err/dt_min/dt_max/"
+                "adaptive_timestep/field_refresh/relax_alpha "
                 "are supported only for algorithm='llg_overdamped'"
             )
         return None
 
+    if dt is not None and (dt_initial is not None or max_err is not None):
+        raise ValueError("deprecated dt cannot be mixed with dt_initial or max_err")
+    if max_error is not None and max_err is not None:
+        raise ValueError("deprecated max_error cannot be mixed with max_err")
+    if max_error is not None and dt_initial is not None:
+        raise ValueError("deprecated max_error cannot be mixed with dt_initial")
+
     integrator = _resolve_relax_solver(solver)
     fixed_timestep, dt_is_auto = _coerce_relax_dt(dt)
+    if adaptive_timestep is not None:
+        if not isinstance(adaptive_timestep, AdaptiveTimestep):
+            raise TypeError("adaptive_timestep must be an AdaptiveTimestep")
+        if any(
+            value is not None
+            for value in (dt, max_error, dt_initial, max_err, dt_min, dt_max)
+        ):
+            raise ValueError(
+                "adaptive_timestep cannot be mixed with dt/max_error/"
+                "dt_initial/max_err/dt_min/dt_max"
+            )
+        if integrator not in ADAPTIVE_INTEGRATORS:
+            raise ValueError("adaptive_timestep requires an adaptive relax solver (rk23 or rk45)")
     if dt_min is not None:
         if dt_min <= 0.0:
             raise ValueError("dt_min must be positive when provided")
@@ -6576,23 +6624,27 @@ def _build_relax_llg_dynamics(
         if fixed_timestep is not None:
             raise ValueError("dt_max requires dt='auto' for relax()")
 
-    adaptive_timestep = None
-    if max_error is not None:
-        if max_error <= 0.0:
-            raise ValueError("max_error must be positive when provided")
+    resolved_adaptive_timestep = adaptive_timestep
+    resolved_max_err = max_err if max_err is not None else max_error
+    if dt_initial is not None and resolved_max_err is None:
+        raise ValueError("dt_initial requires max_err for relax()")
+    if resolved_max_err is not None:
+        max_err_name = "max_err" if max_err is not None else "max_error"
+        if resolved_max_err <= 0.0:
+            raise ValueError(f"{max_err_name} must be positive when provided")
         if fixed_timestep is not None:
-            raise ValueError("max_error requires dt='auto' for relax()")
+            raise ValueError(f"{max_err_name} requires adaptive stepping for relax()")
         if integrator not in ADAPTIVE_INTEGRATORS:
             raise ValueError(
-                "max_error requires an adaptive relax solver (rk23 or rk45)"
+                f"{max_err_name} requires an adaptive relax solver (rk23 or rk45)"
             )
-        adaptive_kwargs: dict[str, Any] = {"atol": max_error}
-        if dt_min is not None:
-            adaptive_kwargs["dt_min"] = dt_min
-        if dt_max is not None:
-            adaptive_kwargs["dt_max"] = dt_max
-        adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
-    elif dt_is_auto and integrator in ADAPTIVE_INTEGRATORS:
+        resolved_adaptive_timestep = AdaptiveTimestep._from_max_error(
+            max_err=resolved_max_err,
+            dt_initial=dt_initial,
+            dt_min=dt_min if dt_min is not None else 1e-15,
+            dt_max=dt_max,
+        )
+    elif resolved_adaptive_timestep is None and dt_is_auto and integrator in ADAPTIVE_INTEGRATORS:
         # dt=None (default) with an adaptive integrator: use default adaptive
         # stepping so the runner receives a valid AdaptiveTimeStepIR rather than
         # both fixed_timestep=None and adaptive_timestep=None.
@@ -6601,7 +6653,7 @@ def _build_relax_llg_dynamics(
             adaptive_kwargs["dt_min"] = dt_min
         if dt_max is not None:
             adaptive_kwargs["dt_max"] = dt_max
-        adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
+        resolved_adaptive_timestep = AdaptiveTimestep(**adaptive_kwargs)
 
     if dt_is_auto and integrator not in ADAPTIVE_INTEGRATORS:
         raise ValueError(
@@ -6613,7 +6665,7 @@ def _build_relax_llg_dynamics(
         gamma=gamma,
         integrator=integrator,
         fixed_timestep=fixed_timestep,
-        adaptive_timestep=adaptive_timestep,
+        adaptive_timestep=resolved_adaptive_timestep,
         field_refresh=field_refresh,
     )
 

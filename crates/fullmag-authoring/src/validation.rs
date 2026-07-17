@@ -40,6 +40,10 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
     if scene.version == "scene.v1" {
         validate_scene_v1_has_no_region_owned_payloads(scene)?;
     }
+    validate_solver_state(&scene.study.solver, false, "study.solver")?;
+    for (index, stage) in scene.study.stages.iter().enumerate() {
+        validate_stage_solver_state(stage, index)?;
+    }
 
     let mut object_ids = BTreeSet::new();
     let mut material_ids = BTreeSet::new();
@@ -128,6 +132,185 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
     validate_scene_field_drives(scene, &object_ids)?;
 
     Ok(())
+}
+
+fn validate_stage_solver_state(
+    stage: &crate::ScriptBuilderStageState,
+    index: usize,
+) -> Result<(), SceneDocumentValidationError> {
+    let context = format!("study.stages[{index}]");
+    if !stage.fixed_timestep.trim().is_empty() && stage.adaptive_timestep.is_some() {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context} fixed and adaptive timestep policies are mutually exclusive"
+        )));
+    }
+    validate_present_positive(&stage.fixed_timestep, &format!("{context}.fixed_timestep"))?;
+    if let Some(adaptive) = stage.adaptive_timestep.as_ref() {
+        validate_adaptive_state(adaptive, true, &context, &stage.integrator)?;
+    }
+    Ok(())
+}
+
+fn validate_solver_state(
+    solver: &crate::ScriptBuilderSolverState,
+    executable: bool,
+    context: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    let convenience = [&solver.dt_initial, &solver.dt_min, &solver.dt_max, &solver.max_err]
+        .iter()
+        .any(|value| !value.trim().is_empty());
+    let active = usize::from(!solver.fixed_timestep.trim().is_empty())
+        + usize::from(convenience)
+        + usize::from(solver.adaptive_timestep.is_some());
+    if active > 1 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context} fixed, convenience-adaptive, and advanced-adaptive policies are mutually exclusive"
+        )));
+    }
+    validate_present_positive(&solver.fixed_timestep, &format!("{context}.fixed_timestep"))?;
+    if convenience {
+        validate_adaptive_values(
+            &solver.dt_initial,
+            &solver.dt_min,
+            &solver.dt_max,
+            executable,
+            context,
+            &solver.integrator,
+        )?;
+        validate_required_positive(&solver.max_err, &format!("{context}.max_err"))?;
+    }
+    if let Some(adaptive) = solver.adaptive_timestep.as_ref() {
+        validate_adaptive_state(adaptive, executable, context, &solver.integrator)?;
+    }
+    Ok(())
+}
+
+fn validate_adaptive_state(
+    adaptive: &crate::ScriptBuilderAdaptiveTimestepState,
+    executable: bool,
+    context: &str,
+    integrator: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    validate_adaptive_values(
+        &adaptive.dt_initial,
+        &adaptive.dt_min,
+        &adaptive.dt_max,
+        executable,
+        context,
+        integrator,
+    )?;
+    let atol = parse_required_nonnegative(&adaptive.atol, &format!("{context}.atol"))?;
+    let rtol = parse_required_nonnegative(&adaptive.rtol, &format!("{context}.rtol"))?;
+    if atol == 0.0 && rtol == 0.0 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context} requires at least one positive adaptive tolerance"
+        )));
+    }
+    match adaptive.tolerance_mode.as_str() {
+        "max_error" if rtol == 0.0 && atol > 0.0 => {}
+        "advanced" => {
+            let safety = parse_required_positive(&adaptive.safety, &format!("{context}.safety"))?;
+            let growth = parse_required_positive(
+                &adaptive.growth_limit,
+                &format!("{context}.growth_limit"),
+            )?;
+            let shrink = parse_required_positive(
+                &adaptive.shrink_limit,
+                &format!("{context}.shrink_limit"),
+            )?;
+            if safety > 1.0 || growth <= 1.0 || shrink >= 1.0 {
+                return Err(SceneDocumentValidationError::new(format!(
+                    "{context} controller requires safety<=1, growth_limit>1, and shrink_limit<1"
+                )));
+            }
+        }
+        "max_error" => {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context} max_error mode requires atol>0 and rtol=0"
+            )))
+        }
+        other => {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context} has unsupported tolerance_mode '{other}'"
+            )))
+        }
+    }
+    validate_present_positive(&adaptive.max_spin_rotation, &format!("{context}.max_spin_rotation"))?;
+    validate_present_positive(&adaptive.norm_tolerance, &format!("{context}.norm_tolerance"))?;
+    Ok(())
+}
+
+fn validate_adaptive_values(
+    initial: &str,
+    minimum: &str,
+    maximum: &str,
+    require_maximum: bool,
+    context: &str,
+    integrator: &str,
+) -> Result<(), SceneDocumentValidationError> {
+    if !matches!(integrator.trim(), "rk23" | "rk45") {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context} adaptive policy requires RK23 or RK45"
+        )));
+    }
+    let minimum = parse_required_positive(minimum, &format!("{context}.dt_min"))?;
+    let maximum = if maximum.trim().is_empty() && !require_maximum {
+        None
+    } else {
+        Some(parse_required_positive(maximum, &format!("{context}.dt_max"))?)
+    };
+    if maximum.is_some_and(|value| value < minimum) {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{context}.dt_max must be greater than or equal to dt_min"
+        )));
+    }
+    if !initial.trim().is_empty() {
+        let initial = parse_required_positive(initial, &format!("{context}.dt_initial"))?;
+        if initial < minimum || maximum.is_some_and(|value| initial > value) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "{context}.dt_initial must lie within adaptive bounds"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn parse_required_positive(value: &str, name: &str) -> Result<f64, SceneDocumentValidationError> {
+    let parsed = value.parse::<f64>().map_err(|_| {
+        SceneDocumentValidationError::new(format!("{name} must be a finite positive number"))
+    })?;
+    if !parsed.is_finite() || parsed <= 0.0 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{name} must be a finite positive number"
+        )));
+    }
+    Ok(parsed)
+}
+
+fn parse_required_nonnegative(
+    value: &str,
+    name: &str,
+) -> Result<f64, SceneDocumentValidationError> {
+    let parsed = value.parse::<f64>().map_err(|_| {
+        SceneDocumentValidationError::new(format!("{name} must be finite and nonnegative"))
+    })?;
+    if !parsed.is_finite() || parsed < 0.0 {
+        return Err(SceneDocumentValidationError::new(format!(
+            "{name} must be finite and nonnegative"
+        )));
+    }
+    Ok(parsed)
+}
+
+fn validate_required_positive(value: &str, name: &str) -> Result<(), SceneDocumentValidationError> {
+    parse_required_positive(value, name).map(|_| ())
+}
+
+fn validate_present_positive(value: &str, name: &str) -> Result<(), SceneDocumentValidationError> {
+    if value.trim().is_empty() {
+        return Ok(());
+    }
+    validate_required_positive(value, name)
 }
 
 fn collect_stage_ids(nodes: &[StudyPipelineNode], ids: &mut BTreeSet<String>) {

@@ -2952,6 +2952,8 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @enum {string} */
+        AdaptiveSolverIntegratorRequest: "rk23" | "rk45";
         AirboxLayerPatch: {
             bounds?: null | components["schemas"]["BasicLayerPatch"];
             /** Format: double */
@@ -4265,6 +4267,8 @@ export interface components {
              */
             view?: string | null;
         };
+        /** @enum {string} */
+        FixedSolverIntegratorRequest: "auto" | "heun" | "rk4" | "rk23" | "rk45" | "abm3";
         FrequencyDomainAvailabilitySummaryResource: {
             diagnostics_json: string;
             driven_response_available: boolean;
@@ -6968,35 +6972,45 @@ export interface components {
         SolverPolicyRequest: {
             /** Format: double */
             fix_dt: number;
-            integrator?: string | null;
+            integrator?: null | components["schemas"]["FixedSolverIntegratorRequest"];
             /** @enum {string} */
             kind: "fixed";
         } | {
             /** Format: double */
-            atol?: number | null;
+            dt_initial?: number | null;
+            /** Format: double */
+            dt_max: number;
+            /** Format: double */
+            dt_min: number;
+            integrator: components["schemas"]["AdaptiveSolverIntegratorRequest"];
+            /** @enum {string} */
+            kind: "adaptive_max_error";
+            /** Format: double */
+            max_err: number;
+        } | {
+            /** Format: double */
+            atol: number;
             /** Format: double */
             dt_initial?: number | null;
             /** Format: double */
-            dt_max?: number | null;
+            dt_max: number;
             /** Format: double */
             dt_min: number;
             /** Format: double */
-            growth_limit?: number | null;
-            integrator: string;
+            growth_limit: number;
+            integrator: components["schemas"]["AdaptiveSolverIntegratorRequest"];
             /** @enum {string} */
-            kind: "adaptive";
-            /** Format: double */
-            max_err?: number | null;
+            kind: "adaptive_advanced";
             /** Format: double */
             max_spin_rotation?: number | null;
             /** Format: double */
             norm_tolerance?: number | null;
             /** Format: double */
-            rtol?: number | null;
+            rtol: number;
             /** Format: double */
-            safety?: number | null;
+            safety: number;
             /** Format: double */
-            shrink_limit?: number | null;
+            shrink_limit: number;
         };
         SolverProfileAggregatesResource: {
             /** Format: int64 */

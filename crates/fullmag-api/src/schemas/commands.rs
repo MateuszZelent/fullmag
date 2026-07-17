@@ -66,32 +66,50 @@ pub struct RuntimeCommandPrecondition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FixedSolverIntegratorRequest {
+    Auto,
+    Heun,
+    Rk4,
+    Rk23,
+    Rk45,
+    Abm3,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AdaptiveSolverIntegratorRequest {
+    Rk23,
+    Rk45,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SolverPolicyRequest {
     Fixed {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        integrator: Option<String>,
+        integrator: Option<FixedSolverIntegratorRequest>,
         fix_dt: f64,
     },
-    Adaptive {
-        integrator: String,
+    AdaptiveMaxError {
+        integrator: AdaptiveSolverIntegratorRequest,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dt_initial: Option<f64>,
         dt_min: f64,
+        dt_max: f64,
+        max_err: f64,
+    },
+    AdaptiveAdvanced {
+        integrator: AdaptiveSolverIntegratorRequest,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        dt_max: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_err: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        atol: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        rtol: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        safety: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        growth_limit: Option<f64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        shrink_limit: Option<f64>,
+        dt_initial: Option<f64>,
+        dt_min: f64,
+        dt_max: f64,
+        atol: f64,
+        rtol: f64,
+        safety: f64,
+        growth_limit: f64,
+        shrink_limit: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_spin_rotation: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

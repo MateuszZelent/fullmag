@@ -320,6 +320,7 @@ pub fn scene_document_to_script_builder_overrides(
             "entrypoint_kind": stage.entrypoint_kind,
             "integrator": string_or_null(&stage.integrator),
             "fixed_timestep": parse_optional_text_f64(&stage.fixed_timestep),
+            "adaptive_timestep": stage.adaptive_timestep.as_ref().map(adaptive_timestep_override_value).unwrap_or(Value::Null),
             "until_seconds": parse_optional_text_f64(&stage.until_seconds),
             "relax_algorithm": string_or_null(&stage.relax_algorithm),
             "torque_tolerance": parse_optional_text_f64(&stage.torque_tolerance),
@@ -430,6 +431,24 @@ fn solver_override_value(solver: &crate::ScriptBuilderSolverState) -> Value {
         }),
     );
     Value::Object(value)
+}
+
+fn adaptive_timestep_override_value(
+    adaptive: &crate::ScriptBuilderAdaptiveTimestepState,
+) -> Value {
+    serde_json::json!({
+        "tolerance_mode": adaptive.tolerance_mode,
+        "atol": parse_optional_text_f64(&adaptive.atol),
+        "rtol": parse_optional_text_f64(&adaptive.rtol),
+        "dt_initial": parse_optional_text_f64(&adaptive.dt_initial),
+        "dt_min": parse_optional_text_f64(&adaptive.dt_min),
+        "dt_max": parse_optional_text_f64(&adaptive.dt_max),
+        "safety": parse_optional_text_f64(&adaptive.safety),
+        "growth_limit": parse_optional_text_f64(&adaptive.growth_limit),
+        "shrink_limit": parse_optional_text_f64(&adaptive.shrink_limit),
+        "max_spin_rotation": parse_optional_text_f64(&adaptive.max_spin_rotation),
+        "norm_tolerance": parse_optional_text_f64(&adaptive.norm_tolerance),
+    })
 }
 
 fn scene_mesh_interface_from_builder(
@@ -1940,6 +1959,7 @@ mod tests {
                 entrypoint_kind: "study".to_string(),
                 integrator: "rk45".to_string(),
                 fixed_timestep: String::new(),
+                adaptive_timestep: None,
                 until_seconds: "1e-9".to_string(),
                 relax_algorithm: String::new(),
                 torque_tolerance: String::new(),
@@ -2342,6 +2362,7 @@ mod tests {
         advanced.solver.integrator = "rk45".to_string();
         advanced.solver.fixed_timestep.clear();
         advanced.solver.adaptive_timestep = Some(ScriptBuilderAdaptiveTimestepState {
+            tolerance_mode: "advanced".to_string(),
             atol: "1e-8".to_string(),
             rtol: "1e-5".to_string(),
             dt_initial: String::new(),
@@ -2366,6 +2387,53 @@ mod tests {
         );
         assert_eq!(
             advanced_projection.rewrite_overrides["solver"]["adaptive_timestep"]["rtol"],
+            serde_json::json!(1e-5)
+        );
+    }
+
+    #[test]
+    fn scene_projection_rejects_conflicting_and_malformed_solver_policy() {
+        let mut conflict = sample_builder();
+        conflict.solver.fixed_timestep = "1e-15".to_string();
+        conflict.solver.dt_min = "1e-16".to_string();
+        conflict.solver.dt_max = "1e-14".to_string();
+        conflict.solver.max_err = "1e-6".to_string();
+        let error = scene_document_problem_projection(&scene_document_from_script_builder(&conflict))
+            .expect_err("fixed and adaptive scene state must fail closed");
+        assert!(error.message.contains("mutually exclusive"));
+
+        let mut malformed = sample_builder();
+        malformed.solver.fixed_timestep = "not-a-number".to_string();
+        let error = scene_document_problem_projection(&scene_document_from_script_builder(&malformed))
+            .expect_err("malformed present numerics must not normalize to null");
+        assert!(error.message.contains("fixed_timestep"));
+    }
+
+    #[test]
+    fn scene_projection_exports_edited_stage_adaptive_policy() {
+        let builder = sample_builder();
+        let mut encoded = serde_json::to_value(builder).unwrap();
+        encoded["stages"][0]["integrator"] = serde_json::json!("rk45");
+        encoded["stages"][0]["fixed_timestep"] = serde_json::json!("");
+        encoded["stages"][0]["adaptive_timestep"] = serde_json::json!({
+            "atol": "1e-8",
+            "rtol": "1e-5",
+            "dt_initial": "",
+            "dt_min": "1e-16",
+            "dt_max": "1e-13",
+            "safety": "0.9",
+            "growth_limit": "2.0",
+            "shrink_limit": "0.2"
+        });
+        let builder: ScriptBuilderState = serde_json::from_value(encoded).unwrap();
+        let projection = scene_document_problem_projection(&scene_document_from_script_builder(&builder))
+            .expect("valid stage adaptive policy should project");
+        assert_eq!(
+            projection.rewrite_overrides["stages"][0]["adaptive_timestep"]["dt_max"],
+            serde_json::json!(1e-13)
+        );
+        assert_eq!(
+            projection.rewrite_overrides["stages"][0]["adaptive_timestep"]["rtol"],
             serde_json::json!(1e-5)
         );
     }

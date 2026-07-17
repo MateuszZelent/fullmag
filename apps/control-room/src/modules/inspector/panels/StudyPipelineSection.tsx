@@ -122,12 +122,18 @@ export function StudySolverPolicyFields({
   algorithmsAvailable,
   draft,
   onUpdate,
+  requestedBackend = "auto",
+  requestedDevice = "auto",
 }: {
   algorithmsAvailable?: readonly string[];
   draft: StudySolverDraft;
   onUpdate: (patch: Partial<StudySolverDraft>) => void;
+  requestedBackend?: string;
+  requestedDevice?: string;
 }) {
-  const supportsAdaptive = algorithmsAvailable?.includes("llg_overdamped") ?? false;
+  const supportsAdaptive =
+    (algorithmsAvailable?.includes("llg_overdamped") ?? false) &&
+    (requestedBackend === "fem" || requestedDevice === "cpu");
   const updateAdvanced = (patch: Partial<StudyAdaptiveTimestepDraft>) =>
     onUpdate({
       adaptiveTimestep: {
@@ -135,12 +141,12 @@ export function StudySolverPolicyFields({
         dtInitial: "",
         dtMax: "",
         dtMin: "",
-        growthLimit: "",
+        growthLimit: "2",
         maxSpinRotation: "",
         normTolerance: "",
         rtol: "",
-        safety: "",
-        shrinkLimit: "",
+        safety: "0.9",
+        shrinkLimit: "0.2",
         ...draft.adaptiveTimestep,
         ...patch,
       },
@@ -190,6 +196,9 @@ export function StudySolverPolicyFields({
           <FormField label="Initial dt" hint="Optional; omission resolves exactly to dt min." unit="s" value={draft.adaptiveTimestep?.dtInitial ?? ""} onChange={(event) => updateAdvanced({ dtInitial: event.target.value })} />
           <FormField label="Adaptive dt min" unit="s" value={draft.adaptiveTimestep?.dtMin ?? ""} onChange={(event) => updateAdvanced({ dtMin: event.target.value })} />
           <FormField label="Adaptive dt max" unit="s" value={draft.adaptiveTimestep?.dtMax ?? ""} onChange={(event) => updateAdvanced({ dtMax: event.target.value })} />
+          <FormField label="Safety factor" value={draft.adaptiveTimestep?.safety ?? "0.9"} onChange={(event) => updateAdvanced({ safety: event.target.value })} />
+          <FormField label="Growth limit" value={draft.adaptiveTimestep?.growthLimit ?? "2"} onChange={(event) => updateAdvanced({ growthLimit: event.target.value })} />
+          <FormField label="Shrink limit" value={draft.adaptiveTimestep?.shrinkLimit ?? "0.2"} onChange={(event) => updateAdvanced({ shrinkLimit: event.target.value })} />
         </>
       ) : null}
       <FormField label="Demag interval" unit="s" value={draft.demagInterval} onChange={(event) => onUpdate({ demagInterval: event.target.value })} />
@@ -2085,6 +2094,9 @@ function RelaxStageDraftFields({
       mode: requestedMode,
     });
   const algorithmSupported = (value: string) => availability(value).supported;
+  const adaptiveSupported =
+    algorithmSupported("llg_overdamped") &&
+    (requestedBackend === "fem" || requestedDevice === "cpu");
   return (
     <>
       <FormField
@@ -2181,6 +2193,7 @@ function RelaxStageDraftFields({
           </FormField>
           <FormField
             label="Timestep mode"
+            hint={adaptiveSupported ? undefined : "Adaptive FDM requires an explicit CPU device and advertised LLG capability."}
             type="select"
             value={draft.timestepMode}
             onChange={(event) =>
@@ -2211,7 +2224,7 @@ function RelaxStageDraftFields({
           >
             <option value="auto">Auto</option>
             <option value="fixed">Fixed</option>
-            <option value="adaptive">Adaptive</option>
+            <option value="adaptive" disabled={!adaptiveSupported}>Adaptive</option>
           </FormField>
           {draft.timestepMode === "fixed" ? (
             <FormField

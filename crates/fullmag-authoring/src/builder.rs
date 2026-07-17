@@ -8,6 +8,8 @@ use crate::scene::{
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderAdaptiveTimestepState {
+    #[serde(default = "default_adaptive_tolerance_mode")]
+    pub tolerance_mode: String,
     #[serde(default)]
     pub atol: String,
     #[serde(default)]
@@ -28,6 +30,10 @@ pub struct ScriptBuilderAdaptiveTimestepState {
     pub max_spin_rotation: String,
     #[serde(default)]
     pub norm_tolerance: String,
+}
+
+fn default_adaptive_tolerance_mode() -> String {
+    "advanced".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -277,6 +283,8 @@ pub struct ScriptBuilderStageState {
     pub integrator: String,
     #[serde(default)]
     pub fixed_timestep: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_timestep: Option<ScriptBuilderAdaptiveTimestepState>,
     #[serde(default)]
     pub until_seconds: String,
     #[serde(default)]
