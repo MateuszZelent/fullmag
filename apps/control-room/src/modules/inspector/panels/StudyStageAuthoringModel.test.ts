@@ -527,6 +527,53 @@ describe("StudyStageAuthoringModel", () => {
     });
   });
 
+  it("migrates discriminator-less advanced payloads without changing custom controls", () => {
+    const draft = createStudyStageDraft(
+      {
+        adaptive_timestep: {
+          atol: 3e-8,
+          rtol: 4e-5,
+          dt_initial: 2e-15,
+          dt_min: 1e-16,
+          dt_max: 1e-13,
+          safety: 0.75,
+          growth_limit: 1.6,
+          shrink_limit: 0.35,
+          max_spin_rotation: 0.15,
+          norm_tolerance: 2e-6,
+        },
+        algorithm: "llg_overdamped",
+        integrator: "rk45",
+        kind: "relax",
+        max_steps: 50000,
+        stage_id: "legacy-advanced",
+        torque_tolerance_apm: 1e-4,
+      },
+      0,
+    );
+
+    expect(draft).toMatchObject({
+      toleranceMode: "advanced",
+      safety: "0.75",
+      growthLimit: "1.6",
+      shrinkLimit: "0.35",
+      maxSpinRotation: "0.15",
+      normTolerance: "0.000002",
+    });
+    expect(studyStageDraftToSceneStage(draft)).toMatchObject({
+      adaptive_timestep: {
+        tolerance_mode: "advanced",
+        atol: 3e-8,
+        rtol: 4e-5,
+        safety: 0.75,
+        growth_limit: 1.6,
+        shrink_limit: 0.35,
+        max_spin_rotation: 0.15,
+        norm_tolerance: 2e-6,
+      },
+    });
+  });
+
   it("rejects simultaneous fixed and adaptive timestep controls", () => {
     const draft = createStudyStageDraft(
       {

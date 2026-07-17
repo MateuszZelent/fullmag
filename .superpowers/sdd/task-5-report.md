@@ -180,3 +180,51 @@ The stage max-error exporter previously discarded an explicit `dt_initial` and e
   - 26 passed, 28 subtests passed.
 - Final authoring stage projection: `cargo test -p fullmag-authoring scene_projection_ --quiet`
   - 3 passed, 0 failed, 41 filtered out.
+
+## Second fix round after re-review of `ab108488`
+
+Status: `DONE_WITH_CONCERNS`
+
+No commit was created.
+
+### Findings 11-16 resolved
+
+- Real public `relax_stage` / `study.stages.add_relax` policies now flow through `export_builder_draft -> rewrite_loaded_problem_script -> reload`. Stage drafts carry their actual adaptive policy instead of relying on a renderer fallback.
+- Max-error stages preserve explicit or omitted `dt_initial`, explicit `dt_min`/`dt_max`, `max_err`, and `tolerance_mode="max_error"`. Advanced stages preserve `atol`, `rtol`, `safety`, `growth_limit`, `shrink_limit`, `max_spin_rotation`, and `norm_tolerance` and remain advanced.
+- Explicit public adaptive stage controls now fail during stage construction unless both finite positive bounds are present. `dt_initial` remains optional. Advanced `AdaptiveTimestep` stages require a non-null `dt_max`; their validated `dt_min` is carried by the public policy object.
+- Control Room treats a legacy stage adaptive object without `tolerance_mode` as `advanced`, matching the Rust serde default. Stage draft load/edit/save now retains every controller and guard rather than replacing custom values with defaults.
+- Production global and stage validation receives active-session algorithms and requested precision. Adaptive authoring is available only for advertised LLG, a qualified backend/device lane, and `double` precision. The API reads requested precision from the active authoring scene and rejects adaptive `single` requests before queue mutation.
+- Rust authoring validates every present global `demag_interval_s` as finite and positive before projection; malformed text, non-finite values, zero, and negative values fail closed instead of becoming null.
+
+### Finding 17 bounded duplication and compatibility proof
+
+The API and CLI solver-policy enums remain duplicated. Extracting them was not surgical: both crates are binaries, the API variant owns OpenAPI `ToSchema`, and moving that browser transport dependency into `fullmag-ir` would invert the backend-neutral IR boundary. Instead, both crates now decode and re-encode one shared backend-neutral JSON fixture covering fixed, max-error adaptive with omitted `dt_initial`, and advanced adaptive with all optional guards. The proof exposed a real mismatch: CLI encoded omitted optional fields as explicit null while API omitted them. CLI serde omission attributes now match the API wire contract.
+
+### Exact RED evidence
+
+- Python public stage pipeline: `PYTHONPATH=packages/fullmag-py/src python3 -m pytest packages/fullmag-py/tests/test_llg_solver_contract.py -q -k 'public_relax_stages or stage_convenience_policy'`
+  - RED: 5 subfailures. Explicit max-error export lost `max_err`; advanced export reloaded as max-error and lost `rtol`, controller values, and guards; three incomplete adaptive stage policies were accepted.
+- Rust demag validation: `cargo test -p fullmag-authoring scene_solver_rejects_malformed_present_demag_interval --quiet`
+  - RED: malformed present `demag_interval_s` validated successfully.
+- API precision lane: `cargo test -p fullmag-api adaptive_command_rejects_single_precision_before_enqueue --quiet`
+  - RED: HTTP returned 200 instead of 400 for adaptive FDM CPU `single`.
+- Control Room focused models/panel with `TMPDIR=/tmp`:
+  - RED: 3 failed / 85 passed. `single` was accepted, the production boundary omitted capability/precision errors, and discriminator-less advanced stage values loaded as max-error with controller/guard loss.
+- Cross-crate serde fixture:
+  - API proof passed; CLI proof failed because omitted adaptive `dt_initial` serialized as `null` instead of being omitted.
+
+### Exact GREEN evidence
+
+- Python public stage focused: 2 passed, 25 deselected, 11 subtests passed.
+- Python full LLG contract: 27 passed, 35 subtests passed.
+- Legacy staged-relax Python compatibility focus: 3 passed, 249 deselected.
+- Rust authoring stage projection: 3 passed, 42 filtered out.
+- Rust malformed demag validation: 1 passed, 44 filtered out.
+- API adaptive-single HTTP rejection: 1 passed, 624 filtered out; the test also asserts the queue length is unchanged.
+- Shared solver-policy serde fixture: API 1 passed / 624 filtered out; CLI 1 passed / 157 filtered out.
+- Control Room models/panel: 3 files passed, 88 tests passed.
+- Control Room `typecheck`, `lint --max-warnings=0`, and `check:api-hygiene`: exit 0.
+
+### Transport and remaining concern
+
+No command schema shape, route, resource, event, binary codec, endpoint string, generated OpenAPI artifact, generated TypeScript type, generated client, facade, hook, ribbon, or viewport path changed in this round. HTTP v2 remains authoritative and realtime remains invalidation-only. The remaining concern is the deliberately bounded API/CLI enum duplication; the shared serde fixture now fails either crate if their wire shapes drift.

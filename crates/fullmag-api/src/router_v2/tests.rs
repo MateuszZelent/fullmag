@@ -14103,6 +14103,50 @@ async fn relax_command_rejects_llg_only_controls_for_direct_minimizer() {
 }
 
 #[tokio::test]
+async fn adaptive_command_rejects_single_precision_before_enqueue() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.study.requested_backend = "fdm".to_string();
+    scene.study.requested_device = "cpu".to_string();
+    scene.study.requested_precision = "single".to_string();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let queued_before = state.current_control_queue.lock().await.len();
+    let app = build_v2_router().with_state(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/simulation/commands")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "kind": "relax",
+                        "solver_policy": {
+                            "kind": "adaptive_max_error",
+                            "integrator": "rk45",
+                            "dt_min": 1e-16,
+                            "dt_max": 1e-13,
+                            "max_err": 1e-6
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    assert!(json["error"]
+        .as_str()
+        .is_some_and(|message| message.contains("double precision")));
+    assert_eq!(state.current_control_queue.lock().await.len(), queued_before);
+}
+
+#[tokio::test]
 async fn current_run_endpoint_returns_runtime_summary() {
     let app = test_router_with_runtime_read_models().await;
     let response = app

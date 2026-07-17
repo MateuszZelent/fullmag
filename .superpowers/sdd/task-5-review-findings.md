@@ -22,3 +22,21 @@
 - Regenerate OpenAPI JSON/types/client only through repository scripts.
 - Run focused `fullmag-authoring`, `fullmag-api`, `fullmag-cli` tests; focused Control Room model/panel tests; Python LLG contract; typecheck; lint; API hygiene; `git diff --check`.
 - Do not hide the known full-suite/environment failures. Browser smoke may remain an explicit environment blocker if Playwright is unavailable; do not install unpinned dependencies.
+
+## Re-review findings after `ab108488`
+
+### Critical
+
+11. Fix the real public Python stage path, not only artificial overrides. `_stage_draft` must carry `study.dynamics.adaptive_timestep`; a normal `relax_stage`/`add_relax` fixed, max-error, or advanced policy must survive `export_builder_draft -> rewrite_loaded_problem_script -> reload` with its exact tolerance mode and requested values.
+12. Advanced stage rendering must preserve `rtol`, `safety`, `growth_limit`, `shrink_limit`, `max_spin_rotation`, and `norm_tolerance`; it must never fall through a max-error-only renderer.
+
+### Important
+
+13. Executable public Python adaptive stages require explicit finite positive `dt_min` and `dt_max`; only `dt_initial` is optional. Reject incomplete max-error and advanced policies at construction, not only later in IR validation.
+14. Preserve legacy advanced stage payloads that omit `tolerance_mode` according to the Rust compatibility default (`advanced`). Add all controller/guard fields to the stage draft and preserve them on UI load/save; do not overwrite custom values with defaults.
+15. Production UI validation must actually receive active algorithms and requested precision. Gate adaptive authoring on backend/device/precision, with double-only qualification and fail-closed FDM CPU behavior. API command lane validation must include requested precision and reject unqualified single before enqueue.
+16. Validate malformed present `demag_interval_s` in Rust authoring rather than lowering it to null.
+
+### Minor to record or eliminate
+
+17. API and CLI duplicate the solver-policy transport enums. Prefer a shared backend-neutral transport/IR contract if it can be done surgically; otherwise add an explicit cross-crate serde compatibility test and record the bounded duplication in the report.

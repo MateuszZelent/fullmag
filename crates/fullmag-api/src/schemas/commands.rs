@@ -226,3 +226,22 @@ pub struct CommandResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SolverPolicyRequest;
+
+    #[test]
+    fn solver_policy_matches_shared_api_cli_serde_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../fullmag-ir/tests/fixtures/solver-policy-transport.json"
+        ))
+        .expect("shared solver policy fixture must be valid JSON");
+        let policies: Vec<SolverPolicyRequest> =
+            serde_json::from_value(fixture.clone()).expect("API policy must decode fixture");
+        assert_eq!(
+            serde_json::to_value(policies).expect("API policy must encode fixture"),
+            fixture
+        );
+    }
+}

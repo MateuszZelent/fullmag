@@ -2249,6 +2249,21 @@ def relax_stage(
     field_refresh: FieldRefreshPolicy | None = None,
     stop: RelaxStop | None = None,
 ) -> RelaxStageSpec:
+    adaptive_controls_requested = any(
+        value is not None
+        for value in (dt_initial, dt_min, dt_max, max_err, max_error)
+    )
+    if adaptive_controls_requested and (dt_min is None or dt_max is None):
+        raise ValueError(
+            "executable adaptive relax stages require explicit dt_min and dt_max"
+        )
+    if (
+        isinstance(adaptive_timestep, AdaptiveTimestep)
+        and adaptive_timestep.dt_max is None
+    ):
+        raise ValueError(
+            "executable adaptive relax stages require explicit dt_min and dt_max"
+        )
     (
         resolved_stop,
         tol,

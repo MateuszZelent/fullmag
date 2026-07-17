@@ -120,6 +120,26 @@ def _adaptive_timestep_draft(policy: AdaptiveTimestep | None) -> dict[str, objec
     }
 
 
+def _stage_adaptive_timestep_draft(
+    policy: AdaptiveTimestep | None,
+) -> dict[str, object] | None:
+    if policy is None:
+        return None
+    return {
+        "tolerance_mode": policy._tolerance_mode,
+        "atol": _text_number(policy.atol),
+        "rtol": _text_number(policy.rtol),
+        "dt_initial": _text_number(policy.dt_initial),
+        "dt_min": _text_number(policy.dt_min),
+        "dt_max": _text_number(policy.dt_max),
+        "safety": _text_number(policy.safety),
+        "growth_limit": _text_number(policy.growth_limit),
+        "shrink_limit": _text_number(policy.shrink_limit),
+        "max_spin_rotation": _text_number(policy.max_spin_rotation),
+        "norm_tolerance": _text_number(policy.norm_tolerance),
+    }
+
+
 def _advanced_policy_with_overrides(
     fallback: AdaptiveTimestep | None,
     overrides: dict[str, object],
@@ -699,6 +719,9 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 {
                     "integrator": study.dynamics.integrator,
                     "fixed_timestep": _text_number(study.dynamics.fixed_timestep),
+                    "adaptive_timestep": _stage_adaptive_timestep_draft(
+                        study.dynamics.adaptive_timestep
+                    ),
                     "demag_interval_s": _text_number(
                         study.dynamics.field_refresh.demag_interval_s
                         if study.dynamics.field_refresh is not None
@@ -3164,6 +3187,45 @@ def _table_autosave_from_override(value: object) -> TableAutosave | None:
     )
 
 
+def _render_relax_adaptive_policy_args(policy: AdaptiveTimestep) -> list[str]:
+    if policy._tolerance_mode == "max_error":
+        args: list[str] = []
+        if policy.dt_initial is not None:
+            args.append(f"dt_initial={_py_number(policy.dt_initial)}")
+        args.extend(
+            [
+                f"max_err={_py_number(policy.atol)}",
+                f"dt_min={_py_number(policy.dt_min)}",
+            ]
+        )
+        if policy.dt_max is not None:
+            args.append(f"dt_max={_py_number(policy.dt_max)}")
+        return args
+
+    adaptive_parts = [
+        f"atol={_py_number(policy.atol)}",
+        f"rtol={_py_number(policy.rtol)}",
+        "dt_initial="
+        + ("None" if policy.dt_initial is None else _py_number(policy.dt_initial)),
+        f"dt_min={_py_number(policy.dt_min)}",
+        "dt_max=" + ("None" if policy.dt_max is None else _py_number(policy.dt_max)),
+        f"safety={_py_number(policy.safety)}",
+        f"growth_limit={_py_number(policy.growth_limit)}",
+        f"shrink_limit={_py_number(policy.shrink_limit)}",
+    ]
+    if policy.max_spin_rotation is not None:
+        adaptive_parts.append(
+            f"max_spin_rotation={_py_number(policy.max_spin_rotation)}"
+        )
+    if policy.norm_tolerance is not None:
+        adaptive_parts.append(f"norm_tolerance={_py_number(policy.norm_tolerance)}")
+    return [
+        "adaptive_timestep=fm.AdaptiveTimestep("
+        + ", ".join(adaptive_parts)
+        + ")"
+    ]
+
+
 def _render_stages(
     stages: Sequence[LoadedStage],
     *,
@@ -3537,52 +3599,15 @@ def _render_stages(
                 if relax_fixed_timestep is not None:
                     call_parts.append(f"dt={_py_number(relax_fixed_timestep)}")
                 if stage_adaptive_policy is not None:
-                    adaptive_timestep = stage_adaptive_policy
-                    if adaptive_timestep._tolerance_mode == "max_error":
-                        if adaptive_timestep.dt_initial is not None:
-                            call_parts.append(
-                                f"dt_initial={_py_number(adaptive_timestep.dt_initial)}"
-                            )
-                        call_parts.append(f"max_err={_py_number(adaptive_timestep.atol)}")
-                        call_parts.append(f"dt_min={_py_number(adaptive_timestep.dt_min)}")
-                        if adaptive_timestep.dt_max is not None:
-                            call_parts.append(f"dt_max={_py_number(adaptive_timestep.dt_max)}")
-                    else:
-                        adaptive_parts = [
-                            f"atol={_py_number(adaptive_timestep.atol)}",
-                            f"rtol={_py_number(adaptive_timestep.rtol)}",
-                            "dt_initial=" + (
-                                "None"
-                                if adaptive_timestep.dt_initial is None
-                                else _py_number(adaptive_timestep.dt_initial)
-                            ),
-                            f"dt_min={_py_number(adaptive_timestep.dt_min)}",
-                            "dt_max=" + (
-                                "None"
-                                if adaptive_timestep.dt_max is None
-                                else _py_number(adaptive_timestep.dt_max)
-                            ),
-                            f"safety={_py_number(adaptive_timestep.safety)}",
-                            f"growth_limit={_py_number(adaptive_timestep.growth_limit)}",
-                            f"shrink_limit={_py_number(adaptive_timestep.shrink_limit)}",
-                        ]
-                        call_parts.append(
-                            "adaptive_timestep=fm.AdaptiveTimestep("
-                            + ", ".join(adaptive_parts)
-                            + ")"
-                        )
+                    call_parts.extend(
+                        _render_relax_adaptive_policy_args(stage_adaptive_policy)
+                    )
                 elif study.dynamics is not None and study.dynamics.adaptive_timestep is not None:
-                    adaptive_timestep = study.dynamics.adaptive_timestep
-                    if adaptive_timestep.dt_initial is not None:
-                        call_parts.append(
-                            f"dt_initial={_py_number(adaptive_timestep.dt_initial)}"
+                    call_parts.extend(
+                        _render_relax_adaptive_policy_args(
+                            study.dynamics.adaptive_timestep
                         )
-                    if adaptive_timestep.atol != DEFAULT_ADAPTIVE_ATOL:
-                        call_parts.append(f"max_err={_py_number(adaptive_timestep.atol)}")
-                    if adaptive_timestep.dt_min != DEFAULT_ADAPTIVE_DT_MIN:
-                        call_parts.append(f"dt_min={_py_number(adaptive_timestep.dt_min)}")
-                    if adaptive_timestep.dt_max is not None:
-                        call_parts.append(f"dt_max={_py_number(adaptive_timestep.dt_max)}")
+                    )
             if is_study_surface:
                 lines.append(f"study.stages.add_relax({', '.join(call_parts)})")
             else:

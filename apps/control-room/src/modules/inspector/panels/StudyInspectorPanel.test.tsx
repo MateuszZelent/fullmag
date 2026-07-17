@@ -980,11 +980,11 @@ describe("StudyInspectorPanel", () => {
     expect(html).not.toContain("Stage ID is required.");
   });
 
-  it("renders editable global study settings", () => {
+  it("renders editable global settings and applies production capability validation", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["boundary"]}>
         <StudyBoundarySection
-          algorithmsAvailable={["llg_overdamped"]}
+          algorithmsAvailable={[]}
           authoringBusy={false}
           authoringFeedback={null}
           draft={{
@@ -997,7 +997,7 @@ describe("StudyInspectorPanel", () => {
             requestedCpuThreads: "8",
             requestedDevice: "gpu",
             requestedMode: "strict",
-            requestedPrecision: "double",
+            requestedPrecision: "single",
             solver: {
               adaptiveTimestep: null,
               demagInterval: "",
@@ -1075,6 +1075,10 @@ describe("StudyInspectorPanel", () => {
     expect(html).not.toContain("Study solver override JSON object");
     expect(html).toContain("FEM demag policy");
     expect(html).toContain("Current CPU threads");
+    expect(html).toContain("LLG is not advertised by the active session.");
+    expect(html).toContain(
+      "Adaptive execution is qualified only for double precision.",
+    );
     expect(html).toContain("Save globals");
   });
 

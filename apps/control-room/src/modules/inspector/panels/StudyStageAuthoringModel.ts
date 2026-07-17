@@ -197,6 +197,11 @@ export interface StudyStageDraft {
   maxError: string;
   atol: string;
   rtol: string;
+  safety: string;
+  growthLimit: string;
+  shrinkLimit: string;
+  maxSpinRotation: string;
+  normTolerance: string;
   toleranceMode: "advanced" | "max_error";
   maxPhysicalTime: string;
   maxPseudotime: string;
@@ -368,6 +373,11 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   maxError: "",
   atol: "",
   rtol: "",
+  safety: "0.9",
+  growthLimit: "2",
+  shrinkLimit: "0.2",
+  maxSpinRotation: "",
+  normTolerance: "",
   toleranceMode: "max_error",
   maxPhysicalTime: "",
   maxPseudotime: "",
@@ -452,6 +462,11 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   maxError: "",
   atol: "",
   rtol: "",
+  safety: "0.9",
+  growthLimit: "2",
+  shrinkLimit: "0.2",
+  maxSpinRotation: "",
+  normTolerance: "",
   toleranceMode: "max_error",
   maxPhysicalTime: "",
   maxPseudotime: "",
@@ -1060,7 +1075,7 @@ export function createStudyStageDraft(
   const hasAdaptiveTimestep = record?.adaptive_timestep != null;
   const adaptiveTimestep = asRecord(record?.adaptive_timestep);
   const toleranceMode =
-    adaptiveTimestep?.tolerance_mode === "advanced" ? "advanced" : "max_error";
+    adaptiveTimestep?.tolerance_mode === "max_error" ? "max_error" : "advanced";
   return {
     ...DEFAULT_RELAX_STAGE_DRAFT,
     algorithm: scalarText(
@@ -1097,6 +1112,11 @@ export function createStudyStageDraft(
     ),
     atol: scalarText(adaptiveTimestep?.atol, ""),
     rtol: scalarText(adaptiveTimestep?.rtol, ""),
+    safety: scalarText(adaptiveTimestep?.safety, "0.9"),
+    growthLimit: scalarText(adaptiveTimestep?.growth_limit, "2"),
+    shrinkLimit: scalarText(adaptiveTimestep?.shrink_limit, "0.2"),
+    maxSpinRotation: scalarText(adaptiveTimestep?.max_spin_rotation, ""),
+    normTolerance: scalarText(adaptiveTimestep?.norm_tolerance, ""),
     toleranceMode,
     maxPhysicalTime: scalarText(record?.max_physical_time_s, ""),
     maxPseudotime: scalarText(record?.max_pseudotime_s, ""),
@@ -1503,9 +1523,21 @@ export function studyStageDraftToSceneStage(
       setOptionalNumber(adaptive, "dt_min", draft.dtMin);
       setOptionalNumber(adaptive, "dt_max", draft.dtMax);
       if (draft.toleranceMode === "advanced") {
-        adaptive.safety = 0.9;
-        adaptive.growth_limit = 2;
-        adaptive.shrink_limit = 0.2;
+        adaptive.safety = requiredNumber(draft.safety, "safety");
+        adaptive.growth_limit = requiredNumber(
+          draft.growthLimit,
+          "growth_limit",
+        );
+        adaptive.shrink_limit = requiredNumber(
+          draft.shrinkLimit,
+          "shrink_limit",
+        );
+        setOptionalNumber(
+          adaptive,
+          "max_spin_rotation",
+          draft.maxSpinRotation,
+        );
+        setOptionalNumber(adaptive, "norm_tolerance", draft.normTolerance);
       }
       stage.adaptive_timestep = adaptive;
     }
@@ -1527,6 +1559,7 @@ export function validateStudyStageDraft(
     demagEnabled?: boolean;
     device: string;
     mode: string;
+    precision?: string;
   },
 ): StudyStageDraftValidation[] {
   const issues: StudyStageDraftValidation[] = [];
@@ -1785,6 +1818,12 @@ export function validateStudyStageDraft(
           severity: "error",
         });
       }
+      if (execution?.precision && execution.precision !== "double") {
+        issues.push({
+          message: "Adaptive execution is qualified only for double precision.",
+          severity: "error",
+        });
+      }
       validateStageAdaptiveBounds(issues, draft);
       if (draft.toleranceMode === "max_error") {
         validatePositiveNumber(issues, draft.maxError, "Maximum embedded vector error", true);
@@ -1797,6 +1836,7 @@ export function validateStudyStageDraft(
             severity: "error",
           });
         }
+        validateStageAdaptiveController(issues, draft);
       }
     }
     validatePositiveNumber(issues, draft.demagInterval, "Demag interval", false);
@@ -1806,6 +1846,26 @@ export function validateStudyStageDraft(
     }
   }
   return issues;
+}
+
+function validateStageAdaptiveController(
+  issues: StudyStageDraftValidation[],
+  draft: StudyStageDraft,
+): void {
+  const safety = Number(draft.safety);
+  if (!draft.safety.trim() || !Number.isFinite(safety) || safety <= 0 || safety > 1) {
+    issues.push({ message: "Safety must be finite and in (0, 1].", severity: "error" });
+  }
+  const growth = Number(draft.growthLimit);
+  if (!draft.growthLimit.trim() || !Number.isFinite(growth) || growth <= 1) {
+    issues.push({ message: "Growth limit must be finite and greater than one.", severity: "error" });
+  }
+  const shrink = Number(draft.shrinkLimit);
+  if (!draft.shrinkLimit.trim() || !Number.isFinite(shrink) || shrink <= 0 || shrink >= 1) {
+    issues.push({ message: "Shrink limit must be finite and in (0, 1).", severity: "error" });
+  }
+  validatePositiveNumber(issues, draft.maxSpinRotation, "Max spin rotation", false);
+  validatePositiveNumber(issues, draft.normTolerance, "Norm tolerance", false);
 }
 
 function validateStageAdaptiveBounds(

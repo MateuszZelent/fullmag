@@ -402,6 +402,129 @@ class CanonicalLlgSolverContractTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 fm.relax_stage(**kwargs)
 
+        incomplete = (
+            {"solver": "rk45", "dt_max": 1e-13, "max_err": 1e-6},
+            {"solver": "rk45", "dt_min": 1e-16, "max_err": 1e-6},
+            {
+                "solver": "rk45",
+                "adaptive_timestep": fm.AdaptiveTimestep(
+                    atol=1e-8,
+                    rtol=1e-5,
+                    dt_min=1e-16,
+                    dt_max=None,
+                ),
+            },
+        )
+        for kwargs in incomplete:
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(
+                ValueError, "dt_min and dt_max"
+            ):
+                fm.relax_stage(**kwargs)
+
+    def test_public_relax_stages_survive_builder_export_rewrite_and_reload(self) -> None:
+        cases = {
+            "fixed": (
+                "dt=2e-15",
+                {"fixed_timestep": 2e-15, "adaptive_timestep": None},
+            ),
+            "max_error_explicit_initial": (
+                "dt_initial=2e-15, dt_min=1e-16, dt_max=1e-13, max_err=1e-6",
+                {
+                    "fixed_timestep": None,
+                    "adaptive_timestep": {
+                        "tolerance_mode": "max_error",
+                        "atol": 1e-6,
+                        "rtol": 0.0,
+                        "dt_initial": 2e-15,
+                        "dt_min": 1e-16,
+                        "dt_max": 1e-13,
+                        "safety": 0.9,
+                        "growth_limit": 2.0,
+                        "shrink_limit": 0.2,
+                    },
+                },
+            ),
+            "max_error_omitted_initial": (
+                "dt_min=1e-16, dt_max=1e-13, max_err=2e-6",
+                {
+                    "fixed_timestep": None,
+                    "adaptive_timestep": {
+                        "tolerance_mode": "max_error",
+                        "atol": 2e-6,
+                        "rtol": 0.0,
+                        "dt_initial": None,
+                        "dt_min": 1e-16,
+                        "dt_max": 1e-13,
+                        "safety": 0.9,
+                        "growth_limit": 2.0,
+                        "shrink_limit": 0.2,
+                    },
+                },
+            ),
+            "advanced": (
+                "adaptive_timestep=fm.AdaptiveTimestep("
+                "atol=3e-8, rtol=4e-5, dt_initial=None, dt_min=1e-16, "
+                "dt_max=1e-13, safety=0.75, growth_limit=1.6, "
+                "shrink_limit=0.35, max_spin_rotation=0.15, norm_tolerance=2e-6)",
+                {
+                    "fixed_timestep": None,
+                    "adaptive_timestep": {
+                        "tolerance_mode": "advanced",
+                        "atol": 3e-8,
+                        "rtol": 4e-5,
+                        "dt_initial": None,
+                        "dt_min": 1e-16,
+                        "dt_max": 1e-13,
+                        "safety": 0.75,
+                        "growth_limit": 1.6,
+                        "shrink_limit": 0.35,
+                        "max_spin_rotation": 0.15,
+                        "norm_tolerance": 2e-6,
+                    },
+                },
+            ),
+        }
+        for name, (stage_policy, expected) in cases.items():
+            with self.subTest(name=name), TemporaryDirectory() as tmp_dir:
+                source = f"""
+                import fullmag as fm
+
+                study = fm.study("stage_{name}")
+                study.engine("fdm")
+                study.cell(5e-9, 5e-9, 5e-9)
+                body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+                body.Ms = 800e3
+                body.Aex = 13e-12
+                body.alpha = 0.1
+                body.m = fm.texture.uniform(1, 0, 0)
+                study.solver(integrator="rk45", fix_dt=9e-15)
+                study.stages.add_relax(
+                    stage_id="relax",
+                    algorithm="llg_overdamped",
+                    solver="rk45",
+                    {stage_policy},
+                )
+                """
+                path = Path(tmp_dir) / f"{name}.py"
+                path.write_text(textwrap.dedent(source), encoding="utf-8")
+                loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+                draft = export_builder_draft(loaded)
+                rewritten = rewrite_loaded_problem_script(loaded, overrides=draft)[
+                    "rendered_source"
+                ]
+                rewritten_path = Path(tmp_dir) / f"{name}_rewritten.py"
+                rewritten_path.write_text(rewritten, encoding="utf-8")
+                reloaded = fm.load_problem_from_script(
+                    rewritten_path, lightweight_assets=True
+                )
+
+                dynamics = reloaded.stages[0].problem.study.to_ir()["dynamics"]
+                self.assertEqual(dynamics["fixed_timestep"], expected["fixed_timestep"])
+                self.assertEqual(
+                    dynamics.get("adaptive_timestep"), expected["adaptive_timestep"]
+                )
+                self.assertNotIn("_from_max_error", rewritten)
+
     def test_explicit_advanced_policy_is_not_rewritten_as_convenience_mode(self) -> None:
         study = self._configure_study()
         study.solver(

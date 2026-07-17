@@ -168,6 +168,10 @@ fn validate_solver_state(
         )));
     }
     validate_present_positive(&solver.fixed_timestep, &format!("{context}.fixed_timestep"))?;
+    validate_present_positive(
+        &solver.demag_interval_s,
+        &format!("{context}.demag_interval_s"),
+    )?;
     if convenience {
         validate_adaptive_values(
             &solver.dt_initial,
@@ -628,6 +632,21 @@ mod tests {
     #[test]
     fn scene_document_validation_accepts_region_owned_payloads() {
         validate_scene_document(&region_owned_scene()).expect("region-owned scene should validate");
+    }
+
+    #[test]
+    fn scene_solver_rejects_malformed_present_demag_interval() {
+        for value in ["not-a-number", "NaN", "inf", "0", "-1e-12"] {
+            let mut scene = region_owned_scene();
+            scene.study.solver.demag_interval_s = value.to_string();
+            let error = validate_scene_document(&scene)
+                .expect_err("present malformed demag_interval_s must fail closed");
+            assert!(
+                error.message.contains("demag_interval_s"),
+                "unexpected validation error for {value}: {}",
+                error.message
+            );
+        }
     }
 
     #[test]

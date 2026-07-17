@@ -56,6 +56,7 @@ pub(crate) async fn submit_structured_command_impl(
                 &req,
                 &scene.study.requested_backend,
                 &scene.study.requested_device,
+                &scene.study.requested_precision,
             )?;
         }
     }
@@ -95,7 +96,13 @@ fn validate_solver_policy_lane(
     req: &StructuredCommandRequest,
     requested_backend: &str,
     requested_device: &str,
+    requested_precision: &str,
 ) -> Result<(), ApiError> {
+    if request_has_adaptive_solver_policy(req) && requested_precision != "double" {
+        return Err(ApiError::bad_request(
+            "Adaptive execution is qualified only for double precision",
+        ));
+    }
     if request_has_adaptive_solver_policy(req)
         && requested_backend != "fem"
         && requested_device != "cpu"
@@ -1518,7 +1525,7 @@ mod tests {
         .expect("canonical adaptive policy should deserialize");
         validate_solver_policy_controls(&request)
             .expect("omitted dt_initial must remain a valid adaptive request");
-        assert!(validate_solver_policy_lane(&request, "fdm", "gpu")
+        assert!(validate_solver_policy_lane(&request, "fdm", "gpu", "double")
             .expect_err("adaptive FDM GPU must fail before enqueue")
             .message
             .contains("explicit CPU"));

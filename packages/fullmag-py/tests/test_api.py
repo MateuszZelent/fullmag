@@ -6825,6 +6825,7 @@ class ProblemApiTests(unittest.TestCase):
             solver="rk45",
             max_error=1e-4,
             dt_min=1e-17,
+            dt_max=1e-15,
             max_steps=5,
         )
         """
@@ -6838,6 +6839,7 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(dynamics["integrator"], "rk45")
         self.assertEqual(dynamics["adaptive_timestep"]["atol"], 1e-4)
         self.assertEqual(dynamics["adaptive_timestep"]["dt_min"], 1e-17)
+        self.assertEqual(dynamics["adaptive_timestep"]["dt_max"], 1e-15)
 
     def test_staged_relax_dt_max_lowers_to_adaptive_timestep(self) -> None:
         script = """

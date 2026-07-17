@@ -639,6 +639,7 @@ export function useStudyInspectorPanelController(
         demagEnabled: state.globalDraft.demagEnabled,
         device: model.requested.device,
         mode: model.requested.mode,
+        precision: state.globalDraft.requestedPrecision,
       }).map((issue) => ({
         ...issue,
         message: `Stage ${index + 1}: ${issue.message}`,
@@ -700,7 +701,9 @@ export function useStudyInspectorPanelController(
     }
   };
   const commitGlobalDraft = async () => {
-    const errors = validateStudyGlobalDraft(state.globalDraft).filter(
+    const errors = validateStudyGlobalDraft(state.globalDraft, {
+      algorithmsAvailable: runtimeStatus?.capabilities.algorithms_available,
+    }).filter(
       (issue) => issue.severity === "error",
     );
     if (errors.length > 0) {
@@ -1302,7 +1305,7 @@ export function StudyBoundarySection({
   onUpdate: (patch: Partial<StudyGlobalDraft>) => void;
   snapshot: StudyInspectorSnapshot;
 }) {
-  const validation = validateStudyGlobalDraft(draft);
+  const validation = validateStudyGlobalDraft(draft, { algorithmsAvailable });
   const hasErrors = validation.some((issue) => issue.severity === "error");
   return (
     <InspectorSection
@@ -1413,6 +1416,7 @@ export function StudyBoundarySection({
         }
         requestedBackend={draft.requestedBackend}
         requestedDevice={draft.requestedDevice}
+        requestedPrecision={draft.requestedPrecision}
       />
       <FormField
         label="FEM demag policy"

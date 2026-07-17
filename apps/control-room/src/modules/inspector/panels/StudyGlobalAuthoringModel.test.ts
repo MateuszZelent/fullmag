@@ -283,4 +283,26 @@ describe("StudyGlobalAuthoringModel", () => {
     expect(messages).toContain("Adaptive dt max must be finite and positive.");
     expect(messages).toContain("Adaptive policy requires RK23 or RK45.");
   });
+
+  it("rejects adaptive single precision even on an explicit FDM CPU lane", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        requested_backend: "fdm",
+        requested_device: "cpu",
+        requested_precision: "single",
+        solver: {
+          integrator: "rk45",
+          dt_min: 1e-16,
+          dt_max: 1e-13,
+          max_err: 1e-6,
+        },
+      },
+    });
+
+    expect(
+      validateStudyGlobalDraft(draft, {
+        algorithmsAvailable: ["llg_overdamped"],
+      }).map((issue) => issue.message),
+    ).toContain("Adaptive execution is qualified only for double precision.");
+  });
 });

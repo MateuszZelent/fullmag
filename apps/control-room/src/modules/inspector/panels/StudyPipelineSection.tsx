@@ -124,15 +124,18 @@ export function StudySolverPolicyFields({
   onUpdate,
   requestedBackend = "auto",
   requestedDevice = "auto",
+  requestedPrecision = "double",
 }: {
   algorithmsAvailable?: readonly string[];
   draft: StudySolverDraft;
   onUpdate: (patch: Partial<StudySolverDraft>) => void;
   requestedBackend?: string;
   requestedDevice?: string;
+  requestedPrecision?: string;
 }) {
   const supportsAdaptive =
     (algorithmsAvailable?.includes("llg_overdamped") ?? false) &&
+    requestedPrecision === "double" &&
     (requestedBackend === "fem" || requestedDevice === "cpu");
   const updateAdvanced = (patch: Partial<StudyAdaptiveTimestepDraft>) =>
     onUpdate({
@@ -257,6 +260,7 @@ export function StudyPipelineSection({
         demagEnabled,
         device: model.requested.device,
         mode: model.requested.mode,
+        precision: model.requested.precision,
       })
     : [];
   const validation = [
@@ -292,6 +296,7 @@ export function StudyPipelineSection({
           requestedBackend={model.requested.backend}
           requestedDevice={model.requested.device}
           requestedMode={model.requested.mode}
+          requestedPrecision={model.requested.precision}
           validation={validation}
           onUpdate={(patch) => onUpdateDraft(draftIndex, patch)}
         />
@@ -560,6 +565,7 @@ export function StudyStageDraftEditor({
   requestedBackend = "auto",
   requestedDevice = "auto",
   requestedMode = "strict",
+  requestedPrecision = "double",
   validation,
   view = "overview",
 }: {
@@ -571,6 +577,7 @@ export function StudyStageDraftEditor({
   requestedBackend?: string;
   requestedDevice?: string;
   requestedMode?: string;
+  requestedPrecision?: string;
   validation: readonly { message: string; severity: "error" | "warning" }[];
   view?: FrequencyDomainAuthoringView;
 }) {
@@ -683,6 +690,7 @@ export function StudyStageDraftEditor({
           requestedBackend={requestedBackend}
           requestedDevice={requestedDevice}
           requestedMode={requestedMode}
+          requestedPrecision={requestedPrecision}
         />
       )}
     </div>
@@ -2072,6 +2080,7 @@ function RelaxStageDraftFields({
   requestedBackend,
   requestedDevice,
   requestedMode,
+  requestedPrecision,
 }: {
   draft: StudyStageDraft;
   demagEnabled: boolean;
@@ -2080,6 +2089,7 @@ function RelaxStageDraftFields({
   requestedBackend: string;
   requestedDevice: string;
   requestedMode: string;
+  requestedPrecision: string;
 }) {
   const tpiEligible =
     requestedMode === "extended" &&
@@ -2096,6 +2106,7 @@ function RelaxStageDraftFields({
   const algorithmSupported = (value: string) => availability(value).supported;
   const adaptiveSupported =
     algorithmSupported("llg_overdamped") &&
+    requestedPrecision === "double" &&
     (requestedBackend === "fem" || requestedDevice === "cpu");
   return (
     <>
@@ -2261,6 +2272,11 @@ function RelaxStageDraftFields({
                 <>
                   <FormField label="Absolute tolerance" value={draft.atol} onChange={(event) => onUpdate({ atol: event.target.value })} />
                   <FormField label="Relative tolerance" value={draft.rtol} onChange={(event) => onUpdate({ rtol: event.target.value })} />
+                  <FormField label="Safety factor" value={draft.safety} onChange={(event) => onUpdate({ safety: event.target.value })} />
+                  <FormField label="Growth limit" value={draft.growthLimit} onChange={(event) => onUpdate({ growthLimit: event.target.value })} />
+                  <FormField label="Shrink limit" value={draft.shrinkLimit} onChange={(event) => onUpdate({ shrinkLimit: event.target.value })} />
+                  <FormField label="Max spin rotation" value={draft.maxSpinRotation} onChange={(event) => onUpdate({ maxSpinRotation: event.target.value })} />
+                  <FormField label="Norm tolerance" value={draft.normTolerance} onChange={(event) => onUpdate({ normTolerance: event.target.value })} />
                 </>
               ) : (
                 <FormField

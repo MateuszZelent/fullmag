@@ -629,13 +629,13 @@ impl AdaptiveSolverIntegratorRequest {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum SolverPolicyRequest {
     Fixed {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         integrator: Option<FixedSolverIntegratorRequest>,
         fix_dt: f64,
     },
     AdaptiveMaxError {
         integrator: AdaptiveSolverIntegratorRequest,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         dt_initial: Option<f64>,
         dt_min: f64,
         dt_max: f64,
@@ -643,7 +643,7 @@ pub(crate) enum SolverPolicyRequest {
     },
     AdaptiveAdvanced {
         integrator: AdaptiveSolverIntegratorRequest,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         dt_initial: Option<f64>,
         dt_min: f64,
         dt_max: f64,
@@ -652,9 +652,9 @@ pub(crate) enum SolverPolicyRequest {
         safety: f64,
         growth_limit: f64,
         shrink_limit: f64,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         max_spin_rotation: Option<f64>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         norm_tolerance: Option<f64>,
     },
 }
@@ -719,6 +719,25 @@ pub(crate) struct SessionCommand {
     pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
     #[serde(default)]
     pub profile: Option<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod solver_policy_compatibility_tests {
+    use super::SolverPolicyRequest;
+
+    #[test]
+    fn solver_policy_matches_shared_api_cli_serde_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fullmag-ir/tests/fixtures/solver-policy-transport.json"
+        ))
+        .expect("shared solver policy fixture must be valid JSON");
+        let policies: Vec<SolverPolicyRequest> =
+            serde_json::from_value(fixture.clone()).expect("CLI policy must decode fixture");
+        assert_eq!(
+            serde_json::to_value(policies).expect("CLI policy must encode fixture"),
+            fixture
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -266,7 +266,10 @@ function solverDraftToScene(draft: StudySolverDraft): JsonObject {
 function validateSolverDraft(
   issues: StudyGlobalDraftValidation[],
   draft: StudySolverDraft,
-  execution: Pick<StudyGlobalDraft, "requestedBackend" | "requestedDevice">,
+  execution: Pick<
+    StudyGlobalDraft,
+    "requestedBackend" | "requestedDevice" | "requestedPrecision"
+  >,
   capabilities?: { algorithmsAvailable?: readonly string[] },
 ): void {
   if (draft.timestepMode === "fixed") {
@@ -305,7 +308,10 @@ function validateSolverDraft(
 function validateAdaptiveExecution(
   issues: StudyGlobalDraftValidation[],
   integrator: string,
-  execution: Pick<StudyGlobalDraft, "requestedBackend" | "requestedDevice">,
+  execution: Pick<
+    StudyGlobalDraft,
+    "requestedBackend" | "requestedDevice" | "requestedPrecision"
+  >,
   capabilities?: { algorithmsAvailable?: readonly string[] },
 ): void {
   if (!matchesAdaptiveIntegrator(integrator)) {
@@ -324,6 +330,12 @@ function validateAdaptiveExecution(
   ) {
     issues.push({
       message: "Adaptive FDM execution requires an explicit CPU device.",
+      severity: "error",
+    });
+  }
+  if (execution.requestedPrecision !== "double") {
+    issues.push({
+      message: "Adaptive execution is qualified only for double precision.",
       severity: "error",
     });
   }
