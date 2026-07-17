@@ -264,6 +264,7 @@ describe("Inspector design-system reference contract", () => {
     "FrequencyDomainResponseSection.tsx",
     "ModeVisualizationInspectorPanel.tsx",
     "frequency-domain/FmrPeakInspector.tsx",
+    "frequency-domain/FrequencyDomainResultInspectors.tsx",
   ])("keeps results panel %s on compact groups", (fileName) => {
     const panel = read(`src/modules/inspector/panels/${fileName}`);
 
