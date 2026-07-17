@@ -2,7 +2,7 @@ import type { ChangeEvent } from "react";
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { FieldRow } from "@/modules/inspector/primitives/FieldRow";
-import { InspectorSection } from "@/modules/inspector/primitives/InspectorSection";
+import { InspectorGroup } from "@/modules/inspector/primitives/InspectorGroup";
 
 import {
   resolveObjectExtensionsSectionModel,
@@ -44,12 +44,11 @@ export function ObjectExtensionsSection({
   }
 
   return (
-    <InspectorSection
+    <InspectorGroup
       badge={model.badge}
       collapsible
-      defaultCollapsed={model.activeCount === 0}
+      defaultOpen={model.activeCount > 0}
       title="Extensions"
-      value="extensions"
     >
       <div className="fm-object-extensions">
         {model.extensions.map((extension) => (
@@ -72,6 +71,6 @@ export function ObjectExtensionsSection({
         label="Active modules"
         value={model.activeCount === 0 ? "none" : String(model.activeCount)}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

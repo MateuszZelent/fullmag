@@ -75,6 +75,7 @@ describe("Inspector design-system reference contract", () => {
 
   it.each([
     "ObjectMaterialPanel.tsx",
+    "ObjectGeneralPanel.tsx",
     "AntennaObjectPanel.tsx",
     "CouplingInspectorPanel.tsx",
     "CrossSectionInspectorPanel.tsx",
@@ -86,5 +87,15 @@ describe("Inspector design-system reference contract", () => {
     expect(panel).not.toMatch(/<\/?InspectorSection\b/);
     expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
     expect(panel).not.toContain("fm-inspector-section");
+  });
+
+  it("keeps object extensions independent from legacy Accordion sections", () => {
+    const extensions = read(
+      "src/modules/inspector/extensions/ObjectExtensionsSection.tsx",
+    );
+
+    expect(extensions).toContain("InspectorGroup");
+    expect(extensions).not.toMatch(/<\/?InspectorSection\b/);
+    expect(extensions).not.toContain('value="extensions"');
   });
 });

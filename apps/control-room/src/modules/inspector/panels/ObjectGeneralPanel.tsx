@@ -29,7 +29,6 @@ import {
   useObjectVisualizationController,
   useObjectVisualizationSelector,
 } from "@/kernel/visualization/useObjectVisualization";
-import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -37,7 +36,7 @@ import { ObjectExtensionsSection } from "../extensions/ObjectExtensionsSection";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   resolveObjectGeneralPanelModel,
   resolveObjectMetricsPanelModel,
@@ -230,19 +229,8 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={[
-        "summary",
-        "energies",
-        "resource",
-        "actions",
-        "validation",
-        "extensions",
-      ]}
-    >
-      <InspectorSection value="summary" title="Ferromagnet Object" collapsible defaultCollapsed={false}>
+    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+      <InspectorGroup title="Ferromagnet Object" collapsible defaultOpen>
         {object.mode === "committed" ? (
           <>
             <FormField
@@ -284,9 +272,9 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
             />
           </>
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection value="energies" title="Energies" badge={metricsModel.status}>
+      <InspectorGroup title="Energies" badge={metricsModel.status} collapsible defaultOpen>
         <FieldRow label="Fetch state" value={objectMetrics.status} />
         <FieldRow label="Sample" value={metricsModel.sample} />
         <FieldRow label="Source" value={metricsModel.source} />
@@ -297,9 +285,9 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Anisotropy" value={metricsModel.anisotropy} />
         <FieldRow label="DMI" value={metricsModel.dmi} />
         <FieldRow label="Total" value={metricsModel.total} />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection value="resource" title="Resource State" collapsible defaultCollapsed={true}>
+      <InspectorGroup title="Resource State" collapsible defaultOpen>
         <FieldRow label="Source" value={object.source} />
         <FieldRow label="Mode" value={object.mode} />
         <FieldRow label="Mesh" value={object.meshStatus} />
@@ -308,9 +296,9 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
           value={object.revision === null ? "unknown" : String(object.revision)}
         />
         <FieldRow label="Fetch state" value={scene.status} />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection value="actions" title="Actions">
+      <InspectorGroup title="Actions">
         <div className="fm-inspector-toolbar">
           {object.mode === "committed" && (
             <>
@@ -347,14 +335,13 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         {feedback ? (
           <FeedbackBanner kind={feedback.kind} message={feedback.message} />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="validation"
+      <InspectorGroup
         title="Validation"
         badge={validationMessages.length > 0 ? String(validationMessages.length) : undefined}
         collapsible
-        defaultCollapsed={validationMessages.length === 0}
+        defaultOpen={validationMessages.length > 0}
       >
         <FieldRow label="Fetch state" value={validation.status} />
         {validationMessages.length > 0 ? (
@@ -366,12 +353,12 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
         ) : (
           <FieldRow label="Backend validation" value="no object issues" />
         )}
-      </InspectorSection>
+      </InspectorGroup>
 
       <ObjectExtensionsSection
         objectId={object.objectId}
         selection={selection}
       />
-    </Accordion>
+    </div>
   );
 }
