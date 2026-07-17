@@ -13,8 +13,8 @@
 |---:|---|---|---|---|---|
 | 1 | completed | empty CUDA architecture, stale report path, stale external-energy assertion | default and `FULLMAG_CUDA_ARCHITECTURES=75` managed gates exit 0 | spec APPROVED; quality APPROVED | `138da5c8` |
 | 2 | completed | initial 23 failures; review RED 7; re-review RED 6; fixed-draft/resolver follow-up RED | focused 24 passed + 24 subtests; task-owned test_api 251 passed | spec APPROVED; quality APPROVED | `4e25d70e` |
-| 3 | completed | max-error intent was not serialized; unsupported adaptive policies could reach CUDA/FEM ABI gaps; stale Floquet fixture conflated periodic and outer markers | IR 181 passed; full planner 229 passed; focused CLI/Python/runner gates green; managed CUDA test pending | spec APPROVED; quality APPROVED | `d24b9003` |
-| 4 | pending | pending | pending | pending | pending |
+| 3 | completed | max-error intent was not serialized; unsupported adaptive policies could reach CUDA/FEM ABI gaps; stale Floquet fixture conflated periodic and outer markers | IR 181 passed; full planner 229 passed; focused CLI/Python/runner gates green; managed CUDA test pending | spec APPROVED; quality APPROVED | `4ff3eb7b` |
+| 4 | completed | hidden first-step/max sentinels, lossy `dt_policy`, fake physical time for direct minimizers, and unbound lane provenance | runner 558/558; all-features and CLI checks green; sentinel restricted to native FEM ABI; adaptive CUDA fails closed | spec APPROVED; quality APPROVED | `5a5c8781` |
 | 5 | pending | pending | pending | pending | pending |
 | 6 | pending | pending | pending | pending | pending |
 | 7 | pending | pending | pending | pending | pending |
