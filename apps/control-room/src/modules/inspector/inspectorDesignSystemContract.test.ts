@@ -76,6 +76,7 @@ describe("Inspector design-system reference contract", () => {
   it.each([
     "ObjectMaterialPanel.tsx",
     "ObjectGeneralPanel.tsx",
+    "GeometryObjectPanel.tsx",
     "AntennaObjectPanel.tsx",
     "CouplingInspectorPanel.tsx",
     "CrossSectionInspectorPanel.tsx",

@@ -19,14 +19,13 @@ import {
   useGeometryValidationResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import { Vector3Field } from "../primitives/Vector3Field";
 import {
   buildGeometryDraftPatch,
@@ -265,25 +264,14 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={[
-        "summary",
-        "primitive",
-        "transform",
-        "identity",
-        "actions",
-        "validation",
-      ]}
-    >
-      <InspectorSection value="summary" title="Geometry Object" collapsible defaultCollapsed={false}>
+    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+      <InspectorGroup title="Geometry Object" collapsible defaultOpen>
         {draft.mode === "committed" && (
           <FieldRow label="Object ID" value={object.objectId} />
         )}
         <FieldRow label="Shape" value={object.shape} />
         <FieldRow label="Dimensions" value={object.dimensions} />
-      </InspectorSection>
+      </InspectorGroup>
 
       <PrimitiveGeometrySection
         draft={draft}
@@ -305,7 +293,7 @@ export function GeometryObjectPanel({ selection }: InspectorPanelProps) {
         messages={validationMessages}
         status={validation.status}
       />
-    </Accordion>
+    </div>
   );
 }
 
@@ -319,14 +307,14 @@ function PrimitiveGeometrySection({
   onVectorChange: VectorDraftUpdater;
 }) {
   return (
-    <InspectorSection value="primitive" title="Primitive Geometry">
+    <InspectorGroup title="Primitive Geometry" collapsible defaultOpen>
       <FieldRow label="Kind" value={draft.geometryKind} />
       <PrimitiveGeometryFields
         draft={draft}
         onFieldChange={onFieldChange}
         onVectorChange={onVectorChange}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -433,7 +421,7 @@ function TransformSection({
   onVectorChange: VectorDraftUpdater;
 }) {
   return (
-    <InspectorSection value="transform" title="Transform">
+    <InspectorGroup title="Transform" collapsible defaultOpen>
       <DraftVectorFormField
         label="Translation"
         unit="m"
@@ -452,7 +440,7 @@ function TransformSection({
         values={draft.scale}
         onChange={(index, value) => onVectorChange("scale", index, value)}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -466,7 +454,7 @@ function DraftIdentitySection({
   if (draft.mode !== "draft-new") return null;
 
   return (
-    <InspectorSection value="identity" title="Draft Identity">
+    <InspectorGroup title="Draft Identity" collapsible defaultOpen>
       <FormField
         label="Name"
         mono={false}
@@ -488,7 +476,7 @@ function DraftIdentitySection({
         value={draft.material}
         onChange={(event) => onFieldChange("material", event.target.value)}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -510,7 +498,7 @@ function ActionsSection({
   pending: boolean;
 }) {
   return (
-    <InspectorSection value="actions" title="Actions">
+    <InspectorGroup title="Actions">
       <div className="fm-inspector-toolbar">
         {draft.mode === "draft-new" ? (
           <Button
@@ -535,7 +523,7 @@ function ActionsSection({
       {feedback ? (
         <FeedbackBanner kind={feedback.kind} message={feedback.message} />
       ) : null}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -592,12 +580,11 @@ function ValidationSection({
   status: string;
 }) {
   return (
-    <InspectorSection
-      value="validation"
+    <InspectorGroup
       title="Validation"
       badge={messages.length > 0 ? String(messages.length) : undefined}
       collapsible
-      defaultCollapsed={messages.length === 0}
+      defaultOpen={messages.length > 0}
     >
       <FieldRow label="Fetch state" value={status} />
       {messages.length > 0 ? (
@@ -609,7 +596,7 @@ function ValidationSection({
       ) : (
         <FieldRow label="Backend validation" value="no object issues" />
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
