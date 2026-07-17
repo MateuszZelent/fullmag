@@ -27,6 +27,7 @@ native/build*/
 node_modules/
 .pnpm-store/
 .next/
+storybook-static/
 out/
 *.tsbuildinfo
 

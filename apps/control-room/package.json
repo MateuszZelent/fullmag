@@ -17,6 +17,8 @@
     "build": "next build",
     "build:webpack": "next build --webpack",
     "build:audit:webpack": "NEXT_PUBLIC_AUDIT_BUILD=1 next build --webpack",
+    "storybook": "storybook dev -p 6006",
+    "build:storybook": "storybook build",
     "check:architecture-hygiene": "node scripts/check-architecture-hygiene.mjs",
     "check:api-hygiene": "node scripts/check-api-hygiene.mjs",
     "generate:api": "pnpm run generate:openapi-v2 && pnpm run generate:api-v2-types && pnpm run generate:api-v2-client",
@@ -79,6 +81,8 @@
     "three": "^0.183.2"
   },
   "devDependencies": {
+    "@storybook/addon-a11y": "^10.5.0",
+    "@storybook/nextjs-vite": "^10.5.0",
     "@tailwindcss/postcss": "^4.2.2",
     "@types/node": "24.13.3",
     "@types/react": "19.2.14",
@@ -87,6 +91,7 @@
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "openapi-typescript": "^7.13.0",
+    "storybook": "^10.5.0",
     "tailwindcss": "^4.2.2",
     "typescript": "5.8.3",
     "vitest": "^4.1.5"
