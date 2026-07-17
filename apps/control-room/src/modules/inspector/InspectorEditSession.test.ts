@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { inspectorActionState, type InspectorEditSession } from "./InspectorEditSession";
+import {
+  createInspectorEditSessionStore,
+  inspectorActionState,
+  type InspectorEditSession,
+} from "./InspectorEditSession";
 import {
   applyInspectorSessionAndShouldContinue,
   shouldGuardInspectorSelection,
@@ -65,5 +69,29 @@ describe("inspectorActionState", () => {
         session({ apply: vi.fn().mockResolvedValue(false) }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("InspectorEditSessionStore", () => {
+  it("keeps mutable ownership behind an immutable service API", () => {
+    const store = createInspectorEditSessionStore();
+    const firstOwner = Symbol("first");
+    const secondOwner = Symbol("second");
+    const firstSession = session({ dirty: true });
+    const secondSession = session({ mode: "liveViewport" });
+    const listener = vi.fn();
+    const unsubscribe = store.subscribe(listener);
+
+    expect(Object.isFrozen(store)).toBe(true);
+    store.register(firstOwner, firstSession);
+    expect(store.getCurrentSession()).toBe(firstSession);
+    store.register(secondOwner, secondSession);
+    store.unregister(firstOwner);
+    expect(store.getCurrentSession()).toBe(secondSession);
+    store.unregister(secondOwner);
+    expect(store.getCurrentSession()).toBeNull();
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    unsubscribe();
   });
 });

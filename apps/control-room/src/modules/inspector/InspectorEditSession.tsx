@@ -7,6 +7,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
@@ -56,28 +57,63 @@ export function inspectorActionState(session: InspectorEditSession | null): Insp
 }
 
 type Listener = () => void;
-interface InspectorEditSessionStore {
-  currentOwner: symbol | null;
-  currentSession: InspectorEditSession | null;
-  listeners: Set<Listener>;
-  version: number;
+export interface InspectorEditSessionStore {
+  getCurrentSession: () => InspectorEditSession | null;
+  getVersion: () => number;
+  register: (
+    owner: symbol,
+    session: InspectorEditSession | null,
+  ) => void;
+  subscribe: (listener: Listener) => () => void;
+  unregister: (owner: symbol) => void;
+  update: (owner: symbol, session: InspectorEditSession | null) => void;
 }
 
 const InspectorEditSessionContext = createContext<InspectorEditSessionStore | null>(null);
 const subscribeEmpty = () => () => undefined;
+const getEmptySnapshot = () => 0;
+
+export function createInspectorEditSessionStore(): InspectorEditSessionStore {
+  let currentOwner: symbol | null = null;
+  let currentSession: InspectorEditSession | null = null;
+  let version = 0;
+  const listeners = new Set<Listener>();
+
+  function publish(): void {
+    version += 1;
+    listeners.forEach((listener) => listener());
+  }
+
+  return Object.freeze({
+    getCurrentSession: () => currentSession,
+    getVersion: () => version,
+    register: (owner: symbol, session: InspectorEditSession | null) => {
+      currentOwner = owner;
+      currentSession = session;
+      publish();
+    },
+    subscribe: (listener: Listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    unregister: (owner: symbol) => {
+      if (currentOwner !== owner) return;
+      currentOwner = null;
+      currentSession = null;
+      publish();
+    },
+    update: (owner: symbol, session: InspectorEditSession | null) => {
+      if (currentOwner !== owner) return;
+      currentSession = session;
+      publish();
+    },
+  });
+}
 
 export function InspectorEditSessionProvider({ children }: { children: ReactNode }) {
-  const storeRef = useRef<InspectorEditSessionStore | null>(null);
-  if (!storeRef.current) {
-    storeRef.current = {
-      currentOwner: null,
-      currentSession: null,
-      listeners: new Set(),
-      version: 0,
-    };
-  }
+  const [store] = useState(createInspectorEditSessionStore);
   return (
-    <InspectorEditSessionContext.Provider value={storeRef.current}>
+    <InspectorEditSessionContext.Provider value={store}>
       {children}
     </InspectorEditSessionContext.Provider>
   );
@@ -86,16 +122,11 @@ export function InspectorEditSessionProvider({ children }: { children: ReactNode
 export function useInspectorEditSession(): InspectorEditSession | null {
   const store = useContext(InspectorEditSessionContext);
   useSyncExternalStore(
-    store
-      ? (listener) => {
-          store.listeners.add(listener);
-          return () => store.listeners.delete(listener);
-        }
-      : subscribeEmpty,
-    () => store?.version ?? 0,
-    () => 0,
+    store?.subscribe ?? subscribeEmpty,
+    store?.getVersion ?? getEmptySnapshot,
+    getEmptySnapshot,
   );
-  return store?.currentSession ?? null;
+  return store?.getCurrentSession() ?? null;
 }
 
 export function useRegisterInspectorEditSession(
@@ -110,8 +141,6 @@ export function useRegisterInspectorEditSession(
   const store = useContext(InspectorEditSessionContext);
   const applyRef = useRef(apply);
   const resetRef = useRef(reset);
-  applyRef.current = apply;
-  resetRef.current = reset;
   const sessionRef = useRef<InspectorEditSession | null>(
     mode
       ? {
@@ -126,6 +155,8 @@ export function useRegisterInspectorEditSession(
       : null,
   );
   useLayoutEffect(() => {
+    applyRef.current = apply;
+    resetRef.current = reset;
     sessionRef.current = mode
       ? {
           apply: () => applyRef.current(),
@@ -137,7 +168,7 @@ export function useRegisterInspectorEditSession(
           valid,
         }
       : null;
-  }, [applying, dirty, lockReason, mode, valid]);
+  }, [apply, applying, dirty, lockReason, mode, reset, valid]);
   const facade = useMemo<InspectorEditSession>(() => ({
     apply: () => sessionRef.current?.apply() ?? false,
     get applying() { return sessionRef.current?.applying ?? false; },
@@ -147,26 +178,16 @@ export function useRegisterInspectorEditSession(
     reset: () => sessionRef.current?.reset(),
     get valid() { return sessionRef.current?.valid ?? true; },
   }), []);
+  const owner = useMemo(() => Symbol("inspector-edit-session"), []);
 
   useEffect(() => {
     if (!store) return;
-    const owner = Symbol("inspector-edit-session");
-    store.currentOwner = owner;
-    store.currentSession = sessionRef.current ? facade : null;
-    store.version += 1;
-    store.listeners.forEach((listener) => listener());
-    return () => {
-      if (store.currentOwner !== owner) return;
-      store.currentOwner = null;
-      store.currentSession = null;
-      store.version += 1;
-      store.listeners.forEach((listener) => listener());
-    };
-  }, [facade, store]);
+    store.register(owner, sessionRef.current ? facade : null);
+    return () => store.unregister(owner);
+  }, [facade, owner, store]);
 
   useEffect(() => {
-    if (!store || store.currentSession !== facade) return;
-    store.version += 1;
-    store.listeners.forEach((listener) => listener());
-  }, [applying, dirty, facade, lockReason, mode, store, valid]);
+    if (!store) return;
+    store.update(owner, sessionRef.current ? facade : null);
+  }, [applying, dirty, facade, lockReason, mode, owner, store, valid]);
 }
