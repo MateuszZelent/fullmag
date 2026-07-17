@@ -2,7 +2,7 @@
 
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   StageInspectorFrame,
   type StageInspectorFrameProps,
@@ -19,8 +19,7 @@ export function UnsupportedStageInspector(props: StageInspectorFrameProps) {
         expectedKind="unsupported"
         kindLabel="Unsupported"
       />
-      <InspectorSection
-        value="unsupported-stage"
+      <InspectorGroup
         title="Unsupported Stage"
         badge="read-only"
       >
@@ -34,7 +33,7 @@ export function UnsupportedStageInspector(props: StageInspectorFrameProps) {
         />
         <FieldRow label="Editing" value="disabled to prevent semantic drift" />
         <FieldRow label="Round-trip" value="original payload preserved" />
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }

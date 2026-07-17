@@ -189,4 +189,16 @@ describe("Inspector design-system reference contract", () => {
     expect(frame).not.toMatch(/<\/?InspectorSection\b/);
     expect(router).not.toContain("<Accordion");
   });
+
+  it.each([
+    "RelaxStageInspector.tsx",
+    "SaveStateStageInspector.tsx",
+    "ChangeDeviceStageInspector.tsx",
+    "UnsupportedStageInspector.tsx",
+  ])("keeps stages/%s on compact Inspector groups", (fileName) => {
+    const panel = read(`src/modules/inspector/panels/stages/${fileName}`);
+
+    expect(panel).toContain("InspectorGroup");
+    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
+  });
 });

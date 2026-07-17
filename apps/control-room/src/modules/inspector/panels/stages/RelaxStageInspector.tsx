@@ -1,7 +1,7 @@
 "use client";
 
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { StageInspectorFrame, type StageInspectorFrameProps } from "./StageInspectorFrame";
 
 export function RelaxStageInspector(props: StageInspectorFrameProps) {
@@ -10,8 +10,7 @@ export function RelaxStageInspector(props: StageInspectorFrameProps) {
   return (
     <>
       <StageInspectorFrame {...props} expectedKind="relax" kindLabel="Relax" />
-      <InspectorSection
-        value="relax-stop-criteria"
+      <InspectorGroup
         title="Stop Criteria"
         badge={stage?.status ?? "draft"}
       >
@@ -38,9 +37,8 @@ export function RelaxStageInspector(props: StageInspectorFrameProps) {
             unit={draft.maxRelaxationTime ? "s" : undefined}
           />
         ) : null}
-      </InspectorSection>
-      <InspectorSection
-        value="relax-numerics"
+      </InspectorGroup>
+      <InspectorGroup
         title="Numerics"
         badge={draft?.algorithm ?? "algorithm"}
       >
@@ -56,8 +54,8 @@ export function RelaxStageInspector(props: StageInspectorFrameProps) {
             <FieldRow label="Field refresh" value={draft.fieldEvery || "not set"} />
           </>
         ) : null}
-      </InspectorSection>
-      <InspectorSection value="relax-results" title="Relax Results">
+      </InspectorGroup>
+      <InspectorGroup title="Relax Results">
         <FieldRow
           label="Metric"
           value={stage?.runtimeMetric?.name ?? "not available"}
@@ -81,7 +79,7 @@ export function RelaxStageInspector(props: StageInspectorFrameProps) {
                 : "no"
           }
         />
-      </InspectorSection>
+      </InspectorGroup>
     </>
   );
 }
