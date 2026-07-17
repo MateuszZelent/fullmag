@@ -64,7 +64,6 @@ import {
   SESSION_STATUS_RESOURCE_KEY,
   useSessionStatusSelector,
 } from "@/kernel/resources/useSessionStatus";
-import { Accordion } from "@/shared/ui/Accordion";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 import { Button } from "@/shared/ui/Button";
 import {
@@ -81,7 +80,7 @@ import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 
 import {
   buildStudyGlobalMergePatch,
@@ -894,22 +893,13 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
 
   return (
     <>
-      <Accordion
-        className="fm-inspector-panel"
+      <div
+        className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]"
         data-scene-has-payload={sceneHasPayload}
         data-scene-revision={sceneRevision ?? ""}
         data-scene-stage-count={sceneStageCount}
         data-scene-status={scene.status}
         data-stage-draft-count={state.stageDrafts.length}
-        type="multiple"
-        defaultValue={[
-          "runtime",
-          "selected-stage",
-          "boundary",
-          "pipeline",
-          "recovery",
-          "history",
-        ]}
       >
         <StudyRuntimeSection
           commandDisabledReason={commandDisabledReason}
@@ -1002,7 +992,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
           }
           totalRows={energyHistory.data?.total_rows ?? "not available"}
         />
-      </Accordion>
+      </div>
       <CommandDetailDialog
         commandId={state.selectedCommandId}
         detail={commandDetail}
@@ -1080,7 +1070,7 @@ function StudyRuntimeSection({
   stepValue: ReactNode;
 }) {
   return (
-    <InspectorSection value="runtime" title="Runtime" badge={model.runtime.state}>
+    <InspectorGroup title="Runtime" badge={model.runtime.state}>
       <FieldRow label="Run" value={model.runtime.runId} />
       <FieldRow label="Active stage" value={model.runtime.activeStageLabel} />
       <FieldRow
@@ -1216,7 +1206,7 @@ function StudyRuntimeSection({
           variant="danger"
         />
       </div>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -1248,8 +1238,7 @@ export function StudySelectedStageSection({
     (eigenmodeSolving ? "waiting for solver progress telemetry" : undefined);
 
   return (
-    <InspectorSection
-      value="selected-stage"
+    <InspectorGroup
       title="Selected Stage"
       badge={selectedStage?.status ?? "none"}
     >
@@ -1359,7 +1348,7 @@ export function StudySelectedStageSection({
         statusLabel={selectedStage?.progressLabel ?? undefined}
         value={selectedStageProgressValue}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -1388,8 +1377,7 @@ export function StudyBoundarySection({
   const validation = validateStudyGlobalDraft(draft, { algorithmsAvailable });
   const hasErrors = validation.some((issue) => issue.severity === "error");
   return (
-    <InspectorSection
-      value="boundary"
+    <InspectorGroup
       title="Global Study Settings"
       badge={snapshot.requested.backend}
     >
@@ -1540,7 +1528,7 @@ export function StudyBoundarySection({
           {authoringBusy ? "Saving" : "Save globals"}
         </Button>
       </div>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -1560,8 +1548,7 @@ function StudyRecoverySection({
   runCommand: StudyCommandRunner;
 }) {
   return (
-    <InspectorSection
-      value="recovery"
+    <InspectorGroup
       title="Recovery"
       badge={`${checkpointCount}`}
     >
@@ -1619,7 +1606,7 @@ function StudyRecoverySection({
           variant="danger"
         />
       </div>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -1635,8 +1622,7 @@ function StudyHistorySection({
   totalRows: ReactNode;
 }) {
   return (
-    <InspectorSection
-      value="history"
+    <InspectorGroup
       title="Run History"
       badge={`${returnedRows}`}
     >
@@ -1644,7 +1630,7 @@ function StudyHistorySection({
       <FieldRow label="Total energy" value={totalEnergy} unit="J" />
       <FieldRow label="Returned rows" value={returnedRows} />
       <FieldRow label="Total rows" value={totalRows} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

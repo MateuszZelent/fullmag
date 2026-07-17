@@ -12,7 +12,7 @@ import { Button } from "@/shared/ui/Button";
 
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 
 import {
   validateStudyStageDraft,
@@ -186,8 +186,7 @@ export function StudyPipelineSection({
   ];
   const hasDraftErrors = validation.some((issue) => issue.severity === "error");
   return (
-    <InspectorSection
-      value="pipeline"
+    <InspectorGroup
       title="Stage Pipeline"
       badge={`${model.stages.length}`}
     >
@@ -394,7 +393,7 @@ export function StudyPipelineSection({
           onRun={runCommand}
         />
       </div>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
