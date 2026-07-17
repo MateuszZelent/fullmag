@@ -26,6 +26,9 @@
   --spacing-fm-control-md: var(--fm-control-height-md);
   --radius-fm-control: var(--fm-radius-control);
   --radius-fm-surface: var(--fm-radius-surface);
+  --radius-fm-input: var(--fm-radius-input);
+  --radius-fm-segment: var(--fm-radius-segment);
+  --radius-fm-disclosure: var(--fm-radius-disclosure);
   --shadow-fm-overlay: var(--fm-shadow-elevated);
   --font-fm-ui: var(--fm-font-ui);
   --font-fm-mono: var(--fm-font-mono);

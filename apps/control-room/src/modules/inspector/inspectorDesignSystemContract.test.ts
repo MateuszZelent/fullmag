@@ -18,6 +18,20 @@ describe("Inspector design-system reference contract", () => {
     expect(bridge).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(/i);
   });
 
+  it("defines the compact Inspector geometry contract", () => {
+    const tokens = read("src/design/styles/tokens.css");
+    const segmented = read("src/shared/ui/SegmentedControl.tsx");
+
+    expect(tokens).toContain("--fm-control-height-compact: 26px");
+    expect(tokens).toContain("--fm-slider-hit-height: 28px");
+    expect(tokens).toContain("--fm-radius-input: 7px");
+    expect(tokens).toContain("--fm-radius-segment: 8px");
+    expect(tokens).toContain("--fm-radius-disclosure: 10px");
+    expect(segmented).toContain('data-slot="segmented-control"');
+    expect(segmented).toContain('data-slot="segmented-control-item"');
+    expect(segmented).not.toContain("border-r");
+  });
+
   it("keeps the reference overview free of nested card sections", () => {
     const overview = read(
       "src/modules/inspector/panels/ObjectVisualizationOverview.tsx",
@@ -44,6 +58,10 @@ describe("Inspector design-system reference contract", () => {
 
     expect(targetSections).toContain("SegmentedControl");
     expect(targetSections).toContain("InspectorPropertyRow");
+    expect(targetSections).toContain("<Slider");
+    expect(targetSections).toContain("<Switch");
     expect(targetSections).not.toContain("fm-inspector-segmented");
+    expect(targetSections).not.toContain("fm-radio-group");
+    expect(targetSections).not.toContain("fm-visualization-range");
   });
 });

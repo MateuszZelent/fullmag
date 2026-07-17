@@ -52,9 +52,21 @@ describe("Inspector composition primitives", () => {
     expect(html).toContain('data-slot="inspector-property-grid"');
     expect(html).toContain('data-slot="inspector-property-row"');
     expect(html).toContain('data-slot="inspector-property-control"');
+    expect(html).toContain('data-layout="inline"');
     expect(html).toContain('role="group"');
     expect(html).toContain("Quantity source");
     expect(html).toContain("A/m");
+  });
+
+  it("keeps stacked rows explicit", () => {
+    const html = renderToStaticMarkup(
+      <InspectorPropertyRow label="Render mode" layout="stacked">
+        <button type="button">Shaded</button>
+      </InspectorPropertyRow>,
+    );
+
+    expect(html).toContain('data-layout="stacked"');
+    expect(html).toContain('data-slot="inspector-property-row"');
   });
 
   it("renders a non-interactive strip of two or four metrics", () => {

@@ -29,6 +29,8 @@ describe("SegmentedControl", () => {
     expect(html).toContain('aria-checked="true"');
     expect(html).toContain('data-slot="segmented-control"');
     expect(html).toContain('data-slot="segmented-control-item"');
+    expect(html).toContain("rounded-[var(--fm-radius-segment)]");
+    expect(html).not.toContain("border-r");
   });
 
   it("selects an enabled option", () => {

@@ -27,11 +27,11 @@ export function InspectorGroup({
   const contentId = useId();
   const heading = (
     <div className="min-w-0 flex-1" data-slot="inspector-group-heading">
-      <h3 className="m-0 text-[13px] font-semibold leading-tight tracking-[-0.01em] text-fm-primary">
+      <h3 className="m-0 text-[11px] font-semibold leading-tight text-fm-primary">
         {title}
       </h3>
       {description ? (
-        <p className="mt-1 mb-0 text-fm-help leading-snug text-fm-muted">
+        <p className="mt-0.5 mb-0 text-fm-help leading-snug text-fm-muted">
           {description}
         </p>
       ) : null}
@@ -41,7 +41,7 @@ export function InspectorGroup({
   return (
     <section
       className={cn(
-        "min-w-0 border-b border-fm-subtle pb-4 last:border-b-0 last:pb-0",
+        "min-w-0 border-b border-fm-subtle pb-[var(--fm-inspector-group-gap)] last:border-b-0 last:pb-0",
         className,
       )}
       data-collapsible={collapsible || undefined}
@@ -52,7 +52,7 @@ export function InspectorGroup({
         <button
           aria-controls={contentId}
           aria-expanded={open}
-          className="flex min-h-fm-control-sm w-full min-w-0 items-center gap-2 rounded-fm-control px-1 text-left outline-none transition-colors hover:bg-fm-disabled focus-visible:ring-2 focus-visible:ring-fm-accent"
+          className="flex h-fm-control-sm w-full min-w-0 items-center gap-1.5 rounded-[var(--fm-radius-disclosure)] px-1.5 text-left outline-none transition-colors hover:bg-fm-disabled focus-visible:ring-2 focus-visible:ring-fm-accent"
           data-slot="inspector-group-trigger"
           type="button"
           onClick={() => setOpen((current) => !current)}
@@ -70,7 +70,7 @@ export function InspectorGroup({
         </button>
       ) : (
         <header
-          className="flex min-h-fm-control-sm min-w-0 items-center gap-2 px-1"
+          className="flex h-fm-control-sm min-w-0 items-center gap-1.5 px-1.5"
           data-slot="inspector-group-header"
         >
           {heading}
@@ -78,7 +78,7 @@ export function InspectorGroup({
         </header>
       )}
       <div
-        className="mt-2 grid min-w-0 gap-3 px-1"
+        className="mt-1 grid min-w-0 gap-[var(--fm-inspector-control-gap)] px-1.5"
         data-slot="inspector-group-content"
         hidden={collapsible && !open}
         id={contentId}

@@ -6,6 +6,8 @@ import type { ComponentPropsWithRef } from "react";
 import { cn } from "@/shared/utils/className";
 
 function Slider({
+  "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
   className,
   ref,
   ...props
@@ -20,7 +22,12 @@ function Slider({
         <SliderPrimitive.Range className="fm-slider__range" />
       </SliderPrimitive.Track>
       {(props.defaultValue ?? props.value ?? [0]).map((_, i) => (
-        <SliderPrimitive.Thumb key={i} className="fm-slider__thumb" />
+        <SliderPrimitive.Thumb
+          aria-label={ariaLabel}
+          aria-labelledby={ariaLabelledBy}
+          className="fm-slider__thumb"
+          key={i}
+        />
       ))}
     </SliderPrimitive.Root>
   );

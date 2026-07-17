@@ -21,9 +21,18 @@
   --fm-ribbon-tabs-height: 34px;
   --fm-status-height: 26px;
   --fm-panel-header-height: 32px;
-  --fm-control-height-sm: 32px;
-  --fm-control-height-md: 36px;
-  --fm-field-row-min-height: 36px;
+  --fm-control-height-compact: 26px;
+  --fm-control-height-regular: 30px;
+  --fm-control-height-sm: var(--fm-control-height-compact);
+  --fm-control-height-md: var(--fm-control-height-regular);
+  --fm-field-row-min-height: 28px;
+  --fm-slider-hit-height: 28px;
+  --fm-slider-track-height: 4px;
+  --fm-slider-thumb-size: 12px;
+  --fm-inspector-padding-inline: 10px;
+  --fm-inspector-row-gap: 4px;
+  --fm-inspector-control-gap: 6px;
+  --fm-inspector-group-gap: 10px;
 
   /* Typography */
   --fm-font-ui: "Inter", "Aptos", sans-serif;
@@ -35,14 +44,17 @@
   --fm-font-size-md: 13px;
   --fm-font-size-lg: 15px;
   --fm-line-height-tight: 1.1;
-  --fm-font-size-field-label: 12px;
-  --fm-font-size-control: 12px;
-  --fm-font-size-help: 11px;
+  --fm-font-size-field-label: 11px;
+  --fm-font-size-control: 11px;
+  --fm-font-size-help: 10px;
   --fm-line-height-control: 1.35;
 
   /* Control geometry and states */
-  --fm-radius-control: 6px;
-  --fm-radius-surface: 8px;
+  --fm-radius-input: 7px;
+  --fm-radius-segment: 8px;
+  --fm-radius-disclosure: 10px;
+  --fm-radius-control: var(--fm-radius-input);
+  --fm-radius-surface: var(--fm-radius-disclosure);
   --fm-disabled-opacity: 1;
 
   /* Font weights */

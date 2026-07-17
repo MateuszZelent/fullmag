@@ -11,6 +11,7 @@ export interface SegmentedControlOption<T extends string> {
 export interface SegmentedControlProps<T extends string> {
   "aria-label": string;
   className?: string;
+  columns?: 2 | 3 | 4;
   disabled?: boolean;
   options: readonly SegmentedControlOption<T>[];
   value: T;
@@ -20,6 +21,7 @@ export interface SegmentedControlProps<T extends string> {
 export function SegmentedControl<T extends string>({
   "aria-label": ariaLabel,
   className,
+  columns,
   disabled = false,
   options,
   value,
@@ -65,7 +67,11 @@ export function SegmentedControl<T extends string>({
     <div
       aria-label={ariaLabel}
       className={cn(
-        "grid min-w-0 auto-cols-fr grid-flow-col rounded-fm-control border border-fm-subtle bg-fm-disabled p-0.5",
+        "grid min-w-0 gap-0.5 rounded-[var(--fm-radius-segment)] bg-fm-disabled p-0.5",
+        columns === 2 && "grid-cols-2",
+        columns === 3 && "grid-cols-3",
+        columns === 4 && "grid-cols-4",
+        columns === undefined && "auto-cols-fr grid-flow-col",
         className,
       )}
       data-disabled={disabled || undefined}
@@ -81,12 +87,12 @@ export function SegmentedControl<T extends string>({
             aria-checked={checked}
             aria-disabled={itemDisabled || undefined}
             className={cn(
-              "min-h-fm-control-sm min-w-0 rounded-[calc(var(--fm-radius-control)-2px)] px-2 py-1",
+              "h-fm-control-sm min-w-0 rounded-[var(--fm-radius-segment)] px-2",
               "font-fm-ui text-fm-control leading-tight outline-none",
               "transition-[background-color,color,box-shadow] duration-150",
               "hover:bg-fm-raised focus-visible:ring-2 focus-visible:ring-fm-accent",
               checked
-                ? "bg-fm-accent-soft font-medium text-fm-accent"
+                ? "bg-fm-accent-soft font-medium text-fm-accent shadow-[var(--fm-shadow-sm)]"
                 : "bg-transparent text-fm-secondary",
               itemDisabled &&
                 "cursor-not-allowed bg-transparent text-fm-disabled-text opacity-100",
