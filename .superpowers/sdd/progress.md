@@ -16,7 +16,7 @@
 | 3 | completed | max-error intent was not serialized; unsupported adaptive policies could reach CUDA/FEM ABI gaps; stale Floquet fixture conflated periodic and outer markers | IR 181 passed; full planner 229 passed; focused CLI/Python/runner gates green; managed CUDA test pending | spec APPROVED; quality APPROVED | `4ff3eb7b` |
 | 4 | completed | hidden first-step/max sentinels, lossy `dt_policy`, fake physical time for direct minimizers, and unbound lane provenance | runner 558/558; all-features and CLI checks green; sentinel restricted to native FEM ABI; adaptive CUDA fails closed | spec APPROVED; quality APPROVED | `5a5c8781` |
 | 5 | completed | policy dropped across authoring/API/UI; raw solver JSON; incomplete/implicit stage policy; flat-relax scope regression; Rust/Python scene `algorithm` drift | authoring 47/47; focused API scene 1/1; Python focused 54/54 then 45/45; Control Room full 3482/3482, typecheck/lint green; full Python residual 3/717 reproduced at pre-Task-5 base | spec APPROVED; quality APPROVED after findings 1-25 | `817f18e7..ddca07f0` |
-| 6 | pending | pending | pending | pending | pending |
+| 6 | completed | q=2/q=4 order ignored; accepted steps could not shrink; dt_min force-retry; unsafe GPU candidate failure paths; max_err rtol=0 rejected | independent managed `verify-fem-time-domain-native-contract` exit 0; shared CPU/CUDA-host golden vectors and boundary/failure contracts green | spec APPROVED; quality APPROVED | `8c7b1d6c` |
 | 7 | pending | pending | pending | pending | pending |
 | 8 | pending | pending | pending | pending | pending |
 | 9 | pending | pending | pending | pending | pending |
@@ -35,3 +35,12 @@
 - 2026-07-17: `just verify-fem-time-domain-native-contract` failed during
   CMake generation because CUDA targets had empty `CUDA_ARCHITECTURES`; the
   recipe did not reach adaptive solver assertions.
+
+### Routed remediation debt
+
+- Task 8 owns the pre-existing advanced adaptive error scale mismatch: current
+  FEM CPU/GPU normalization uses only the candidate state and a `max(norm, 1)`
+  floor rather than canonical `max(||m_old||, ||m_hi||)`.
+- Task 10 owns general post-backup `gpu_rk_run_stage_attempt` failure rollback;
+  Task 6 closes adaptive reduction, readback, decision-failure, and retry
+  candidate restoration only.
