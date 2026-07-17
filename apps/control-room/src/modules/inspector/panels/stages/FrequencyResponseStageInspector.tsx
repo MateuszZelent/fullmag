@@ -6,7 +6,7 @@ import { Button } from "@/shared/ui/Button";
 import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { FrequencyDomainCalculationModeSection } from "./FrequencyDomainCalculationModeSection";
 import { StageInspectorFrame, type StageInspectorFrameProps } from "./StageInspectorFrame";
 
@@ -57,8 +57,7 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
         />
       ) : null}
       {authoringView === "setup" ? (
-        <InspectorSection
-          value="frequency-response-setup-detail"
+        <InspectorGroup
           title="Study Settings"
           badge="direct solve"
         >
@@ -94,11 +93,10 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             label="Unsupported lanes"
             value="GPU response, nonzero-k Floquet response, dynamic demag-k, magnetoelastic response"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "excitation" ? (
-        <InspectorSection
-          value="frequency-response-excitation-detail"
+        <InspectorGroup
           title="Excitation"
           badge="phasor"
         >
@@ -138,11 +136,10 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             label="Backend semantics"
             value="driven harmonic solve consumes the same canonical FrequencyResponse stage"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "equilibrium" ? (
-        <InspectorSection
-          value="frequency-response-equilibrium-detail"
+        <InspectorGroup
           title="Linearization Point"
           badge={equilibriumSummary.source}
         >
@@ -162,11 +159,10 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             label="Artifact readiness"
             value={equilibriumSummary.artifactReadiness}
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "solver" ? (
-        <InspectorSection
-          value="frequency-response-solver-detail"
+        <InspectorGroup
           title="Solver Configuration"
           badge={draft?.deviceTarget ?? "device"}
         >
@@ -198,11 +194,10 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             label="Unsupported lanes"
             value="GPU response, single precision, nonzero-k response, magnetoelastic response"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "sweep" ? (
-        <InspectorSection
-          value="frequency-response-sweep-detail"
+        <InspectorGroup
           title="Frequency Sweep"
           badge={draft?.observable ?? "observable"}
         >
@@ -242,11 +237,10 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             label="Expected result"
             value="amplitude, phase, absorbed power, susceptibility, and response fields"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "outputs" ? (
-        <InspectorSection
-          value="frequency-response-outputs-detail"
+        <InspectorGroup
           title="Output"
           badge={draft?.observable ?? "outputs"}
         >
@@ -290,11 +284,10 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             label="Artifact bundle"
             value="magnetic_response_sweep.v2.json, frequency_points, field_payloads"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "diagnostics" ? (
-        <InspectorSection
-          value="frequency-response-diagnostics-detail"
+        <InspectorGroup
           title="Diagnostics"
           badge={validationSummary.badge}
         >
@@ -331,11 +324,10 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             label="Published artifacts"
             value={stage?.artifactRefs.length ? stage.artifactRefs.join(", ") : "none"}
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "boundary" ? (
-        <InspectorSection
-          value="frequency-response-boundary-detail"
+        <InspectorGroup
           title="Boundary"
           badge={boundarySummary.spinWave}
         >
@@ -368,11 +360,10 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             label="Response-map handoff"
             value="open k/f grid when nonzero-k response becomes available"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "periodic_pairs" ? (
-        <InspectorSection
-          value="frequency-response-periodic-pairs-detail"
+        <InspectorGroup
           title="Periodic Pairs"
           badge={boundarySummary.spinWave}
         >
@@ -397,11 +388,10 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             label="Validation"
             value="requires periodic-pair metadata before response_map can run"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {authoringView === "k_grid" ? (
-        <InspectorSection
-          value="frequency-response-k-grid-detail"
+        <InspectorGroup
           title="k/f Grid"
           badge={draft?.kSampling || "k-grid"}
         >
@@ -424,11 +414,10 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             label="Unsupported lane"
             value="nonzero-k driven response rejected until backend exposes it"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
       {showCommandCenter ? (
-        <InspectorSection
-          value="frequency-response-command-center"
+        <InspectorGroup
           title="Driven Response Command Center"
           badge="FrequencyResponse"
         >
@@ -502,10 +491,11 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
             label="Export canonical Python"
             value="Canonical Python export is available after the saved stage patch is materialized"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
-      <InspectorSection
-        value="frequency-response-sweep"
+      {showCommandCenter ? (
+        <>
+      <InspectorGroup
         title="Frequency Sweep"
         badge={draft?.observable ?? "observable"}
       >
@@ -521,9 +511,8 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           label="Observable"
           value={draft?.observable ?? "not set"}
         />
-      </InspectorSection>
-      <InspectorSection
-        value="frequency-response-linearization"
+      </InspectorGroup>
+      <InspectorGroup
         title="Linearization State"
       >
         <FieldRow
@@ -536,8 +525,8 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
         />
         <FieldRow label="Damping policy" value={draft?.dampingPolicy ?? "not set"} />
         <FieldRow label="Include demag" value={draft?.includeDemag ? "yes" : "no"} />
-      </InspectorSection>
-      <InspectorSection value="frequency-response-wavevector" title="Spin-Wave Sampling">
+      </InspectorGroup>
+      <InspectorGroup title="Spin-Wave Sampling">
         <FieldRow label="Spin-wave BC" value={boundarySummary.spinWave} />
         <FieldRow
           label="Magnetostatic BC"
@@ -545,8 +534,8 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
         />
         <FieldRow label="k vector" value={draft?.kVector || "not set"} />
         <FieldRow label="k sampling" value={draft?.kSampling || "not set"} />
-      </InspectorSection>
-      <InspectorSection value="frequency-response-results" title="Frequency Results">
+      </InspectorGroup>
+      <InspectorGroup title="Frequency Results">
         <FieldRow label="Status" value={stage?.status ?? "not started"} />
         <FieldRow
           label="Computed response"
@@ -556,7 +545,9 @@ function renderFrequencyResponseStageInspector(props: StageInspectorFrameProps) 
           label="Artifacts"
           value={stage?.artifactRefs.length ? stage.artifactRefs.join(", ") : "none"}
         />
-      </InspectorSection>
+      </InspectorGroup>
+        </>
+      ) : null}
     </>
   );
 }

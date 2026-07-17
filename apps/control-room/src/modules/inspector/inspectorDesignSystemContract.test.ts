@@ -215,4 +215,14 @@ describe("Inspector design-system reference contract", () => {
     expect(panel).toContain("InspectorGroup");
     expect(panel).not.toMatch(/<\/?InspectorSection\b/);
   });
+
+  it.each([
+    "EigenmodesStageInspector.tsx",
+    "FrequencyResponseStageInspector.tsx",
+  ])("keeps stages/%s frequency-domain UI on compact groups", (fileName) => {
+    const panel = read(`src/modules/inspector/panels/stages/${fileName}`);
+
+    expect(panel).toContain("InspectorGroup");
+    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
+  });
 });
