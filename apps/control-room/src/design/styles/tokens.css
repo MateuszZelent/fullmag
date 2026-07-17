@@ -59,6 +59,7 @@
 .fm-mt-4 { margin-top: var(--fm-space-4); }
 .fm-mb-2 { margin-bottom: var(--fm-space-2); }
 .fm-mb-3 { margin-bottom: var(--fm-space-3); }
+.fm-ml-auto { margin-left: auto; }
 
 /* ── Common structural utilities ── */
 .fm-section-separator {

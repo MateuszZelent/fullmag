@@ -287,7 +287,7 @@
   border-color: var(--fm-accent);
   background: color-mix(in srgb, var(--fm-bg-panel-raised) 92%, var(--fm-accent));
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgb(0 0 0 / 15%);
+  box-shadow: var(--fm-shadow-md);
 }
 
 .fm-footer-telemetry__metric-label {

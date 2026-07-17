@@ -1,63 +1,69 @@
 @import "tailwindcss";
 
+/* ── Layer order declaration ──
+ * Establishes cascade precedence: tokens < base < primitives < components < modules
+ * Tailwind's own layers (base, components, utilities) sit alongside these.
+ */
+@layer fm-tokens, fm-base, fm-primitives, fm-components, fm-modules;
+
 /* ── Tokens & Theme ── */
-@import "../src/design/styles/tokens.css";
-@import "../src/design/styles/theme.css";
+@import "../src/design/styles/tokens.css" layer(fm-tokens);
+@import "../src/design/styles/theme.css" layer(fm-tokens);
 
 /* ── Base & Layout ── */
-@import "../src/design/styles/base.css";
-@import "../src/design/styles/layout.css";
-@import "../src/design/styles/slots.css";
+@import "../src/design/styles/base.css" layer(fm-base);
+@import "../src/design/styles/layout.css" layer(fm-base);
+@import "../src/design/styles/slots.css" layer(fm-base);
 
 /* ── Shared Primitives ── */
-@import "../src/design/styles/dropdown.css";
-@import "../src/design/styles/dialog.css";
-@import "../src/design/styles/dialog-mesh-build.css";
-@import "../src/design/styles/dialog-data-preview.css";
-@import "../src/design/styles/dialog-simulation-startup.css";
-@import "../src/design/styles/dialog-communication-policy.css";
-@import "../src/design/styles/dialog-notifications.css";
-@import "../src/design/styles/accordion.css";
-@import "../src/design/styles/context-menu.css";
-@import "../src/design/styles/tabs.css";
-@import "../src/design/styles/command.css";
-@import "../src/design/styles/primitives.css";
+@import "../src/design/styles/dropdown.css" layer(fm-primitives);
+@import "../src/design/styles/dialog.css" layer(fm-primitives);
+@import "../src/design/styles/dialog-mesh-build.css" layer(fm-primitives);
+@import "../src/design/styles/dialog-data-preview.css" layer(fm-primitives);
+@import "../src/design/styles/dialog-simulation-startup.css" layer(fm-primitives);
+@import "../src/design/styles/dialog-communication-policy.css" layer(fm-primitives);
+@import "../src/design/styles/dialog-notifications.css" layer(fm-primitives);
+@import "../src/design/styles/accordion.css" layer(fm-primitives);
+@import "../src/design/styles/context-menu.css" layer(fm-primitives);
+@import "../src/design/styles/tabs.css" layer(fm-primitives);
+@import "../src/design/styles/command.css" layer(fm-primitives);
+@import "../src/design/styles/primitives.css" layer(fm-primitives);
 
 /* ── Shell ── */
-@import "../src/design/styles/header.css";
-@import "../src/design/styles/ribbon.css";
+@import "../src/design/styles/header.css" layer(fm-components);
+@import "../src/design/styles/ribbon.css" layer(fm-components);
 
 /* ── Explorer ── */
-@import "../src/design/styles/explorer.css";
+@import "../src/design/styles/explorer.css" layer(fm-components);
 
 /* ── Inspector (base + domain splits) ── */
-@import "../src/design/styles/inspector.css";
-@import "../src/design/styles/inspector-sinc.css";
-@import "../src/design/styles/inspector-topological-charge.css";
-@import "../src/design/styles/inspector-hysteresis.css";
-@import "../src/design/styles/inspector-regions.css";
-@import "../src/design/styles/inspector-mesh.css";
-@import "../src/design/styles/inspector-frequency-domain.css";
-@import "../src/design/styles/inspector-study.css";
-@import "../src/design/styles/inspector-visualization.css";
+@import "../src/design/styles/inspector.css" layer(fm-modules);
+@import "../src/design/styles/inspector-sinc.css" layer(fm-modules);
+@import "../src/design/styles/inspector-topological-charge.css" layer(fm-modules);
+@import "../src/design/styles/inspector-hysteresis.css" layer(fm-modules);
+@import "../src/design/styles/inspector-regions.css" layer(fm-modules);
+@import "../src/design/styles/inspector-mesh.css" layer(fm-modules);
+@import "../src/design/styles/inspector-frequency-domain.css" layer(fm-modules);
+@import "../src/design/styles/inspector-study.css" layer(fm-modules);
+@import "../src/design/styles/inspector-visualization.css" layer(fm-modules);
 
 /* ── Viewport & Analysis ── */
-@import "../src/design/styles/viewport-3d.css";
-@import "../src/design/styles/cross-section-image.css";
-@import "../src/design/styles/analysis-plots.css";
+@import "../src/design/styles/viewport-3d.css" layer(fm-modules);
+@import "../src/design/styles/cross-section-image.css" layer(fm-modules);
+@import "../src/design/styles/analysis-plots.css" layer(fm-modules);
 
 /* ── Footer (base + domain splits) ── */
-@import "../src/design/styles/footer.css";
-@import "../src/design/styles/footer-command-audit.css";
-@import "../src/design/styles/footer-transport-log.css";
-@import "../src/design/styles/footer-diagnostics.css";
-@import "../src/design/styles/footer-telemetry.css";
-@import "../src/design/styles/footer-recorder.css";
+@import "../src/design/styles/footer.css" layer(fm-modules);
+@import "../src/design/styles/footer-command-audit.css" layer(fm-modules);
+@import "../src/design/styles/footer-transport-log.css" layer(fm-modules);
+@import "../src/design/styles/footer-diagnostics.css" layer(fm-modules);
+@import "../src/design/styles/footer-telemetry.css" layer(fm-modules);
+@import "../src/design/styles/footer-recorder.css" layer(fm-modules);
 
 /* ── Auxiliary ── */
-@import "../src/design/styles/command-palette.css";
-@import "../src/design/styles/registry-inspector.css";
-@import "../src/design/styles/thread-manager.css";
-@import "../src/design/styles/diagnostic-recorder.css";
-@import "../src/design/styles/material-library.css";
-@import "../src/design/styles/components/index.css";
+@import "../src/design/styles/command-palette.css" layer(fm-modules);
+@import "../src/design/styles/registry-inspector.css" layer(fm-modules);
+@import "../src/design/styles/thread-manager.css" layer(fm-modules);
+@import "../src/design/styles/diagnostic-recorder.css" layer(fm-modules);
+@import "../src/design/styles/material-library.css" layer(fm-modules);
+@import "../src/design/styles/components/index.css" layer(fm-modules);

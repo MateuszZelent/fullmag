@@ -207,7 +207,7 @@ function FooterLogs({ kernel }: { kernel: ModuleProps["kernel"] }) {
           type="button"
           variant="ghost"
           size="icon"
-          style={{ marginLeft: "auto" }}
+          className="fm-ml-auto"
           aria-label="Copy log to clipboard"
           title={`Copy ${filteredEntries.length} log entries to clipboard`}
           onClick={handleCopyLog}

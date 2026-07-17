@@ -277,14 +277,14 @@ button.fm-mesh-detail-list__item:focus-visible {
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-md);
   background: var(--fm-bg-panel);
-  box-shadow: 0 4px 12px -2px rgba(0, 0, 0, 0.2), 0 2px 6px -1px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--fm-shadow-md);
   transition: border-color var(--fm-transition-fast), box-shadow var(--fm-transition-fast);
 }
 
 .fm-mesh-quality-metric:hover,
 .fm-mesh-size-distribution:hover {
   border-color: var(--fm-border-default);
-  box-shadow: 0 6px 16px -2px rgba(0, 0, 0, 0.25), 0 4px 8px -1px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--fm-shadow-lg);
 }
 
 
@@ -379,7 +379,7 @@ button.fm-mesh-detail-list__item:focus-visible {
   border-radius: var(--fm-radius-md);
   background: color-mix(in srgb, var(--fm-bg-panel-raised) 85%, transparent);
   backdrop-filter: blur(8px);
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--fm-shadow-elevated);
   pointer-events: none;
 }
 
