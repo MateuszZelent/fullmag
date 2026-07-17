@@ -1221,11 +1221,15 @@ pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mu
         ("gpu_count", true),
         ("device_index", true),
     ] {
-        if selection.get(key).is_some_and(|value| {
-            !value
-                .as_u64()
-                .is_some_and(|number| allow_zero || number > 0)
-        }) {
+        if selection
+            .get(key)
+            .filter(|value| !value.is_null())
+            .is_some_and(|value| {
+                !value
+                    .as_u64()
+                    .is_some_and(|number| allow_zero || number > 0)
+            })
+        {
             let requirement = if allow_zero {
                 "a non-negative"
             } else {

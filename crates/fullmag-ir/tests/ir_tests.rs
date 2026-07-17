@@ -2784,6 +2784,24 @@ fn runtime_selection_validation_is_global() {
 }
 
 #[test]
+fn runtime_selection_accepts_null_optional_integer_fields() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({
+            "device": "gpu",
+            "gpu_count": 1,
+            "device_index": null,
+            "cpu_threads": null,
+            "execution_precision": "double"
+        }),
+    );
+
+    ir.validate()
+        .expect("null optional runtime-selection integers mean unspecified");
+}
+
+#[test]
 fn random_seeded_initial_magnetization_must_be_positive() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::RandomSeeded { seed: 0 });
