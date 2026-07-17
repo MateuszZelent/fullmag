@@ -9,19 +9,10 @@
   justify-content: flex-start;
   gap: var(--fm-inspector-control-gap);
   padding-inline: 7px;
-  border-color: transparent;
-  border-radius: var(--fm-radius-segment);
-  background: var(--fm-bg-panel-raised);
 }
 
 .fm-visualization-toggle-grid--vectors {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.fm-visualization-toggle[data-active="true"] {
-  border-color: transparent;
-  background: var(--fm-accent-soft);
-  box-shadow: var(--fm-shadow-sm);
 }
 
 /* ── Frequency-domain visualization color compatibility ── */

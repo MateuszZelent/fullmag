@@ -16,7 +16,10 @@ describe("Button", () => {
     expect(html).toContain("fm-button--sm");
     expect(html).toContain('data-slot="button"');
     expect(html).toContain("h-fm-control-sm");
-    expect(html).toContain("bg-fm-accent-soft");
+    expect(html).toContain("bg-fm-accent");
+    expect(html).toContain("text-fm-inverse");
+    expect(html).toContain("shadow-[var(--fm-shadow-control)]");
+    expect(html).toContain("active:scale-[0.98]");
     expect(html).toContain(">Run</button>");
   });
 });

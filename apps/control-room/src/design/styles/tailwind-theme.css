@@ -12,6 +12,7 @@
   --color-fm-secondary: var(--fm-text-secondary);
   --color-fm-muted: var(--fm-text-muted);
   --color-fm-disabled-text: var(--fm-text-disabled);
+  --color-fm-inverse: var(--fm-text-inverse);
   --color-fm-subtle: var(--fm-border-subtle);
   --color-fm-border: var(--fm-border-default);
   --color-fm-strong: var(--fm-border-strong);

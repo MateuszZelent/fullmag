@@ -67,7 +67,7 @@ export function SegmentedControl<T extends string>({
     <div
       aria-label={ariaLabel}
       className={cn(
-        "grid min-w-0 gap-0.5 rounded-[var(--fm-radius-segment)] bg-fm-disabled p-0.5",
+        "grid min-w-0 gap-0.5 rounded-[var(--fm-radius-segment)] border border-fm-subtle bg-fm-disabled p-0.5 shadow-[var(--fm-shadow-control-inset)]",
         columns === 2 && "grid-cols-2",
         columns === 3 && "grid-cols-3",
         columns === 4 && "grid-cols-4",
@@ -89,13 +89,14 @@ export function SegmentedControl<T extends string>({
             className={cn(
               "h-fm-control-sm min-w-0 rounded-[var(--fm-radius-segment)] px-2",
               "font-fm-ui text-fm-control leading-tight outline-none",
-              "transition-[background-color,color,box-shadow] duration-150",
+              "transition-[transform,background-color,color,box-shadow] duration-150",
+              "active:scale-[0.98] motion-reduce:active:scale-100",
               "hover:bg-fm-raised focus-visible:ring-2 focus-visible:ring-fm-accent",
               checked
-                ? "bg-fm-accent-soft font-medium text-fm-accent shadow-[var(--fm-shadow-sm)]"
+                ? "bg-fm-accent font-medium text-fm-inverse shadow-[var(--fm-shadow-control)]"
                 : "bg-transparent text-fm-secondary",
               itemDisabled &&
-                "cursor-not-allowed bg-transparent text-fm-disabled-text opacity-100",
+                "cursor-not-allowed bg-transparent text-fm-disabled-text opacity-100 active:scale-100",
             )}
             data-slot="segmented-control-item"
             data-state={checked ? "checked" : "unchecked"}

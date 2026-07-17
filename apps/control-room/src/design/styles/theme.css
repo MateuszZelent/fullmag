@@ -64,6 +64,10 @@
 
   --fm-shadow-panel: 0 12px 34px rgb(0 0 0 / 40%);
   --fm-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 50%);
+  --fm-shadow-control: 0 1px 2px rgb(0 0 0 / 42%), inset 0 1px 0 rgb(255 255 255 / 8%);
+  --fm-shadow-control-hover: 0 2px 5px rgb(0 0 0 / 46%), inset 0 1px 0 rgb(255 255 255 / 11%);
+  --fm-shadow-control-pressed: inset 0 1px 3px rgb(0 0 0 / 55%);
+  --fm-shadow-control-inset: inset 0 1px 3px rgb(0 0 0 / 34%);
 }
 
 /* ===== Catppuccin Latte (light) ===== */
@@ -131,6 +135,10 @@
 
   --fm-shadow-panel: 0 14px 40px rgb(76 79 105 / 10%);
   --fm-shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 5%);
+  --fm-shadow-control: 0 1px 2px rgb(76 79 105 / 14%), inset 0 1px 0 rgb(255 255 255 / 72%);
+  --fm-shadow-control-hover: 0 2px 5px rgb(76 79 105 / 18%), inset 0 1px 0 rgb(255 255 255 / 82%);
+  --fm-shadow-control-pressed: inset 0 1px 3px rgb(76 79 105 / 20%);
+  --fm-shadow-control-inset: inset 0 1px 3px rgb(76 79 105 / 13%);
 }
 
 .fm-inspector-alert {

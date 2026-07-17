@@ -169,10 +169,6 @@ function useObjectVisualizationPanelState(
       visualizationState.data,
     ],
   );
-  const airboxPartIds =
-    manifest.data?.mesh_parts?.flatMap((part) =>
-      isVisualizationAirboxIdentity(part) ? [part.id] : [],
-    ) ?? [];
   const regionId = useMemo(() => {
     if (resolvedTarget?.kind !== "region") return null;
     const parsed = parseRegionVisualizationTargetId(resolvedTarget.id);
@@ -308,7 +304,6 @@ function useObjectVisualizationPanelState(
       vectorsVisible: Boolean(settings?.vectorsVisible),
     }),
   });
-  const vectorDomain = visualizationState.data?.layers?.vectors?.domain ?? "auto";
   const topologyFreshness = resolvedTarget
     ? resolveObjectVisualizationPanelTopologyFreshness({
         manifest: manifest.data,
@@ -608,7 +603,6 @@ function useObjectVisualizationPanelState(
     appliedBaseline,
     displaySettings,
     effectiveSettings,
-    airboxPartIds,
     feedback,
     fieldCatalog,
     childRegionOverrideCount,
@@ -634,7 +628,6 @@ function useObjectVisualizationPanelState(
     target: resolvedTarget,
     setPatchChildRegions,
     primitiveDisplayToggleVisible,
-    vectorDomain,
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorMeshParts,
@@ -684,7 +677,6 @@ function ObjectVisualizationPanelView({
   const {
     appliedBaseline: currentAppliedBaseline,
     displaySettings,
-    airboxPartIds,
     childRegionOverrideCount,
     childRegionTargets,
     feedback,
@@ -710,7 +702,6 @@ function ObjectVisualizationPanelView({
     setPatchChildRegions,
     target,
     primitiveDisplayToggleVisible,
-    vectorDomain,
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorMeshParts,

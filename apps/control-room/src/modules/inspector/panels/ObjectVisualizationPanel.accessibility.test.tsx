@@ -15,22 +15,20 @@ import {
 } from "./ObjectVisualizationPanelAccessibility";
 
 describe("ObjectVisualizationPanel accessibility controls", () => {
-  it("exposes Surface, Wireframe, Points, and Vectors as pressed toggles", () => {
+  it("exposes only independent display overlays as pressed toggles", () => {
     const html = renderToStaticMarkup(
       <>
-        <VisualizationToggleButton active label="Surface" onClick={vi.fn()} />
-        <VisualizationToggleButton active={false} label="Wireframe" onClick={vi.fn()} />
-        <VisualizationToggleButton active label="Points" onClick={vi.fn()} />
+        <VisualizationToggleButton active label="Visible" onClick={vi.fn()} />
         <VisualizationToggleButton active={false} label="Vectors" onClick={vi.fn()} />
+        <VisualizationToggleButton active label="Frame" onClick={vi.fn()} />
       </>,
     );
 
     expect(html).toContain('aria-pressed="true"');
     expect(html).toContain('aria-pressed="false"');
-    expect(html).toContain(">Surface</button>");
-    expect(html).toContain(">Wireframe</button>");
-    expect(html).toContain(">Points</button>");
+    expect(html).toContain(">Visible</button>");
     expect(html).toContain(">Vectors</button>");
+    expect(html).toContain(">Frame</button>");
   });
 
   it("announces why a disabled display control cannot be changed", () => {

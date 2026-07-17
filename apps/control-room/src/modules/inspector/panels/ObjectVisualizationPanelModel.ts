@@ -43,6 +43,7 @@ import {
   type SurfaceColorSource,
   type VisualizationGeometryScope,
   type VisualizationColorMode,
+  type VisualizationRenderMode,
   type VisualizationTargetKind,
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
@@ -971,38 +972,39 @@ export function surfaceSolidColorPatch(value: string): VisualizationTargetPatch 
   };
 }
 
-export function surfaceDisplayPassPatch(
-  settings: VisualizationTargetSettings,
-): VisualizationTargetPatch {
-  if (
-    settings.shaderVisible &&
-    !settings.wireframeVisible &&
-    !settings.pointsVisible
-  ) {
-    return { shaderVisible: false };
-  }
-
-  return {
-    ...renderModePatch("surface"),
-  };
-}
-
 export function renderModeDisplayPatch(
-  renderMode: VisualizationTargetSettings["renderMode"],
+  renderMode: VisualizationDisplayMode,
 ): VisualizationTargetPatch {
+  if (renderMode === "off") {
+    return {
+      pointsVisible: false,
+      shaderVisible: false,
+      wireframeVisible: false,
+    };
+  }
   return {
     ...renderModePatch(renderMode),
   };
 }
 
+export type VisualizationDisplayMode = VisualizationRenderMode | "off";
+
+export function resolveVisualizationDisplayMode(
+  settings: Pick<
+    VisualizationTargetSettings,
+    "pointsVisible" | "shaderVisible" | "wireframeVisible"
+  >,
+): VisualizationDisplayMode {
+  if (settings.pointsVisible) return "points";
+  if (settings.shaderVisible && settings.wireframeVisible) return "surface+edges";
+  if (settings.shaderVisible) return "surface";
+  if (settings.wireframeVisible) return "wireframe";
+  return "off";
+}
+
 export function displayPassTogglePatch(
   settings: VisualizationTargetSettings,
-  field:
-    | "boundsVisible"
-    | "pointsVisible"
-    | "primitiveVisible"
-    | "vectorsVisible"
-    | "wireframeVisible",
+  field: "boundsVisible" | "primitiveVisible" | "vectorsVisible",
 ): VisualizationTargetPatch {
   return {
     [field]: !settings[field],
@@ -1010,21 +1012,10 @@ export function displayPassTogglePatch(
 }
 
 export function geometryScopeDisplayPatch(
-  settings: VisualizationTargetSettings,
+  _settings: VisualizationTargetSettings,
   geometryScope: VisualizationTargetSettings["geometryScope"],
 ): VisualizationTargetPatch {
-  if (geometryScope !== "full") {
-    return { geometryScope };
-  }
-
-  if (settings.wireframeVisible || settings.pointsVisible) {
-    return { geometryScope };
-  }
-
-  return {
-    ...renderModePatch("surface+edges"),
-    geometryScope,
-  };
+  return { geometryScope };
 }
 
 function rgbToHex(red: number, green: number, blue: number): string {
@@ -1569,10 +1560,7 @@ export function buildVisualizationPanelSections({
       disabled: passDisabled,
       fields: [
         { id: "visible", kind: "toggle", label: "Visible" },
-        { id: "shaderVisible", kind: "toggle", label: "Surface" },
-        { id: "wireframeVisible", kind: "toggle", label: "Wireframe" },
         { id: "boundsVisible", kind: "toggle", label: "Frame" },
-        { id: "pointsVisible", kind: "toggle", label: "Points" },
         { id: "vectorsVisible", kind: "toggle", label: "Vectors" },
       ],
       id: "display-passes",

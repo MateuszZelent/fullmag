@@ -296,11 +296,36 @@ try {
     document.documentElement.dataset.theme = "light";
   });
   const renderModeControl = overview.locator(
-    '[data-slot="segmented-control"][aria-label="Render mode"]',
+    '[data-slot="segmented-control"][aria-label="Display mode"]',
   );
   const initialRenderMode = await renderModeControl
     .locator('[data-slot="segmented-control-item"][data-state="checked"]')
     .getAttribute("data-value");
+  assert(
+    (await overview.getByRole("button", { name: /^(Surface|Wireframe|Points)$/ }).count()) === 0,
+    "Drawable passes must not have duplicate toggle buttons beside Display mode.",
+  );
+  const vectorsBeforeOff = await vectorsToggle.getAttribute("aria-pressed");
+  await renderModeControl
+    .locator('[data-slot="segmented-control-item"][data-value="off"]')
+    .click();
+  await page.waitForTimeout(500);
+  assert(
+    (await renderModeControl
+      .locator('[data-slot="segmented-control-item"][data-state="checked"]')
+      .getAttribute("data-value")) === "off",
+    "Display mode did not remain Off after the resource update settled.",
+  );
+  assert(
+    (await vectorsToggle.getAttribute("aria-pressed")) === vectorsBeforeOff,
+    "Display mode Off changed the independent Vectors overlay.",
+  );
+  if (initialRenderMode && initialRenderMode !== "off") {
+    await renderModeControl
+      .locator(`[data-slot="segmented-control-item"][data-value="${initialRenderMode}"]`)
+      .click();
+    await page.waitForTimeout(200);
+  }
   if ((await visibleToggle.getAttribute("aria-pressed")) === "true") {
     await visibleToggle.click();
   }

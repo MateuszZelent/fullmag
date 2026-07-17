@@ -27,6 +27,8 @@ describe("Inspector design-system reference contract", () => {
     expect(tokens).toContain("--fm-radius-input: 7px");
     expect(tokens).toContain("--fm-radius-segment: 8px");
     expect(tokens).toContain("--fm-radius-disclosure: 10px");
+    expect(tokens).toContain("--fm-shadow-control:");
+    expect(tokens).toContain("--fm-shadow-control-inset:");
     expect(segmented).toContain('data-slot="segmented-control"');
     expect(segmented).toContain('data-slot="segmented-control-item"');
     expect(segmented).not.toContain("border-r");
@@ -65,5 +67,9 @@ describe("Inspector design-system reference contract", () => {
     expect(targetSections).not.toContain("fm-visualization-range");
     expect(targetSections).not.toContain("Airbox visualization diagnostic");
     expect(targetSections).not.toContain("setAirboxDiagnosticOpen");
+    expect(targetSections).not.toContain('label="Surface"');
+    expect(targetSections).not.toContain('label="Wireframe"');
+    expect(targetSections).not.toContain('label="Points"');
+    expect(targetSections).toContain('{ label: "Off", value: "off" }');
   });
 });

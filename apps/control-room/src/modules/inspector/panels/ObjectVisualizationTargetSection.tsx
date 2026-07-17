@@ -12,7 +12,6 @@ import { controlVariants } from "@/shared/ui/controlVariants";
 import { cn } from "@/shared/utils/className";
 import {
   type VisualizationGeometryScope,
-  type VisualizationRenderMode,
   type SurfaceColorSource,
   type VisualizationTargetKind,
   type VisualizationTargetPatch,
@@ -43,7 +42,8 @@ import {
   regionVisualizationCarrierSupportsFieldMeta,
   regionVisualizationFieldWarning,
   renderModeDisplayPatch,
-  surfaceDisplayPassPatch,
+  resolveVisualizationDisplayMode,
+  type VisualizationDisplayMode,
   VISUALIZATION_COLOR_MODE_ITEMS,
   type VisualizationVectorBudgetRange,
   type RegionVisualizationCarrier,
@@ -62,11 +62,12 @@ import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
 
-const RENDER_MODES = [
+const RENDER_MODES: Array<{ label: string; value: VisualizationDisplayMode }> = [
   { label: "Shaded", value: "surface" },
   { label: "Shaded + wireframe", value: "surface+edges" },
   { label: "Wire", value: "wireframe" },
   { label: "Points", value: "points" },
+  { label: "Off", value: "off" },
 ];
 
 const GEOMETRY_SCOPES = [
@@ -114,28 +115,15 @@ export function VisualizationDisplayPassesSection({
           onClick={handleVisibleClick}
         />
         <ToggleButton
-          active={displaySettings.shaderVisible}
+          active={displaySettings.vectorsVisible}
           disabled={passControlsDisabled}
           disabledDescription={displayControlDisabledDescription(
             passControlsDisabled,
             settings.visible,
             pending,
           )}
-          label="Surface"
-          onClick={() => void patch(surfaceDisplayPassPatch(settings))}
-        />
-        <ToggleButton
-          active={displaySettings.wireframeVisible}
-          disabled={passControlsDisabled}
-          disabledDescription={displayControlDisabledDescription(
-            passControlsDisabled,
-            settings.visible,
-            pending,
-          )}
-          label="Wireframe"
-          onClick={() =>
-            void patch(displayPassTogglePatch(settings, "wireframeVisible"))
-          }
+          label="Vectors"
+          onClick={() => void patch(displayPassTogglePatch(settings, "vectorsVisible"))}
         />
         <ToggleButton
           active={displaySettings.boundsVisible}
@@ -147,28 +135,6 @@ export function VisualizationDisplayPassesSection({
           )}
           label="Frame"
           onClick={() => void patch(displayPassTogglePatch(settings, "boundsVisible"))}
-        />
-        <ToggleButton
-          active={displaySettings.pointsVisible}
-          disabled={passControlsDisabled}
-          disabledDescription={displayControlDisabledDescription(
-            passControlsDisabled,
-            settings.visible,
-            pending,
-          )}
-          label="Points"
-          onClick={() => void patch(displayPassTogglePatch(settings, "pointsVisible"))}
-        />
-        <ToggleButton
-          active={displaySettings.vectorsVisible}
-          disabled={passControlsDisabled}
-          disabledDescription={displayControlDisabledDescription(
-            passControlsDisabled,
-            settings.visible,
-            pending,
-          )}
-          label="Vectors"
-          onClick={() => void patch(displayPassTogglePatch(settings, "vectorsVisible"))}
         />
         {primitiveDisplayToggleVisible ? (
           <ToggleButton
@@ -211,15 +177,15 @@ export function VisualizationRenderModeSection({
           pending,
         )
       }
-      label="Render mode"
+      label="Display mode"
       layout="stacked"
     >
       <SegmentedControl
-        aria-label="Render mode"
+        aria-label="Display mode"
         disabled={passControlsDisabled}
         options={RENDER_MODES}
-        value={displaySettings.renderMode}
-        onValueChange={(value) => void patch(renderModeDisplayPatch(value as VisualizationRenderMode))}
+        value={resolveVisualizationDisplayMode(displaySettings)}
+        onValueChange={(value) => void patch(renderModeDisplayPatch(value))}
       />
     </InspectorPropertyRow>
   );

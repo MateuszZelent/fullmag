@@ -34,6 +34,7 @@ import {
   visualizationVectorSurfaceActionTargetLabel,
   resolveObjectVisualizationPanelSelectionTarget,
   resolveSurfaceColorSourceItems,
+  resolveVisualizationDisplayMode,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
   resolveChildRegionOverrideTargetIds,
@@ -49,7 +50,6 @@ import {
   SURFACE_COLOR_SOURCE_ITEMS,
   SURFACE_FIELD_PROJECTION_ITEMS,
   surfaceColorSourceFieldMetaComponent,
-  surfaceDisplayPassPatch,
   surfaceSolidColorPatch,
   renderModeDisplayPatch,
   regionVisualizationCarrierSupportsFieldMeta,
@@ -1081,25 +1081,19 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
-  it("turns the Surface display pass into surface-only rendering", () => {
-    expect(surfaceDisplayPassPatch(DEFAULT_OBJECT_VISUALIZATION)).toMatchObject({
+  it("uses one display mode as the source of truth for drawable passes", () => {
+    expect(renderModeDisplayPatch("off")).toEqual({
       pointsVisible: false,
-      renderMode: "surface",
-      shaderVisible: true,
+      shaderVisible: false,
       wireframeVisible: false,
     });
-  });
-
-  it("lets an already surface-only display pass toggle the surface off", () => {
-    expect(
-      surfaceDisplayPassPatch({
-        ...DEFAULT_OBJECT_VISUALIZATION,
-        pointsVisible: false,
-        renderMode: "surface",
-        shaderVisible: true,
-        wireframeVisible: false,
-      }),
-    ).toEqual({ shaderVisible: false });
+    expect(resolveVisualizationDisplayMode({
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      pointsVisible: false,
+      shaderVisible: false,
+      wireframeVisible: false,
+    })).toBe("off");
+    expect(renderModeDisplayPatch("off")).not.toHaveProperty("vectorsVisible");
   });
 
   it("preserves a hidden target while computing pass-only patches", () => {
@@ -1114,13 +1108,6 @@ describe("ObjectVisualizationPanelModel", () => {
       wireframeVisible: false,
     };
 
-    expect(surfaceDisplayPassPatch(hiddenRegionSettings)).toMatchObject({
-      shaderVisible: true,
-    });
-    expect(surfaceDisplayPassPatch(hiddenRegionSettings)).not.toHaveProperty("visible");
-    expect(
-      displayPassTogglePatch(hiddenRegionSettings, "wireframeVisible"),
-    ).toEqual({ wireframeVisible: true });
     expect(
       displayPassTogglePatch(hiddenRegionSettings, "boundsVisible"),
     ).toEqual({ boundsVisible: true });
@@ -1152,7 +1139,7 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toMatchObject({ visible: true, wireframeVisible: true });
   });
 
-  it("turns Full geometry scope into a visible volume-mesh pass when only the surface is active", () => {
+  it("keeps display passes unchanged when selecting Full geometry scope", () => {
     expect(
       geometryScopeDisplayPatch(
         {
@@ -1164,12 +1151,7 @@ describe("ObjectVisualizationPanelModel", () => {
         },
         "full",
       ),
-    ).toMatchObject({
-      geometryScope: "full",
-      renderMode: "surface+edges",
-      shaderVisible: true,
-      wireframeVisible: true,
-    });
+    ).toEqual({ geometryScope: "full" });
   });
 
   it("keeps Full geometry scope scoped-only when a volume-capable pass is already active", () => {
