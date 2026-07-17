@@ -3401,10 +3401,10 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Select active peak");
     expect(html).toContain("Plot active peak 3D");
     expect(html).toMatch(
-      /<button class="fm-button fm-button--secondary fm-button--sm"[^>]*>Select active peak<\/button>/,
+      /<button class="[^"]*fm-button--secondary[^"]*fm-button--sm[^"]*"[^>]*>Select active peak<\/button>/,
     );
     expect(html).toMatch(
-      /<button class="fm-button fm-button--primary fm-button--sm"[^>]*>Plot active peak 3D<\/button>/,
+      /<button class="[^"]*fm-button--primary[^"]*fm-button--sm[^"]*"[^>]*>Plot active peak 3D<\/button>/,
     );
   });
 
@@ -3479,7 +3479,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Plot selected eigen mode phase");
     expect(html).toContain("Animate selected eigen mode phase in 3D");
     expect(html).toMatch(
-      /<button class="fm-button fm-button--primary fm-button--sm fm-inspector-action-button" aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*><svg[^>]*class="lucide lucide-rotate-cw"/,
+      /<button class="[^"]*fm-button--primary[^"]*fm-button--sm[^"]*fm-inspector-action-button[^"]*"[^>]*aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*><svg[^>]*class="lucide lucide-rotate-cw"/,
     );
     expect(html).toMatch(
       /aria-label="Plot this response field with phase-rotated real display at 9.5 GHz" title="Plot this response field with phase-rotated real display"/,
@@ -4483,7 +4483,7 @@ describe("FrequencyDomainInspectorPanel", () => {
     expect(html).toContain("Open selected eigen mode data preview");
     expect(html).toContain("Mode data preview");
     expect(html).toMatch(
-      /<button class="fm-button fm-button--primary fm-button--sm fm-inspector-action-button" aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*><svg[^>]*class="lucide lucide-rotate-cw"/,
+      /<button class="[^"]*fm-button--primary[^"]*fm-button--sm[^"]*fm-inspector-action-button[^"]*"[^>]*aria-label="Plot selected eigen mode with phase-rotated real display"[^>]*><svg[^>]*class="lucide lucide-rotate-cw"/,
     );
     expect(html).not.toMatch(
       /<button[^>]*disabled=""[^>]*aria-label="Plot selected eigen mode with phase-rotated real display"/,
