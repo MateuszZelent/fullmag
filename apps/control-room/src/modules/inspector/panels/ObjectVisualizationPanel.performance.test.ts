@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const panelSource = readFileSync(
-  join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationPanel.tsx"),
-  "utf8",
-);
+const panelSource =
+  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationPanel.tsx"), "utf8") +
+  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationHelpers.ts"), "utf8") +
+  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx"), "utf8");
 
 describe("ObjectVisualizationPanel performance contracts", () => {
   it("stages range-field commits until interaction boundaries", () => {

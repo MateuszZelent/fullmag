@@ -66,18 +66,7 @@
   scrollbar-color: var(--fm-border-default) transparent;
 }
 
-.fm-explorer-tree::-webkit-scrollbar {
-  width: 6px;
-}
 
-.fm-explorer-tree::-webkit-scrollbar-thumb {
-  background: var(--fm-border-default);
-  border-radius: 3px;
-}
-
-.fm-explorer-tree::-webkit-scrollbar-track {
-  background: transparent;
-}
 
 .fm-explorer-tree-row {
   --fm-tree-depth: 0;

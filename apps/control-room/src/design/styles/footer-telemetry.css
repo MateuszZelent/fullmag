@@ -32,42 +32,6 @@
   text-align: center;
 }
 
-.fm-footer-telemetry__mark {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  color: var(--fm-accent);
-}
-
-.fm-footer-telemetry__mark-loop {
-  position: absolute;
-  top: 7px;
-  width: 18px;
-  height: 18px;
-  border: 2px solid currentColor;
-  border-radius: 6px 10px 6px 10px;
-  transform: rotate(38deg);
-}
-
-.fm-footer-telemetry__mark-loop--left {
-  left: 1px;
-}
-
-.fm-footer-telemetry__mark-loop--right {
-  right: 1px;
-  transform: rotate(-38deg);
-}
-
-.fm-footer-telemetry__mark-node {
-  position: absolute;
-  left: 14px;
-  top: 3px;
-  width: 5px;
-  height: 26px;
-  border-radius: 999px;
-  background: currentColor;
-  transform: rotate(28deg);
-}
 
 .fm-footer-telemetry__brand-copy {
   display: flex;
@@ -248,23 +212,6 @@
   scrollbar-color: var(--fm-border-default) transparent;
 }
 
-.fm-footer-telemetry__metrics-grid::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-.fm-footer-telemetry__metrics-grid::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.fm-footer-telemetry__metrics-grid::-webkit-scrollbar-thumb {
-  background: var(--fm-border-default);
-  border-radius: var(--fm-radius-lg);
-}
-
-.fm-footer-telemetry__metrics-grid::-webkit-scrollbar-thumb:hover {
-  background: var(--fm-border-strong);
-}
 
 .fm-footer-telemetry__metric {
   display: flex;

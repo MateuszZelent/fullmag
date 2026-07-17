@@ -4531,10 +4531,10 @@ describe("FrequencyDomainInspectorPanel", () => {
   });
 
   it("wires Plot in 3D to the user-entered phase value", () => {
-    const source = readFileSync(
-      resolve(__dirname, "FrequencyDomainInspectorPanel.tsx"),
-      "utf8",
-    );
+    const source =
+      readFileSync(resolve(__dirname, "FrequencyDomainInspectorPanel.tsx"), "utf8") +
+      readFileSync(resolve(__dirname, "FrequencyDomainEigenSection.tsx"), "utf8") +
+      readFileSync(resolve(__dirname, "FrequencyDomainResponseSection.tsx"), "utf8");
     const dataPreviewSource = readFileSync(
       resolve(__dirname, "FrequencyDomainModeDataPreviewDialog.tsx"),
       "utf8",

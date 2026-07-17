@@ -81,6 +81,40 @@ import {
 } from "./frequencyDomainInspectorModel";
 import { FrequencyDomainModeDataPreviewDialog } from "./FrequencyDomainModeDataPreviewDialog";
 import { resolveFrequencyDomainNodeDetail } from "./frequencyDomainNodeDetails";
+import { FrequencyDomainEigenSection } from "./FrequencyDomainEigenSection";
+import { FrequencyDomainResponseSection } from "./FrequencyDomainResponseSection";
+import {
+  formatBoolean,
+  formatError,
+  familyLabel,
+  formatList,
+  record,
+  finiteNumber,
+  formatNumber,
+  formatFrequency,
+  arrayLength,
+  formatRecordField,
+  numberArray,
+  susceptibilityPairCount,
+  maxAbsComplexPairs,
+  formatScalar,
+  analysisFieldViewOptions,
+  selectedField3DPlotStatus,
+  canPlotSelectedFieldIn3D,
+  floquetKVectorFromManifest,
+  firstPeriodicPair,
+  pairTranslation,
+  dotProduct,
+  invalidPeriodicPairCount,
+  maxPeriodicPairResidual,
+  parseKPathSummary,
+  isFrequencyDomainKind,
+  isExactFrequencyDomainKind,
+  modePointKey,
+  modePointLabel,
+  fmrPeakKey,
+  fmrPeakLabel,
+} from "./frequency-domain/FrequencyDomainHelpers";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorSection } from "../primitives/InspectorSection";
 import {
@@ -143,302 +177,7 @@ const EIGEN_MODE_BROWSER_ACTIONS: readonly {
   },
 ];
 
-function formatBoolean(value: boolean | null | undefined): string {
-  if (value === true) return "yes";
-  if (value === false) return "no";
-  return "not available";
-}
-
-function formatError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return "resource load failed";
-}
-
-function familyLabel(kind: string | null): string {
-  if (!kind) return "Frequency-domain";
-  if (kind.startsWith("results.eigen")) return "Modal eigen / dispersion";
-  if (kind.startsWith("results.frequency_response")) {
-    return "Driven frequency response";
-  }
-  if (kind.startsWith("resources.analysis.eigen")) return "Eigen resource";
-  if (kind.startsWith("resources.analysis.frequency_response")) {
-    return "Frequency-response resource";
-  }
-  if (kind === "resources.mesh.periodic_pairs") {
-    return "Periodic / Floquet mesh resource";
-  }
-  if (kind.startsWith("jobs.frequency_domain")) return "Frequency-domain job";
-  if (kind.startsWith("diagnostics.frequency_domain")) {
-    return "Frequency-domain diagnostics";
-  }
-  return "Frequency-domain";
-}
-
-function formatList(values: readonly string[] | null | undefined): string {
-  return values && values.length > 0 ? values.join(", ") : "not reported";
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function finiteNumber(value: unknown): number | null {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function formatNumber(value: unknown, unit = ""): string {
-  const parsed = finiteNumber(value);
-  if (parsed == null) return "not available";
-  return `${parsed}${unit}`;
-}
-
-function formatFrequency(valueHz: unknown): string {
-  const parsed = finiteNumber(valueHz);
-  return formatFrequencyHz(parsed);
-}
-
-function arrayLength(value: unknown): string {
-  return Array.isArray(value) ? String(value.length) : "not available";
-}
-
-function formatRecordField(
-  value: unknown,
-  key: string,
-  fallback = "not available",
-): string {
-  const item = record(value)?.[key];
-  if (typeof item === "string" && item.trim()) return item;
-  if (typeof item === "boolean") return formatBoolean(item);
-  const numeric = finiteNumber(item);
-  return numeric == null ? fallback : String(numeric);
-}
-
-function numberArray(value: unknown): number[] {
-  return Array.isArray(value)
-    ? value.flatMap((item) => {
-        const parsed = finiteNumber(item);
-        return parsed == null ? [] : [parsed];
-      })
-    : [];
-}
-
-function susceptibilityPairCount(value: unknown): string {
-  if (!Array.isArray(value) || value.length === 0) return "not available";
-  return String(value.length);
-}
-
-function maxAbsComplexPairs(value: unknown): number | null {
-  if (!Array.isArray(value)) return null;
-  let maxValue: number | null = null;
-  for (const pair of value) {
-    if (!Array.isArray(pair)) continue;
-    const real = finiteNumber(pair[0]);
-    const imag = finiteNumber(pair[1]);
-    if (real == null || imag == null) continue;
-    const magnitude = Math.hypot(real, imag);
-    maxValue = maxValue == null ? magnitude : Math.max(maxValue, magnitude);
-  }
-  return maxValue;
-}
-
-function formatScalar(value: number | null | undefined, unit = ""): string {
-  if (value == null || !Number.isFinite(value)) return "not available";
-  if (Math.abs(value) < 1e-12) return `0${unit}`;
-  if (Math.abs(value) >= 1e4 || Math.abs(value) < 1e-3) {
-    return `${value.toExponential(3)}${unit}`;
-  }
-  return `${Number(value.toPrecision(5))}${unit}`;
-}
-
-function analysisFieldViewOptions(
-  availableViews: readonly string[] | null | undefined,
-  defaultView: string | null | undefined,
-): string[] {
-  const normalized = (availableViews ?? ANALYSIS_FIELD_VIEW_OPTIONS).map(
-    normalizeAnalysisFieldView,
-  );
-  const options = Array.from(new Set(normalized));
-  const normalizedDefault = normalizeAnalysisFieldView(defaultView);
-  const orderedOptions = [
-    normalizedDefault,
-    ...options.filter((option) => option !== normalizedDefault),
-  ];
-  return orderedOptions.length > 0 ? orderedOptions : [DEFAULT_ANALYSIS_FIELD_VIEW];
-}
-
-function selectedField3DPlotStatus(
-  meta: {
-    component_basis?: string | null;
-    component_count?: number | null;
-    resource_key?: string | null;
-    value_kind?: string | null;
-  } | null | undefined,
-): string {
-  if (!meta?.resource_key) {
-    return "Selected frequency-domain field is missing a data-plane resource";
-  }
-  if (
-    meta.component_basis === "local_tangent_frame" ||
-    meta.value_kind === "complex_tangent_vector" ||
-    (meta.component_count != null && meta.component_count !== 3)
-  ) {
-    return "requires tangent-to-XYZ reconstruction artifact";
-  }
-  return "ready for spatial XYZ field";
-}
-
-function canPlotSelectedFieldIn3D(
-  meta: {
-    component_basis?: string | null;
-    component_count?: number | null;
-    resource_key?: string | null;
-    value_kind?: string | null;
-  } | null | undefined,
-): boolean {
-  return selectedField3DPlotStatus(meta) === "ready for spatial XYZ field";
-}
-
-function floquetKVectorFromManifest(manifestPayload: unknown): number[] {
-  const payload = record(manifestPayload);
-  const spinWaveBc = record(payload?.spin_wave_bc ?? payload?.spinWaveBc);
-  return numberArray(
-    spinWaveBc?.floquet_k_vector_rad_per_m ??
-      spinWaveBc?.k_vector_rad_per_m ??
-      spinWaveBc?.k_vector,
-  );
-}
-
-function firstPeriodicPair(pairs: readonly unknown[]): Record<string, unknown> | null {
-  return pairs.map(record).find((pair): pair is Record<string, unknown> => !!pair) ?? null;
-}
-
-function pairTranslation(pair: Record<string, unknown> | null): number[] {
-  return numberArray(
-    pair?.expected_translation_m ??
-      pair?.translation_m ??
-      pair?.delta_r_m ??
-      pair?.delta_r,
-  );
-}
-
-function dotProduct(left: readonly number[], right: readonly number[]): number | null {
-  if (left.length === 0 || right.length === 0) return null;
-  const length = Math.min(left.length, right.length);
-  let value = 0;
-  for (let index = 0; index < length; index += 1) {
-    value += left[index]! * right[index]!;
-  }
-  return value;
-}
-
-function invalidPeriodicPairCount(pairs: readonly unknown[]): number {
-  return pairs.filter((entry) => {
-    const pair = record(entry);
-    if (!pair) return true;
-    const status = String(pair.status ?? "").toLowerCase();
-    const unpairedSource = finiteNumber(pair.unpaired_source_node_count) ?? 0;
-    const unpairedDestination = finiteNumber(pair.unpaired_destination_node_count) ?? 0;
-    return status !== "ready" || unpairedSource > 0 || unpairedDestination > 0;
-  }).length;
-}
-
-function maxPeriodicPairResidual(pairs: readonly unknown[]): number | null {
-  const residuals = pairs.flatMap((item) => {
-    const pair = record(item);
-    return [
-      finiteNumber(pair?.max_residual_m),
-      finiteNumber(pair?.rms_residual_m),
-    ].flatMap((value) => (value == null ? [] : [value]));
-  });
-  return residuals.length > 0 ? Math.max(...residuals) : null;
-}
-
-function parseKPathSummary(csv: string | null | undefined): {
-  endpointLabels: string;
-  pathSRange: string;
-  sampleCount: number;
-} {
-  const lines = (csv ?? "").split(/\r?\n/).filter((line) => line.trim().length > 0);
-  if (lines.length < 2) {
-    return { endpointLabels: "not available", pathSRange: "not available", sampleCount: 0 };
-  }
-  const headers = lines[0]?.split(",").map((item) => item.trim()) ?? [];
-  const rows = lines.slice(1).map((line) => {
-    const columns = line.split(",").map((item) => item.trim());
-    return Object.fromEntries(headers.map((header, index) => [header, columns[index]]));
-  });
-  const pathValues = rows.flatMap((row) => {
-    const value = finiteNumber(row.path_s_rad_per_m ?? row.path_s ?? row.pathS);
-    return value == null ? [] : [value];
-  });
-  const labels = rows.flatMap((row) => {
-    const value = row.endpoint_label ?? row.k_label ?? row.label;
-    return typeof value === "string" && value ? [value] : [];
-  });
-  return {
-    endpointLabels:
-      labels.length > 0 ? `${labels[0]} -> ${labels[labels.length - 1]}` : "not available",
-    pathSRange:
-      pathValues.length > 0
-        ? `${Math.min(...pathValues)}-${Math.max(...pathValues)} rad/m`
-        : "not available",
-    sampleCount: pathValues.length,
-  };
-}
-
-function isFrequencyDomainKind(
-  kind: string,
-  ...matches: readonly string[]
-): boolean {
-  return matches.some((match) => kind === match || kind.startsWith(`${match}.`));
-}
-
-function isExactFrequencyDomainKind(
-  kind: string,
-  ...matches: readonly string[]
-): boolean {
-  return matches.includes(kind);
-}
-
-function modePointKey(point: {
-  rawModeIndex: number;
-  sampleIndex: number;
-}): string {
-  return `${point.sampleIndex}:${point.rawModeIndex}`;
-}
-
-function modePointLabel(point: {
-  frequencyHz: number;
-  rawModeIndex: number;
-  sampleIndex: number;
-}): string {
-  return `sample ${point.sampleIndex}, mode ${point.rawModeIndex}, ${formatFrequency(point.frequencyHz)}`;
-}
-
-function fmrPeakKey(peak: FmrPeakPoint): string {
-  const modalRef = peak.modeRef
-    ? `sample-${peak.modeRef.sampleIndex}:mode-${peak.modeRef.rawModeIndex}`
-    : "no-mode";
-  const responseRef =
-    peak.frequencyPointIndex == null
-      ? "no-response-point"
-      : `frequency-${peak.frequencyPointIndex}`;
-  return `${peak.source}:${peak.frequencyHz}:${modalRef}:${responseRef}`;
-}
-
-function fmrPeakLabel(peak: FmrPeakPoint): string {
-  const target =
-    peak.modeRef != null
-      ? `sample ${peak.modeRef.sampleIndex} mode ${peak.modeRef.rawModeIndex}`
-      : peak.frequencyPointIndex != null
-        ? `frequency point ${peak.frequencyPointIndex}`
-        : "unmapped target";
-  return `${peak.source}, ${formatFrequency(peak.frequencyHz)}, ${target}`;
-}
+// Helper functions extracted to ./frequency-domain/FrequencyDomainHelpers.ts
 
 type FrequencyDomainInspectorState = {
   calculationModeValidationMessage: string | null;
@@ -1805,113 +1544,16 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
       </InspectorSection>
       ) : null}
 
-      {showDrivenSolver ? (
-      <InspectorSection title="Driven Response Solver" badge={data?.response.status ?? "unknown"}>
-        <FieldRow
-          label="Study kind"
-          value={data?.response.study_kind ?? "frequency_response"}
-        />
-        <FieldRow
-          label="Driven response"
-          value={formatBoolean(data?.response.driven_response_available)}
-        />
-        <FieldRow
-          label="Static-periodic response"
-          value={formatBoolean(data?.response.static_periodic_response_available)}
-        />
-        <FieldRow
-          label="CPU response status"
-          value={data?.capabilities.response.magnetic_cpu.status ?? "unknown"}
-        />
-        <FieldRow
-          label="Floquet response"
-          value={formatBoolean(data?.response.floquet_response_available)}
-        />
-        <FieldRow label="GPU lane" value={formatBoolean(data?.response.gpu_available)} />
-        <FieldRow label="Reason" value={data?.response.reason ?? "not reported"} />
-      </InspectorSection>
-      ) : null}
-
-      {showExcitationWorkflow ? (
-      <InspectorSection title="Excitation Workflow" badge="stage draft">
-        <FieldRow
-          label="Frequency Response excitation authoring"
-          value="harmonic drive definition for direct linear response"
-        />
-        <FieldRow
-          label="Drive type"
-          value="uniform RF field now; spatial profile and mode-projected drive are capability-gated"
-        />
-        <FieldRow
-          label="Drive amplitude"
-          value="stored as finite vector components in A/m"
-        />
-        <FieldRow
-          label="Drive vector hx"
-          value="finite A/m component; edit in Study stage draft"
-        />
-        <FieldRow
-          label="Drive vector hy"
-          value="finite A/m component; edit in Study stage draft"
-        />
-        <FieldRow
-          label="Drive vector hz"
-          value="finite A/m component; edit in Study stage draft"
-        />
-        <FieldRow
-          label="Drive phase"
-          value="stored in rad; display may show degrees"
-        />
-        <FieldRow
-          label="Drive axis"
-          value="x / y / z drive helpers lower to vector components"
-        />
-        <FieldRow label="Drive projection" value="local tangent plane" />
-        <FieldRow
-          label="Phasor convention"
-          value="delta_h exp(i omega t + phase_rad)"
-        />
-        <FieldRow
-          label="Canonical stage draft"
-          value="Use the Study stage inspector draft editor"
-        />
-        <FieldRow label="Draft commit path" value="Save stage commits excitation fields through the canonical stage patch" />
-      </InspectorSection>
-      ) : null}
-
-      {showFrequencySweepWorkflow ? (
-      <InspectorSection title="Frequency Sweep Workflow" badge="stage draft">
-        <FieldRow
-          label="Frequency Response sweep authoring"
-          value="ordered Hz grid for direct harmonic response"
-        />
-        <FieldRow
-          label="Sweep type"
-          value="linear / log / explicit list helper"
-        />
-        <FieldRow label="Explicit frequency list" value="optional values_hz override" />
-        <FieldRow
-          label="Start frequency"
-          value="display helper; canonical output is values_hz"
-        />
-        <FieldRow
-          label="Stop frequency"
-          value="display helper; canonical output is values_hz"
-        />
-        <FieldRow
-          label="Frequency samples"
-          value="positive integer used by range helpers"
-        />
-        <FieldRow label="Spacing" value="linear in Hz" />
-        <FieldRow label="Stored values_hz" value="generated from start/stop/count unless explicit list is set" />
-        <FieldRow label="Partial artifact policy" value="write per frequency" />
-        <FieldRow
-          label="Canonical stage draft"
-          value="Use the Study stage inspector draft editor"
-        />
-        <FieldRow label="Draft commit path" value="Save stage commits values_hz through the canonical stage patch" />
-      </InspectorSection>
-      ) : null}
+      <FrequencyDomainResponseSection
+        selection={selection}
+        inspectorState={inspectorState}
+        setInspectorState={setInspectorState}
+        data={data}
+        responseSweep={responseSweep}
+        responseProgress={responseProgress}
+        responseCancelRequested={responseCancelRequested}
+        manifestPhysics={manifestPhysics}
+      />
 
       {showResponseFields ? (
       <InspectorSection
@@ -1991,57 +1633,18 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
       </InspectorSection>
       ) : null}
 
-      {showModalSolver ? (
-      <InspectorSection title="Modal Eigen Solver" badge={data?.eigenmodes.status ?? "unknown"}>
-        <FieldRow
-          label="Study kind"
-          value={data?.eigenmodes.study_kind ?? "eigenmodes"}
-        />
-        <FieldRow
-          label="Modal solver"
-          value={formatBoolean(data?.eigenmodes.modal_solver_available)}
-        />
-        <FieldRow
-          label="Floquet modal"
-          value={formatBoolean(data?.eigenmodes.floquet_modal_available)}
-        />
-        <FieldRow label="GPU lane" value={formatBoolean(data?.eigenmodes.gpu_available)} />
-        <FieldRow label="Reason" value={data?.eigenmodes.reason ?? "not reported"} />
-      </InspectorSection>
-      ) : null}
-
-      {showPlotReadiness ? (
-      <InspectorSection title="Plot Readiness" badge="manifest-driven">
-        <FieldRow
-          label="FMR modal spectrum"
-          value={
-            data?.eigenmodes.modal_solver_available
-              ? "can be exposed by modal artifacts"
-              : "blocked"
-          }
-        />
-        <FieldRow
-          label="FMR response sweep"
-          value={
-            data?.response.driven_response_available
-              ? "can be exposed by response artifacts"
-              : "blocked"
-          }
-        />
-        <FieldRow
-          label="Dispersion"
-          value={
-            data?.floquet_nonzero_k_demag_supported
-              ? "Floquet demag-k allowed"
-              : "nonzero-k demag rejected"
-          }
-        />
-        <FieldRow
-          label="3D mode plotting"
-          value="waiting for mode-field artifacts"
-        />
-      </InspectorSection>
-      ) : null}
+      <FrequencyDomainEigenSection
+        selection={selection}
+        inspectorState={inspectorState}
+        setInspectorState={setInspectorState}
+        data={data}
+        spectrum={spectrum}
+        branches={branches}
+        dispersion={dispersion}
+        manifestPhysics={manifestPhysics}
+        plotSelectedSpectrumMode={plotSelectedSpectrumMode}
+        EIGEN_MODE_BROWSER_ACTIONS={EIGEN_MODE_BROWSER_ACTIONS}
+      />
 
       {showCalculationModeWorkflow ? (
       <InspectorSection

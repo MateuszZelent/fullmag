@@ -229,3 +229,19 @@
   color: var(--fm-text-muted);
   text-overflow: ellipsis;
 }
+
+.fm-status-bar__item--clickable {
+  cursor: pointer;
+  transition: color var(--fm-transition-fast);
+}
+.fm-status-bar__item--clickable:hover {
+  color: var(--fm-text-primary);
+}
+.fm-status-bar__engine--clickable {
+  cursor: pointer;
+  transition: background var(--fm-transition-fast), border-color var(--fm-transition-fast);
+}
+.fm-status-bar__engine--clickable:hover {
+  background: color-mix(in srgb, var(--fm-text-muted) 8%, var(--fm-bg-panel-raised));
+  border-color: var(--fm-border-strong);
+}

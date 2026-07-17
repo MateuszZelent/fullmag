@@ -4,6 +4,7 @@ import { ChevronDown, Search } from "lucide-react";
 import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
+import { commandPaletteStore } from "@/modules/overlay/commandPaletteStore";
 import {
   SIMULATION_SOLVER_STATUS_PATH,
   SESSION_STATUS_PATH,
@@ -523,13 +524,21 @@ export function AppMenuBar() {
         ))}
       </div>
 
-      <label className="fm-header__search">
+      <label
+        className="fm-header__search"
+        onClick={() => commandPaletteStore.open()}
+        style={{ cursor: "pointer" }}
+      >
         <Search size={13} aria-hidden="true" />
         <input
           aria-label="Command search"
           placeholder="Command search (Ctrl+Shift+P)"
           readOnly
           type="text"
+          onFocus={(e) => {
+            e.target.blur();
+            commandPaletteStore.open();
+          }}
         />
       </label>
 

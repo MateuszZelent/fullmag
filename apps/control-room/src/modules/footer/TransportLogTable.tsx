@@ -8,7 +8,8 @@ import {
   ChevronsUpDown,
   Maximize2,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 import type { CommandDetailResource } from "@/kernel/api/apiTypes";
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
@@ -60,6 +61,13 @@ export function TransportLogTable({
     () => buildTransportTrafficSummary(entries),
     [entries],
   );
+  const parentRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: sortedEntries.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 28,
+    overscan: 10,
+  });
 
   if (entries.length === 0) {
     return (
@@ -116,7 +124,7 @@ export function TransportLogTable({
           </ol>
         ) : null}
       </div>
-      <div className="fm-footer-log" role="table" aria-label="Transport logs">
+      <div className="fm-footer-log" ref={parentRef} role="table" aria-label="Transport logs">
         <div
           className="fm-footer-log__row fm-footer-log__row--header"
           role="row"
@@ -159,35 +167,60 @@ export function TransportLogTable({
             onSort={setSort}
           />
         </div>
-        {sortedEntries.map((entry) => (
-          <div className="fm-footer-log__row" role="row" key={entry.id}>
-            <time
-              role="cell"
-              dateTime={formatTransportTimestampSignature(entry.timestampMs)}
-              title={formatTransportTimestampSignature(entry.timestampMs)}
-            >
-              {formatTransportTimestamp(entry.timestampMs)}
-            </time>
-            <span role="cell" className="fm-footer-log__message-cell">
-              <button
-                type="button"
-                className="fm-footer-log__message"
-                onClick={() => setSelectedEntry(entry)}
-                title={summarizeTransportPath(entry)}
+        <div
+          style={{
+            height: `${rowVirtualizer.getTotalSize()}px`,
+            width: "100%",
+            position: "relative",
+          }}
+        >
+          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+            const entry = sortedEntries[virtualRow.index];
+            if (!entry) return null;
+            return (
+              <div
+                className="fm-footer-log__row"
+                role="row"
+                key={entry.id}
+                data-index={virtualRow.index}
+                ref={rowVirtualizer.measureElement}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
               >
-                <span>{buildTransportMessagePreview(entry)}</span>
-                <Maximize2 size={12} aria-hidden="true" />
-              </button>
-            </span>
-            <span role="cell">
-              <DirectionBadge entry={entry} />
-            </span>
-            <span role="cell">{entry.channel.toUpperCase()}</span>
-            <span role="cell">{formatStatus(entry)}</span>
-            <span role="cell">{formatTransportByteSize(entry.byteLength)}</span>
-            <span role="cell">{formatTransportDuration(entry.durationMs)}</span>
-          </div>
-        ))}
+                <time
+                  role="cell"
+                  dateTime={formatTransportTimestampSignature(entry.timestampMs)}
+                  title={formatTransportTimestampSignature(entry.timestampMs)}
+                >
+                  {formatTransportTimestamp(entry.timestampMs)}
+                </time>
+                <span role="cell" className="fm-footer-log__message-cell">
+                  <button
+                    type="button"
+                    className="fm-footer-log__message"
+                    onClick={() => setSelectedEntry(entry)}
+                    title={summarizeTransportPath(entry)}
+                  >
+                    <span>{buildTransportMessagePreview(entry)}</span>
+                    <Maximize2 size={12} aria-hidden="true" />
+                  </button>
+                </span>
+                <span role="cell">
+                  <DirectionBadge entry={entry} />
+                </span>
+                <span role="cell">{entry.channel.toUpperCase()}</span>
+                <span role="cell">{formatStatus(entry)}</span>
+                <span role="cell">{formatTransportByteSize(entry.byteLength)}</span>
+                <span role="cell">{formatTransportDuration(entry.durationMs)}</span>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       <TransportLogDetailsDialog

@@ -385,3 +385,27 @@
   flex-shrink: 0;
   align-self: center;
 }
+
+@media (max-width: 1400px) {
+  .fm-ribbon {
+    --fm-ribbon-action-width: 32px;
+  }
+  .fm-ribbon-action-shell {
+    width: var(--fm-ribbon-action-width);
+    min-width: var(--fm-ribbon-action-width);
+  }
+  .fm-ribbon-action {
+    width: var(--fm-ribbon-action-width);
+    min-width: var(--fm-ribbon-action-width);
+    padding-inline: 0;
+  }
+  .fm-ribbon-action__label {
+    display: none;
+  }
+  .fm-ribbon-group__label {
+    font-size: 8px;
+  }
+  .fm-ribbon-group__label small {
+    display: none;
+  }
+}
