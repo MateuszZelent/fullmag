@@ -46,7 +46,7 @@ export function InspectorMetricStrip({
   return (
     <div
       className={cn(
-        "grid min-w-0 grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-x-4 gap-y-3 border-b border-fm-subtle pb-4",
+        "fm-inspector-metric-strip grid min-w-0 grid-cols-2 gap-x-5 gap-y-3 border-b border-fm-subtle pb-4",
         className,
       )}
       data-count={metrics.length}

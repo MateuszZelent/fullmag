@@ -27,7 +27,7 @@ export function InspectorGroup({
   const contentId = useId();
   const heading = (
     <div className="min-w-0 flex-1" data-slot="inspector-group-heading">
-      <h3 className="m-0 text-fm-label font-semibold leading-tight text-fm-primary">
+      <h3 className="m-0 text-[13px] font-semibold leading-tight tracking-[-0.01em] text-fm-primary">
         {title}
       </h3>
       {description ? (

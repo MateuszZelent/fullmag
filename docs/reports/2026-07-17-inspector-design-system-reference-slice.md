@@ -73,11 +73,11 @@ The five Inspector/shared CSS files retain 162 unique `fm-*` selectors after the
 
 ## Storybook evidence
 
-Pending Task 7.
+`pnpm --dir apps/control-room build:storybook` completes successfully with Storybook 10.5.2 and the official Next.js/Vite adapter. The workshop contains isolated SegmentedControl states and deterministic Visualization Overview states without mounting the kernel or opening network connections.
 
 ## Browser and screenshot evidence
 
-Pending Task 8. Required final screenshots:
+The live browser smoke produced these required screenshots under `apps/control-room/.fullmag/reports/inspector-2-browser/`:
 
 - `visualization-overview-light-360.png`
 - `visualization-overview-light-416.png`
@@ -87,6 +87,21 @@ Pending Task 8. Required final screenshots:
 - `visualization-overview-dark-560.png`
 - `visualization-overview-light-disabled-416.png`
 - `visualization-overview-dark-degraded-416.png`
+
+An additional `visualization-overview-controls-light-416.png` records the scrolled Render Mode and Quantity Source geometry rather than hiding those controls below the fixed action bar.
+
+Manual review findings after the second visual pass:
+
+| Criterion | Evidence |
+|---|---|
+| Surface hierarchy | Four metrics use a border-light 2×2 strip; Display is the only initially expanded control group. |
+| Text readability | Group headings are 13 px, field labels are at least 12 px, and live browser measurement rejects smaller labels. |
+| Control alignment | Display passes use a stable three-column grid; Render Mode uses the full content width; Quantity Source has one label rather than a nested `Quantity source / Source` pair. |
+| Disabled readability | Inputs keep opaque semantic text, border, and background tokens; browser proof requires opacity at least 0.7. |
+| Light/dark parity | All accepted widths were captured in both themes with the same geometry. |
+| 360 px wrapping | No horizontal overflow; the target metadata stacks, metrics remain 2×2, and segmented labels wrap inside their control. |
+| Nested cards | No nested `.fm-inspector-section`; ordinary groups have computed `box-shadow: none`. |
+| Remaining reference issue | The live runtime used for proof reports Mesh Readiness `Ready`; the deterministic degraded state remains isolated in the `DegradedMesh` Storybook story. |
 
 ## Verification log
 
@@ -98,9 +113,9 @@ Pending Task 8. Required final screenshots:
 | TypeScript | pass | `typecheck` after reference composition |
 | ESLint | pass | zero warnings after reference composition |
 | Full Vitest | pending | Task 9 |
-| Storybook build | pending | Task 9 |
+| Storybook build | pass | Storybook 10.5.2 static build |
 | React Doctor | pending | Task 9 |
-| Inspector browser smoke | pending | Task 9 |
+| Inspector browser smoke | pass | 0 console errors, 0 preview requests, widths 360/416/560, light/dark, Reset verified |
 
 ## Known issues
 

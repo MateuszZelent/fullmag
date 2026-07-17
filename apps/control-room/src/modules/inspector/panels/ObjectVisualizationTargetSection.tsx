@@ -1,6 +1,6 @@
 "use client";
 
-import { Info, RotateCcw } from "lucide-react";
+import { Check, Info, RotateCcw } from "lucide-react";
 import React, { useState, useId, useRef, useCallback, useEffect } from "react";
 import { type FieldCatalogResource, type FieldMetaResource } from "@/kernel/api/apiTypes";
 import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
@@ -156,19 +156,6 @@ export function VisualizationDisplayPassesSection({
         <FeedbackBanner kind="warning" message={renderWarning} />
       ) : null}
       <div className="fm-visualization-toggle-grid">
-        {targetKind === "airbox" ? (
-          <Button
-            aria-label="Airbox visualization diagnostics"
-            className="fm-visualization-toggle"
-            size="sm"
-            title="Airbox visualization diagnostics"
-            type="button"
-            variant="secondary"
-            onClick={handleDiagnosticClick}
-          >
-            <Info size={14} />
-          </Button>
-        ) : null}
         <ToggleButton
           active={displaySettings.visible}
           disabled={pending}
@@ -248,6 +235,20 @@ export function VisualizationDisplayPassesSection({
             }
           />
         ) : null}
+        {targetKind === "airbox" ? (
+          <Button
+            aria-label="Airbox visualization diagnostics"
+            className="fm-visualization-toggle"
+            size="sm"
+            title="Airbox visualization diagnostics"
+            type="button"
+            variant="ghost"
+            onClick={handleDiagnosticClick}
+          >
+            <Info aria-hidden="true" size={13} />
+            Diagnostic
+          </Button>
+        ) : null}
       </div>
       {primitiveDisplayToggleVisible ? <ViewportPreferenceScopeNote /> : null}
       <Dialog
@@ -326,6 +327,7 @@ export function VisualizationRenderModeSection({
         )
       }
       label="Render mode"
+      layout="stacked"
     >
       <SegmentedControl
         aria-label="Render mode"
@@ -392,7 +394,7 @@ export function VisualizationSurfaceColoringSection({
     ...fieldMetaScopeQuery,
   });
   return (
-    <InspectorGroup collapsible title="Surface Coloring">
+    <InspectorGroup collapsible defaultOpen={false} title="Surface Coloring">
       {regionFieldWarning ? (
         <FeedbackBanner
           kind="warning"
@@ -649,29 +651,27 @@ export function VisualizationQuantitySection({
   targetKind?: VisualizationTargetKind;
 }) {
   return (
-    <InspectorPropertyRow label="Quantity source">
-      <FormField
-        disabled={pending || !settings.visible}
-        label="Source"
-        type="select"
-        value={settings.activeQuantityId}
-        onChange={(event) => {
-          const patchValue = quantitySourcePatch(settings, event.target.value);
-          const nextSurfaceColorSource =
-            patchValue.surfaceColorSource ?? settings.surfaceColorSource;
-          if (nextSurfaceColorSource !== "solid") {
-            onFieldCatalogRequest();
-          }
-          void patch(patchValue);
-        }}
-      >
-        {visualizationQuantityItems(settings.activeQuantityId, targetKind).map((quantity) => (
-          <option key={quantity.value} value={quantity.value}>
-            {quantity.label}
-          </option>
-        ))}
-      </FormField>
-    </InspectorPropertyRow>
+    <FormField
+      disabled={pending || !settings.visible}
+      label="Quantity source"
+      type="select"
+      value={settings.activeQuantityId}
+      onChange={(event) => {
+        const patchValue = quantitySourcePatch(settings, event.target.value);
+        const nextSurfaceColorSource =
+          patchValue.surfaceColorSource ?? settings.surfaceColorSource;
+        if (nextSurfaceColorSource !== "solid") {
+          onFieldCatalogRequest();
+        }
+        void patch(patchValue);
+      }}
+    >
+      {visualizationQuantityItems(settings.activeQuantityId, targetKind).map((quantity) => (
+        <option key={quantity.value} value={quantity.value}>
+          {quantity.label}
+        </option>
+      ))}
+    </FormField>
   );
 }
 
@@ -769,7 +769,7 @@ export function VisualizationVectorsSection({
   const vectorsDisabled = pending || sectionDisabled("vectors");
 
   return (
-    <InspectorGroup collapsible title="Vectors">
+    <InspectorGroup collapsible defaultOpen={false} title="Vectors">
       <ViewportPreferenceScopeNote />
       <VisualizationRadioGroup
         disabled={vectorsDisabled}
@@ -1205,6 +1205,7 @@ export function VisualizationToggleButton({
       variant={active ? "primary" : "secondary"}
       onClick={onClick}
     >
+      {active ? <Check aria-hidden="true" size={13} /> : null}
       {label}
       {disabledDescription ? (
         <span className="fm-visually-hidden" id={descriptionId}>

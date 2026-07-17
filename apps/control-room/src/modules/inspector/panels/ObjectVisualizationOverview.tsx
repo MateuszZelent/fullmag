@@ -29,7 +29,10 @@ export function ObjectVisualizationOverview({
   vectors,
 }: ObjectVisualizationOverviewProps) {
   return (
-    <div className="grid min-w-0 gap-4" data-slot="visualization-overview">
+    <div
+      className="fm-object-visualization-overview grid min-w-0 gap-5 [container-type:inline-size]"
+      data-slot="object-visualization-overview"
+    >
       <InspectorMetricStrip
         metrics={[
           { label: "Display Passes", value: `${enabledPassCount} enabled` },

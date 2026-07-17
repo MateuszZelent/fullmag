@@ -66,8 +66,89 @@ try {
     `Unexpected Visualization tabs: ${JSON.stringify(tabLabels)}`,
   );
 
+  const overview = inspector.locator(
+    '[data-slot="object-visualization-overview"]',
+  );
+  assert(
+    (await overview.count()) === 1,
+    "Visualization Inspector must expose exactly one reference Overview.",
+  );
+  assert(
+    (await overview
+      .locator('[data-slot="inspector-group"]')
+      .filter({ has: page.getByRole("heading", { name: "Display", exact: true }) })
+      .count()) === 1,
+    "Visualization Overview must expose exactly one Display group.",
+  );
+  assert(
+    (await inspector.locator(".fm-inspector-section .fm-inspector-section").count()) === 0,
+    "Visualization Inspector contains nested compatibility cards.",
+  );
+  assert(
+    (await inspector.locator("img, canvas").count()) === 0,
+    "Inspector rendered preview media.",
+  );
+
+  const geometry = await overview.evaluate((element) => {
+    const labels = Array.from(
+      element.querySelectorAll('[data-slot="inspector-property-label"]'),
+    );
+    const controls = Array.from(
+      element.querySelectorAll(
+        '.fm-visualization-toggle, [data-slot="segmented-control-item"], select',
+      ),
+    ).filter((control) => control.getBoundingClientRect().height > 0);
+    const groups = Array.from(
+      element.querySelectorAll('[data-slot="inspector-group"]'),
+    );
+    const segmented = element.querySelector('[data-slot="segmented-control"]');
+    const overviewRect = element.getBoundingClientRect();
+    const segmentedRect = segmented?.getBoundingClientRect();
+    return {
+      groupShadows: groups.map((group) => getComputedStyle(group).boxShadow),
+      groupSpacing: Number.parseFloat(getComputedStyle(element).rowGap),
+      labelSizes: labels.map((label) => Number.parseFloat(getComputedStyle(label).fontSize)),
+      controlHeights: controls.map((control) => ({
+        className: control.className,
+        element: control.tagName.toLowerCase(),
+        height: control.getBoundingClientRect().height,
+        slot: control.getAttribute("data-slot"),
+      })),
+      minControlHeight: Math.min(
+        ...controls.map((control) => control.getBoundingClientRect().height),
+      ),
+      segmentedFits:
+        !segmentedRect || segmentedRect.right <= overviewRect.right + 0.5,
+    };
+  });
+  assert(
+    geometry.labelSizes.length > 0 && geometry.labelSizes.every((size) => size >= 12),
+    `Inspector field labels are too small: ${JSON.stringify(geometry.labelSizes)}`,
+  );
+  assert(
+    geometry.minControlHeight >= 32,
+    `Inspector control height is below 32px: ${JSON.stringify(geometry.controlHeights)}.`,
+  );
+  assert(
+    geometry.groupSpacing >= 12,
+    `Inspector group spacing is below 12px: ${geometry.groupSpacing}px.`,
+  );
+  assert(
+    geometry.groupShadows.every((shadow) => shadow === "none"),
+    `Ordinary Inspector groups must not have shadows: ${JSON.stringify(geometry.groupShadows)}`,
+  );
+  assert(geometry.segmentedFits, "Render Mode segmented control is clipped.");
+
   const panel = page.getByTestId("panel-right");
-  const resizeHandle = page.getByRole("separator", { name: "Resize Inspector" });
+  const resizeHandle = page.getByRole("separator", { name: /Inspector/ }).last();
+  const visibleToggle = overview.getByRole("button", { name: "Visible", exact: true });
+  const resetButton = panel.getByRole("button", { name: "Reset", exact: true });
+  const initialVisible = (await visibleToggle.getAttribute("aria-pressed")) === "true";
+  if (!initialVisible) {
+    await visibleToggle.click();
+    await page.waitForTimeout(150);
+  }
+  const screenshotFiles = [];
   for (const width of [360, 416, 560]) {
     const handleBox = await resizeHandle.boundingBox();
     const panelBox = await panel.boundingBox();
@@ -88,13 +169,111 @@ try {
       await inspector.evaluate((element) => element.scrollWidth <= element.clientWidth),
       `Inspector overflows horizontally at ${width}px.`,
     );
-    await page.screenshot({ path: resolve(outputDir, `inspector-${width}.png`) });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate((nextTheme) => {
+        document.documentElement.dataset.theme = nextTheme;
+      }, theme);
+      await page.waitForTimeout(100);
+      const fileName = `visualization-overview-${theme}-${width}.png`;
+      await panel.screenshot({ path: resolve(outputDir, fileName) });
+      screenshotFiles.push(fileName);
+    }
   }
 
   await resizeHandle.dblclick();
   await page.waitForTimeout(150);
   const resetWidth = await panel.boundingBox();
   assert(resetWidth && Math.abs(resetWidth.width - 416) <= 3, "Double-click did not restore 416px.");
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = "light";
+  });
+  const overviewContent = inspector.locator(
+    ".fm-inspector__content > .fm-scroll-area__viewport",
+  );
+  await overviewContent.evaluate((element) => {
+    element.scrollTop = 140;
+  });
+  await page.waitForTimeout(100);
+  const controlsGeometry = await overview.evaluate((element) => {
+    const segmented = element.querySelector('[data-slot="segmented-control"]');
+    const quantity = element.querySelector('select[aria-label="Quantity source"]');
+    return {
+      overview: element.getBoundingClientRect().toJSON(),
+      quantity: quantity?.getBoundingClientRect().toJSON() ?? null,
+      segmented: segmented?.getBoundingClientRect().toJSON() ?? null,
+    };
+  });
+  assert(
+    controlsGeometry.segmented && controlsGeometry.quantity,
+    `Overview controls are missing after scroll: ${JSON.stringify(controlsGeometry)}`,
+  );
+  await panel.screenshot({
+    path: resolve(outputDir, "visualization-overview-controls-light-416.png"),
+  });
+  await overviewContent.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = "light";
+  });
+  const initialRenderMode = await overview
+    .locator('[data-slot="segmented-control-item"][data-state="checked"]')
+    .getAttribute("data-value");
+  if ((await visibleToggle.getAttribute("aria-pressed")) === "true") {
+    await visibleToggle.click();
+  }
+  assert(!(await resetButton.isDisabled()), "A live display change did not enable Reset.");
+  const disabledControl = overview.locator("select:disabled").first();
+  assert(await disabledControl.count(), "Hidden target did not expose a disabled readable control.");
+  const disabledStyle = await disabledControl.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { color: style.color, opacity: Number.parseFloat(style.opacity) };
+  });
+  assert(
+    disabledStyle.color !== "transparent" && disabledStyle.opacity >= 0.7,
+    `Disabled control is unreadable: ${JSON.stringify(disabledStyle)}`,
+  );
+  const disabledFile = "visualization-overview-light-disabled-416.png";
+  await panel.screenshot({ path: resolve(outputDir, disabledFile) });
+  screenshotFiles.push(disabledFile);
+  await resetButton.click();
+  await page.waitForTimeout(150);
+  assert(await resetButton.isDisabled(), "Visualization Reset did not restore the applied baseline.");
+  assert(
+    (await overview
+      .locator('[data-slot="segmented-control-item"][data-state="checked"]')
+      .getAttribute("data-value")) === initialRenderMode,
+    "Visualization Reset changed the initial render mode.",
+  );
+
+  if ((await visibleToggle.getAttribute("aria-pressed")) !== "true") {
+    await visibleToggle.click();
+    await page.waitForTimeout(200);
+  }
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = "dark";
+  });
+  const degradedFile = "visualization-overview-dark-degraded-416.png";
+  await panel.screenshot({ path: resolve(outputDir, degradedFile) });
+  screenshotFiles.push(degradedFile);
+
+  const segmentedItem = overview
+    .locator('[data-slot="segmented-control-item"][data-state="checked"]')
+    .first();
+  const initialFocusedMode = await segmentedItem.getAttribute("data-value");
+  await segmentedItem.focus();
+  await segmentedItem.press("ArrowRight");
+  await page.waitForTimeout(200);
+  assert(
+    (await page.evaluate(() =>
+      document.activeElement?.getAttribute("data-value"),
+    )) !== initialFocusedMode,
+    "Render Mode focus did not respond to keyboard navigation.",
+  );
+  await resetButton.click();
 
   const headerTop = await inspector.locator(".fm-inspector__header").boundingBox();
   const tabsTop = await inspector.locator(".fm-inspector__tabs").boundingBox();
@@ -209,8 +388,10 @@ try {
         consoleErrors: consoleErrors.length,
         dirtySelectionGuard: "verified",
         previewRequests: previewRequests.length,
-        screenshots: 7,
+        screenshots: screenshotFiles,
         tabs: expectedTabs,
+        themes: ["light", "dark"],
+        visualizationReset: "verified",
         widths: [360, 416, 560],
       },
       null,

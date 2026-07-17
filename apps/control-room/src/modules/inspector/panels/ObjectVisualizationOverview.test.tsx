@@ -20,7 +20,7 @@ describe("ObjectVisualizationOverview", () => {
       />,
     );
 
-    expect(html).toContain('data-slot="visualization-overview"');
+    expect(html).toContain('data-slot="object-visualization-overview"');
     expect(html).toContain('data-slot="inspector-metric-strip"');
     expect(html).toContain("4 enabled");
     expect(html).toContain("Quantity Source");
