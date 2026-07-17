@@ -463,3 +463,15 @@
   font-size: var(--fm-font-size-xs);
 }
 
+
+/* ── Frequency domain alert cards ── */
+.fm-fd-alert__title {
+  font-weight: var(--fm-font-weight-bold);
+  font-size: var(--fm-font-size-sm);
+  margin-bottom: var(--fm-space-1);
+}
+
+.fm-fd-alert__row {
+  font-size: var(--fm-font-size-xs);
+  margin: var(--fm-space-1) 0;
+}

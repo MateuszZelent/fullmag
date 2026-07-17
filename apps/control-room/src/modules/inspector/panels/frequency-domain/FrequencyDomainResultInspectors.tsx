@@ -712,10 +712,10 @@ export function FrequencyResponseOverviewInspectorPanel(
       <div data-inspector-surface="frequency-response-overview">
         <InspectorSection title="Driven Response Validation" badge="blocking">
           <div className="fm-inspector-alert fm-alert-danger">
-            <div style={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: "6px" }}>Drive source: missing</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Severity:</strong> blocking</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Message:</strong> Frequency-domain response requires a dynamic perturbation δh. Without excitation, the response is identically zero.</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Action:</strong> Add drive source</div>
+            <div className="fm-fd-alert__title">Drive source: missing</div>
+            <div className="fm-fd-alert__row"><strong>Severity:</strong> blocking</div>
+            <div className="fm-fd-alert__row"><strong>Message:</strong> Frequency-domain response requires a dynamic perturbation δh. Without excitation, the response is identically zero.</div>
+            <div className="fm-fd-alert__row"><strong>Action:</strong> Add drive source</div>
           </div>
         </InspectorSection>
       </div>
@@ -3725,10 +3725,10 @@ export function FrequencyResponseSweepInspectorPanel(props: InspectorPanelProps)
       <div data-inspector-surface="frequency-response-sweep">
         <InspectorSection title="Driven Response Validation" badge="blocking">
           <div className="fm-inspector-alert fm-alert-danger">
-            <div style={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: "6px" }}>Drive source: missing</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Severity:</strong> blocking</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Message:</strong> Frequency-domain response requires a dynamic perturbation δh. Without excitation, the response is identically zero.</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Action:</strong> Add drive source</div>
+            <div className="fm-fd-alert__title">Drive source: missing</div>
+            <div className="fm-fd-alert__row"><strong>Severity:</strong> blocking</div>
+            <div className="fm-fd-alert__row"><strong>Message:</strong> Frequency-domain response requires a dynamic perturbation δh. Without excitation, the response is identically zero.</div>
+            <div className="fm-fd-alert__row"><strong>Action:</strong> Add drive source</div>
           </div>
         </InspectorSection>
       </div>
@@ -4066,10 +4066,10 @@ export function FrequencyDomainOperatorDiagnosticInspectorPanel(
       >
         {dmiWarning && (
           <div className="fm-inspector-alert fm-alert-warning">
-            <div style={{ fontWeight: "bold", fontSize: "1.1em", marginBottom: "6px" }}>DMI BC uncertain</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Severity:</strong> warning</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>Message:</strong> Frequency-domain DMI boundary conditions are not yet fully resolved. Use with caution.</div>
-            <div style={{ fontSize: "0.9em", margin: "4px 0" }}><strong>ID:</strong> frequency_domain.dmi_boundary_condition_uncertain</div>
+            <div className="fm-fd-alert__title">DMI BC uncertain</div>
+            <div className="fm-fd-alert__row"><strong>Severity:</strong> warning</div>
+            <div className="fm-fd-alert__row"><strong>Message:</strong> Frequency-domain DMI boundary conditions are not yet fully resolved. Use with caution.</div>
+            <div className="fm-fd-alert__row"><strong>ID:</strong> frequency_domain.dmi_boundary_condition_uncertain</div>
           </div>
         )}
         <FieldRow label="Operator family" value={summary.operatorFamily} />

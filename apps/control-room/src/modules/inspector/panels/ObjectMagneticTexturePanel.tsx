@@ -494,7 +494,7 @@ export function MagneticTextureTransformSection({
   return (
     <InspectorSection value="transform" title="Texture Transform">
       {hasBounds && (
-        <div className="fm-inspector-toolbar" style={{ marginBottom: "0.75rem" }}>
+        <div className="fm-inspector-toolbar fm-mb-3">
           <Button
             size="sm"
             type="button"
