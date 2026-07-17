@@ -9,13 +9,12 @@ import {
   publishCommittedSceneResource,
   useModelCouplingsResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import { resolveCouplingInspectorModel } from "./CouplingInspectorPanelModel";
 
 function formatParameters(parameters: Record<string, unknown>): string {
@@ -94,12 +93,8 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={["identity", "endpoints", "parameters", "diagnostics"]}
-    >
-      <InspectorSection value="identity" title="Coupling" collapsible defaultCollapsed={false}>
+    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+      <InspectorGroup title="Coupling" collapsible defaultOpen>
         {model.mode === "missing" ? (
           <FeedbackBanner
             kind="warning"
@@ -136,9 +131,9 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
         {feedback ? (
           <FeedbackBanner kind={feedback.kind} message={feedback.message} />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection value="endpoints" title="Endpoints">
+      <InspectorGroup title="Endpoints" collapsible defaultOpen>
         <FieldRow label="Source" value={model.source?.label ?? "unresolved"} />
         <FieldRow label="Source kind" value={model.source?.kind ?? "unresolved"} />
         <FieldRow
@@ -167,13 +162,13 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
           label="Target area"
           value={formatOptionalNumber(model.target?.area ?? null, " m²")}
         />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection value="parameters" title="Parameters">
+      <InspectorGroup title="Parameters" collapsible defaultOpen>
         <FieldRow label="Values" value={formatParameters(model.parameters)} />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection value="diagnostics" title="Diagnostics">
+      <InspectorGroup title="Diagnostics" collapsible defaultOpen>
         {model.blockerReason ? (
           <FeedbackBanner kind="error" message={model.blockerReason} />
         ) : null}
@@ -201,7 +196,7 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
           label="Target tolerance"
           value={formatOptionalNumber(model.target?.tolerance ?? null, " m")}
         />
-      </InspectorSection>
-    </Accordion>
+      </InspectorGroup>
+    </div>
   );
 }

@@ -75,6 +75,8 @@ describe("Inspector design-system reference contract", () => {
 
   it.each([
     "ObjectMaterialPanel.tsx",
+    "AntennaObjectPanel.tsx",
+    "CouplingInspectorPanel.tsx",
     "CrossSectionInspectorPanel.tsx",
     "CrossSectionSettingsEditor.tsx",
   ])("keeps migrated %s authoring on compact Inspector groups", (fileName) => {
