@@ -2,8 +2,8 @@
 
 ## Plan: 2026-07-17 LLG time-domain solver remediation
 
-- Worktree: `/tmp/fullmag-llg-time-domain-remediation`
-- Branch: `codex/llg-time-domain-remediation`
+- Worktree: `/tmp/fullmag-llg-remediation-clean`
+- Branch: `codex/llg-time-domain-remediation-clean`
 - Base: `707a50386cdfe6787aac06cca3070289dc731fa2`
 - Approved audit: `docs/audits/2026-07-16-llg-time-domain-solver-audit.md`
 - Canonical contract: `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
@@ -12,8 +12,8 @@
 | Task | Status | RED evidence | GREEN evidence | Reviews | Commit |
 |---:|---|---|---|---|---|
 | 1 | completed | empty CUDA architecture, stale report path, stale external-energy assertion | default and `FULLMAG_CUDA_ARCHITECTURES=75` managed gates exit 0 | spec APPROVED; quality APPROVED | `138da5c8` |
-| 2 | completed | initial 23 failures; review RED 7; re-review RED 6; fixed-draft/resolver follow-up RED | focused 24 passed + 24 subtests; task-owned test_api 251 passed | spec APPROVED; quality APPROVED | pending |
-| 3 | pending | pending | pending | pending | pending |
+| 2 | completed | initial 23 failures; review RED 7; re-review RED 6; fixed-draft/resolver follow-up RED | focused 24 passed + 24 subtests; task-owned test_api 251 passed | spec APPROVED; quality APPROVED | `4e25d70e` |
+| 3 | completed | max-error intent was not serialized; unsupported adaptive policies could reach CUDA/FEM ABI gaps; stale Floquet fixture conflated periodic and outer markers | IR 181 passed; full planner 229 passed; focused CLI/Python/runner gates green; managed CUDA test pending | spec APPROVED; quality APPROVED | `d24b9003` |
 | 4 | pending | pending | pending | pending | pending |
 | 5 | pending | pending | pending | pending | pending |
 | 6 | pending | pending | pending | pending | pending |

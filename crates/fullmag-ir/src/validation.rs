@@ -1151,6 +1151,114 @@ pub(crate) fn is_supported_llg_integrator(integrator: &str) -> bool {
     )
 }
 
+pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mut Vec<String>) {
+    let Some(value) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_selection")
+    else {
+        return;
+    };
+    let Some(selection) = value.as_object() else {
+        errors.push("runtime_metadata.runtime_selection must be an object".to_string());
+        return;
+    };
+    let device = match selection.get("device") {
+        None => None,
+        Some(value) => match value.as_str() {
+            Some(value) if matches!(value, "auto" | "cpu" | "gpu" | "cuda") => Some(value),
+            Some(value) => {
+                errors.push(format!(
+                    "runtime_metadata.runtime_selection.device '{value}' is unsupported"
+                ));
+                None
+            }
+            None => {
+                errors.push(
+                    "runtime_metadata.runtime_selection.device must be a string".to_string(),
+                );
+                None
+            }
+        },
+    };
+    let precision_value = selection
+        .get("execution_precision")
+        .or_else(|| selection.get("precision"));
+    let precision = match precision_value {
+        None => None,
+        Some(value) => match value.as_str() {
+            Some(value) if matches!(value, "single" | "double") => Some(value),
+            Some(value) => {
+                errors.push(format!(
+                    "runtime_metadata.runtime_selection.execution_precision '{value}' is unsupported"
+                ));
+                None
+            }
+            None => {
+                errors.push(
+                    "runtime_metadata.runtime_selection.execution_precision must be a string"
+                        .to_string(),
+                );
+                None
+            }
+        },
+    };
+    if let (Some(left), Some(right)) = (
+        selection
+            .get("execution_precision")
+            .and_then(|value| value.as_str()),
+        selection.get("precision").and_then(|value| value.as_str()),
+    ) {
+        if left != right {
+            errors.push(
+                "runtime_metadata.runtime_selection precision and execution_precision must agree"
+                    .to_string(),
+            );
+        }
+    }
+    for (key, allow_zero) in [
+        ("cpu_threads", false),
+        ("gpu_count", true),
+        ("device_index", true),
+    ] {
+        if selection.get(key).is_some_and(|value| {
+            !value
+                .as_u64()
+                .is_some_and(|number| allow_zero || number > 0)
+        }) {
+            let requirement = if allow_zero {
+                "a non-negative"
+            } else {
+                "a positive"
+            };
+            errors.push(format!(
+                "runtime_metadata.runtime_selection.{key} must be {requirement} integer"
+            ));
+        }
+    }
+    if selection
+        .get("explicit_selection")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        errors.push(
+            "runtime_metadata.runtime_selection.explicit_selection must be a boolean".to_string(),
+        );
+    }
+    let typed = match problem.backend_policy.execution_precision {
+        crate::ExecutionPrecision::Single => "single",
+        crate::ExecutionPrecision::Double => "double",
+    };
+    if device == Some("auto") && typed == "single" {
+        errors.push("runtime_metadata.runtime_selection device='auto' with execution_precision='single' is not qualified; select device='gpu' explicitly".to_string());
+    }
+    if precision.is_some_and(|value| value != typed) {
+        errors.push(format!(
+            "runtime_metadata.runtime_selection.execution_precision '{}' conflicts with backend_policy.execution_precision '{typed}'",
+            precision.expect("checked as present")
+        ));
+    }
+}
+
 pub(crate) fn validate_study_dynamics(dynamics: &DynamicsIR, errors: &mut Vec<String>) {
     validate_study_dynamics_with_integrator_policy(dynamics, true, errors);
 }
@@ -1172,11 +1280,12 @@ fn validate_study_dynamics_with_integrator_policy(
             gyromagnetic_ratio,
             integrator,
             fixed_timestep,
+            adaptive_timestep,
             field_refresh,
             ..
         } => {
-            if *gyromagnetic_ratio <= 0.0 {
-                errors.push("llg.gyromagnetic_ratio must be positive".to_string());
+            if !gyromagnetic_ratio.is_finite() || *gyromagnetic_ratio <= 0.0 {
+                errors.push("llg.gyromagnetic_ratio must be finite and positive".to_string());
             }
             if validate_integrator && integrator.trim().is_empty() {
                 errors.push("llg.integrator must not be empty".to_string());
@@ -1185,18 +1294,124 @@ fn validate_study_dynamics_with_integrator_policy(
                     "llg.integrator must be one of: heun, rk4, rk23, rk45, abm3, auto".to_string(),
                 );
             }
-            if fixed_timestep.is_some_and(|value| value <= 0.0) {
-                errors.push("llg.fixed_timestep must be positive when provided".to_string());
+            if fixed_timestep.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+                errors.push("llg.fixed_timestep must be finite and positive when provided".to_string());
+            }
+            if validate_integrator && fixed_timestep.is_some() && adaptive_timestep.is_some() {
+                errors.push("llg.fixed_timestep and llg.adaptive_timestep are mutually exclusive".to_string());
+            }
+            if validate_integrator {
+                if let Some(adaptive) = adaptive_timestep {
+                    validate_adaptive_timestep(integrator, adaptive, errors);
+                }
             }
             if field_refresh
                 .as_ref()
                 .and_then(|policy| policy.demag_interval_s)
-                .is_some_and(|value| value <= 0.0)
+                .is_some_and(|value| !value.is_finite() || value <= 0.0)
             {
                 errors.push(
-                    "llg.field_refresh.demag_interval_s must be positive when provided".to_string(),
+                    "llg.field_refresh.demag_interval_s must be finite and positive when provided".to_string(),
                 );
             }
         }
+    }
+}
+
+fn validate_adaptive_timestep(
+    integrator: &str,
+    adaptive: &crate::AdaptiveTimeStepIR,
+    errors: &mut Vec<String>,
+) {
+    if !matches!(integrator, "rk23" | "rk45" | "auto") {
+        errors.push(
+            "llg.adaptive_timestep requires an embedded-error integrator: rk23, rk45, or auto"
+                .to_string(),
+        );
+    }
+    if !adaptive.atol.is_finite() || adaptive.atol < 0.0 {
+        errors.push("llg.adaptive_timestep.atol must be finite and nonnegative".to_string());
+    }
+    if !adaptive.rtol.is_finite() || adaptive.rtol < 0.0 {
+        errors.push("llg.adaptive_timestep.rtol must be finite and nonnegative".to_string());
+    }
+    if adaptive.atol == 0.0 && adaptive.rtol == 0.0 {
+        errors.push("llg.adaptive_timestep requires at least one positive tolerance".to_string());
+    }
+    if adaptive.tolerance_mode == crate::AdaptiveToleranceModeIR::MaxError {
+        if !adaptive.atol.is_finite() || adaptive.atol <= 0.0 {
+            errors.push(
+                "llg.adaptive_timestep max_error mode requires finite positive atol".to_string(),
+            );
+        }
+        if adaptive.rtol != 0.0 {
+            errors.push("llg.adaptive_timestep max_error mode requires rtol=0".to_string());
+        }
+    }
+    if !adaptive.dt_min.is_finite() || adaptive.dt_min <= 0.0 {
+        errors.push("llg.adaptive_timestep.dt_min must be finite and positive".to_string());
+    }
+    match adaptive.dt_max {
+        Some(value) if !value.is_finite() || value <= 0.0 => {
+            errors.push("llg.adaptive_timestep.dt_max must be finite and positive".to_string());
+        }
+        Some(value) if adaptive.dt_min.is_finite() && value < adaptive.dt_min => {
+            errors.push("llg.adaptive_timestep.dt_max must be >= dt_min".to_string());
+        }
+        Some(_) => {}
+        None => errors.push(
+            "llg.adaptive_timestep.dt_max is required for executable adaptive dynamics"
+                .to_string(),
+        ),
+    }
+    if let Some(value) = adaptive.dt_initial {
+        if !value.is_finite() || value <= 0.0 {
+            errors.push(
+                "llg.adaptive_timestep.dt_initial must be finite and positive when provided"
+                    .to_string(),
+            );
+        } else {
+            if adaptive.dt_min.is_finite() && value < adaptive.dt_min {
+                errors.push("llg.adaptive_timestep.dt_initial must be >= dt_min".to_string());
+            }
+            if adaptive
+                .dt_max
+                .is_some_and(|maximum| maximum.is_finite() && value > maximum)
+            {
+                errors.push("llg.adaptive_timestep.dt_initial must be <= dt_max".to_string());
+            }
+        }
+    }
+    if !adaptive.safety.is_finite() || !(0.0 < adaptive.safety && adaptive.safety <= 1.0) {
+        errors.push("llg.adaptive_timestep.safety must be finite and in (0, 1]".to_string());
+    }
+    if !adaptive.growth_limit.is_finite() || adaptive.growth_limit <= 1.0 {
+        errors.push("llg.adaptive_timestep.growth_limit must be finite and > 1".to_string());
+    }
+    if !adaptive.shrink_limit.is_finite()
+        || adaptive.shrink_limit <= 0.0
+        || adaptive.shrink_limit >= 1.0
+    {
+        errors.push(
+            "llg.adaptive_timestep.shrink_limit must be finite and in (0, 1)".to_string(),
+        );
+    }
+    if adaptive
+        .max_spin_rotation
+        .is_some_and(|value| !value.is_finite() || value <= 0.0)
+    {
+        errors.push(
+            "llg.adaptive_timestep.max_spin_rotation must be finite and positive when provided"
+                .to_string(),
+        );
+    }
+    if adaptive
+        .norm_tolerance
+        .is_some_and(|value| !value.is_finite() || value <= 0.0)
+    {
+        errors.push(
+            "llg.adaptive_timestep.norm_tolerance must be finite and positive when provided"
+                .to_string(),
+        );
     }
 }

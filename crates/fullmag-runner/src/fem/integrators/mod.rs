@@ -106,6 +106,7 @@ pub fn default_adaptive_config(choice: IntegratorChoice) -> AdaptiveTimeStepIR {
         _ => (1e-5, 1e-4),
     };
     AdaptiveTimeStepIR {
+        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
         atol,
         rtol,
         dt_initial: Some(crate::DEFAULT_ADAPTIVE_DT_INITIAL),

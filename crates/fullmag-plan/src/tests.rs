@@ -5772,6 +5772,10 @@ fn staged_multilayer_rejects_abm3() {
 #[test]
 fn staged_multilayer_rejects_adaptive_rk23() {
     let mut ir = stacked_two_body_multilayer_problem();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cpu"}),
+    );
     let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
         panic!("bootstrap study should be time evolution");
     };
@@ -5784,6 +5788,7 @@ fn staged_multilayer_rejects_adaptive_rk23() {
     *integrator = "rk23".to_string();
     *fixed_timestep = None;
     *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
         atol: 1.0e-6,
         rtol: 1.0e-4,
         dt_initial: Some(1.0e-13),
@@ -5801,6 +5806,102 @@ fn staged_multilayer_rejects_adaptive_rk23() {
         .reasons
         .iter()
         .any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep")));
+}
+
+fn set_adaptive_rk45(problem: &mut ProblemIR, mode: fullmag_ir::AdaptiveToleranceModeIR) {
+    let dynamics = match &mut problem.study {
+        fullmag_ir::StudyIR::TimeEvolution { dynamics, .. }
+        | fullmag_ir::StudyIR::Eigenmodes { dynamics, .. }
+        | fullmag_ir::StudyIR::FrequencyResponse { dynamics, .. } => dynamics,
+        fullmag_ir::StudyIR::Relaxation { dynamics: Some(dynamics), .. } => dynamics,
+        _ => panic!("fixture must have dynamics"),
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        ..
+    } = dynamics;
+    *integrator = "rk45".to_string();
+    *fixed_timestep = None;
+    *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+        tolerance_mode: mode,
+        atol: 1e-6,
+        rtol: 1e-4,
+        dt_initial: Some(1e-15),
+        dt_min: 1e-16,
+        dt_max: Some(1e-14),
+        safety: 0.9,
+        growth_limit: 2.0,
+        shrink_limit: 0.2,
+        max_spin_rotation: None,
+        norm_tolerance: None,
+    });
+}
+
+#[test]
+fn adaptive_fdm_requires_explicit_cpu_and_rejects_auto_cuda_routes() {
+    for device in [None, Some("auto"), Some("cuda"), Some("gpu")] {
+        let mut ir = ProblemIR::bootstrap_example();
+        set_adaptive_rk45(
+            &mut ir,
+            fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+        );
+        if let Some(device) = device {
+            ir.problem_meta.runtime_metadata.insert(
+                "runtime_selection".into(),
+                serde_json::json!({"device": device}),
+            );
+        }
+        let err = plan(&ir).expect_err("non-explicit CPU adaptive FDM must fail");
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("requires explicit")
+                && reason.contains("device='cpu'")));
+    }
+    let mut cpu = ProblemIR::bootstrap_example();
+    set_adaptive_rk45(
+        &mut cpu,
+        fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+    );
+    cpu.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({"device": "cpu"}),
+    );
+    plan(&cpu).expect("explicit CPU adaptive FDM should remain legal");
+}
+
+#[test]
+fn fem_advanced_requires_both_positive_tolerances_until_native_parity() {
+    for zero_field in ["atol", "rtol"] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+        set_adaptive_rk45(
+            &mut ir,
+            fullmag_ir::AdaptiveToleranceModeIR::Advanced,
+        );
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+            unreachable!()
+        };
+        let fullmag_ir::DynamicsIR::Llg {
+            adaptive_timestep, ..
+        } = dynamics;
+        let adaptive = adaptive_timestep.as_mut().unwrap();
+        if zero_field == "atol" {
+            adaptive.atol = 0.0;
+        } else {
+            adaptive.rtol = 0.0;
+        }
+        let err = plan(&ir).expect_err("native FEM zero tolerance must fail closed");
+        assert!(
+            err.reasons
+                .iter()
+                .any(|reason| reason.contains("both atol>0 and rtol>0")),
+            "{zero_field}: {:?}",
+            err.reasons
+        );
+    }
 }
 
 #[test]
@@ -7341,13 +7442,13 @@ fn fem_eigen_floquet_dynamic_demag_is_rejected() {
                 elements: vec![[0, 1, 2, 3], [4, 5, 6, 7]],
                 element_markers: vec![1, 0],
                 boundary_faces: vec![[0, 1, 2], [4, 5, 6]],
-                boundary_markers: vec![10, 99],
+                boundary_markers: vec![10, 11],
                 periodic_boundary_pairs: vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
                     pair_id: "x_faces".to_string(),
                     source_marker: None,
                     destination_marker: None,
                     marker_a: 10,
-                    marker_b: 99,
+                    marker_b: 11,
                     translation: None,
                     tolerance: None,
                     axis_hint: None,
@@ -8565,6 +8666,7 @@ fn frequency_response_planner_controls_do_not_validate_time_integrator_settings(
         integrator: "heun".to_string(),
         fixed_timestep: Some(1.0e-13),
         adaptive_timestep: Some(fullmag_ir::AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
             atol: 1.0e-6,
             rtol: 1.0e-6,
             dt_initial: Some(1.0e-13),

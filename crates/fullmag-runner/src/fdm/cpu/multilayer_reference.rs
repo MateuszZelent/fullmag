@@ -52,6 +52,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     crate::fdm::validate_multilayer_grid_budget(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -1026,6 +1027,17 @@ mod tests {
             .expect("test certificate should be valid"),
         );
         plan
+    }
+
+    #[test]
+    fn direct_cpu_multilayer_entry_rejects_adaptive_before_materialization() {
+        let mut plan = make_plan(false);
+        plan.integrator = IntegratorChoice::Rk45;
+        plan.fixed_timestep = None;
+        assert!(execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
+            .unwrap_err()
+            .message
+            .contains("adaptive time stepping"));
     }
 
     #[test]

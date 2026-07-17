@@ -295,6 +295,9 @@ class CanonicalLlgSolverContractTests(unittest.TestCase):
 
         self.assertNotIn("tolerance_mode", repr(convenience))
         self.assertEqual(advanced, convenience)
+        self.assertEqual(advanced.to_ir()["tolerance_mode"], "advanced")
+        self.assertEqual(convenience.to_ir()["tolerance_mode"], "max_error")
+        self.assertEqual(dict(convenience.to_ir())["tolerance_mode"], "max_error")
         with self.assertRaises(TypeError):
             fm.AdaptiveTimestep(atol=1e-6, _tolerance_mode="max_error")
 

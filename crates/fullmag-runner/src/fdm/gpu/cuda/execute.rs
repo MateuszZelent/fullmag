@@ -57,6 +57,7 @@ pub(crate) fn execute_cuda_fdm(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::fdm::reject_adaptive_cuda_single_grid_plan(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),

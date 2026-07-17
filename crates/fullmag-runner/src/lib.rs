@@ -754,6 +754,7 @@ mod initial_timestep_tests {
     #[test]
     fn resolve_initial_timestep_prefers_fixed_value() {
         let adaptive = fullmag_ir::AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
             atol: 1e-6,
             rtol: 1e-3,
             dt_initial: Some(5e-14),
@@ -774,6 +775,7 @@ mod initial_timestep_tests {
     #[test]
     fn resolve_initial_timestep_uses_adaptive_seed_when_meaningful() {
         let adaptive = fullmag_ir::AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
             atol: 1e-6,
             rtol: 1e-3,
             dt_initial: Some(5e-14),
@@ -791,6 +793,7 @@ mod initial_timestep_tests {
     #[test]
     fn resolve_initial_timestep_falls_back_when_seed_matches_dt_min() {
         let adaptive = fullmag_ir::AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
             atol: 1e-6,
             rtol: 1e-3,
             dt_initial: Some(1e-15),
@@ -808,6 +811,7 @@ mod initial_timestep_tests {
     #[test]
     fn resolve_initial_timestep_falls_back_when_seed_missing() {
         let adaptive = fullmag_ir::AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
             atol: 1e-6,
             rtol: 1e-3,
             dt_initial: None,
@@ -2807,6 +2811,7 @@ pub fn run_reference_multilayer_fdm(
     until_seconds: f64,
     outputs: &[OutputIR],
 ) -> Result<RunResult, RunError> {
+    fdm::reject_adaptive_multilayer_plan(plan)?;
     Ok(multilayer_reference::execute_reference_fdm_multilayer(
         plan,
         until_seconds,

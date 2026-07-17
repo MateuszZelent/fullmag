@@ -108,6 +108,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
     live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     validate_multilayer_grid_budget(plan)?;
     if !is_cuda_available() {
         return Err(RunError {
@@ -927,6 +928,7 @@ fn assisted_multilayer_provenance(
 fn build_native_stacked_cuda_plan(
     plan: &FdmMultilayerPlanIR,
 ) -> Result<Option<NativeStackedCudaPlan>, RunError> {
+    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     let Some(first_layer) = plan.layers.first() else {
         return Ok(None);
     };
@@ -1134,6 +1136,7 @@ fn execute_native_stacked_cuda_multilayer(
     mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     let mut backend = NativeFdmBackend::create(&native.combined_plan)?;
     let device_info = backend.device_info().ok();
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
@@ -3060,6 +3063,30 @@ mod tests {
         let mut plan = make_plan(enable_demag, precision);
         plan.layers[1].material.name = "Py_variant".to_string();
         plan
+    }
+
+    #[test]
+    fn cuda_assisted_entry_rejects_adaptive_before_cuda_probe() {
+        let mut plan = make_assisted_plan(false, ExecutionPrecision::Double);
+        plan.integrator = IntegratorChoice::Rk45;
+        plan.fixed_timestep = None;
+        let error = match execute_cuda_fdm_multilayer(&plan, 1e-13, &[]) {
+            Ok(_) => panic!("adaptive CUDA must reject"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("adaptive time stepping"));
+    }
+
+    #[test]
+    fn native_stacked_build_boundary_rejects_adaptive_before_materialization() {
+        let mut plan = make_plan(false, ExecutionPrecision::Double);
+        plan.integrator = IntegratorChoice::Rk23;
+        plan.fixed_timestep = None;
+        let error = match build_native_stacked_cuda_plan(&plan) {
+            Ok(_) => panic!("adaptive native stack must reject"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("adaptive time stepping"));
     }
 
     fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {

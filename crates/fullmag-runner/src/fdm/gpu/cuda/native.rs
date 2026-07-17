@@ -438,6 +438,7 @@ impl NativeFdmBackend {
     }
 
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
+        crate::fdm::reject_adaptive_cuda_single_grid_plan(plan)?;
         validate_single_grid_budget(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
         if plan.material.ms_field.is_some()
@@ -2067,6 +2068,30 @@ mod tests {
             .message
             .contains("does not yet support cellwise material fields"));
         assert!(error.message.contains("FDM CPU reference"));
+    }
+
+    #[test]
+    fn native_fdm_cuda_create_rejects_adaptive_before_ffi() {
+        let mut plan = make_relaxation_precession_test_plan();
+        plan.fixed_timestep = None;
+        plan.adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
+            tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+            atol: 1e-6,
+            rtol: 0.0,
+            dt_initial: Some(1e-15),
+            dt_min: 1e-16,
+            dt_max: Some(1e-14),
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        });
+        let error = match NativeFdmBackend::create(&plan) {
+            Ok(_) => panic!("adaptive CUDA must fail before FFI"),
+            Err(error) => error,
+        };
+        assert!(error.message.contains("complete controller contract"));
     }
 
     #[test]

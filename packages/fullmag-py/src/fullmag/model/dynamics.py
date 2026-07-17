@@ -88,6 +88,7 @@ class AdaptiveTimestep:
 
     def to_ir(self) -> dict[str, object]:
         d: dict[str, object] = {
+            "tolerance_mode": self._tolerance_mode,
             "atol": self.atol,
             "rtol": self.rtol,
             "dt_initial": self.dt_initial,

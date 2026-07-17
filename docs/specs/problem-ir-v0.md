@@ -1,5 +1,10 @@
 # ProblemIR v0
 
+Current canonical writers emit IR `0.3.0`. Adaptive LLG policies carry an
+explicit `tolerance_mode` (`advanced` or `max_error`) and an explicit bounded
+controller contract; executable adaptive studies require `dt_min` and
+`dt_max`, while `dt_initial` remains optional and is never synthesized.
+
 ## Goal
 
 `ProblemIR` is the canonical, typed representation of a Fullmag problem after Python-side serialization and before backend-specific lowering.

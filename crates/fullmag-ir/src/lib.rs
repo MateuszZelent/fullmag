@@ -29,10 +29,13 @@ pub use spectral_validation::BlochWavevectorIR;
 pub use study::*;
 use validation::*;
 
-pub const IR_VERSION: &str = "0.2.0";
+pub const IR_VERSION: &str = "0.3.0";
 pub const CURRENT_IR_VERSION: &str = IR_VERSION;
-pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.1.0";
-pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[CURRENT_IR_VERSION, PREVIOUS_PUBLIC_IR_VERSION];
+pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.2.0";
+pub const LEGACY_PUBLIC_IR_VERSION: &str = "0.1.0";
+pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[
+    CURRENT_IR_VERSION, PREVIOUS_PUBLIC_IR_VERSION, LEGACY_PUBLIC_IR_VERSION,
+];
 const MU0_H_PER_M: f64 = 1.256_637_061_435_917_2e-6;
 
 fn validate_sampling_period_policy(
@@ -84,6 +87,25 @@ fn migrate_legacy_cylinder_axes(value: &mut Value) {
     }
 }
 
+fn migrate_dynamics_adaptive_tolerance_mode(value: &mut Value) {
+    if let Some(adaptive) = value.as_object_mut()
+        .and_then(|dynamics| dynamics.get_mut("adaptive_timestep"))
+        .and_then(Value::as_object_mut)
+    {
+        adaptive.entry("tolerance_mode".to_string())
+            .or_insert_with(|| Value::String("advanced".to_string()));
+    }
+}
+
+fn migrate_study_adaptive_tolerance_modes(value: &mut Value) {
+    let Some(study) = value.as_object_mut() else {
+        return;
+    };
+    if let Some(dynamics) = study.get_mut("dynamics") {
+        migrate_dynamics_adaptive_tolerance_mode(dynamics);
+    }
+}
+
 pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> {
     let object = value
         .as_object_mut()
@@ -97,10 +119,11 @@ pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> 
     if version == CURRENT_IR_VERSION {
         return Ok(false);
     }
-    if version != PREVIOUS_PUBLIC_IR_VERSION {
+    if !SUPPORTED_READ_IR_VERSIONS.contains(&version) {
         return Err(format!("ir_version '{version}' is not supported for read"));
     }
 
+    let source_version = version.to_string();
     object.insert(
         "ir_version".to_string(),
         Value::String(CURRENT_IR_VERSION.to_string()),
@@ -111,21 +134,22 @@ pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> 
         .and_then(Value::as_object_mut)
     {
         for key in ["script_api_version", "serializer_version"] {
-            if meta
-                .get(key)
-                .and_then(Value::as_str)
-                .is_some_and(|value| value.trim() == PREVIOUS_PUBLIC_IR_VERSION)
-            {
-                meta.insert(
-                    key.to_string(),
-                    Value::String(CURRENT_IR_VERSION.to_string()),
-                );
+            if let Some(value) = meta.get(key).and_then(Value::as_str).map(str::trim) {
+                if SUPPORTED_READ_IR_VERSIONS.contains(&value) && value != source_version {
+                    return Err(format!("ProblemIR.ir_version '{source_version}' conflicts with problem_meta.{key} '{value}'"));
+                }
+                if value == source_version {
+                    meta.insert(key.to_string(), Value::String(CURRENT_IR_VERSION.to_string()));
+                }
             }
         }
     }
 
-    for value in object.values_mut() {
-        migrate_legacy_cylinder_axes(value);
+    if source_version == LEGACY_PUBLIC_IR_VERSION {
+        for value in object.values_mut() { migrate_legacy_cylinder_axes(value); }
+    }
+    if matches!(source_version.as_str(), PREVIOUS_PUBLIC_IR_VERSION | LEGACY_PUBLIC_IR_VERSION) {
+        if let Some(study) = object.get_mut("study") { migrate_study_adaptive_tolerance_modes(study); }
     }
 
     Ok(true)
@@ -501,6 +525,7 @@ impl ProblemIR {
         if self.problem_meta.entrypoint_kind.trim().is_empty() {
             errors.push("problem_meta.entrypoint_kind must not be empty".to_string());
         }
+        validate_runtime_selection(self, &mut errors);
         if self.geometry.entries.is_empty() {
             errors.push("at least one geometry entry is required".to_string());
         }
@@ -858,7 +883,7 @@ impl ProblemIR {
                 k_sampling,
                 ..
             } => {
-                validate_study_dynamics(dynamics, &mut errors);
+                validate_frequency_response_dynamics(dynamics, &mut errors);
                 if *count == 0 {
                     errors.push("eigenmodes.count must be > 0".to_string());
                 }

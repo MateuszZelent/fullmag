@@ -380,6 +380,7 @@ fn with_poisson_demag(mut plan: FemPlanIR) -> FemPlanIR {
 fn with_adaptive_dt(mut plan: FemPlanIR) -> FemPlanIR {
     plan.fixed_timestep = None;
     plan.adaptive_timestep = Some(AdaptiveTimeStepIR {
+        tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::Advanced,
         atol: 1e-8,
         rtol: 1e-5,
         dt_initial: Some(2.5e-13),

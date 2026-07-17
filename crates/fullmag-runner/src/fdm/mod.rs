@@ -7,6 +7,35 @@ pub(crate) mod schedules;
 use crate::types::RunError;
 use std::collections::BTreeSet;
 
+#[cfg(feature = "cuda")]
+pub(crate) fn reject_adaptive_cuda_single_grid_plan(
+    plan: &fullmag_ir::FdmPlanIR,
+) -> Result<(), RunError> {
+    if plan.adaptive_timestep.is_some() {
+        return Err(RunError {
+            message: "adaptive time stepping is not supported by the FDM CUDA runtime until its ABI preserves the complete controller contract".to_string(),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn reject_adaptive_multilayer_plan(
+    plan: &fullmag_ir::FdmMultilayerPlanIR,
+) -> Result<(), RunError> {
+    if plan.fixed_timestep.is_none()
+        && matches!(
+            plan.integrator,
+            fullmag_ir::IntegratorChoice::Rk23 | fullmag_ir::IntegratorChoice::Rk45
+        )
+    {
+        return Err(RunError {
+            message: "adaptive time stepping is not supported by multilayer FDM runtimes"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Resolve the planner's requested FDM PBC demagnetization policy once for
 /// every runtime lane.  CPU and CUDA must not infer kernel padding directly
 /// from local periodic stencil flags.

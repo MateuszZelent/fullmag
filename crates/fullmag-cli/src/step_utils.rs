@@ -3284,6 +3284,47 @@ pub(crate) fn join_errors(errors: Vec<String>) -> anyhow::Error {
     anyhow::anyhow!(errors.join("; "))
 }
 
+fn resolve_interactive_llg_policy(
+    dynamics: &mut fullmag_ir::DynamicsIR,
+    command: &crate::types::SessionCommand,
+) -> Result<()> {
+    let fullmag_ir::DynamicsIR::Llg {
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        ..
+    } = dynamics;
+    if let Some(value) = command.integrator.as_ref() {
+        *integrator = serde_json::from_value(serde_json::json!(value))
+            .with_context(|| format!("invalid integrator '{value}'"))?;
+    }
+    if command.max_error.is_some() {
+        bail!("legacy max_error command cannot preserve the required dt_max bound; use the canonical adaptive solver command with dt_min, dt_max, and max_err");
+    }
+    if let Some(dt) = command.fixed_timestep {
+        *fixed_timestep = Some(dt);
+        *adaptive_timestep = None;
+    } else if matches!(command.integrator.as_deref(), Some("rk23" | "rk45")) {
+        let policy = adaptive_timestep.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "selecting adaptive integrator '{}' requires a complete adaptive policy with dt_min and dt_max",
+                integrator
+            )
+        })?;
+        if policy.dt_max.is_none() {
+            bail!(
+                "selecting adaptive integrator '{}' requires a complete adaptive policy with dt_min and dt_max",
+                integrator
+            );
+        }
+        *fixed_timestep = None;
+    }
+    if fixed_timestep.is_some() == adaptive_timestep.is_some() {
+        bail!("LLG solver requires exactly one of fixed_timestep or adaptive_timestep");
+    }
+    Ok(())
+}
+
 pub(crate) fn build_interactive_command_stage(
     base_problem: &ProblemIR,
     command: &crate::types::SessionCommand,
@@ -3317,28 +3358,7 @@ pub(crate) fn build_interactive_command_stage(
 
             let mut ir = base_problem.clone();
             let mut dynamics = required_study_dynamics(&ir.study, "interactive run command")?;
-            let fullmag_ir::DynamicsIR::Llg {
-                ref mut integrator,
-                ref mut fixed_timestep,
-                ..
-            } = dynamics;
-            if let Some(ref int_str) = command.integrator {
-                if let Ok(parsed_integrator) = serde_json::from_value(serde_json::json!(int_str)) {
-                    *integrator = parsed_integrator;
-                } else {
-                    eprintln!(
-                        "[fullmag] warning: failed to parse integrator '{}'",
-                        int_str
-                    );
-                }
-            }
-            if let Some(ft) = command.fixed_timestep {
-                *fixed_timestep = Some(ft);
-            } else if command.integrator.as_deref() == Some("rk45")
-                || command.integrator.as_deref() == Some("rk23")
-            {
-                *fixed_timestep = None;
-            }
+            resolve_interactive_llg_policy(&mut dynamics, command)?;
             let sampling = ir.study.sampling().clone();
             ir.problem_meta.entrypoint_kind = "interactive_run".to_string();
             ir.study = fullmag_ir::StudyIR::TimeEvolution { dynamics, sampling };
@@ -3366,54 +3386,7 @@ pub(crate) fn build_interactive_command_stage(
                 None
             };
             if let Some(dynamics) = dynamics.as_mut() {
-                let fullmag_ir::DynamicsIR::Llg {
-                    integrator,
-                    fixed_timestep,
-                    adaptive_timestep,
-                    ..
-                } = dynamics;
-                if let Some(ref int_str) = command.integrator {
-                    *integrator = serde_json::from_value(serde_json::json!(int_str))
-                        .with_context(|| format!("invalid integrator '{int_str}'"))?;
-                }
-                if let Some(ft) = command.fixed_timestep {
-                    *fixed_timestep = Some(ft);
-                    *adaptive_timestep = None;
-                } else if let Some(atol) = command.max_error {
-                    *fixed_timestep = None;
-                    *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
-                        atol,
-                        rtol: 1e-3,
-                        dt_initial: None,
-                        dt_min: 1e-15,
-                        dt_max: None,
-                        safety: 0.9,
-                        growth_limit: 2.0,
-                        shrink_limit: 0.2,
-                        max_spin_rotation: None,
-                        norm_tolerance: None,
-                    });
-                } else if command.integrator.as_deref() == Some("rk45")
-                    || command.integrator.as_deref() == Some("rk23")
-                {
-                    *fixed_timestep = None;
-                }
-                let is_adaptive_integrator = matches!(integrator.as_str(), "rk23" | "rk45");
-                if fixed_timestep.is_none() && adaptive_timestep.is_none() && is_adaptive_integrator
-                {
-                    *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
-                        atol: 1e-6,
-                        rtol: 1e-3,
-                        dt_initial: None,
-                        dt_min: 1e-15,
-                        dt_max: None,
-                        safety: 0.9,
-                        growth_limit: 2.0,
-                        shrink_limit: 0.2,
-                        max_spin_rotation: None,
-                        norm_tolerance: None,
-                    });
-                }
+                resolve_interactive_llg_policy(dynamics, command)?;
             }
             let sampling = ir.study.sampling().clone();
             let stop = fullmag_ir::RelaxStopIR {
@@ -3666,6 +3639,55 @@ mod tests {
             }
         }))
         .expect("sample ProblemIR should deserialize")
+    }
+
+    fn solver_command(kind: &str) -> crate::types::SessionCommand {
+        serde_json::from_value(json!({
+            "command_id": format!("cmd-{kind}"),
+            "kind": kind,
+            "created_at_unix_ms": 0,
+            "until_seconds": 1e-12
+        }))
+        .expect("minimal solver command")
+    }
+
+    #[test]
+    fn interactive_fixed_clears_adaptive_and_legacy_max_error_rejects() {
+        let mut dynamics = required_study_dynamics(
+            &sample_problem_ir_with_adaptive_relax_dt(1e-15).study,
+            "test",
+        )
+        .unwrap();
+        let mut fixed = solver_command("run");
+        fixed.fixed_timestep = Some(2e-15);
+        resolve_interactive_llg_policy(&mut dynamics, &fixed).unwrap();
+        assert!(matches!(
+            dynamics,
+            fullmag_ir::DynamicsIR::Llg {
+                fixed_timestep: Some(_),
+                adaptive_timestep: None,
+                ..
+            }
+        ));
+
+        let mut legacy = solver_command("run");
+        legacy.max_error = Some(1e-6);
+        assert!(resolve_interactive_llg_policy(&mut dynamics, &legacy)
+            .unwrap_err()
+            .to_string()
+            .contains("legacy max_error"));
+    }
+
+    #[test]
+    fn interactive_adaptive_integrator_over_fixed_requires_complete_policy() {
+        let mut dynamics =
+            required_study_dynamics(&sample_problem_ir().study, "test").unwrap();
+        let mut command = solver_command("run");
+        command.integrator = Some("rk45".into());
+        assert!(resolve_interactive_llg_policy(&mut dynamics, &command)
+            .unwrap_err()
+            .to_string()
+            .contains("complete adaptive policy"));
     }
 
     fn primitive_node(id: &str, stage_kind: &str, payload: Value) -> StudyPipelineNode {

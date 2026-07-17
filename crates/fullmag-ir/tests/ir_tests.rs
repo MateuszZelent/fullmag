@@ -273,6 +273,47 @@ fn previous_public_ir_version_is_supported_for_read_and_requires_migration() {
 }
 
 #[test]
+fn current_v0_3_adaptive_payload_without_tolerance_mode_fails_deserialization() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["study"]["dynamics"]["integrator"] = serde_json::json!("rk45");
+    value["study"]["dynamics"]["fixed_timestep"] = serde_json::Value::Null;
+    value["study"]["dynamics"]["adaptive_timestep"] = serde_json::json!({
+        "atol":1e-6,"rtol":0.0,"dt_min":1e-16,"dt_max":1e-14,
+        "safety":0.9,"growth_limit":2.0,"shrink_limit":0.2
+    });
+    let error = serde_json::from_value::<ProblemIR>(value).expect_err("current IR must require explicit mode");
+    assert!(error.to_string().contains("tolerance_mode"));
+}
+
+#[test]
+fn v0_2_adaptive_payload_migrates_mode_shape_aware() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["ir_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["script_api_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["serializer_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["study"]["dynamics"]["integrator"] = serde_json::json!("rk45");
+    value["study"]["dynamics"]["fixed_timestep"] = serde_json::Value::Null;
+    value["study"]["dynamics"]["adaptive_timestep"] = serde_json::json!({
+        "atol":1e-6,"rtol":0.0,"dt_min":1e-16,"dt_max":1e-14,
+        "safety":0.9,"growth_limit":2.0,"shrink_limit":0.2
+    });
+    value["problem_meta"]["runtime_metadata"]["adaptive_timestep"] = serde_json::json!({"opaque":true});
+    let decoded: ProblemIR = serde_json::from_value(value).unwrap();
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert_eq!(encoded["study"]["dynamics"]["adaptive_timestep"]["tolerance_mode"], "advanced");
+    assert!(encoded["problem_meta"]["runtime_metadata"]["adaptive_timestep"].get("tolerance_mode").is_none());
+}
+
+#[test]
+fn migration_rejects_mixed_supported_versions() {
+    let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
+    value["ir_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["problem_meta"]["script_api_version"] = serde_json::json!(LEGACY_PUBLIC_IR_VERSION);
+    let error = serde_json::from_value::<ProblemIR>(value).expect_err("mixed versions must fail");
+    assert!(error.to_string().contains("conflicts"));
+}
+
+#[test]
 fn problem_ir_deserialize_migrates_previous_public_version() {
     let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
         .expect("bootstrap ProblemIR should serialize");
@@ -293,9 +334,9 @@ fn problem_ir_deserialize_migrates_previous_public_version() {
 fn previous_public_cylinder_without_axis_migrates_explicitly() {
     let mut value = serde_json::to_value(ProblemIR::bootstrap_example())
         .expect("bootstrap ProblemIR should serialize");
-    value["ir_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
-    value["problem_meta"]["script_api_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
-    value["problem_meta"]["serializer_version"] = serde_json::json!(PREVIOUS_PUBLIC_IR_VERSION);
+    value["ir_version"] = serde_json::json!(LEGACY_PUBLIC_IR_VERSION);
+    value["problem_meta"]["script_api_version"] = serde_json::json!(LEGACY_PUBLIC_IR_VERSION);
+    value["problem_meta"]["serializer_version"] = serde_json::json!(LEGACY_PUBLIC_IR_VERSION);
     value["geometry"]["entries"] = serde_json::json!([{
         "kind": "cylinder",
         "name": "legacy",
@@ -314,7 +355,7 @@ fn previous_public_cylinder_without_axis_migrates_explicitly() {
 #[test]
 fn legacy_migration_adds_axes_to_nested_geometry_and_region_csg() {
     let mut value = serde_json::json!({
-        "ir_version": PREVIOUS_PUBLIC_IR_VERSION,
+        "ir_version": LEGACY_PUBLIC_IR_VERSION,
         "geometry": {"entries": [{
             "kind": "translate", "name": "translated", "by": [0.0, 0.0, 0.0],
             "base": {"kind": "difference", "name": "difference",
@@ -2640,6 +2681,106 @@ fn llg_requires_supported_integrator() {
     assert!(errors
         .iter()
         .any(|error| error.contains("llg.integrator must be one of")));
+}
+
+fn valid_adaptive_problem() -> ProblemIR {
+    let mut ir = ProblemIR::bootstrap_example();
+    let sampling = ir.study.sampling().clone();
+    ir.study = StudyIR::TimeEvolution {
+        dynamics: serde_json::from_value(serde_json::json!({
+            "kind": "llg",
+            "gyromagnetic_ratio": 2.211e5,
+            "integrator": "rk45",
+            "fixed_timestep": null,
+            "adaptive_timestep": {
+                "tolerance_mode": "max_error",
+                "atol": 1e-6,
+                "rtol": 0.0,
+                "dt_initial": 1e-15,
+                "dt_min": 1e-16,
+                "dt_max": 1e-14,
+                "safety": 0.9,
+                "growth_limit": 2.0,
+                "shrink_limit": 0.2
+            }
+        }))
+        .unwrap(),
+        sampling,
+    };
+    ir
+}
+
+#[test]
+fn adaptive_policy_round_trips_explicit_mode() {
+    let ir = valid_adaptive_problem();
+    ir.validate().unwrap();
+    assert_eq!(
+        serde_json::to_value(ir).unwrap()["study"]["dynamics"]["adaptive_timestep"]
+            ["tolerance_mode"],
+        "max_error"
+    );
+}
+
+#[test]
+fn adaptive_validation_rejects_every_nonfinite_scalar() {
+    for field in [
+        "atol",
+        "rtol",
+        "dt_initial",
+        "dt_min",
+        "dt_max",
+        "safety",
+        "growth_limit",
+        "shrink_limit",
+        "max_spin_rotation",
+        "norm_tolerance",
+    ] {
+        let mut ir = valid_adaptive_problem();
+        let StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+            unreachable!()
+        };
+        let DynamicsIR::Llg {
+            adaptive_timestep, ..
+        } = dynamics;
+        let adaptive = adaptive_timestep.as_mut().unwrap();
+        match field {
+            "atol" => adaptive.atol = f64::NAN,
+            "rtol" => adaptive.rtol = f64::INFINITY,
+            "dt_initial" => adaptive.dt_initial = Some(f64::NAN),
+            "dt_min" => adaptive.dt_min = f64::NEG_INFINITY,
+            "dt_max" => adaptive.dt_max = Some(f64::INFINITY),
+            "safety" => adaptive.safety = f64::NAN,
+            "growth_limit" => adaptive.growth_limit = f64::INFINITY,
+            "shrink_limit" => adaptive.shrink_limit = f64::NEG_INFINITY,
+            "max_spin_rotation" => adaptive.max_spin_rotation = Some(f64::NAN),
+            "norm_tolerance" => adaptive.norm_tolerance = Some(f64::INFINITY),
+            _ => unreachable!(),
+        }
+        let errors = ir.validate().expect_err("nonfinite must fail");
+        assert!(
+            errors.iter().any(|error| error.contains(field)),
+            "{field}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn runtime_selection_validation_is_global() {
+    for (selection, expected) in [
+        (serde_json::json!("gpu"), "must be an object"),
+        (
+            serde_json::json!({"device": 1}),
+            "device must be a string",
+        ),
+        (serde_json::json!({"device": "quantum"}), "quantum"),
+    ] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".into(), selection);
+        let errors = ir.validate().expect_err("invalid selection must fail");
+        assert!(errors.iter().any(|error| error.contains(expected)));
+    }
 }
 
 #[test]

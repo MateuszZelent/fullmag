@@ -2187,9 +2187,9 @@ pub(crate) fn plan_fdm_multilayer(
             "the {lane} multilayer FDM runner supports only fixed-step 'heun', 'rk4', and 'rk23' integrators; rk45 and abm3 require the native single-grid-compatible CUDA lane"
         ));
     }
-    if !native_cuda_lane && adaptive_timestep.is_some() {
+    if adaptive_timestep.is_some() {
         errors.push(
-            "the staged CPU/CUDA multilayer FDM runner does not support adaptive_timestep"
+            "the public multilayer FDM runner does not support adaptive_timestep on any CPU/CUDA lane"
                 .to_string(),
         );
     }

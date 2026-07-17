@@ -395,8 +395,17 @@ pub enum DynamicsIR {
 }
 
 /// Adaptive time-stepping configuration for embedded-error RK methods.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AdaptiveToleranceModeIR {
+    Advanced,
+    #[serde(alias = "maximum_error")]
+    MaxError,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AdaptiveTimeStepIR {
+    pub tolerance_mode: AdaptiveToleranceModeIR,
     pub atol: f64,
     pub rtol: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

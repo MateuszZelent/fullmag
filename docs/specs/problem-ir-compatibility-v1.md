@@ -21,7 +21,8 @@ This spec defines versioning, read compatibility, and migration policy for `Prob
 |---|---|---|---|---|
 | Python exporter | current | planner/runtime | yes | canonical write path |
 | UI exporter | current | planner/runtime | yes | canonical write path |
-| saved payload | previous supported | planner/runtime | read-only via migration | transitional read support |
+| saved payload | 0.2.0 | planner/runtime | read-only via migration | adds `adaptive_timestep.tolerance_mode=advanced`; preserves other adaptive omissions |
+| saved payload | 0.1.0 | planner/runtime | read-only via migration | legacy cylinder-axis migration, then adaptive mode migration |
 | saved payload | unsupported | planner/runtime | no | validation error |
 
 ## 4. Rules

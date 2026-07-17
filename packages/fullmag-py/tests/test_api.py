@@ -287,7 +287,7 @@ class ProblemApiTests(unittest.TestCase):
         problem = self._build_problem()
         ir = problem.to_ir()
 
-        self.assertEqual(ir["ir_version"], "0.2.0")
+        self.assertEqual(ir["ir_version"], "0.3.0")
         self.assertEqual(ir["problem_meta"]["script_language"], "python")
         self.assertEqual(ir["backend_policy"]["requested_backend"], "auto")
         self.assertEqual(ir["backend_policy"]["execution_precision"], "double")
