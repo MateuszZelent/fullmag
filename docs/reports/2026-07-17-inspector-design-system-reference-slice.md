@@ -51,17 +51,25 @@ The seven existing Inspector 2.0 comparison screenshots are ignored runtime arti
 
 | Area | Before | Reference owner | Status |
 |---|---|---|---|
-| Product color and state values | `theme.css` | `theme.css` plus token aliases | pending |
-| Geometry and density values | `tokens.css` and component CSS | `tokens.css` | pending |
-| Tailwind utility names | absent | `tailwind-theme.css` | pending |
-| Shared control variants | mixed global CSS and component classes | shared CVA primitives | pending |
-| Inspector group and row composition | `InspectorSection` card cascade | Inspector composition primitives | pending |
-| Visualization Overview | nested panel sections | `ObjectVisualizationOverview` | pending |
-| Visualization domain layout | `inspector-visualization.css` | domain-only selectors | pending |
+| Product color and state values | `theme.css` | `theme.css` plus token aliases | complete |
+| Geometry and density values | `tokens.css` and component CSS | `tokens.css` | complete |
+| Tailwind utility names | absent | `tailwind-theme.css` | complete |
+| Shared control variants | mixed global CSS and component classes | shared CVA primitives | complete |
+| Inspector group and row composition | `InspectorSection` card cascade | Inspector composition primitives | complete |
+| Visualization Overview | nested panel sections | `ObjectVisualizationOverview` | complete |
+| Visualization domain layout | `inspector-visualization.css` | domain-only selectors | complete |
 
 ## Selector deletion inventory
 
-The before/after selector lists and replacement owners will be recorded during Task 6. No selector is considered removable from global compatibility CSS until source reachability proves that unmigrated Inspector families do not consume it.
+The five Inspector/shared CSS files retain 162 unique `fm-*` selectors after the reference migration. Source-reachability tests remain the deletion gate for global compatibility selectors used by unmigrated families.
+
+| Deleted selector family | Replacement owner |
+|---|---|
+| `fm-inspector-summary-*` (six selectors) | `InspectorMetricStrip` local Tailwind composition |
+| `fm-inspector-section__empty-copy` | local semantic help-text utilities in `ObjectVisualizationOverview` |
+| `fm-inspector-checkbox-wrap` | `FormField` composed through `InspectorPropertyRow` |
+
+`inspector-visualization.css` now contains only Visualization layouts (display toggles, color controls, vector/mesh-part controls, scientific ranges, and axis controls). It does not define generic Inspector sections, shared inputs/selects, buttons, tabs, or segmented-control chrome.
 
 ## Storybook evidence
 
@@ -86,9 +94,9 @@ Pending Task 8. Required final screenshots:
 |---|---|---|
 | Pre-change full Vitest baseline | pass | 362 files, 3506 tests |
 | Reference contract RED | pass | 4 expected failures: missing token bridge, missing Overview component, and legacy target controls |
-| Focused component tests | pending | Tasks 2–6 |
-| TypeScript | pending | Task 9 |
-| ESLint | pending | Task 9 |
+| Focused component tests | pass | 72 files, 982 tests across Inspector and shared controls |
+| TypeScript | pass | `typecheck` after reference composition |
+| ESLint | pass | zero warnings after reference composition |
 | Full Vitest | pending | Task 9 |
 | Storybook build | pending | Task 9 |
 | React Doctor | pending | Task 9 |
@@ -96,7 +104,7 @@ Pending Task 8. Required final screenshots:
 
 ## Known issues
 
-The baseline nested-card composition, low-contrast disabled state, and repeated generic control styling remain present until Tasks 2–6 are complete.
+Storybook isolation, browser screenshots, and the final full-suite gates remain outstanding. Broader Inspector families intentionally retain their compatibility styling until the reference slice is approved.
 
 ## Recommendation
 
