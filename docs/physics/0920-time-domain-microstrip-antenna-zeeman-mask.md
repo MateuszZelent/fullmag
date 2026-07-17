@@ -554,6 +554,8 @@ sources. A typical spectroscopy workflow is:
 Relax(stage_id="relax")
 AddFieldDrive(stage_id="add-k0-antenna", drive=RegionalFieldDrive(...))
 Run(stage_id="excite", ...)
+RemoveFieldDrive(stage_id="remove-antenna", drive_id="k0-sinc-antenna")
+Run(stage_id="free-evolution", ...)
 ```
 
 `AddFieldDrive` is a typed, zero-duration pipeline action. It leaves the
@@ -569,6 +571,24 @@ subsequent stages. Therefore:
    drive;
 5. removing or moving the action changes exactly the downstream stages;
 6. duplicate drive ids and invalid targets fail at the action boundary.
+
+`RemoveFieldDrive` is the symmetrical typed, zero-duration action. It removes
+exactly one drive by `RegionalFieldDrive.id` from the persistent problem state
+seen by subsequent stages while preserving magnetization, mesh, materials,
+solver time, device residency, and output configuration. The public command is:
+
+```python
+study.stages.remove_field_drive(
+    "k0-sinc-antenna",
+    stage_id="remove-antenna",
+)
+```
+
+The positional `drive_id` names the physical source. The optional `stage_id`
+names only the removal action; it never identifies a Run or the earlier add
+action. Removing an unknown or already removed identifier fails at the action
+boundary. A removed identifier may be added again later. Removing one source
+does not mutate any other active source.
 
 The older global-definition plus `DriveActivation.stage_ids(...)` form remains
 valid compatibility input. It does not replace the explicit action in new UI
@@ -678,9 +698,10 @@ state and must never overwrite the requested ProblemIR policy.
 
 Resolution is per `Run`, from ordered workflow state immediately before that
 run. `D_sinc(run)` contains only sinc drives that were already added, remain
-enabled, apply to the target run under their activation policy, and have a
-finite positive `cutoff_hz`. A persistent automatic instruction may therefore
-resolve to different periods for later runs as the active drive set changes.
+enabled, have not been removed, apply to the target run under their activation
+policy, and have a finite positive `cutoff_hz`. A persistent automatic
+instruction may therefore resolve to different periods for later runs as the
+active drive set changes.
 For one run, automatic table autosave and automatic field autosave use the same
 active-drive rule and resolve to the same period; numeric autosave cadences
 remain independent.
@@ -1237,7 +1258,8 @@ quantity metadata must expose sampling location.
 - [x] FEM CPU implementation
 - [x] FEM GPU implementation
 - [x] OpenAPI/resource implementation for regional drive and Gamma response
-- [ ] Explicit `AddFieldDrive` pipeline action and stage-local outputs
+- [x] Explicit `AddFieldDrive` pipeline action and stage-local outputs
+- [ ] Explicit `RemoveFieldDrive` pipeline action and round-trip
 - [ ] Dedicated stage inspectors and complete planned/actual FFT UI
 - [ ] End-to-end browser/runtime qualification for the explicit pipeline
 

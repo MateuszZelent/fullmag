@@ -59,6 +59,13 @@ state for following stages. Consequently a preceding relax snapshot has no
 drive at all; it is not merely a globally declared drive with a false enabled
 flag. Global declaration plus activation remains compatibility input.
 
+Source removal is the symmetrical typed zero-duration `RemoveFieldDrive`
+action. It identifies the physical source by `RegionalFieldDrive.id`, preserves
+the incoming magnetization/runtime state, and removes only that drive from the
+persistent problem state for following stages. The optional action `stage_id`
+names the removal instruction; it does not identify a Run or the earlier add
+instruction. Removing an unknown identifier fails at the action boundary.
+
 Sampling/output/response-analysis policy is owned by the following compute
 stage. Stage-local values override global compatibility defaults, are exported
 to canonical Python, and are preserved in runtime provenance.
