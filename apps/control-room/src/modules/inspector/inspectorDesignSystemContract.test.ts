@@ -134,4 +134,21 @@ describe("Inspector design-system reference contract", () => {
     expect(panel).not.toContain("<Accordion");
     expect(panel).not.toContain("defaultCollapsed");
   });
+
+  it.each([
+    "AirboxOverviewPanel.tsx",
+    "AirboxMeshOverviewPanel.tsx",
+    "AirboxMeshParametersPanel.tsx",
+    "AirboxMeshBuildPanel.tsx",
+    "AirboxMeshQualityGatesPanel.tsx",
+    "AirboxMeshStatisticsPanel.tsx",
+    "AirboxMeshTopologyPanel.tsx",
+  ])("keeps migrated airbox/%s on compact Inspector groups", (fileName) => {
+    const panel = read(`src/modules/inspector/panels/airbox/${fileName}`);
+
+    expect(panel).toContain("InspectorGroup");
+    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
+    expect(panel).not.toContain("<Accordion");
+    expect(panel).not.toContain("defaultCollapsed");
+  });
 });

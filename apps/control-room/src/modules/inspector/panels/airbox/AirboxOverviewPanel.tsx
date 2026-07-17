@@ -1,6 +1,5 @@
 "use client";
 
-import { Accordion } from "@/shared/ui/Accordion";
 import {
   useMeshSharedDomainManifestResource,
   useUniverseMeshPolicyResource,
@@ -10,7 +9,7 @@ import { shouldLoadRuntimeMeshManifest } from "@/kernel/resources/studyRuntimeRe
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { AirboxFieldRow as FieldRow } from "./airboxDisplay";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { findCanonicalAirboxPart } from "./airboxMeshInspectorModel";
 import { useAirboxInspectorRuntimeStatus } from "./airboxInspectorRuntimeStatus";
 
@@ -30,8 +29,8 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
   );
 
   return (
-    <Accordion className="fm-inspector-panel" type="multiple" defaultValue={["overview"]}>
-      <InspectorSection value="overview" title="Airbox Overview" badge={policy.status}>
+    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+      <InspectorGroup title="Airbox Overview" badge={policy.status}>
         <FieldRow label="Canonical target" value="airbox" />
         <FieldRow label="Domain mode" value={String(authored.mode ?? "inherited")} />
         <FieldRow label="Authored size" value={Array.isArray(authored.size) ? authored.size.join(", ") : "automatic"} unit="m" />
@@ -56,7 +55,7 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
                 : "hidden"
           }
         />
-      </InspectorSection>
-    </Accordion>
+      </InspectorGroup>
+    </div>
   );
 }
