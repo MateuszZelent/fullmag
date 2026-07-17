@@ -479,27 +479,16 @@ pub(crate) fn planned_study_controls(
             {
                 errors.push("adaptive_timestep on FDM requires explicit runtime_selection.device='cpu' or device='cuda'; auto selection cannot silently change the qualified adaptive lane".to_string());
             }
-            if resolved_backend == BackendTarget::Fem {
-                if adaptive.tolerance_mode == fullmag_ir::AdaptiveToleranceModeIR::MaxError {
-                    errors.push("adaptive_timestep max_error mode is not currently accepted by the native FEM controller; use advanced mode until FEM parity is implemented".to_string());
-                }
-                if adaptive.tolerance_mode == fullmag_ir::AdaptiveToleranceModeIR::Advanced
-                    && (adaptive.atol <= 0.0 || adaptive.rtol <= 0.0)
-                {
-                    errors.push("adaptive_timestep advanced mode on native FEM currently requires both atol>0 and rtol>0".to_string());
-                }
-                if adaptive.safety == 1.0 {
-                    errors.push("adaptive_timestep.safety=1 is valid IR but is not currently accepted by the native FEM controller; use safety<1 until FEM parity is implemented".to_string());
-                }
-            }
             if adaptive.dt_max.is_none() {
                 errors.push("adaptive_timestep.dt_max is required; planner will not invent a hidden upper bound".to_string());
             }
-            if adaptive.max_spin_rotation.is_some() {
-                errors.push("adaptive_timestep.max_spin_rotation is unsupported by current FDM/FEM execution lanes and cannot be dropped".to_string());
-            }
-            if adaptive.norm_tolerance.is_some() {
-                errors.push("adaptive_timestep.norm_tolerance is unsupported by current FDM/FEM execution lanes and cannot be dropped".to_string());
+            if resolved_backend == BackendTarget::Fdm {
+                if adaptive.max_spin_rotation.is_some() {
+                    errors.push("adaptive_timestep.max_spin_rotation is unsupported by current FDM execution lanes and cannot be dropped".to_string());
+                }
+                if adaptive.norm_tolerance.is_some() {
+                    errors.push("adaptive_timestep.norm_tolerance is unsupported by current FDM execution lanes and cannot be dropped".to_string());
+                }
             }
         }
     }

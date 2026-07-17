@@ -5897,7 +5897,7 @@ fn adaptive_fdm_requires_explicit_cpu_or_cuda_and_rejects_auto_routes() {
 }
 
 #[test]
-fn fem_advanced_requires_both_positive_tolerances_until_native_parity() {
+fn fem_adaptive_modes_and_geometry_guards_reach_native_plan_controls() {
     for zero_field in ["atol", "rtol"] {
         let mut ir = ProblemIR::bootstrap_example();
         ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
@@ -5917,15 +5917,32 @@ fn fem_advanced_requires_both_positive_tolerances_until_native_parity() {
         } else {
             adaptive.rtol = 0.0;
         }
-        let err = plan(&ir).expect_err("native FEM zero tolerance must fail closed");
-        assert!(
-            err.reasons
-                .iter()
-                .any(|reason| reason.contains("both atol>0 and rtol>0")),
-            "{zero_field}: {:?}",
-            err.reasons
-        );
+        adaptive.safety = 1.0;
+        adaptive.max_spin_rotation = Some(0.2);
+        adaptive.norm_tolerance = Some(1.0e-3);
+        let mut errors = Vec::new();
+        let controls = validate::planned_study_controls(&ir, BackendTarget::Fem, &mut errors);
+        assert!(errors.is_empty(), "{zero_field}: {errors:?}");
+        let resolved = controls.adaptive_timestep.expect("adaptive controls");
+        assert_eq!(resolved.max_spin_rotation, Some(0.2));
+        assert_eq!(resolved.norm_tolerance, Some(1.0e-3));
     }
+
+    let mut max_error = ProblemIR::bootstrap_example();
+    max_error.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
+    set_adaptive_rk45(
+        &mut max_error,
+        fullmag_ir::AdaptiveToleranceModeIR::MaxError,
+    );
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut max_error.study else {
+        unreachable!()
+    };
+    let fullmag_ir::DynamicsIR::Llg { adaptive_timestep, .. } = dynamics;
+    let adaptive = adaptive_timestep.as_mut().expect("adaptive policy");
+    adaptive.rtol = 0.0;
+    let mut errors = Vec::new();
+    validate::planned_study_controls(&max_error, BackendTarget::Fem, &mut errors);
+    assert!(errors.is_empty(), "maximum-error FEM controls: {errors:?}");
 }
 
 #[test]
