@@ -4,12 +4,11 @@ import type { ChangeEvent } from "react";
 import { useMemo, useState } from "react";
 import type { MaterialParameterFieldListResource, SceneResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
-import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { FormField } from "../../primitives/FormField";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { RegionMaterialParameter, RegionMaterialConflictPolicy } from "../ObjectRegionsPanelModel";
 import { PhysicalScalarField } from "../ObjectRegionsPanel";
 import { publishRegionAuthoringScene } from "../regionAuthoringInvalidation";
@@ -128,7 +127,6 @@ function useObjectRegionMagneticParametersPanelView({
 }: RegionSubPanelProps) {
   const { api, resources } = useKernel();
   const { data: sceneData } = useSceneResource();
-  const sections = ["regions", "material", "material-fields", "actions"];
   const parameters: RegionMaterialParameter[] = ["ms", "aex", "alpha", "ku1"];
   const [fieldPending, setFieldPending] = useState(false);
   const [fieldFeedback, setFieldFeedback] = useState<LocalFeedback>(null);
@@ -277,14 +275,10 @@ function useObjectRegionMagneticParametersPanelView({
   );
   const inheritedParams = parameters.filter((p) => !overriddenParams.has(p));
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={sections}
-    >
+    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
       <ObjectRegionMetadataSection model={model} />
 
-      <InspectorSection value="material" title="Material Overrides">
+      <InspectorGroup title="Material Overrides">
         <ObjectRegionInlineDiagnostics
           capabilityGates={["regions.material_override"]}
           model={model}
@@ -400,9 +394,9 @@ function useObjectRegionMagneticParametersPanelView({
             Add Override
           </Button>
         </div>
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection value="material-fields" title="Material Fields">
+      <InspectorGroup title="Material Fields">
         <FieldRow label="Editable fields" value={fieldDrafts.length} />
         <FieldRow label="Unsupported fields" value={unsupportedRegionFieldCount} />
         {fieldDrafts.length === 0 ? (
@@ -627,7 +621,7 @@ function useObjectRegionMagneticParametersPanelView({
         {fieldFeedback ? (
           <FeedbackBanner kind={fieldFeedback.kind} message={fieldFeedback.message} />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
       <ObjectRegionActionsSection
         pending={pending}
@@ -642,6 +636,6 @@ function useObjectRegionMagneticParametersPanelView({
         deleteRegion={deleteRegion}
         feedback={feedback}
       />
-    </Accordion>
+    </div>
   );
 }

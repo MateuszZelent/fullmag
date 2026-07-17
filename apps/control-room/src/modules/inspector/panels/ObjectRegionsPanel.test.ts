@@ -101,7 +101,7 @@ describe("ObjectRegionsPanel physical scalar inputs", () => {
       "draft.materialOverrides.map",
     );
     const fieldsStart = materialPanel.indexOf(
-      '<InspectorSection value="material-fields"',
+      '<InspectorGroup title="Material Fields"',
       overridesStart,
     );
 

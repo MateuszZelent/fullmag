@@ -115,4 +115,23 @@ describe("Inspector design-system reference contract", () => {
     expect(meshPolicy).not.toMatch(/<\/?InspectorSection\b/);
     expect(meshPolicy).not.toContain("defaultCollapsed");
   });
+
+  it.each([
+    "RegionsListPanel.tsx",
+    "region/ObjectRegionOverviewPanel.tsx",
+    "region/ObjectRegionGeometryPanel.tsx",
+    "region/ObjectRegionMeshPanel.tsx",
+    "region/ObjectRegionNestedRegionsPanel.tsx",
+    "region/ObjectRegionMagneticParametersPanel.tsx",
+    "region/ObjectRegionTexturePanel.tsx",
+    "region/ObjectRegionDiagnosticsPanel.tsx",
+    "region/shared.tsx",
+  ])("keeps migrated %s region UI on compact Inspector groups", (fileName) => {
+    const panel = read(`src/modules/inspector/panels/${fileName}`);
+
+    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
+    expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
+    expect(panel).not.toContain("<Accordion");
+    expect(panel).not.toContain("defaultCollapsed");
+  });
 });

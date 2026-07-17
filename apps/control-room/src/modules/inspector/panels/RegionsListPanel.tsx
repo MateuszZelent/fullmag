@@ -9,14 +9,13 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { visualizationTargetIdForSceneObject } from "@/kernel/selection/selectionTypes";
-import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   buildNewRegionPayload,
   defaultNewRegionDraft,
@@ -178,12 +177,8 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={["regions", "create", "summary"]}
-    >
-      <InspectorSection value="regions" title="Object Regions" collapsible defaultCollapsed={false}>
+    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+      <InspectorGroup title="Object Regions" collapsible defaultOpen>
         <div className="fm-inspector-toolbar">
           <Button
             disabled={pending || model.mode !== "committed"}
@@ -240,10 +235,10 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
             })
           )}
         </div>
-      </InspectorSection>
+      </InspectorGroup>
 
       {adding ? (
-        <InspectorSection value="create" title="New Region">
+        <InspectorGroup title="New Region">
           <FormField
             label="Name"
             mono={false}
@@ -296,10 +291,10 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
               Cancel
             </Button>
           </div>
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
 
-      <InspectorSection value="summary" title="Summary">
+      <InspectorGroup title="Summary">
         <FieldRow label="Object" value={model.objectLabel} />
         <FieldRow label="Object ID" value={model.objectId} />
         <FieldRow label="Region count" value={String(model.items.length)} />
@@ -310,7 +305,7 @@ export function RegionsListPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Regions fetch" value={regions.status} />
         <FieldRow label="Diagnostics fetch" value={regionDiagnostics.status} />
         {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
-      </InspectorSection>
-    </Accordion>
+      </InspectorGroup>
+    </div>
   );
 }

@@ -1,26 +1,19 @@
 "use client";
 
-import { Accordion } from "@/shared/ui/Accordion";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   ObjectRegionMetadataSection,
   type RegionSubPanelProps,
 } from "./shared";
 
 export function ObjectRegionDiagnosticsPanel({ model }: RegionSubPanelProps) {
-  const sections = ["regions", "diagnostics"];
-
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={sections}
-    >
+    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
       <ObjectRegionMetadataSection model={model} />
 
-      <InspectorSection value="diagnostics" title="Diagnostics">
+      <InspectorGroup title="Diagnostics">
         <FieldRow label="Mode" value={model.mode} />
         <FieldRow label="Source" value={model.source} />
         <FieldRow
@@ -61,7 +54,7 @@ export function ObjectRegionDiagnosticsPanel({ model }: RegionSubPanelProps) {
             ))}
           </div>
         )}
-      </InspectorSection>
-    </Accordion>
+      </InspectorGroup>
+    </div>
   );
 }

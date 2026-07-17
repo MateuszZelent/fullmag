@@ -18,7 +18,6 @@ import {
   buildMagnetizationAssetPatch as buildTextureAssetPatch,
   buildRegionTextureOverridePatch,
 } from "@/shared/domain/magnetization-texture/draftModel";
-import { Accordion } from "@/shared/ui/Accordion";
 import {
   ObjectRegionMetadataSection,
   type RegionSubPanelProps,
@@ -233,14 +232,8 @@ export function ObjectRegionTexturePanel({
     }
   }
 
-  const sections = ["regions", "assignment", "preset", "actions"];
-
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={sections}
-    >
+    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
       <ObjectRegionMetadataSection model={regionModel} />
 
       <MagneticTextureAssignmentSection
@@ -270,6 +263,6 @@ export function ObjectRegionTexturePanel({
         onSave={() => void saveTexture()}
         pending={pending}
       />
-    </Accordion>
+    </div>
   );
 }

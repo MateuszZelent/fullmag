@@ -9,9 +9,8 @@ import {
   useMeshRegionMembershipResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { normalizeMeshQualityStatistics } from "@/shared/domain/mesh/qualityStatistics";
-import { Accordion } from "@/shared/ui/Accordion";
 import { FormField } from "../../primitives/FormField";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import type { MeshSizeDistributionHoverBin } from "../MeshQualityChart";
 import { MeshQualityStatisticsView } from "../MeshQualityStatisticsView";
 import { emitMeshSizeHistogramHover } from "../meshSizeHistogramHover";
@@ -65,17 +64,11 @@ export function ObjectRegionMeshPanel({
     },
     [kernel, membership.data?.mesh_part_ids, model.objectId, model.regionId],
   );
-  const sections = ["regions", "mesh", "quality", "actions"];
-
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={sections}
-    >
+    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
       <ObjectRegionMetadataSection model={model} />
 
-      <InspectorSection value="mesh" title="Mesh Policy">
+      <InspectorGroup title="Mesh Policy">
         <ObjectRegionInlineDiagnostics
           capabilityGates={["regions.mesh_policy"]}
           model={model}
@@ -115,10 +108,9 @@ export function ObjectRegionMeshPanel({
           disabled={!draft.meshPolicy.enabled}
           onChange={(event: ChangeEvent<HTMLInputElement>) => updateMeshPolicy({ order: Number(event.target.value) })}
         />
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection
-        value="quality"
+      <InspectorGroup
         title="Region Quality Distributions"
         badge={
           qualityStatistics?.elementCount === null ||
@@ -127,13 +119,13 @@ export function ObjectRegionMeshPanel({
             : qualityStatistics.elementCount.toLocaleString("en-US")
         }
         collapsible
-        defaultCollapsed={false}
+        defaultOpen
       >
         <MeshQualityStatisticsView
           statistics={qualityStatistics}
           onHoverSizeDistributionBin={hoverSizeDistributionBin}
         />
-      </InspectorSection>
+      </InspectorGroup>
 
       <ObjectRegionActionsSection
         pending={pending}
@@ -148,6 +140,6 @@ export function ObjectRegionMeshPanel({
         deleteRegion={deleteRegion}
         feedback={feedback}
       />
-    </Accordion>
+    </div>
   );
 }
