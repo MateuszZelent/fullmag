@@ -1,10 +1,10 @@
-import { useState, type ReactNode } from "react";
-import { ChevronRight } from "lucide-react";
+import type { ReactNode } from "react";
 import {
   AccordionItem,
   AccordionTrigger,
   AccordionContent,
 } from "@/shared/ui/Accordion";
+import { InspectorGroup } from "./InspectorGroup";
 
 interface InspectorSectionProps {
   children: ReactNode;
@@ -35,7 +35,6 @@ export function InspectorSection({
   title,
   value,
 }: InspectorSectionProps) {
-  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const headerContent = (
     <>
       <div className="fm-inspector-section__title-row">
@@ -59,35 +58,14 @@ export function InspectorSection({
     );
   }
 
-  // Mode 2: Standalone collapsible (auto-wrapped Accordion)
-  if (collapsible) {
-    return (
-      <section
-        className="fm-inspector-section fm-inspector-section--standalone"
-        data-collapsed={collapsed}
-      >
-        <button
-          aria-expanded={!collapsed}
-          className="fm-inspector-section__header"
-          data-collapsible="true"
-          type="button"
-          onClick={() => setCollapsed((current) => !current)}
-        >
-          {headerContent}
-          <ChevronRight className="fm-inspector-section__chevron" aria-hidden="true" />
-        </button>
-        <div className="fm-inspector-section__body" hidden={collapsed}>
-          {children}
-        </div>
-      </section>
-    );
-  }
-
-  // Mode 3: Static section (no collapse)
   return (
-    <section className="fm-inspector-section">
-      <header className="fm-inspector-section__header">{headerContent}</header>
-      <div className="fm-inspector-section__body">{children}</div>
-    </section>
+    <InspectorGroup
+      badge={badge}
+      collapsible={collapsible}
+      defaultOpen={!defaultCollapsed}
+      title={title}
+    >
+      {children}
+    </InspectorGroup>
   );
 }

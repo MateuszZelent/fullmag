@@ -17,12 +17,10 @@ import {
   useObjectInteractionResource,
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
-import { Tabs, TabsContent } from "@/shared/ui/Tabs";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
-import { useInspectorActiveTab } from "../InspectorTabState";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
@@ -420,6 +418,7 @@ function ObjectMaterialPanelView({
     applyParameters,
     parametersDirty,
     parametersTargetChanged,
+    setFeedback,
   ]);
   const resetInspectorDraft = useCallback(() => {
     setDraftState(
@@ -431,7 +430,15 @@ function ObjectMaterialPanelView({
     );
     setAnisotropyDraftState({ draft: baseAnisotropyDraft, key: "" });
     setFeedback(null);
-  }, [baseAnisotropyDraft, baseDraft, draftIdentityKey, draftKey]);
+  }, [
+    baseAnisotropyDraft,
+    baseDraft,
+    draftIdentityKey,
+    draftKey,
+    setAnisotropyDraftState,
+    setDraftState,
+    setFeedback,
+  ]);
   useRegisterInspectorEditSession(
     "staged",
     pending,
@@ -441,13 +448,9 @@ function ObjectMaterialPanelView({
     applyInspectorDraft,
     resetInspectorDraft,
   );
-  const activeTab = useInspectorActiveTab();
-
   return (
     <div className="fm-inspector-panel">
-      <Tabs value={activeTab} className="fm-inspector-tabs">
-
-        <TabsContent value="overview" className="fm-tabs-content">
+      <div className="grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
           {showSection("parameters") ? (
             <InspectorSection title="Magnetic Parameters" collapsible defaultCollapsed={false}>
               <FieldRow label="Object ID" value={object.objectId} />
@@ -490,9 +493,9 @@ function ObjectMaterialPanelView({
               />
             </InspectorSection>
           ) : null}
-        </TabsContent>
+      </div>
 
-        <TabsContent value="properties" className="fm-tabs-content">
+      <div className="grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
           {showSection("material-parameters") ? (
             <InspectorSection title="Material Parameters">
               <FormField
@@ -574,9 +577,9 @@ function ObjectMaterialPanelView({
               />
             </InspectorSection>
           ) : null}
-        </TabsContent>
+      </div>
 
-        <TabsContent value="diagnostics" className="fm-tabs-content">
+      <div className="grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
           {showSection("actions") ? (
             <InspectorSection title="Actions">
               <div className="fm-inspector-toolbar">
@@ -636,8 +639,7 @@ function ObjectMaterialPanelView({
               {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
             </InspectorSection>
           ) : null}
-        </TabsContent>
-      </Tabs>
+      </div>
     </div>
   );
 }

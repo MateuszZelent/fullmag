@@ -734,11 +734,11 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     );
   }
 
-  async function applyPolicy({
+  const applyPolicy = useCallback(async ({
     silentSuccess = false,
   }: {
     silentSuccess?: boolean;
-  } = {}): Promise<{ ok: boolean }> {
+  } = {}): Promise<{ ok: boolean }> => {
     if (!objectId) {
       setFeedback({ kind: "error", message: "No selected scene object." });
       return { ok: false };
@@ -776,7 +776,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
     } finally {
       setPending(false);
     }
-  }
+  }, [api, draft, objectId, resources]);
 
   async function buildMesh(): Promise<void> {
     if (!objectId) {

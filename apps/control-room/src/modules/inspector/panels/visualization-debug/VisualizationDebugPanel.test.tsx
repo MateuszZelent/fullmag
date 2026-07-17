@@ -50,7 +50,7 @@ describe("VisualizationDebugPanelView", () => {
     expect(html).toContain("Shared bytes are excluded from target-owned total");
     expect(html).toContain("viewport-wide");
     expect(html).toContain("Raw bounded JSON");
-    expect(html).toContain("data-collapsed=\"true\"");
+    expect(html).toContain("data-open=\"false\"");
   });
 
   it("keeps memory row identities unique across carriers with local entry IDs", () => {

@@ -35,7 +35,7 @@ export interface InspectorDescriptor {
   typeLabel: string;
 }
 
-const AUTHORING_TABS: InspectorTabDescriptor[] = [
+const MESH_TABS: InspectorTabDescriptor[] = [
   { id: "overview", label: "Overview" },
   { id: "properties", label: "Properties" },
   { id: "diagnostics", label: "Diagnostics" },
@@ -54,11 +54,11 @@ interface FamilyDescriptor {
 }
 
 const EXACT_FAMILIES: Record<string, FamilyDescriptor> = {
-  "object.geometry": { tabs: AUTHORING_TABS, typeLabel: "Geometry" },
-  "object.material": { tabs: AUTHORING_TABS, typeLabel: "Material" },
-  "object.mesh": { tabs: AUTHORING_TABS, typeLabel: "Mesh policy" },
-  "object.physics": { tabs: AUTHORING_TABS, typeLabel: "Physics" },
-  "object.regions": { tabs: AUTHORING_TABS, typeLabel: "Regions" },
+  "object.geometry": { tabs: [], typeLabel: "Geometry" },
+  "object.material": { tabs: [], typeLabel: "Material" },
+  "object.mesh": { tabs: MESH_TABS, typeLabel: "Mesh policy" },
+  "object.physics": { tabs: [], typeLabel: "Physics" },
+  "object.regions": { tabs: [], typeLabel: "Regions" },
 };
 
 function titleCase(value: string): string {
@@ -86,14 +86,14 @@ function resolveFamily(kind: string): FamilyDescriptor {
     return { tabs: RESULT_TABS, typeLabel: "Result" };
   }
   if (kind.startsWith("study.")) {
-    return { tabs: AUTHORING_TABS, typeLabel: "Study" };
+    return { tabs: [], typeLabel: "Study" };
   }
   if (kind.startsWith("object.region")) {
-    return { tabs: AUTHORING_TABS, typeLabel: "Region" };
+    return { tabs: [], typeLabel: "Region" };
   }
   return (
     EXACT_FAMILIES[kind] ?? {
-      tabs: AUTHORING_TABS,
+      tabs: [],
       typeLabel: titleCase(kind.split(".").at(-1) ?? "Selection"),
     }
   );

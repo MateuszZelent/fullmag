@@ -879,7 +879,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
   const resetInspectorDraft = useCallback(() => {
     dispatch({ type: "revertGlobalDraft" });
     dispatch({ type: "revertStageDrafts" });
-  }, []);
+  }, [dispatch]);
   useRegisterInspectorEditSession(
     "staged",
     state.authoringBusy,

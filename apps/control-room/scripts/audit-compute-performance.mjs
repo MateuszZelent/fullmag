@@ -819,18 +819,16 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
   );
 
   requireTokens(numberField, "ObjectVisualizationPanel NumberField commit boundary", [
-    "pendingValueRef",
-    "queuedDraftValueRef",
-    "window.requestAnimationFrame",
-    "window.cancelAnimationFrame",
-    "setDraftOverride(queuedValue)",
-    "onPointerUp={flushDraft}",
-    "onPointerCancel={flushDraft}",
-    "onKeyUp={flushDraft}",
-    "onBlur={flushDraft}",
+    "<Slider",
+    "onValueChange",
+    "setDraftOverride(nextValue)",
+    "onValueCommit",
+    "setDraftOverride(null)",
+    "onChange(nextValue)",
   ]);
   forbidTokens(numberField, "ObjectVisualizationPanel NumberField commit boundary", [
     "window.setTimeout(",
+    "window.requestAnimationFrame",
     "onChange(event.target.value)",
     "onChange(Number(event.target.value))",
   ]);
@@ -841,8 +839,8 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
   ]);
   requireTokens(vectorsSection, "ObjectVisualizationPanel vector range debounce", [
     "<NumberField",
-    'label="Vector alpha"',
-    'label="Vector thickness"',
+    'label="Opacity"',
+    'label="Thickness"',
     'label="Arrow length"',
     'label="Arrow budget"',
     'label="Extra surface gap"',

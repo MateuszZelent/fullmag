@@ -71,16 +71,6 @@
   min-width: 0;
 }
 
-.fm-inspector-section__chevron {
-  color: var(--fm-text-muted);
-  flex-shrink: 0;
-  transition: transform var(--fm-transition-fast);
-}
-
-.fm-inspector-section[data-collapsed="true"] .fm-inspector-section__chevron {
-  transform: rotate(-90deg);
-}
-
 .fm-inspector-section__header h3 {
   margin: 0;
   color: var(--fm-text-primary);

@@ -12,7 +12,8 @@ describe("InspectorSection", () => {
       </InspectorSection>,
     );
 
-    expect(html).toContain("fm-inspector-section");
+    expect(html).toContain('data-slot="inspector-group"');
+    expect(html).not.toContain("fm-inspector-section");
     expect(html).toContain("Geometry");
     expect(html).toContain("Thickness");
     expect(html).toContain("50");

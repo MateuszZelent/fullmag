@@ -47,6 +47,18 @@ describe("resolveInspectorDescriptor", () => {
     expect(descriptor.metadata.length).toBeLessThanOrEqual(4);
   });
 
+  it.each([
+    "object.material",
+    "object.geometry",
+    "object.physics",
+    "object.regions",
+    "object.region.material",
+    "study.root",
+    "study.stage.relax",
+  ])("does not render generic tabs for continuous authoring panel %s", (kind) => {
+    expect(resolveInspectorDescriptor(selection(kind)).tabs).toEqual([]);
+  });
+
   it("uses an honest empty-selection descriptor", () => {
     const descriptor = resolveInspectorDescriptor({
       kind: null,

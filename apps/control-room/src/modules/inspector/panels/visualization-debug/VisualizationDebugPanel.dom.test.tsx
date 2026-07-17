@@ -108,11 +108,11 @@ describe("VisualizationDebugPanel mounted interaction", () => {
     for (const button of focusOrder) {
       pressTab(dom.document, focusOrder);
       expect(dom.document.activeElement).toBe(button);
-      expect(button.getAttribute("class")).toContain(
-        button === rawJson
-          ? "fm-inspector-section__header"
-          : "fm-visualization-debug-action",
-      );
+      if (button === rawJson) {
+        expect(button.getAttribute("data-slot")).toBe("inspector-group-trigger");
+      } else {
+        expect(button.getAttribute("class")).toContain("fm-visualization-debug-action");
+      }
     }
 
     await act(async () => keyboardActivate(copySnapshot, "Enter"));
