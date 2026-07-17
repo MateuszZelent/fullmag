@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::schemas::commands::{RuntimeCommandPrecondition, RuntimeCommandTarget};
+use crate::schemas::commands::{
+    RuntimeCommandPrecondition, RuntimeCommandTarget, SolverPolicyRequest,
+};
 use crate::schemas::relaxation::{
     RelaxationAlgorithm, StageMetricKind, StageMetricUnit, StageStopReason,
 };
@@ -425,6 +427,8 @@ pub struct CommandDetailResource {
     pub fixed_timestep: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_error: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_policy: Option<SolverPolicyRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relax_algorithm: Option<RelaxationAlgorithm>,
     #[serde(skip_serializing_if = "Option::is_none")]

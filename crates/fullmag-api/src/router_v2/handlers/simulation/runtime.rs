@@ -1734,6 +1734,7 @@ pub async fn get_command_detail(
         integrator: record.command.integrator.clone(),
         fixed_timestep: record.command.fixed_timestep,
         max_error: record.command.max_error,
+        solver_policy: record.command.solver_policy.clone(),
         relax_algorithm: record
             .command
             .relax_algorithm

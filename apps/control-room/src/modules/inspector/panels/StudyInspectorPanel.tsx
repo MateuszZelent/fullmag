@@ -102,7 +102,10 @@ import {
   type StudyInspectorModel,
   type StudyInspectorSnapshot,
 } from "./StudyInspectorPanelModel";
-import { StudyPipelineSection } from "./StudyPipelineSection";
+import {
+  StudyPipelineSection,
+  StudySolverPolicyFields,
+} from "./StudyPipelineSection";
 import { validateStudyWorkflow } from "./stages/studyWorkflowState";
 import { StudyProgressBar } from "./StudyProgressBar";
 
@@ -843,6 +846,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
         />
 
         <StudyBoundarySection
+          algorithmsAvailable={runtimeStatus?.capabilities.algorithms_available}
           authoringBusy={state.authoringBusy}
           authoringFeedback={
             state.authoringFeedbackScope === "global"
@@ -1277,6 +1281,7 @@ export function StudySelectedStageSection({
 }
 
 export function StudyBoundarySection({
+  algorithmsAvailable,
   authoringBusy,
   authoringFeedback,
   draft,
@@ -1285,6 +1290,7 @@ export function StudyBoundarySection({
   onUpdate,
   snapshot,
 }: {
+  algorithmsAvailable?: readonly string[];
   authoringBusy: boolean;
   authoringFeedback: {
     kind: "error" | "success" | "warning";
@@ -1399,13 +1405,12 @@ export function StudyBoundarySection({
         value={draft.externalField}
         onChange={(event) => onUpdate({ externalField: event.target.value })}
       />
-      <FormField
-        label="Solver"
-        hint="Study solver override JSON object."
-        rows={4}
-        type="textarea"
-        value={draft.solver}
-        onChange={(event) => onUpdate({ solver: event.target.value })}
+      <StudySolverPolicyFields
+        algorithmsAvailable={algorithmsAvailable}
+        draft={draft.solver}
+        onUpdate={(patch) =>
+          onUpdate({ solver: { ...draft.solver, ...patch } })
+        }
       />
       <FormField
         label="FEM demag policy"

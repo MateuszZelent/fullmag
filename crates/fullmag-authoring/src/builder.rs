@@ -7,11 +7,47 @@ use crate::scene::{
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ScriptBuilderAdaptiveTimestepState {
+    #[serde(default)]
+    pub atol: String,
+    #[serde(default)]
+    pub rtol: String,
+    #[serde(default)]
+    pub dt_initial: String,
+    #[serde(default)]
+    pub dt_min: String,
+    #[serde(default)]
+    pub dt_max: String,
+    #[serde(default)]
+    pub safety: String,
+    #[serde(default)]
+    pub growth_limit: String,
+    #[serde(default)]
+    pub shrink_limit: String,
+    #[serde(default)]
+    pub max_spin_rotation: String,
+    #[serde(default)]
+    pub norm_tolerance: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct ScriptBuilderSolverState {
     #[serde(default = "default_solver_integrator")]
     pub integrator: String,
     #[serde(default = "default_solver_timestep")]
     pub fixed_timestep: String,
+    #[serde(default)]
+    pub dt_initial: String,
+    #[serde(default)]
+    pub dt_min: String,
+    #[serde(default)]
+    pub dt_max: String,
+    #[serde(default)]
+    pub max_err: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptive_timestep: Option<ScriptBuilderAdaptiveTimestepState>,
+    #[serde(default)]
+    pub demag_interval_s: String,
     #[serde(default = "default_solver_relax_algorithm")]
     pub relax_algorithm: String,
     #[serde(default = "default_solver_torque_tol")]
@@ -27,6 +63,12 @@ impl Default for ScriptBuilderSolverState {
         Self {
             integrator: default_solver_integrator(),
             fixed_timestep: default_solver_timestep(),
+            dt_initial: String::new(),
+            dt_min: String::new(),
+            dt_max: String::new(),
+            max_err: String::new(),
+            adaptive_timestep: None,
+            demag_interval_s: String::new(),
             relax_algorithm: default_solver_relax_algorithm(),
             torque_tolerance: default_solver_torque_tol(),
             energy_tolerance: default_solver_energy_tol(),

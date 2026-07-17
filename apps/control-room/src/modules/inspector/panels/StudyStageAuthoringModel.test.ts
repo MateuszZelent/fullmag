@@ -416,7 +416,13 @@ describe("StudyStageAuthoringModel", () => {
   it("preserves adaptive timestep mode without converting dt_initial to fixed", () => {
     const draft = createStudyStageDraft(
       {
-        adaptive_timestep: { atol: 1e-6, dt_initial: 2e-15, dt_min: 1e-17 },
+        adaptive_timestep: {
+          atol: 1e-6,
+          dt_min: 1e-17,
+          dt_max: 1e-13,
+          rtol: 0,
+          tolerance_mode: "max_error",
+        },
         algorithm: "llg_overdamped",
         kind: "relax",
         max_steps: 50000,
@@ -426,15 +432,60 @@ describe("StudyStageAuthoringModel", () => {
       0,
     );
     expect(draft).toMatchObject({
-      dt: "2e-15",
+      dt: "auto",
+      dtMax: "1e-13",
       dtMin: "1e-17",
       maxError: "0.000001",
+      toleranceMode: "max_error",
       timestepMode: "adaptive",
     });
     expect(studyStageDraftToSceneStage(draft)).toMatchObject({
-      adaptive_timestep: { atol: 1e-6, dt_initial: 2e-15, dt_min: 1e-17 },
+      adaptive_timestep: {
+        atol: 1e-6,
+        dt_min: 1e-17,
+        dt_max: 1e-13,
+        rtol: 0,
+        tolerance_mode: "max_error",
+      },
     });
+    expect(
+      (studyStageDraftToSceneStage(draft).adaptive_timestep as Record<string, unknown>)
+        .dt_initial,
+    ).toBeUndefined();
     expect(studyStageDraftToSceneStage(draft)).not.toHaveProperty("fixed_timestep");
+  });
+
+  it("preserves advanced adaptive atol and rtol separately", () => {
+    const draft = createStudyStageDraft(
+      {
+        adaptive_timestep: {
+          atol: 1e-8,
+          dt_initial: 2e-15,
+          dt_min: 1e-16,
+          dt_max: 1e-13,
+          rtol: 1e-5,
+          tolerance_mode: "advanced",
+        },
+        algorithm: "llg_overdamped",
+        kind: "relax",
+        max_steps: 50000,
+        stage_id: "advanced-adaptive",
+        torque_tolerance_apm: 1e-4,
+      },
+      0,
+    );
+    expect(draft).toMatchObject({
+      atol: "1e-8",
+      rtol: "0.00001",
+      toleranceMode: "advanced",
+    });
+    expect(studyStageDraftToSceneStage(draft)).toMatchObject({
+      adaptive_timestep: {
+        atol: 1e-8,
+        rtol: 1e-5,
+        tolerance_mode: "advanced",
+      },
+    });
   });
 
   it("rejects simultaneous fixed and adaptive timestep controls", () => {
@@ -975,7 +1026,12 @@ describe("StudyStageAuthoringModel", () => {
           stages: [
             {
               algorithm: "llg_overdamped",
-              adaptive_timestep: { atol: 1e-4, dt_min: 1e-18 },
+              adaptive_timestep: {
+                atol: 1e-4,
+                dt_min: 1e-18,
+                rtol: 0,
+                tolerance_mode: "max_error",
+              },
               energy_tolerance_j: 1e-10,
               entrypoint_kind: "flat_relax",
               field_refresh: { every_n: 10 },

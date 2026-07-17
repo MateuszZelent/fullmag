@@ -984,6 +984,7 @@ describe("StudyInspectorPanel", () => {
     const html = renderToStaticMarkup(
       <Accordion type="multiple" defaultValue={["boundary"]}>
         <StudyBoundarySection
+          algorithmsAvailable={["llg_overdamped"]}
           authoringBusy={false}
           authoringFeedback={null}
           draft={{
@@ -997,7 +998,21 @@ describe("StudyInspectorPanel", () => {
             requestedDevice: "gpu",
             requestedMode: "strict",
             requestedPrecision: "double",
-            solver: '{"integrator":"rk45"}',
+            solver: {
+              adaptiveTimestep: null,
+              demagInterval: "",
+              dtInitial: "",
+              dtMax: "1e-14",
+              dtMin: "1e-16",
+              energyTolerance: "",
+              fixDt: "",
+              integrator: "rk45",
+              maxErr: "1e-6",
+              maxRelaxSteps: "",
+              relaxAlgorithm: "",
+              timestepMode: "adaptive_max_error",
+              torqueTolerance: "",
+            },
           }}
           model={{
             boundary: testBoundary({
@@ -1055,7 +1070,9 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Demag enabled");
     expect(html).toContain("Poisson Robin");
     expect(html).toContain("External field");
-    expect(html).toContain("Solver");
+    expect(html).toContain("Timestep policy");
+    expect(html).toContain("Maximum embedded vector error");
+    expect(html).not.toContain("Study solver override JSON object");
     expect(html).toContain("FEM demag policy");
     expect(html).toContain("Current CPU threads");
     expect(html).toContain("Save globals");

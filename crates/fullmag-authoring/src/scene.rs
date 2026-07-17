@@ -724,6 +724,12 @@ fn default_solver() -> ScriptBuilderSolverState {
     ScriptBuilderSolverState {
         integrator: String::new(),
         fixed_timestep: String::new(),
+        dt_initial: String::new(),
+        dt_min: String::new(),
+        dt_max: String::new(),
+        max_err: String::new(),
+        adaptive_timestep: None,
+        demag_interval_s: String::new(),
         relax_algorithm: String::new(),
         torque_tolerance: String::new(),
         energy_tolerance: String::new(),

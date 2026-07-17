@@ -65,6 +65,40 @@ pub struct RuntimeCommandPrecondition {
     pub command_revision: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SolverPolicyRequest {
+    Fixed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        integrator: Option<String>,
+        fix_dt: f64,
+    },
+    Adaptive {
+        integrator: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dt_initial: Option<f64>,
+        dt_min: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dt_max: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_err: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        atol: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rtol: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        safety: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        growth_limit: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shrink_limit: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_spin_rotation: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        norm_tolerance: Option<f64>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StructuredCommandRequest {
@@ -78,6 +112,8 @@ pub enum StructuredCommandRequest {
         integrator: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         fixed_timestep: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        solver_policy: Option<SolverPolicyRequest>,
     },
     Relax {
         #[serde(default, flatten)]
@@ -106,6 +142,8 @@ pub enum StructuredCommandRequest {
         fixed_timestep: Option<f64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         max_error: Option<f64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        solver_policy: Option<SolverPolicyRequest>,
     },
     Pause {
         #[serde(default, flatten)]

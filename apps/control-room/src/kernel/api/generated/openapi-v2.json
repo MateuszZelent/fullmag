@@ -1568,6 +1568,16 @@
             "minimum": 0,
             "type": "integer"
           },
+          "solver_policy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SolverPolicyRequest"
+              }
+            ]
+          },
           "stage_id": {
             "type": [
               "string",
@@ -16015,6 +16025,128 @@
         ],
         "type": "object"
       },
+      "SolverPolicyRequest": {
+        "oneOf": [
+          {
+            "properties": {
+              "fix_dt": {
+                "format": "double",
+                "type": "number"
+              },
+              "integrator": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "fixed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "fix_dt",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "atol": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "dt_initial": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "dt_max": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "dt_min": {
+                "format": "double",
+                "type": "number"
+              },
+              "growth_limit": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "integrator": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "adaptive"
+                ],
+                "type": "string"
+              },
+              "max_err": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "max_spin_rotation": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "norm_tolerance": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "rtol": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "safety": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "shrink_limit": {
+                "format": "double",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "integrator",
+              "dt_min",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "SolverProfileAggregatesResource": {
         "properties": {
           "average_demag_ns": {
@@ -17310,6 +17442,16 @@
                       "null"
                     ]
                   },
+                  "solver_policy": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/components/schemas/SolverPolicyRequest"
+                      }
+                    ]
+                  },
                   "until_seconds": {
                     "format": "double",
                     "type": "number"
@@ -17401,6 +17543,16 @@
                     "type": [
                       "number",
                       "null"
+                    ]
+                  },
+                  "solver_policy": {
+                    "oneOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "$ref": "#/components/schemas/SolverPolicyRequest"
+                      }
                     ]
                   },
                   "torque_tolerance": {

@@ -35,7 +35,21 @@ describe("StudyGlobalAuthoringModel", () => {
       requestedDevice: "gpu",
       requestedMode: "extended",
       requestedPrecision: "single",
-      solver: '{"integrator":"rk45"}',
+      solver: {
+        adaptiveTimestep: null,
+        demagInterval: "",
+        dtInitial: "",
+        dtMax: "",
+        dtMin: "",
+        energyTolerance: "",
+        fixDt: "",
+        integrator: "rk45",
+        maxErr: "",
+        maxRelaxSteps: "",
+        relaxAlgorithm: "",
+        timestepMode: "auto",
+        torqueTolerance: "",
+      },
     });
   });
 
@@ -52,7 +66,21 @@ describe("StudyGlobalAuthoringModel", () => {
         requestedDevice: "gpu",
         requestedMode: "strict",
         requestedPrecision: "double",
-        solver: '{"integrator":"rk45"}',
+        solver: {
+          adaptiveTimestep: null,
+          demagInterval: "",
+          dtInitial: "",
+          dtMax: "",
+          dtMin: "1e-16",
+          energyTolerance: "",
+          fixDt: "",
+          integrator: "rk45",
+          maxErr: "1e-6",
+          maxRelaxSteps: "5000",
+          relaxAlgorithm: "llg_overdamped",
+          timestepMode: "adaptive_max_error",
+          torqueTolerance: "1e-4",
+        },
       }),
     ).toEqual({
       kind: "merge_patch",
@@ -68,7 +96,20 @@ describe("StudyGlobalAuthoringModel", () => {
           requested_device: "gpu",
           requested_mode: "strict",
           requested_precision: "double",
-          solver: { integrator: "rk45" },
+          solver: {
+            adaptive_timestep: null,
+            demag_interval_s: null,
+            dt_initial: null,
+            dt_max: null,
+            dt_min: 1e-16,
+            fixed_timestep: null,
+            integrator: "rk45",
+            max_err: 1e-6,
+            max_relax_steps: "5000",
+            relax_algorithm: "llg_overdamped",
+            torque_tolerance: "1e-4",
+            energy_tolerance: "",
+          },
         },
       },
     });
@@ -86,7 +127,21 @@ describe("StudyGlobalAuthoringModel", () => {
       requestedDevice: "auto",
       requestedMode: "strict",
       requestedPrecision: "double",
-      solver: "",
+      solver: {
+        adaptiveTimestep: null,
+        demagInterval: "",
+        dtInitial: "",
+        dtMax: "",
+        dtMin: "",
+        energyTolerance: "",
+        fixDt: "",
+        integrator: "",
+        maxErr: "",
+        maxRelaxSteps: "",
+        relaxAlgorithm: "",
+        timestepMode: "auto",
+        torqueTolerance: "",
+      },
     });
     expect(request.kind).toBe("merge_patch");
     if (request.kind !== "merge_patch") throw new Error("expected merge patch");
@@ -96,6 +151,53 @@ describe("StudyGlobalAuthoringModel", () => {
       fem_demag_solver_policy: null,
       requested_cpu_threads: null,
       solver: {},
+    });
+  });
+
+  it("round-trips advanced adaptive tolerances without synthesizing dt_initial", () => {
+    const draft = createStudyGlobalDraft({
+      study: {
+        solver: {
+          adaptive_timestep: {
+            atol: 1e-8,
+            rtol: 1e-5,
+            dt_initial: "",
+            dt_min: 1e-16,
+            dt_max: 1e-13,
+            safety: 0.9,
+            growth_limit: 2,
+            shrink_limit: 0.2,
+            max_spin_rotation: "",
+            norm_tolerance: "",
+          },
+          integrator: "rk45",
+        },
+      },
+    });
+    expect(draft.solver).toMatchObject({
+      integrator: "rk45",
+      timestepMode: "adaptive_advanced",
+      adaptiveTimestep: {
+        atol: "1e-8",
+        rtol: "0.00001",
+        dtInitial: "",
+        dtMax: "1e-13",
+        dtMin: "1e-16",
+      },
+    });
+    const request = buildStudyGlobalMergePatch(draft);
+    expect(request.kind).toBe("merge_patch");
+    if (request.kind !== "merge_patch") throw new Error("expected merge patch");
+    expect(request.merge_patch.study).toMatchObject({
+      solver: {
+        adaptive_timestep: {
+          atol: 1e-8,
+          rtol: 1e-5,
+          dt_initial: null,
+          dt_min: 1e-16,
+          dt_max: 1e-13,
+        },
+      },
     });
   });
 
@@ -112,13 +214,27 @@ describe("StudyGlobalAuthoringModel", () => {
         requestedDevice: "auto",
         requestedMode: "strict",
         requestedPrecision: "double",
-        solver: "{bad",
+      solver: {
+        adaptiveTimestep: null,
+        demagInterval: "",
+        dtInitial: "",
+        dtMax: "1e-15",
+        dtMin: "1e-14",
+        energyTolerance: "",
+        fixDt: "",
+        integrator: "rk45",
+        maxErr: "1e-6",
+        maxRelaxSteps: "",
+        relaxAlgorithm: "",
+        timestepMode: "adaptive_max_error",
+        torqueTolerance: "",
+      },
       }).map((issue) => issue.message),
     ).toEqual([
       "Backend is required.",
       "External field must contain three finite numbers.",
       "CPU threads must be a positive integer.",
-      "Solver must be a JSON object.",
+      "Adaptive dt max must be greater than or equal to dt min.",
       "FEM demag policy must be a JSON object.",
     ]);
   });

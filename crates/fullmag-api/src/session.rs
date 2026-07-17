@@ -2671,6 +2671,7 @@ mod tests {
             integrator: None,
             fixed_timestep: None,
             max_error: None,
+            solver_policy: None,
             relax_algorithm: None,
             relax_alpha: None,
             mesh_options: None,

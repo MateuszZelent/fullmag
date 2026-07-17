@@ -1,6 +1,8 @@
 //! API request/response types and view models.
 
-use crate::schemas::commands::{CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget};
+use crate::schemas::commands::{
+    CommandResponse, RuntimeCommandPrecondition, RuntimeCommandTarget, SolverPolicyRequest,
+};
 use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::hysteresis::HysteresisBookmarkSchema;
 use crate::schemas::realtime::RealtimeResourceChange;
@@ -1147,6 +1149,8 @@ pub(crate) struct SessionCommand {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_error: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solver_policy: Option<SolverPolicyRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relax_algorithm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relax_alpha: Option<f64>,
@@ -1299,6 +1303,7 @@ mod tests {
                 torque_tolerance: "1e-4".to_string(),
                 energy_tolerance: String::new(),
                 max_relax_steps: "1000".to_string(),
+                ..fullmag_authoring::ScriptBuilderSolverState::default()
             },
             mesh: fullmag_authoring::ScriptBuilderMeshState {
                 algorithm_2d: 6,

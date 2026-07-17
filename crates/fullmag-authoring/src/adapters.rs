@@ -247,16 +247,7 @@ pub fn scene_document_to_script_builder_overrides(
         "external_field": builder.external_field
             .map(|value| serde_json::json!([value[0], value[1], value[2]]))
             .unwrap_or(Value::Null),
-        "solver": {
-            "integrator": string_or_null(&builder.solver.integrator),
-            "fixed_timestep": parse_optional_text_f64(&builder.solver.fixed_timestep),
-            "relax": {
-                "algorithm": string_or_null(&builder.solver.relax_algorithm),
-                "torque_tolerance": parse_optional_text_f64(&builder.solver.torque_tolerance),
-                "energy_tolerance": parse_optional_text_f64(&builder.solver.energy_tolerance),
-                "max_steps": parse_optional_text_u64(&builder.solver.max_relax_steps),
-            },
-        },
+        "solver": solver_override_value(&builder.solver),
         "mesh": {
             "algorithm_2d": builder.mesh.algorithm_2d,
             "algorithm_3d": builder.mesh.algorithm_3d,
@@ -382,6 +373,63 @@ pub fn scene_document_to_script_builder_overrides(
             "samples": analysis.samples,
         })).unwrap_or(Value::Null),
     }))
+}
+
+fn solver_override_value(solver: &crate::ScriptBuilderSolverState) -> Value {
+    let mut value = Map::new();
+    value.insert("integrator".to_string(), string_or_null(&solver.integrator));
+    value.insert(
+        "demag_interval_s".to_string(),
+        parse_optional_text_f64(&solver.demag_interval_s),
+    );
+    if !solver.fixed_timestep.trim().is_empty() {
+        value.insert(
+            "fixed_timestep".to_string(),
+            parse_optional_text_f64(&solver.fixed_timestep),
+        );
+    } else if let Some(adaptive) = solver.adaptive_timestep.as_ref() {
+        value.insert(
+            "adaptive_timestep".to_string(),
+            serde_json::json!({
+                "atol": parse_optional_text_f64(&adaptive.atol),
+                "rtol": parse_optional_text_f64(&adaptive.rtol),
+                "dt_initial": parse_optional_text_f64(&adaptive.dt_initial),
+                "dt_min": parse_optional_text_f64(&adaptive.dt_min),
+                "dt_max": parse_optional_text_f64(&adaptive.dt_max),
+                "safety": parse_optional_text_f64(&adaptive.safety),
+                "growth_limit": parse_optional_text_f64(&adaptive.growth_limit),
+                "shrink_limit": parse_optional_text_f64(&adaptive.shrink_limit),
+                "max_spin_rotation": parse_optional_text_f64(&adaptive.max_spin_rotation),
+                "norm_tolerance": parse_optional_text_f64(&adaptive.norm_tolerance),
+            }),
+        );
+    } else if [
+        &solver.dt_initial,
+        &solver.dt_min,
+        &solver.dt_max,
+        &solver.max_err,
+    ]
+    .iter()
+    .any(|entry| !entry.trim().is_empty())
+    {
+        value.insert(
+            "dt_initial".to_string(),
+            parse_optional_text_f64(&solver.dt_initial),
+        );
+        value.insert("dt_min".to_string(), parse_optional_text_f64(&solver.dt_min));
+        value.insert("dt_max".to_string(), parse_optional_text_f64(&solver.dt_max));
+        value.insert("max_err".to_string(), parse_optional_text_f64(&solver.max_err));
+    }
+    value.insert(
+        "relax".to_string(),
+        serde_json::json!({
+            "algorithm": string_or_null(&solver.relax_algorithm),
+            "torque_tolerance": parse_optional_text_f64(&solver.torque_tolerance),
+            "energy_tolerance": parse_optional_text_f64(&solver.energy_tolerance),
+            "max_steps": parse_optional_text_u64(&solver.max_relax_steps),
+        }),
+    );
+    Value::Object(value)
 }
 
 fn scene_mesh_interface_from_builder(
@@ -1781,13 +1829,14 @@ impl From<crate::SceneCoupling> for fullmag_ir::CouplingIR {
 mod tests {
     use super::*;
     use crate::{
-        MacroStageNode, PrimitiveStageNode, ScriptBuilderCurrentModuleState,
-        ScriptBuilderDriveState, ScriptBuilderInitialState, ScriptBuilderMagneticInteractionEntry,
-        ScriptBuilderMagneticInteractionKind, ScriptBuilderMaterialState,
-        ScriptBuilderMeshOperationState, ScriptBuilderMeshSizeFieldState, ScriptBuilderMeshState,
-        ScriptBuilderPerGeometryMeshState, ScriptBuilderSolverState, ScriptBuilderStageState,
-        ScriptBuilderUniverseState, StudyMacroStageKind, StudyPipelineDocument, StudyPipelineNode,
-        StudyPipelineNodeSource, StudyPrimitiveStageKind,
+        MacroStageNode, PrimitiveStageNode, ScriptBuilderAdaptiveTimestepState,
+        ScriptBuilderCurrentModuleState, ScriptBuilderDriveState, ScriptBuilderInitialState,
+        ScriptBuilderMagneticInteractionEntry, ScriptBuilderMagneticInteractionKind,
+        ScriptBuilderMaterialState, ScriptBuilderMeshOperationState,
+        ScriptBuilderMeshSizeFieldState, ScriptBuilderMeshState, ScriptBuilderPerGeometryMeshState,
+        ScriptBuilderSolverState, ScriptBuilderStageState, ScriptBuilderUniverseState,
+        StudyMacroStageKind, StudyPipelineDocument, StudyPipelineNode, StudyPipelineNodeSource,
+        StudyPrimitiveStageKind,
     };
 
     #[test]
@@ -1833,6 +1882,7 @@ mod tests {
                 torque_tolerance: "1e-6".to_string(),
                 energy_tolerance: String::new(),
                 max_relax_steps: "1000".to_string(),
+                ..ScriptBuilderSolverState::default()
             },
             mesh: ScriptBuilderMeshState {
                 algorithm_2d: 6,
@@ -2230,6 +2280,93 @@ mod tests {
                 .as_ref()
                 .map(|document| document.version.as_str()),
             Some("study_pipeline.v1")
+        );
+    }
+
+    #[test]
+    fn scene_projection_preserves_canonical_fixed_and_adaptive_solver_policies() {
+        let mut fixed = sample_builder();
+        fixed.solver.fixed_timestep = "2e-15".to_string();
+        fixed.solver.dt_initial.clear();
+        fixed.solver.dt_min.clear();
+        fixed.solver.dt_max.clear();
+        fixed.solver.max_err.clear();
+        fixed.solver.adaptive_timestep = None;
+
+        let fixed_scene = scene_document_from_script_builder(&fixed);
+        let fixed_projection = scene_document_problem_projection(&fixed_scene)
+            .expect("fixed solver policy should project");
+        assert_eq!(
+            fixed_projection.rewrite_overrides["solver"]["fixed_timestep"],
+            serde_json::json!(2e-15)
+        );
+        assert_eq!(
+            scene_document_to_script_builder(&fixed_scene)
+                .expect("fixed scene should round-trip")
+                .solver,
+            fixed.solver
+        );
+
+        let mut adaptive = sample_builder();
+        adaptive.solver.integrator = "rk45".to_string();
+        adaptive.solver.fixed_timestep.clear();
+        adaptive.solver.dt_initial.clear();
+        adaptive.solver.dt_min = "1e-16".to_string();
+        adaptive.solver.dt_max.clear();
+        adaptive.solver.max_err = "1e-6".to_string();
+        adaptive.solver.adaptive_timestep = None;
+
+        let adaptive_scene = scene_document_from_script_builder(&adaptive);
+        let adaptive_projection = scene_document_problem_projection(&adaptive_scene)
+            .expect("adaptive solver policy should project");
+        assert_eq!(
+            adaptive_projection.rewrite_overrides["solver"]["dt_initial"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            adaptive_projection.rewrite_overrides["solver"]["dt_max"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            adaptive_projection.rewrite_overrides["solver"]["max_err"],
+            serde_json::json!(1e-6)
+        );
+        assert_eq!(
+            scene_document_to_script_builder(&adaptive_scene)
+                .expect("adaptive scene should round-trip")
+                .solver,
+            adaptive.solver
+        );
+
+        let mut advanced = sample_builder();
+        advanced.solver.integrator = "rk45".to_string();
+        advanced.solver.fixed_timestep.clear();
+        advanced.solver.adaptive_timestep = Some(ScriptBuilderAdaptiveTimestepState {
+            atol: "1e-8".to_string(),
+            rtol: "1e-5".to_string(),
+            dt_initial: String::new(),
+            dt_min: "1e-16".to_string(),
+            dt_max: "1e-13".to_string(),
+            safety: "0.9".to_string(),
+            growth_limit: "2".to_string(),
+            shrink_limit: "0.2".to_string(),
+            max_spin_rotation: String::new(),
+            norm_tolerance: String::new(),
+        });
+        let advanced_scene = scene_document_from_script_builder(&advanced);
+        let advanced_projection = scene_document_problem_projection(&advanced_scene)
+            .expect("advanced solver policy should project");
+        assert_eq!(
+            advanced_projection.rewrite_overrides["solver"]["adaptive_timestep"]["dt_initial"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            advanced_projection.rewrite_overrides["solver"]["adaptive_timestep"]["atol"],
+            serde_json::json!(1e-8)
+        );
+        assert_eq!(
+            advanced_projection.rewrite_overrides["solver"]["adaptive_timestep"]["rtol"],
+            serde_json::json!(1e-5)
         );
     }
 

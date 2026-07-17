@@ -28,6 +28,10 @@ import {
   type StudyStageDraftKind,
 } from "./StudyStageAuthoringModel";
 import type {
+  StudyAdaptiveTimestepDraft,
+  StudySolverDraft,
+} from "./StudyGlobalAuthoringModel";
+import type {
   StudyInspectorModel,
   StudyStageModel,
 } from "./StudyInspectorPanelModel";
@@ -113,6 +117,85 @@ const DEFAULT_DYNAMICS_SETTLE_STEP: HysteresisSettleStepDraft = {
 
 type StudyCommandRunner = (commandId: string, input?: unknown) => void;
 type StudyCommandDisabledReason = (commandId: string) => string | null;
+
+export function StudySolverPolicyFields({
+  algorithmsAvailable,
+  draft,
+  onUpdate,
+}: {
+  algorithmsAvailable?: readonly string[];
+  draft: StudySolverDraft;
+  onUpdate: (patch: Partial<StudySolverDraft>) => void;
+}) {
+  const supportsAdaptive = algorithmsAvailable?.includes("llg_overdamped") ?? false;
+  const updateAdvanced = (patch: Partial<StudyAdaptiveTimestepDraft>) =>
+    onUpdate({
+      adaptiveTimestep: {
+        atol: "",
+        dtInitial: "",
+        dtMax: "",
+        dtMin: "",
+        growthLimit: "",
+        maxSpinRotation: "",
+        normTolerance: "",
+        rtol: "",
+        safety: "",
+        shrinkLimit: "",
+        ...draft.adaptiveTimestep,
+        ...patch,
+      },
+    });
+  return (
+    <>
+      <FormField
+        label="Integrator"
+        type="select"
+        value={draft.integrator}
+        onChange={(event) => onUpdate({ integrator: event.target.value })}
+      >
+        <option value="">Default</option>
+        <option value="heun">Heun</option>
+        <option value="rk23">RK23</option>
+        <option value="rk45">RK45</option>
+      </FormField>
+      <FormField
+        label="Timestep policy"
+        hint={supportsAdaptive ? "LLG is advertised by the active session; the planner validates the requested RK lane." : "LLG is not advertised by the active session."}
+        type="select"
+        value={draft.timestepMode}
+        onChange={(event) =>
+          onUpdate({
+            timestepMode: event.target.value as StudySolverDraft["timestepMode"],
+          })
+        }
+      >
+        <option value="auto">Unspecified</option>
+        <option value="fixed">Fixed</option>
+        <option value="adaptive_max_error" disabled={!supportsAdaptive}>Adaptive — maximum vector error</option>
+        <option value="adaptive_advanced" disabled={!supportsAdaptive}>Adaptive — advanced atol/rtol</option>
+      </FormField>
+      {draft.timestepMode === "fixed" ? (
+        <FormField label="Fixed dt" unit="s" value={draft.fixDt} onChange={(event) => onUpdate({ fixDt: event.target.value })} />
+      ) : draft.timestepMode === "adaptive_max_error" ? (
+        <>
+          <FormField label="Initial dt" hint="Optional; omission resolves exactly to dt min." unit="s" value={draft.dtInitial} onChange={(event) => onUpdate({ dtInitial: event.target.value })} />
+          <FormField label="Adaptive dt min" unit="s" value={draft.dtMin} onChange={(event) => onUpdate({ dtMin: event.target.value })} />
+          <FormField label="Adaptive dt max" unit="s" value={draft.dtMax} onChange={(event) => onUpdate({ dtMax: event.target.value })} />
+          <FormField label="Maximum embedded vector error" hint="Absolute maximum node/cell embedded-vector error." value={draft.maxErr} onChange={(event) => onUpdate({ maxErr: event.target.value })} />
+        </>
+      ) : draft.timestepMode === "adaptive_advanced" ? (
+        <>
+          <FormField label="Absolute tolerance" value={draft.adaptiveTimestep?.atol ?? ""} onChange={(event) => updateAdvanced({ atol: event.target.value })} />
+          <FormField label="Relative tolerance" value={draft.adaptiveTimestep?.rtol ?? ""} onChange={(event) => updateAdvanced({ rtol: event.target.value })} />
+          <FormField label="Initial dt" hint="Optional; omission resolves exactly to dt min." unit="s" value={draft.adaptiveTimestep?.dtInitial ?? ""} onChange={(event) => updateAdvanced({ dtInitial: event.target.value })} />
+          <FormField label="Adaptive dt min" unit="s" value={draft.adaptiveTimestep?.dtMin ?? ""} onChange={(event) => updateAdvanced({ dtMin: event.target.value })} />
+          <FormField label="Adaptive dt max" unit="s" value={draft.adaptiveTimestep?.dtMax ?? ""} onChange={(event) => updateAdvanced({ dtMax: event.target.value })} />
+        </>
+      ) : null}
+      <FormField label="Demag interval" unit="s" value={draft.demagInterval} onChange={(event) => onUpdate({ demagInterval: event.target.value })} />
+    </>
+  );
+}
 
 export function StudyPipelineSection({
   activeStageIndex,
@@ -2151,11 +2234,29 @@ function RelaxStageDraftFields({
                 value={draft.dtMin}
                 onChange={(event) => onUpdate({ dtMin: event.target.value })}
               />
+              <FormField label="Adaptive dt max" unit="s" value={draft.dtMax} onChange={(event) => onUpdate({ dtMax: event.target.value })} />
               <FormField
-                label="Adaptive tolerance"
-                value={draft.maxError}
-                onChange={(event) => onUpdate({ maxError: event.target.value })}
-              />
+                label="Tolerance mode"
+                type="select"
+                value={draft.toleranceMode}
+                onChange={(event) => onUpdate({ toleranceMode: event.target.value as StudyStageDraft["toleranceMode"] })}
+              >
+                <option value="max_error">Maximum vector error</option>
+                <option value="advanced">Advanced atol/rtol</option>
+              </FormField>
+              {draft.toleranceMode === "advanced" ? (
+                <>
+                  <FormField label="Absolute tolerance" value={draft.atol} onChange={(event) => onUpdate({ atol: event.target.value })} />
+                  <FormField label="Relative tolerance" value={draft.rtol} onChange={(event) => onUpdate({ rtol: event.target.value })} />
+                </>
+              ) : (
+                <FormField
+                  label="Maximum embedded vector error"
+                  hint="Absolute maximum node/cell embedded-vector error."
+                  value={draft.maxError}
+                  onChange={(event) => onUpdate({ maxError: event.target.value })}
+                />
+              )}
             </>
           ) : null}
           <FormField

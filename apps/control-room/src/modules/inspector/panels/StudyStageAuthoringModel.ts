@@ -171,6 +171,7 @@ export interface StudyStageDraft {
   demagInterval: string;
   deviceTarget: string;
   dt: string;
+  dtMax: string;
   dtMin: string;
   energyTolerance: string;
   equilibriumArtifact: string;
@@ -194,6 +195,9 @@ export interface StudyStageDraft {
   legacyRunFixedTimestep: string;
   magnetostaticBc: string;
   maxError: string;
+  atol: string;
+  rtol: string;
+  toleranceMode: "advanced" | "max_error";
   maxPhysicalTime: string;
   maxPseudotime: string;
   maxRelaxationTime: string;
@@ -338,6 +342,7 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   demagInterval: "",
   deviceTarget: "cpu",
   dt: "auto",
+  dtMax: "",
   dtMin: "",
   energyTolerance: "",
   equilibriumArtifact: "",
@@ -361,6 +366,9 @@ const DEFAULT_RELAX_STAGE_DRAFT: StudyStageDraft = {
   legacyRunFixedTimestep: "",
   magnetostaticBc: "open",
   maxError: "",
+  atol: "",
+  rtol: "",
+  toleranceMode: "max_error",
   maxPhysicalTime: "",
   maxPseudotime: "",
   maxRelaxationTime: "",
@@ -418,6 +426,7 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   demagInterval: "",
   deviceTarget: "cpu",
   dt: "auto",
+  dtMax: "",
   dtMin: "",
   energyTolerance: "",
   equilibriumArtifact: "",
@@ -441,6 +450,9 @@ const DEFAULT_RUN_STAGE_DRAFT: StudyStageDraft = {
   legacyRunFixedTimestep: "",
   magnetostaticBc: "open",
   maxError: "",
+  atol: "",
+  rtol: "",
+  toleranceMode: "max_error",
   maxPhysicalTime: "",
   maxPseudotime: "",
   maxRelaxationTime: "",
@@ -1046,6 +1058,9 @@ export function createStudyStageDraft(
     record?.fixed_timestep !== null &&
     record?.fixed_timestep !== "";
   const hasAdaptiveTimestep = record?.adaptive_timestep != null;
+  const adaptiveTimestep = asRecord(record?.adaptive_timestep);
+  const toleranceMode =
+    adaptiveTimestep?.tolerance_mode === "advanced" ? "advanced" : "max_error";
   return {
     ...DEFAULT_RELAX_STAGE_DRAFT,
     algorithm: scalarText(
@@ -1063,9 +1078,10 @@ export function createStudyStageDraft(
       DEFAULT_RELAX_STAGE_DRAFT.dt,
     ),
     dtMin: scalarText(
-      asRecord(record?.adaptive_timestep)?.dt_min ?? record?.dt_min,
+      adaptiveTimestep?.dt_min ?? record?.dt_min,
       "",
     ),
+    dtMax: scalarText(adaptiveTimestep?.dt_max ?? record?.dt_max, ""),
     energyTolerance: scalarText(record?.energy_tolerance_j ?? record?.energy_tolerance, ""),
     fieldEvery: scalarText(
       asRecord(record?.field_refresh)?.every_n ??
@@ -1074,9 +1090,14 @@ export function createStudyStageDraft(
     ),
     kind: "relax",
     maxError: scalarText(
-      asRecord(record?.adaptive_timestep)?.atol ?? record?.max_error,
+      toleranceMode === "max_error"
+        ? adaptiveTimestep?.atol ?? record?.max_error
+        : record?.max_error,
       "",
     ),
+    atol: scalarText(adaptiveTimestep?.atol, ""),
+    rtol: scalarText(adaptiveTimestep?.rtol, ""),
+    toleranceMode,
     maxPhysicalTime: scalarText(record?.max_physical_time_s, ""),
     maxPseudotime: scalarText(record?.max_pseudotime_s, ""),
     maxRelaxationTime: scalarText(
@@ -1468,12 +1489,19 @@ export function studyStageDraftToSceneStage(
     if (draft.timestepMode === "fixed" && draft.dt.trim()) {
       stage.fixed_timestep = requiredNumber(draft.dt, "fixed_timestep");
     } else if (draft.timestepMode === "adaptive") {
-      const adaptive: JsonObject = {};
-      setOptionalNumber(adaptive, "atol", draft.maxError);
+      const adaptive: JsonObject = { tolerance_mode: draft.toleranceMode };
+      if (draft.toleranceMode === "advanced") {
+        setOptionalNumber(adaptive, "atol", draft.atol);
+        setOptionalNumber(adaptive, "rtol", draft.rtol);
+      } else {
+        setOptionalNumber(adaptive, "atol", draft.maxError);
+        adaptive.rtol = 0;
+      }
       if (draft.dt.trim() !== "auto") {
         setOptionalNumber(adaptive, "dt_initial", draft.dt);
       }
       setOptionalNumber(adaptive, "dt_min", draft.dtMin);
+      setOptionalNumber(adaptive, "dt_max", draft.dtMax);
       stage.adaptive_timestep = adaptive;
     }
     const fieldRefresh: JsonObject = {};
@@ -1733,8 +1761,22 @@ export function validateStudyStageDraft(
     }
     validatePositiveNumber(issues, draft.maxRelaxationTime, "Max relaxation time", false);
     validatePositiveNumber(issues, draft.relaxAlpha, "Relax alpha", false);
-    validatePositiveNumber(issues, draft.maxError, "Max error", false);
-    validatePositiveNumber(issues, draft.dtMin, "dt_min", false);
+    if (draft.timestepMode === "adaptive") {
+      validatePositiveNumber(issues, draft.dtMin, "dt_min", true);
+      validatePositiveNumber(issues, draft.dtMax, "dt_max", false);
+      if (draft.toleranceMode === "max_error") {
+        validatePositiveNumber(issues, draft.maxError, "Maximum embedded vector error", true);
+      } else {
+        validateNonnegativeNumber(issues, draft.atol, "Absolute tolerance");
+        validateNonnegativeNumber(issues, draft.rtol, "Relative tolerance");
+        if (Number(draft.atol) === 0 && Number(draft.rtol) === 0) {
+          issues.push({
+            message: "At least one advanced tolerance must be positive.",
+            severity: "error",
+          });
+        }
+      }
+    }
     validatePositiveNumber(issues, draft.demagInterval, "Demag interval", false);
     validatePositiveInteger(issues, draft.fieldEvery, "Field refresh", false);
     if (draft.timestepMode !== "auto" && draft.dt.trim()) {
@@ -1742,6 +1784,17 @@ export function validateStudyStageDraft(
     }
   }
   return issues;
+}
+
+function validateNonnegativeNumber(
+  issues: StudyStageDraftValidation[],
+  value: string,
+  label: string,
+): void {
+  const parsed = Number(value);
+  if (!value.trim() || !Number.isFinite(parsed) || parsed < 0) {
+    issues.push({ message: `${label} must be finite and nonnegative.`, severity: "error" });
+  }
 }
 
 function validateSpectralOptions(

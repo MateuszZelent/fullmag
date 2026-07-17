@@ -3309,6 +3309,7 @@ export interface components {
             run_id?: string | null;
             /** Format: int64 */
             seq: number;
+            solver_policy?: null | components["schemas"]["SolverPolicyRequest"];
             stage_id?: string | null;
             /** Format: int32 */
             stage_index?: number | null;
@@ -6964,6 +6965,39 @@ export interface components {
             /** Format: double */
             zeeman: number;
         };
+        SolverPolicyRequest: {
+            /** Format: double */
+            fix_dt: number;
+            integrator?: string | null;
+            /** @enum {string} */
+            kind: "fixed";
+        } | {
+            /** Format: double */
+            atol?: number | null;
+            /** Format: double */
+            dt_initial?: number | null;
+            /** Format: double */
+            dt_max?: number | null;
+            /** Format: double */
+            dt_min: number;
+            /** Format: double */
+            growth_limit?: number | null;
+            integrator: string;
+            /** @enum {string} */
+            kind: "adaptive";
+            /** Format: double */
+            max_err?: number | null;
+            /** Format: double */
+            max_spin_rotation?: number | null;
+            /** Format: double */
+            norm_tolerance?: number | null;
+            /** Format: double */
+            rtol?: number | null;
+            /** Format: double */
+            safety?: number | null;
+            /** Format: double */
+            shrink_limit?: number | null;
+        };
         SolverProfileAggregatesResource: {
             /** Format: int64 */
             average_demag_ns: number;
@@ -7294,6 +7328,7 @@ export interface components {
             integrator?: string | null;
             /** Format: int64 */
             max_steps?: number | null;
+            solver_policy?: null | components["schemas"]["SolverPolicyRequest"];
             /** Format: double */
             until_seconds: number;
         } & {
@@ -7315,6 +7350,7 @@ export interface components {
             relax_algorithm?: null | components["schemas"]["RelaxationAlgorithm"];
             /** Format: double */
             relax_alpha?: number | null;
+            solver_policy?: null | components["schemas"]["SolverPolicyRequest"];
             /** Format: double */
             torque_tolerance?: number | null;
             /** Format: double */

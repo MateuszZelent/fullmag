@@ -9,7 +9,8 @@ use axum::Json;
 
 use crate::error::ApiError;
 use crate::schemas::commands::{
-    CommandResponse, RuntimeCommandIntent, RuntimeCommandTarget, StructuredCommandRequest,
+    CommandResponse, RuntimeCommandIntent, RuntimeCommandTarget, SolverPolicyRequest,
+    StructuredCommandRequest,
 };
 use crate::session::effective_runtime_status_code;
 use crate::types::{AppState, CommandLifecycleState, SessionCommand, TrackedCommandRecord};
@@ -48,6 +49,7 @@ pub(crate) async fn submit_structured_command_impl(
     mut req: StructuredCommandRequest,
 ) -> Result<CommandResponse, ApiError> {
     validate_relax_command_controls(&req)?;
+    validate_solver_policy_controls(&req)?;
     if let Some((scene, realization)) = validate_authoring_gate_for_command(&state, &req).await? {
         attach_geometry_realization_to_mesh_request(&mut req, &scene, &realization)?;
     }
@@ -59,6 +61,130 @@ pub(crate) async fn submit_structured_command_impl(
     let command = command_from_structured(req, command_id, now);
     validate_runtime_command_contract(&state, &command).await?;
     enqueue_session_command_impl(state, headers, command).await
+}
+
+fn validate_solver_policy_controls(req: &StructuredCommandRequest) -> Result<(), ApiError> {
+    let (solver_policy, legacy_integrator, legacy_fixed, legacy_max_error) = match req {
+        StructuredCommandRequest::Run {
+            solver_policy,
+            integrator,
+            fixed_timestep,
+            ..
+        } => (solver_policy, integrator, fixed_timestep, &None),
+        StructuredCommandRequest::Relax {
+            solver_policy,
+            fixed_timestep,
+            max_error,
+            ..
+        } => (solver_policy, &None, fixed_timestep, max_error),
+        _ => return Ok(()),
+    };
+    let Some(policy) = solver_policy else {
+        return Ok(());
+    };
+    if legacy_integrator.is_some() || legacy_fixed.is_some() || legacy_max_error.is_some() {
+        return Err(ApiError::bad_request(
+            "legacy integrator/fixed_timestep/max_error controls cannot be mixed with solver_policy",
+        ));
+    }
+
+    match policy {
+        SolverPolicyRequest::Fixed { fix_dt, .. } => {
+            require_positive_finite("solver_policy.fix_dt", *fix_dt)?;
+        }
+        SolverPolicyRequest::Adaptive {
+            integrator,
+            dt_initial,
+            dt_min,
+            dt_max,
+            max_err,
+            atol,
+            rtol,
+            safety,
+            growth_limit,
+            shrink_limit,
+            max_spin_rotation,
+            norm_tolerance,
+        } => {
+            if !matches!(integrator.as_str(), "rk23" | "rk45" | "auto") {
+                return Err(ApiError::bad_request(
+                    "adaptive solver_policy integrator must be rk23, rk45, or auto",
+                ));
+            }
+            require_positive_finite("solver_policy.dt_min", *dt_min)?;
+            if let Some(value) = dt_max {
+                require_positive_finite("solver_policy.dt_max", *value)?;
+                if value < dt_min {
+                    return Err(ApiError::bad_request(
+                        "solver_policy.dt_max must be greater than or equal to dt_min",
+                    ));
+                }
+            }
+            if let Some(value) = dt_initial {
+                require_positive_finite("solver_policy.dt_initial", *value)?;
+                if value < dt_min || dt_max.is_some_and(|maximum| value > &maximum) {
+                    return Err(ApiError::bad_request(
+                        "solver_policy.dt_initial must be >= dt_min and <= dt_max when bounded",
+                    ));
+                }
+            }
+            match (max_err, atol, rtol) {
+                (Some(value), None, None) => {
+                    require_positive_finite("solver_policy.max_err", *value)?;
+                }
+                (None, Some(atol), Some(rtol))
+                    if atol.is_finite()
+                        && rtol.is_finite()
+                        && *atol >= 0.0
+                        && *rtol >= 0.0
+                        && (*atol > 0.0 || *rtol > 0.0) => {}
+                _ => {
+                    return Err(ApiError::bad_request(
+                        "adaptive solver_policy requires exactly one tolerance mode: max_err or advanced atol/rtol",
+                    ));
+                }
+            }
+            if let Some(value) = safety {
+                if !value.is_finite() || *value <= 0.0 || *value > 1.0 {
+                    return Err(ApiError::bad_request(
+                        "solver_policy.safety must be finite and in (0, 1]",
+                    ));
+                }
+            }
+            if let Some(value) = growth_limit {
+                if !value.is_finite() || *value <= 1.0 {
+                    return Err(ApiError::bad_request(
+                        "solver_policy.growth_limit must be finite and greater than one",
+                    ));
+                }
+            }
+            if let Some(value) = shrink_limit {
+                if !value.is_finite() || *value <= 0.0 || *value >= 1.0 {
+                    return Err(ApiError::bad_request(
+                        "solver_policy.shrink_limit must be finite and in (0, 1)",
+                    ));
+                }
+            }
+            for (name, value) in [
+                ("solver_policy.max_spin_rotation", max_spin_rotation),
+                ("solver_policy.norm_tolerance", norm_tolerance),
+            ] {
+                if let Some(value) = value {
+                    require_positive_finite(name, *value)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn require_positive_finite(name: &str, value: f64) -> Result<(), ApiError> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(ApiError::bad_request(format!(
+            "{name} must be finite and greater than zero"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_relax_command_controls(req: &StructuredCommandRequest) -> Result<(), ApiError> {
@@ -1074,6 +1200,7 @@ fn new_session_command(command_id: String, kind: &str, created_at_unix_ms: u128)
         integrator: None,
         fixed_timestep: None,
         max_error: None,
+        solver_policy: None,
         relax_algorithm: None,
         relax_alpha: None,
         mesh_options: None,
@@ -1102,6 +1229,7 @@ fn command_from_structured(
             max_steps,
             integrator,
             fixed_timestep,
+            solver_policy,
         } => {
             let mut command = new_session_command(command_id, "run", created_at_unix_ms);
             apply_command_intent(
@@ -1113,6 +1241,7 @@ fn command_from_structured(
             command.max_steps = max_steps;
             command.integrator = integrator;
             command.fixed_timestep = fixed_timestep;
+            command.solver_policy = solver_policy;
             command
         }
         StructuredCommandRequest::Relax {
@@ -1129,6 +1258,7 @@ fn command_from_structured(
             relax_alpha,
             fixed_timestep,
             max_error,
+            solver_policy,
         } => {
             let mut command = new_session_command(command_id, "relax", created_at_unix_ms);
             apply_command_intent(
@@ -1146,6 +1276,7 @@ fn command_from_structured(
             command.relax_alpha = relax_alpha;
             command.fixed_timestep = fixed_timestep;
             command.max_error = max_error;
+            command.solver_policy = solver_policy;
             command
         }
         StructuredCommandRequest::Pause { intent } => {
@@ -1307,5 +1438,60 @@ mod tests {
                 .and_then(|value| value.get("max_samples")),
             Some(&serde_json::json!(7))
         );
+    }
+
+    #[test]
+    fn run_command_preserves_typed_fixed_solver_policy() {
+        let request: StructuredCommandRequest = serde_json::from_value(serde_json::json!({
+            "kind": "run",
+            "until_seconds": 1e-9,
+            "solver_policy": {
+                "kind": "fixed",
+                "fix_dt": 2e-15
+            }
+        }))
+        .expect("canonical fixed policy should deserialize");
+        let command = command_from_structured(request, "cmd-fixed".to_string(), 123);
+        assert_eq!(
+            serde_json::to_value(command.solver_policy).unwrap(),
+            serde_json::json!({"kind": "fixed", "fix_dt": 2e-15})
+        );
+    }
+
+    #[test]
+    fn relax_command_preserves_omitted_adaptive_bounds_and_rejects_legacy_mixing() {
+        let request: StructuredCommandRequest = serde_json::from_value(serde_json::json!({
+            "kind": "relax",
+            "solver_policy": {
+                "kind": "adaptive",
+                "integrator": "rk45",
+                "dt_min": 1e-16,
+                "max_err": 1e-6
+            }
+        }))
+        .expect("canonical adaptive policy should deserialize");
+        validate_solver_policy_controls(&request)
+            .expect("omitted dt_initial and dt_max must remain a valid adaptive request");
+        let command = command_from_structured(request, "cmd-adaptive".to_string(), 123);
+        assert_eq!(
+            serde_json::to_value(command.solver_policy).unwrap(),
+            serde_json::json!({
+                "kind": "adaptive",
+                "integrator": "rk45",
+                "dt_min": 1e-16,
+                "max_err": 1e-6
+            })
+        );
+
+        let mixed: StructuredCommandRequest = serde_json::from_value(serde_json::json!({
+            "kind": "relax",
+            "fixed_timestep": 1e-15,
+            "solver_policy": {"kind": "fixed", "fix_dt": 1e-15}
+        }))
+        .expect("legacy fields remain readable for deterministic rejection");
+        assert!(validate_solver_policy_controls(&mixed)
+            .expect_err("legacy and canonical controls must not mix")
+            .message
+            .contains("cannot be mixed"));
     }
 }
