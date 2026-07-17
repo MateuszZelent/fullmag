@@ -3,6 +3,7 @@ import type { KeyboardEvent } from "react";
 import { cn } from "@/shared/utils/className";
 
 export interface SegmentedControlOption<T extends string> {
+  accessibleLabel?: string;
   disabled?: boolean;
   label: string;
   value: T;
@@ -84,6 +85,7 @@ export function SegmentedControl<T extends string>({
 
         return (
           <button
+            aria-label={option.accessibleLabel}
             aria-checked={checked}
             aria-disabled={itemDisabled || undefined}
             className={cn(
@@ -105,6 +107,7 @@ export function SegmentedControl<T extends string>({
             key={option.value}
             role="radio"
             tabIndex={checked && !itemDisabled ? 0 : -1}
+            title={option.accessibleLabel}
             type="button"
             onClick={() => {
               if (!itemDisabled) onValueChange(option.value);

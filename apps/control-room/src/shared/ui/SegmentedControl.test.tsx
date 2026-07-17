@@ -75,4 +75,25 @@ describe("SegmentedControl", () => {
     expect(onValueChange).not.toHaveBeenCalled();
     expect(options[0]?.props.disabled).toBe(true);
   });
+
+  it("supports a compact visible label with a full accessible name", () => {
+    const html = renderToStaticMarkup(
+      <SegmentedControl
+        aria-label="Display mode"
+        options={[
+          {
+            accessibleLabel: "Shaded plus wireframe",
+            label: "Shaded+",
+            value: "surface+edges",
+          },
+        ]}
+        value="surface+edges"
+        onValueChange={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Shaded plus wireframe"');
+    expect(html).toContain('title="Shaded plus wireframe"');
+    expect(html).toContain(">Shaded+</button>");
+  });
 });

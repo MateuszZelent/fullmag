@@ -5,7 +5,10 @@ import React, { useState, useId } from "react";
 import { type FieldCatalogResource, type FieldMetaResource } from "@/kernel/api/apiTypes";
 import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
 import { Button } from "@/shared/ui/Button";
-import { SegmentedControl } from "@/shared/ui/SegmentedControl";
+import {
+  SegmentedControl,
+  type SegmentedControlOption,
+} from "@/shared/ui/SegmentedControl";
 import { Slider } from "@/shared/ui/Slider";
 import { Switch } from "@/shared/ui/Switch";
 import { controlVariants } from "@/shared/ui/controlVariants";
@@ -62,9 +65,13 @@ import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
 
-const RENDER_MODES: Array<{ label: string; value: VisualizationDisplayMode }> = [
+const RENDER_MODES: Array<SegmentedControlOption<VisualizationDisplayMode>> = [
   { label: "Shaded", value: "surface" },
-  { label: "Shaded + wireframe", value: "surface+edges" },
+  {
+    accessibleLabel: "Shaded plus wireframe",
+    label: "Shaded+",
+    value: "surface+edges",
+  },
   { label: "Wire", value: "wireframe" },
   { label: "Points", value: "points" },
   { label: "Off", value: "off" },
