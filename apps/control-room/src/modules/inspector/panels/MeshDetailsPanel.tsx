@@ -1,7 +1,5 @@
 "use client";
 
-import { Accordion } from "@/shared/ui/Accordion";
-
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { JsonResourceSection } from "./MeshResourceView";
 import { MeshBuildHistorySection } from "./mesh-details/MeshBuildHistorySection";
@@ -113,11 +111,9 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   const showSection = (section: string) => sections.includes(section);
 
   return (
-    <Accordion
+    <div
       key={selection.kind ?? "default"}
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={sections}
+      className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]"
     >
       {showSection("overview") ? (
         <MeshOverviewSection
@@ -262,6 +258,6 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
           value={model.latestBuildJson}
         />
       ) : null}
-    </Accordion>
+    </div>
   );
 }

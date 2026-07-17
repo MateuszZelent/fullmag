@@ -1,4 +1,4 @@
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   asRecord,
   formatLength,
@@ -14,7 +14,7 @@ export function MeshRealizedSizeFieldsSection({
   sizeFields: readonly unknown[];
 }) {
   return (
-    <InspectorSection value="size-fields" title="Realized Size Fields" badge={`${sizeFields.length}`} collapsible defaultCollapsed={false}>
+    <InspectorGroup title="Realized Size Fields" badge={`${sizeFields.length}`} collapsible defaultOpen>
       {sizeFields.length > 0 ? (
         <div className="fm-mesh-detail-list">
           {sizeFields.map((field, index) => {
@@ -44,7 +44,7 @@ export function MeshRealizedSizeFieldsSection({
       ) : (
         <MeshResourceEmpty label="No realized size fields are available for the current build." />
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -54,7 +54,7 @@ export function OperationStatusesSection({
   operationStatuses: readonly unknown[];
 }) {
   return (
-    <InspectorSection value="operation-statuses" title="Operation Statuses" badge={`${operationStatuses.length}`} collapsible defaultCollapsed={true}>
+    <InspectorGroup title="Operation Statuses" badge={`${operationStatuses.length}`} collapsible defaultOpen={false}>
       {operationStatuses.length > 0 ? (
         <div className="fm-mesh-detail-list">
           {operationStatuses.map((statusEntry, index) => {
@@ -79,7 +79,7 @@ export function OperationStatusesSection({
       ) : (
         <MeshResourceEmpty label="No operation statuses are present in the active build report." />
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -89,7 +89,7 @@ export function ThinFilmDiagnosticsSection({
   thinFilmDiagnostics: readonly unknown[];
 }) {
   return (
-    <InspectorSection value="thin-film" title="Thin-Film Diagnostics" badge={`${thinFilmDiagnostics.length}`} collapsible defaultCollapsed={true}>
+    <InspectorGroup title="Thin-Film Diagnostics" badge={`${thinFilmDiagnostics.length}`} collapsible defaultOpen={false}>
       {thinFilmDiagnostics.length > 0 ? (
         <div className="fm-mesh-detail-list">
           {thinFilmDiagnostics.map((diagnosticEntry) => {
@@ -124,6 +124,6 @@ export function ThinFilmDiagnosticsSection({
       ) : (
         <MeshResourceEmpty label="No thin-film diagnostics are present in the active build report." />
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

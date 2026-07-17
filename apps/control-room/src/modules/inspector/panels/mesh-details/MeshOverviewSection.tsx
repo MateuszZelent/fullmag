@@ -1,5 +1,5 @@
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
   asRecord,
   formatCount,
@@ -36,7 +36,7 @@ export function MeshOverviewSection({
   title: string;
 }) {
   return (
-    <InspectorSection value="overview" title={title} badge={buildStatus} collapsible defaultCollapsed={false}>
+    <InspectorGroup title={title} badge={buildStatus} collapsible defaultOpen>
       {meshIsStale ? (
         <FeedbackBanner
           kind="warning"
@@ -77,7 +77,7 @@ export function MeshOverviewSection({
           },
         ]}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -99,7 +99,7 @@ export function SolverMeshIdentitySection({
   } | null | undefined;
 }) {
   return (
-    <InspectorSection value="identity" title="Solver Mesh Identity" badge={badge} collapsible defaultCollapsed={false}>
+    <InspectorGroup title="Solver Mesh Identity" badge={badge} collapsible defaultOpen>
       <MeshResourceFields
         fields={[
           { label: "Mesh name", value: manifest?.mesh_name ?? "not built" },
@@ -131,7 +131,7 @@ export function SolverMeshIdentitySection({
           { label: "Regions", value: String(manifest?.regions?.length ?? 0) },
         ]}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -150,7 +150,7 @@ export function MeshCountsExtentsSection({
   meshSummary: unknown;
 }) {
   return (
-    <InspectorSection value="counts" title="Counts And Extents" collapsible defaultCollapsed={false}>
+    <InspectorGroup title="Counts And Extents" collapsible defaultOpen>
       <MeshResourceFields
         fields={[
           {
@@ -194,6 +194,6 @@ export function MeshCountsExtentsSection({
           },
         ]}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

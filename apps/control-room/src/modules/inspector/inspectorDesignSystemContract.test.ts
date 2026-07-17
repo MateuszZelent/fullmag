@@ -151,4 +151,28 @@ describe("Inspector design-system reference contract", () => {
     expect(panel).not.toContain("<Accordion");
     expect(panel).not.toContain("defaultCollapsed");
   });
+
+  it.each([
+    "MeshResourceView.tsx",
+    "mesh-details/MeshOverviewSection.tsx",
+    "mesh-details/MeshBuildPipelineSection.tsx",
+    "mesh-details/MeshBuildHistorySection.tsx",
+    "mesh-details/MeshPolicyComparisonSection.tsx",
+    "mesh-details/MeshQualityGatesSection.tsx",
+    "mesh-details/MeshRealizedSizeFieldsSection.tsx",
+    "mesh-details/MeshViewportDeliverySection.tsx",
+    "mesh-details/MeshEditorCapabilitiesSection.tsx",
+  ])("keeps migrated %s mesh details on compact Inspector groups", (fileName) => {
+    const panel = read(`src/modules/inspector/panels/${fileName}`);
+
+    expect(panel).toContain("InspectorGroup");
+    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
+    expect(panel).not.toContain("defaultCollapsed");
+  });
+
+  it("keeps the mesh details surface independent from a legacy Accordion", () => {
+    const panel = read("src/modules/inspector/panels/MeshDetailsPanel.tsx");
+
+    expect(panel).not.toContain("<Accordion");
+  });
 });

@@ -5,7 +5,7 @@ import type {
   normalizeMeshQualityStatistics,
 } from "@/shared/domain/mesh/qualityStatistics";
 
-import { InspectorSection } from "../../primitives/InspectorSection";
+import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { formatCount, MeshResourceEmpty } from "../MeshResourceView";
 import type { MeshSizeDistributionHoverBin } from "../MeshQualityChart";
 import { MeshQualityStatisticsView } from "../MeshQualityStatisticsView";
@@ -18,7 +18,7 @@ export function MeshQualityGatesSection({
   gateRows: Array<{ id: string; status: string; value: string }>;
 }) {
   return (
-    <InspectorSection value="quality-gates" title="Quality Gates" badge={badge} collapsible defaultCollapsed={false}>
+    <InspectorGroup title="Quality Gates" badge={badge} collapsible defaultOpen>
       {gateRows.length > 0 ? (
         <div className="fm-mesh-detail-table" role="table">
           <div className="fm-mesh-detail-table__row" role="row">
@@ -42,7 +42,7 @@ export function MeshQualityGatesSection({
       ) : (
         <MeshResourceEmpty label="No quality-gate checks published yet." />
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -62,12 +62,11 @@ export function MeshQualityStatisticsSection({
   statistics: ReturnType<typeof normalizeMeshQualityStatistics>;
 }) {
   return (
-    <InspectorSection
-      value="quality-statistics"
+    <InspectorGroup
       title="Quality Distributions"
       badge={statistics ? formatCount(statistics.elementCount) : "missing"}
       collapsible
-      defaultCollapsed={false}
+      defaultOpen
     >
       <MeshQualityStatisticsView
         statistics={statistics}
@@ -77,6 +76,6 @@ export function MeshQualityStatisticsSection({
         onSelectMetric={onSelectMetric}
         onSelectWorstElement={onSelectWorstElement}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
