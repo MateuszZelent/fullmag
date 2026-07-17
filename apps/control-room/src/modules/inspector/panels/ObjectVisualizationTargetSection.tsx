@@ -5,6 +5,7 @@ import React, { useState, useId, useRef, useCallback, useEffect } from "react";
 import { type FieldCatalogResource, type FieldMetaResource } from "@/kernel/api/apiTypes";
 import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
 import { Button } from "@/shared/ui/Button";
+import { SegmentedControl } from "@/shared/ui/SegmentedControl";
 import {
   Dialog,
   DialogClose,
@@ -65,7 +66,8 @@ import { surfaceFieldStatus } from "./ObjectVisualizationHelpers";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
 import { FieldRow } from "../primitives/FieldRow";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
+import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
 
 const RENDER_MODES = [
   { label: "Shaded", value: "surface" },
@@ -149,7 +151,7 @@ export function VisualizationDisplayPassesSection({
   }
 
   return (
-    <InspectorSection title="Display Passes">
+    <div className="grid min-w-0 gap-3" data-slot="visualization-display-passes">
       {renderWarning ? (
         <FeedbackBanner kind="warning" message={renderWarning} />
       ) : null}
@@ -299,7 +301,7 @@ export function VisualizationDisplayPassesSection({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </InspectorSection>
+    </div>
   );
 }
 
@@ -315,16 +317,24 @@ export function VisualizationRenderModeSection({
   patch: PatchVisualizationTarget;
 }) {
   return (
-    <InspectorSection title="Render Mode">
-      <VisualizationRadioGroup
+    <InspectorPropertyRow
+      description={
+        displayControlDisabledDescription(
+          passControlsDisabled,
+          displaySettings.visible,
+          pending,
+        )
+      }
+      label="Render mode"
+    >
+      <SegmentedControl
+        aria-label="Render mode"
         disabled={passControlsDisabled}
-        disabledDescription={displayControlDisabledDescription(passControlsDisabled, displaySettings.visible, pending)}
-        items={RENDER_MODES}
-        label="Render mode"
+        options={RENDER_MODES}
         value={displaySettings.renderMode}
         onValueChange={(value) => void patch(renderModeDisplayPatch(value as VisualizationRenderMode))}
       />
-    </InspectorSection>
+    </InspectorPropertyRow>
   );
 }
 
@@ -382,7 +392,7 @@ export function VisualizationSurfaceColoringSection({
     ...fieldMetaScopeQuery,
   });
   return (
-    <InspectorSection title="Surface Coloring" collapsible>
+    <InspectorGroup collapsible title="Surface Coloring">
       {regionFieldWarning ? (
         <FeedbackBanner
           kind="warning"
@@ -466,7 +476,7 @@ export function VisualizationSurfaceColoringSection({
           fieldCatalog.status,
         )}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -639,10 +649,10 @@ export function VisualizationQuantitySection({
   targetKind?: VisualizationTargetKind;
 }) {
   return (
-    <InspectorSection title="Quantity Source">
+    <InspectorPropertyRow label="Quantity source">
       <FormField
         disabled={pending || !settings.visible}
-        label="Quantity source"
+        label="Source"
         type="select"
         value={settings.activeQuantityId}
         onChange={(event) => {
@@ -661,7 +671,7 @@ export function VisualizationQuantitySection({
           </option>
         ))}
       </FormField>
-    </InspectorSection>
+    </InspectorPropertyRow>
   );
 }
 
@@ -677,14 +687,14 @@ export function VisualizationPointsSection({
   settings: VisualizationTargetSettings;
 }) {
   return (
-    <InspectorSection title="Points">
+    <InspectorGroup title="Points">
       <ColorField
         disabled={pending || sectionDisabled("points")}
         label="Point color"
         value={settings.pointColor}
         onChange={(value) => patchColor("pointColor", value)}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -702,10 +712,10 @@ export function VisualizationWireframeSection({
   settings: VisualizationTargetSettings;
 }) {
   return (
-    <InspectorSection title="Wireframe">
+    <InspectorGroup title="Wireframe">
       <ColorField disabled={pending || sectionDisabled("wireframe")} label="Wireframe color" value={settings.wireframeColor} onChange={(value) => patchColor("wireframeColor", value)} />
       <NumberField disabled={pending || sectionDisabled("wireframe")} label="Wireframe opacity" max={100} min={0} step={1} unit="%" value={settings.wireframeOpacityPercent} onChange={(value) => patchNumber("wireframeOpacityPercent", value)} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -759,7 +769,7 @@ export function VisualizationVectorsSection({
   const vectorsDisabled = pending || sectionDisabled("vectors");
 
   return (
-    <InspectorSection title="Vectors">
+    <InspectorGroup collapsible title="Vectors">
       <ViewportPreferenceScopeNote />
       <VisualizationRadioGroup
         disabled={vectorsDisabled}
@@ -898,7 +908,7 @@ export function VisualizationVectorsSection({
           ))}
         </fieldset>
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -939,7 +949,7 @@ export function VisualizationGeometryScopeSection({
   >;
 }) {
   return (
-    <InspectorSection title="Geometry Scope">
+    <InspectorGroup title="Geometry Scope">
       <VisualizationRadioGroup
         disabled={passControlsDisabled}
         disabledDescription={displayControlDisabledDescription(passControlsDisabled, settings.visible, pending)}
@@ -959,7 +969,7 @@ export function VisualizationGeometryScopeSection({
           })
         }
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -971,7 +981,7 @@ export function VisualizationOpacitySection({
   settings: VisualizationTargetSettings;
 }) {
   return (
-    <InspectorSection title="Opacity">
+    <InspectorGroup title="Opacity">
       <NumberField
         disabled={!settings.visible}
         label="Opacity"
@@ -982,7 +992,7 @@ export function VisualizationOpacitySection({
         value={settings.opacityPercent}
         onChange={(value) => void patch({ opacityPercent: value })}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -1004,7 +1014,7 @@ export function VisualizationOverridesSection({
   resetLabel: string;
 }) {
   return (
-    <InspectorSection title="Overrides">
+    <InspectorGroup title="Overrides">
       <div className="fm-inspector-toolbar">
         <Button size="sm" type="button" disabled={pending} variant="ghost" onClick={onReset}>
           <RotateCcw size={12} aria-hidden="true" />
@@ -1024,7 +1034,7 @@ export function VisualizationOverridesSection({
         ) : null}
       </div>
       {feedback && <FeedbackBanner kind="error" message={feedback} />}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

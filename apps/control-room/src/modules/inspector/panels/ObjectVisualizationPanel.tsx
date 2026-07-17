@@ -86,6 +86,7 @@ import {
   objectVisualizationPanelSnapshotEquals,
   viewportRenderingPreferencesPatch,
 } from "./ObjectVisualizationHelpers";
+import { ObjectVisualizationOverview } from "./ObjectVisualizationOverview";
 
 interface ObjectVisualizationAppliedBaseline {
   overrides: VisualizationStateResource["overrides"];
@@ -754,37 +755,26 @@ function ObjectVisualizationPanelView({
       <Tabs value={activeTab} className="fm-inspector-tabs">
 
         <TabsContent value="overview" className="fm-tabs-content">
-          <div className="fm-inspector-summary-section">
-            <div className="fm-inspector-summary-grid">
-              <div className="fm-inspector-summary-tile">
-                <span className="fm-inspector-summary-tile__label">Display Passes</span>
-                <span className="fm-inspector-summary-tile__value">
-                  {enabledPassCount} enabled
-                </span>
-              </div>
-              <div className="fm-inspector-summary-tile">
-                <span className="fm-inspector-summary-tile__label">Quantity Source</span>
-                <span className="fm-inspector-summary-tile__value">
-                  {settings.activeQuantityId || "H_eff"}
-                </span>
-              </div>
-              <div className="fm-inspector-summary-tile">
-                <span className="fm-inspector-summary-tile__label">Mesh Readiness</span>
-                <span className="fm-inspector-summary-tile__value" data-state={meshState.toLowerCase()}>
-                  <span className="fm-inspector-summary-tile__dot" /> {meshState}
-                </span>
-              </div>
-              <div className="fm-inspector-summary-tile">
-                <span className="fm-inspector-summary-tile__label">Data State</span>
-                <span className="fm-inspector-summary-tile__value" data-state={dataState.toLowerCase()}>
-                  <span className="fm-inspector-summary-tile__dot" /> {dataState}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <InspectorSection title="Display Settings" defaultCollapsed={false}>
-            <VisualizationDisplayPassesSection
+          <ObjectVisualizationOverview
+            advanced={
+              <p className="m-0 text-fm-help leading-snug text-fm-muted">
+                Advanced rendering uses the active viewport quality profile.
+              </p>
+            }
+            camera={
+              <p className="m-0 text-fm-help leading-snug text-fm-muted">
+                Camera framing follows the active viewport.
+              </p>
+            }
+            clipping={
+              <p className="m-0 text-fm-help leading-snug text-fm-muted">
+                No clipping plane is configured for this target.
+              </p>
+            }
+            dataState={dataState}
+            display={
+              <>
+                <VisualizationDisplayPassesSection
               airboxPartIds={airboxPartIds}
               displaySettings={displaySettings}
               fieldCatalog={fieldCatalog}
@@ -797,21 +787,27 @@ function ObjectVisualizationPanelView({
               targetKind={target.kind}
               primitiveDisplayToggleVisible={primitiveDisplayToggleVisible}
               vectorDomain={vectorDomain}
-            />
-            <VisualizationRenderModeSection
+                />
+                <VisualizationRenderModeSection
               displaySettings={displaySettings}
               passControlsDisabled={passControlsDisabled}
               pending={pending}
               patch={patch}
-            />
-            <VisualizationQuantitySection
+                />
+                <VisualizationQuantitySection
               onFieldCatalogRequest={onFieldCatalogRequest}
               patch={patch}
               pending={pending}
               settings={settings}
               targetKind={target.kind}
-            />
-            <VisualizationSurfaceColoringSection
+                />
+              </>
+            }
+            enabledPassCount={enabledPassCount}
+            meshState={meshState}
+            quantitySource={settings.activeQuantityId || "H_eff"}
+            surfaceColoring={
+              <VisualizationSurfaceColoringSection
               patch={patch}
               patchColor={patchColor}
               pending={pending}
@@ -821,8 +817,10 @@ function ObjectVisualizationPanelView({
               regionCarrier={regionCarrier}
               settings={settings}
               target={target}
-            />
-            <VisualizationVectorsSection
+              />
+            }
+            vectors={
+              <VisualizationVectorsSection
               meshParts={vectorMeshParts}
               onTogglePartVectors={onTogglePartVectors}
               patch={patch}
@@ -835,26 +833,9 @@ function ObjectVisualizationPanelView({
               vectorBudgetRange={vectorBudgetRange}
               vectorBudgetRanges={vectorBudgetRanges}
               vectorTopologyHash={vectorTopologyHash}
-            />
-          </InspectorSection>
-
-          <InspectorSection title="Clipping & Section" defaultCollapsed={true} badge="Section: Off">
-            <p className="fm-inspector-section__empty-copy">
-              No clipping plane is configured for this target.
-            </p>
-          </InspectorSection>
-
-          <InspectorSection title="Camera & View" defaultCollapsed={true} badge="Perspective: Auto">
-            <p className="fm-inspector-section__empty-copy">
-              Camera framing follows the active viewport.
-            </p>
-          </InspectorSection>
-
-          <InspectorSection title="Advanced" defaultCollapsed={true} badge="Rendering">
-            <p className="fm-inspector-section__empty-copy">
-              Advanced rendering uses the active viewport quality profile.
-            </p>
-          </InspectorSection>
+              />
+            }
+          />
         </TabsContent>
 
         <TabsContent value="properties" className="fm-tabs-content">

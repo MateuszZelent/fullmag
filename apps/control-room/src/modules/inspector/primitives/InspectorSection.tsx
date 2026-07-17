@@ -19,7 +19,8 @@ interface InspectorSectionProps {
 }
 
 /**
- * Inspector panel section with optional collapse.
+ * Compatibility card surface for Inspector families that have not yet migrated.
+ * Migrated panels must use InspectorGroup and must never nest InspectorSection.
  *
  * Rendering modes:
  * 1. `value` prop → renders as AccordionItem (requires parent <Accordion>)

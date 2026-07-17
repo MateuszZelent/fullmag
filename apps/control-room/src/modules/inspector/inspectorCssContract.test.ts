@@ -58,7 +58,8 @@ describe("Inspector visual contract", () => {
     );
 
     expect(editSession).toContain("InspectorEditSessionContext");
-    expect(editSession).not.toContain("let currentSession");
+    expect(editSession).toContain("createInspectorEditSessionStore");
+    expect(editSession).toContain("Object.freeze");
     expect(inspectorModule).toContain("InspectorEditSessionProvider");
   });
 

@@ -494,14 +494,6 @@
 }
 
 /* ── Checkbox ── */
-.fm-inspector-checkbox-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--fm-space-2);
-  cursor: pointer;
-  user-select: none;
-}
-
 .fm-inspector-checkbox {
   appearance: none;
   width: 14px;
@@ -797,87 +789,6 @@
   min-width: 0;
   height: 40px;
   border-radius: 0;
-}
-
-/* Summary cards styling */
-.fm-inspector-summary-section {
-  padding: 0;
-}
-
-.fm-inspector-summary-section h3 {
-  margin: 0 0 var(--fm-space-2) 0;
-  color: var(--fm-text-primary);
-  font-size: var(--fm-font-size-sm);
-  font-weight: 600;
-}
-
-.fm-inspector-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--fm-space-3);
-  width: 100%;
-}
-
-.fm-inspector-summary-tile {
-  display: flex;
-  flex-direction: column;
-  min-height: 72px;
-  justify-content: space-between;
-  padding: var(--fm-space-3);
-  border: 1px solid var(--fm-border-subtle);
-  border-radius: var(--fm-radius-lg);
-  background: var(--fm-bg-panel-raised);
-  box-shadow: var(--fm-shadow-sm);
-}
-
-.fm-inspector-summary-tile__label {
-  color: var(--fm-text-muted);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-bottom: 2px;
-}
-
-.fm-inspector-summary-tile__value {
-  color: var(--fm-text-primary);
-  font-size: var(--fm-font-size-sm);
-  font-weight: 600;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--fm-space-1);
-}
-
-.fm-inspector-summary-tile__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.fm-inspector-summary-tile__value[data-state="ready"],
-.fm-inspector-summary-tile__value[data-state="live"] {
-  color: var(--fm-success);
-}
-
-.fm-inspector-summary-tile__value[data-state="ready"] .fm-inspector-summary-tile__dot,
-.fm-inspector-summary-tile__value[data-state="live"] .fm-inspector-summary-tile__dot {
-  background: var(--fm-success);
-}
-
-.fm-inspector-summary-tile__value[data-state="degraded"] {
-  color: var(--fm-warning);
-}
-
-.fm-inspector-summary-tile__value[data-state="degraded"] .fm-inspector-summary-tile__dot {
-  background: var(--fm-warning);
-}
-
-.fm-inspector-section__empty-copy {
-  margin: 0;
-  color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-sm);
-  line-height: 1.45;
 }
 
 .fm-inspector__diagnostic-warning {
