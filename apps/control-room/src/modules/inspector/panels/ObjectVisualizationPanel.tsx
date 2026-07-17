@@ -56,7 +56,6 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
-import { InspectorSection } from "../primitives/InspectorSection";
 import {
   buildVisualizationPanelSections,
   resolveVisualizationVectorBudgetRange,
@@ -654,9 +653,9 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   if (!target || !settings || !displaySettings) {
     return (
       <div className="fm-inspector-panel">
-        <InspectorSection title="Visualization">
+        <InspectorGroup title="Visualization">
           <FieldRow label="Target" value="No visualization target" />
-        </InspectorSection>
+        </InspectorGroup>
       </div>
     );
   }

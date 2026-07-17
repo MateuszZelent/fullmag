@@ -1,7 +1,7 @@
 "use client";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import { FieldRow } from "../primitives/FieldRow";
 import { Button } from "@/shared/ui/Button";
 import {
@@ -82,7 +82,7 @@ export function FrequencyDomainResponseSection({
   return (
     <>
       {showResponseSolver ? (
-        <InspectorSection title="Driven Response Solver" badge={data?.response.status ?? "unknown"}>
+        <InspectorGroup title="Driven Response Solver" badge={data?.response.status ?? "unknown"}>
           <FieldRow
             label="Study kind"
             value={data?.response.study_kind ?? "frequency_response"}
@@ -93,11 +93,11 @@ export function FrequencyDomainResponseSection({
           />
           <FieldRow label="GPU lane" value={formatBoolean(data?.response.gpu_available)} />
           <FieldRow label="Reason" value={data?.response.reason ?? "not reported"} />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
 
       {showFmrSpectrumWorkbench && (
-        <InspectorSection title="FMR Spectrum Workbench" badge="active">
+        <InspectorGroup title="FMR Spectrum Workbench" badge="active">
           <FieldRow label="FMR Status" value={responseSweep.status} />
           {selectedFmrPeak ? (
             <>
@@ -105,11 +105,11 @@ export function FrequencyDomainResponseSection({
               <FieldRow label="Peak Amplitude" value={formatScalar(selectedFmrPeak.amplitude)} />
             </>
           ) : null}
-        </InspectorSection>
+        </InspectorGroup>
       )}
 
       {peaks.length > 0 ? (
-        <InspectorSection title="FMR Peaks" badge={peaks.length > 0 ? "ready" : "missing"}>
+        <InspectorGroup title="FMR Peaks" badge={peaks.length > 0 ? "ready" : "missing"}>
           <div className="fm-frequency-domain-table-wrap">
             <table className="fm-frequency-domain-table">
               <thead>
@@ -147,7 +147,7 @@ export function FrequencyDomainResponseSection({
               </tbody>
             </table>
           </div>
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
 
     </>

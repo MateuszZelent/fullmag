@@ -1,7 +1,7 @@
 "use client";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import { FieldRow } from "../primitives/FieldRow";
 import { Button } from "@/shared/ui/Button";
 import {
@@ -106,7 +106,7 @@ export function FrequencyDomainEigenSection({
   return (
     <>
       {showModalSolver ? (
-        <InspectorSection title="Modal Eigen Solver" badge={data?.eigenmodes.status ?? "unknown"}>
+        <InspectorGroup title="Modal Eigen Solver" badge={data?.eigenmodes.status ?? "unknown"}>
           <FieldRow
             label="Study kind"
             value={data?.eigenmodes.study_kind ?? "eigenmodes"}
@@ -121,11 +121,11 @@ export function FrequencyDomainEigenSection({
           />
           <FieldRow label="GPU lane" value={formatBoolean(data?.eigenmodes.gpu_available)} />
           <FieldRow label="Reason" value={data?.eigenmodes.reason ?? "not reported"} />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
 
       {showPlotReadiness ? (
-        <InspectorSection title="Plot Readiness" badge="manifest-driven">
+        <InspectorGroup title="Plot Readiness" badge="manifest-driven">
           <FieldRow
             label="FMR modal spectrum"
             value={
@@ -154,11 +154,11 @@ export function FrequencyDomainEigenSection({
             label="3D mode plotting"
             value="waiting for mode-field artifacts"
           />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
 
       {showKPath ? (
-        <InspectorSection title="Bloch k-Path Parameters" badge={dispersion.status}>
+        <InspectorGroup title="Bloch k-Path Parameters" badge={dispersion.status}>
           <FieldRow
             label="Reciprocal path"
             value={
@@ -204,11 +204,11 @@ export function FrequencyDomainEigenSection({
               />
             </>
           ) : null}
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
 
       {spectrumData?.modes && spectrumData.modes.length > 0 ? (
-        <InspectorSection title="Modal Spectrum" badge={spectrumData.status ?? spectrum.status}>
+        <InspectorGroup title="Modal Spectrum" badge={spectrumData.status ?? spectrum.status}>
           <div className="fm-frequency-domain-table-wrap">
             <table className="fm-frequency-domain-table">
               <thead>
@@ -249,7 +249,7 @@ export function FrequencyDomainEigenSection({
               </tbody>
             </table>
           </div>
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
 
     </>

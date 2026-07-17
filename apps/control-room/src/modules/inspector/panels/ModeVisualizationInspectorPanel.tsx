@@ -15,7 +15,7 @@ import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FieldRow } from "../primitives/FieldRow";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   ANALYSIS_FIELD_VIEW_OPTIONS,
   DEFAULT_ANALYSIS_FIELD_VIEW,
@@ -289,14 +289,14 @@ export function ModeVisualizationInspectorPanel({
 
   if (!target) {
     return (
-      <InspectorSection title="Mode Visualization">
+      <InspectorGroup title="Mode Visualization">
         <p className="fm-inspector-empty">No mode visualization target selected.</p>
-      </InspectorSection>
+      </InspectorGroup>
     );
   }
 
   return (
-    <InspectorSection title="Mode Visualization">
+    <InspectorGroup title="Mode Visualization">
       <FieldRow label="Object" value={target.objectId} />
       <FieldRow label="Source" value={modeVisualizationSourceLabel(target)} />
       <FieldRow label="Selection" value={modeVisualizationIndexLabel(target)} />
@@ -334,6 +334,6 @@ export function ModeVisualizationInspectorPanel({
         viewDefaultValue={target.view ?? DEFAULT_ANALYSIS_FIELD_VIEW}
         viewOptions={ANALYSIS_FIELD_VIEW_OPTIONS}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }

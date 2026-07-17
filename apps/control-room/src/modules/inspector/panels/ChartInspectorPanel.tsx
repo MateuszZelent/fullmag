@@ -13,7 +13,7 @@ import { yAxisIdsAfterXAxisSelection } from "@/shared/domain/analysis/axisSelect
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FieldRow } from "../primitives/FieldRow";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 
 export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
   const tableId =
@@ -65,20 +65,20 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
 
   return (
     <div className="fm-inspector-panel">
-      <InspectorSection title="Table Autosave">
+      <InspectorGroup title="Table Autosave">
         <FieldRow label="Chart" value={chartId} />
         <FieldRow label="Table" value={tableId} />
         <FieldRow label="Cadence" value="study.table_autosave(t_sampl)" />
-      </InspectorSection>
+      </InspectorGroup>
       {selectedPoint ? (
-        <InspectorSection title="Selected Point">
+        <InspectorGroup title="Selected Point">
           <FieldRow label="Series" value={selectedPoint.quantity} />
           <FieldRow label="Row" value={String(selectedPoint.rowIndex)} />
           <FieldRow label="X" value={formatInspectorNumber(selectedPoint.x)} />
           <FieldRow label="Y" value={formatInspectorNumber(selectedPoint.y)} />
-        </InspectorSection>
+        </InspectorGroup>
       ) : null}
-      <InspectorSection title="Columns">
+      <InspectorGroup title="Columns">
         <TableColumnList
           onSelectXAxis={setXAxisId}
           onToggleYAxis={toggleYAxis}
@@ -87,12 +87,12 @@ export function ChartInspectorPanel({ selection }: InspectorPanelProps) {
           xAxisRadioName="fm-inspector-analysis-x-axis"
           yAxisIds={yAxisIds}
         />
-      </InspectorSection>
-      <InspectorSection title="Range">
+      </InspectorGroup>
+      <InspectorGroup title="Range">
         <FieldRow label="Mode" value="follow table cursor" />
         <FieldRow label="Visible cap" value="5000 rows" />
         <FieldRow label="Decimation" value="server target_points + bounded client window" />
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }

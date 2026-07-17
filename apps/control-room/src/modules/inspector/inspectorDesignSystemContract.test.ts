@@ -255,4 +255,19 @@ describe("Inspector design-system reference contract", () => {
       );
     }
   });
+
+  it.each([
+    "ObjectVisualizationPanel.tsx",
+    "ChartInspectorPanel.tsx",
+    "FrequencyDomainEigenSection.tsx",
+    "FrequencyDomainResponseSection.tsx",
+    "ModeVisualizationInspectorPanel.tsx",
+    "frequency-domain/FmrPeakInspector.tsx",
+  ])("keeps results panel %s on compact groups", (fileName) => {
+    const panel = read(`src/modules/inspector/panels/${fileName}`);
+
+    expect(panel).toContain("InspectorGroup");
+    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
+    expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
+  });
 });
