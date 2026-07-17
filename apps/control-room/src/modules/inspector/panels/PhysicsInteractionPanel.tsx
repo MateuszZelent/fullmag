@@ -12,7 +12,6 @@ import {
 } from "@/kernel/resources/geometryLifecycleResources";
 import { SESSION_STATUS_RESOURCE_KEY } from "@/kernel/resources/useSessionStatus";
 import type { InteractionFieldSpec } from "@/shared/domain/physics/interactions";
-import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 import {
   Dialog,
@@ -27,7 +26,7 @@ import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import { Vector3Field } from "../primitives/Vector3Field";
 import {
   buildInteractionApplyPatch,
@@ -267,18 +266,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={[
-        "interaction",
-        "contract",
-        "backend",
-        "state",
-        "parameters",
-        "actions",
-      ]}
-    >
+    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
       <PhysicsInteractionSelectionSection
         interactionId={interactionId}
         draft={draft}
@@ -343,7 +331,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
           onOpenChange={(open) => dispatch({ type: "setHelpOpen", open })}
         />
       ) : null}
-    </Accordion>
+    </div>
   );
 }
 
@@ -368,11 +356,10 @@ function PhysicsInteractionSelectionSection({
 }) {
   const options = interactionSelectOptions();
   return (
-    <InspectorSection
-      value="interaction"
+    <InspectorGroup
       title="Physics Interaction"
       collapsible
-      defaultCollapsed={false}
+      defaultOpen
     >
       <FieldRow label="Object ID" value={objectId ?? "no object selection"} />
       {selectedRegionId ? (
@@ -417,7 +404,7 @@ function PhysicsInteractionSelectionSection({
           <HelpCircle aria-hidden="true" size={16} />
         </Button>
       </div>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -479,14 +466,14 @@ function PhysicsInteractionContractSection({
   spec: PhysicsInteractionSpec;
 }) {
   return (
-    <InspectorSection value="contract" title="Contract">
+    <InspectorGroup title="Contract" collapsible defaultOpen>
       <FieldRow label="Scope" value={scopeLabel(spec.scope)} />
       <FieldRow label="Storage" value={storageLabel(spec.storage)} />
       <FieldRow label="Status" value={statusLabel(spec.availability)} />
       {spec.writableReason ? (
         <FieldRow label="Write path" value={spec.writableReason} />
       ) : null}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -502,17 +489,16 @@ function PhysicsInteractionBackendSection({
   status: string;
 }) {
   return (
-    <InspectorSection
-      value="backend"
+    <InspectorGroup
       title="Backend Resource"
       collapsible
-      defaultCollapsed
+      defaultOpen={false}
     >
       <FieldRow label="Fetch state" value={status} />
       <FieldRow label="Present" value={present ? "yes" : "no"} />
       <FieldRow label="Enabled" value={enabled ? "yes" : "no"} />
       <FieldRow label="Kind" value={interactionKind} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -526,7 +512,7 @@ function PhysicsInteractionStateSection({
   onPatch: (patch: Partial<PhysicsInteractionDraft>) => void;
 }) {
   return (
-    <InspectorSection value="state" title="State">
+    <InspectorGroup title="State" collapsible defaultOpen>
       <FormField
         label="Present"
         type="checkbox"
@@ -541,7 +527,7 @@ function PhysicsInteractionStateSection({
         checked={draft.enabled}
         onChange={(event) => onPatch({ enabled: event.target.checked })}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -557,7 +543,7 @@ function PhysicsInteractionParametersSection({
   spec: PhysicsInteractionSpec | undefined;
 }) {
   return (
-    <InspectorSection value="parameters" title="Parameters">
+    <InspectorGroup title="Parameters" collapsible defaultOpen>
       {spec && spec.fields.length > 0 ? (
         spec.fields.map((field) => (
           <InteractionField
@@ -571,7 +557,7 @@ function PhysicsInteractionParametersSection({
       ) : (
         <FieldRow label="Parameters" value="No explicit parameters" />
       )}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -589,7 +575,7 @@ function PhysicsInteractionActionsSection({
   pending: boolean;
 }) {
   return (
-    <InspectorSection value="actions" title="Actions">
+    <InspectorGroup title="Actions">
       <div className="fm-inspector-toolbar">
         <Button
           disabled={pending || !canApply}
@@ -613,7 +599,7 @@ function PhysicsInteractionActionsSection({
       {feedback ? (
         <FeedbackBanner kind={feedback.kind} message={feedback.message} />
       ) : null}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 

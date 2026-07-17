@@ -22,14 +22,13 @@ import {
 } from "@/shared/domain/magnetization-texture/draftModel";
 import { MAGNETIZATION_TEXTURE_PRESETS } from "@/shared/domain/magnetization-texture/texturePresets";
 import type { MagnetizationTextureTarget } from "@/shared/domain/magnetization-texture/types";
-import { Accordion } from "@/shared/ui/Accordion";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import { Vector3Field } from "../primitives/Vector3Field";
 import {
   initialInspectorDraftState,
@@ -89,7 +88,7 @@ function MagneticTextureSummarySection({
   sceneStatus: string;
 }) {
   return (
-    <InspectorSection value="summary" title="Magnetic Texture" collapsible defaultCollapsed={false}>
+    <InspectorGroup title="Magnetic Texture" collapsible defaultOpen>
       <FieldRow label="Object ID" value={model.objectId} />
       <FieldRow label="Target" value={model.targetKind} />
       {model.regionId && <FieldRow label="Region ID" value={model.regionId} />}
@@ -100,7 +99,7 @@ function MagneticTextureSummarySection({
       <FieldRow label="Assignment" value={model.assignment} />
       <FieldRow label="Scene fetch" value={sceneStatus} />
       <FieldRow label="Regions fetch" value={regionsStatus} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -114,7 +113,7 @@ export function MagneticTextureAssignmentSection({
   updateDraft: UpdateMagneticTextureDraft;
 }) {
   return (
-    <InspectorSection value="assignment" title="Assignment">
+    <InspectorGroup title="Assignment" collapsible defaultOpen>
       <FormField
         label="Magnetization ref"
         mono={false}
@@ -146,7 +145,7 @@ export function MagneticTextureAssignmentSection({
           </option>
         ))}
       </FormField>
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -314,7 +313,7 @@ export function MagneticTexturePresetParametersSection({
   updateDraft: UpdateMagneticTextureDraft;
 }) {
   return (
-    <InspectorSection value="preset" title="Preset Parameters">
+    <InspectorGroup title="Preset Parameters" collapsible defaultOpen>
       {draft.presetKind === "uniform" ? (
         <Vector3Field
           label="Direction"
@@ -451,7 +450,7 @@ export function MagneticTexturePresetParametersSection({
           <DraftNumberField draft={draft} field="cone_angle_rad" label="Cone Angle" unit="rad" updateDraft={updateDraft} />
         </>
       ) : null}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -492,7 +491,7 @@ export function MagneticTextureTransformSection({
   }
 
   return (
-    <InspectorSection value="transform" title="Texture Transform">
+    <InspectorGroup title="Texture Transform" collapsible defaultOpen>
       {hasBounds && (
         <div className="fm-inspector-toolbar fm-mb-3">
           <Button
@@ -531,7 +530,7 @@ export function MagneticTextureTransformSection({
           updateDraft({ [fields[index]]: value });
         }}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -543,7 +542,7 @@ export function MagneticTextureMappingSection({
   updateDraft: UpdateMagneticTextureDraft;
 }) {
   return (
-    <InspectorSection value="mapping" title="Mapping" collapsible defaultCollapsed={true}>
+    <InspectorGroup title="Mapping" collapsible defaultOpen={false}>
       <FormField label="Space" type="select" value={draft.mappingSpace} onChange={(event) => updateDraft({ mappingSpace: event.target.value })}>
         <option value="object">Object</option>
         <option value="world">World</option>
@@ -568,7 +567,7 @@ export function MagneticTextureMappingSection({
           updateDraft({ [fields[index]]: value });
         }}
       />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -578,10 +577,10 @@ export function MagneticTextureRawAssetSection({
   model: MagneticTexturePanelModel;
 }) {
   return (
-    <InspectorSection value="raw" title="Raw Asset" collapsible defaultCollapsed={true}>
+    <InspectorGroup title="Raw Asset" collapsible defaultOpen={false}>
       <FormField label="Mapping" type="textarea" readOnly rows={5} value={model.mapping} />
       <FormField label="Texture transform" type="textarea" readOnly rows={5} value={model.textureTransform} />
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -597,7 +596,7 @@ export function MagneticTextureLoadFileSection({
   pending: boolean;
 }) {
   return (
-    <InspectorSection value="load" title="Load Texture">
+    <InspectorGroup title="Load Texture" collapsible defaultOpen>
       <div className="fm-inspector-toolbar">
         <Button
           disabled={pending || model.mode !== "committed"}
@@ -614,7 +613,7 @@ export function MagneticTextureLoadFileSection({
       <FieldRow label="Formats" value="H5, Zarr ZIP" />
       <FieldRow label="Mode" value="ready to load" />
       {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -638,7 +637,7 @@ export function MagneticTextureActionsSection({
   pending: boolean;
 }) {
   return (
-    <InspectorSection value="actions" title="Actions">
+    <InspectorGroup title="Actions">
       <div className="fm-inspector-toolbar">
         <Button
           disabled={pending || model.mode !== "committed"}
@@ -679,7 +678,7 @@ export function MagneticTextureActionsSection({
       </div>
       <FieldRow label="Draft" value={dirty ? "modified" : "clean"} />
       {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
-    </InspectorSection>
+    </InspectorGroup>
   );
 }
 
@@ -893,11 +892,7 @@ export function ObjectMagneticTexturePanel({
   }
 
   return (
-    <Accordion
-      className="fm-inspector-panel"
-      type="multiple"
-      defaultValue={["summary", "assignment", "preset", "transform", "mapping", "load", "actions"]}
-    >
+    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
       <MagneticTextureSummarySection
         model={model}
         regionsStatus={regions.status}
@@ -953,6 +948,6 @@ export function ObjectMagneticTexturePanel({
           pending={pending}
         />
       ) : null}
-    </Accordion>
+    </div>
   );
 }

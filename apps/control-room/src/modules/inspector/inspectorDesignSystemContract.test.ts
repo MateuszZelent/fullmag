@@ -77,6 +77,8 @@ describe("Inspector design-system reference contract", () => {
     "ObjectMaterialPanel.tsx",
     "ObjectGeneralPanel.tsx",
     "GeometryObjectPanel.tsx",
+    "ObjectMagneticTexturePanel.tsx",
+    "PhysicsInteractionPanel.tsx",
     "AntennaObjectPanel.tsx",
     "CouplingInspectorPanel.tsx",
     "CrossSectionInspectorPanel.tsx",
