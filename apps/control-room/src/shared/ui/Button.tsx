@@ -4,25 +4,39 @@ import type { ComponentPropsWithoutRef } from "react";
 
 import { cn } from "@/shared/utils/className";
 
-const buttonVariants = cva("fm-button", {
-  variants: {
-    variant: {
-      primary: "fm-button--primary",
-      secondary: "fm-button--secondary",
-      ghost: "fm-button--ghost",
-      danger: "fm-button--danger",
+const buttonVariants = cva(
+  [
+    "fm-button inline-flex min-w-0 items-center justify-center border",
+    "rounded-fm-control font-fm-ui font-medium leading-none outline-none",
+    "transition-[background-color,border-color,color,box-shadow] duration-150",
+    "focus-visible:ring-2 focus-visible:ring-fm-accent",
+    "disabled:cursor-not-allowed disabled:border-fm-disabled-border",
+    "disabled:bg-fm-disabled disabled:text-fm-disabled-text disabled:opacity-100",
+  ],
+  {
+    variants: {
+      variant: {
+        primary:
+          "fm-button--primary border-fm-accent bg-fm-accent-soft text-fm-accent hover:border-fm-strong hover:bg-fm-selected",
+        secondary:
+          "fm-button--secondary border-fm-subtle bg-fm-raised text-fm-primary hover:border-fm-border hover:bg-fm-disabled",
+        ghost:
+          "fm-button--ghost border-transparent bg-transparent text-fm-secondary hover:bg-fm-disabled hover:text-fm-primary",
+        danger:
+          "fm-button--danger border-fm-danger bg-transparent text-fm-danger hover:bg-fm-disabled",
+      },
+      size: {
+        sm: "fm-button--sm h-fm-control-sm gap-2 px-2 text-fm-control",
+        md: "fm-button--md h-fm-control-md gap-2 px-3 text-fm-control",
+        icon: "fm-button--icon size-fm-control-sm p-0 text-fm-control",
+      },
     },
-    size: {
-      sm: "fm-button--sm",
-      md: "fm-button--md",
-      icon: "fm-button--icon",
+    defaultVariants: {
+      variant: "secondary",
+      size: "md",
     },
   },
-  defaultVariants: {
-    variant: "secondary",
-    size: "md",
-  },
-});
+);
 
 export interface ButtonProps
   extends ComponentPropsWithoutRef<"button">,
@@ -42,6 +56,7 @@ export function Button({
   return (
     <Component
       className={cn(buttonVariants({ size, variant }), className)}
+      data-slot="button"
       {...props}
     />
   );

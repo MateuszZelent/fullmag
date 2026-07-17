@@ -14,6 +14,9 @@ describe("Button", () => {
     expect(html).toContain("fm-button");
     expect(html).toContain("fm-button--primary");
     expect(html).toContain("fm-button--sm");
+    expect(html).toContain('data-slot="button"');
+    expect(html).toContain("h-fm-control-sm");
+    expect(html).toContain("bg-fm-accent-soft");
     expect(html).toContain(">Run</button>");
   });
 });

@@ -2,23 +2,33 @@
 
 import * as React from "react";
 import * as SelectPrimitive from "@radix-ui/react-select";
+import type { VariantProps } from "class-variance-authority";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/shared/utils/className";
+import { controlVariants } from "@/shared/ui/controlVariants";
 
 export const Select = SelectPrimitive.Root;
 export const SelectGroup = SelectPrimitive.Group;
 export const SelectValue = SelectPrimitive.Value;
 
+type SelectTriggerProps = React.ComponentPropsWithoutRef<
+  typeof SelectPrimitive.Trigger
+> &
+  VariantProps<typeof controlVariants>;
+
 export const SelectTrigger = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Trigger>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Trigger>
->(({ className, children, ...props }, ref) => (
+  SelectTriggerProps
+>(({ className, children, density, invalid, ...props }, ref) => (
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
       "fm-select-trigger",
-      className
+      controlVariants({ density, invalid }),
+      "w-full justify-between",
+      className,
     )}
+    data-slot="select-trigger"
     {...props}
   >
     {children}
@@ -39,6 +49,7 @@ export const SelectScrollUpButton = React.forwardRef<
       "fm-select-scroll-button",
       className
     )}
+    data-slot="select-scroll-up-button"
     {...props}
   >
     <ChevronUp size={14} />
@@ -56,6 +67,7 @@ export const SelectScrollDownButton = React.forwardRef<
       "fm-select-scroll-button",
       className
     )}
+    data-slot="select-scroll-down-button"
     {...props}
   >
     <ChevronDown size={14} />
@@ -75,6 +87,7 @@ export const SelectContent = React.forwardRef<
         position === "popper" && "fm-select-content--popper",
         className
       )}
+      data-slot="select-content"
       position={position}
       {...props}
     >
@@ -100,6 +113,7 @@ export const SelectLabel = React.forwardRef<
   <SelectPrimitive.Label
     ref={ref}
     className={cn("fm-select-label", className)}
+    data-slot="select-label"
     {...props}
   />
 ));
@@ -112,6 +126,7 @@ export const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn("fm-select-item", className)}
+    data-slot="select-item"
     {...props}
   >
     <span className="fm-select-item__indicator">
@@ -132,6 +147,7 @@ export const SelectSeparator = React.forwardRef<
   <SelectPrimitive.Separator
     ref={ref}
     className={cn("fm-select-separator", className)}
+    data-slot="select-separator"
     {...props}
   />
 ));
