@@ -72,4 +72,17 @@ describe("Inspector design-system reference contract", () => {
     expect(targetSections).not.toContain('label="Points"');
     expect(targetSections).toContain('{ label: "Off", value: "off" }');
   });
+
+  it.each([
+    "ObjectMaterialPanel.tsx",
+    "CrossSectionInspectorPanel.tsx",
+    "CrossSectionSettingsEditor.tsx",
+  ])("keeps migrated %s authoring on compact Inspector groups", (fileName) => {
+    const panel = read(`src/modules/inspector/panels/${fileName}`);
+
+    expect(panel).toContain("InspectorGroup");
+    expect(panel).not.toMatch(/<\/?InspectorSection\b/);
+    expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
+    expect(panel).not.toContain("fm-inspector-section");
+  });
 });

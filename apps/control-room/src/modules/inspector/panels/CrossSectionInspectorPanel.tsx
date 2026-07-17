@@ -29,7 +29,7 @@ import {
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   formatCount,
   formatValue,
@@ -160,7 +160,7 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
           }
         />
       ) : (
-        <InspectorSection title="Cut Plane">
+        <InspectorGroup title="Cut Plane">
           <MeshResourceFields
             fields={[
               { label: "Plane", value: query.plane.toUpperCase() },
@@ -179,10 +179,10 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
               { label: "Wireframe", value: query.includeWireframe ? "shown" : "hidden" },
             ]}
           />
-        </InspectorSection>
+        </InspectorGroup>
       )}
 
-      <InspectorSection title="Cross-Section Statistics">
+      <InspectorGroup title="Cross-Section Statistics">
         <MeshResourceFields
           fields={[
             {
@@ -221,9 +221,9 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
             totalCount={statistics.polygonCount}
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title="Selected Element">
+      <InspectorGroup title="Selected Element">
         {selectedElement ? (
           <MeshResourceFields
             fields={[
@@ -235,7 +235,7 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
         ) : (
           <MeshResourceEmpty label="Hover or click a cross-section polygon to inspect its parent tet." />
         )}
-      </InspectorSection>
+      </InspectorGroup>
     </div>
   );
 }

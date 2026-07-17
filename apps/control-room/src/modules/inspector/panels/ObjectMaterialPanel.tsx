@@ -24,7 +24,7 @@ import { useRegisterInspectorEditSession } from "../InspectorEditSession";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import { Vector3Field } from "../primitives/Vector3Field";
 import {
   initialInspectorDraftState,
@@ -452,7 +452,7 @@ function ObjectMaterialPanelView({
     <div className="fm-inspector-panel">
       <div className="grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
           {showSection("parameters") ? (
-            <InspectorSection title="Magnetic Parameters" collapsible defaultCollapsed={false}>
+            <InspectorGroup title="Magnetic Parameters" collapsible defaultOpen>
               <FieldRow label="Object ID" value={object.objectId} />
               <FieldRow label="Current material" value={object.material} />
               <FieldRow
@@ -466,11 +466,11 @@ function ObjectMaterialPanelView({
               />
               <FieldRow label="Scene fetch" value={scene.status} />
               <FieldRow label="Material fetch" value={material.status} />
-            </InspectorSection>
+            </InspectorGroup>
           ) : null}
 
           {showSection("assignment") ? (
-            <InspectorSection title="Assignment">
+            <InspectorGroup title="Assignment">
               <FormField
                 label="Material"
                 type="select"
@@ -491,13 +491,13 @@ function ObjectMaterialPanelView({
                     ?.name ?? draft.materialRef ?? "unassigned"
                 }
               />
-            </InspectorSection>
+            </InspectorGroup>
           ) : null}
       </div>
 
       <div className="grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
           {showSection("material-parameters") ? (
-            <InspectorSection title="Material Parameters">
+            <InspectorGroup title="Material Parameters">
               <FormField
                 label="Name"
                 mono={false}
@@ -545,11 +545,11 @@ function ObjectMaterialPanelView({
                 value={draft.dbulk}
                 onChange={(event) => updateDraft({ dbulk: event.target.value })}
               />
-            </InspectorSection>
+            </InspectorGroup>
           ) : null}
 
           {showSection("uniaxial-anisotropy") ? (
-            <InspectorSection title="Uniaxial Anisotropy">
+            <InspectorGroup title="Uniaxial Anisotropy">
               <FormField
                 label="Present"
                 type="checkbox"
@@ -575,13 +575,13 @@ function ObjectMaterialPanelView({
                   updateAnisotropyDraft({ [fields[index]]: value });
                 }}
               />
-            </InspectorSection>
+            </InspectorGroup>
           ) : null}
       </div>
 
       <div className="grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
           {showSection("actions") ? (
-            <InspectorSection title="Actions">
+            <InspectorGroup title="Actions">
               <div className="fm-inspector-toolbar">
                 {showSection("assignment") ? (
                   <Button
@@ -637,7 +637,7 @@ function ObjectMaterialPanelView({
                 </Button>
               </div>
               {feedback && <FeedbackBanner kind={feedback.kind} message={feedback.message} />}
-            </InspectorSection>
+            </InspectorGroup>
           ) : null}
       </div>
     </div>
