@@ -260,6 +260,7 @@ describe("Inspector design-system reference contract", () => {
     "ObjectVisualizationPanel.tsx",
     "ChartInspectorPanel.tsx",
     "FrequencyDomainEigenSection.tsx",
+    "FrequencyDomainInspectorPanel.tsx",
     "FrequencyDomainResponseSection.tsx",
     "ModeVisualizationInspectorPanel.tsx",
     "frequency-domain/FmrPeakInspector.tsx",

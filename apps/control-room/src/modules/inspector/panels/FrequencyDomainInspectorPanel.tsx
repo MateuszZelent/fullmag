@@ -113,7 +113,7 @@ import {
   fmrPeakLabel,
 } from "./frequency-domain/FrequencyDomainHelpers";
 import { FieldRow } from "../primitives/FieldRow";
-import { InspectorSection } from "../primitives/InspectorSection";
+import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   ANALYSIS_FIELD_VIEW_OPTIONS,
   analysisFieldViewLabel,
@@ -1054,7 +1054,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
 
   return (
     <div className="fm-inspector-panel">
-      <InspectorSection
+      <InspectorGroup
         title={familyLabel(selection.kind)}
         badge={resourceStatus}
       >
@@ -1073,17 +1073,17 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
         {manifest.error ? (
           <FieldRow label="Load error" value={formatError(manifest.error)} />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
 
-      <InspectorSection title={nodeDetail.title} badge="per-node">
+      <InspectorGroup title={nodeDetail.title} badge="per-node">
         <FieldRow label="Node focus" value={nodeDetail.focus} />
         <FieldRow label="Node resource" value={nodeDetail.resource} />
         <FieldRow label="Node artifact" value={nodeDetail.artifact} />
         <FieldRow label="Visualization contract" value={nodeDetail.visualization} />
-      </InspectorSection>
+      </InspectorGroup>
 
       {showFamilyContract ? (
-      <InspectorSection title="Solver Family Contract" badge={data?.schema_version ?? "missing"}>
+      <InspectorGroup title="Solver Family Contract" badge={data?.schema_version ?? "missing"}>
         <FieldRow
           label="Family namespace"
           value={data?.family_namespace ?? "frequencyDomain"}
@@ -1105,11 +1105,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           label="Floquet nonzero-k demag"
           value={formatBoolean(data?.floquet_nonzero_k_demag_supported)}
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showPhysicsContract ? (
-      <InspectorSection
+      <InspectorGroup
         title="Physics Contract"
         badge={formatRecordField(manifestPhysics, "analysis_family")}
       >
@@ -1133,11 +1133,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           label="Normalization"
           value={formatRecordField(manifestPhysics, "normalization")}
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showPeriodicSection ? (
-      <InspectorSection
+      <InspectorGroup
         title="Periodic / Floquet Boundary Conditions"
         badge={
           periodicPairs.data
@@ -1244,11 +1244,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
             value={formatError(periodicPairs.error)}
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showBoundaryWorkflow ? (
-      <InspectorSection title="Boundary Workflow" badge="read-only">
+      <InspectorGroup title="Boundary Workflow" badge="read-only">
         <FieldRow
           label="Boundary condition"
           value={
@@ -1285,11 +1285,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           label="Status"
           value="diagnostic view; editing requires study transaction"
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showKSamplingWorkflow ? (
-      <InspectorSection title="k-Sampling Workflow" badge="read-only">
+      <InspectorGroup title="k-Sampling Workflow" badge="read-only">
         <FieldRow
           label="k sampling mode"
           value={
@@ -1366,11 +1366,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           label="Status"
           value="diagnostic view; editing requires study transaction"
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showSetupAuthoring ? (
-      <InspectorSection
+      <InspectorGroup
         title={
           isEigenmodesAuthoringNode
             ? "Eigenmodes setup authoring"
@@ -1419,11 +1419,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           value="Use the Study stage inspector draft editor"
         />
         <FieldRow label="Draft commit path" value="Save stage commits setup fields through the canonical stage patch" />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showEquilibriumAuthoring ? (
-      <InspectorSection
+      <InspectorGroup
         title={
           isEigenmodesAuthoringNode
             ? "Eigenmodes equilibrium authoring"
@@ -1452,11 +1452,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           value="Use the Study stage inspector draft editor"
         />
         <FieldRow label="Draft commit path" value="Save stage commits equilibrium source through the canonical stage patch" />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showOperatorAuthoring ? (
-      <InspectorSection
+      <InspectorGroup
         title={
           isEigenmodesAuthoringNode
             ? "Eigenmodes operator authoring"
@@ -1488,7 +1488,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           value="Use the Study stage inspector draft editor"
         />
         <FieldRow label="Draft commit path" value="Save stage commits operator options through the canonical stage patch" />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       <FrequencyDomainResponseSection
@@ -1500,7 +1500,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
       />
 
       {showResponseFields ? (
-      <InspectorSection
+      <InspectorGroup
         title="Response Field Resources"
         badge={
           responseFieldResources.length > 0
@@ -1527,11 +1527,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
             value={`${entry.fieldResourceId}; payload ${entry.payloadPath ?? "not available"}`}
           />
         ))}
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showResponseCancellation ? (
-      <InspectorSection
+      <InspectorGroup
         title="Response Cancellation"
         badge={responseCancelRequested.data?.status ?? responseCancelRequested.status}
       >
@@ -1574,7 +1574,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
             value={formatError(responseCancelRequested.error)}
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       <FrequencyDomainEigenSection
@@ -1588,7 +1588,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
       />
 
       {showCalculationModeWorkflow ? (
-      <InspectorSection
+      <InspectorGroup
         title={calculationModeAuthoringTitle}
         badge={activeCalculationMode}
       >
@@ -1756,11 +1756,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
             </tbody>
           </table>
         </div>
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showFrequencyDomainResourceGroup ? (
-      <InspectorSection title="Frequency-Domain Resource Group" badge="resources">
+      <InspectorGroup title="Frequency-Domain Resource Group" badge="resources">
         <FieldRow
           label="Resource group"
           value={frequencyDomainResourceGroupLabel(kind)}
@@ -1832,11 +1832,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
             .filter((item): item is string => item != null)
             .join(", ") || "not available"}
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showKPath ? (
-      <InspectorSection title="Bloch k-Path Parameters" badge={dispersion.status}>
+      <InspectorGroup title="Bloch k-Path Parameters" badge={dispersion.status}>
         <FieldRow
           label="path_s range"
           value={kPathSummary.pathSRange}
@@ -1853,11 +1853,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           label="Dispersion x-axis"
           value="path_s_rad_per_m"
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showEigenModeBrowser ? (
-      <InspectorSection
+      <InspectorGroup
         title="Eigen Mode Browser"
         badge={`${spectrumModeRows.length} mode(s)`}
       >
@@ -2002,11 +2002,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
             </div>
           </>
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showSelectedField ? (
-      <InspectorSection title="Selected Field Metadata" badge={selectedFieldStatus}>
+      <InspectorGroup title="Selected Field Metadata" badge={selectedFieldStatus}>
         <FieldRow
           label="Field ID"
           value={selectedFieldId ?? "not selected"}
@@ -2369,11 +2369,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
         {commandMessage ? (
           <FieldRow label="3D command" value={commandMessage} />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showSelectedEigenMode ? (
-      <InspectorSection
+      <InspectorGroup
         title="Selected Eigen Mode"
         badge={eigenMode.status}
       >
@@ -2582,11 +2582,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
             value={formatError(eigenMode.error)}
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showSelectedBranch ? (
-      <InspectorSection
+      <InspectorGroup
         title="Selected Eigen Branch"
         badge={branches.status}
       >
@@ -2647,11 +2647,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
             value={formatError(branches.error)}
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showSelectedResponsePoint ? (
-      <InspectorSection
+      <InspectorGroup
         title="Selected Response Frequency Point"
         badge={responseFrequencyPoint.data?.status ?? responseFrequencyPoint.status}
       >
@@ -2762,11 +2762,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
             value={formatError(responseFrequencyPoint.error)}
           />
         ) : null}
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showSelectedObservable ? (
-      <InspectorSection
+      <InspectorGroup
         title="Selected Response Observable"
         badge={responseSweep.status}
       >
@@ -2803,11 +2803,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           label="Sweep resource"
           value={frequencyDomainRef?.resourceRef ?? "not selected"}
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showFmrSpectrumWorkbench ? (
-      <InspectorSection title="FMR Spectrum Workbench" badge={chartRoute.mode}>
+      <InspectorGroup title="FMR Spectrum Workbench" badge={chartRoute.mode}>
         <FieldRow
           label="Active modal resonance"
           value={activeModalResonance}
@@ -2840,11 +2840,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           label="Primary chart route"
           value={`${chartRoute.primaryChart} (${chartRoute.status})`}
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showFmrPeaks ? (
-      <InspectorSection title="FMR Peaks" badge={fmrPeakModel.peaks.length > 0 ? "ready" : "missing"}>
+      <InspectorGroup title="FMR Peaks" badge={fmrPeakModel.peaks.length > 0 ? "ready" : "missing"}>
         <FieldRow label="Peak count" value={String(fmrPeakModel.peaks.length)} />
         <FieldRow label="Modal peaks" value={String(modalPeakCount)} />
         <FieldRow label="Driven peaks" value={String(drivenPeakCount)} />
@@ -2947,11 +2947,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           onSelectPeak={selectFmrPeak}
           peaks={fmrPeakModel.peaks}
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showModalSpectrum ? (
-      <InspectorSection title="Modal Spectrum" badge={spectrum.data?.status ?? spectrum.status}>
+      <InspectorGroup title="Modal Spectrum" badge={spectrum.data?.status ?? spectrum.status}>
         <FieldRow
           label="Eigen spectrum"
           value={`${spectrumModel.points.length} points, ${spectrumModel.droppedPointCount} dropped`}
@@ -2983,11 +2983,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           label="Spectrum resource"
           value={spectrum.data?.status ?? spectrum.status}
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showDispersionChart ? (
-      <InspectorSection title="Dispersion Chart" badge={dispersion.status}>
+      <InspectorGroup title="Dispersion Chart" badge={dispersion.status}>
         <FieldRow
           label="Dispersion"
           value={`${dispersionModel.points.length} points, ${dispersionModel.series.length} series`}
@@ -3001,11 +3001,11 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           selectedBranchId={activeEigenBranchId}
           onSelectBranch={selectEigenBranch}
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
 
       {showDrivenResponseChart ? (
-      <InspectorSection title="Driven Response Chart" badge={responseSweep.data?.status ?? responseSweep.status}>
+      <InspectorGroup title="Driven Response Chart" badge={responseSweep.data?.status ?? responseSweep.status}>
         <FieldRow
           label="Primary chart"
           value={`${chartRoute.primaryChart} (${chartRoute.mode})`}
@@ -3078,7 +3078,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
           label="Response resource"
           value={responseSweep.data?.status ?? responseSweep.status}
         />
-      </InspectorSection>
+      </InspectorGroup>
       ) : null}
     </div>
   );
