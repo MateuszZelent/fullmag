@@ -228,3 +228,35 @@ The API and CLI solver-policy enums remain duplicated. Extracting them was not s
 ### Transport and remaining concern
 
 No command schema shape, route, resource, event, binary codec, endpoint string, generated OpenAPI artifact, generated TypeScript type, generated client, facade, hook, ribbon, or viewport path changed in this round. HTTP v2 remains authoritative and realtime remains invalidation-only. The remaining concern is the deliberately bounded API/CLI enum duplication; the shared serde fixture now fails either crate if their wire shapes drift.
+
+## Fourth fix round after re-review of `c9d3bbbc`
+
+Status: `DONE`
+
+No commit was created.
+
+### Findings 18-20 resolved
+
+- `AdaptiveTimestep` retains its public constructor signature, repr, equality, and pickle behavior. A private non-comparing marker records whether `dt_min` was supplied explicitly. Only executable public advanced relax stages inspect the marker, so global solver and direct model construction retain their existing default semantics and the existing bounds validator remains the single source of numerical validation.
+- Canonical stage rendering emits only executable explicit advanced policies. An implicit incomplete default policy is not materialized into generated public Python; explicit staged policies render `dt_min` and `dt_max` and reload successfully.
+- Scene-document stage projection now preserves `adaptive_timestep` presence. A missing key retains the loaded policy, explicit null clears it, fixed/auto edits suppress the loaded adaptive fallback, and an adaptive edit clears the loaded fixed timestep.
+- The global advanced solver UI now renders `Max spin rotation` and `Norm tolerance`, loads and saves both exactly, and rejects present non-finite, zero, or negative values.
+
+### Exact RED evidence
+
+- Python LLG contract: 2 failures. An advanced stage accepted an omitted `dt_min`, and the real scene projection dropped the stage `adaptive_timestep` key.
+- Control Room focused model/panel: 2 failures. Global guard validation returned no errors and the global advanced form omitted both guard controls.
+
+### Exact GREEN evidence
+
+- Python LLG plus script-builder authoring: `PYTHONPATH=packages/fullmag-py/src python3 -m unittest packages/fullmag-py/tests/test_llg_solver_contract.py packages/fullmag-py/tests/test_script_builder_roundtrip.py`
+  - 42 passed.
+- Control Room focused model/panel: 2 files passed, 30 tests passed.
+- Control Room full suite: 359 files passed, 3481 tests passed. The first sandboxed run had one environment-only `spawnSync /usr/local/bin/node EPERM`; the permitted rerun completed with zero failures.
+- Control Room `typecheck`: exit 0.
+- Control Room `lint --max-warnings=0`: exit 0.
+- `git diff --check`: exit 0.
+
+### Scope
+
+No OpenAPI, generated transport, command schema, endpoint, realtime event, resource hook, binary codec, ribbon, viewport, or backend runtime path changed in this round.

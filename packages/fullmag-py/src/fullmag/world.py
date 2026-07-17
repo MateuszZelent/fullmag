@@ -2259,7 +2259,10 @@ def relax_stage(
         )
     if (
         isinstance(adaptive_timestep, AdaptiveTimestep)
-        and adaptive_timestep.dt_max is None
+        and (
+            not adaptive_timestep._dt_min_explicit
+            or adaptive_timestep.dt_max is None
+        )
     ):
         raise ValueError(
             "executable adaptive relax stages require explicit dt_min and dt_max"

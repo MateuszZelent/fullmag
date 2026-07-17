@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import inspect
+import pickle
 import textwrap
 import unittest
 from pathlib import Path
@@ -563,6 +564,138 @@ class CanonicalLlgSolverContractTests(unittest.TestCase):
         self.assertEqual(dict(convenience.to_ir())["tolerance_mode"], "max_error")
         with self.assertRaises(TypeError):
             fm.AdaptiveTimestep(atol=1e-6, _tolerance_mode="max_error")
+
+        restored = pickle.loads(pickle.dumps(advanced))
+        self.assertEqual(restored, advanced)
+        self.assertEqual(repr(restored), repr(advanced))
+
+    def test_advanced_stage_requires_explicit_dt_min_without_changing_public_signature(self) -> None:
+        signature = inspect.signature(fm.AdaptiveTimestep)
+        self.assertEqual(signature.parameters["dt_min"].default, 1e-15)
+
+        implicit_minimum = fm.AdaptiveTimestep(dt_max=1e-13)
+        with self.assertRaisesRegex(ValueError, "explicit dt_min and dt_max"):
+            fm.relax_stage(solver="rk45", adaptive_timestep=implicit_minimum)
+
+        explicit_default_minimum = fm.AdaptiveTimestep(
+            dt_min=1e-15,
+            dt_max=1e-13,
+        )
+        stage = fm.relax_stage(
+            solver="rk45",
+            adaptive_timestep=explicit_default_minimum,
+        )
+        self.assertIs(stage.adaptive_timestep, explicit_default_minimum)
+
+        study = self._configure_study()
+        study.solver(integrator="rk45", adaptive_timestep=implicit_minimum)
+        self.assertIs(flat_world._state._adaptive_timestep_policy, implicit_minimum)
+
+    def test_real_scene_stage_policy_edits_clear_loaded_fallbacks(self) -> None:
+        source = """
+        import fullmag as fm
+
+        study = fm.study("stage_scene_edits")
+        study.engine("fdm")
+        study.cell(5e-9, 5e-9, 5e-9)
+        body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.alpha = 0.1
+        study.solver(integrator="rk45", fix_dt=1e-15)
+        study.stages.add_relax(
+            stage_id="relax",
+            algorithm="llg_overdamped",
+            solver="rk45",
+            adaptive_timestep=fm.AdaptiveTimestep(
+                atol=2e-7,
+                rtol=3e-5,
+                dt_min=1e-15,
+                dt_max=1e-13,
+            ),
+        )
+        study.stages.add_relax(
+            stage_id="fixed",
+            algorithm="llg_overdamped",
+            solver="rk45",
+            dt=3e-15,
+        )
+        """
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "stage_scene_edits.py"
+            path.write_text(textwrap.dedent(source), encoding="utf-8")
+            loaded = fm.load_problem_from_script(path, lightweight_assets=True)
+
+            fixed_scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            fixed_scene["study"]["stages"][0]["fixed_timestep"] = 2e-15
+            fixed_scene["study"]["stages"][0]["adaptive_timestep"] = None
+            fixed_overrides = builder_overrides_from_scene_document(fixed_scene)
+            self.assertIn("adaptive_timestep", fixed_overrides["stages"][0])
+            fixed = rewrite_loaded_problem_script(loaded, overrides=fixed_overrides)[
+                "rendered_source"
+            ]
+            fixed_line = next(line for line in fixed.splitlines() if ".stages.add_relax(" in line)
+            self.assertIn("dt=2e-15", fixed_line)
+            self.assertNotIn("adaptive_timestep=", fixed_line)
+
+            auto_scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            auto_scene["study"]["stages"][0]["fixed_timestep"] = None
+            auto_scene["study"]["stages"][0]["adaptive_timestep"] = None
+            auto = rewrite_loaded_problem_script(
+                loaded,
+                overrides=builder_overrides_from_scene_document(auto_scene),
+            )["rendered_source"]
+            auto_line = next(line for line in auto.splitlines() if ".stages.add_relax(" in line)
+            self.assertNotIn("dt=", auto_line)
+            self.assertNotIn("adaptive_timestep=", auto_line)
+
+            missing_scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            missing_scene["study"]["stages"][0].pop("adaptive_timestep")
+            missing = rewrite_loaded_problem_script(
+                loaded,
+                overrides=builder_overrides_from_scene_document(missing_scene),
+            )["rendered_source"]
+            missing_line = next(
+                line
+                for line in missing.splitlines()
+                if 'stage_id="relax"' in line and ".stages.add_relax(" in line
+            )
+            self.assertIn("adaptive_timestep=fm.AdaptiveTimestep(", missing_line)
+
+            adaptive_scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            adaptive_scene["study"]["stages"][1]["fixed_timestep"] = None
+            adaptive_scene["study"]["stages"][1]["adaptive_timestep"] = {
+                "tolerance_mode": "advanced",
+                "atol": 4e-8,
+                "rtol": 5e-5,
+                "dt_initial": None,
+                "dt_min": 1e-15,
+                "dt_max": 8e-14,
+                "safety": 0.8,
+                "growth_limit": 1.8,
+                "shrink_limit": 0.25,
+            }
+            adaptive = rewrite_loaded_problem_script(
+                loaded,
+                overrides=builder_overrides_from_scene_document(adaptive_scene),
+            )["rendered_source"]
+            adaptive_line = next(
+                line
+                for line in adaptive.splitlines()
+                if 'stage_id="fixed"' in line and ".stages.add_relax(" in line
+            )
+            self.assertNotIn("dt=", adaptive_line)
+            self.assertIn("adaptive_timestep=fm.AdaptiveTimestep(", adaptive_line)
+            self.assertIn("atol=4e-08", adaptive_line)
+            adaptive_path = Path(tmp_dir) / "stage_scene_adaptive.py"
+            adaptive_path.write_text(adaptive, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(
+                adaptive_path, lightweight_assets=True
+            )
+            reloaded_policy = reloaded.stages[1].problem.study.dynamics.adaptive_timestep
+            self.assertEqual(reloaded_policy.dt_min, 1e-15)
+            self.assertEqual(reloaded_policy.dt_max, 8e-14)
+            self.assertEqual(reloaded_policy.atol, 4e-8)
 
     def test_partial_advanced_scene_override_merges_and_preserves_presence(self) -> None:
         source = """

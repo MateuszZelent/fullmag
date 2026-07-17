@@ -352,6 +352,8 @@ function validateController(
   validatePositiveText(issues, adaptive.safety, "Adaptive safety");
   validatePositiveText(issues, adaptive.growthLimit, "Adaptive growth limit");
   validatePositiveText(issues, adaptive.shrinkLimit, "Adaptive shrink limit");
+  validateOptionalPositiveText(issues, adaptive.maxSpinRotation, "Max spin rotation");
+  validateOptionalPositiveText(issues, adaptive.normTolerance, "Norm tolerance");
   const safety = Number(adaptive.safety);
   const growth = Number(adaptive.growthLimit);
   const shrink = Number(adaptive.shrinkLimit);

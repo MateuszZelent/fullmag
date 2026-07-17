@@ -25,6 +25,7 @@ import {
 } from "./StudyInspectorPanel";
 import {
   StudyPipelineSection,
+  StudySolverPolicyFields,
   StudyStageDraftEditor,
 } from "./StudyPipelineSection";
 import { createDefaultStudyStageDraft } from "./StudyStageAuthoringModel";
@@ -53,6 +54,49 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
+  it("renders global advanced adaptive guard controls", () => {
+    const html = renderToStaticMarkup(
+      <StudySolverPolicyFields
+        algorithmsAvailable={["llg_overdamped"]}
+        draft={{
+          adaptiveTimestep: {
+            atol: "1e-8",
+            dtInitial: "",
+            dtMax: "1e-13",
+            dtMin: "1e-16",
+            growthLimit: "2",
+            maxSpinRotation: "0.15",
+            normTolerance: "2e-6",
+            rtol: "1e-5",
+            safety: "0.9",
+            shrinkLimit: "0.2",
+          },
+          demagInterval: "",
+          dtInitial: "",
+          dtMax: "",
+          dtMin: "",
+          energyTolerance: "",
+          fixDt: "",
+          integrator: "rk45",
+          maxErr: "",
+          maxRelaxSteps: "",
+          relaxAlgorithm: "llg_overdamped",
+          timestepMode: "adaptive_advanced",
+          torqueTolerance: "",
+        }}
+        onUpdate={() => undefined}
+        requestedBackend="fdm"
+        requestedDevice="cpu"
+        requestedPrecision="double"
+      />,
+    );
+
+    expect(html).toContain("Max spin rotation");
+    expect(html).toContain("Norm tolerance");
+    expect(html).toContain('value="0.15"');
+    expect(html).toContain('value="2e-6"');
+  });
+
   it("renders command detail provenance in the dialog", () => {
     const command: CommandDetailResource = {
       artifact_refs: ["artifact://stage-1"],

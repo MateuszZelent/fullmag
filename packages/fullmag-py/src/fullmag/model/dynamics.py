@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 
 from fullmag._validation import require_non_negative, require_positive
@@ -18,8 +19,21 @@ INTEGRATOR_ALIASES: dict[str, str] = {
 ADAPTIVE_INTEGRATORS = {"rk23", "rk45"}
 
 
+class _AdaptiveTimestepType(type):
+    @property
+    def __signature__(cls) -> inspect.Signature:
+        parameters = tuple(inspect.signature(cls.__init__).parameters.values())[1:]
+        return inspect.Signature(parameters)
+
+    def __call__(cls, *args: object, **kwargs: object) -> object:
+        dt_min_explicit = "dt_min" in kwargs or len(args) >= 4
+        policy = super().__call__(*args, **kwargs)
+        object.__setattr__(policy, "_dt_min_explicit", dt_min_explicit)
+        return policy
+
+
 @dataclass(frozen=True, slots=True)
-class AdaptiveTimestep:
+class AdaptiveTimestep(metaclass=_AdaptiveTimestepType):
     """Controls for embedded-error adaptive time stepping (RK23, RK45)."""
 
     atol: float = 1e-6
@@ -34,6 +48,9 @@ class AdaptiveTimestep:
     norm_tolerance: float | None = None
     _tolerance_mode: str = field(
         default="advanced", init=False, repr=False, compare=False
+    )
+    _dt_min_explicit: bool = field(
+        default=False, init=False, repr=False, compare=False
     )
 
     @classmethod

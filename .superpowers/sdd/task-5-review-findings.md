@@ -40,3 +40,9 @@
 ### Minor to record or eliminate
 
 17. API and CLI duplicate the solver-policy transport enums. Prefer a shared backend-neutral transport/IR contract if it can be done surgically; otherwise add an explicit cross-crate serde compatibility test and record the bounded duplication in the report.
+
+## Third re-review quality findings after `c9d3bbbc`
+
+18. Public advanced staged relaxation must not rely on an implicit `AdaptiveTimestep.dt_min` default. Add a lossless way to know that executable stage bounds were explicitly supplied, while preserving backward compatibility for non-stage/global uses; add missing-explicit-dt_min RED/validation.
+19. Stage mode edits must clear stale loaded policy. Distinguish an absent `adaptive_timestep` override from an explicit JSON null: adaptive -> fixed/auto must not fall back to the original adaptive policy, and fixed -> adaptive must not retain fixed dt. Test real scene edit -> canonical rewrite -> reload transitions.
+20. Global advanced typed controls must render and validate `max_spin_rotation` and `norm_tolerance`, including positive finite validation and exact load/save preservation.

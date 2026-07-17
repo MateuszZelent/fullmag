@@ -202,6 +202,8 @@ export function StudySolverPolicyFields({
           <FormField label="Safety factor" value={draft.adaptiveTimestep?.safety ?? "0.9"} onChange={(event) => updateAdvanced({ safety: event.target.value })} />
           <FormField label="Growth limit" value={draft.adaptiveTimestep?.growthLimit ?? "2"} onChange={(event) => updateAdvanced({ growthLimit: event.target.value })} />
           <FormField label="Shrink limit" value={draft.adaptiveTimestep?.shrinkLimit ?? "0.2"} onChange={(event) => updateAdvanced({ shrinkLimit: event.target.value })} />
+          <FormField label="Max spin rotation" value={draft.adaptiveTimestep?.maxSpinRotation ?? ""} onChange={(event) => updateAdvanced({ maxSpinRotation: event.target.value })} />
+          <FormField label="Norm tolerance" value={draft.adaptiveTimestep?.normTolerance ?? ""} onChange={(event) => updateAdvanced({ normTolerance: event.target.value })} />
         </>
       ) : null}
       <FormField label="Demag interval" unit="s" value={draft.demagInterval} onChange={(event) => onUpdate({ demagInterval: event.target.value })} />

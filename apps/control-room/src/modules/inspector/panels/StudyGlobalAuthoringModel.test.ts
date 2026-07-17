@@ -167,8 +167,8 @@ describe("StudyGlobalAuthoringModel", () => {
             safety: 0.9,
             growth_limit: 2,
             shrink_limit: 0.2,
-            max_spin_rotation: "",
-            norm_tolerance: "",
+            max_spin_rotation: 0.15,
+            norm_tolerance: 2e-6,
           },
           integrator: "rk45",
         },
@@ -183,6 +183,8 @@ describe("StudyGlobalAuthoringModel", () => {
         dtInitial: "",
         dtMax: "1e-13",
         dtMin: "1e-16",
+        maxSpinRotation: "0.15",
+        normTolerance: "0.000002",
       },
     });
     const request = buildStudyGlobalMergePatch(draft);
@@ -196,6 +198,8 @@ describe("StudyGlobalAuthoringModel", () => {
           dt_initial: null,
           dt_min: 1e-16,
           dt_max: 1e-13,
+          max_spin_rotation: 0.15,
+          norm_tolerance: 2e-6,
         },
       },
     });
@@ -282,6 +286,22 @@ describe("StudyGlobalAuthoringModel", () => {
     const messages = validateStudyGlobalDraft(incomplete).map((issue) => issue.message);
     expect(messages).toContain("Adaptive dt max must be finite and positive.");
     expect(messages).toContain("Adaptive policy requires RK23 or RK45.");
+
+    const invalidGuards = {
+      ...draft,
+      requestedDevice: "cpu",
+      solver: {
+        ...draft.solver,
+        adaptiveTimestep: {
+          ...draft.solver.adaptiveTimestep!,
+          maxSpinRotation: "0",
+          normTolerance: "Infinity",
+        },
+      },
+    };
+    const guardMessages = validateStudyGlobalDraft(invalidGuards).map((issue) => issue.message);
+    expect(guardMessages).toContain("Max spin rotation must be finite and positive.");
+    expect(guardMessages).toContain("Norm tolerance must be finite and positive.");
   });
 
   it("rejects adaptive single precision even on an explicit FDM CPU lane", () => {

@@ -522,6 +522,15 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
                 "entrypoint_kind": stage.get("entrypoint_kind"),
                 "integrator": stage.get("integrator") or None,
                 "fixed_timestep": _number_or_none(stage.get("fixed_timestep")),
+                **(
+                    {
+                        "adaptive_timestep": _stage_adaptive_timestep_override(
+                            stage.get("adaptive_timestep")
+                        )
+                    }
+                    if "adaptive_timestep" in stage
+                    else {}
+                ),
                 "until_seconds": _number_or_none(stage.get("until_seconds")),
                 "relax_algorithm": stage.get("relax_algorithm") or None,
                 "torque_tolerance": _number_or_none(stage.get("torque_tolerance")),
@@ -560,6 +569,30 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }
+
+
+def _stage_adaptive_timestep_override(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    override = {
+        key: _number_or_none(value.get(key))
+        for key in (
+            "atol",
+            "rtol",
+            "dt_initial",
+            "dt_min",
+            "dt_max",
+            "safety",
+            "growth_limit",
+            "shrink_limit",
+            "max_spin_rotation",
+            "norm_tolerance",
+        )
+        if key in value
+    }
+    if "tolerance_mode" in value:
+        override["tolerance_mode"] = value.get("tolerance_mode")
+    return override
 
 
 def _number_or_none(value: Any) -> float | str | None:

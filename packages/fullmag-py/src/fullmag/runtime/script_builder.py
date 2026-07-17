@@ -3507,6 +3507,7 @@ def _render_stages(
                 "fixed_timestep",
                 study.dynamics.fixed_timestep if study.dynamics is not None else None,
             )
+            has_stage_adaptive_override = "adaptive_timestep" in stage_override
             stage_adaptive_override = _normalize_mapping(
                 stage_override.get("adaptive_timestep")
             )
@@ -3526,6 +3527,8 @@ def _render_stages(
                     stage_adaptive_policy = _advanced_policy_with_overrides(
                         None, stage_adaptive_override
                     )
+            if stage_adaptive_policy is not None:
+                relax_fixed_timestep = None
             torque_tolerance = _override_number(
                 stage_override,
                 "torque_tolerance",
@@ -3602,7 +3605,14 @@ def _render_stages(
                     call_parts.extend(
                         _render_relax_adaptive_policy_args(stage_adaptive_policy)
                     )
-                elif study.dynamics is not None and study.dynamics.adaptive_timestep is not None:
+                elif (
+                    not has_stage_adaptive_override
+                    and relax_fixed_timestep is None
+                    and study.dynamics is not None
+                    and study.dynamics.adaptive_timestep is not None
+                    and study.dynamics.adaptive_timestep._dt_min_explicit
+                    and study.dynamics.adaptive_timestep.dt_max is not None
+                ):
                     call_parts.extend(
                         _render_relax_adaptive_policy_args(
                             study.dynamics.adaptive_timestep
