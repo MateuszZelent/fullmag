@@ -65,7 +65,9 @@ use crate::quantities::{normalize_quantity_id, QuantityId};
 #[cfg(feature = "fem-gpu")]
 use crate::scalar_metrics::{single_object_scalars, weighted_object_scalars};
 #[cfg(feature = "fem-gpu")]
-use crate::types::{LivePreviewField, LivePreviewRequest, RunError, StepStats};
+use crate::types::{
+    LivePreviewField, LivePreviewRequest, RunError, SolverAttemptRecord, StepStats,
+};
 #[cfg(feature = "fem-gpu")]
 use fullmag_engine::{dot, MU0};
 #[cfg(feature = "fem-gpu")]
@@ -112,6 +114,39 @@ fn checked_native_nonnegative(label: &str, value: f64) -> Result<f64, RunError> 
             message: format!("native FEM returned negative {label}"),
         })
     }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn solver_attempt_decision(value: u32) -> Result<&'static str, RunError> {
+    match value {
+        1 => Ok("accepted"),
+        2 => Ok("retry"),
+        3 => Ok("failed"),
+        _ => Err(RunError {
+            message: format!("native FEM returned unknown solver attempt decision {value}"),
+        }),
+    }
+}
+
+#[cfg(feature = "fem-gpu")]
+fn solver_attempt_reason(value: u32) -> Result<&'static str, RunError> {
+    const REASONS: [&str; 9] = [
+        "within_tolerance",
+        "error_above_tolerance",
+        "dt_min_exhausted",
+        "invalid_order",
+        "invalid_bounds",
+        "invalid_controller_limits",
+        "invalid_timestep",
+        "invalid_current_error",
+        "invalid_previous_error",
+    ];
+    value
+        .checked_sub(1)
+        .and_then(|index| REASONS.get(index as usize).copied())
+        .ok_or_else(|| RunError {
+            message: format!("native FEM returned unknown solver attempt reason {value}"),
+        })
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -509,6 +544,7 @@ pub(crate) struct NativeFemBackend {
     object_node_indices: Vec<(String, Vec<u32>)>,
     demag_solver: Option<String>,
     demag_preconditioner: Option<String>,
+    adaptive_max_error: Option<f64>,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1868,6 +1904,11 @@ impl NativeFemBackend {
             object_node_indices: native_fem_object_node_indices(plan),
             demag_solver: demag_policy.as_ref().map(|policy| policy.solver.clone()),
             demag_preconditioner: demag_policy.map(|policy| policy.preconditioner),
+            adaptive_max_error: plan
+                .adaptive_timestep
+                .as_ref()
+                .filter(|adaptive| adaptive.rtol == 0.0)
+                .map(|adaptive| adaptive.atol),
         })
     }
 
@@ -2101,6 +2142,8 @@ impl NativeFemBackend {
             return Err(self.last_error_or("FEM GPU step failed"));
         }
 
+        let solver_attempts = self.solver_attempts()?;
+
         let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
         let torque_apm = validate_native_step_stats(&stats)?;
         let mut step_stats = StepStats {
@@ -2148,11 +2191,10 @@ impl NativeFemBackend {
             native_ffi_overhead_wall_time_ns: ffi_wall_time_ns
                 .saturating_sub(stats.wall_time_ns)
                 .saturating_sub(relaxation_subphase_wall_time_ns),
-            error_estimate: if stats.error_estimate > 0.0 {
-                Some(stats.error_estimate)
-            } else {
-                None
-            },
+            error_estimate: self
+                .adaptive_max_error
+                .map(|max_error| stats.error_estimate * max_error),
+            max_error: self.adaptive_max_error,
             rejected_attempts: stats.rejected_attempts,
             dt_suggested: if stats.dt_suggested > 0.0 {
                 Some(stats.dt_suggested)
@@ -2161,6 +2203,7 @@ impl NativeFemBackend {
             },
             rhs_evals: stats.rhs_evaluations,
             fsal_reused: stats.fsal_reused != 0,
+            solver_attempts,
             demag_solves: stats.demag_solve_count,
             poisson_iterations: stats.demag_linear_iterations,
             poisson_final_residual: stats.demag_linear_residual,
@@ -2180,6 +2223,88 @@ impl NativeFemBackend {
             };
         self.attach_native_object_average_m(&mut step_stats)?;
         Ok(Some(step_stats))
+    }
+
+    fn solver_attempts(&self) -> Result<Vec<SolverAttemptRecord>, RunError> {
+        let mut count = 0u64;
+        let rc =
+            unsafe { ffi::fullmag_fem_backend_solver_attempt_count_v1(self.handle, &mut count) };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM native solver-attempt count failed"));
+        }
+        if count > 64 {
+            return Err(RunError {
+                message: format!(
+                    "native FEM solver attempt trace exceeded its 64-record contract: {count}"
+                ),
+            });
+        }
+        let mut raw = vec![ffi::fullmag_fem_solver_attempt_record_v1::default(); count as usize];
+        let mut copied = 0u64;
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_copy_solver_attempts_v1(
+                self.handle,
+                raw.as_mut_ptr(),
+                count,
+                &mut copied,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK || copied != count {
+            return Err(self.last_error_or("FEM native solver-attempt copy failed"));
+        }
+        raw.into_iter()
+            .map(|record| {
+                if record.abi_version != ffi::FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V1_ABI_VERSION
+                    || record.struct_size as usize
+                        != std::mem::size_of::<ffi::fullmag_fem_solver_attempt_record_v1>()
+                {
+                    return Err(RunError {
+                        message: "native FEM returned an incompatible solver-attempt ABI record"
+                            .to_string(),
+                    });
+                }
+                Ok(SolverAttemptRecord {
+                    attempt: record.attempt,
+                    target_step: record.target_step,
+                    time: checked_native_nonnegative("solver attempt time", record.time_seconds)?,
+                    dt_attempt: checked_native_nonnegative(
+                        "solver attempt dt",
+                        record.dt_attempt_seconds,
+                    )?,
+                    eta: checked_native_nonnegative("solver attempt eta", record.eta)?,
+                    max_norm_defect: (record.max_norm_defect >= 0.0)
+                        .then(|| {
+                            checked_native_nonnegative(
+                                "solver attempt norm defect",
+                                record.max_norm_defect,
+                            )
+                        })
+                        .transpose()?,
+                    max_spin_rotation: (record.max_spin_rotation >= 0.0)
+                        .then(|| {
+                            checked_native_nonnegative(
+                                "solver attempt spin rotation",
+                                record.max_spin_rotation,
+                            )
+                        })
+                        .transpose()?,
+                    decision: solver_attempt_decision(record.decision)?.to_string(),
+                    reason: solver_attempt_reason(record.reason)?.to_string(),
+                    dt_next: checked_native_nonnegative(
+                        "solver attempt next dt",
+                        record.dt_next_seconds,
+                    )?,
+                    demag_solves: record.demag_solve_count,
+                    demag_iterations: record.demag_linear_iterations,
+                    demag_residual: checked_native_nonnegative(
+                        "solver attempt demag residual",
+                        record.demag_linear_residual,
+                    )?,
+                    rhs_evals: record.rhs_evaluations,
+                    estimator_order: record.estimator_order,
+                })
+            })
+            .collect()
     }
 
     pub fn invalidate_fsal(&mut self) -> Result<(), RunError> {

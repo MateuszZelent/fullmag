@@ -39,6 +39,8 @@ void fullmag_cuda_adaptive_error_norm_blocks(
     bool has_max_spin_rotation,
     double max_spin_rotation,
     double *block_max_scaled_error,
+    double *block_max_norm_defect,
+    double *block_max_spin_rotation,
     int stages,
     int N,
     cudaStream_t stream = nullptr);

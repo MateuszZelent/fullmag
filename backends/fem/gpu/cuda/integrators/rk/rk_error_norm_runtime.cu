@@ -73,6 +73,8 @@ bool gpu_rk_reduce_adaptive_error_norm_device(
         ctx.adaptive_dt.has_max_spin_rotation,
         ctx.adaptive_dt.max_spin_rotation,
         gpu.reductions.scalar_workspace,
+        gpu.reductions.scalar_workspace + blocks,
+        gpu.reductions.scalar_workspace + 2 * blocks,
         tableau.stages,
         n,
         stream);
@@ -89,6 +91,27 @@ bool gpu_rk_reduce_adaptive_error_norm_device(
         reduce_bytes,
         stream);
     if (!cuda_launch_ok("launch GPU RK adaptive error norm reduction", reason)) {
+        return false;
+    }
+
+    fullmag_cuda_device_max(
+        gpu.reductions.scalar_workspace + blocks,
+        std::max(1, blocks),
+        gpu.reductions.scalar_result + 1,
+        gpu.reductions.temp_storage,
+        reduce_bytes,
+        stream);
+    if (!cuda_launch_ok("launch GPU RK norm-defect reduction", reason)) {
+        return false;
+    }
+    fullmag_cuda_device_max(
+        gpu.reductions.scalar_workspace + 2 * blocks,
+        std::max(1, blocks),
+        gpu.reductions.scalar_result + 2,
+        gpu.reductions.temp_storage,
+        reduce_bytes,
+        stream);
+    if (!cuda_launch_ok("launch GPU RK spin-rotation reduction", reason)) {
         return false;
     }
 

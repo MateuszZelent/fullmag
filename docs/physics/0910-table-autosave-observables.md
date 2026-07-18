@@ -84,6 +84,13 @@ Table autosave contains accepted-state observables only. Its documented
 coalesced behavior when one adaptive step crosses several output times does
 not alter, compress, or replace the one-record-per-attempt solver trace.
 
+The live solver read-model may expose the latest accepted-step `Error`,
+configured `MaxError`, suggested next `dt`, and rejected-attempt count. In
+maximum-error mode `Error` and `MaxError` are absolute embedded vector errors
+and may be compared directly. The normalized controller metric `eta` remains
+in `solver_attempts.csv`; advanced `atol + rtol` mode must not relabel `eta` as
+an absolute error or compare it directly with `atol`.
+
 ## 3. Numerical Interpretation
 
 ### 3.1 FDM

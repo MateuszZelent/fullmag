@@ -639,6 +639,23 @@ void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
         error.c_str());
     check(stats.rejected_attempts > 0u, "adaptive CPU RK fixture must reject its first attempt");
     check(
+        ctx.stepper.attempt_trace.records.size() ==
+            static_cast<size_t>(stats.rejected_attempts + 1u),
+        "adaptive CPU RK must publish exactly one trace record per attempted step");
+    for (size_t attempt = 0; attempt < ctx.stepper.attempt_trace.records.size(); ++attempt) {
+        const auto &record = ctx.stepper.attempt_trace.records[attempt];
+        check(record.attempt == attempt, "adaptive CPU RK trace attempt indices must be contiguous");
+        check(record.target_step == step_before + 1u, "all retry records must target one accepted step");
+        check(record.time_seconds == time_before, "retry records must retain the pre-step time");
+        check(record.dt_attempt_seconds > 0.0, "attempt trace dt must be positive");
+        check(record.estimator_order == tableau.order_est, "attempt trace must publish estimator order");
+        check(
+            record.decision == (attempt + 1u == ctx.stepper.attempt_trace.records.size()
+                ? fullmag::fem::RkAttemptDecision::Accepted
+                : fullmag::fem::RkAttemptDecision::Retry),
+            "adaptive CPU RK trace must end in one accepted decision after its retries");
+    }
+    check(
         stats.fsal_reused == 0u,
         "accepted retry must not report FSAL reused by the rejected attempt");
     check(ctx.state.step_count == step_before + 1u, "rejected attempts must not advance step count");

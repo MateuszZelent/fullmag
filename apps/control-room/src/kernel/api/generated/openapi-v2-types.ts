@@ -7620,11 +7620,17 @@ export interface components {
             converged?: boolean | null;
             /** Format: double */
             dt_seconds?: number | null;
+            /** Format: double */
+            dt_suggested_seconds?: number | null;
+            /** Format: double */
+            error_estimate?: number | null;
             integrator?: string | null;
             is_busy: boolean;
             last_error?: string | null;
             /** Format: int64 */
             last_step_updated_at_unix_ms?: number | null;
+            /** Format: double */
+            max_error?: number | null;
             /**
              * Format: double
              * @description Maximum total dynamic RHS norm in 1/s. This is not an equilibrium torque.
@@ -7643,6 +7649,8 @@ export interface components {
             max_torque_T?: number | null;
             /** Format: double */
             pseudo_time_seconds?: number | null;
+            /** Format: int32 */
+            rejected_attempts?: number | null;
             relaxation_algorithm?: null | components["schemas"]["RelaxationAlgorithm"];
             /** Format: int64 */
             revision: number;

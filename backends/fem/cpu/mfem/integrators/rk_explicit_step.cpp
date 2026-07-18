@@ -25,6 +25,7 @@
 #include "fem_common.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -104,6 +105,7 @@ bool context_step_explicit_rk_mfem(
     }
 
     ctx.adaptive_dt.current_dt = dt_seconds;
+    ctx.stepper.attempt_trace.records.clear();
 
     const size_t dof_len = ctx.state.m_xyz.size();
     stepper_workspace_allocate(ctx.stepper.workspace, dof_len, tab.stages);
@@ -121,6 +123,8 @@ bool context_step_explicit_rk_mfem(
 
     for (;;) {
         ctx.adaptive_dt.current_dt = dt;
+        const uint32_t demag_solves_before_attempt = ctx.poisson_demag.solves_current_step;
+        const uint32_t rhs_before_attempt = total_rhs;
         std::unique_ptr<RkAttemptCacheSnapshot> attempt_cache;
         if (adaptive) {
             attempt_cache = std::make_unique<RkAttemptCacheSnapshot>(ctx);
@@ -247,6 +251,33 @@ bool context_step_explicit_rk_mfem(
                 return false;
             }
             auto result = adaptive_pi_step(ctx, dt, acceptance_metric, tab.order_est);
+            if (ctx.stepper.attempt_trace.records.size() >= RkAttemptTraceState::max_records) {
+                ctx.state.m_xyz = ws.m_backup;
+                ws.fsal_valid = false;
+                error = "adaptive RK attempt trace capacity exceeded";
+                return false;
+            }
+            ctx.stepper.attempt_trace.records.push_back({
+                static_cast<uint64_t>(ctx.stepper.attempt_trace.records.size()),
+                ctx.state.step_count + 1u,
+                ctx.state.current_time,
+                dt,
+                acceptance_metric,
+                guard_metrics.max_norm_defect,
+                guard_metrics.max_spin_rotation,
+                result.kind == adaptive::AdaptiveDecisionKind::accepted
+                    ? RkAttemptDecision::Accepted
+                    : result.kind == adaptive::AdaptiveDecisionKind::retry
+                        ? RkAttemptDecision::Retry
+                        : RkAttemptDecision::Failed,
+                static_cast<uint32_t>(result.reason) + 1u,
+                result.dt_next,
+                ctx.poisson_demag.solves_current_step - demag_solves_before_attempt,
+                static_cast<uint32_t>(std::max(0, ctx.poisson_demag.last_iterations)),
+                ctx.poisson_demag.last_residual,
+                total_rhs - rhs_before_attempt,
+                tab.order_est,
+            });
             if (result.kind == adaptive::AdaptiveDecisionKind::failed) {
                 ctx.state.m_xyz = ws.m_backup;
                 ws.fsal_valid = false;
@@ -293,6 +324,23 @@ bool context_step_explicit_rk_mfem(
             }
             stats.error_estimate = 0.0;
             stats.dt_suggested = dt;
+            ctx.stepper.attempt_trace.records.push_back({
+                0u,
+                ctx.state.step_count + 1u,
+                ctx.state.current_time,
+                dt,
+                acceptance_metric,
+                guard_metrics.max_norm_defect,
+                guard_metrics.max_spin_rotation,
+                RkAttemptDecision::Accepted,
+                1u,
+                dt,
+                ctx.poisson_demag.solves_current_step - demag_solves_before_attempt,
+                static_cast<uint32_t>(std::max(0, ctx.poisson_demag.last_iterations)),
+                ctx.poisson_demag.last_residual,
+                total_rhs - rhs_before_attempt,
+                tab.order_est,
+            });
         }
 
         if (!normalize_active_magnetization_aos(ctx, ws.m_candidate, error)) {

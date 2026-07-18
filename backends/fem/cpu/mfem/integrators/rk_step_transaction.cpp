@@ -177,7 +177,8 @@ struct RkStepTransaction::Impl {
           gpu_hybrid_demag_energy(context.gpu_state.device.demag_poisson.hybrid_demag_energy_joules),
           phase_timings(capture_phase_timings(context.gpu_state.rk_phase_timings)),
           cpu_fsal_valid(context.stepper.workspace.fsal_valid),
-          cpu_k0(context.stepper.workspace.k[0])
+          cpu_k0(context.stepper.workspace.k[0]),
+          attempt_trace(context.stepper.attempt_trace)
     {
 #if FULLMAG_HAS_MFEM_STACK
         poisson_step_state = capture_poisson_step_state(context.poisson_demag);
@@ -225,6 +226,7 @@ struct RkStepTransaction::Impl {
         restore_phase_timings(ctx.gpu_state.rk_phase_timings, phase_timings);
         ctx.stepper.workspace.fsal_valid = cpu_fsal_valid;
         ctx.stepper.workspace.k[0] = cpu_k0;
+        ctx.stepper.attempt_trace = attempt_trace;
 #if FULLMAG_HAS_MFEM_STACK
         restore_poisson_step_state(ctx.poisson_demag, poisson_step_state);
         restore_vector(ctx.poisson_demag.solution_vec, poisson_solution);
@@ -267,6 +269,7 @@ struct RkStepTransaction::Impl {
     PhaseTimingSnapshot phase_timings;
     bool cpu_fsal_valid;
     std::vector<double> cpu_k0;
+    RkAttemptTraceState attempt_trace;
 #if FULLMAG_HAS_MFEM_STACK
     PoissonStepStateSnapshot poisson_step_state{};
     std::vector<double> poisson_solution;

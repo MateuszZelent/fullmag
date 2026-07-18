@@ -64,6 +64,8 @@ pub struct StepDiagnostics {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_estimate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_error: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dt_suggested: Option<f64>,
     #[serde(default)]
     pub rejected_attempts: u32,

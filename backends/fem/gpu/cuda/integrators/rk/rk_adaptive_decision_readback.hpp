@@ -22,6 +22,8 @@ struct Context;
 struct GpuAdaptiveDecisionReadback {
     GpuAdaptiveResult adaptive_result;
     double error_norm;
+    double max_norm_defect;
+    double max_spin_rotation;
 };
 
 bool gpu_rk_read_adaptive_error_norm_decision_host(

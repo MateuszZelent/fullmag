@@ -49,6 +49,35 @@ struct RkStepFailureInjectionState {
     uint64_t injected_count = 0;
 };
 
+enum class RkAttemptDecision : uint32_t {
+    Accepted = 1,
+    Retry = 2,
+    Failed = 3,
+};
+
+struct RkAttemptRecord {
+    uint64_t attempt = 0;
+    uint64_t target_step = 0;
+    double time_seconds = 0.0;
+    double dt_attempt_seconds = 0.0;
+    double eta = 0.0;
+    double max_norm_defect = 0.0;
+    double max_spin_rotation = 0.0;
+    RkAttemptDecision decision = RkAttemptDecision::Accepted;
+    uint32_t reason = 0;
+    double dt_next_seconds = 0.0;
+    uint32_t demag_solve_count = 0;
+    uint32_t demag_linear_iterations = 0;
+    double demag_linear_residual = 0.0;
+    uint32_t rhs_evaluations = 0;
+    int32_t estimator_order = 0;
+};
+
+struct RkAttemptTraceState {
+    static constexpr std::size_t max_records = 64;
+    std::vector<RkAttemptRecord> records;
+};
+
 /*
  * Runtime owner for the reusable explicit RK workspace.
  *
@@ -59,6 +88,7 @@ struct RkStepFailureInjectionState {
 struct RkStepperRuntimeState {
     StepperWorkspace workspace{};
     RkStepFailureInjectionState failure_injection{};
+    RkAttemptTraceState attempt_trace{};
 };
 
 } // namespace fullmag::fem

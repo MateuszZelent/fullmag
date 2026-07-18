@@ -188,6 +188,14 @@ pub struct SolverStatusResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dt_seconds: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_estimate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_error: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dt_suggested_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rejected_attempts: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub sim_time_seconds: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pseudo_time_seconds: Option<f64>,

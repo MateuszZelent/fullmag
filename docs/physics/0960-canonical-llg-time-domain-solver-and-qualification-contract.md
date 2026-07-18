@@ -462,6 +462,20 @@ attempt, t, dt_attempt, eta, norm_defect, max_rotation,
 decision, reason, dt_next, demag_iterations, demag_residual
 ```
 
+Native FEM publishes the latest step trace through the versioned
+`fullmag_fem_backend_solver_attempt_count_v1` and
+`fullmag_fem_backend_copy_solver_attempts_v1` ABI symbols. The trace capacity
+is 64 records, which is greater than the canonical 50-rejection budget plus
+the accepted attempt. Capacity exhaustion fails the step; records are never
+silently truncated. A failed outer step transaction restores the previously
+published trace together with solver state.
+
+For maximum-error mode, accepted-step telemetry converts `eta` back to the
+absolute embedded vector error `eta * max_err`, so live `Error` and `MaxError`
+have identical semantics. For advanced `atol + rtol` mode the scalar `eta`
+remains the authoritative acceptance metric and no misleading absolute
+`MaxError` comparison is published.
+
 Required run artifacts are:
 
 - `solver_config.json` for requested/resolved configuration and runtime
@@ -471,6 +485,10 @@ Required run artifacts are:
   counts, and accepted `dt`;
 - `qualification.json` for analytic expectations, measured errors/orders,
   parity budgets, and pass/fail.
+
+Artifact creation alone writes `qualification.json` with status
+`not_evaluated`. Only the dedicated scientific qualification gate may replace
+that state with pass/fail evidence.
 
 Attempt trace is not a coalesced table-autosave observable. Output samples do
 not redefine internal steps and may be interpolated only under an explicitly
