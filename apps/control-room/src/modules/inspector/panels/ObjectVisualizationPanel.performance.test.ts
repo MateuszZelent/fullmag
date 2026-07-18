@@ -58,9 +58,11 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("Viewport-only settings");
   });
 
-  it("disables every pass control while a target is hidden but preserves Visible and reset", () => {
-    expect(panelSource).toContain("const passControlsDisabled = pending || !settings?.visible;");
-    expect(panelSource).toContain("label=\"Visible\"");
+  it("disables dependent pass controls while preserving recovery controls and reset", () => {
+    expect(panelSource).toContain("renderResolution?.degradedReasons.length");
+    expect(panelSource).toContain('aria-label="Toggle target visibility"');
+    expect(panelSource).not.toContain('aria-label="Toggle surface shading"');
+    expect(panelSource).not.toContain('aria-label="Toggle wireframe overlay"');
     expect(panelSource).toContain("disabled={pending}");
     expect(panelSource).toContain("resetLabel={visualizationResetActionLabel(target.kind)}");
     expect(panelSource).toContain("disabled={pending}");
@@ -68,7 +70,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
 
   it("renders target quantity selection inside the visualization inspector", () => {
     expect(panelSource).toContain("VisualizationQuantitySection");
-    expect(panelSource).toContain('label="Quantity source"');
+    expect(panelSource).toContain('label="Quantity Source"');
     expect(panelSource).toContain("quantitySourcePatch(settings, event.target.value)");
     expect(panelSource).toContain("onFieldCatalogRequest()");
   });
@@ -88,10 +90,17 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("resetChildRegionTargets");
   });
 
-  it("renders the airbox synthetic vector developer toggle locally", () => {
-    expect(panelSource).toContain('label="Dev fallback +Z"');
-    expect(panelSource).toContain("airboxSyntheticVectorsEnabled");
+  it("keeps the synthetic Airbox vector fallback out of the production inspector", () => {
+    expect(panelSource).not.toContain('label="Dev fallback +Z"');
     expect(panelSource).toContain("visualization.patchViewportPreferences(resolvedTarget, localPatch)");
+  });
+
+  it("uses target capabilities and one geometry extent control", () => {
+    expect(panelSource).toContain("visualizationTargetCapabilities(targetKind)");
+    expect(panelSource).toContain("targetKind={target.kind}");
+    expect(panelSource.match(/<VisualizationGeometryScopeSection/g)).toHaveLength(1);
+    expect(panelSource).not.toContain('label="Arrow extent"');
+    expect(panelSource).not.toContain('aria-label="Vectors geometry scope"');
   });
 
   it("does not promise per-part persistence for object-owned surface vector toggles", () => {

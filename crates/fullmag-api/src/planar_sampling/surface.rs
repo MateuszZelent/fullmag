@@ -63,15 +63,14 @@ pub(super) fn sample_boundary(
         }
     }
 
-    let mut pixel_faces =
-        vec![Vec::<(Vec<f64>, f64, f64, f64, u32)>::new(); pixel_count];
+    let mut pixel_faces = vec![Vec::<(Vec<f64>, f64, f64, f64, u32)>::new(); pixel_count];
     for faces in faces_by_key.values().filter(|faces| faces.len() == 1) {
         let face = faces[0];
         let points = face.nodes.map(|node| field.nodes()[node as usize]);
         let ab = sub(points[1], points[0]);
         let ac = sub(points[2], points[0]);
         let area_vector = cross(ab, ac);
-        if dot(area_vector, area_vector) <= f64::EPSILON {
+        if dot(area_vector, area_vector) == 0.0 {
             continue;
         }
         let opposite = field.nodes()[face.opposite as usize];
@@ -94,8 +93,34 @@ pub(super) fn sample_boundary(
             .collect::<Vec<_>>();
         let du = (frame.bounds[1] - frame.bounds[0]) / request.resolution[0] as f64;
         let dv = (frame.bounds[3] - frame.bounds[2]) / request.resolution[1] as f64;
-        for y in 0..request.resolution[1] {
-            for x in 0..request.resolution[0] {
+        let u_min = polygon
+            .iter()
+            .map(|vertex| vertex.uvn[0])
+            .fold(f64::INFINITY, f64::min);
+        let u_max = polygon
+            .iter()
+            .map(|vertex| vertex.uvn[0])
+            .fold(f64::NEG_INFINITY, f64::max);
+        let v_min = polygon
+            .iter()
+            .map(|vertex| vertex.uvn[1])
+            .fold(f64::INFINITY, f64::min);
+        let v_max = polygon
+            .iter()
+            .map(|vertex| vertex.uvn[1])
+            .fold(f64::NEG_INFINITY, f64::max);
+        let Some((x_start, x_end)) =
+            pixel_overlap_range(u_min, u_max, frame.bounds[0], du, request.resolution[0])
+        else {
+            continue;
+        };
+        let Some((y_start, y_end)) =
+            pixel_overlap_range(v_min, v_max, frame.bounds[2], dv, request.resolution[1])
+        else {
+            continue;
+        };
+        for y in y_start..=y_end {
+            for x in x_start..=x_end {
                 let u_min = frame.bounds[0] + x as f64 * du;
                 let v_min = frame.bounds[2] + y as f64 * dv;
                 let clipped =
@@ -104,13 +129,7 @@ pub(super) fn sample_boundary(
                     continue;
                 };
                 let pixel = (y * request.resolution[0] + x) as usize;
-                pixel_faces[pixel].push((
-                    value,
-                    area,
-                    depth,
-                    facing,
-                    face.parent_element_id,
-                ));
+                pixel_faces[pixel].push((value, area, depth, facing, face.parent_element_id));
             }
         }
     }
@@ -202,6 +221,20 @@ pub(super) fn sample_boundary(
         source_entity_ids,
         overlay: None,
     })
+}
+
+fn pixel_overlap_range(
+    projected_min: f64,
+    projected_max: f64,
+    frame_min: f64,
+    pixel_size: f64,
+    resolution: u32,
+) -> Option<(u32, u32)> {
+    let first = ((projected_min - frame_min) / pixel_size).floor() as i64;
+    let last = ((projected_max - frame_min) / pixel_size).floor() as i64;
+    let first = first.max(0);
+    let last = last.min(resolution as i64 - 1);
+    (first <= last).then_some((first as u32, last as u32))
 }
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

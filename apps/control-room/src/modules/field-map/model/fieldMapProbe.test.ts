@@ -12,6 +12,9 @@ describe("field-map probes", () => {
     expect(
       localProbe(0.75, 0.25, [0, 1, 0, 1], [2, 2], [1, 2, 3, 4], [0, 1, 0, 0]),
     ).toMatchObject({ occupancy: "empty", value: null });
+    expect(
+      localProbe(0.75, 0.25, [0, 1, 0, 1], [2, 2], [1, 2, 3, 4], [0, 4, 0, 0]),
+    ).toMatchObject({ occupancy: "overlap_ambiguous", value: 2 });
   });
 
   it("maps a pinned planar probe into exact world coordinates", () => {

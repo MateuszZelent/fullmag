@@ -137,8 +137,6 @@ export function CrossSectionInspectorPanel({ selection }: InspectorPanelProps) {
       },
       "inspector",
     );
-    kernel.layout.setActiveViewportMainModule("cross-section-image");
-    kernel.layout.setFocusedSlot("viewport-main");
     kernel.layout.setPanelVisible("right", true);
   };
 

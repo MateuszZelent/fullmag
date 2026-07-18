@@ -80,6 +80,9 @@ pub struct FdmGridCertificateIR {
     /// Deterministic legend for numeric region IDs in `FdmPlanIR.region_mask`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub region_legend: Vec<FdmRegionLegendEntryIR>,
+    /// Canonical object identities represented by this single-grid realization.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_ids: Vec<String>,
     /// SHA-256 of the canonical region legend, when a realized region mask exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_legend_fingerprint: Option<String>,
@@ -184,6 +187,7 @@ impl FdmGridCertificateIR {
             estimated_bytes,
             grid_fingerprint,
             region_legend: Vec::new(),
+            object_ids: Vec::new(),
             region_legend_fingerprint: None,
         };
         certificate.validate()?;
@@ -197,6 +201,14 @@ impl FdmGridCertificateIR {
         let payload = serde_json::to_vec(&legend).unwrap_or_default();
         self.region_legend_fingerprint = Some(format!("sha256:{:x}", Sha256::digest(payload)));
         self.region_legend = legend;
+        self
+    }
+
+    /// Attach the canonical object aliases represented by the active-cell mask.
+    pub fn with_object_ids(mut self, mut object_ids: Vec<String>) -> Self {
+        object_ids.sort();
+        object_ids.dedup();
+        self.object_ids = object_ids;
         self
     }
 

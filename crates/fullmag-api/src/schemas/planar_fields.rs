@@ -25,6 +25,8 @@ pub struct PlanarFieldProbeQuery {
     pub u_m: f64,
     pub v_m: f64,
     pub component: Option<String>,
+    pub resolution_x: Option<u32>,
+    pub resolution_y: Option<u32>,
     pub scope_kind: Option<String>,
     pub scope_id: Option<String>,
     pub stage_id: Option<String>,

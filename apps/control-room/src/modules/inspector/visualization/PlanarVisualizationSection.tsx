@@ -113,13 +113,15 @@ export function PlanarVisualizationSection({
           })
         }
       >
-        {(fieldCatalog.data?.quantities ?? [])
-          .filter((quantity) => quantity.available)
-          .map((quantity) => (
+        {(fieldCatalog.data?.quantities ?? []).flatMap((quantity) =>
+          quantity.available
+            ? [(
             <option key={quantity.quantity_id} value={quantity.quantity_id}>
               {quantity.label} ({quantity.unit || "1"})
             </option>
-          ))}
+              )]
+            : [],
+        )}
       </FormField>
       <FormField
         label="Component"

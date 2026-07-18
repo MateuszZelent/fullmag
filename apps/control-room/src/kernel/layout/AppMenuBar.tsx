@@ -4,7 +4,6 @@ import { ChevronDown, Search } from "lucide-react";
 import { useEffect, useMemo, useReducer, useSyncExternalStore } from "react";
 
 import { useTheme } from "@/design/theme/ThemeProvider";
-import { commandPaletteStore } from "@/modules/overlay/commandPaletteStore";
 import {
   SIMULATION_SOLVER_STATUS_PATH,
   SESSION_STATUS_PATH,
@@ -526,8 +525,7 @@ export function AppMenuBar() {
 
       <label
         className="fm-header__search"
-        onClick={() => commandPaletteStore.open()}
-        style={{ cursor: "pointer" }}
+        onClick={() => runCommand("workspace.command-palette")}
       >
         <Search size={13} aria-hidden="true" />
         <input
@@ -537,7 +535,7 @@ export function AppMenuBar() {
           type="text"
           onFocus={(e) => {
             e.target.blur();
-            commandPaletteStore.open();
+            runCommand("workspace.command-palette");
           }}
         />
       </label>

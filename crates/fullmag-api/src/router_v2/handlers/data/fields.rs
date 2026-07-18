@@ -1,7 +1,7 @@
 //! Field endpoints — catalog, meta, binary vector (P1 component), and 2D slice (P2).
 
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read};
 use std::sync::Arc;
 
@@ -12,9 +12,9 @@ use axum::Json;
 use serde::Deserialize;
 
 use super::field_resolution::{
-    extract_fdm_field, extract_fem_field, field_values_match_current_domain,
-    flatten_json_field_values, json_field_grid, live_magnetization_available,
-    live_magnetization_values,
+    extract_fdm_field, extract_fem_field, fem_magnetic_node_indices,
+    field_values_match_current_domain, flatten_json_field_values, json_field_grid,
+    live_magnetization_available, live_magnetization_values,
 };
 use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
@@ -972,6 +972,7 @@ struct ResolvedFieldScope {
     kind: String,
     id: Option<String>,
     node_indices: Vec<usize>,
+    value_indices: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1071,6 +1072,7 @@ fn resolve_field_scope(
                     part,
                     geometry_scope == "surface",
                 )?,
+                value_indices: Vec::new(),
             }
         }
         "selection" => {
@@ -1095,10 +1097,40 @@ fn resolve_field_scope(
     let node_indices = scope
         .node_indices
         .into_iter()
-        .filter(|index| *index < raw_point_count)
+        .filter(|index| *index < mesh.nodes.len())
         .collect::<Vec<_>>();
+    let value_indices = if raw_point_count == mesh.nodes.len() {
+        node_indices.clone()
+    } else if quantity_spatial_domain(quantity_id) == "magnetic_only" {
+        let magnetic_node_indices = fem_magnetic_node_indices(mesh).ok_or_else(|| {
+            ApiError::conflict(format!(
+                "compact field '{quantity_id}' has no resolvable magnetic-node mapping"
+            ))
+        })?;
+        if magnetic_node_indices.len() != raw_point_count {
+            return Err(ApiError::conflict(format!(
+                "compact field '{quantity_id}' length does not match the FEM magnetic-node mapping"
+            )));
+        }
+        let compact_index_by_node = magnetic_node_indices
+            .into_iter()
+            .enumerate()
+            .map(|(compact_index, node_index)| (node_index as usize, compact_index))
+            .collect::<BTreeMap<_, _>>();
+        node_indices
+            .iter()
+            .filter_map(|node_index| compact_index_by_node.get(node_index).copied())
+            .collect()
+    } else {
+        node_indices
+            .iter()
+            .copied()
+            .filter(|index| *index < raw_point_count)
+            .collect()
+    };
     Ok(Some(ResolvedFieldScope {
         node_indices,
+        value_indices,
         ..scope
     }))
 }
@@ -1162,6 +1194,7 @@ fn resolve_object_scope(
             kind: "object".to_string(),
             id: Some(object_id.to_string()),
             node_indices: node_indices_for_part(part),
+            value_indices: Vec::new(),
         });
     }
 
@@ -1179,6 +1212,7 @@ fn resolve_object_scope(
         kind: "object".to_string(),
         id: Some(object_id.to_string()),
         node_indices: node_indices_for_segment(mesh, segment),
+        value_indices: Vec::new(),
     })
 }
 
@@ -1299,6 +1333,7 @@ fn resolve_part_scope(
         kind: public_kind.to_string(),
         id: Some(part.id.clone()),
         node_indices: node_indices_for_part(part),
+        value_indices: Vec::new(),
     })
 }
 
@@ -1363,8 +1398,8 @@ fn apply_field_scope(
     if n_comp == 0 {
         return raw_values;
     }
-    let mut scoped = Vec::with_capacity(scope.node_indices.len() * n_comp);
-    for point_index in &scope.node_indices {
+    let mut scoped = Vec::with_capacity(scope.value_indices.len() * n_comp);
+    for point_index in &scope.value_indices {
         let start = point_index.saturating_mul(n_comp);
         let end = start.saturating_add(n_comp);
         if end <= raw_values.len() {
@@ -1403,8 +1438,16 @@ fn sample_field_scope(
 
     let sample_count = max_samples.max(1);
     let stride = (scope.node_indices.len() / sample_count).max(1);
-    scope.node_indices = (0..sample_count)
-        .filter_map(|sample| scope.node_indices.get(sample * stride).copied())
+    let sampled_positions = (0..sample_count)
+        .map(|sample| sample * stride)
+        .collect::<Vec<_>>();
+    scope.node_indices = sampled_positions
+        .iter()
+        .filter_map(|position| scope.node_indices.get(*position).copied())
+        .collect();
+    scope.value_indices = sampled_positions
+        .iter()
+        .filter_map(|position| scope.value_indices.get(*position).copied())
         .collect();
     scope
 }
@@ -4767,10 +4810,10 @@ fn urlencoding(s: &str) -> String {
 mod tests {
     use super::{
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
-        decode_complex_f64_pairs_little_endian, is_fem_runtime, parse_analysis_eigen_mode_field_id,
-        parse_analysis_frequency_response_field_id, parse_component, project_values,
-        resolve_field_scope, serialize_analysis_field_vector_binary, FieldVectorQuery,
-        ResolvedFieldScopeDomain,
+        apply_field_scope, decode_complex_f64_pairs_little_endian, is_fem_runtime,
+        parse_analysis_eigen_mode_field_id, parse_analysis_frequency_response_field_id,
+        parse_component, project_values, resolve_field_scope,
+        serialize_analysis_field_vector_binary, FieldVectorQuery, ResolvedFieldScopeDomain,
     };
     use crate::session::default_current_live_state;
     use crate::types::CurrentLiveSnapshotRequest;
@@ -4923,6 +4966,105 @@ mod tests {
         assert_eq!(scope.domain, ResolvedFieldScopeDomain::Air);
         assert_eq!(scope.id.as_deref(), Some("airbox-b"));
         assert_eq!(scope.node_indices, vec![6, 7]);
+    }
+
+    #[test]
+    fn compact_magnetic_field_scope_keeps_global_nodes_and_uses_compact_offsets() {
+        let mesh = FemMeshPayload {
+            mesh_name: "compact-scope-test".to_string(),
+            mesh_id: "compact-scope-test:1".to_string(),
+            nodes: vec![[0.0, 0.0, 0.0]; 5],
+            elements: Vec::new(),
+            element_markers: Vec::new(),
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: vec![
+                FemMeshPartPayload {
+                    id: "body-a".to_string(),
+                    label: "body-a".to_string(),
+                    role: "magnetic_object".to_string(),
+                    object_id: Some("body-a".to_string()),
+                    geometry_id: Some("body-a".to_string()),
+                    material_id: None,
+                    element_start: 0,
+                    element_count: 0,
+                    boundary_face_start: 0,
+                    boundary_face_count: 0,
+                    boundary_face_indices: Vec::new(),
+                    node_start: 0,
+                    node_count: 1,
+                    node_indices: vec![1],
+                    surface_faces: Vec::new(),
+                    bounds_min: None,
+                    bounds_max: None,
+                },
+                FemMeshPartPayload {
+                    id: "body-b".to_string(),
+                    label: "body-b".to_string(),
+                    role: "magnetic_object".to_string(),
+                    object_id: Some("body-b".to_string()),
+                    geometry_id: Some("body-b".to_string()),
+                    material_id: None,
+                    element_start: 0,
+                    element_count: 0,
+                    boundary_face_start: 0,
+                    boundary_face_count: 0,
+                    boundary_face_indices: Vec::new(),
+                    node_start: 0,
+                    node_count: 1,
+                    node_indices: vec![3],
+                    surface_faces: Vec::new(),
+                    bounds_min: None,
+                    bounds_max: None,
+                },
+            ],
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("compact-scope-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: None,
+        };
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "compact-scope-test"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.fem_mesh = Some(mesh);
+
+        let scope = resolve_field_scope(
+            &FieldVectorQuery {
+                component: Some("full".to_string()),
+                geometry_scope: None,
+                max_samples: None,
+                phase_rad: None,
+                scope_id: Some("body-b".to_string()),
+                scope_kind: Some("part".to_string()),
+                snapshot_id: None,
+                stage_id: None,
+                view: None,
+            },
+            &snapshot,
+            None,
+            2,
+            "m",
+        )
+        .expect("compact magnetic scope should resolve")
+        .expect("part scope should be scoped");
+
+        assert_eq!(scope.node_indices, vec![3]);
+        assert_eq!(scope.value_indices, vec![1]);
+        assert_eq!(
+            apply_field_scope(
+                vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                [2, 1, 1],
+                3,
+                Some(&scope),
+            ),
+            vec![0.0, 1.0, 0.0],
+        );
     }
 
     #[test]

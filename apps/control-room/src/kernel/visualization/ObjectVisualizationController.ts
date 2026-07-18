@@ -112,6 +112,7 @@ export interface ObjectVisualizationSnapshot {
 export interface PendingVisualizationTargetPatch {
   baseRevision: number;
   patch: VisualizationStoredTargetPatch;
+  target: VisualizationTargetRef;
 }
 
 export interface ResolvedTargetVisualization {
@@ -150,6 +151,29 @@ export const AIRBOX_VISUALIZATION_TARGET: VisualizationTargetRef = {
   kind: "airbox",
   label: "Airbox",
 };
+
+export interface VisualizationTargetCapabilities {
+  primaryRenderModes: readonly VisualizationRenderMode[];
+  showBoundsControl: boolean;
+}
+
+const DEFAULT_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
+  primaryRenderModes: ["surface", "surface+edges", "wireframe", "points"],
+  showBoundsControl: true,
+};
+
+const AIRBOX_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
+  primaryRenderModes: ["wireframe", "points"],
+  showBoundsControl: false,
+};
+
+export function visualizationTargetCapabilities(
+  kind: VisualizationTargetKind,
+): VisualizationTargetCapabilities {
+  return kind === "airbox"
+    ? AIRBOX_VISUALIZATION_TARGET_CAPABILITIES
+    : DEFAULT_VISUALIZATION_TARGET_CAPABILITIES;
+}
 
 export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   activeQuantityId: "m",
@@ -205,11 +229,11 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   pointColor: "var(--fm-info)",
   pointsVisible: false,
   primitiveVisible: false,
-  renderMode: "surface",
+  renderMode: "wireframe",
   scalarColorPalette: "viridis",
   shaderColorMode: "monochrome",
   shaderMonoColor: "var(--fm-airbox-fill)",
-  shaderVisible: true,
+  shaderVisible: false,
   surfaceColorSource: "solid",
   surfaceProjectionMode: "raw_nodal",
   viewportColorbarVisible: false,
@@ -223,10 +247,10 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   vectorSurfaceOffsetScale: 0,
   vectorThickness: 1,
   vectorsVisible: false,
-  visible: true,
+  visible: false,
   wireframeColor: "var(--fm-airbox-wire)",
   wireframeOpacityPercent: 100,
-  wireframeVisible: false,
+  wireframeVisible: true,
 };
 
 const DEFAULT_PART_VISUALIZATION: VisualizationTargetSettings = {
@@ -364,6 +388,7 @@ export class ObjectVisualizationController {
     const next: PendingVisualizationTargetPatch = {
       baseRevision,
       patch: nextPatch,
+      target,
     };
 
     if (
@@ -377,10 +402,18 @@ export class ObjectVisualizationController {
     this.bump();
   }
 
-  acknowledgePendingTargetPatches(revision: number): void {
+  acknowledgePendingTargetPatches(state: VisualizationStateResource): void {
     let changed = false;
     for (const [key, pending] of this.pendingOverrides) {
-      if (revision > pending.baseRevision) {
+      const persistedOverride = resolveVisualizationStateTargetOverride(
+        state,
+        pending.target,
+      );
+      if (
+        state.revision > pending.baseRevision &&
+        persistedOverride &&
+        visualizationTargetPatchSatisfiesPatch(persistedOverride, pending.patch)
+      ) {
         this.pendingOverrides.delete(key);
         changed = true;
       }
@@ -473,8 +506,15 @@ export function displayLabelForVisualizationTarget(
 }
 
 export function renderModePatch(
-  renderMode: VisualizationRenderMode,
+  renderMode: VisualizationRenderMode | "off",
 ): VisualizationTargetPatch {
+  if (renderMode === "off") {
+    return {
+      pointsVisible: false,
+      shaderVisible: false,
+      wireframeVisible: false,
+    };
+  }
   if (renderMode === "surface") {
     return {
       pointsVisible: false,
@@ -539,25 +579,14 @@ export function resolveEffectiveVisualizationSettings(
 }
 
 /**
- * Regions inherit the owner's quantity and color treatment, never its display
- * activation. A region is an opt-in subdomain target, so visibility and every
- * render pass stay on the region defaults until its own override enables them.
+ * Region visualization is a sparse override of its owner's effective state.
+ * Keeping the inherited baseline complete makes every non-overridden setting
+ * follow later owner changes instead of materializing a copied region state.
  */
 export function resolveRegionInheritedBaseline(
   ownerSettings: VisualizationTargetSettings,
 ): VisualizationTargetPatch {
-  return {
-    activeQuantityId: ownerSettings.activeQuantityId,
-    pointColor: ownerSettings.pointColor,
-    scalarColorPalette: ownerSettings.scalarColorPalette,
-    shaderColorMode: ownerSettings.shaderColorMode,
-    shaderMonoColor: ownerSettings.shaderMonoColor,
-    surfaceColorSource: ownerSettings.surfaceColorSource,
-    surfaceProjectionMode: ownerSettings.surfaceProjectionMode,
-    vectorColorMode: ownerSettings.vectorColorMode,
-    vectorMonoColor: ownerSettings.vectorMonoColor,
-    wireframeColor: ownerSettings.wireframeColor,
-  };
+  return { ...ownerSettings };
 }
 
 export function resolveDefaultVisualizationSettings(
@@ -655,13 +684,22 @@ export function resolveTargetVisualization({
 function resolvePendingTargetPatch(
   snapshot: ObjectVisualizationSnapshot,
   target: VisualizationTargetRef,
-  revision: number | undefined,
+  _revision: number | undefined,
 ): VisualizationStoredTargetPatch | null {
   const pending = snapshot.pendingOverrides?.[visualizationTargetKey(target)];
-  if (!pending || revision === undefined || revision > pending.baseRevision) {
-    return null;
-  }
-  return pending.patch;
+  return pending?.patch ?? null;
+}
+
+function visualizationTargetPatchSatisfiesPatch(
+  statePatch: VisualizationStoredTargetPatch,
+  expectedPatch: VisualizationStoredTargetPatch,
+): boolean {
+  return Object.entries(expectedPatch).every(([field, expected]) =>
+    Object.is(
+      statePatch[field as keyof VisualizationStoredTargetPatch],
+      expected,
+    ),
+  );
 }
 
 export function resolveEffectiveTargetRegistryEntry(
@@ -1418,14 +1456,6 @@ export function airboxVisualizationStatePatchFromTargetPatch(
   currentOverrides?: VisualizationStateResource["overrides"],
 ): VisualizationStatePatch {
   const normalized = normalizePatch(patch);
-  const hasExplicitDrawablePass =
-    normalized.boundsVisible !== undefined ||
-    normalized.pointsVisible !== undefined ||
-    normalized.shaderVisible !== undefined ||
-    normalized.vectorsVisible !== undefined ||
-    normalized.wireframeVisible !== undefined;
-  const shouldEnableDefaultSurface =
-    normalized.visible === true && !hasExplicitDrawablePass;
   const vectors =
     normalized.vectorsVisible === undefined && normalized.vectorBudget === undefined
       ? {}
@@ -1453,9 +1483,7 @@ export function airboxVisualizationStatePatchFromTargetPatch(
       ? {}
       : { points: { visible: normalized.pointsVisible } }),
     ...(normalized.shaderVisible === undefined
-      ? shouldEnableDefaultSurface
-        ? { surface: { visible: true } }
-        : {}
+      ? {}
       : { surface: { visible: normalized.shaderVisible } }),
     ...vectors,
     ...(normalized.visible === undefined ? {} : { visible: normalized.visible }),
@@ -1476,9 +1504,7 @@ export function airboxVisualizationStatePatchFromTargetPatch(
   const statePatch: VisualizationStatePatch = {
     ...(Object.keys(airbox).length > 0 ? { layers: { airbox } } : {}),
   };
-  const remotePatch = shouldEnableDefaultSurface
-    ? { ...normalized, shaderVisible: true }
-    : normalized;
+  const remotePatch = normalized;
   return Object.keys(remotePatch).length > 0
     ? {
         ...statePatch,

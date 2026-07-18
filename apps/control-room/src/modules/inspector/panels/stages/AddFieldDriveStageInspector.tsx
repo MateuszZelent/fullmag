@@ -26,6 +26,8 @@ import { SamplingDiagnostics } from "./SamplingDiagnostics";
 import { formatEditableNumber } from "./samplingPresentation";
 import { resolveStudyWorkflowStateBefore } from "./studyWorkflowState";
 
+const AXES = ["x", "y", "z"] as const;
+
 export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
   const draft = props.draft;
   const drive = draft?.kind === "add_field_drive" ? draft.fieldDrive : null;
@@ -41,6 +43,10 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
     [drive?.activation, props.scene],
   );
   const pipelineDrafts = props.pipelineDrafts ?? [];
+  const activeStageIds = useMemo(
+    () => new Set(drive?.activation.kind === "stage_ids" ? drive.activation.stage_ids : []),
+    [drive],
+  );
   const subsequentRuns = pipelineDrafts
     .map((candidate, index) => ({ candidate, index }))
     .slice(props.draftIndex + 1)
@@ -48,7 +54,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
   const samplingRunEntry = drive?.activation.kind === "stage_ids"
     ? subsequentRuns.find(({ candidate }) =>
         drive.activation.kind === "stage_ids" &&
-        drive.activation.stage_ids.includes(candidate.stageId),
+        activeStageIds.has(candidate.stageId),
       ) ?? null
     : subsequentRuns[0] ?? null;
   const samplingRun = samplingRunEntry?.candidate ?? null;
@@ -148,8 +154,9 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
         <label className="fm-inspector-field">
           <span>Direction (x, y, z)</span>
           <div className="fm-inspector-vector-row">
-            {[0, 1, 2].map((index) => (
+            {AXES.map((axis, index) => (
               <input
+                aria-label={`Direction ${axis}`}
                 className="fm-inspector-input"
                 disabled={!drive}
                 key={index}
@@ -602,7 +609,7 @@ export function AddFieldDriveStageInspector(props: StageInspectorFrameProps) {
             {subsequentRuns.map(({ candidate: run }) => (
               <label key={run.stageId}>
                 <input
-                  checked={drive.activation.kind === "stage_ids" && drive.activation.stage_ids.includes(run.stageId)}
+                  checked={activeStageIds.has(run.stageId)}
                   type="checkbox"
                   onChange={(event) =>
                     updateDrive((current) => {
@@ -657,8 +664,9 @@ function SpatialSincFields({
       <label className="fm-inspector-field">
         <span>Spatial axis (x, y, z)</span>
         <div className="fm-inspector-vector-row">
-          {[0, 1, 2].map((index) => (
+          {AXES.map((axisName, index) => (
             <input
+              aria-label={`Spatial axis ${axisName}`}
               className="fm-inspector-input"
               key={index}
               step="0.01"

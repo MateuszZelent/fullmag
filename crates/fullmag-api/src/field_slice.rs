@@ -426,6 +426,8 @@ pub struct FdmField {
     pub origin: Option<[f64; 3]>,
     /// Cell spacing per axis (m). Optional — used to resolve `cut_world`.
     pub spacing: Option<[f64; 3]>,
+    /// Optional canonical target membership, one flag per structured-grid cell.
+    pub active_mask: Option<Vec<bool>>,
 }
 
 /// A raw FEM nodal field over tetrahedral elements.
@@ -1820,6 +1822,7 @@ mod tests {
             values,
             origin: None,
             spacing: None,
+            active_mask: None,
         }
     }
 
@@ -1938,6 +1941,7 @@ mod tests {
             values: vec![1.0, 3.0],
             origin: None,
             spacing: None,
+            active_mask: None,
         };
 
         let min = fdm_projection(
@@ -1981,6 +1985,7 @@ mod tests {
             values: vec![1.0, 2.0, 4.0],
             origin: None,
             spacing: None,
+            active_mask: None,
         };
         for reduction in [
             "mean_occupied",

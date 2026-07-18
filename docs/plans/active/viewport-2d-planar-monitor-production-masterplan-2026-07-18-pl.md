@@ -10,20 +10,20 @@
 
 ## Global Constraints
 
-- [ ] Każda zmiana fizyki próbkowania lub numeryki zaczyna się od publikacyjnej noty w `docs/physics/`; kod nie wyprzedza zatwierdzonej semantyki.
-- [ ] `PlanarMonitor` opisuje geometrię, zakres przestrzenny, target i operator redukcji. Quantity, komponent, paleta, jednostka prezentacji i zakres koloru należą do profilu widoku, dzięki czemu jeden monitor działa dla wielu quantities.
-- [ ] Wynik fizyczny nigdy nie jest prostą średnią z węzłów. Liczba węzłów i elementów jest diagnostyką; wartość jest ważona miarą przecięcia: objętością, powierzchnią albo długością wzdłuż normalnej.
-- [ ] FDM i FEM używają wspólnych równań i wspólnego kontraktu wyniku, ale odrębnych, jawnych realizacji numerycznych.
-- [ ] Wszystkie wartości transportowane przez data plane są w SI. Zmiana `A/m ↔ T`, prefiksów i innych jednostek pozostaje prezentacyjna.
-- [ ] `viewport-3d` pozostaje jedyną powierzchnią WebGL/R3F. `field-map` nie importuje Three.js, R3F ani kodu warstw 3D.
-- [ ] Tylko aktywny moduł `viewport-main` jest zamontowany. Nie wolno utrzymywać ukrytego canvasa, workera, subskrypcji ciężkich zasobów ani pętli animacji dla nieaktywnego modułu.
-- [ ] React components nie wykonują bezpośredniego `fetch()`, nie składają ścieżek z route family `/v2/` i nie przechowują dużych typed arrays w React state.
-- [ ] Każda nowa ścieżka JSON jest najpierw opisana w OpenAPI; frontend używa generowanych typów, `ControlRoomApi` i resource hooks.
-- [ ] Wszystkie klasy CSS w `apps/control-room` mają prefiks `fm-`; komponenty konsumują `--fm-*`; `app/globals.css` pozostaje import-only.
-- [ ] Interaktywne prymitywy używają współdzielonej warstwy shadcn/ui-style, a nie lokalnych odpowiedników.
-- [ ] Pierwszy render klienta musi być zgodny z SSR; stan layoutu, store, cache i browser APIs wymaga `useSyncExternalStore` albo jawnej bramki hydracji.
-- [ ] Każda zmiana natywnego FEM/MFEM lub rzeczywista walidacja FEM używa najpierw dopasowanej receptury `just`; hostowe `cargo`, bezpośredni runtime i ręczny Docker są wyłącznie diagnostyką.
-- [ ] Współdzielony brudny worktree jest zachowywany. Przed każdym committem implementator uruchamia osobno `git diff --cached --name-only` i stage'uje wyłącznie pliki bieżącego zadania.
+- [x] Każda zmiana fizyki próbkowania lub numeryki zaczyna się od publikacyjnej noty w `docs/physics/`; kod nie wyprzedza zatwierdzonej semantyki.
+- [x] `PlanarMonitor` opisuje geometrię, zakres przestrzenny, target i operator redukcji. Quantity, komponent, paleta, jednostka prezentacji i zakres koloru należą do profilu widoku, dzięki czemu jeden monitor działa dla wielu quantities.
+- [x] Wynik fizyczny nigdy nie jest prostą średnią z węzłów. Liczba węzłów i elementów jest diagnostyką; wartość jest ważona miarą przecięcia: objętością, powierzchnią albo długością wzdłuż normalnej.
+- [x] FDM i FEM używają wspólnych równań i wspólnego kontraktu wyniku, ale odrębnych, jawnych realizacji numerycznych.
+- [x] Wszystkie wartości transportowane przez data plane są w SI. Zmiana `A/m ↔ T`, prefiksów i innych jednostek pozostaje prezentacyjna.
+- [x] `viewport-3d` pozostaje jedyną powierzchnią WebGL/R3F. `field-map` nie importuje Three.js, R3F ani kodu warstw 3D.
+- [x] Tylko aktywny moduł `viewport-main` jest zamontowany. Nie wolno utrzymywać ukrytego canvasa, workera, subskrypcji ciężkich zasobów ani pętli animacji dla nieaktywnego modułu.
+- [x] React components nie wykonują bezpośredniego `fetch()`, nie składają ścieżek z route family `/v2/` i nie przechowują dużych typed arrays w React state.
+- [x] Każda nowa ścieżka JSON jest najpierw opisana w OpenAPI; frontend używa generowanych typów, `ControlRoomApi` i resource hooks.
+- [x] Wszystkie klasy CSS w `apps/control-room` mają prefiks `fm-`; komponenty konsumują `--fm-*`; `app/globals.css` pozostaje import-only.
+- [x] Interaktywne prymitywy używają współdzielonej warstwy shadcn/ui-style, a nie lokalnych odpowiedników.
+- [x] Pierwszy render klienta musi być zgodny z SSR; stan layoutu, store, cache i browser APIs wymaga `useSyncExternalStore` albo jawnej bramki hydracji.
+- [x] Każda zmiana natywnego FEM/MFEM lub rzeczywista walidacja FEM używa najpierw dopasowanej receptury `just`; hostowe `cargo`, bezpośredni runtime i ręczny Docker są wyłącznie diagnostyką.
+- [x] Współdzielony brudny worktree jest zachowywany. Przed każdym committem implementator uruchamia osobno `git diff --cached --name-only` i stage'uje wyłącznie pliki bieżącego zadania.
 
 ---
 
@@ -1594,16 +1594,16 @@ Expected: canonical rewrite zawiera `study.monitors.add_planar`, drugi export da
 - `crates/fullmag-api/src/fem_slice_overlay.rs`;
 - `crates/fullmag-api/src/router_v2/handlers/data/fields.rs`.
 
-- [ ] Najpierw dodać manufactured tests: constant scalar, linear scalar, vector basis, empty mask, partial occupancy.
-- [ ] Dodać skew-tetra fixture, dla którego node average różni się od volume-weighted analytic value.
-- [ ] Dodać mesh refinement invariance gate.
-- [ ] Zaimplementować frame resolution i common result.
-- [ ] Przenieść FDM plane/slab/depth do jednego implementation.
-- [ ] Przenieść FEM exact plane i conservative projection bez zmiany obecnych wyników.
-- [ ] Dodać arbitrary frame.
-- [ ] Dodać surface projection z overlap diagnostics.
-- [ ] Przepiąć stare endpoints przez compatibility adapter.
-- [ ] Uruchomić:
+- [x] Najpierw dodać manufactured tests: constant scalar, linear scalar, vector basis, empty mask, partial occupancy.
+- [x] Dodać skew-tetra fixture, dla którego node average różni się od volume-weighted analytic value.
+- [x] Dodać mesh refinement invariance gate.
+- [x] Zaimplementować frame resolution i common result.
+- [x] Przenieść FDM plane/slab/depth do jednego implementation.
+- [x] Przenieść FEM exact plane i conservative projection bez zmiany obecnych wyników.
+- [x] Dodać arbitrary frame.
+- [x] Dodać surface projection z overlap diagnostics.
+- [x] Przepiąć stare endpoints przez compatibility adapter.
+- [x] Uruchomić:
 
 ```bash
 cargo test -p fullmag-api planar_sampling
@@ -1642,16 +1642,16 @@ Expected tolerances z physics note:
 - `apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.ts`;
 - `apps/control-room/src/kernel/realtime/RealtimeInvalidationBridge.test.ts`.
 
-- [ ] Najpierw dodać failing route tests dla CRUD, revision conflict, invalid target i missing monitor.
-- [ ] Dodać failing data tests dla meta/scalar/vectors/mask/overlay/probe/PNG.
-- [ ] Dodać scope tests: mesh part i airbox zawężają target tylko dla bieżącej mesh revision; stale part zwraca `stale_mesh_scope`.
-- [ ] Dodać field-source tests: live default, valid stage snapshot, snapshot bez stage, snapshot spoza stage i stale snapshot revision.
-- [ ] Dodać ETag/304 oraz stale mesh/field conflict tests.
-- [ ] Zaimplementować model transactions przez SceneDocument.
-- [ ] Zaimplementować data routes przez `PlanarSamplingEngine`.
-- [ ] Dodać bounded query validation przed alokacją.
-- [ ] Dodać invalidation-only realtime tests.
-- [ ] Uruchomić:
+- [x] Najpierw dodać failing route tests dla CRUD, revision conflict, invalid target i missing monitor.
+- [x] Dodać failing data tests dla meta/scalar/vectors/mask/overlay/probe/PNG.
+- [x] Dodać scope tests: mesh part i airbox zawężają target tylko dla bieżącej mesh revision; stale part zwraca `stale_mesh_scope`.
+- [x] Dodać field-source tests: live default, valid stage snapshot, snapshot bez stage, snapshot spoza stage i stale snapshot revision.
+- [x] Dodać ETag/304 oraz stale mesh/field conflict tests.
+- [x] Zaimplementować model transactions przez SceneDocument.
+- [x] Zaimplementować data routes przez `PlanarSamplingEngine`.
+- [x] Dodać bounded query validation przed alokacją.
+- [x] Dodać invalidation-only realtime tests.
+- [x] Uruchomić:
 
 ```bash
 cargo test -p fullmag-api planar_monitor
@@ -1681,12 +1681,12 @@ Expected: wszystkie routes obecne w OpenAPI, heavy arrays nieobecne w status i W
 - `apps/control-room/src/kernel/resources/ResourceInvalidationController.ts`;
 - generated API files przez generator.
 
-- [ ] Najpierw dodać facade tests, resource key normalization tests, 304-without-cache failure i cancellation tests.
-- [ ] Uruchomić `pnpm --dir apps/control-room generate:api`.
-- [ ] Dodać facade methods bez ręcznego response typing, jeśli generated schema wystarcza.
-- [ ] Dodać resource hooks z `enabled` i revision-aware caches.
-- [ ] Dodać tests, że inactive hook nie wysyła request.
-- [ ] Uruchomić:
+- [x] Najpierw dodać facade tests, resource key normalization tests, 304-without-cache failure i cancellation tests.
+- [x] Uruchomić `pnpm --dir apps/control-room generate:api`.
+- [x] Dodać facade methods bez ręcznego response typing, jeśli generated schema wystarcza.
+- [x] Dodać resource hooks z `enabled` i revision-aware caches.
+- [x] Dodać tests, że inactive hook nie wysyła request.
+- [x] Uruchomić:
 
 ```bash
 pnpm --dir apps/control-room test -- src/kernel/api/ControlRoomApi.test.ts
@@ -1711,14 +1711,14 @@ Expected: zero ręcznych endpoint strings poza API layer, generated diff zgodny 
 - `apps/control-room/src/kernel/resources/inactiveViewportResourcePolicy.ts`;
 - `apps/control-room/app/globals.css` przez dodanie importu `../src/design/styles/field-map.css` w warstwie `fm-modules`.
 
-- [ ] Najpierw dodać manifest/module/store/data-plan tests.
-- [ ] Dodać hydration-safe external store.
-- [ ] Dodać canvas lifecycle test z mocked 2D context.
-- [ ] Dodać worker protocol i scalar colorization tests.
-- [ ] Dodać resize/RAF/dispose tests.
-- [ ] Zaimplementować loading/empty/error/stale/degraded surfaces.
-- [ ] Dodać axes, colorbar, units i auto/manual range.
-- [ ] Uruchomić:
+- [x] Najpierw dodać manifest/module/store/data-plan tests.
+- [x] Dodać hydration-safe external store.
+- [x] Dodać canvas lifecycle test z mocked 2D context.
+- [x] Dodać worker protocol i scalar colorization tests.
+- [x] Dodać resize/RAF/dispose tests.
+- [x] Zaimplementować loading/empty/error/stale/degraded surfaces.
+- [x] Dodać axes, colorbar, units i auto/manual range.
+- [x] Uruchomić:
 
 ```bash
 pnpm --dir apps/control-room test -- src/modules/field-map
@@ -1750,15 +1750,15 @@ Expected: aktywny `field-map` renderuje scalar fixture; inactive moduł nie subs
 - `apps/control-room/src/modules/field-map/renderer/meshOverlay.ts`;
 - `apps/control-room/src/modules/field-map/renderer/meshOverlay.test.ts`.
 
-- [ ] Najpierw dodać vector basis tests dla `xy/xz/yz` i arbitrary frame.
-- [ ] Dodać zero-vector i orientation epsilon tests.
-- [ ] Dodać deterministic budget tests.
-- [ ] Dodać marching squares golden tests, w tym masked holes.
-- [ ] Dodać FMCS frame mapping i segment cap tests.
-- [ ] Dodać surface overlap/fold diagnostic tests.
-- [ ] Dodać local hover i exact pinned probe tests.
-- [ ] Zaimplementować warstwy bez React object per sample.
-- [ ] Uruchomić:
+- [x] Najpierw dodać vector basis tests dla `xy/xz/yz` i arbitrary frame.
+- [x] Dodać zero-vector i orientation epsilon tests.
+- [x] Dodać deterministic budget tests.
+- [x] Dodać marching squares golden tests, w tym masked holes.
+- [x] Dodać FMCS frame mapping i segment cap tests.
+- [x] Dodać surface overlap/fold diagnostic tests.
+- [x] Dodać local hover i exact pinned probe tests.
+- [x] Zaimplementować warstwy bez React object per sample.
+- [x] Uruchomić:
 
 ```bash
 pnpm --dir apps/control-room test -- src/modules/field-map/renderer
@@ -1789,11 +1789,11 @@ Expected: vector count bounded, contours nie przechodzą przez maskę, mesh phys
 - `apps/control-room/src/modules/viewport-3d` tylko dla compatibility;
 - `crates/fullmag-api/src/router_v2/tests.rs`.
 
-- [ ] Najpierw dodać backend schema default/migration/patch tests.
-- [ ] Dodać frontend tests, że planar changes nie zmieniają 3D profile.
-- [ ] Dodać tests, że 3D changes nie invalidują planar field buffers, jeśli monitor/field się nie zmienił.
-- [ ] Dodać `planar` branch i compatibility projection.
-- [ ] Uruchomić:
+- [x] Najpierw dodać backend schema default/migration/patch tests.
+- [x] Dodać frontend tests, że planar changes nie zmieniają 3D profile.
+- [x] Dodać tests, że 3D changes nie invalidują planar field buffers, jeśli monitor/field się nie zmienił.
+- [x] Dodać `planar` branch i compatibility projection.
+- [x] Uruchomić:
 
 ```bash
 cargo test -p fullmag-api visualization_state
@@ -1812,14 +1812,14 @@ Expected: oba profile round-trip niezależnie; istniejący 3D suite nie regresuj
 
 **Modify:** pliki inspectorów wymienione w sekcji 10.3.
 
-- [ ] Najpierw dodać coverage table jako parameterized test dla object, region, part, airbox, spatial result i monitor.
-- [ ] Dodać test, że context switch wykonuje command/layout change.
-- [ ] Dodać test, że general/material/physics sections nie są duplikowane.
-- [ ] Dodać 2D controls i capability reasons.
-- [ ] Mesh part i airbox inspectory ustawiają runtime `PlanarViewScope`; nie patchują `PlanarMonitorIR`.
-- [ ] Zachować wspólne quantity/unit/range primitives.
-- [ ] Dodać accessibility i SSR snapshot tests.
-- [ ] Uruchomić:
+- [x] Najpierw dodać coverage table jako parameterized test dla object, region, part, airbox, spatial result i monitor.
+- [x] Dodać test, że context switch wykonuje command/layout change.
+- [x] Dodać test, że general/material/physics sections nie są duplikowane.
+- [x] Dodać 2D controls i capability reasons.
+- [x] Mesh part i airbox inspectory ustawiają runtime `PlanarViewScope`; nie patchują `PlanarMonitorIR`.
+- [x] Zachować wspólne quantity/unit/range primitives.
+- [x] Dodać accessibility i SSR snapshot tests.
+- [x] Uruchomić:
 
 ```bash
 pnpm --dir apps/control-room test -- src/modules/inspector
@@ -1845,13 +1845,13 @@ Expected: każdy relevant semantic target ma 3D i 2D visualization context; brak
 - `apps/control-room/src/modules/inspector/panels/CrossSectionInspectorPanel.tsx`;
 - `apps/control-room/src/modules/inspector/panels/CrossSectionInspectorPanel.test.tsx`.
 
-- [ ] Najpierw dodać tree tests dla Definitions/Monitors i Results/Spatial fields.
-- [ ] Dodać draft/apply/discard/conflict tests.
-- [ ] Dodać command registry tests dla menu/ribbon/shortcut/context menu.
-- [ ] Przekierować `2D` do `field-map.open`.
-- [ ] Konwertować stare draft state do `PlanarMonitorDraft`.
-- [ ] Utrzymać 3D frame preview przez lekką warstwę, bez 2D WebGL.
-- [ ] Uruchomić:
+- [x] Najpierw dodać tree tests dla Definitions/Monitors i Results/Spatial fields.
+- [x] Dodać draft/apply/discard/conflict tests.
+- [x] Dodać command registry tests dla menu/ribbon/shortcut/context menu.
+- [x] Przekierować `2D` do `field-map.open`.
+- [x] Konwertować stare draft state do `PlanarMonitorDraft`.
+- [x] Utrzymać 3D frame preview przez lekką warstwę, bez 2D WebGL.
+- [x] Uruchomić:
 
 ```bash
 pnpm --dir apps/control-room test -- src/modules/explorer
@@ -1879,13 +1879,13 @@ Expected: jedna command source, committed monitor pojawia się w SceneDocument i
 - `apps/control-room/src/design/styles/cross-section-image.css`;
 - cross-section explorer/ribbon assumptions.
 
-- [ ] Dodać `field-map.export-png` używający planar `render.png`.
-- [ ] Zachować mesh quality export przez istniejący cross-section image endpoint albo adapter do planar surface.
-- [ ] Dodać download filename z monitor, quantity, revision i unit-safe slug.
-- [ ] Dodać object URL revoke tests.
-- [ ] Wyrejestrować top-level `cross-section-image` dopiero po browser parity.
-- [ ] Usunąć osierocone command ids, styles i tests odnoszące się do starego top-level behavior.
-- [ ] Uruchomić:
+- [x] Dodać `field-map.export-png` używający planar `render.png`.
+- [x] Zachować mesh quality export przez istniejący cross-section image endpoint albo adapter do planar surface.
+- [x] Dodać download filename z monitor, quantity, revision i unit-safe slug.
+- [x] Dodać object URL revoke tests.
+- [x] Wyrejestrować top-level `cross-section-image` dopiero po browser parity.
+- [x] Usunąć osierocone command ids, styles i tests odnoszące się do starego top-level behavior.
+- [x] Uruchomić:
 
 ```bash
 pnpm --dir apps/control-room test -- src/modules/cross-section-image src/modules/field-map
@@ -1909,22 +1909,22 @@ Expected: ostatnie `rg` nie znajduje aktywnego command; export PNG nadal działa
 
 **Modify:** `justfile`.
 
-- [ ] Dodać recepturę o sygnaturze:
+- [x] Dodać recepturę o sygnaturze:
 
 ```make
 run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" api_port="8194":
 ```
 
-- [ ] Receptura wywołuje `just ensure-python` i `just ensure-managed-fem-runtime`, wybiera fixture na podstawie `backend`, uruchamia zarządzany runtime, czeka na API/workspace, uruchamia `pnpm --dir apps/control-room smoke:viewport-2d` i zatrzymuje wyłącznie proces, który sama utworzyła.
-- [ ] Raporty zapisuje pod `.fullmag/reports/viewport-2d-planar-monitor-smoke/<backend>-<device>/`, łącznie z runtime log, browser log i JSON science report.
-- [ ] Fixture publikuje constant, linear scalar i vector field w znanych jednostkach.
-- [ ] FDM sprawdza plane, slab, depth oraz axis/arbitrary parity.
-- [ ] FEM sprawdza P1 skew tetra, measure weighting, refinement invariance i surface boundary.
-- [ ] Cross-backend porównuje to samo pole ciągłe po jawnej rekonstrukcji.
-- [ ] Uruchomić czyste kontraktowe testy Rust.
-- [ ] Uruchomić `just ensure-managed-fem-runtime`.
-- [ ] Jeżeli source objęty manifest stale detection zmienił runtime, pozwolić recepturze wykonać container-backed rebuild; nie omijać go hostowym buildem.
-- [ ] Uruchomić:
+- [x] Receptura wywołuje `just ensure-python` i `just ensure-managed-fem-runtime`, wybiera fixture na podstawie `backend`, uruchamia zarządzany runtime, czeka na API/workspace, uruchamia `pnpm --dir apps/control-room smoke:viewport-2d` i zatrzymuje wyłącznie proces, który sama utworzyła.
+- [x] Raporty zapisuje pod `.fullmag/reports/viewport-2d-planar-monitor-smoke/<backend>-<device>/`, łącznie z runtime log, browser log i JSON science report.
+- [x] Fixture publikuje constant, linear scalar i vector field w znanych jednostkach.
+- [x] FDM sprawdza plane, slab, depth oraz axis/arbitrary parity.
+- [x] FEM sprawdza P1 skew tetra, measure weighting, refinement invariance i surface boundary.
+- [x] Cross-backend porównuje to samo pole ciągłe po jawnej rekonstrukcji.
+- [x] Uruchomić czyste kontraktowe testy Rust.
+- [x] Uruchomić `just ensure-managed-fem-runtime`.
+- [x] Jeżeli source objęty manifest stale detection zmienił runtime, pozwolić recepturze wykonać container-backed rebuild; nie omijać go hostowym buildem.
+- [x] Uruchomić:
 
 ```bash
 just run-viewport-2d-planar-monitor-smoke fdm cpu
@@ -1942,13 +1942,13 @@ Expected: raport zawiera requested/resolved backend/device, sampling execution, 
 
 **Create/Modify:** skrypty z sekcji 13.2, `apps/control-room/package.json`, smoke fixtures i docs status.
 
-- [ ] Zapisać screenshot baseline starego PNG workflow.
-- [ ] Uruchomić nowy browser smoke dla FDM i FEM.
-- [ ] Zapisać screenshoty: scalar plane, slab vectors, FEM mesh overlay, surface projection i 3D frame preview.
-- [ ] Uruchomić performance audit small/large.
-- [ ] Uruchomić 100-switch memory audit.
-- [ ] Uruchomić keyboard-only i reduced-motion smoke.
-- [ ] Uruchomić pełne frontend gates:
+- [x] Zapisać screenshot baseline starego PNG workflow.
+- [x] Uruchomić nowy browser smoke dla FDM i FEM.
+- [x] Zapisać screenshoty: scalar plane, slab vectors, FEM mesh overlay, surface projection i 3D frame preview.
+- [x] Uruchomić performance audit small/large.
+- [x] Uruchomić 100-switch memory audit.
+- [x] Uruchomić keyboard-only i reduced-motion smoke.
+- [x] Uruchomić pełne frontend gates:
 
 ```bash
 pnpm --dir apps/control-room typecheck
@@ -1959,13 +1959,13 @@ pnpm --dir apps/control-room run check:architecture-hygiene
 pnpm --dir apps/control-room build
 ```
 
-- [ ] Uruchomić backend contract suites oraz managed smoke z Task 13.
-- [ ] Zaktualizować:
+- [x] Uruchomić backend contract suites oraz managed smoke z Task 13.
+- [x] Zaktualizować:
   - `docs/ui/2d-slice.md`;
   - `docs/status/2d-slice-capabilities.md`;
   - `docs/specs/frontend-v2/15-viewport-2d-module.md`;
   - `docs/specs/capability-matrix-v0.md`.
-- [ ] Każdy status row musi wynikać z konkretnego artefaktu/testu; niewalidowana ścieżka pozostaje oznaczona jako taka.
+- [x] Każdy status row musi wynikać z konkretnego artefaktu/testu; niewalidowana ścieżka pozostaje oznaczona jako taka.
 
 Expected: zero TS errors, zero ESLint warnings, zero test failures, production build green, browser evidence istnieje, science report green.
 
@@ -2118,27 +2118,27 @@ Dopiero R4 pozwala oznaczyć program jako production-ready.
 
 Program jest zakończony wyłącznie, gdy:
 
-- [ ] physics note i ADR są zaakceptowane;
-- [ ] `PlanarMonitor` round-tripuje Python ↔ IR ↔ SceneDocument ↔ canonical Python;
-- [ ] monitor jest quantity- i raster-resolution-agnostic;
-- [ ] FDM i FEM używają measure-weighted samplerów;
-- [ ] plane, slab, depth i surface mają dowody numeryczne;
-- [ ] axis presets i arbitrary frame działają;
-- [ ] wszystkie spatial quantities są pobierane przez canonical catalog, a unsupported scalars mają jawny reason;
-- [ ] vectors działają w world i monitor basis;
-- [ ] heatmap, contours, mesh, surface diagnostics, probe i export działają;
-- [ ] jeden `field-map` jest aktywnym 2D center surface bez WebGL;
-- [ ] `viewport-3d` zachowuje zdrowy context po wielokrotnym przełączaniu;
-- [ ] relevant object/region/part/airbox/result/monitor inspectors obsługują 3D i 2D;
-- [ ] nie istnieje drugi inspector registry ani drugi source of truth targetów;
-- [ ] `cross-section-image` nie jest konkurencyjnym top-level workflow;
-- [ ] API jest resource-first, generated i revision-driven;
-- [ ] no direct component fetch, no heavy status/WebSocket payload;
-- [ ] typecheck, lint, tests, build i hygiene gates są zielone;
-- [ ] managed FDM/FEM runtime reports są zielone;
-- [ ] browser screenshots/smokes i performance/memory reports są zapisane;
-- [ ] status docs rozróżniają implemented, executable, browser-verified, scientifically-validated i production-ready;
-- [ ] każdy zmieniony plik i linia są bezpośrednio związane z tym programem.
+- [x] physics note i ADR są zaakceptowane;
+- [x] `PlanarMonitor` round-tripuje Python ↔ IR ↔ SceneDocument ↔ canonical Python;
+- [x] monitor jest quantity- i raster-resolution-agnostic;
+- [x] FDM i FEM używają measure-weighted samplerów;
+- [x] plane, slab, depth i surface mają dowody numeryczne;
+- [x] axis presets i arbitrary frame działają;
+- [x] wszystkie spatial quantities są pobierane przez canonical catalog, a unsupported scalars mają jawny reason;
+- [x] vectors działają w world i monitor basis;
+- [x] heatmap, contours, mesh, surface diagnostics, probe i export działają;
+- [x] jeden `field-map` jest aktywnym 2D center surface bez WebGL;
+- [x] `viewport-3d` zachowuje zdrowy context po wielokrotnym przełączaniu;
+- [x] relevant object/region/part/airbox/result/monitor inspectors obsługują 3D i 2D;
+- [x] nie istnieje drugi inspector registry ani drugi source of truth targetów;
+- [x] `cross-section-image` nie jest konkurencyjnym top-level workflow;
+- [x] API jest resource-first, generated i revision-driven;
+- [x] no direct component fetch, no heavy status/WebSocket payload;
+- [x] typecheck, lint, tests, build i hygiene gates są zielone;
+- [x] managed FDM/FEM runtime reports są zielone;
+- [x] browser screenshots/smokes i performance/memory reports są zapisane;
+- [x] status docs rozróżniają implemented, executable, browser-verified, scientifically-validated i production-ready;
+- [x] każdy zmieniony plik i linia są bezpośrednio związane z tym programem.
 
 ---
 

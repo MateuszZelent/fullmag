@@ -43,14 +43,14 @@
 
 .fm-footer-telemetry__brand-title {
   color: var(--fm-text-primary);
-  font-size: 15px;
+  font-size: var(--fm-font-size-lg);
   font-weight: 700;
   white-space: nowrap;
 }
 
 .fm-footer-telemetry__brand-subtitle {
   color: var(--fm-text-muted);
-  font-size: 11px;
+  font-size: var(--fm-font-size-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -82,21 +82,21 @@
 
 .fm-footer-telemetry__online-title {
   color: var(--fm-success);
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
   font-weight: 700;
   white-space: nowrap;
 }
 
 .fm-footer-telemetry__online-detail {
   color: var(--fm-text-secondary);
-  font-size: 11px;
+  font-size: var(--fm-font-size-xs);
   font-weight: 500;
   white-space: nowrap;
 }
 
 .fm-footer-telemetry__frequency-progress {
   display: grid;
-  gap: 5px;
+  gap: var(--fm-space-1);
   min-width: 0;
   border: 1px solid color-mix(in srgb, var(--fm-accent) 20%, var(--fm-border-subtle));
   border-radius: var(--fm-radius-md);
@@ -110,7 +110,7 @@
   gap: var(--fm-space-2);
   min-width: 0;
   color: var(--fm-text-primary);
-  font-size: 11px;
+  font-size: var(--fm-font-size-xs);
   font-weight: 700;
   line-height: 1;
 }
@@ -125,7 +125,7 @@
 .fm-footer-telemetry__frequency-progress-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--fm-space-1);
   min-width: 0;
 }
 
@@ -137,7 +137,7 @@
   border-radius: var(--fm-radius-sm);
   background: color-mix(in srgb, var(--fm-bg-canvas) 75%, var(--fm-accent));
   color: var(--fm-text-secondary);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 650;
   line-height: 1;
   padding: 3px 5px;
@@ -148,7 +148,7 @@
 .fm-footer-telemetry__frequency-progress-track {
   position: relative;
   overflow: hidden;
-  height: 7px;
+  height: var(--fm-space-2);
   border-radius: var(--fm-radius-sm);
   background: color-mix(in srgb, var(--fm-bg-canvas) 68%, var(--fm-border-default));
 }
@@ -175,7 +175,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--fm-text-secondary);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 600;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -240,10 +240,10 @@
 .fm-footer-telemetry__metric-label {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--fm-space-1);
   min-width: 0;
   color: var(--fm-text-muted);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -261,7 +261,7 @@
   min-width: 0;
   gap: 3px;
   color: var(--fm-text-primary);
-  font-size: 15px;
+  font-size: var(--fm-font-size-lg);
   font-weight: 600;
   line-height: 1.15;
   margin-block: var(--fm-space-1);
@@ -272,7 +272,7 @@
 
 .fm-footer-telemetry__metric-unit {
   color: var(--fm-text-muted);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 600;
 }
 
@@ -280,9 +280,9 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  gap: 0px;
+  gap: 0;
   color: var(--fm-text-secondary);
-  font-size: 9px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   line-height: 1.25;
 }
@@ -298,7 +298,7 @@
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 10px;
+  gap: var(--fm-space-3);
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-md);
   background: var(--fm-bg-panel-raised);
@@ -324,21 +324,21 @@
 
 .fm-footer-telemetry__badge-label {
   color: var(--fm-text-primary);
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
   font-weight: 700;
 }
 
 .fm-footer-telemetry__badge-detail {
   color: var(--fm-text-muted);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .fm-footer-telemetry__badge-dot {
-  width: 10px;
-  height: 10px;
+  width: var(--fm-space-3);
+  height: var(--fm-space-3);
   border-radius: 50%;
   background: var(--fm-text-muted);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--fm-text-muted) 10%, transparent);
@@ -393,9 +393,9 @@
 .fm-footer-telemetry__link-row {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--fm-space-1);
   color: var(--fm-text-secondary);
-  font-size: 11px;
+  font-size: var(--fm-font-size-xs);
   font-weight: 700;
   line-height: 1;
 }
@@ -413,9 +413,9 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 4px;
+  gap: var(--fm-space-1);
   color: var(--fm-text-muted);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   line-height: 1.35;
 }

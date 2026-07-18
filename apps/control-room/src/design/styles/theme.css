@@ -19,6 +19,7 @@
 
   --fm-border-subtle: #313244;
   --fm-border-default: #45475a;
+  --fm-border-moderate: color-mix(in srgb, var(--fm-border-default) 50%, var(--fm-border-strong));
   --fm-border-strong: #585b70;
   --fm-border-muted: #292a3a;
   --fm-border-disabled: var(--fm-border-muted);
@@ -90,6 +91,7 @@
 
   --fm-border-subtle: #ccd0da;
   --fm-border-default: #bcc0cc;
+  --fm-border-moderate: color-mix(in srgb, var(--fm-border-default) 50%, var(--fm-border-strong));
   --fm-border-strong: #acb0be;
   --fm-border-muted: #d7dae2;
   --fm-border-disabled: var(--fm-border-muted);
@@ -142,9 +144,9 @@
 }
 
 .fm-inspector-alert {
-  padding: 12px;
-  border-radius: 4px;
-  margin: 8px 0;
+  padding: var(--fm-space-3);
+  border-radius: var(--fm-radius-sm);
+  margin: var(--fm-space-2) 0;
 }
 
 .fm-inspector-alert.fm-alert-danger {

@@ -41,8 +41,8 @@
 }
 
 .fm-region-card__dot {
-  width: 10px;
-  height: 10px;
+  width: var(--fm-space-3);
+  height: var(--fm-space-3);
   border-radius: 50%;
   margin-top: 3px;
   background: var(--fm-accent);

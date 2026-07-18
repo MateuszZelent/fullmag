@@ -894,7 +894,7 @@ export function StudyInspectorPanel({ selection }: InspectorPanelProps) {
   return (
     <>
       <div
-        className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]"
+        className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
         data-scene-has-payload={sceneHasPayload}
         data-scene-revision={sceneRevision ?? ""}
         data-scene-stage-count={sceneStageCount}

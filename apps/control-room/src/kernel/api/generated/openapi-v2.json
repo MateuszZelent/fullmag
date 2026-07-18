@@ -3327,6 +3327,12 @@
             "minimum": 0,
             "type": "integer"
           },
+          "object_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "origin_m": {
             "items": {
               "format": "double",
@@ -23780,8 +23786,11 @@
             },
             "description": "Thin descriptor for realized FDM cell membership"
           },
+          "204": {
+            "description": "No realized FDM region membership artifact yet"
+          },
           "404": {
-            "description": "No realized FDM region membership artifact"
+            "description": "No active workspace"
           }
         },
         "tags": [
@@ -24416,6 +24425,26 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
             }
           },
           {

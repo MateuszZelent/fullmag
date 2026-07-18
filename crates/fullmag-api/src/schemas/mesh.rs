@@ -701,6 +701,8 @@ pub struct FdmRegionMembershipResource {
     pub counts: [u32; 3],
     pub cell_m: [f64; 3],
     pub cell_count: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_ids: Vec<String>,
     pub region_legend: Vec<FdmRegionLegendEntryResource>,
     pub encoding: String,
 }

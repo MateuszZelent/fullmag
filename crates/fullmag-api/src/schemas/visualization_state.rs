@@ -910,7 +910,7 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
                 vectors_visible: false,
                 wireframe_color: "var(--fm-airbox-wire)".to_string(),
                 wireframe_opacity: 1.0,
-                wireframe_visible: false,
+                wireframe_visible: true,
             },
             override_state: None,
         },

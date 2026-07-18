@@ -19,6 +19,7 @@ type ExplorerNodeKind =
   | "definitions.root"
   | "model.planar.monitors"
   | "model.planar.monitor"
+  | "model.planar.monitor.draft"
   | "object.root"
   | "object.geometry"
   | "object.antenna"

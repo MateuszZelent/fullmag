@@ -37,7 +37,7 @@ export function InspectorGroup({
 
   const heading = (
     <div className="min-w-0 flex-1" data-slot="inspector-group-heading">
-      <h3 className="m-0 text-[11px] font-semibold leading-tight text-fm-primary">
+      <h3 className="m-0 text-fm-xs font-semibold leading-tight text-fm-primary">
         {title}
       </h3>
       {description ? (
@@ -63,7 +63,7 @@ export function InspectorGroup({
         <button
           aria-controls={contentId}
           aria-expanded={open}
-          className="fm-inspector-group-nav-trigger flex w-full min-w-0 items-center gap-3 px-[var(--fm-inspector-padding-inline)] py-2.5 text-left outline-none transition-colors hover:bg-fm-hover focus-visible:ring-2 focus-visible:ring-fm-accent"
+          className="fm-inspector-group-nav-trigger flex w-full min-w-0 items-center gap-3 px-fm-inline py-2.5 text-left outline-none transition-all hover:bg-fm-hover active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-fm-accent"
           data-slot="inspector-group-trigger"
           type="button"
           onClick={() => setOpen((current) => !current)}
@@ -73,11 +73,11 @@ export function InspectorGroup({
               {icon}
             </span>
           ) : null}
-          <span className="min-w-0 flex-1 text-[13px] font-semibold leading-tight text-fm-primary">
+          <span className="min-w-0 flex-1 text-fm-md font-semibold leading-tight text-fm-primary">
             {title}
           </span>
           {summary ? (
-            <span className="shrink-0 text-[11px] text-fm-muted">{summary}</span>
+            <span className="shrink-0 text-fm-xs text-fm-muted">{summary}</span>
           ) : null}
           {badge ? <Badge variant="secondary">{badge}</Badge> : null}
           <ChevronRight
@@ -87,7 +87,7 @@ export function InspectorGroup({
           />
         </button>
         <div
-          className="grid min-w-0 gap-[var(--fm-inspector-control-gap)] px-[var(--fm-inspector-padding-inline)] pb-3"
+          className="grid min-w-0 gap-fm-inspector-control px-fm-inline pb-3"
           data-slot="inspector-group-content"
           hidden={collapsible && !open}
           id={contentId}
@@ -101,7 +101,7 @@ export function InspectorGroup({
   return (
     <section
       className={cn(
-        "min-w-0 border-b border-fm-subtle pb-[var(--fm-inspector-group-gap)] last:border-b-0 last:pb-0",
+        "min-w-0 border-b border-fm-subtle pb-fm-inspector-group last:border-b-0 last:pb-0",
         className,
       )}
       data-collapsible={collapsible || undefined}
@@ -112,7 +112,7 @@ export function InspectorGroup({
         <button
           aria-controls={contentId}
           aria-expanded={open}
-          className="flex h-fm-control-sm w-full min-w-0 items-center gap-1.5 rounded-[var(--fm-radius-disclosure)] px-1.5 text-left outline-none transition-colors hover:bg-fm-disabled focus-visible:ring-2 focus-visible:ring-fm-accent"
+          className="flex h-fm-control-sm w-full min-w-0 items-center gap-1.5 rounded-fm-disclosure px-1.5 text-left outline-none transition-all hover:bg-fm-disabled active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-fm-accent"
           data-slot="inspector-group-trigger"
           type="button"
           onClick={() => setOpen((current) => !current)}
@@ -153,7 +153,7 @@ export function InspectorGroup({
         </header>
       )}
       <div
-        className="mt-1 grid min-w-0 gap-[var(--fm-inspector-control-gap)] px-1.5"
+        className="mt-1 grid min-w-0 gap-fm-inspector-control px-1.5"
         data-slot="inspector-group-content"
         hidden={collapsible && !open}
         id={contentId}

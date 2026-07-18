@@ -4528,6 +4528,7 @@ class StudyBuilder:
         target_frequency: float | None = None,
         frequency_min: float | None = None,
         frequency_max: float | None = None,
+        operator: str = "linearized_llg",
         include_demag: bool = True,
         equilibrium_source: str = "relax",
         equilibrium_artifact: str | None = None,
@@ -4543,6 +4544,7 @@ class StudyBuilder:
             target_frequency=target_frequency,
             frequency_min=frequency_min,
             frequency_max=frequency_max,
+            operator=operator,
             include_demag=include_demag,
             equilibrium_source=equilibrium_source,
             equilibrium_artifact=equilibrium_artifact,
@@ -4570,6 +4572,7 @@ class StudyBuilder:
         bc: str | dict[str, object] = "free",
         magnetostatic_bc: str = "open",
         solver_method: str | None = None,
+        solver_preconditioner: str | None = None,
         solver_rtol: float | None = None,
         solver_max_iterations: int | None = None,
         solver_restart_iterations: int | None = None,
@@ -4590,6 +4593,7 @@ class StudyBuilder:
             bc=bc,
             magnetostatic_bc=magnetostatic_bc,
             solver_method=solver_method,
+            solver_preconditioner=solver_preconditioner,
             solver_rtol=solver_rtol,
             solver_max_iterations=solver_max_iterations,
             solver_restart_iterations=solver_restart_iterations,
@@ -7038,6 +7042,11 @@ def run_while(
         max_steps=max_steps,
         relax=relax,
     )
+    relax_algorithm = str(relax_kwargs.get("algorithm", "llg_overdamped"))
+    relax_alpha = relax_kwargs.get(
+        "relax_alpha",
+        1.0 if relax_algorithm == "llg_overdamped" else None,
+    )
 
     if _capture_enabled:
         if cfg.relax:
@@ -7051,9 +7060,9 @@ def run_while(
                     relax_kwargs.get("tol", _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM)
                 ),
                 max_steps=chunk_steps,
-                algorithm=str(relax_kwargs.get("algorithm", "llg_overdamped")),
+                algorithm=relax_algorithm,
                 energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
-                relax_alpha=relax_kwargs.get("relax_alpha", 1.0),  # type: ignore[arg-type]
+                relax_alpha=relax_alpha,  # type: ignore[arg-type]
                 solver=relax_kwargs.get("solver"),  # type: ignore[arg-type]
                 dt=relax_kwargs.get("dt"),  # type: ignore[arg-type]
                 max_error=relax_kwargs.get("max_error"),  # type: ignore[arg-type]
@@ -7097,9 +7106,9 @@ def run_while(
                     relax_kwargs.get("tol", _RELAXATION_DEFAULT_TORQUE_TOLERANCE_APM)
                 ),
                 max_steps=chunk_steps,
-                algorithm=str(relax_kwargs.get("algorithm", "llg_overdamped")),
+                algorithm=relax_algorithm,
                 energy_tolerance=relax_kwargs.get("energy_tolerance"),  # type: ignore[arg-type]
-                relax_alpha=relax_kwargs.get("relax_alpha", 1.0),  # type: ignore[arg-type]
+                relax_alpha=relax_alpha,  # type: ignore[arg-type]
                 solver=relax_kwargs.get("solver"),  # type: ignore[arg-type]
                 dt=relax_kwargs.get("dt"),  # type: ignore[arg-type]
                 max_error=relax_kwargs.get("max_error"),  # type: ignore[arg-type]

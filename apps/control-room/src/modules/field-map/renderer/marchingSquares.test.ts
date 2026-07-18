@@ -14,4 +14,10 @@ describe("marching squares", () => {
       marchingSquares([1, 0, 0, 0], 2, 2, 0.5, [0, 0, 1, 0]),
     ).toEqual([]);
   });
+
+  it("draws through explicitly renderable overlap-ambiguous support", () => {
+    expect(
+      marchingSquares([1, 0, 0, 0], 2, 2, 0.5, [4, 4, 4, 4]),
+    ).toEqual([[0, 0.5, 0.5, 0]]);
+  });
 });

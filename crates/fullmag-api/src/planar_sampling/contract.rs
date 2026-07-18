@@ -2,6 +2,7 @@ use crate::error::ApiError;
 use fullmag_ir::{PlanarFrameIR, PlanarOperatorIR};
 
 pub(crate) const PLANAR_SAMPLER_VERSION: &str = "planar_sampling_v1";
+pub(crate) const MAX_PLANAR_SAMPLE_POINTS: u32 = 1_048_576;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPlanarSampleRequest {
@@ -46,9 +47,9 @@ impl ResolvedPlanarSampleRequest {
                 "invalid_planar_resolution: width and height must be positive",
             ));
         }
-        if width.saturating_mul(height) > 262_144 {
+        if width.saturating_mul(height) > MAX_PLANAR_SAMPLE_POINTS {
             return Err(ApiError::bad_request(
-                "invalid_planar_resolution: width*height exceeds 262144",
+                "invalid_planar_resolution: width*height exceeds 1048576",
             ));
         }
         crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&self.frame)?;
@@ -125,6 +126,7 @@ pub(crate) struct FdmPlanarField {
     origin_m: [f64; 3],
     spacing_m: [f64; 3],
     values: Vec<f64>,
+    membership_mask: Option<Vec<bool>>,
 }
 
 impl FdmPlanarField {
@@ -157,7 +159,26 @@ impl FdmPlanarField {
             origin_m,
             spacing_m,
             values,
+            membership_mask: None,
         })
+    }
+
+    pub(crate) fn with_membership_mask(
+        mut self,
+        membership_mask: Vec<bool>,
+    ) -> Result<Self, ApiError> {
+        let point_count = self
+            .grid
+            .iter()
+            .try_fold(1usize, |acc, value| acc.checked_mul(*value as usize))
+            .ok_or_else(|| ApiError::bad_request("invalid_fdm_field: grid size overflow"))?;
+        if membership_mask.len() != point_count {
+            return Err(ApiError::bad_request(
+                "invalid_fdm_membership: mask length does not match grid",
+            ));
+        }
+        self.membership_mask = Some(membership_mask);
+        Ok(self)
     }
 
     pub(super) fn n_comp(&self) -> usize {
@@ -174,6 +195,11 @@ impl FdmPlanarField {
     }
     pub(super) fn values(&self) -> &[f64] {
         &self.values
+    }
+    pub(super) fn contains_cell(&self, cell: usize) -> bool {
+        self.membership_mask
+            .as_ref()
+            .is_none_or(|membership| membership[cell])
     }
 }
 

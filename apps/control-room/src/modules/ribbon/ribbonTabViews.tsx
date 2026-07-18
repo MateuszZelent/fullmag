@@ -193,6 +193,7 @@ export const homeTab: RibbonTabContent = {
           label: "3D",
           shortcut: "1",
           iconColor: "text-indigo-400",
+          splitButton: true,
           menu: [
             {
               type: "radio-group",

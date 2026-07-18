@@ -1,8 +1,6 @@
 import type { ReactNode } from "react";
 import {
   Box,
-  Palette,
-  ArrowUpRight,
   Scissors,
   Camera,
   Settings2,

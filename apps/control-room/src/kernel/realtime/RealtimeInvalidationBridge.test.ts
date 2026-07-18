@@ -1082,6 +1082,60 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(hEffMetaKey)).toBeNull();
   });
 
+  it("refreshes object topological charge after a broad field sample change", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const topologicalChargeKey =
+      ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", "body");
+
+    resources.subscribe(topologicalChargeKey, () => {});
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            broad: true,
+            resource: "fields",
+            resource_id: "samples",
+            revision: 18,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(topologicalChargeKey)).toBe(18);
+  });
+
+  it("does not refresh topological charge for a broad non-m field change", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const topologicalChargeKey =
+      ANALYSIS_OBJECT_TOPOLOGICAL_CHARGE_PATH.replace("{object_id}", "body");
+
+    resources.subscribe(topologicalChargeKey, () => {});
+
+    bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            broad: true,
+            quantity_ids: ["H_eff"],
+            resource: "fields",
+            resource_id: "samples",
+            revision: 19,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(resources.getRevision(topologicalChargeKey)).toBeNull();
+  });
+
   it("refreshes viewport 3D part scalar range collections when matching quantity samples change", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);

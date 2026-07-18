@@ -1005,6 +1005,7 @@ pub(crate) fn plan_fdm(
     .map_err(|message| PlanError {
         reasons: vec![format!("invalid resolved FDM grid certificate: {message}")],
     })?
+    .with_object_ids(owner_names.iter().map(|name| (*name).to_string()).collect())
     .with_region_legend(grid_legend);
     let active_field_drives: Vec<_> = problem
         .field_drives

@@ -65,7 +65,9 @@ export function HysteresisSettlePipelineInspector({
     ? settlePipeline.settle_pipeline
     : null;
   const topLevelResolvedSteps = Array.isArray(settlePipeline?.resolved_steps)
-    ? settlePipeline.resolved_steps.filter(isRecord).map(resolvedSettleStep)
+    ? settlePipeline.resolved_steps.flatMap((step) =>
+        isRecord(step) ? [resolvedSettleStep(step)] : [],
+      )
     : [];
   const rawPipelineSteps = Array.isArray(pipeline?.steps)
     ? pipeline.steps.filter(isRecord)

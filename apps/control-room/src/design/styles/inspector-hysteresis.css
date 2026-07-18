@@ -90,7 +90,7 @@
   border: 1px solid color-mix(in srgb, var(--fm-accent) 35%, var(--fm-border-subtle));
   border-radius: var(--fm-radius-xs);
   color: var(--fm-accent-strong);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   line-height: 1.4;
   padding: 0 var(--fm-space-1);
 }
@@ -106,8 +106,8 @@
 }
 
 .fm-hysteresis-inspector-action.fm-button {
-  min-height: 32px;
+  min-height: var(--fm-control-height-regular);
   padding: 0 var(--fm-space-1);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
 }
 

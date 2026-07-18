@@ -2,7 +2,7 @@
 .fm-study-progress {
   position: relative;
   display: grid;
-  min-height: 18px;
+  min-height: var(--fm-space-5);
   overflow: hidden;
   align-items: center;
   border: 1px solid var(--fm-border-subtle);
@@ -111,7 +111,7 @@ button.fm-study-stage-card:focus-visible {
 .fm-study-stage-card__header small {
   color: var(--fm-text-muted);
   font-family: var(--fm-font-mono);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   text-transform: uppercase;
 }
 
@@ -120,7 +120,7 @@ button.fm-study-stage-card:focus-visible {
   flex-wrap: wrap;
   color: var(--fm-text-muted);
   font-family: var(--fm-font-mono);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
 }
 
 .fm-study-stage-card__meta span {
@@ -177,10 +177,10 @@ button.fm-study-stage-card:focus-visible {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  height: 18px;
+  height: var(--fm-space-5);
   padding: 0 6px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   font-family: var(--fm-font-ui);
   letter-spacing: 0.01em;
@@ -211,12 +211,12 @@ button.fm-study-stage-card:focus-visible {
 .fm-study-stage-card__meta span {
   display: inline-flex;
   align-items: center;
-  height: 16px;
+  height: var(--fm-space-4);
   padding: 0 5px;
   border: 1px solid var(--fm-border-subtle);
   border-radius: 999px;
   font-family: var(--fm-font-ui);
-  font-size: 9px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   letter-spacing: 0.01em;
   color: var(--fm-text-muted);
@@ -256,7 +256,7 @@ button.fm-study-stage-card:focus-visible {
 .fm-study-checkpoint-list__item small {
   color: var(--fm-text-muted);
   font-family: var(--fm-font-mono);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
 }
 
 .fm-study-file-input {

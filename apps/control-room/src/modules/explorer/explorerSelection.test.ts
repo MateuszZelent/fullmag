@@ -982,6 +982,30 @@ describe("selectExplorerNode", () => {
     });
   });
 
+  it("selects an uncommitted planar monitor draft with its own identity", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:definitions:planar-monitors:draft",
+      kind: "model.planar.monitor.draft",
+      label: "Midplane",
+      parentId: "model:definitions:planar-monitors",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "model.planar.monitor.draft",
+      label: "Midplane",
+      nodeId: "model:definitions:planar-monitors:draft",
+      ref: {
+        draftId: "draft",
+        kind: "model.planar.monitor.draft",
+        type: "planar-monitor-draft",
+        visualizationTargetId: "planar-monitor:draft",
+      },
+    });
+  });
+
   it("selects concrete study stage nodes with stage id and index refs", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {

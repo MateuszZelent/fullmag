@@ -96,11 +96,11 @@
 }
 
 .fm-resize-handle--vertical {
-  width: 6px;
+  width: var(--fm-space-1);
   cursor: col-resize;
 }
 
 .fm-resize-handle--horizontal {
-  height: 5px;
+  height: var(--fm-space-1);
   cursor: row-resize;
 }

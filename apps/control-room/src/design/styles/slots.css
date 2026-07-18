@@ -104,7 +104,7 @@
 
 .fm-viewport-tabs__list {
   display: inline-flex;
-  height: 26px;
+  height: var(--fm-control-height-compact);
   min-width: 0;
 }
 
@@ -147,15 +147,15 @@
 
 .fm-status-bar__sep {
   width: 1px;
-  height: 12px;
+  height: var(--fm-slider-thumb-size);
   margin-inline: var(--fm-space-2);
   background: var(--fm-border-subtle);
   flex-shrink: 0;
 }
 
 .fm-status-bar__dot {
-  width: 6px;
-  height: 6px;
+  width: var(--fm-space-1);
+  height: var(--fm-space-1);
   border-radius: 50%;
   background: var(--fm-text-muted);
   flex-shrink: 0;

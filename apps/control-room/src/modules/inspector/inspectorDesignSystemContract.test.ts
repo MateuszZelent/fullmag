@@ -70,7 +70,10 @@ describe("Inspector design-system reference contract", () => {
     expect(targetSections).not.toContain('label="Surface"');
     expect(targetSections).not.toContain('label="Wireframe"');
     expect(targetSections).not.toContain('label="Points"');
-    expect(targetSections).toContain('{ label: "Off", value: "off" }');
+    expect(targetSections).toContain("renderModeDisplayPatch");
+    expect(targetSections).toContain('aria-label="Toggle target visibility"');
+    expect(targetSections).toContain('aria-label="Toggle target bounds"');
+    expect(targetSections).not.toContain('aria-label="Toggle surface shading"');
   });
 
   it.each([

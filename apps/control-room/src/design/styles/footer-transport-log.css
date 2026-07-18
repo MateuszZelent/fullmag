@@ -163,7 +163,7 @@
 
 .fm-footer-log__direction {
   display: inline-flex;
-  width: 54px;
+  width: var(--fm-thread-progress-width);
   align-items: center;
   justify-content: center;
   gap: var(--fm-space-1);

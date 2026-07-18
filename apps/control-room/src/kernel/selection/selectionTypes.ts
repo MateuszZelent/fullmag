@@ -177,6 +177,13 @@ export type SelectionRef =
       visualizationTargetId: "cross-section:draft";
     }
   | {
+      draftId: "draft";
+      kind: "model.planar.monitor.draft";
+      nodeId: string;
+      type: "planar-monitor-draft";
+      visualizationTargetId: "planar-monitor:draft";
+    }
+  | {
       kind: "mesh.cross-section.plot";
       nodeId: string;
       plotId: string;
@@ -439,6 +446,14 @@ export function selectionRefEquals(
     case "cross-section-draft":
       return (
         right.type === "cross-section-draft" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.draftId === right.draftId &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
+    case "planar-monitor-draft":
+      return (
+        right.type === "planar-monitor-draft" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.draftId === right.draftId &&

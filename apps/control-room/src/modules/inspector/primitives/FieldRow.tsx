@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { cn } from "@/shared/utils/className";
+
 interface FieldRowProps {
   label: string;
   unit?: string;
@@ -15,10 +17,10 @@ export function FieldRow({ label, unit, value, status, mono }: FieldRowProps) {
     <div className="fm-inspector-field-row">
       <span className="fm-inspector-field-row__label">{label}</span>
       <span
-        className={[
+        className={cn(
           "fm-inspector-field-row__value",
-          mono ? "fm-inspector-field-row__value--mono" : null,
-        ].filter(Boolean).join(" ")}
+          mono && "fm-inspector-field-row__value--mono",
+        )}
         data-status={status}
       >
         {value}

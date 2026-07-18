@@ -37,7 +37,7 @@ export function AirboxMeshStatisticsPanel({ selection }: InspectorPanelProps) {
   const statistics = normalizeMeshQualityStatistics(quality.data?.quality);
 
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Airbox Mesh Statistics" badge={manifest.status}>
         <FieldRow label="Points / nodes" value={formatCount(model.statistics.nodeCount)} />
         <FieldRow label="Tetrahedra" value={formatCount(model.statistics.elementCount)} />

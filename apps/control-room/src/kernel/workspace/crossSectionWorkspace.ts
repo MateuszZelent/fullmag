@@ -25,18 +25,21 @@ interface CrossSectionPlotRenderOptions {
   wireframeVisible: boolean;
 }
 
-export interface CrossSectionDraft {
-  colorScale: SliceMeshColorScale;
-  edgeWidth: number;
-  filterExpression: string;
+export interface PlanarMonitorDraft {
   frameExtent: CrossSectionFrameExtent;
   id: "draft";
-  includeWireframe: boolean;
-  metric: CrossSectionQualityMetric;
   name: string;
   plane: CrossSectionPlane;
   positionPercent: number;
   rotationDegrees: number;
+}
+
+export interface CrossSectionDraft extends PlanarMonitorDraft {
+  colorScale: SliceMeshColorScale;
+  edgeWidth: number;
+  filterExpression: string;
+  includeWireframe: boolean;
+  metric: CrossSectionQualityMetric;
   shrinkFactor: number;
 }
 
@@ -58,8 +61,6 @@ export interface CrossSectionFramePreview {
   positionPercent: number;
   rotationDegrees: number;
 }
-
-export type PlanarMonitorDraft = CrossSectionDraft;
 
 export function isPlanarMonitorRevisionConflict(error: unknown): boolean {
   return (
@@ -158,6 +159,7 @@ function planarFrameFromDraft(draft: PlanarMonitorDraft, positionM: number) {
 export interface CrossSectionWorkspaceState {
   activePlotId: string | null;
   draft: CrossSectionDraft | null;
+  planarMonitorDraft: PlanarMonitorDraft | null;
   plots: readonly CrossSectionPlot[];
 }
 
@@ -178,9 +180,19 @@ const DEFAULT_DRAFT: CrossSectionDraft = {
   shrinkFactor: 1,
 };
 
+const DEFAULT_PLANAR_MONITOR_DRAFT: PlanarMonitorDraft = {
+  frameExtent: "universe",
+  id: "draft",
+  name: "Midplane",
+  plane: "xy",
+  positionPercent: 50,
+  rotationDegrees: 0,
+};
+
 const INITIAL_STATE: CrossSectionWorkspaceState = {
   activePlotId: null,
   draft: null,
+  planarMonitorDraft: null,
   plots: [],
 };
 
@@ -228,6 +240,53 @@ class CrossSectionWorkspaceStore {
 }
 
 export const crossSectionWorkspaceStore = new CrossSectionWorkspaceStore();
+
+export function beginPlanarMonitorDraft(
+  visualizationState?: VisualizationStateResource | null,
+): PlanarMonitorDraft {
+  const slice = visualizationState?.slice;
+  const source = visualizationState?.clip.enabled
+    ? visualizationState.clip
+    : slice;
+  const draft: PlanarMonitorDraft = {
+    ...DEFAULT_PLANAR_MONITOR_DRAFT,
+    plane: source ? PLANE_BY_AXIS[source.axis] : DEFAULT_PLANAR_MONITOR_DRAFT.plane,
+    positionPercent:
+      source?.position_percent ?? DEFAULT_PLANAR_MONITOR_DRAFT.positionPercent,
+  };
+  const state = crossSectionWorkspaceStore.getSnapshot();
+  crossSectionWorkspaceStore.setState({
+    ...state,
+    planarMonitorDraft: draft,
+  });
+  return draft;
+}
+
+export function updatePlanarMonitorDraft(
+  patch: Partial<PlanarMonitorDraft>,
+): PlanarMonitorDraft | null {
+  const state = crossSectionWorkspaceStore.getSnapshot();
+  if (!state.planarMonitorDraft) return null;
+  const draft = sanitizePlanarMonitorDraft({
+    ...state.planarMonitorDraft,
+    ...patch,
+    id: "draft",
+  });
+  crossSectionWorkspaceStore.setState({
+    ...state,
+    planarMonitorDraft: draft,
+  });
+  return draft;
+}
+
+export function discardPlanarMonitorDraft(): void {
+  const state = crossSectionWorkspaceStore.getSnapshot();
+  if (!state.planarMonitorDraft) return;
+  crossSectionWorkspaceStore.setState({
+    ...state,
+    planarMonitorDraft: null,
+  });
+}
 
 export function beginCrossSectionDraft(
   visualizationState?: VisualizationStateResource | null,
@@ -288,6 +347,7 @@ export function commitCrossSectionDraft(): CrossSectionPlot | null {
   crossSectionWorkspaceStore.setState({
     activePlotId: plot.id,
     draft: null,
+    planarMonitorDraft: state.planarMonitorDraft,
     plots: [...state.plots, plot],
   });
   return plot;
@@ -344,6 +404,9 @@ export function activeCrossSectionPlot(
 export function activeCrossSectionFrameRotationDegrees(
   state: CrossSectionWorkspaceState,
 ): number {
+  if (state.planarMonitorDraft) {
+    return state.planarMonitorDraft.rotationDegrees;
+  }
   if (state.draft) return state.draft.rotationDegrees;
   return activeCrossSectionPlot(state)?.rotationDegrees ?? 0;
 }
@@ -351,7 +414,8 @@ export function activeCrossSectionFrameRotationDegrees(
 export function activeCrossSectionFramePreview(
   state: CrossSectionWorkspaceState,
 ): CrossSectionFramePreview | null {
-  const source = state.draft ?? activeCrossSectionPlot(state);
+  const source =
+    state.planarMonitorDraft ?? state.draft ?? activeCrossSectionPlot(state);
   if (!source) return null;
   return {
     axis: crossSectionAxisFromPlane(source.plane),
@@ -485,6 +549,16 @@ function sanitizeDraft(draft: CrossSectionDraft): CrossSectionDraft {
     positionPercent: clamp(draft.positionPercent, 0, 100),
     rotationDegrees: clamp(draft.rotationDegrees, -180, 180),
     shrinkFactor: clamp(draft.shrinkFactor, 0.5, 1),
+  };
+}
+
+function sanitizePlanarMonitorDraft(
+  draft: PlanarMonitorDraft,
+): PlanarMonitorDraft {
+  return {
+    ...draft,
+    positionPercent: clamp(draft.positionPercent, 0, 100),
+    rotationDegrees: clamp(draft.rotationDegrees, -180, 180),
   };
 }
 

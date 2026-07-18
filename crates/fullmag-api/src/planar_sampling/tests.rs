@@ -77,6 +77,32 @@ fn planar_sampling_fdm_constant_scalar_and_vector_basis_are_exact() {
 }
 
 #[test]
+fn planar_sampling_fdm_plane_supports_large_production_raster() {
+    let field = FdmPlanarField::new(
+        1,
+        [16, 12, 4],
+        [-0.5; 3],
+        [0.0625, 1.0 / 12.0, 0.25],
+        vec![1.0; 768],
+    )
+    .unwrap();
+    let frame = explicit_frame([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let started = std::time::Instant::now();
+    let result = PlanarSamplingEngine::sample_fdm(
+        &field,
+        &request(frame, PlanarOperatorIR::PlaneSample, [1024, 1024]),
+    )
+    .unwrap();
+
+    assert_eq!(result.scalar_values.len(), 1024 * 1024);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "large FDM plane sample exceeded the production 2 s budget: {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
 fn planar_sampling_orientation_uses_monitor_basis_and_masks_zero_vectors() {
     let field = FdmPlanarField::new(
         3,
@@ -142,6 +168,48 @@ fn planar_sampling_fdm_linear_depth_is_measure_weighted_and_masks_empty_pixels()
 }
 
 #[test]
+fn planar_sampling_fdm_depth_projection_preserves_nanometer_scale_measure() {
+    let nm = 1.0e-9;
+    let field = FdmPlanarField::new(
+        1,
+        [16, 12, 4],
+        [-40.0 * nm, -30.0 * nm, -10.0 * nm],
+        [5.0 * nm; 3],
+        vec![800_000.0; 16 * 12 * 4],
+    )
+    .unwrap();
+    let frame = PlanarFrameIR {
+        extent: PlanarExtentIR::Explicit {
+            u_min_m: -40.0 * nm,
+            u_max_m: 40.0 * nm,
+            v_min_m: -30.0 * nm,
+            v_max_m: 30.0 * nm,
+        },
+        ..explicit_frame([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    };
+    let result = PlanarSamplingEngine::sample_fdm(
+        &field,
+        &request(
+            frame,
+            PlanarOperatorIR::DepthProjection {
+                reduction: PlanarReductionIR::MeanOccupied,
+                empty_policy: EmptyPolicyIR::ExcludeEmpty,
+            },
+            [32, 32],
+        ),
+    )
+    .unwrap();
+
+    assert!(
+        result
+            .occupancy
+            .iter()
+            .any(|support| *support != Occupancy::Empty),
+        "nanometer-scale depth projection must retain occupied measure"
+    );
+}
+
+#[test]
 fn planar_sampling_marks_partial_pixel_prism_occupancy() {
     let field = FdmPlanarField::new(1, [1, 1, 1], [-0.5; 3], [1.0; 3], vec![4.0]).unwrap();
     let frame = PlanarFrameIR {
@@ -165,6 +233,53 @@ fn planar_sampling_marks_partial_pixel_prism_occupancy() {
     assert_eq!(result.scalar_values, vec![4.0]);
     assert_eq!(result.occupancy, vec![Occupancy::Partial]);
     assert_eq!(result.meta.partial_count, 1);
+}
+
+#[test]
+fn fdm_membership_mask_excludes_cells_from_plane_and_depth_sampling() {
+    let field = FdmPlanarField::new(
+        1,
+        [2, 1, 1],
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+        vec![4.0, 9.0],
+    )
+    .unwrap()
+    .with_membership_mask(vec![true, false])
+    .unwrap();
+    let frame = PlanarFrameIR {
+        extent: PlanarExtentIR::Explicit {
+            u_min_m: 0.0,
+            u_max_m: 2.0,
+            v_min_m: 0.0,
+            v_max_m: 1.0,
+        },
+        ..explicit_frame([0.0, 0.0, 0.5], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    };
+    let plane = request(frame.clone(), PlanarOperatorIR::PlaneSample, [2, 1]);
+    let result = PlanarSamplingEngine::sample_fdm(&field, &plane).unwrap();
+    assert_eq!(
+        result.occupancy,
+        vec![Occupancy::Occupied, Occupancy::Empty]
+    );
+    assert_eq!(result.scalar_values[0], 4.0);
+    assert!(result.scalar_values[1].is_nan());
+
+    let depth = request(
+        frame,
+        PlanarOperatorIR::DepthProjection {
+            reduction: PlanarReductionIR::MeanOccupied,
+            empty_policy: EmptyPolicyIR::ExcludeEmpty,
+        },
+        [2, 1],
+    );
+    let result = PlanarSamplingEngine::sample_fdm(&field, &depth).unwrap();
+    assert_eq!(
+        result.occupancy,
+        vec![Occupancy::Occupied, Occupancy::Empty]
+    );
+    assert_eq!(result.scalar_values[0], 4.0);
+    assert!(result.scalar_values[1].is_nan());
 }
 
 fn skew_tetra_field() -> FemPlanarField {
@@ -212,6 +327,45 @@ fn planar_sampling_fem_p1_linear_arbitrary_plane_is_barycentric() {
     assert_eq!(&fmcs[0..4], b"FMCS");
     assert_eq!(u32::from_le_bytes(fmcs[4..8].try_into().unwrap()), 3);
     assert!(fmcs.len() >= 160);
+}
+
+#[test]
+fn planar_sampling_fem_plane_preserves_nanometer_scale_tetrahedra() {
+    let nm = 1.0e-9;
+    let field = FemPlanarField::new(
+        1,
+        vec![
+            [0.0, 0.0, 0.0],
+            [10.0 * nm, 0.0, 0.0],
+            [0.0, 10.0 * nm, 0.0],
+            [0.0, 0.0, 10.0 * nm],
+        ],
+        vec![[0, 1, 2, 3]],
+        vec![1],
+        vec![2.0; 4],
+    )
+    .unwrap();
+    let frame = PlanarFrameIR {
+        extent: PlanarExtentIR::Explicit {
+            u_min_m: 0.0,
+            u_max_m: 2.0 * nm,
+            v_min_m: 0.0,
+            v_max_m: 2.0 * nm,
+        },
+        ..explicit_frame(
+            [0.0, 0.0, 2.0 * nm],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        )
+    };
+    let result = PlanarSamplingEngine::sample_fem(
+        &field,
+        &request(frame, PlanarOperatorIR::PlaneSample, [1, 1]),
+    )
+    .unwrap();
+
+    assert_eq!(result.occupancy, vec![Occupancy::Occupied]);
+    assert!((result.scalar_values[0] - 2.0).abs() < 1.0e-12);
 }
 
 #[test]
@@ -327,7 +481,9 @@ fn planar_sampling_rejects_unpublished_surface_selectors_instead_of_using_object
     .unwrap_err();
 
     assert_eq!(error.status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(error.message.starts_with("unsupported_region_boundary_projection:"));
+    assert!(error
+        .message
+        .starts_with("unsupported_region_boundary_projection:"));
 }
 
 #[test]
@@ -375,4 +531,51 @@ fn planar_sampling_surface_clips_boundary_faces_across_pixel_footprints() {
             > 4,
         "a rasterized boundary triangle must cover more pixels than its face centroids"
     );
+}
+
+#[test]
+fn planar_sampling_surface_preserves_nanometer_scale_boundary_measure() {
+    let nm = 1.0e-9;
+    let field = FemPlanarField::new(
+        1,
+        vec![
+            [0.0, 0.0, 0.0],
+            [10.0 * nm, 0.0, 0.0],
+            [0.0, 10.0 * nm, 0.0],
+            [0.0, 0.0, 10.0 * nm],
+        ],
+        vec![[0, 1, 2, 3]],
+        vec![1],
+        vec![2.0; 4],
+    )
+    .unwrap();
+    let frame = PlanarFrameIR {
+        extent: PlanarExtentIR::Explicit {
+            u_min_m: 0.0,
+            u_max_m: 10.0 * nm,
+            v_min_m: 0.0,
+            v_max_m: 10.0 * nm,
+        },
+        ..explicit_frame([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0])
+    };
+    let result = PlanarSamplingEngine::sample_fem(
+        &field,
+        &request(
+            frame,
+            PlanarOperatorIR::SurfaceProjection {
+                boundary: fullmag_ir::SurfaceBoundarySelectorIR::ObjectBoundary,
+                visibility_policy: fullmag_ir::SurfaceVisibilityPolicyIR::Frontmost,
+            },
+            [4, 4],
+        ),
+    )
+    .unwrap();
+
+    assert!(
+        result
+            .occupancy
+            .iter()
+            .any(|occupancy| *occupancy != Occupancy::Empty)
+    );
+    assert!(result.meta.occupied_measure > 0.0);
 }

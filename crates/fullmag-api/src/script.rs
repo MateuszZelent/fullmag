@@ -531,9 +531,30 @@ hole_refinement.mesh(minimum_element_size=0.5e-9, maximum_element_size=1e-9, ord
     #[test]
     fn load_scene_document_state_accepts_change_device_stage() {
         let root = repo_root();
-        let script_path = root.join("examples/fem_fmr_periodic_k0_smoke.py");
+        let script_path =
+            std::env::temp_dir().join(format!("fullmag-change-device-{}.py", uuid_v4_hex()));
+        std::fs::write(
+            &script_path,
+            r#"
+import fullmag as fm
+
+study = fm.study("stage_change_device")
+study.engine("fem")
+study.device("gpu", precision="double")
+body = study.geometry(fm.Box(100e-9, 20e-9, 5e-9), name="track")
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.1
+body.m = fm.texture.uniform(1, 0, 0)
+study.stages.add_relax(max_steps=25, dt=1e-15)
+study.stages.change_device("cpu")
+study.stages.add_eigenmodes(count=4)
+"#,
+        )
+        .expect("failed to write change-device fixture");
         let scene = load_scene_document_state(&root, &root, &script_path)
             .expect("change-device script should export a scene document");
+        let _ = std::fs::remove_file(&script_path);
 
         let pipeline = scene
             .study

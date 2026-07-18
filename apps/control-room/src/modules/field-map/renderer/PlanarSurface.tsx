@@ -133,9 +133,16 @@ export function PlanarSurface({
         aria-label="Planar scalar field"
         className="fm-field-map__canvas"
         role="img"
+        tabIndex={0}
         onClick={(event) => {
           const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, bounds);
           onPin?.(u, v);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onPin?.(0.5, 0.5);
+          }
         }}
         onPointerMove={(event) => {
           const values = valuesRef.current;

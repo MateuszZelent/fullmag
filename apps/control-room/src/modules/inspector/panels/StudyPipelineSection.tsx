@@ -33,6 +33,7 @@ export { StageCard, StudyStageDraftEditor };
 
 type StudyCommandRunner = (commandId: string, input?: unknown) => void;
 type StudyCommandDisabledReason = (commandId: string) => string | null;
+const EMPTY_ALGORITHMS: readonly string[] = [];
 
 export function StudySolverPolicyFields({
   algorithmsAvailable,
@@ -129,7 +130,7 @@ export function StudySolverPolicyFields({
 
 export function StudyPipelineSection({
   activeStageIndex,
-  algorithmsAvailable = [],
+  algorithmsAvailable = EMPTY_ALGORITHMS,
   authoringBusy = false,
   authoringFeedback,
   demagEnabled = false,
@@ -180,9 +181,11 @@ export function StudyPipelineSection({
     : [];
   const validation = [
     ...localValidation,
-    ...validateStudyWorkflow(drafts)
-      .filter((issue) => issue.index === draftIndex)
-      .map(({ message, severity }) => ({ message, severity })),
+    ...validateStudyWorkflow(drafts).flatMap((issue) =>
+      issue.index === draftIndex
+        ? [{ message: issue.message, severity: issue.severity }]
+        : [],
+    ),
   ];
   const hasDraftErrors = validation.some((issue) => issue.severity === "error");
   return (

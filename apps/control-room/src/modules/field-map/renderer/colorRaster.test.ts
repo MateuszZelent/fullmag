@@ -17,4 +17,19 @@ describe("scalar raster colorization", () => {
     );
     expect([...pixels]).toEqual([0, 0, 255, 255, 0, 0, 0, 0]);
   });
+
+  it("renders partial and overlap-ambiguous support while masking empty and undefined", () => {
+    const values = new Float32Array([0, 1, 2, 3, 4]);
+    const mask = new Uint8Array([0, 1, 2, 3, 4]);
+
+    expect(finiteScalarRange(values, mask)).toEqual({ max: 4, min: 0 });
+    const pixels = colorizeScalarRaster(values, { max: 4, min: 0 }, mask);
+    expect([0, 1, 2, 3, 4].map((index) => pixels[index * 4 + 3])).toEqual([
+      255,
+      0,
+      255,
+      0,
+      255,
+    ]);
+  });
 });

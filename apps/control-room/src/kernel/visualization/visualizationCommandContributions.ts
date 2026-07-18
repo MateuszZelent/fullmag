@@ -453,7 +453,7 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
       return value
         ? patchSelectedTarget(
             context,
-            renderModePatch(value as VisualizationRenderMode),
+            renderModePatch(value as VisualizationRenderMode | "off"),
           )
         : invalidPayload("visualization.target.set-render-mode");
     },

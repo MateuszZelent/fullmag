@@ -2,12 +2,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fieldMapCommands } from "./fieldMapCommands";
 import { fieldMapStore } from "./fieldMapStore";
+import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
 import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
+import {
+  crossSectionWorkspaceStore,
+  discardPlanarMonitorDraft,
+} from "@/kernel/workspace/crossSectionWorkspace";
 
 describe("field-map commands", () => {
   afterEach(() => {
     fieldMapStore.reset();
     planarMonitorFramePreviewStore.clear();
+    discardPlanarMonitorDraft();
+  });
+
+  it("registers the one-key 2D shortcut on the canonical open command", () => {
+    expect(
+      fieldMapCommands.find((entry) => entry.id === "field-map.open"),
+    ).toMatchObject({ shortcut: "2" });
   });
 
   it("opens the shared center surface and selects a monitor through one command", async () => {
@@ -29,6 +41,44 @@ describe("field-map commands", () => {
     expect(fieldMapStore.get().activeMonitorId).toBe("plane-1");
     expect(setActiveViewportMainModule).toHaveBeenCalledWith("field-map");
     expect(setFocusedSlot).toHaveBeenCalledWith("viewport-main");
+  });
+
+  it("offers an uncommitted Midplane draft when 2D opens without monitors", async () => {
+    const setActiveViewportMainModule = vi.fn();
+    const setFocusedSlot = vi.fn();
+    const setPanelVisible = vi.fn();
+    const selectionSet = vi.fn();
+    const command = fieldMapCommands.find((entry) => entry.id === "field-map.open");
+
+    const result = await command?.run({
+      api: {
+        model: {
+          planarMonitors: {
+            list: vi.fn().mockResolvedValue({ monitors: [], scene_revision: 4 }),
+          },
+        },
+      } as never,
+      layout: {
+        setActiveViewportMainModule,
+        setFocusedSlot,
+        setPanelVisible,
+      } as never,
+      selection: { set: selectionSet } as never,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Apply the Midplane draft to render the 2D field.",
+      status: "completed",
+    });
+    expect(crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft).toMatchObject({
+      name: "Midplane",
+    });
+    expect(selectionSet).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "model.planar.monitor.draft" }),
+      "test",
+    );
+    expect(setPanelVisible).toHaveBeenCalledWith("right", true);
   });
 
   it("loads the resolved monitor frame before opening its outline in 3D", async () => {
@@ -81,5 +131,70 @@ describe("field-map commands", () => {
       originM: [0, 0, 3],
     });
     expect(setActiveViewportMainModule).toHaveBeenCalledWith("viewport-3d");
+  });
+
+  it("routes context-menu rename to the Inspector when no name was supplied", async () => {
+    const setPanelVisible = vi.fn();
+    const command = fieldMapCommands.find(
+      (entry) => entry.id === "planar-monitor.rename",
+    );
+
+    const result = await command?.run({
+      api: {
+        model: {
+          planarMonitors: {
+            list: vi.fn().mockResolvedValue({ scene_revision: 7 }),
+          },
+        },
+      } as never,
+      input: { monitorId: "plane-1" },
+      layout: { setPanelVisible } as never,
+      source: "test",
+    });
+
+    expect(result).toEqual({
+      message: "Edit the monitor name in the Inspector.",
+      status: "completed",
+    });
+    expect(setPanelVisible).toHaveBeenCalledWith("right", true);
+  });
+
+  it("renames through the canonical monitor patch and invalidates its collection", async () => {
+    const invalidate = vi.fn();
+    const patch = vi.fn().mockResolvedValue({ scene_revision: 8 });
+    const command = fieldMapCommands.find(
+      (entry) => entry.id === "planar-monitor.rename",
+    );
+
+    const result = await command?.run({
+      api: {
+        model: {
+          planarMonitors: {
+            get: vi.fn().mockResolvedValue({
+              monitor: {
+                id: "plane-1",
+                name: "Old name",
+                operator: { kind: "plane_sample" },
+              },
+            }),
+            list: vi.fn().mockResolvedValue({ scene_revision: 7 }),
+            patch,
+          },
+        },
+      } as never,
+      input: { monitorId: "plane-1", newName: "New name" },
+      resources: { invalidate } as never,
+      source: "test",
+    });
+
+    expect(result).toEqual({ status: "completed" });
+    expect(patch).toHaveBeenCalledWith("plane-1", {
+      expected_scene_revision: 7,
+      monitor: expect.objectContaining({ id: "plane-1", name: "New name" }),
+    });
+    expect(invalidate).toHaveBeenCalledWith(
+      MODEL_PLANAR_MONITORS_PATH,
+      8,
+    );
   });
 });

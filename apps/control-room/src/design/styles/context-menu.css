@@ -12,7 +12,7 @@
 .fm-context-menu-item {
   position: relative;
   display: flex;
-  min-height: 26px;
+  min-height: var(--fm-control-height-compact);
   align-items: center;
   gap: var(--fm-space-2);
   border-radius: var(--fm-radius-sm);

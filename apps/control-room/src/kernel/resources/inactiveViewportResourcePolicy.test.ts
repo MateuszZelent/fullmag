@@ -6,6 +6,7 @@ import {
   DATA_FIELDS_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   MESHING_SHARED_DOMAIN_CROSS_SECTION_IMAGE_PATH,
+  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
   MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
 } from "@/kernel/api/apiPaths";
 import { EventBus } from "@/kernel/events/EventBus";
@@ -33,10 +34,13 @@ describe("inactiveViewportResourcePolicy", () => {
       true,
     );
     expect(
+      isViewport3DExclusiveResourceKey(MESHING_SHARED_DOMAIN_MANIFEST_PATH),
+    ).toBe(false);
+    expect(
       isViewport3DExclusiveResourceKey(
         MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
       ),
-    ).toBe(true);
+    ).toBe(false);
 
     expect(
       isViewport3DExclusiveResourceKey(

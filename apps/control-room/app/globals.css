@@ -30,7 +30,6 @@
 @import "../src/design/styles/inspector-study.css" layer(fm-modules);
 @import "../src/design/styles/inspector-visualization.css" layer(fm-modules);
 @import "../src/design/styles/viewport-3d.css" layer(fm-modules);
-@import "../src/design/styles/cross-section-image.css" layer(fm-modules);
 @import "../src/design/styles/field-map.css" layer(fm-modules);
 @import "../src/design/styles/analysis-plots.css" layer(fm-modules);
 @import "../src/design/styles/footer.css" layer(fm-modules);

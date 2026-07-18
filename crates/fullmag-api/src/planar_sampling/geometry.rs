@@ -248,7 +248,7 @@ fn integrate_polyhedron(polyhedron: &ConvexPolyhedron) -> MeasureIntegral {
             let b = &face[index];
             let c = &face[index + 1];
             let volume = tetra_volume(center.position, a.position, b.position, c.position);
-            if volume <= 1.0e-24 {
+            if volume == 0.0 {
                 continue;
             }
             measure += volume;

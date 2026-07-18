@@ -10,7 +10,7 @@ import type {
 } from "@/kernel/commands/commandTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
-import { beginCrossSectionDraft } from "@/kernel/workspace/crossSectionWorkspace";
+import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
 import {
   BACKEND_INTERACTION_IDS,
   findInteractionSpec,
@@ -185,7 +185,7 @@ export const RIBBON_COMMANDS: CommandContribution[] = [
   },
   {
     id: RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
-    title: "Create 2D Cross-Section Draft",
+    title: "Create Planar Monitor",
     group: "ribbon-visualization",
     category: "View",
     scope: "workspace",
@@ -364,9 +364,9 @@ function focusAirboxFromCommand(context: CommandContext): CommandResult {
 function beginCrossSectionDraftFromCommand(
   context: CommandContext,
 ): CommandResult {
-  const draft = beginCrossSectionDraft(visualizationStateFromContext(context));
-  const nodeId = "model:visualizations-2d:draft";
-  selectCrossSectionDraft(context, draft.name, nodeId);
+  const draft = beginPlanarMonitorDraft(visualizationStateFromContext(context));
+  const nodeId = "model:definitions:planar-monitors:draft";
+  selectPlanarMonitorDraft(context, draft.name, nodeId);
   context.layout?.setPanelVisible("left", true);
   context.layout?.setPanelVisible("right", true);
   context.layout?.setFocusedSlot("viewport-main");
@@ -374,23 +374,23 @@ function beginCrossSectionDraftFromCommand(
   return { status: "completed" };
 }
 
-function selectCrossSectionDraft(
+function selectPlanarMonitorDraft(
   context: CommandContext,
   label: string,
   nodeId: string,
 ): void {
   context.selection?.set(
     {
-      kind: "mesh.cross-section.draft",
+      kind: "model.planar.monitor.draft",
       label,
       nodeId,
       objectId: null,
       ref: {
         draftId: "draft",
-        kind: "mesh.cross-section.draft",
+        kind: "model.planar.monitor.draft",
         nodeId,
-        type: "cross-section-draft",
-        visualizationTargetId: "cross-section:draft",
+        type: "planar-monitor-draft",
+        visualizationTargetId: "planar-monitor:draft",
       },
     },
     context.source,

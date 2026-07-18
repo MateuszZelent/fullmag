@@ -98,6 +98,8 @@ export interface PlanarFieldProbeQuery
     | "expected_field_revision"
     | "expected_mesh_revision"
     | "expected_monitor_revision"
+    | "resolution_x"
+    | "resolution_y"
     | "scope_id"
     | "scope_kind"
     | "snapshot_id"

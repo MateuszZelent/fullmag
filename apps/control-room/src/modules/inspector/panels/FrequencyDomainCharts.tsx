@@ -23,8 +23,6 @@ const CHART_COLORS = [
   "var(--fm-chart-mauve)",
 ] as const;
 
-const activeCharts: ECharts[] = [];
-
 function formatNumber(value: number): string {
   if (!Number.isFinite(value)) return "n/a";
   if (Math.abs(value) >= 1e4 || (value !== 0 && Math.abs(value) < 1e-3)) {
@@ -514,19 +512,6 @@ function FrequencyDomainEChartsFrame({
         const chart = echarts.init(element, undefined, { renderer: "canvas" });
         chartRef.current = chart;
 
-        // Enforce 4 concurrent ECharts instances budget
-        if (activeCharts.length >= 4) {
-          const oldestChart = activeCharts.shift();
-          if (oldestChart) {
-            try {
-              oldestChart.dispose();
-            } catch {
-              // ignore already disposed
-            }
-          }
-        }
-        activeCharts.push(chart);
-
         chart.on("click", selectChartPoint);
         chart.on("dblclick", inspectChartPoint);
         chart.setOption(optionRef.current, true);
@@ -545,10 +530,6 @@ function FrequencyDomainEChartsFrame({
       disposed = true;
       resizeObserver?.disconnect();
       if (chartRef.current) {
-        const idx = activeCharts.indexOf(chartRef.current);
-        if (idx !== -1) {
-          activeCharts.splice(idx, 1);
-        }
         chartRef.current.off("click", selectChartPoint);
         chartRef.current.off("dblclick", inspectChartPoint);
         chartRef.current.dispose();

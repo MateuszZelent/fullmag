@@ -150,7 +150,7 @@
 .fm-dialog__mesh-progress {
   position: relative;
   display: flex;
-  min-height: 24px;
+  min-height: var(--fm-control-height-compact);
   align-items: center;
   justify-content: space-between;
   overflow: hidden;

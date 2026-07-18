@@ -195,7 +195,7 @@ export function FormField(props: FormFieldProps) {
             aria-label={label}
             aria-invalid={invalid || undefined}
             checked={checked}
-            className="fm-inspector-checkbox size-4 shrink-0 accent-[var(--fm-accent)] disabled:cursor-not-allowed disabled:opacity-100"
+            className="fm-inspector-checkbox size-4 shrink-0 accent-fm-accent disabled:cursor-not-allowed disabled:opacity-100"
             disabled={disabled}
             type="checkbox"
             onChange={onChange}

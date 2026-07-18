@@ -93,7 +93,7 @@ export function CouplingInspectorPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Coupling" collapsible defaultOpen>
         {model.mode === "missing" ? (
           <FeedbackBanner

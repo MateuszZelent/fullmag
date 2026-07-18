@@ -107,6 +107,6 @@ describe("PlanarVisualizationSection", () => {
     expect(html).toContain("Display unit");
     expect(html).toContain('aria-label="Automatic planar color range"');
     expect(html).toContain("Use target scope");
-    expect(html).not.toContain("/v2/");
+    expect(html).not.toContain("sessions/current");
   });
 });

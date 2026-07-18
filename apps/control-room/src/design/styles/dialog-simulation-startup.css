@@ -23,7 +23,7 @@
 }
 
 .fm-simulation-startup__spinner {
-  width: 32px;
+  width: var(--fm-control-height-regular);
   aspect-ratio: 1;
   border: 3px solid color-mix(in srgb, var(--fm-accent) 22%, transparent);
   border-top-color: var(--fm-accent);

@@ -477,6 +477,14 @@ export class RealtimeInvalidationBridge {
               fieldSampleRevision,
               "broad",
             );
+            if (
+              !change.quantity_ids?.length ||
+              change.quantity_ids.some(
+                (quantityId) => resolveCanonicalQuantityId(quantityId) === "m",
+              )
+            ) {
+              this.queueMagnetizationFieldDependents(fieldSampleRevision);
+            }
           } else {
             this.recordFieldInvalidation("broad");
             for (const quantityId of change.quantity_ids) {

@@ -33,7 +33,7 @@
   background: var(--fm-bg-chrome);
   color: var(--fm-text-muted);
   font-family: var(--fm-font-mono);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   padding: 2px var(--fm-space-1);
   max-width: 100%;
   overflow-wrap: anywhere;
@@ -55,7 +55,7 @@
 
 .fm-topological-charge-method__equation > span {
   color: var(--fm-text-muted);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 600;
   text-transform: uppercase;
 }

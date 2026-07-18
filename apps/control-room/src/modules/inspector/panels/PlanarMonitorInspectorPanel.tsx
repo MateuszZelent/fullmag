@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import { usePlanarMonitorResource } from "@/kernel/resources/planarMonitorResources";
@@ -7,6 +9,7 @@ import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FieldRow } from "../primitives/FieldRow";
+import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { VisualizationContextSwitch } from "../visualization/VisualizationContextSwitch";
 import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
@@ -23,15 +26,29 @@ export function PlanarMonitorInspectorPanel({
     enabled: monitorId.length > 0,
   });
   const monitor = resource.data?.monitor;
+  const [nameOverride, setNameOverride] = useState<string | null>(null);
+  const [renamePending, setRenamePending] = useState(false);
   const frame = monitor?.frame;
-  const run = (commandId: string) =>
+  const nameDraft = nameOverride ?? monitor?.name ?? "";
+  const run = (commandId: string, input?: Record<string, unknown>) =>
     kernel.commands.execute(
       commandId,
       createCommandContext("inspector", kernel, {
         sourceDetail: "planar-monitor-inspector",
       }),
-      { monitorId },
+      { monitorId, ...input },
     );
+  const rename = async () => {
+    if (!nameDraft.trim() || nameDraft.trim() === monitor?.name) return;
+    setRenamePending(true);
+    try {
+      await run("planar-monitor.rename", { newName: nameDraft.trim() });
+      await resource.refetch();
+      setNameOverride(null);
+    } finally {
+      setRenamePending(false);
+    }
+  };
 
   return (
     <div className="fm-inspector-panel">
@@ -39,10 +56,27 @@ export function PlanarMonitorInspectorPanel({
         <VisualizationContextSwitch />
       </InspectorGroup>
       <InspectorGroup title="Identity">
-        <FieldRow
+        <FormField
+          disabled={!monitor || renamePending}
           label="Name"
-          value={monitor?.name ?? selection.label ?? "Unknown"}
+          type="text"
+          value={nameDraft || monitor?.name || selection.label || ""}
+          onChange={(event) => setNameOverride(event.currentTarget.value)}
         />
+        <Button
+          disabled={
+            !monitor ||
+            renamePending ||
+            !nameDraft.trim() ||
+            nameDraft.trim() === monitor.name
+          }
+          size="sm"
+          type="button"
+          variant="ghost"
+          onClick={() => void rename()}
+        >
+          Apply name
+        </Button>
         <FieldRow label="ID" value={monitorId || "Unknown monitor"} />
         <FieldRow
           label="Scene revision"

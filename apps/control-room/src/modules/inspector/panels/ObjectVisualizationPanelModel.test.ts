@@ -282,7 +282,11 @@ describe("ObjectVisualizationPanelModel", () => {
         snapshot: {
           overrides: {},
           pendingOverrides: {
-            "region:object-a:core": { baseRevision: 4, patch: { vectorsVisible: false } },
+            "region:object-a:core": {
+              baseRevision: 4,
+              patch: { vectorsVisible: false },
+              target: { id: "region:object-a:core", kind: "region" },
+            },
           },
         },
       }),

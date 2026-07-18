@@ -18,7 +18,7 @@
 }
 
 .fm-inspector-colorbar__ramp {
-  height: 10px;
+  height: var(--fm-space-3);
   min-width: 96px;
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-xs);
@@ -58,7 +58,7 @@
 .fm-mesh-detail-table__row {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) 80px minmax(0, 0.8fr);
-  min-height: 32px;
+  min-height: var(--fm-control-height-regular);
   align-items: center;
   gap: var(--fm-space-2);
   border-radius: var(--fm-radius-md);
@@ -211,7 +211,7 @@ button.fm-mesh-detail-list__item:focus-visible {
 .fm-mesh-build-comparison__row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) repeat(3, minmax(64px, max-content));
-  min-height: 32px;
+  min-height: var(--fm-control-height-regular);
   align-items: center;
   gap: var(--fm-space-2);
   border-radius: var(--fm-radius-md);
@@ -368,7 +368,7 @@ button.fm-mesh-detail-list__item:focus-visible {
 
 .fm-mesh-quality-chart {
   width: 100%;
-  min-height: 80px;
+  min-height: var(--fm-chart-height-xs);
 }
 
 .fm-mesh-chart-tooltip {
@@ -487,7 +487,7 @@ button.fm-mesh-detail-list__item:focus-visible {
 
 .fm-mesh-size-distribution__bins li span {
   color: var(--fm-text-muted);
-  font-size: 9px;
+  font-size: var(--fm-font-size-2xs);
   font-family: var(--fm-font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -496,7 +496,7 @@ button.fm-mesh-detail-list__item:focus-visible {
 
 .fm-mesh-size-distribution__bins li strong {
   color: var(--fm-text-primary);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-family: var(--fm-font-mono);
 }
 

@@ -51,9 +51,11 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
     : [];
   const validation = [
     ...localValidation,
-    ...validateStudyWorkflow(state.stageDrafts)
-      .filter((issue) => issue.index === selectedIndex)
-      .map(({ message, severity }) => ({ message, severity })),
+    ...validateStudyWorkflow(state.stageDrafts).flatMap((issue) =>
+      issue.index === selectedIndex
+        ? [{ message: issue.message, severity: issue.severity }]
+        : [],
+    ),
   ];
   const workflowValidation = validateStudyWorkflow(state.stageDrafts);
   const allStageValidation = state.stageDrafts.flatMap((stageDraft, index) => [
@@ -116,7 +118,7 @@ export function StudyStageInspectorRouter({ selection }: InspectorPanelProps) {
 
   return (
     <div
-      className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]"
+      className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
       data-scene-has-payload={sceneHasPayload}
       data-scene-revision={sceneRevision ?? ""}
       data-scene-stage-count={sceneStageCount}

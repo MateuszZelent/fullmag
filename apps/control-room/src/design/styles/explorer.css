@@ -22,20 +22,20 @@
 /* Override the shared fm-tabs-list inside explorer */
 .fm-explorer-tabs .fm-tabs-list {
   gap: 0;
-  min-height: 38px;
+  min-height: var(--fm-panel-header-height);
   border: 0;
   background: transparent;
 }
 
 .fm-explorer-tabs .fm-tabs-trigger {
-  height: 38px;
+  height: var(--fm-panel-header-height);
   padding-inline: var(--fm-space-2);
   border: 0;
   border-bottom: 2px solid transparent;
   border-radius: 0;
   background: transparent;
   color: var(--fm-text-muted);
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
   font-weight: 500;
   letter-spacing: 0.01em;
   transition:
@@ -61,7 +61,7 @@
   align-items: center;
   gap: var(--fm-space-2);
   margin: var(--fm-space-2) var(--fm-space-2);
-  height: 32px;
+  height: var(--fm-control-height-regular);
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-md);
   background: var(--fm-bg-panel-raised);
@@ -84,7 +84,7 @@
   border: 0;
   background: transparent;
   color: var(--fm-text-secondary);
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
   outline: none;
 }
 
@@ -128,16 +128,16 @@
   position: relative;
   display: grid;
   grid-template-columns: 16px 18px minmax(0, 1fr) auto auto;
-  min-height: 30px;
+  min-height: var(--fm-control-height-compact);
   align-items: center;
   gap: var(--fm-space-1);
   border: 1px solid transparent;
   border-radius: var(--fm-radius-sm);
   color: var(--fm-text-secondary);
   cursor: default;
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
   font-family: var(--fm-font-ui);
-  padding-left: calc(var(--fm-space-1) + var(--fm-tree-depth) * 15px);
+  padding-left: calc(var(--fm-space-1) + var(--fm-tree-depth) * var(--fm-tree-indent));
   padding-right: var(--fm-space-1);
   transition:
     background-color var(--fm-transition-fast),
@@ -181,6 +181,80 @@
   width: 1px;
   background: var(--fm-border-subtle);
   pointer-events: none;
+}
+
+/* ── Semantic icon colors ── */
+/* Each icon token maps to a harmonious semantic color */
+.fm-explorer-tree-row__icon[data-icon="layers"] {
+  color: #6366f1; /* indigo — groups, hierarchy */
+}
+
+.fm-explorer-tree-row__icon[data-icon="box"] {
+  color: #f97316; /* orange — physical objects */
+}
+
+.fm-explorer-tree-row__icon[data-icon="mesh"],
+.fm-explorer-tree-row__icon[data-icon="triangle"] {
+  color: #f59e0b; /* amber — mesh / geometry */
+}
+
+.fm-explorer-tree-row__icon[data-icon="wave"] {
+  color: #0d9488; /* teal — fields, waves, parameters */
+}
+
+.fm-explorer-tree-row__icon[data-icon="sparkles"] {
+  color: #06b6d4; /* cyan — visualization */
+}
+
+.fm-explorer-tree-row__icon[data-icon="activity"] {
+  color: #8b5cf6; /* violet — results, analysis */
+}
+
+.fm-explorer-tree-row__icon[data-icon="magnet"] {
+  color: #f43f5e; /* rose — magnetic materials */
+}
+
+.fm-explorer-tree-row__icon[data-icon="settings"] {
+  color: #10b981; /* emerald — build pipeline, config */
+}
+
+.fm-explorer-tree-row__icon[data-icon="braces"] {
+  color: #38bdf8; /* sky — geometry DSL, code nodes */
+}
+
+.fm-explorer-tree-row__icon[data-icon="circle"] {
+  color: #a855f7; /* purple — regions */
+}
+
+.fm-explorer-tree-row__icon[data-icon="shield"] {
+  color: #22c55e; /* green — quality gates */
+}
+
+.fm-explorer-tree-row__icon[data-icon="gauge"] {
+  color: #64748b; /* slate — diagnostics, stats */
+}
+
+.fm-explorer-tree-row__icon[data-icon="play"] {
+  color: #22c55e; /* green — run controls */
+}
+
+.fm-explorer-tree-row__icon[data-icon="folder"] {
+  color: #f59e0b; /* amber — resource folders */
+}
+
+.fm-explorer-tree-row__icon[data-icon="database"] {
+  color: #64748b; /* slate — data */
+}
+
+/* Dim icons on muted/disabled rows, but keep color on selected */
+.fm-explorer-tree-row[data-status="unavailable"] .fm-explorer-tree-row__icon,
+.fm-explorer-tree-row[data-status="cancelled"] .fm-explorer-tree-row__icon {
+  opacity: 0.4;
+}
+
+/* Preserve icon color on selected rows (don't let row color override) */
+.fm-explorer-tree-row[data-active="true"] .fm-explorer-tree-row__icon {
+  filter: brightness(1.15) saturate(1.1);
 }
 
 /* ── Node status color classes ── */
@@ -268,7 +342,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
   font-family: var(--fm-font-ui);
 }
 
@@ -276,11 +350,11 @@
 .fm-explorer-tree-row__status {
   display: inline-flex;
   align-items: center;
-  height: 18px;
+  height: var(--fm-space-5);
   padding: 0 6px;
   border-radius: 999px;
   font-family: var(--fm-font-ui);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   white-space: nowrap;
   letter-spacing: 0.01em;
@@ -293,14 +367,14 @@
 .fm-explorer-tree-row__badge {
   display: inline-flex;
   align-items: center;
-  height: 18px;
+  height: var(--fm-space-5);
   padding: 0 6px;
   border-radius: var(--fm-radius-xs);
   border: 1px solid var(--fm-border-subtle);
   background: transparent;
   color: var(--fm-text-muted);
   font-family: var(--fm-font-mono);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   white-space: nowrap;
 }
 
@@ -308,14 +382,14 @@
 .fm-explorer-tree-row__active-field {
   display: inline-flex;
   align-items: center;
-  height: 18px;
+  height: var(--fm-space-5);
   padding: 0 6px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--fm-accent) 54%, var(--fm-border-subtle));
   background: color-mix(in srgb, var(--fm-accent) 14%, transparent);
   color: var(--fm-accent);
   font-family: var(--fm-font-ui);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   white-space: nowrap;
 }
@@ -375,15 +449,15 @@
   padding: var(--fm-space-1) var(--fm-space-2);
   border-top: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-panel);
-  min-height: 36px;
+  min-height: var(--fm-control-height-regular);
   flex-shrink: 0;
 }
 
 .fm-explorer-toolbar__action {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 26px;
+  gap: var(--fm-space-1);
+  height: var(--fm-control-height-compact);
   padding: 0 var(--fm-space-2);
   border: 1px solid transparent;
   border-radius: var(--fm-radius-sm);
@@ -391,13 +465,14 @@
   color: var(--fm-text-muted);
   cursor: pointer;
   font-family: var(--fm-font-ui);
-  font-size: 11px;
+  font-size: var(--fm-font-size-xs);
   font-weight: 500;
   white-space: nowrap;
   transition:
     background-color var(--fm-transition-fast),
     border-color var(--fm-transition-fast),
-    color var(--fm-transition-fast);
+    color var(--fm-transition-fast),
+    transform 80ms ease-out;
 }
 
 .fm-explorer-toolbar__action:hover {
@@ -406,7 +481,13 @@
   color: var(--fm-text-primary);
 }
 
+/* Apple: press feedback */
+.fm-explorer-toolbar__action:active {
+  transform: scale(0.96);
+  transition-duration: 60ms;
+}
+
 .fm-explorer-toolbar__action:focus-visible {
   outline: none;
-  box-shadow: var(--fm-focus-ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 30%, transparent);
 }

@@ -65,8 +65,8 @@ pub(crate) fn region_membership_artifacts(
     let fingerprint = decode_grid_fingerprint(&certificate.grid_fingerprint)?;
     let mut binary = Vec::with_capacity(64 + fdm.region_mask.len() * std::mem::size_of::<u32>());
     binary.extend_from_slice(b"FMRM");
-    binary.push(1); // format version
-    binary.push(1); // payload kind: u32 region IDs
+    binary.push(2); // format version
+    binary.push(2); // payload kind: u32 membership (MAX = inactive, 0 = active/unassigned)
     binary.extend_from_slice(&0u16.to_le_bytes());
     for count in fdm.grid.cells {
         binary.extend_from_slice(&count.to_le_bytes());
@@ -75,30 +75,36 @@ pub(crate) fn region_membership_artifacts(
     binary.extend_from_slice(&(certificate.region_legend.len() as u32).to_le_bytes());
     binary.extend_from_slice(&fingerprint);
     binary.extend_from_slice(&[0u8; 4]);
-    for region_id in &fdm.region_mask {
-        binary.extend_from_slice(&region_id.to_le_bytes());
+    for (index, region_id) in fdm.region_mask.iter().enumerate() {
+        let membership = if fdm.active_mask.as_ref().is_some_and(|mask| !mask[index]) {
+            u32::MAX
+        } else {
+            *region_id
+        };
+        binary.extend_from_slice(&membership.to_le_bytes());
     }
 
     let descriptor = serde_json::to_vec_pretty(&serde_json::json!({
-        "schema_version": "fdm_region_membership.v1",
-        "binary_path": "mesh/fdm_region_membership.v1.bin",
+        "schema_version": "fdm_region_membership.v2",
+        "binary_path": "mesh/fdm_region_membership.v2.bin",
         "grid_fingerprint": certificate.grid_fingerprint,
         "region_legend_fingerprint": certificate.region_legend_fingerprint,
         "origin_m": certificate.origin_m,
         "counts": certificate.counts,
         "cell_m": certificate.cell_m,
         "cell_count": fdm.region_mask.len(),
+        "object_ids": certificate.object_ids,
         "region_legend": certificate.region_legend,
-        "encoding": "FMRM:u32_le",
+        "encoding": "FMRM:u32_membership_le",
     }))
     .map_err(|error| format!("FDM region membership descriptor serialization failed: {error}"))?;
     Ok(vec![
         AuxiliaryArtifact {
-            relative_path: "mesh/fdm_region_membership.v1.json".to_string(),
+            relative_path: "mesh/fdm_region_membership.v2.json".to_string(),
             bytes: descriptor,
         },
         AuxiliaryArtifact {
-            relative_path: "mesh/fdm_region_membership.v1.bin".to_string(),
+            relative_path: "mesh/fdm_region_membership.v2.bin".to_string(),
             bytes: binary,
         },
     ])

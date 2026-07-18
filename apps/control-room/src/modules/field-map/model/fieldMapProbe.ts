@@ -27,10 +27,12 @@ export function localProbe(
     ),
   );
   const index = y * resolution[0] + x;
+  const occupancyCode = mask?.[index];
+  const renderable = isRenderablePlanarOccupancy(occupancyCode);
   return {
     index,
-    occupancy: mask?.[index] ? "empty" : "occupied",
-    value: mask?.[index] ? null : (values[index] ?? null),
+    occupancy: planarOccupancyLabel(occupancyCode),
+    value: renderable ? (values[index] ?? null) : null,
   };
 }
 
@@ -46,3 +48,7 @@ export function probeWorldCoordinate(
       v * frame.vAxis[axis]!,
   ) as [number, number, number];
 }
+import {
+  isRenderablePlanarOccupancy,
+  planarOccupancyLabel,
+} from "./planarOccupancy";

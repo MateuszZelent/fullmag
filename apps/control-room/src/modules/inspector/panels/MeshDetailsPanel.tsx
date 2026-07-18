@@ -113,7 +113,7 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
   return (
     <div
       key={selection.kind ?? "default"}
-      className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]"
+      className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
     >
       {showSection("overview") ? (
         <MeshOverviewSection

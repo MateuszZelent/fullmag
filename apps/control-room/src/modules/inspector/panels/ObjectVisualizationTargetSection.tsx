@@ -6,7 +6,9 @@ import {
   Palette,
   ArrowUpRight,
   Eye,
+  EyeOff,
   ArrowRightLeft,
+  SquareDashed,
 } from "lucide-react";
 import React, { useState, useId } from "react";
 import { type FieldCatalogResource, type FieldMetaResource } from "@/kernel/api/apiTypes";
@@ -14,7 +16,6 @@ import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
 import { Button } from "@/shared/ui/Button";
 import {
   SegmentedControl,
-  type SegmentedControlOption,
 } from "@/shared/ui/SegmentedControl";
 import { Slider } from "@/shared/ui/Slider";
 import { Switch } from "@/shared/ui/Switch";
@@ -27,6 +28,7 @@ import {
   type VisualizationTargetPatch,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
+  visualizationTargetCapabilities,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   useFieldMetaResource,
@@ -72,22 +74,22 @@ import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { InspectorPropertyRow } from "../primitives/InspectorPropertyRow";
 
-const RENDER_MODES: Array<SegmentedControlOption<VisualizationDisplayMode>> = [
-  { label: "Shaded", value: "surface" },
-  {
-    accessibleLabel: "Shaded plus wireframe",
-    label: "Shaded +\nWireframe",
-    value: "surface+edges",
-  },
-  { label: "Wireframe", value: "wireframe" },
-  { label: "Points", value: "points" },
-  { label: "Off", value: "off" },
-];
-
 const GEOMETRY_SCOPES = [
   { label: "Surface", value: "surface" },
   { label: "Full", value: "full" },
 ];
+
+const RENDER_MODE_OPTIONS = [
+  { value: "surface" as const, label: "Shaded", subLabel: undefined },
+  { value: "surface+edges" as const, label: "Shaded +", subLabel: "Wireframe" },
+  { value: "wireframe" as const, label: "Wireframe", subLabel: undefined },
+  { value: "points" as const, label: "Points", subLabel: undefined },
+  { value: "off" as const, label: "Off", subLabel: undefined },
+] satisfies Array<{
+  value: VisualizationDisplayMode;
+  label: string;
+  subLabel?: string;
+}>;
 
 type PatchVisualizationTarget = (patchValue: VisualizationTargetPatch) => Promise<void>;
 type SectionDisabled = (
@@ -101,6 +103,7 @@ export function VisualizationDisplayPassesSection({
   pending,
   renderWarning,
   settings,
+  targetKind,
   primitiveDisplayToggleVisible,
 }: {
   displaySettings: VisualizationTargetSettings;
@@ -109,68 +112,70 @@ export function VisualizationDisplayPassesSection({
   pending: boolean;
   renderWarning: string | null;
   settings: VisualizationTargetSettings;
+  targetKind: VisualizationTargetKind;
   primitiveDisplayToggleVisible: boolean;
 }) {
-  function handleVisibleClick(): void {
-    void patch({ visible: !settings.visible });
-  }
-
+  const capabilities = visualizationTargetCapabilities(targetKind);
   return (
-    <div className="grid min-w-0 gap-3" data-slot="visualization-display-passes">
+    <div className="grid min-w-0 gap-0" data-slot="visualization-display-passes">
       {renderWarning ? (
         <FeedbackBanner kind="warning" message={renderWarning} />
       ) : null}
 
-      {/* Surface row */}
-      <div className="fm-viz-display-row">
-        <span className="fm-viz-display-row__icon">
-          <Eye size={15} strokeWidth={1.75} />
-        </span>
-        <span className="fm-viz-display-row__label">Surface</span>
-        <span className="fm-viz-display-row__controls">
-          <button
-            aria-pressed={displaySettings.visible}
-            className={`fm-viz-visible-pill${!displaySettings.visible ? " fm-viz-visible-pill--inactive" : ""}`}
-            disabled={pending}
-            type="button"
-            onClick={handleVisibleClick}
-          >
-            <span className="fm-viz-visible-pill__dot" aria-hidden="true" />
-            Visible
-          </button>
-        </span>
-      </div>
+      <div className="fm-viz-layer-strip">
+        <button
+          aria-label="Toggle target visibility"
+          aria-pressed={settings.visible}
+          className={`fm-viz-layer-chip${
+            settings.visible
+              ? " fm-viz-layer-chip--on"
+              : ""
+          }`}
+          disabled={pending}
+          type="button"
+          onClick={() => void patch({ visible: !settings.visible })}
+        >
+          <Eye size={13} strokeWidth={1.75} aria-hidden="true" />
+          Visible
+        </button>
 
-      {/* Vectors row */}
-      <div className="fm-viz-display-row">
-        <span className="fm-viz-display-row__icon">
-          <ArrowRightLeft size={15} strokeWidth={1.75} />
-        </span>
-        <span className="fm-viz-display-row__label">Vectors</span>
-        <span className="fm-viz-display-row__controls fm-viz-display-row__controls--vectors">
-          <span className="fm-viz-display-row__enabled-label">Enabled</span>
-          <Switch
-            aria-label="Toggle vectors"
-            checked={displaySettings.vectorsVisible}
+        {capabilities.showBoundsControl ? (
+          <button
+            aria-label="Toggle target bounds"
+            aria-pressed={displaySettings.boundsVisible && displaySettings.visible}
+            className={`fm-viz-layer-chip${
+              displaySettings.boundsVisible && displaySettings.visible
+                ? " fm-viz-layer-chip--on"
+                : ""
+            }`}
             disabled={passControlsDisabled}
-            onCheckedChange={() =>
-              void patch(displayPassTogglePatch(settings, "vectorsVisible"))
+            type="button"
+            onClick={() =>
+              void patch(displayPassTogglePatch(settings, "boundsVisible"))
             }
-          />
-          <SegmentedControl
-            aria-label="Vectors geometry scope"
-            className="fm-viz-display-row__scope"
-            disabled={passControlsDisabled}
-            options={[
-              { label: "Surface", value: "surface" },
-              { label: "Volume", value: "full" },
-            ]}
-            value={settings.geometryScope === "full" ? "full" : "surface"}
-            onValueChange={(value) =>
-              void patch({ geometryScope: value as "surface" | "full" })
-            }
-          />
-        </span>
+          >
+            <SquareDashed size={13} strokeWidth={1.75} aria-hidden="true" />
+            Bounds
+          </button>
+        ) : null}
+
+        <button
+          aria-label="Toggle vector field arrows"
+          aria-pressed={displaySettings.vectorsVisible && displaySettings.visible}
+          className={`fm-viz-layer-chip${
+            displaySettings.vectorsVisible && displaySettings.visible
+              ? " fm-viz-layer-chip--on"
+              : ""
+          }`}
+          disabled={passControlsDisabled}
+          type="button"
+          onClick={() =>
+            void patch(displayPassTogglePatch(settings, "vectorsVisible"))
+          }
+        >
+          <ArrowRightLeft size={13} strokeWidth={1.75} aria-hidden="true" />
+          Vectors
+        </button>
       </div>
 
       {primitiveDisplayToggleVisible ? <ViewportPreferenceScopeNote /> : null}
@@ -184,22 +189,33 @@ export function VisualizationRenderModeSection({
   passControlsDisabled,
   pending,
   patch,
+  targetKind,
 }: {
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
   pending: boolean;
   patch: PatchVisualizationTarget;
+  targetKind: VisualizationTargetKind;
 }) {
+  const capabilities = visualizationTargetCapabilities(targetKind);
   const currentMode = resolveVisualizationDisplayMode(displaySettings);
-  const renderModeOptions = [
-    { value: "surface" as const, label: "Shaded", subLabel: undefined },
-    { value: "surface+edges" as const, label: "Shaded +", subLabel: "Wireframe" },
-    { value: "wireframe" as const, label: "Wireframe", subLabel: undefined },
-    { value: "points" as const, label: "Points", subLabel: undefined },
-  ] satisfies Array<{ value: VisualizationDisplayMode; label: string; subLabel?: string }>;
+  const renderModeOptions = RENDER_MODE_OPTIONS.filter(
+    (option) =>
+      option.value === "off" ||
+      capabilities.primaryRenderModes.includes(option.value),
+  );
+  const unsupportedCurrentMode =
+    currentMode !== "off" &&
+    !capabilities.primaryRenderModes.includes(currentMode);
   return (
     <div className="grid min-w-0 gap-1.5">
       <span className="fm-viz-render-mode-label">Render Mode</span>
+      {unsupportedCurrentMode ? (
+        <FeedbackBanner
+          kind="warning"
+          message="This saved render mode is not available for this target. Choose a supported mode to replace it."
+        />
+      ) : null}
       <div
         className="fm-viz-render-mode-grid"
         role="radiogroup"
@@ -213,7 +229,7 @@ export function VisualizationRenderModeSection({
               aria-checked={isActive}
               aria-label={option.label}
               className={`fm-viz-render-mode-tile ${isActive ? "fm-viz-render-mode-tile--active" : ""}`}
-              disabled={passControlsDisabled}
+              disabled={passControlsDisabled || pending}
               role="radio"
               type="button"
               onClick={() => void patch(renderModeDisplayPatch(option.value))}
@@ -256,6 +272,9 @@ export function VisualizationRenderModeSection({
                     <circle cx="4" cy="12" r="1" fill="currentColor" />
                     <circle cx="20" cy="12" r="1" fill="currentColor" />
                   </svg>
+                )}
+                {option.value === "off" && (
+                  <EyeOff size={20} strokeWidth={1.5} />
                 )}
               </span>
               <span className="fm-viz-render-mode-tile__label">
@@ -673,7 +692,6 @@ export function VisualizationVectorsSection({
   settings,
   targetKind,
   vectorBudgetRange,
-  vectorBudgetRanges,
   vectorTopologyHash,
 }: {
   meshParts?: ReadonlyArray<{
@@ -699,10 +717,6 @@ export function VisualizationVectorsSection({
   settings: VisualizationTargetSettings;
   targetKind: VisualizationTargetKind;
   vectorBudgetRange: VisualizationVectorBudgetRange;
-  vectorBudgetRanges: Record<
-    VisualizationGeometryScope,
-    VisualizationVectorBudgetRange
-  >;
   vectorTopologyHash: string | null;
 }) {
   const vectorBudgetValue = Math.max(
@@ -771,27 +785,6 @@ export function VisualizationVectorsSection({
         />
       </div>
       <div className="fm-visualization-toggle-grid fm-visualization-toggle-grid--vectors">
-        {targetKind === "airbox" ? (
-          <ToggleButton
-            active={settings.airboxSyntheticVectorsEnabled}
-            disabled={vectorsDisabled}
-            disabledDescription={visualizationSectionDisabledDescription({
-              disabled: vectorsDisabled,
-              pending,
-              requiredPass: "Vectors",
-              requiredPassEnabled: settings.vectorsVisible,
-              targetVisible: settings.visible,
-            })}
-            label="Dev fallback +Z"
-            onClick={() =>
-              void patch({
-                airboxSyntheticVectorsEnabled:
-                  !settings.airboxSyntheticVectorsEnabled,
-                vectorsVisible: true,
-              })
-            }
-          />
-        ) : null}
         <ToggleButton
           active={settings.vectorCenteringEnabled}
           disabled={vectorsDisabled}
@@ -831,30 +824,6 @@ export function VisualizationVectorsSection({
       {settings.vectorSurfaceOffsetEnabled ? (
         <NumberField disabled={pending || sectionDisabled("vectors")} label="Extra surface gap" max={1} min={0} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
       ) : null}
-      <VisualizationRadioGroup
-        disabled={vectorsDisabled}
-        disabledDescription={visualizationSectionDisabledDescription({
-          disabled: vectorsDisabled,
-          pending,
-          requiredPass: "Vectors",
-          requiredPassEnabled: settings.vectorsVisible,
-          targetVisible: settings.visible,
-        })}
-        items={GEOMETRY_SCOPES}
-        label="Arrow extent"
-        value={settings.geometryScope}
-        onValueChange={(value) =>
-          void patch(
-            geometryScopeVectorBudgetPatch({
-              currentRange:
-                vectorBudgetRanges[settings.geometryScope] ?? vectorBudgetRange,
-              geometryScope: value as VisualizationGeometryScope,
-              nextRange: vectorBudgetRanges[value as VisualizationGeometryScope],
-              settings,
-            }),
-          )
-        }
-      />
       {meshParts && meshParts.length > 1 && onTogglePartVectors && (
         <fieldset className="fm-visualization-part-toggles" aria-label="Object target vector visibility">
           <span className="fm-visualization-part-toggles__label">Object surfaces</span>

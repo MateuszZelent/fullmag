@@ -29,7 +29,7 @@ export function AirboxOverviewPanel({ selection }: InspectorPanelProps) {
   );
 
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Airbox Overview" badge={policy.status}>
         <FieldRow label="Canonical target" value="airbox" />
         <FieldRow label="Domain mode" value={String(authored.mode ?? "inherited")} />

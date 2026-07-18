@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const appRoot = process.cwd();
 const runtimeCommandsPath = path.join(
@@ -291,61 +292,72 @@ const binaryResourcePerformanceMeasureNames = [
 
 const failures = [];
 
-checkComputeCommandInvalidationScope();
-checkStudyRunCommandInvalidationScope();
-checkRealtimeSessionStatusFanout();
-checkBinaryDecodeScheduler();
-checkControlRoomApiBinaryPerformanceMarks();
-checkSessionStatusSelectors();
-checkExplorerModuleSessionStatusSelector();
-checkRibbonModuleSessionStatusSelector();
-checkHeaderSessionStatusSelector();
-checkSimulationStartupOverlaySessionStatusSelector();
-checkRuntimeControlSessionStatusSelector();
-checkStudyRuntimeCommandResourceDataSessionStatusSelector();
-checkFieldCatalogResourceSeparation();
-checkObjectVisualizationPanelSessionStatusSelector();
-checkObjectVisualizationPanelVisualizationSelector();
-checkObjectVisualizationPanelNumberFieldCommitBoundary();
-checkMeshDetailsPanelSessionStatusSelector();
-checkAirboxInspectorPanelsResourceOwnership();
-checkStudyInspectorPanelSessionStatusSelector();
-checkMeshBuildDialogSessionStatusSelector();
-checkShellSelectorHooks();
-checkSelectionComparatorHotPath();
-checkObjectVisualizationSelectorHooks();
-checkViewport3DObjectVisualizationSelector();
-checkObjectGeneralPanelVisualizationSelector();
-checkCommandShortcutConnector();
-checkFooterDiagnosticsBatching();
-checkPerformanceDiagnosticsExport();
-checkReactRenderProfilerInstrumentation();
-checkVisualizationPatchHotPath();
-checkVisualizationDebugLifecycleBudgets();
-checkRibbonSliderCommandDebounce();
-checkViewportPerformanceMarks();
-checkPrimitiveGeometryKeyHotPath();
-checkTopologyPositionConversionCache();
-checkTopologyIndexBufferCache();
-checkVectorSurfaceNormalCache();
-checkMeshQualityVertexColorCache();
-checkFdmCuboidChunkedUpload();
-checkVectorGlyphChunkedUpload();
-checkFdmVectorSegmentCache();
-checkFdmCuboidSceneModelReuse();
-checkFooterTelemetryIsOptIn();
-checkViewportSmokeComputeMetrics();
-checkComputePerformanceSmokeScript();
-checkComputePerformanceMicrobenchCoverage();
-checkAnalysisPlotsStableResourceInputs();
-checkAnalysisPlotDecimation();
+export function runComputePerformanceAudit() {
+  failures.length = 0;
+  checkComputeCommandInvalidationScope();
+  checkStudyRunCommandInvalidationScope();
+  checkRealtimeSessionStatusFanout();
+  checkBinaryDecodeScheduler();
+  checkControlRoomApiBinaryPerformanceMarks();
+  checkSessionStatusSelectors();
+  checkExplorerModuleSessionStatusSelector();
+  checkRibbonModuleSessionStatusSelector();
+  checkHeaderSessionStatusSelector();
+  checkSimulationStartupOverlaySessionStatusSelector();
+  checkRuntimeControlSessionStatusSelector();
+  checkStudyRuntimeCommandResourceDataSessionStatusSelector();
+  checkFieldCatalogResourceSeparation();
+  checkObjectVisualizationPanelSessionStatusSelector();
+  checkObjectVisualizationPanelVisualizationSelector();
+  checkObjectVisualizationPanelNumberFieldCommitBoundary();
+  checkMeshDetailsPanelSessionStatusSelector();
+  checkAirboxInspectorPanelsResourceOwnership();
+  checkStudyInspectorPanelSessionStatusSelector();
+  checkMeshBuildDialogSessionStatusSelector();
+  checkShellSelectorHooks();
+  checkSelectionComparatorHotPath();
+  checkObjectVisualizationSelectorHooks();
+  checkViewport3DObjectVisualizationSelector();
+  checkObjectGeneralPanelVisualizationSelector();
+  checkCommandShortcutConnector();
+  checkFooterDiagnosticsBatching();
+  checkPerformanceDiagnosticsExport();
+  checkReactRenderProfilerInstrumentation();
+  checkVisualizationPatchHotPath();
+  checkVisualizationDebugLifecycleBudgets();
+  checkRibbonSliderCommandDebounce();
+  checkViewportPerformanceMarks();
+  checkPrimitiveGeometryKeyHotPath();
+  checkTopologyPositionConversionCache();
+  checkTopologyIndexBufferCache();
+  checkVectorSurfaceNormalCache();
+  checkMeshQualityVertexColorCache();
+  checkFdmCuboidChunkedUpload();
+  checkVectorGlyphChunkedUpload();
+  checkFdmVectorSegmentCache();
+  checkFdmCuboidSceneModelReuse();
+  checkFooterTelemetryIsOptIn();
+  checkViewportSmokeComputeMetrics();
+  checkComputePerformanceSmokeScript();
+  checkComputePerformanceMicrobenchCoverage();
+  checkAnalysisPlotsStableResourceInputs();
+  checkAnalysisPlotDecimation();
 
-if (failures.length > 0) {
-  console.error(`Compute performance audit failed:\n${failures.join("\n")}`);
-  process.exit(1);
+  if (failures.length > 0) {
+    throw new Error(`Compute performance audit failed:\n${failures.join("\n")}`);
+  }
+
+  return "Compute performance audit passed.";
 }
 
-console.log("Compute performance audit passed.");
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    console.log(runComputePerformanceAudit());
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+}
 
 function checkComputeCommandInvalidationScope() {
   const source = readFileSync(runtimeCommandsPath, "utf8");

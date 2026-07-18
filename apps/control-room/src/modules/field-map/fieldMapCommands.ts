@@ -1,6 +1,7 @@
 import type { CommandContribution } from "@/kernel/commands/commandTypes";
 import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
 import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
+import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
 
 import { fieldMapStore } from "./fieldMapStore";
 import { downloadPlanarPng, planarExportFilename } from "./fieldMapExport";
@@ -41,6 +42,34 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       }
       context.layout?.setActiveViewportMainModule("field-map");
       context.layout?.setFocusedSlot("viewport-main");
+      if (id === "field-map.open" && context.api) {
+        const collection = await context.api.model.planarMonitors.list();
+        if (collection.monitors.length === 0) {
+          const draft = beginPlanarMonitorDraft();
+          const nodeId = "model:definitions:planar-monitors:draft";
+          context.selection?.set(
+            {
+              kind: "model.planar.monitor.draft",
+              label: draft.name,
+              nodeId,
+              objectId: null,
+              ref: {
+                draftId: "draft",
+                kind: "model.planar.monitor.draft",
+                nodeId,
+                type: "planar-monitor-draft",
+                visualizationTargetId: "planar-monitor:draft",
+              },
+            },
+            context.source,
+          );
+          context.layout?.setPanelVisible("right", true);
+          return {
+            message: "Apply the Midplane draft to render the 2D field.",
+            status: "completed",
+          };
+        }
+      }
     }
     if (id === "planar-monitor.show-frame-3d") {
       if (!context.api || typeof input?.monitorId !== "string") {
@@ -175,9 +204,10 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         fieldMapStore.set({ activeMonitorId: response.monitor.id });
       } else {
         if (typeof input.newName !== "string" || !input.newName.trim()) {
+          context.layout?.setPanelVisible("right", true);
           return {
-            message: "A non-empty new monitor name is required.",
-            status: "failed",
+            message: "Edit the monitor name in the Inspector.",
+            status: "completed",
           };
         }
         const current = await context.api.model.planarMonitors.get(
@@ -197,5 +227,6 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
     return { status: "completed" };
   },
   scope: "viewport",
+  shortcut: id === "field-map.open" ? "2" : undefined,
   title,
 }));

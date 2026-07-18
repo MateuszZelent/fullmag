@@ -10,7 +10,7 @@ import {
 
 export function ObjectRegionDiagnosticsPanel({ model }: RegionSubPanelProps) {
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <ObjectRegionMetadataSection model={model} />
 
       <InspectorGroup title="Diagnostics">

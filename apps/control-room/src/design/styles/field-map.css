@@ -24,7 +24,7 @@
   display: flex;
   gap: var(--fm-space-3);
   align-items: center;
-  min-height: 36px;
+  min-height: var(--fm-inspector-nav-icon-size);
   padding: 0 var(--fm-space-3);
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-panel);

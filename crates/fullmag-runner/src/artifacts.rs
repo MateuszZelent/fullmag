@@ -3303,17 +3303,19 @@ mod tests {
             panic!("expected FDM plan");
         };
         fdm.region_mask = vec![1, 1, 2, 2, 0, 0, 1, 2];
+        fdm.active_mask = Some(vec![true, true, true, true, true, false, true, true]);
         fdm.grid_certificate = Some(
             fullmag_ir::FdmGridCertificateIR::new_with_masks(
                 fdm.origin_m,
                 fdm.grid.cells,
                 fdm.cell_size,
-                8,
+                7,
                 1024,
-                None,
+                fdm.active_mask.as_deref(),
                 &fdm.region_mask,
             )
             .expect("FDM region certificate should be valid")
+            .with_object_ids(vec!["body".to_string()])
             .with_region_legend(vec![
                 fullmag_ir::FdmRegionLegendEntryIR {
                     numeric_id: 1,
@@ -3335,19 +3337,25 @@ mod tests {
         assert_eq!(artifacts.len(), 2);
         assert_eq!(
             artifacts[0].relative_path,
-            "mesh/fdm_region_membership.v1.json"
+            "mesh/fdm_region_membership.v2.json"
         );
         assert_eq!(
             artifacts[1].relative_path,
-            "mesh/fdm_region_membership.v1.bin"
+            "mesh/fdm_region_membership.v2.bin"
         );
         let descriptor: serde_json::Value = serde_json::from_slice(&artifacts[0].bytes)
             .expect("membership descriptor should be JSON");
-        assert_eq!(descriptor["schema_version"], "fdm_region_membership.v1");
+        assert_eq!(descriptor["schema_version"], "fdm_region_membership.v2");
+        assert_eq!(descriptor["object_ids"], serde_json::json!(["body"]));
         assert_eq!(descriptor["cell_count"], 8);
         assert_eq!(descriptor["region_legend"].as_array().unwrap().len(), 2);
         assert_eq!(&artifacts[1].bytes[..4], b"FMRM");
-        assert_eq!(artifacts[1].bytes[4], 1);
+        assert_eq!(artifacts[1].bytes[4], 2);
+        assert_eq!(
+            u32::from_le_bytes(artifacts[1].bytes[84..88].try_into().unwrap()),
+            u32::MAX,
+            "inactive cells must remain distinguishable from active cells without an authored region"
+        );
         assert_eq!(
             artifacts[1].bytes.len(),
             64 + 8 * std::mem::size_of::<u32>()

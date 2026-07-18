@@ -894,7 +894,7 @@ export function ObjectMeshPolicyPanel({ selection }: InspectorPanelProps) {
             pending={pending}
           />
 
-          <div className="grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+          <div className="grid min-w-0 gap-fm-inspector-group">
             <JsonResourceSection sectionValue="json-report" title="Object Mesh Report JSON" value={report.data} />
             <JsonResourceSection sectionValue="json-quality" title="Object Mesh Quality JSON" value={quality.data} />
             <JsonResourceSection sectionValue="json-size-field" title="Object Size Field JSON" value={sizeField.data} />

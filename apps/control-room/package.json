@@ -27,7 +27,6 @@
     "generate:openapi-v2": "cargo run -p fullmag-api -- --print-openapi-v2 > src/kernel/api/generated/openapi-v2.json",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
-    "smoke:cross-section-workflow": "node scripts/smoke-cross-section-workflow.mjs",
     "smoke:airbox-field-routing": "node scripts/smoke-airbox-field-routing.mjs",
     "smoke:study-authoring-ui": "node scripts/smoke-study-authoring-ui.mjs",
     "smoke:study-runtime-control": "node scripts/smoke-study-runtime-control.mjs",

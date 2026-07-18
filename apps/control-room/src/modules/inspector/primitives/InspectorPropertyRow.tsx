@@ -13,7 +13,7 @@ export function InspectorPropertyGrid({
 }: InspectorPropertyGridProps) {
   return (
     <div
-      className={cn("grid min-w-0 gap-[var(--fm-inspector-row-gap)]", className)}
+      className={cn("grid min-w-0 gap-fm-inspector-row", className)}
       data-slot="inspector-property-grid"
     >
       {children}
@@ -43,7 +43,7 @@ export function InspectorPropertyRow({
   return (
     <div
       className={cn(
-        "grid min-h-[var(--fm-field-row-min-height)] min-w-0 gap-x-[var(--fm-inspector-control-gap)] gap-y-1",
+        "grid min-h-fm-field-row min-w-0 gap-x-fm-inspector-control gap-y-1",
         layout === "inline"
           ? "grid-cols-[minmax(96px,0.8fr)_minmax(0,1.2fr)] items-center"
           : "grid-cols-1",
@@ -67,7 +67,7 @@ export function InspectorPropertyRow({
       </div>
       <div
         aria-labelledby={labelId}
-        className="flex min-w-0 items-center justify-end gap-[var(--fm-inspector-control-gap)] [font-variant-numeric:tabular-nums]"
+        className="flex min-w-0 items-center justify-end gap-fm-inspector-control [font-variant-numeric:tabular-nums]"
         data-slot="inspector-property-control"
         role="group"
       >

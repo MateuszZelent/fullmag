@@ -20,7 +20,7 @@
   --fm-ribbon-height: 124px;
   --fm-ribbon-tabs-height: 34px;
   --fm-status-height: 26px;
-  --fm-panel-header-height: 32px;
+  --fm-panel-header-height: 38px;
   --fm-control-height-compact: 26px;
   --fm-control-height-regular: 30px;
   --fm-control-height-sm: var(--fm-control-height-compact);
@@ -33,6 +33,19 @@
   --fm-inspector-row-gap: 2px;
   --fm-inspector-control-gap: 2px;
   --fm-inspector-group-gap: 8px;
+  --fm-inspector-tab-height: 44px;
+  --fm-inspector-icon-size: 44px;
+  --fm-inspector-nav-icon-size: 36px;
+  --fm-inspector-group-nav-height: 52px;
+  --fm-chart-height-xs: 64px;
+  --fm-chart-height-sm: 96px;
+  --fm-chart-height-md: 260px;
+  --fm-chart-height-lg: 360px;
+  --fm-ribbon-chevron-size: 19px;
+  --fm-ribbon-tab-indicator-bottom: 25px;
+  --fm-thread-progress-width: 54px;
+  --fm-tree-indent: 15px;
+  --fm-tree-guide-offset: 7px;
 
   /* Typography */
   --fm-font-ui: "Inter", "Aptos", sans-serif;
@@ -43,6 +56,7 @@
   --fm-font-size-sm: 12px;
   --fm-font-size-md: 13px;
   --fm-font-size-lg: 15px;
+  --fm-font-size-xl: 18px;
   --fm-line-height-tight: 1.1;
   --fm-font-size-field-label: 11px;
   --fm-font-size-control: 11px;
@@ -74,6 +88,11 @@
   --fm-shadow-lg: 0 6px 16px -2px rgba(0, 0, 0, 0.25), 0 4px 8px -1px rgba(0, 0, 0, 0.15);
   --fm-shadow-elevated: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
   --fm-shadow-panel: 0 8px 32px -6px rgba(0, 0, 0, 0.45), 0 4px 12px -4px rgba(0, 0, 0, 0.2);
+  --fm-shadow-drop-sm: 0 1px 3px rgb(0 0 0 / 50%);
+  --fm-shadow-swatch-inset: inset 0 1px 2px rgb(0 0 0 / 30%);
+
+  /* Scrim / modal backdrop */
+  --fm-scrim: rgba(0, 0, 0, 0.5);
 
   /* Effects */
   --fm-focus-ring: 0 0 0 2px var(--fm-bg-app), 0 0 0 4px var(--fm-accent);

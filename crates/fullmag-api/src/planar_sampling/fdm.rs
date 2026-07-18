@@ -135,6 +135,9 @@ fn sample_volume(
         for y in 0..grid[1] {
             for x in 0..grid[0] {
                 let cell = ((z * grid[1] + y) * grid[0] + x) as usize;
+                if !field.contains_cell(cell) {
+                    continue;
+                }
                 let start = cell * field.n_comp();
                 let value = field.values()[start..start + field.n_comp()].to_vec();
                 let low = [
@@ -280,6 +283,9 @@ fn cell_value_at(field: &FdmPlanarField, point: [f64; 3]) -> Option<(u32, &[f64]
         index[axis] = coordinate.floor() as u32;
     }
     let cell = ((index[2] * field.grid()[1] + index[1]) * field.grid()[0] + index[0]) as usize;
+    if !field.contains_cell(cell) {
+        return None;
+    }
     let start = cell * field.n_comp();
     Some((cell as u32, &field.values()[start..start + field.n_comp()]))
 }

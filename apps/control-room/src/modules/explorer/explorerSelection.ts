@@ -231,6 +231,16 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
+  if (node.kind === "model.planar.monitor.draft") {
+    return {
+      draftId: "draft",
+      kind: "model.planar.monitor.draft",
+      nodeId: node.id,
+      type: "planar-monitor-draft",
+      visualizationTargetId: "planar-monitor:draft",
+    };
+  }
+
   if (
     node.kind === "visualizations-2d.draft" ||
     (node.kind === "visualizations-2d.parameter" && node.crossSectionDraftId)
@@ -372,6 +382,7 @@ export function selectExplorerNode(
       kind:
         ref?.type === "cross-section-draft" ||
         ref?.type === "cross-section-plot" ||
+        ref?.type === "planar-monitor-draft" ||
         ref?.type === "mesh-part"
           ? ref.kind
           : node.kind,

@@ -2476,7 +2476,7 @@ describe("useViewport3DSceneModel", () => {
     ).toEqual(["film:core", "film:edge"]);
   });
 
-  it("keeps mesh-backed region parts hidden until the region is explicitly enabled", () => {
+  it("inherits owner passes for mesh-backed regions except sparse overrides", () => {
     const visualization = new ObjectVisualizationController();
     const part = {
       id: "part:film:core",
@@ -2502,11 +2502,12 @@ describe("useViewport3DSceneModel", () => {
         objectVisualizationSnapshot: visualization.getSnapshot(),
         part,
         regionTarget,
+        sceneObjectIds: new Set(["film"]),
       }),
     ).toMatchObject({
       shaderVisible: false,
-      vectorsVisible: false,
-      visible: false,
+      vectorsVisible: true,
+      visible: true,
       wireframeVisible: false,
     });
   });
@@ -2621,7 +2622,7 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
-  it("keeps an explicitly visible region hidden when its owner object is hidden", () => {
+  it("allows an explicit region visibility override when its owner is hidden", () => {
     const visualization = new ObjectVisualizationController();
     const part = {
       geometry_id: "periodic_antidot_film:r1",
@@ -2651,9 +2652,9 @@ describe("useViewport3DSceneModel", () => {
         sceneObjectIds: new Set(["periodic_antidot_film"]),
       }),
     ).toMatchObject({
-      shaderVisible: false,
-      visible: false,
-      wireframeVisible: false,
+      shaderVisible: true,
+      visible: true,
+      wireframeVisible: true,
     });
   });
 
@@ -2714,7 +2715,7 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
-  it("keeps an unconfigured mesh-backed region part hidden", () => {
+  it("inherits owner visualization for an unconfigured mesh-backed region", () => {
     const visualization = new ObjectVisualizationController();
     const part = {
       id: "part:film:core",
@@ -2732,9 +2733,9 @@ describe("useViewport3DSceneModel", () => {
         },
       }),
     ).toMatchObject({
-      shaderVisible: false,
-      visible: false,
-      wireframeVisible: false,
+      shaderVisible: true,
+      visible: true,
+      wireframeVisible: true,
     });
   });
 

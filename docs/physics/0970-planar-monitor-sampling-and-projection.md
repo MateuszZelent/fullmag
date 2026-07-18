@@ -237,6 +237,21 @@ point. Slab and depth reductions use cell/pixel-prism intersection volume.
 Axis-aligned fast paths are legal only when they agree with the general
 operator within the declared tolerance.
 
+The resolved structured grid carries two independent membership facts:
+
+- an active-cell mask identifies the magnetic object support;
+- a numeric region mask plus its deterministic legend identifies authored
+  object regions.
+
+`magnetic_domain` and object targets intersect the sampler with the active-cell
+mask. Region targets additionally require an exact `(object_id, region_id)`
+legend match and select only cells carrying that numeric region identifier.
+The complete physical domain may include inactive grid cells. An inactive or
+unselected cell is empty support, not a zero-valued field sample. The grid
+origin, cell size, active mask, region mask, and legend are planner-owned
+realization facts; the API and sampler must consume their published artifact
+instead of reconstructing membership from authoring geometry.
+
 For a layered grid with cell values \(q_k\) and occupied intersection volumes
 \(V_k\),
 
@@ -356,6 +371,21 @@ expose thin metadata and separate bounded binary scalar, vector, occupancy, and
 mesh-overlay payloads. Probe and PNG export remain separate resources.
 WebSocket messages carry invalidation only; session status carries no rasters.
 
+For FDM, the existing revisioned region-membership data-plane artifact is also
+the authoritative planar-target mask. It binds grid origin/counts/cell size,
+active support, numeric region membership, object identity, and legend to one
+grid fingerprint. A missing, stale, malformed, or grid-incompatible membership
+artifact produces an explicit capability/staleness diagnostic; the route must
+not silently sample the full rectangular storage grid.
+
+During the interactive pre-run state, material fields and the immutable
+execution plan are available before run artifacts are persisted. In that state
+the API may decode the same planner-owned certificate, active mask, region
+mask, object identities, and legend directly from the current execution plan.
+Once the matching FMRM artifact exists it is the data-plane source. A malformed
+or mismatched existing artifact must fail explicitly and must not fall back to
+the in-memory plan.
+
 ### 4.6 Unified workspace
 
 `field-map` is the `viewport-main` owner for interactive 2D spatial fields. It
@@ -382,11 +412,17 @@ as a competing top-level workflow only after parity evidence exists.
 | PM-N07 | partial/empty domain | correct occupancy and excluded extrema |
 | PM-N08 | planar boundary | analytic area-weighted surface value |
 | PM-N09 | folded surface | explicit non-injective diagnostic |
+| PM-N10 | FDM object/region membership | inactive and non-selected cells remain empty for plane/slab/depth |
+| PM-N11 | nanometre-scale FDM depth projection | occupied volume remains non-zero without a unit-dependent absolute volume cutoff |
+| PM-N12 | nanometre-scale FEM surface projection | valid boundary faces retain non-zero projected measure without a unit-dependent squared-area cutoff |
+| PM-N13 | nanometre-scale FEM plane sample | valid tetrahedra retain non-zero barycentric determinant without a unit-dependent absolute determinant cutoff |
 
 Constant and linear P1 point evaluations target near-machine precision.
 Clipping/integration tests declare fixture-specific absolute and relative
-tolerances derived from integration order. A timeout or lower-quality operator
-is not a scientific fallback.
+tolerances derived from integration order and local geometric scale. A fixed
+absolute volume or area cutoff in SI units is forbidden because it changes the
+operator when geometry is rescaled. A timeout or lower-quality operator is not
+a scientific fallback.
 
 ### 5.2 Cross-backend checks
 
@@ -454,4 +490,3 @@ the lanes proven by current reports.
 - Backend ownership in `docs/architecture/backend-golden-masterplan.md`.
 - Center-surface lifecycle in
   `docs/adr/0016-center-viewport-tabbed-surfaces.md`.
-

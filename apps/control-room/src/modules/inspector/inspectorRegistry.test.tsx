@@ -315,6 +315,12 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("resolves planar monitor drafts independently from legacy cross-section images", () => {
+    expect(
+      resolveInspectorPanel({ kind: "model.planar.monitor.draft" })?.id,
+    ).toBe("planar-monitor-draft");
+  });
+
   it("routes study root separately from concrete study stage inspectors", () => {
     expect(resolveInspectorPanel({ kind: "study.root" })?.id).toBe(
       "study-root",

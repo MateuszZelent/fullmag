@@ -33,6 +33,17 @@ interface WorkspaceDockState {
   restored: boolean;
 }
 
+function persistWorkspaceLayout(layout: typeof DEFAULT_WORKSPACE_LAYOUT): void {
+  try {
+    window.localStorage.setItem(
+      WORKSPACE_LAYOUT_STORAGE_KEY,
+      serializeWorkspaceLayout(layout),
+    );
+  } catch {
+    return;
+  }
+}
+
 function SortableWorkspaceColumn({
   column,
 }: SortableWorkspaceColumnProps) {
@@ -122,17 +133,6 @@ export function WorkspaceDockLayout() {
       }
     };
   }, []);
-
-  function persistWorkspaceLayout(layout: typeof DEFAULT_WORKSPACE_LAYOUT): void {
-    try {
-      window.localStorage.setItem(
-        WORKSPACE_LAYOUT_STORAGE_KEY,
-        serializeWorkspaceLayout(layout),
-      );
-    } catch {
-      return;
-    }
-  }
 
   function handleMoveColumn(activeId: string, overId: string): void {
     setDockState((currentState) => {

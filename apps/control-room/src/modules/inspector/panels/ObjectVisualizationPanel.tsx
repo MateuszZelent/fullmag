@@ -328,7 +328,10 @@ function useObjectVisualizationPanelState(
         settings,
       })
     : [];
-  const passControlsDisabled = pending || !settings?.visible;
+  const passControlsDisabled =
+    pending ||
+    !settings?.visible ||
+    Boolean(renderResolution?.degradedReasons.length);
   const primitiveDisplayToggleVisible = resolvedTarget
     ? shouldShowPrimitiveDisplayToggle(
         activeModuleTab,
@@ -748,17 +751,20 @@ function ObjectVisualizationPanelView({
     resetLiveViewportChanges,
   );
   const enabledPassCount = [
-    settings.visible,
-    settings.shaderVisible,
-    settings.wireframeVisible,
-    settings.vectorsVisible,
-    settings.pointsVisible,
+    displaySettings.boundsVisible,
+    displaySettings.shaderVisible,
+    displaySettings.wireframeVisible,
+    displaySettings.vectorsVisible,
+    displaySettings.pointsVisible,
   ].filter(Boolean).length;
   const meshState = renderResolution?.degradedReasons.length
     ? "Degraded"
     : "Ready";
+  const requiresFieldData =
+    displaySettings.vectorsVisible ||
+    (displaySettings.shaderVisible && settings.surfaceColorSource !== "solid");
   const dataState =
-    settings.surfaceColorSource === "solid"
+    !requiresFieldData
       ? "Not required"
       : fieldCatalog.status === "ready"
         ? "Live"
@@ -766,7 +772,7 @@ function ObjectVisualizationPanelView({
 
   return (
     <div
-      className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]"
+      className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
       data-visualization-revision={revision}
     >
       <InspectorGroup collapsible defaultOpen={false} title="Target">
@@ -833,6 +839,7 @@ function ObjectVisualizationPanelView({
               pending={pending}
               renderWarning={renderWarning}
               settings={settings}
+              targetKind={target.kind}
               primitiveDisplayToggleVisible={primitiveDisplayToggleVisible}
                 />
                 <VisualizationRenderModeSection
@@ -840,20 +847,23 @@ function ObjectVisualizationPanelView({
               passControlsDisabled={passControlsDisabled}
               pending={pending}
               patch={patch}
+              targetKind={target.kind}
                 />
-                <VisualizationQuantitySection
+                {settings.shaderVisible || settings.vectorsVisible ? (
+                  <VisualizationQuantitySection
               onFieldCatalogRequest={onFieldCatalogRequest}
               patch={patch}
               pending={pending}
               settings={settings}
               targetKind={target.kind}
-                />
+                  />
+                ) : null}
               </>
             }
             enabledPassCount={enabledPassCount}
             meshState={meshState}
             quantitySource={settings.activeQuantityId || "H_eff"}
-            surfaceColoring={
+            surfaceColoring={target.kind === "airbox" ? null : (
               <VisualizationSurfaceColoringSection
               patch={patch}
               patchColor={patchColor}
@@ -865,7 +875,7 @@ function ObjectVisualizationPanelView({
               settings={settings}
               target={target}
               />
-            }
+            )}
             vectors={
               <VisualizationVectorsSection
               meshParts={vectorMeshParts}
@@ -878,7 +888,6 @@ function ObjectVisualizationPanelView({
               settings={settings}
               targetKind={target.kind}
               vectorBudgetRange={vectorBudgetRange}
-              vectorBudgetRanges={vectorBudgetRanges}
               vectorTopologyHash={vectorTopologyHash}
               />
             }

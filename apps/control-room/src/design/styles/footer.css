@@ -60,7 +60,7 @@
 }
 
 .fm-footer__filter {
-  height: 22px;
+  height: var(--fm-control-height-compact);
   border: 1px solid transparent;
   border-radius: var(--fm-radius-sm);
   background: transparent;
@@ -84,7 +84,7 @@
 
 .fm-footer__filter-sep {
   width: 1px;
-  height: 14px;
+  height: var(--fm-space-3);
   margin-inline: var(--fm-space-1);
   background: var(--fm-border-subtle);
   flex-shrink: 0;
@@ -114,11 +114,11 @@
 
   .fm-footer-telemetry__metric,
   .fm-footer-telemetry__links {
-    padding-inline: 10px;
+    padding-inline: var(--fm-inspector-padding-inline);
   }
 
   .fm-footer-telemetry__metric-value {
-    font-size: 14px;
+    font-size: var(--fm-font-size-lg);
   }
 }
 

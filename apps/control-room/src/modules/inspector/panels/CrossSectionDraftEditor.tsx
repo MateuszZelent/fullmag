@@ -18,6 +18,10 @@ import { fieldMapStore } from "@/modules/field-map/public";
 import { MeshResourceEmpty } from "./MeshResourceView";
 import { CrossSectionSettingsEditor } from "./CrossSectionSettingsEditor";
 
+function updateDraft(patch: Partial<CrossSectionDraft>): void {
+  updateCrossSectionDraft(patch);
+}
+
 export function CrossSectionDraftEditor({
   draft,
 }: {
@@ -33,9 +37,6 @@ export function CrossSectionDraftEditor({
     return <MeshResourceEmpty label="No editable cross-section draft." />;
   }
 
-  const updateDraft = (patch: Partial<CrossSectionDraft>) => {
-    updateCrossSectionDraft(patch);
-  };
   const commitDraft = async () => {
     setPending(true);
     setFeedback(null);

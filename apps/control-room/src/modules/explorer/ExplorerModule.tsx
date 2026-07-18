@@ -186,6 +186,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     selectExplorerCrossSections,
     { isEqual: explorerCrossSectionsEqual },
   );
+  const planarMonitorDraft = useCrossSectionWorkspaceSelector(
+    (state) => state.planarMonitorDraft,
+  );
   const crossSectionExpansionIds = useMemo(() => {
     const ids: string[] = [];
     if (crossSections.draft || crossSections.plots.length > 0) {
@@ -343,25 +346,28 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       regionCount: manifest.data?.regions?.length ?? null,
       sourceSceneRevision: revisionValue(modelResourceRecord?.revision),
       visualizationPartFallbacks: semanticTargetCatalog.entries
-        .filter((entry) => entry.targetKind === "part")
         .flatMap((entry) =>
-          entry.carrierIds.slice(0, 1).map((carrierId) => ({
+          entry.targetKind === "part"
+            ? entry.carrierIds.slice(0, 1).map((carrierId) => ({
             id: carrierId,
             label: entry.label,
             visualizationTargetId: entry.targetId,
-          })),
+              }))
+            : [],
         ),
     };
-    const objects = modelSnapshot.objects
-      ?.filter((object) => !isVisualizationAirboxIdentity(object))
-      .map((object) => ({
-        ...object,
-        extensions: resolveActiveObjectExtensionExplorerItems(
-          object.id,
-          objectExtensionActivation,
-        ),
-        textureLoadEnabled: textureLoadObjectIds.has(object.id),
-      }));
+    const objects = modelSnapshot.objects?.flatMap((object) =>
+      isVisualizationAirboxIdentity(object)
+        ? []
+        : [{
+            ...object,
+            extensions: resolveActiveObjectExtensionExplorerItems(
+              object.id,
+              objectExtensionActivation,
+            ),
+            textureLoadEnabled: textureLoadObjectIds.has(object.id),
+          }],
+    );
     const baseNodes =
       activeTab === "model"
         ? buildModelTree(
@@ -371,6 +377,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               frequencyDomainManifest: frequencyDomainManifest.data,
               frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
               frequencyDomainSpectrum: frequencyDomainSpectrum.data,
+              planarMonitorDraft,
               planarMonitors: planarMonitors.data,
             },
           )
@@ -398,6 +405,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelCouplings.data,
     modelMaterialFields.data,
     modelRegions.data,
+    planarMonitorDraft,
     planarMonitors.data,
     regionMemberships.data,
     stageExecution.data,
@@ -492,7 +500,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             title="Expand All"
             type="button"
             onClick={() => {
-              expandExplorerNodes(activeTab, collectExplorerNodeIds(buildExplorerTree(activeTab)));
+              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
             }}
           >
             <ChevronsUpDown size={13} aria-hidden="true" />
@@ -503,8 +511,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             title="Collapse All"
             type="button"
             onClick={() => {
-              const allIds = collectExplorerNodeIds(buildExplorerTree(activeTab));
-              collapseExplorerNodes(activeTab, allIds);
+              collapseExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
             }}
           >
             <ChevronsDownUp size={13} aria-hidden="true" />
@@ -516,7 +523,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             type="button"
             onClick={() => {
               setExplorerFilterText("");
-              expandExplorerNodes(activeTab, collectExplorerNodeIds(buildExplorerTree(activeTab)));
+              expandExplorerNodes(activeTab, collectExplorerNodeIds(nodes));
             }}
           >
             <RefreshCw size={13} aria-hidden="true" />

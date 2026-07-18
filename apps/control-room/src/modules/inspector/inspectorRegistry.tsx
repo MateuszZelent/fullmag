@@ -106,6 +106,7 @@ import {
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
 import { PhysicsInteractionPanel } from "./panels/PhysicsInteractionPanel";
 import { PlanarMonitorInspectorPanel } from "./panels/PlanarMonitorInspectorPanel";
+import { PlanarMonitorDraftInspectorPanel } from "./panels/PlanarMonitorDraftInspectorPanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
@@ -449,6 +450,12 @@ const frequencyDomainPanels: InspectorPanelContribution[] =
   }));
 
 const PANELS: InspectorPanelContribution[] = [
+  {
+    id: "planar-monitor-draft",
+    title: "Planar Monitor Draft",
+    selectionKinds: ["model.planar.monitor.draft"],
+    component: PlanarMonitorDraftInspectorPanel,
+  },
   {
     id: "planar-monitor",
     title: "Planar Monitor",

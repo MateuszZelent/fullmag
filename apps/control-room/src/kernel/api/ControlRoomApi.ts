@@ -471,28 +471,30 @@ export function transformFieldVectorForDisplay(
     },
   };
 }
+import { decodeCrossSection } from "./codecs/crossSectionCodec";
+import { decodeCrossSectionQuality } from "./codecs/crossSectionQualityCodec";
+import { decodeFieldVector } from "./codecs/fieldVectorCodec";
+import { decodeMeshQualityData } from "./codecs/meshQualityDataCodec";
+import { decodePeriodicPairs } from "./codecs/periodicPairsCodec";
+import { decodeTableRows } from "./codecs/tableRowsCodec";
 import {
-  decodeCrossSection,
-  decodeCrossSectionQuality,
-  decodeFieldVector,
-  decodeMeshQualityData,
-  decodePeriodicPairs,
-  decodeTableRows,
   decodeTopology,
   decodeTopologyHeader,
   decodeTopologySections,
   expectedTopologyByteLength,
   FMMT_HEADER_LEN,
   topologyByteLayout,
-  type DecodedCrossSection,
-  type DecodedCrossSectionQuality,
-  type DecodedFieldVector,
-  type DecodedMeshQualityData,
-  type DecodedTableRows,
-  type DecodedTopology,
   type TopologyHeader,
   type TopologySections,
-} from "./codecs";
+} from "./codecs/topologyCodec";
+import type {
+  DecodedCrossSection,
+  DecodedCrossSectionQuality,
+  DecodedFieldVector,
+  DecodedMeshQualityData,
+  DecodedTableRows,
+  DecodedTopology,
+} from "./codecs/types";
 import {
   createBinaryDecodeScheduler,
   type BinaryDecoderKind,
@@ -1060,7 +1062,7 @@ export class ControlRoomApi {
         options,
       ),
     fdmRegionMemberships: (options?: RequestOptions) =>
-      this.requestJson<FdmRegionMembershipResource>(
+      this.requestOptionalJson<FdmRegionMembershipResource>(
         DATA_FDM_REGION_MEMBERSHIPS_PATH,
         options,
       ),

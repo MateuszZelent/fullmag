@@ -74,7 +74,6 @@ import { usePlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFr
 import {
   AIRBOX_VISUALIZATION_TARGET,
   resolveDefaultVisualizationSettings,
-  resolveEffectiveVisualizationSettings,
   resolveGlobalObjectVisualizationSettings,
   resolveTargetVisualization,
   surfaceColorSourceToColorMode,
@@ -1287,15 +1286,6 @@ export function resolveViewport3DPartVisualizationSettings({
     target: regionTarget,
     visualizationState: renderingState,
   });
-  if (!objectVisualization.effectiveSettings.visible) {
-    return {
-      ...resolveEffectiveVisualizationSettings({
-        ...regionVisualization.effectiveSettings,
-        visible: false,
-      }),
-      target,
-    };
-  }
   return { ...regionVisualization.effectiveSettings, target };
 }
 

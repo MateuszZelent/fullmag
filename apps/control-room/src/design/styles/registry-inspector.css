@@ -14,8 +14,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: var(--fm-space-6);
+  height: var(--fm-control-height-compact);
   padding: 0;
   border: 1px solid var(--fm-border-subtle);
   border-radius: var(--fm-radius-sm);
@@ -73,7 +73,7 @@
   background: var(--fm-bg-muted);
   color: var(--fm-text-muted);
   font-family: var(--fm-font-mono, monospace);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 600;
   line-height: 1.4;
 }
@@ -141,7 +141,7 @@
   content: "▶";
   display: inline-block;
   width: 0.9em;
-  font-size: 9px;
+  font-size: var(--fm-font-size-2xs);
   color: var(--fm-text-muted);
   transition: transform 100ms;
   flex-shrink: 0;
@@ -184,7 +184,7 @@ details[open] > .fm-registry-tree__summary::before {
   border-radius: 3px;
   background: var(--fm-bg-muted);
   color: var(--fm-text-muted);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
 }
 
 details[open] > .fm-registry-tree__summary .fm-registry-tree__compact {

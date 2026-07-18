@@ -1516,6 +1516,27 @@ fn fdm_object_region_material_overrides_materialize_to_cell_fields() {
         .as_ref()
         .expect("FDM plan should carry a grid certificate")
         .region_legend;
+    assert!(
+        fdm.grid_certificate
+            .as_ref()
+            .expect("FDM plan should carry a grid certificate")
+            .object_ids
+            .iter()
+            .any(|object_id| object_id == &legend[0].object_id),
+        "grid certificate must bind the realized single-grid object identity"
+    );
+    let round_tripped: fullmag_ir::FdmPlanIR =
+        serde_json::from_value(serde_json::to_value(&fdm).expect("FDM plan should serialize"))
+            .expect("FDM plan should deserialize");
+    round_tripped
+        .grid_certificate
+        .as_ref()
+        .expect("round-tripped plan should retain the grid certificate")
+        .validate_against_masks(
+            round_tripped.active_mask.as_deref(),
+            &round_tripped.region_mask,
+        )
+        .expect("serialized execution-plan membership must retain its certificate identity");
     assert_eq!(legend.len(), 1);
     assert_eq!(legend[0].numeric_id, 1);
     assert_eq!(legend[0].region_id, region_id);

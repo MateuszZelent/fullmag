@@ -65,7 +65,7 @@ export function ObjectRegionMeshPanel({
     [kernel, membership.data?.mesh_part_ids, model.objectId, model.regionId],
   );
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <ObjectRegionMetadataSection model={model} />
 
       <InspectorGroup title="Mesh Policy">

@@ -24,7 +24,7 @@ export function AirboxMeshQualityGatesPanel({ selection }: InspectorPanelProps) 
   });
 
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Airbox Quality Gates" badge={model.qualityGates.status}>
         <FieldRow label="Airbox-scoped result" value={model.qualityGates.status} />
         <FieldRow label="Reason" value={model.qualityGates.reason} />

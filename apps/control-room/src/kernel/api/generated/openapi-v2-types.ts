@@ -3889,6 +3889,7 @@ export interface components {
             grid_fingerprint: string;
             /** Format: int64 */
             mesh_revision: number;
+            object_ids?: string[];
             origin_m: number[];
             region_legend: components["schemas"]["FdmRegionLegendEntryResource"][];
             region_legend_fingerprint?: string | null;
@@ -10141,7 +10142,14 @@ export interface operations {
                     "application/json": components["schemas"]["FdmRegionMembershipResource"];
                 };
             };
-            /** @description No realized FDM region membership artifact */
+            /** @description No realized FDM region membership artifact yet */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No active workspace */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -10375,6 +10383,8 @@ export interface operations {
                 u_m: number;
                 v_m: number;
                 component?: string;
+                resolution_x?: number;
+                resolution_y?: number;
                 scope_kind?: string;
                 scope_id?: string;
                 stage_id?: string;

@@ -23,6 +23,13 @@ import {
   defaultMaterialOverrideUnit,
   defaultMaterialOverrideValue,
 } from "../ObjectRegionsPanelModel";
+
+const REGION_MATERIAL_PARAMETERS: RegionMaterialParameter[] = [
+  "ms",
+  "aex",
+  "alpha",
+  "ku1",
+];
 import {
   defaultMaterialFieldDraft,
   isEditableMaterialField,
@@ -127,7 +134,6 @@ function useObjectRegionMagneticParametersPanelView({
 }: RegionSubPanelProps) {
   const { api, resources } = useKernel();
   const { data: sceneData } = useSceneResource();
-  const parameters: RegionMaterialParameter[] = ["ms", "aex", "alpha", "ku1"];
   const [fieldPending, setFieldPending] = useState(false);
   const [fieldFeedback, setFieldFeedback] = useState<LocalFeedback>(null);
   const objectMaterialFields = useMemo(
@@ -273,9 +279,11 @@ function useObjectRegionMagneticParametersPanelView({
   const overriddenParams = new Set(
     draft.materialOverrides.map((override) => override.parameter),
   );
-  const inheritedParams = parameters.filter((p) => !overriddenParams.has(p));
+  const inheritedParams = REGION_MATERIAL_PARAMETERS.filter(
+    (parameter) => !overriddenParams.has(parameter),
+  );
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <ObjectRegionMetadataSection model={model} />
 
       <InspectorGroup title="Material Overrides">

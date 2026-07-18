@@ -27,7 +27,7 @@ export function AirboxMeshBuildPanel({ selection }: InspectorPanelProps) {
   });
 
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Airbox Mesh Build" badge={lifecycle.status}>
         <FieldRow label="Lifecycle" value={lifecycle.status} />
         <FieldRow label="Reason" value={lifecycle.reason} />

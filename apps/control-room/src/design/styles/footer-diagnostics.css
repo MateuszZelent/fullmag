@@ -165,7 +165,7 @@
   display: flex;
   width: 100%;
   min-width: 0;
-  height: 8px;
+  height: var(--fm-space-2);
   overflow: hidden;
   border-radius: var(--fm-radius-sm);
   background: var(--fm-bg-canvas);

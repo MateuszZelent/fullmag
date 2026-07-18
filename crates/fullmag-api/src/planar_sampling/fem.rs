@@ -162,27 +162,76 @@ fn sample_plane(
     let mut scalar_values = vec![f64::NAN; pixel_count];
     let mut vector_values = vec![[f64::NAN; 3]; pixel_count];
     let mut source_entity_ids = vec![None; pixel_count];
-    for y in 0..request.resolution[1] {
-        for x in 0..request.resolution[0] {
-            let uv = frame.pixel_center(x, y, request.resolution);
-            let point = frame.point(uv[0], uv[1], 0.0);
-            let index = (y * request.resolution[0] + x) as usize;
-            let Some((element_id, value)) = interpolate_at(field, point) else {
-                continue;
-            };
-            occupancy[index] = Occupancy::Occupied;
-            source_entity_ids[index] = Some(element_id);
-            scalar_values[index] = if field.n_comp() == 1 {
-                value[0]
-            } else {
-                value
-                    .iter()
-                    .map(|component| component * component)
-                    .sum::<f64>()
-                    .sqrt()
-            };
-            if field.n_comp() >= 3 {
-                vector_values[index] = [value[0], value[1], value[2]];
+    let du = (frame.bounds[1] - frame.bounds[0]) / request.resolution[0] as f64;
+    let dv = (frame.bounds[3] - frame.bounds[2]) / request.resolution[1] as f64;
+    for (element_index, element) in field.elements().iter().enumerate() {
+        if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
+            continue;
+        }
+        let nodes = element.map(|index| field.nodes()[index as usize]);
+        let projected = nodes.map(|point| frame.project(point));
+        let n_min = projected
+            .iter()
+            .map(|point| point[2])
+            .fold(f64::INFINITY, f64::min);
+        let n_max = projected
+            .iter()
+            .map(|point| point[2])
+            .fold(f64::NEG_INFINITY, f64::max);
+        if n_min > 0.0 || n_max < 0.0 {
+            continue;
+        }
+        let u_min = projected
+            .iter()
+            .map(|point| point[0])
+            .fold(f64::INFINITY, f64::min);
+        let u_max = projected
+            .iter()
+            .map(|point| point[0])
+            .fold(f64::NEG_INFINITY, f64::max);
+        let v_min = projected
+            .iter()
+            .map(|point| point[1])
+            .fold(f64::INFINITY, f64::min);
+        let v_max = projected
+            .iter()
+            .map(|point| point[1])
+            .fold(f64::NEG_INFINITY, f64::max);
+        let Some((x_start, x_end)) =
+            pixel_center_range(u_min, u_max, frame.bounds[0], du, request.resolution[0])
+        else {
+            continue;
+        };
+        let Some((y_start, y_end)) =
+            pixel_center_range(v_min, v_max, frame.bounds[2], dv, request.resolution[1])
+        else {
+            continue;
+        };
+        for y in y_start..=y_end {
+            for x in x_start..=x_end {
+                let index = (y * request.resolution[0] + x) as usize;
+                if occupancy[index] != Occupancy::Empty {
+                    continue;
+                }
+                let uv = frame.pixel_center(x, y, request.resolution);
+                let point = frame.point(uv[0], uv[1], 0.0);
+                let Some(value) = interpolate_element(field, element, nodes, point) else {
+                    continue;
+                };
+                occupancy[index] = Occupancy::Occupied;
+                source_entity_ids[index] = Some(element_index as u32);
+                scalar_values[index] = if field.n_comp() == 1 {
+                    value[0]
+                } else {
+                    value
+                        .iter()
+                        .map(|component| component * component)
+                        .sum::<f64>()
+                        .sqrt()
+                };
+                if field.n_comp() >= 3 {
+                    vector_values[index] = [value[0], value[1], value[2]];
+                }
             }
         }
     }
@@ -254,6 +303,20 @@ fn sample_plane(
         source_entity_ids,
         overlay: None,
     })
+}
+
+fn pixel_center_range(
+    projected_min: f64,
+    projected_max: f64,
+    frame_min: f64,
+    pixel_size: f64,
+    resolution: u32,
+) -> Option<(u32, u32)> {
+    let first = ((projected_min - frame_min) / pixel_size - 0.5).ceil() as i64;
+    let last = ((projected_max - frame_min) / pixel_size - 0.5).floor() as i64;
+    let first = first.max(0);
+    let last = last.min(resolution as i64 - 1);
+    (first <= last).then_some((first as u32, last as u32))
 }
 
 fn sample_volume(
@@ -337,34 +400,41 @@ fn sample_volume(
     )
 }
 
-pub(super) fn interpolate_at(
-    field: &FemPlanarField,
-    point: [f64; 3],
-) -> Option<(u32, Vec<f64>)> {
+pub(super) fn interpolate_at(field: &FemPlanarField, point: [f64; 3]) -> Option<(u32, Vec<f64>)> {
     for (element_index, element) in field.elements().iter().enumerate() {
         if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
             continue;
         }
         let nodes = element.map(|index| field.nodes()[index as usize]);
-        let Some(weights) = barycentric(nodes, point) else {
+        let Some(result) = interpolate_element(field, element, nodes, point) else {
             continue;
         };
-        if weights
-            .iter()
-            .any(|weight| *weight < -1.0e-11 || *weight > 1.0 + 1.0e-11)
-        {
-            continue;
-        }
-        let mut result = vec![0.0; field.n_comp()];
-        for (local, node) in element.iter().enumerate() {
-            for component in 0..field.n_comp() {
-                result[component] +=
-                    weights[local] * field.values()[*node as usize * field.n_comp() + component];
-            }
-        }
         return Some((element_index as u32, result));
     }
     None
+}
+
+fn interpolate_element(
+    field: &FemPlanarField,
+    element: &[u32; 4],
+    nodes: [[f64; 3]; 4],
+    point: [f64; 3],
+) -> Option<Vec<f64>> {
+    let weights = barycentric(nodes, point)?;
+    if weights
+        .iter()
+        .any(|weight| *weight < -1.0e-11 || *weight > 1.0 + 1.0e-11)
+    {
+        return None;
+    }
+    let mut result = vec![0.0; field.n_comp()];
+    for (local, node) in element.iter().enumerate() {
+        for component in 0..field.n_comp() {
+            result[component] +=
+                weights[local] * field.values()[*node as usize * field.n_comp() + component];
+        }
+    }
+    Some(result)
 }
 
 fn barycentric(nodes: [[f64; 3]; 4], point: [f64; 3]) -> Option<[f64; 4]> {
@@ -373,7 +443,7 @@ fn barycentric(nodes: [[f64; 3]; 4], point: [f64; 3]) -> Option<[f64; 4]> {
     let c = sub(nodes[2], nodes[3]);
     let p = sub(point, nodes[3]);
     let determinant = dot(a, cross(b, c));
-    if determinant.abs() <= f64::EPSILON {
+    if determinant == 0.0 {
         return None;
     }
     let w0 = dot(p, cross(b, c)) / determinant;

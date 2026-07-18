@@ -4,8 +4,6 @@ import {
   DATA_FIELDS_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_PLANAR_FIELD_META_PATH,
-  MESHING_SHARED_DOMAIN_MANIFEST_PATH,
-  MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH,
 } from "@/kernel/api/apiPaths";
 import type { LayoutController } from "@/kernel/layout/LayoutController";
 import { sharedResourceRuntimeStore } from "@/kernel/resources/ResourceRuntimeStore";
@@ -43,9 +41,7 @@ export function isViewport3DExclusiveResourceKey(
 
   return (
     path === DATA_DOMAIN_META_PATH ||
-    path === DATA_DOMAIN_TOPOLOGY_PATH ||
-    path === MESHING_SHARED_DOMAIN_MANIFEST_PATH ||
-    path === MESHING_SHARED_DOMAIN_QUALITY_DATA_PATH
+    path === DATA_DOMAIN_TOPOLOGY_PATH
   );
 }
 

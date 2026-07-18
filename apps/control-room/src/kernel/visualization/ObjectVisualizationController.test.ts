@@ -19,6 +19,7 @@ import {
   resolveVisualizationSettings,
   resolveVisualizationTargetFromSelection,
   visualizationStatePatchFromDefaultTargetPatch,
+  visualizationTargetCapabilities,
   visualizationTargetKey,
   type VisualizationTargetPatch,
 } from "./ObjectVisualizationController";
@@ -50,10 +51,10 @@ describe("ObjectVisualizationController", () => {
       geometryScope: "full",
       opacityPercent: 28,
       pointColor: "var(--fm-info)",
-      renderMode: "surface",
+      renderMode: "wireframe",
       shaderColorMode: "monochrome",
       shaderMonoColor: "var(--fm-airbox-fill)",
-      shaderVisible: true,
+      shaderVisible: false,
       surfaceColorSource: "solid",
       vectorAlphaPercent: 100,
       vectorColorMode: "orientation",
@@ -63,8 +64,9 @@ describe("ObjectVisualizationController", () => {
       vectorsVisible: false,
       wireframeColor: "var(--fm-airbox-wire)",
       wireframeOpacityPercent: 100,
-      wireframeVisible: false,
+      wireframeVisible: true,
       airboxSyntheticVectorsEnabled: false,
+      visible: false,
     });
   });
 
@@ -90,7 +92,18 @@ describe("ObjectVisualizationController", () => {
       });
   });
 
-  it("inherits only quantity and color style when a region overrides quantity", () => {
+  it("limits primary Airbox geometry controls without removing renderer compatibility", () => {
+    expect(visualizationTargetCapabilities("airbox")).toEqual({
+      primaryRenderModes: ["wireframe", "points"],
+      showBoundsControl: false,
+    });
+    expect(visualizationTargetCapabilities("object")).toEqual({
+      primaryRenderModes: ["surface", "surface+edges", "wireframe", "points"],
+      showBoundsControl: true,
+    });
+  });
+
+  it("inherits every owner visualization setting except a sparse region override", () => {
     const controller = new ObjectVisualizationController();
     const objectTarget = {
       id: "object:film",
@@ -125,10 +138,10 @@ describe("ObjectVisualizationController", () => {
     expect(regionSettings).toMatchObject({
       activeQuantityId: "H_eff",
       surfaceColorSource: "component_x",
-      shaderVisible: false,
+      shaderVisible: true,
       vectorsVisible: false,
-      visible: false,
-      wireframeVisible: false,
+      visible: true,
+      wireframeVisible: true,
     });
   });
 
@@ -384,10 +397,10 @@ describe("ObjectVisualizationController", () => {
           bounds: { opacity: 1, visible: false },
           opacity: 0.28,
           points: { opacity: 1, visible: false },
-          surface: { opacity: 1, visible: true },
+          surface: { opacity: 1, visible: false },
           vectors: { density: 1200, domain: "airbox_only", visible: false },
-          visible: true,
-          wireframe: { opacity: 1, visible: false },
+          visible: false,
+          wireframe: { opacity: 1, visible: true },
         },
       },
       overrides: [
@@ -683,7 +696,7 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("keeps region display passes independent from owner visualization settings", () => {
+  it("keeps only explicitly overridden region display passes independent", () => {
     const controller = new ObjectVisualizationController();
     const objectTarget = { id: "film", kind: "object" as const };
     const regionTarget = {
@@ -710,9 +723,9 @@ describe("ObjectVisualizationController", () => {
 
     expect(region.settings).toMatchObject({
       shaderVisible: false,
-      vectorsVisible: false,
+      vectorsVisible: true,
       wireframeVisible: false,
-      visible: false,
+      visible: true,
     });
   });
 
@@ -1142,7 +1155,7 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("lets a pending target patch win only until a newer registry revision acknowledges it", () => {
+  it("keeps a pending target patch until the backend response contains that target override", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "free-layer", kind: "object" as const };
     controller.patchDefaults("object", {
@@ -1183,22 +1196,34 @@ describe("ObjectVisualizationController", () => {
       wireframeVisible: true,
     });
 
+    const unrelatedNewerState = {
+      ...stateAtPendingRevision,
+      revision: 15,
+    } as never;
+    controller.acknowledgePendingTargetPatches(unrelatedNewerState);
     expect(
       resolveTargetVisualization({
         snapshot: controller.getSnapshot(),
         target,
-        visualizationState: {
-          ...stateAtPendingRevision,
-          revision: 15,
-        } as never,
+        visualizationState: unrelatedNewerState,
       }).settings,
     ).toMatchObject({
-      shaderVisible: true,
+      shaderVisible: false,
       surfaceProjectionMode: "thickness_average_z",
       wireframeVisible: true,
     });
+    expect(controller.getSnapshot().pendingOverrides).not.toEqual({});
 
-    controller.acknowledgePendingTargetPatches(15);
+    controller.acknowledgePendingTargetPatches({
+      ...unrelatedNewerState,
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "free-layer",
+          display: { surface: { visible: false } },
+        },
+      ],
+    });
     expect(controller.getSnapshot().pendingOverrides).toEqual({});
   });
 
@@ -1971,14 +1996,12 @@ describe("ObjectVisualizationController", () => {
     expect(patch).toMatchObject({
       layers: {
         airbox: {
-          surface: { visible: true },
           visible: true,
         },
       },
       overrides: [
         {
           display: {
-            surface: { visible: true },
             visible: true,
           },
           quantity: {
@@ -2083,19 +2106,25 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("enables the default airbox surface when master visibility is turned on without active passes", () => {
-    expect(
-      airboxVisualizationStatePatchFromTargetPatch({
-        visible: true,
-      }),
-    ).toMatchObject({
-      layers: {
-        airbox: {
-          surface: { visible: true },
-          visible: true,
-        },
-      },
+  it("changes only the airbox master gate when visibility is turned on", () => {
+    const patch = airboxVisualizationStatePatchFromTargetPatch({ visible: true });
+
+    expect(patch.layers?.airbox).toEqual({ visible: true });
+    expect(JSON.stringify(patch)).not.toContain('"surface"');
+  });
+
+  it("turns off Airbox geometry without changing its master visibility or vectors", () => {
+    const patch = airboxVisualizationStatePatchFromTargetPatch(
+      renderModePatch("off"),
+    );
+
+    expect(patch.layers?.airbox).toMatchObject({
+      points: { visible: false },
+      surface: { visible: false },
+      wireframe: { visible: false },
     });
+    expect(patch.layers?.airbox).not.toHaveProperty("visible");
+    expect(patch.layers?.airbox).not.toHaveProperty("vectors");
   });
 
   it("does not force airbox wireframe when visibility patch includes an explicit drawable pass", () => {

@@ -71,7 +71,7 @@ export function buildCrossSectionNodes(
         crossSectionPlotId: plot.id,
         icon: "gauge" as const,
         status: "ready" as const,
-        contextCommands: ["cross-section-image.open", "workspace.focus-selection"],
+        contextCommands: ["workspace.focus-selection"],
       };
     }),
   );
@@ -84,11 +84,7 @@ export function buildCrossSectionNodes(
     badge: crossSectionRootBadge(plots.length, Boolean(draft)),
     icon: "layers",
     status: "ready",
-    contextCommands: [
-      "cross-section-image.open",
-      "explorer.expand-all",
-      "explorer.collapse-all",
-    ],
+    contextCommands: ["explorer.expand-all", "explorer.collapse-all"],
     children,
   };
 }

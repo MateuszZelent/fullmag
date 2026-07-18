@@ -203,36 +203,69 @@ pub(super) fn extract_fdm_field(
 ) -> Option<FdmField> {
     if quantity_id == "m" {
         if let Some((values, grid)) = live_magnetization_values(snapshot) {
-            return Some(FdmField {
-                n_comp: 3,
-                grid,
-                values,
-                origin: None,
-                spacing: None,
-            });
+            return Some(fdm_field_with_plan_geometry(
+                snapshot,
+                FdmField {
+                    n_comp: 3,
+                    grid,
+                    values,
+                    origin: None,
+                    spacing: None,
+                    active_mask: None,
+                },
+            ));
         }
     }
     if let Some(raw) = snapshot.latest_fields.get(quantity_id) {
         let values = flatten_json_field_values(raw);
         let grid = json_field_grid(raw)?;
-        return Some(FdmField {
-            n_comp,
-            grid,
-            values,
-            origin: None,
-            spacing: None,
-        });
+        return Some(fdm_field_with_plan_geometry(
+            snapshot,
+            FdmField {
+                n_comp,
+                grid,
+                values,
+                origin: None,
+                spacing: None,
+                active_mask: None,
+            },
+        ));
     }
     if let Some(field) = snapshot.preview_cache.get(quantity_id) {
-        return Some(FdmField {
-            n_comp,
-            grid: field.preview_grid,
-            values: field.vector_field_values.clone(),
-            origin: None,
-            spacing: None,
-        });
+        return Some(fdm_field_with_plan_geometry(
+            snapshot,
+            FdmField {
+                n_comp,
+                grid: field.preview_grid,
+                values: field.vector_field_values.clone(),
+                origin: None,
+                spacing: None,
+                active_mask: None,
+            },
+        ));
     }
     None
+}
+
+fn fdm_field_with_plan_geometry(snapshot: &SessionStateResponse, mut field: FdmField) -> FdmField {
+    let Some(plan_value) = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("execution_plan"))
+    else {
+        return field;
+    };
+    let Ok(plan) = serde_json::from_value::<fullmag_ir::ExecutionPlanIR>(plan_value.clone()) else {
+        return field;
+    };
+    let fullmag_ir::BackendPlanIR::Fdm(plan) = plan.backend_plan else {
+        return field;
+    };
+    if plan.grid.cells == field.grid {
+        field.origin = Some(plan.origin_m);
+        field.spacing = Some(plan.cell_size);
+    }
+    field
 }
 
 fn extract_raw_field_values(

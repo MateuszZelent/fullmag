@@ -450,7 +450,7 @@ function ObjectMaterialPanelView({
   );
   return (
     <div className="fm-inspector-panel">
-      <div className="grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+      <div className="grid min-w-0 gap-fm-inspector-group">
           {showSection("parameters") ? (
             <InspectorGroup title="Magnetic Parameters" collapsible defaultOpen>
               <FieldRow label="Object ID" value={object.objectId} />
@@ -495,7 +495,7 @@ function ObjectMaterialPanelView({
           ) : null}
       </div>
 
-      <div className="grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+      <div className="grid min-w-0 gap-fm-inspector-group">
           {showSection("material-parameters") ? (
             <InspectorGroup title="Material Parameters">
               <FormField
@@ -579,7 +579,7 @@ function ObjectMaterialPanelView({
           ) : null}
       </div>
 
-      <div className="grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+      <div className="grid min-w-0 gap-fm-inspector-group">
           {showSection("actions") ? (
             <InspectorGroup title="Actions">
               <div className="fm-inspector-toolbar">

@@ -10,6 +10,7 @@ use axum::{
 use fullmag_ir::{MonitorTargetIR, PlanarExtentIR, PlanarMonitorIR, PlanarOperatorIR};
 use sha2::{Digest, Sha256};
 
+use super::fdm_region_membership::load_resolved_fdm_membership;
 use super::field_resolution::{extract_fdm_field, extract_fem_field};
 use crate::{
     error::ApiError,
@@ -17,7 +18,7 @@ use crate::{
     field_store::serialize_field_vector_binary_v2,
     planar_sampling::{
         FdmPlanarField, FemPlanarField, Occupancy, PlanarComponent, PlanarSampleResult,
-        PlanarSamplingEngine, ResolvedPlanarSampleRequest,
+        PlanarSamplingEngine, ResolvedPlanarSampleRequest, MAX_PLANAR_SAMPLE_POINTS,
     },
     preview::quantity_unit,
     router_v2::handlers::{
@@ -37,10 +38,9 @@ use crate::{
 const DEFAULT_RESOLUTION: u32 = 128;
 const MIN_RESOLUTION: u32 = 16;
 const MAX_RESOLUTION: u32 = 2048;
-const MAX_PLANAR_POINTS: u32 = 1_048_576;
 
 struct BuiltPlanarField {
-    result: PlanarSampleResult,
+    result: Arc<PlanarSampleResult>,
     monitor: PlanarMonitorIR,
     scene_revision: u64,
     quantity_id: String,
@@ -199,8 +199,8 @@ pub async fn get_planar_field_probe(
         scope_id: probe.scope_id,
         stage_id: probe.stage_id,
         snapshot_id: probe.snapshot_id,
-        resolution_x: Some(DEFAULT_RESOLUTION),
-        resolution_y: Some(DEFAULT_RESOLUTION),
+        resolution_x: probe.resolution_x,
+        resolution_y: probe.resolution_y,
         quality: None,
         vector_budget: Some(0),
         include_mesh: Some(false),
@@ -366,6 +366,7 @@ async fn build_planar_field(
             values,
             origin: None,
             spacing: None,
+            active_mask: None,
         })
     } else {
         extract_fdm_field(snapshot, quantity_id, n_comp)
@@ -396,29 +397,6 @@ async fn build_planar_field(
         component,
     };
     let source_entity_kind = if fem.is_some() { "element" } else { "cell" };
-    let result = if let Some(fem) = fem {
-        let source = FemPlanarField::new(
-            fem.n_comp,
-            fem.nodes,
-            fem.elements,
-            fem.element_markers,
-            fem.values,
-        )?;
-        PlanarSamplingEngine::sample_fem(&source, &request)?
-    } else if let Some(fdm) = fdm {
-        let source = FdmPlanarField::new(
-            fdm.n_comp,
-            fdm.grid,
-            fdm.origin.unwrap_or([-0.5; 3]),
-            fdm.spacing.unwrap_or([1.0; 3]),
-            fdm.values,
-        )?;
-        PlanarSamplingEngine::sample_fdm(&source, &request)?
-    } else {
-        return Err(ApiError::not_found(format!(
-            "quantity_not_materialized: field '{quantity_id}' is not published"
-        )));
-    };
     let scope_kind = query
         .scope_kind
         .clone()
@@ -430,6 +408,58 @@ async fn build_planar_field(
             "magnitude".to_string()
         }
     });
+    let sample_cache_identity = serde_json::json!({
+        "schema": "planar-sample-cache-v1",
+        "monitor_hash": monitor_hash,
+        "quantity_id": quantity_id,
+        "component": component_label,
+        "resolution": resolution,
+        "field_revision": field_revision,
+        "mesh_revision": mesh_revision,
+        "generation_id": generation_id,
+        "field_source": field_source,
+        "scope_kind": scope_kind,
+        "scope_id": query.scope_id,
+    });
+    let sample_cache_key = format!(
+        "planar-sample:{:x}",
+        Sha256::digest(sample_cache_identity.to_string().as_bytes())
+    );
+    let mut sample_cache = state.quantity_data_plane.planar_sample_cache.lock().await;
+    let result = if let Some(cached) = sample_cache.get(&sample_cache_key) {
+        cached
+    } else {
+        let sampled = if let Some(fem) = fem {
+            let source = FemPlanarField::new(
+                fem.n_comp,
+                fem.nodes,
+                fem.elements,
+                fem.element_markers,
+                fem.values,
+            )?;
+            PlanarSamplingEngine::sample_fem(&source, &request)?
+        } else if let Some(fdm) = fdm {
+            let mut source = FdmPlanarField::new(
+                fdm.n_comp,
+                fdm.grid,
+                fdm.origin.unwrap_or([-0.5; 3]),
+                fdm.spacing.unwrap_or([1.0; 3]),
+                fdm.values,
+            )?;
+            if let Some(active_mask) = fdm.active_mask {
+                source = source.with_membership_mask(active_mask)?;
+            }
+            PlanarSamplingEngine::sample_fdm(&source, &request)?
+        } else {
+            return Err(ApiError::not_found(format!(
+                "quantity_not_materialized: field '{quantity_id}' is not published"
+            )));
+        };
+        let sampled = Arc::new(sampled);
+        sample_cache.insert(sample_cache_key, Arc::clone(&sampled));
+        sampled
+    };
+    drop(sample_cache);
     let etag_identity = serde_json::json!({
         "schema": "planar-field-cache-v1",
         "monitor_hash": monitor_hash,
@@ -474,7 +504,7 @@ fn resolve_resolution(query: &PlanarFieldQuery) -> Result<[u32; 2], ApiError> {
     let y = query.resolution_y.unwrap_or(DEFAULT_RESOLUTION);
     if !(MIN_RESOLUTION..=MAX_RESOLUTION).contains(&x)
         || !(MIN_RESOLUTION..=MAX_RESOLUTION).contains(&y)
-        || x.saturating_mul(y) > MAX_PLANAR_POINTS
+        || x.saturating_mul(y) > MAX_PLANAR_SAMPLE_POINTS
     {
         return Err(ApiError::bad_request(
             "invalid_planar_resolution: dimensions must be 16..2048 and at most 1048576 points",
@@ -575,16 +605,80 @@ fn apply_resolved_scope(
 ) -> Result<(), ApiError> {
     let scope_kind = query.scope_kind.as_deref().unwrap_or("monitor_target");
     if fem.is_none() {
-        if scope_kind != "monitor_target"
-            || !matches!(
-                target,
-                MonitorTargetIR::MagneticDomain | MonitorTargetIR::Domain
-            )
-        {
+        if scope_kind != "monitor_target" {
             return Err(ApiError::unprocessable_entity(
-                "planar_scope_unsupported: structured-grid runtime has no published object, region, mesh-part, or airbox membership for this field",
+                "planar_scope_unsupported: structured-grid runtime does not publish mesh-part or airbox membership",
             ));
         }
+        if matches!(target, MonitorTargetIR::Domain) {
+            return Ok(());
+        }
+        let field = fdm
+            .as_mut()
+            .ok_or_else(|| ApiError::not_found("quantity_not_materialized"))?;
+        let membership = load_resolved_fdm_membership(snapshot)?;
+        if membership.counts != field.grid
+            || membership.cell_membership.len()
+                != field
+                    .grid
+                    .iter()
+                    .map(|count| *count as usize)
+                    .product::<usize>()
+        {
+            return Err(ApiError::conflict(
+                "stale_fdm_membership: membership grid does not match the published field",
+            ));
+        }
+        let selected = match target {
+            MonitorTargetIR::MagneticDomain => membership
+                .cell_membership
+                .iter()
+                .map(|value| *value != u32::MAX)
+                .collect::<Vec<_>>(),
+            MonitorTargetIR::Object { object_id } => {
+                if !membership.object_ids.iter().any(|id| id == object_id) {
+                    return Err(ApiError::conflict(format!(
+                        "stale_fdm_membership: object '{object_id}' is absent from the realized grid"
+                    )));
+                }
+                membership
+                    .cell_membership
+                    .iter()
+                    .map(|value| *value != u32::MAX)
+                    .collect::<Vec<_>>()
+            }
+            MonitorTargetIR::Region {
+                object_id,
+                region_id,
+            } => {
+                let numeric_id = membership
+                    .region_legend
+                    .iter()
+                    .find(|entry| {
+                        entry.object_id == *object_id && entry.region_id == *region_id
+                    })
+                    .map(|entry| entry.numeric_id)
+                    .ok_or_else(|| {
+                        ApiError::conflict(format!(
+                            "stale_fdm_membership: region '{object_id}/{region_id}' is absent from the realized grid"
+                        ))
+                    })?;
+                membership
+                    .cell_membership
+                    .iter()
+                    .map(|value| *value == numeric_id)
+                    .collect::<Vec<_>>()
+            }
+            MonitorTargetIR::Domain => unreachable!("domain target returned above"),
+        };
+        if !selected.iter().any(|selected| *selected) {
+            return Err(ApiError::unprocessable_entity(
+                "planar_scope_empty: resolved FDM monitor target has no active cells",
+            ));
+        }
+        field.origin = Some(membership.origin_m);
+        field.spacing = Some(membership.cell_m);
+        field.active_mask = Some(selected);
         return Ok(());
     }
 
@@ -680,14 +774,36 @@ fn resolve_dynamic_extent(
     } else if let Some(fdm) = fdm {
         let origin = fdm.origin.unwrap_or([-0.5; 3]);
         let spacing = fdm.spacing.unwrap_or([1.0; 3]);
-        let high = [0, 1, 2].map(|axis| origin[axis] + spacing[axis] * fdm.grid[axis] as f64);
-        vec![
-            [origin[0], origin[1], origin[2]],
-            [high[0], origin[1], origin[2]],
-            [origin[0], high[1], origin[2]],
-            [origin[0], origin[1], high[2]],
-            [high[0], high[1], high[2]],
-        ]
+        let mut low_cell = [0u32; 3];
+        let mut high_cell = fdm.grid;
+        if let Some(active_mask) = fdm.active_mask.as_ref() {
+            low_cell = fdm.grid;
+            high_cell = [0; 3];
+            for (cell, selected) in active_mask.iter().enumerate() {
+                if !selected {
+                    continue;
+                }
+                let x = cell as u32 % fdm.grid[0];
+                let yz = cell as u32 / fdm.grid[0];
+                let y = yz % fdm.grid[1];
+                let z = yz / fdm.grid[1];
+                for (axis, coordinate) in [x, y, z].into_iter().enumerate() {
+                    low_cell[axis] = low_cell[axis].min(coordinate);
+                    high_cell[axis] = high_cell[axis].max(coordinate + 1);
+                }
+            }
+        }
+        let low = [0, 1, 2].map(|axis| origin[axis] + spacing[axis] * low_cell[axis] as f64);
+        let high = [0, 1, 2].map(|axis| origin[axis] + spacing[axis] * high_cell[axis] as f64);
+        let mut corners = Vec::with_capacity(8);
+        for z in [low[2], high[2]] {
+            for y in [low[1], high[1]] {
+                for x in [low[0], high[0]] {
+                    corners.push([x, y, z]);
+                }
+            }
+        }
+        corners
     } else {
         return Err(ApiError::not_found("quantity_not_materialized"));
     };

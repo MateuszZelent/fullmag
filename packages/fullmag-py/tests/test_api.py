@@ -3976,8 +3976,8 @@ class ProblemApiTests(unittest.TestCase):
         with patch.dict(os.environ, {"FULLMAG_FEM_MESH_CACHE_DIR": ""}), patch(
             "fullmag.meshing.realize_fem_mesh_asset", return_value=mesh
         ) as mocked_mesh, patch(
-            "fullmag.meshing.realize_fem_domain_mesh_asset_from_components",
-            return_value=(mesh, [{"geometry_name": "box_geom", "marker": 1}]),
+            "fullmag.meshing.asset_pipeline.realize_fem_domain_mesh_asset_from_components_with_report",
+            return_value=(mesh, [{"geometry_name": "box_geom", "marker": 1}], None),
         ) as mocked_domain, patch("fullmag._core.validate_mesh_ir", return_value=True):
             problem.to_ir(requested_backend=fm.BackendTarget.FEM)
 
@@ -4776,6 +4776,30 @@ class ProblemApiTests(unittest.TestCase):
 
         rewritten = rewrite_loaded_problem_script(loaded)["rendered_source"]
         self.assertIn('operator="full_2x2"', rewritten)
+
+    def test_study_builder_eigenmodes_forwards_operator(self) -> None:
+        builder = flat_world.study("immediate_eigen_operator")
+
+        with patch("fullmag.world.eigenmodes", return_value="eigen-result") as mocked:
+            result = builder.eigenmodes(operator="full_2x2")
+
+        self.assertEqual(result, "eigen-result")
+        self.assertEqual(mocked.call_args.kwargs["operator"], "full_2x2")
+
+    def test_study_builder_frequency_response_forwards_solver_preconditioner(self) -> None:
+        builder = flat_world.study("immediate_frequency_preconditioner")
+
+        with patch("fullmag.world.frequency_response", return_value="response-result") as mocked:
+            result = builder.frequency_response(
+                frequencies_hz=[1.0e9],
+                solver_preconditioner="block_jacobi",
+            )
+
+        self.assertEqual(result, "response-result")
+        self.assertEqual(
+            mocked.call_args.kwargs["solver_preconditioner"],
+            "block_jacobi",
+        )
 
     def test_study_builder_relax_stage_roundtrips_solver_and_dt(self) -> None:
         script = """

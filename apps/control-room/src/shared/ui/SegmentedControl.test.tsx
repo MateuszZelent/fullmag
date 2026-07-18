@@ -29,9 +29,9 @@ describe("SegmentedControl", () => {
     expect(html).toContain('aria-checked="true"');
     expect(html).toContain('data-slot="segmented-control"');
     expect(html).toContain('data-slot="segmented-control-item"');
-    expect(html).toContain("rounded-[var(--fm-radius-segment)]");
+    expect(html).toContain("rounded-fm-segment");
     expect(html).toContain("border-fm-subtle");
-    expect(html).toContain("shadow-[var(--fm-shadow-control-inset)]");
+    expect(html).toContain("shadow-fm-control-inset");
     expect(html).toContain("bg-fm-accent");
     expect(html).toContain("text-fm-inverse");
     expect(html).toContain("active:scale-[0.98]");

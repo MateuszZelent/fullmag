@@ -193,14 +193,14 @@ that does not claim native GPU sampling.
 
 | Capability | FDM | FEM P1 | FEM high-order | Failure/degraded rule |
 |---|---|---|---|---|
-| `planar_monitor_authoring` | contract target | contract target | contract target | invalid authored frame/target rejects before execution |
-| `planar_plane_sample` axis frame | production target | production target | gated | no hidden basis-order fallback |
-| `planar_plane_sample` arbitrary frame | production target | production target | gated | invalid/unsupported frame returns stable reason |
-| `planar_slab_average` | cell-volume weighted | conservative tetra measure | gated | node-count averaging forbidden |
-| `planar_depth_projection` | cell-volume weighted | conservative tetra measure | gated | unsupported reduction rejects |
-| `planar_surface_projection` planar boundary | boundary measure | boundary triangle measure | gated | folded/non-injective surfaces are diagnostic |
-| `planar_vector_sampling` | published vector fields | published nodal vector fields | gated | unavailable component returns stable reason |
-| `planar_mesh_overlay` | optional grid outline | exact section topology | topology-gated | absence does not alter sampled values |
+| `planar_monitor_authoring` | implemented | implemented | gated | invalid authored frame/target rejects before execution |
+| `planar_plane_sample` axis frame | scientifically validated | scientifically validated | gated | no hidden basis-order fallback |
+| `planar_plane_sample` arbitrary frame | scientifically validated | scientifically validated | gated | invalid/unsupported frame returns stable reason |
+| `planar_slab_average` | cell-volume weighted, validated | conservative tetra measure, validated | gated | node-count averaging forbidden |
+| `planar_depth_projection` | cell-volume weighted, validated | conservative tetra measure, validated | gated | unsupported reduction rejects |
+| `planar_surface_projection` planar boundary | boundary measure | boundary triangle measure, validated | gated | folded/non-injective surfaces are diagnostic |
+| `planar_vector_sampling` | browser-verified | browser-verified nodal vectors | gated | unavailable component returns stable reason |
+| `planar_mesh_overlay` | optional grid outline | exact section topology, browser-verified | topology-gated | absence does not alter sampled values |
 | `planar_airbox_sampling` | full-domain quantities only | full-domain quantities and air mesh | gated | magnetic-only quantities do not become airbox fields |
 
 `contract target` and `production target` are not current validation claims.

@@ -202,7 +202,7 @@ export function AirboxMeshParametersPanel({ selection }: InspectorPanelProps) {
   };
 
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Canonical Authored Parameters" badge="Python round-trip">
         <FieldRow label="Policy revision" value={String(resource.revision)} />
         {NUMBER_FIELDS.map(({ key, label, unit }) => (

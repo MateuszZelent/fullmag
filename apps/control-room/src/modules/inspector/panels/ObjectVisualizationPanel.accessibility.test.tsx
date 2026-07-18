@@ -8,13 +8,36 @@ import {
 } from "./ObjectVisualizationPanel";
 import {
   NumberField,
+  VisualizationDisplayPassesSection,
 } from "./ObjectVisualizationTargetSection";
+import { DEFAULT_AIRBOX_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
 import {
   nextVisualizationRadioValue,
   visualizationSectionDisabledDescription,
 } from "./ObjectVisualizationPanelAccessibility";
 
 describe("ObjectVisualizationPanel accessibility controls", () => {
+  it("renders one Airbox master control without duplicate geometry toggles", () => {
+    const html = renderToStaticMarkup(
+      <VisualizationDisplayPassesSection
+        displaySettings={DEFAULT_AIRBOX_VISUALIZATION}
+        passControlsDisabled
+        patch={vi.fn().mockResolvedValue(undefined)}
+        pending={false}
+        primitiveDisplayToggleVisible={false}
+        renderWarning={null}
+        settings={DEFAULT_AIRBOX_VISUALIZATION}
+        targetKind="airbox"
+      />,
+    );
+
+    expect(html).toContain('aria-label="Toggle target visibility"');
+    expect(html).toContain(">Visible</button>");
+    expect(html).toContain(">Vectors</button>");
+    expect(html).not.toContain('aria-label="Toggle surface shading"');
+    expect(html).not.toContain('aria-label="Toggle wireframe overlay"');
+  });
+
   it("exposes only independent display overlays as pressed toggles", () => {
     const html = renderToStaticMarkup(
       <>

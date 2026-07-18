@@ -4113,6 +4113,36 @@ describe("buildModelTree", () => {
     });
   });
 
+  it("shows an uncommitted planar monitor draft under Definitions/Planar Monitors", () => {
+    const flattened = flattenExplorerNodes(
+      buildModelTree(
+        modelTreeSnapshotFromScene({ objects: [] }),
+        {
+          planarMonitorDraft: {
+            frameExtent: "universe",
+            id: "draft",
+            name: "Midplane",
+            plane: "xy",
+            positionPercent: 50,
+            rotationDegrees: 0,
+          },
+          planarMonitors: null,
+        },
+      ),
+    );
+
+    expect(
+      flattened.find(
+        (node) => node.id === "model:definitions:planar-monitors:draft",
+      ),
+    ).toMatchObject({
+      kind: "model.planar.monitor.draft",
+      label: "Midplane",
+      parentId: "model:definitions:planar-monitors",
+      status: "queued",
+    });
+  });
+
   it("merges stage execution by stage id before falling back to index", () => {
     const sceneSnapshot = modelTreeSnapshotFromScene({
       objects: [],

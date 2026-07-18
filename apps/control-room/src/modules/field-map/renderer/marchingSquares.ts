@@ -33,7 +33,7 @@ export function marchingSquares(
         (y + 1) * width + x + 1,
         (y + 1) * width + x,
       ];
-      if (indices.some((index) => mask?.[index])) continue;
+      if (indices.some((index) => !isRenderablePlanarOccupancy(mask?.[index]))) continue;
       const cell = indices.map((index) => values[index] ?? Number.NaN);
       if (cell.some((value) => !Number.isFinite(value))) continue;
       const code = cell.reduce(
@@ -73,3 +73,4 @@ function edgePoint(
     corners[a]![1]! + t * (corners[b]![1]! - corners[a]![1]!),
   ];
 }
+import { isRenderablePlanarOccupancy } from "../model/planarOccupancy";

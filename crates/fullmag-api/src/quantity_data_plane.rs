@@ -22,6 +22,7 @@
 //! the total cached byte count exceeds `max_bytes` or entry count exceeds `max_entries`.
 
 use crate::fem_spatial_index::FemNormalAxisIndex;
+use crate::planar_sampling::PlanarSampleResult;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -33,6 +34,7 @@ const DEFAULT_MAX_PROJECTION_ENTRIES: usize = 64;
 const DEFAULT_MAX_SLICE_ENTRIES: usize = 128;
 /// Maximum number of cached analysis resource entries.
 const DEFAULT_MAX_ANALYSIS_RESOURCE_ENTRIES: usize = 128;
+const DEFAULT_MAX_PLANAR_SAMPLE_ENTRIES: usize = 8;
 /// Default memory budget for each sub-cache in bytes (128 MiB).
 const DEFAULT_MAX_BYTES: usize = 128 * 1024 * 1024;
 
@@ -69,6 +71,99 @@ pub(crate) struct JsonResourceCache {
     entries: HashMap<String, CachedJsonResource>,
     generation: u64,
     max_entries: usize,
+}
+
+#[derive(Clone)]
+struct CachedPlanarSample {
+    result: Arc<PlanarSampleResult>,
+    estimated_bytes: usize,
+    generation: u64,
+}
+
+pub(crate) struct PlanarSampleCache {
+    entries: HashMap<String, CachedPlanarSample>,
+    total_bytes: usize,
+    generation: u64,
+    max_entries: usize,
+    max_bytes: usize,
+}
+
+impl PlanarSampleCache {
+    pub fn new(max_entries: usize, max_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::with_capacity(max_entries),
+            total_bytes: 0,
+            generation: 0,
+            max_entries,
+            max_bytes,
+        }
+    }
+
+    pub fn get(&mut self, key: &str) -> Option<Arc<PlanarSampleResult>> {
+        let entry = self.entries.get_mut(key)?;
+        self.generation += 1;
+        entry.generation = self.generation;
+        Some(Arc::clone(&entry.result))
+    }
+
+    pub fn insert(&mut self, key: String, result: Arc<PlanarSampleResult>) {
+        let estimated_bytes = estimate_planar_sample_bytes(&result);
+        if estimated_bytes > self.max_bytes || self.max_entries == 0 {
+            return;
+        }
+        if let Some(previous) = self.entries.remove(&key) {
+            self.total_bytes = self.total_bytes.saturating_sub(previous.estimated_bytes);
+        }
+        while self.entries.len() >= self.max_entries
+            || self.total_bytes + estimated_bytes > self.max_bytes
+        {
+            let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.generation)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(previous) = self.entries.remove(&oldest_key) {
+                self.total_bytes = self.total_bytes.saturating_sub(previous.estimated_bytes);
+            }
+        }
+        self.generation += 1;
+        self.entries.insert(
+            key,
+            CachedPlanarSample {
+                result,
+                estimated_bytes,
+                generation: self.generation,
+            },
+        );
+        self.total_bytes += estimated_bytes;
+    }
+}
+
+fn estimate_planar_sample_bytes(result: &PlanarSampleResult) -> usize {
+    let scalar = result.scalar_values.len() * std::mem::size_of::<f64>();
+    let vectors = result
+        .vector_values
+        .as_ref()
+        .map_or(0, |values| values.len() * std::mem::size_of::<[f64; 3]>());
+    let occupancy =
+        result.occupancy.len() * std::mem::size_of::<crate::planar_sampling::Occupancy>();
+    let source_ids = result.source_entity_ids.len() * std::mem::size_of::<Option<u32>>();
+    let overlay = result.overlay.as_ref().map_or(0, |overlay| {
+        overlay
+            .polygons
+            .iter()
+            .map(|polygon| {
+                std::mem::size_of_val(polygon)
+                    + polygon.vertices_uv_m.len() * std::mem::size_of::<[f64; 2]>()
+            })
+            .sum::<usize>()
+            + overlay.segments.len()
+                * std::mem::size_of::<crate::planar_sampling::PlanarOverlaySegment>()
+    });
+    scalar + vectors + occupancy + source_ids + overlay
 }
 
 impl JsonResourceCache {
@@ -344,6 +439,8 @@ pub(crate) struct QuantityDataPlaneStore {
     pub fem_spatial_index_cache: Mutex<HashMap<String, Arc<FemNormalAxisIndex>>>,
     /// Cache for small JSON analysis resources keyed by source revisions.
     pub topological_charge_cache: Mutex<JsonResourceCache>,
+    /// Bounded revision-keyed results shared by planar meta/binary resources.
+    pub planar_sample_cache: Mutex<PlanarSampleCache>,
 }
 
 impl std::fmt::Debug for QuantityDataPlaneStore {
@@ -378,6 +475,10 @@ impl QuantityDataPlaneStore {
             arrow_slice_cache: Mutex::new(BinaryCache::new(max_arrow_slices, max_bytes_each)),
             fem_spatial_index_cache: Mutex::new(HashMap::new()),
             topological_charge_cache: Mutex::new(JsonResourceCache::new(max_analysis_resources)),
+            planar_sample_cache: Mutex::new(PlanarSampleCache::new(
+                DEFAULT_MAX_PLANAR_SAMPLE_ENTRIES,
+                DEFAULT_MAX_BYTES,
+            )),
         }
     }
 }
@@ -391,6 +492,34 @@ impl Default for QuantityDataPlaneStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planar_sampling::{Occupancy, PlanarSampleMeta};
+
+    fn planar_sample(value_count: usize) -> Arc<PlanarSampleResult> {
+        Arc::new(PlanarSampleResult {
+            meta: PlanarSampleMeta {
+                sampler_version: "test",
+                sampling_method: "test",
+                monitor_id: "monitor".to_string(),
+                monitor_hash: "hash".to_string(),
+                bounds_uv_m: [0.0, 1.0, 0.0, 1.0],
+                resolution: [value_count as u32, 1],
+                occupied_count: value_count as u32,
+                partial_count: 0,
+                empty_count: 0,
+                occupied_measure: value_count as f64,
+                overlap_count: 0,
+                fold_count: 0,
+                non_injective: false,
+                basis_order: 0,
+                integration_order: 0,
+            },
+            scalar_values: vec![1.0; value_count],
+            vector_values: None,
+            occupancy: vec![Occupancy::Occupied; value_count],
+            source_entity_ids: vec![Some(0); value_count],
+            overlay: None,
+        })
+    }
 
     #[test]
     fn cache_insert_and_hit() {
@@ -401,6 +530,27 @@ mod tests {
         assert_eq!(hit.unwrap().bytes.len(), 100);
         assert_eq!(cache.total_bytes(), 100);
         assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn planar_sample_cache_reuses_results_and_evicts_to_its_byte_budget() {
+        let small = planar_sample(4);
+        let estimated = estimate_planar_sample_bytes(&small);
+        let mut cache = PlanarSampleCache::new(2, estimated * 2);
+        cache.insert("first".to_string(), Arc::clone(&small));
+
+        let hit = cache.get("first").expect("cached planar sample");
+        assert!(Arc::ptr_eq(&hit, &small));
+
+        cache.insert("second".to_string(), planar_sample(4));
+        let _ = cache.get("second");
+        cache.insert("third".to_string(), planar_sample(4));
+        assert!(
+            cache.get("first").is_none(),
+            "least-recent sample is evicted"
+        );
+        assert!(cache.get("second").is_some());
+        assert!(cache.get("third").is_some());
     }
 
     #[test]

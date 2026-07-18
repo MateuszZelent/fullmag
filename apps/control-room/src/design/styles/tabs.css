@@ -3,12 +3,12 @@
   min-width: 0;
   align-items: center;
   gap: var(--fm-space-1);
-  min-height: 40px;
+  min-height: var(--fm-inspector-tab-height);
 }
 
 .fm-tabs-trigger {
   display: inline-flex;
-  height: 32px;
+  height: var(--fm-control-height-regular);
   min-width: 0;
   align-items: center;
   justify-content: center;

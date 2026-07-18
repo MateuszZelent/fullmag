@@ -152,7 +152,6 @@ import {
   VECTOR_COLOR_ITEMS,
   GEOMETRY_SCOPE_ITEMS,
   VECTOR_COMPONENT_ITEMS,
-  AIRBOX_EXTENT_ITEMS,
   quantityItemsForVisualizationTarget,
   SELECTED_SURFACE_COLOR_SOURCE_ITEMS,
   SELECTED_RENDER_ITEMS,
@@ -2692,6 +2691,13 @@ function buildAirboxAction(
   const settings = targetVisualization.settings;
   const effectiveSettings = targetVisualization.effectiveSettings;
   const passControlsDisabled = !settings.visible;
+  const renderMode = settings.shaderVisible
+    ? settings.renderMode
+    : settings.pointsVisible
+      ? "points"
+      : settings.wireframeVisible
+        ? "wireframe"
+        : "off";
 
   return {
     id: "view-airbox",
@@ -2715,80 +2721,41 @@ function buildAirboxAction(
         commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
         commandInput: (checked: boolean) => visualizationAirboxCommandInput({ visible: checked }),
       },
-      { type: "separator", id: "airbox:s-primitive" },
       {
-        type: "label",
-        id: "airbox:primitive-section",
-        label: "Surface",
-        badge: effectiveSettings.shaderVisible ? "on" : "off",
-      },
-      {
-        type: "checkbox",
-        id: "airbox:shaded",
-        label: "Shaded on/off",
-        checked: effectiveSettings.shaderVisible,
+        type: "radio-group",
+        id: "airbox:render-mode",
+        label: "Geometry",
+        value: renderMode,
+        items: [
+          { value: "wireframe", label: "Wireframe" },
+          { value: "points", label: "Points" },
+          { value: "off", label: "Off" },
+        ],
         disabled: passControlsDisabled,
         commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
-        commandInput: (checked: boolean) =>
-          visualizationAirboxCommandInput({ shaderVisible: checked }),
-      },
-      {
-        type: "checkbox",
-        id: "airbox:wireframe",
-        label: "Wireframe on/off",
-        checked: effectiveSettings.wireframeVisible,
-        disabled: passControlsDisabled,
-        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
-        commandInput: (checked: boolean) =>
-          visualizationAirboxCommandInput({ wireframeVisible: checked }),
-      },
-      {
-        type: "checkbox",
-        id: "airbox:frame",
-        label: "Frame on/off",
-        checked: effectiveSettings.boundsVisible,
-        disabled: passControlsDisabled,
-        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
-        commandInput: (checked: boolean) =>
-          visualizationAirboxCommandInput({ boundsVisible: checked }),
+        commandInput: (value: string) =>
+          visualizationAirboxCommandInput(
+            value === "off"
+              ? {
+                  pointsVisible: false,
+                  shaderVisible: false,
+                  wireframeVisible: false,
+                }
+              : renderModePatch(value as VisualizationRenderMode),
+          ),
       },
       {
         type: "radio-group",
-        id: "airbox:wireframe-scope",
-        label: "Wireframe extent",
+        id: "airbox:extent",
+        label: "Extent",
         value: settings.geometryScope,
         items: GEOMETRY_SCOPE_ITEMS,
-        disabled: passControlsDisabled || !effectiveSettings.wireframeVisible,
+        disabled: passControlsDisabled,
         commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
         commandInput: (value: string) =>
           visualizationAirboxCommandInput({
             geometryScope: value as VisualizationGeometryScope,
           }),
-      },
-      { type: "separator", id: "airbox:s-points" },
-      {
-        type: "label",
-        id: "airbox:points-section",
-        label: "Points",
-        badge: effectiveSettings.pointsVisible ? "on" : "off",
-      },
-      {
-        type: "checkbox",
-        id: "airbox:points",
-        label: "Points on/off",
-        checked: effectiveSettings.pointsVisible,
-        disabled: passControlsDisabled,
-        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
-        commandInput: (checked: boolean) =>
-          visualizationAirboxCommandInput({ pointsVisible: checked }),
-      },
-      {
-        type: "radio-group",
-        id: "airbox:points-scope",
-        label: "Points extent",
-        value: "surface",
-        items: AIRBOX_EXTENT_ITEMS,
-        disabled: true,
       },
       { type: "separator", id: "airbox:s-vectors" },
       {
@@ -2806,19 +2773,6 @@ function buildAirboxAction(
         commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
         commandInput: (checked: boolean) =>
           visualizationAirboxCommandInput({ vectorsVisible: checked }),
-      },
-      {
-        type: "radio-group",
-        id: "airbox:vectors-scope",
-        label: "Vectors extent",
-        value: settings.geometryScope,
-        items: GEOMETRY_SCOPE_ITEMS,
-        disabled: passControlsDisabled || !effectiveSettings.vectorsVisible,
-        commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
-        commandInput: (value: string) =>
-          visualizationAirboxCommandInput({
-            geometryScope: value as VisualizationGeometryScope,
-          }),
       },
       {
         type: "submenu",
@@ -3155,6 +3109,13 @@ function buildSelectedVisualizationGroup(
       ? visualizationSnapshot.defaults[target.kind]?.geometryScope
       : undefined) ??
     "full";
+  const selectedRenderMode = settings?.shaderVisible
+    ? settings?.renderMode ?? "surface"
+    : settings?.pointsVisible
+      ? "points"
+      : settings?.wireframeVisible
+        ? "wireframe"
+        : "off";
   const revision = targetVisualization?.revision ?? `${visualizationSnapshot.version}`;
 
   return {
@@ -3195,7 +3156,7 @@ function buildSelectedVisualizationGroup(
                 ? visualizationTargetCommandInput(target, targetQuantityPatch(value))
                 : value,
           },
-          {
+          ...(target?.kind === "airbox" ? [] : [{
             type: "checkbox",
             id: "selected-texture:visible",
             label: "Surface on/off",
@@ -3203,8 +3164,8 @@ function buildSelectedVisualizationGroup(
             disabled: !enabled || passControlsDisabled,
             commandId: "visualization.target.set-surface-visible",
             commandInput: (checked: boolean) => checked,
-          },
-          {
+          } as RibbonMenuNode]),
+          ...(target?.kind === "airbox" ? [] : [{
             type: "radio-group",
             id: "selected-texture:surface-coloring",
             label: "Color source",
@@ -3216,8 +3177,8 @@ function buildSelectedVisualizationGroup(
               !effectiveSettings?.shaderVisible,
             commandId: "visualization.target.set-surface-color-source",
             commandInput: (value: unknown) => value,
-          },
-          {
+          } as RibbonMenuNode]),
+          ...(target?.kind === "airbox" ? [] : [{
             type: "color",
             id: "selected-texture:solid-color",
             label: "Solid color",
@@ -3228,14 +3189,14 @@ function buildSelectedVisualizationGroup(
               !effectiveSettings?.shaderVisible,
             commandId: "visualization.target.set-shader-mono-color",
             commandInput: (value: unknown) => value,
-          },
-          {
+          } as RibbonMenuNode]),
+          ...(target?.kind === "airbox" ? [] : [{
             type: "status",
             id: "selected-texture:field-status",
             label: "Field status",
             tone: selectedFieldStatus.tone,
             value: selectedFieldStatus.value,
-          },
+          } as RibbonMenuNode]),
           { type: "separator", id: "selected-texture:vectors-separator" },
           {
             type: "checkbox",
@@ -3354,11 +3315,15 @@ function buildSelectedVisualizationGroup(
             type: "radio-group",
             id: "selected:render-mode",
             label: "Render mode",
-            value: settings?.renderMode ?? "surface",
+            value: selectedRenderMode,
             disabled: !enabled || passControlsDisabled,
-            items: SELECTED_RENDER_ITEMS.map((item) => ({
-              ...item,
-            })),
+            items: target?.kind === "airbox"
+              ? [
+                  { value: "wireframe", label: "Wireframe" },
+                  { value: "points", label: "Points" },
+                  { value: "off", label: "Off" },
+                ]
+              : SELECTED_RENDER_ITEMS.map((item) => ({ ...item })),
             commandId: "visualization.target.set-render-mode",
             commandInput: (value: unknown) => value,
           },
@@ -3374,7 +3339,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-geometry-scope",
             commandInput: (value: unknown) => value,
           },
-          {
+          ...(target?.kind === "airbox" ? [] : [{
             type: "checkbox",
             id: "selected:wireframe",
             label: "Wireframe on/off",
@@ -3382,7 +3347,7 @@ function buildSelectedVisualizationGroup(
             disabled: !enabled || passControlsDisabled,
             commandId: "visualization.target.set-wireframe-visible",
             commandInput: (checked: boolean) => checked,
-          },
+          } as RibbonMenuNode]),
           {
             type: "color",
             id: "selected:wireframe-color",
@@ -3411,7 +3376,7 @@ function buildSelectedVisualizationGroup(
             commandId: "visualization.target.set-wireframe-opacity-percent",
             commandInput: (value: unknown) => value,
           },
-          {
+          ...(target?.kind === "airbox" ? [] : [{
             type: "checkbox",
             id: "selected:frame",
             label: "Frame on/off",
@@ -3419,8 +3384,8 @@ function buildSelectedVisualizationGroup(
             disabled: !enabled || passControlsDisabled,
             commandId: "visualization.target.set-bounds-visible",
             commandInput: (checked: boolean) => checked,
-          },
-          {
+          } as RibbonMenuNode]),
+          ...(target?.kind === "airbox" ? [] : [{
             type: "checkbox",
             id: "selected:points",
             label: "Points on/off",
@@ -3428,7 +3393,7 @@ function buildSelectedVisualizationGroup(
             disabled: !enabled || passControlsDisabled,
             commandId: "visualization.target.set-points-visible",
             commandInput: (checked: boolean) => checked,
-          },
+          } as RibbonMenuNode]),
           {
             type: "color",
             id: "selected:point-color",

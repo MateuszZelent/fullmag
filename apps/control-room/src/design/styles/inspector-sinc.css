@@ -52,7 +52,7 @@
 .fm-sinc-preview__marker-label,
 .fm-sinc-preview__tick {
   fill: var(--fm-text-muted);
-  font-size: 9px;
+  font-size: var(--fm-font-size-2xs);
   font-variant-numeric: tabular-nums;
 }
 
@@ -165,7 +165,7 @@
   font-size: var(--fm-font-size-xs);
   font-weight: 600;
   line-height: 1;
-  padding: 5px 7px;
+  padding: var(--fm-space-1) var(--fm-space-2);
   text-transform: capitalize;
 }
 

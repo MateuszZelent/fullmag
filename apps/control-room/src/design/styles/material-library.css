@@ -6,14 +6,14 @@
 
 .fm-material-library__close {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  top: var(--fm-space-4);
+  right: var(--fm-space-4);
   display: inline-grid;
-  width: 28px;
-  height: 28px;
+  width: var(--fm-field-row-min-height);
+  height: var(--fm-field-row-min-height);
   place-items: center;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: 6px;
+  border-radius: var(--fm-radius-md);
   color: var(--fm-text-muted);
   background: var(--fm-bg-elevated);
 }
@@ -26,16 +26,16 @@
 .fm-material-library__layout {
   display: grid;
   grid-template-columns: minmax(190px, 0.8fr) minmax(420px, 1.7fr) minmax(220px, 0.9fr);
-  gap: 12px;
+  gap: var(--fm-space-3);
   min-height: 520px;
-  margin-top: 12px;
+  margin-top: var(--fm-space-3);
 }
 
 .fm-material-library__panel,
 .fm-material-library__editor {
   min-width: 0;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: 8px;
+  border-radius: var(--fm-radius-md);
   background: var(--fm-bg-surface);
 }
 
@@ -49,25 +49,25 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 10px;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-3);
   border-bottom: 1px solid var(--fm-border-subtle);
   color: var(--fm-text-primary);
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
   font-weight: 650;
 }
 
 .fm-material-library__panel-header .fm-button,
 .fm-material-library__actions .fm-button {
-  gap: 6px;
+  gap: var(--fm-space-1);
 }
 
 .fm-material-library__list {
   display: grid;
   align-content: start;
-  gap: 6px;
+  gap: var(--fm-space-1);
   overflow-y: auto;
-  padding: 8px;
+  padding: var(--fm-space-2);
 }
 
 .fm-material-library__item {
@@ -75,9 +75,9 @@
   gap: 3px;
   width: 100%;
   min-width: 0;
-  padding: 8px;
+  padding: var(--fm-space-2);
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--fm-radius-md);
   color: var(--fm-text-secondary);
   text-align: left;
   background: transparent;
@@ -97,7 +97,7 @@
 .fm-material-library__item strong {
   overflow: hidden;
   color: var(--fm-text-primary);
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -107,35 +107,35 @@
 .fm-material-library__empty,
 .fm-material-library__feedback {
   color: var(--fm-text-muted);
-  font-size: 11px;
+  font-size: var(--fm-font-size-xs);
   line-height: 1.35;
 }
 
 .fm-material-library__editor {
   display: grid;
   grid-template-rows: 1fr auto;
-  gap: 12px;
+  gap: var(--fm-space-3);
   overflow-y: auto;
-  padding: 12px;
+  padding: var(--fm-space-3);
 }
 
 .fm-material-library__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--fm-space-3);
 }
 
 .fm-material-library__grid label {
   display: grid;
-  gap: 5px;
+  gap: var(--fm-space-1);
   min-width: 0;
   color: var(--fm-text-secondary);
-  font-size: 12px;
+  font-size: var(--fm-font-size-sm);
 }
 
 .fm-material-library__grid span {
   color: var(--fm-text-muted);
-  font-size: 11px;
+  font-size: var(--fm-font-size-xs);
   font-weight: 650;
   text-transform: uppercase;
 }
@@ -145,21 +145,21 @@
   width: 100%;
   min-width: 0;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: 6px;
+  border-radius: var(--fm-radius-md);
   color: var(--fm-text-primary);
   background: var(--fm-bg-elevated);
   font: inherit;
 }
 
 .fm-material-library__grid input {
-  height: 30px;
+  height: var(--fm-control-height-regular);
   padding: 0 8px;
 }
 
 .fm-material-library__grid textarea {
   min-height: 72px;
   resize: vertical;
-  padding: 7px 8px;
+  padding: var(--fm-space-2) var(--fm-space-2);
 }
 
 .fm-material-library__grid input:disabled {
@@ -169,7 +169,7 @@
 
 .fm-material-library__grid small {
   color: var(--fm-text-muted);
-  font-size: 10px;
+  font-size: var(--fm-font-size-2xs);
 }
 
 .fm-material-library__wide {
@@ -179,9 +179,9 @@
 .fm-material-library__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding-top: 10px;
+  gap: var(--fm-space-2);
+  min-height: var(--fm-panel-header-height);
+  padding-top: var(--fm-space-3);
   border-top: 1px solid var(--fm-border-subtle);
 }
 

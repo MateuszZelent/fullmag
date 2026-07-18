@@ -18,18 +18,18 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          "fm-button--primary border-fm-accent bg-fm-accent text-fm-inverse shadow-[var(--fm-shadow-control)] hover:border-fm-strong hover:shadow-[var(--fm-shadow-control-hover)] active:shadow-[var(--fm-shadow-control-pressed)]",
+          "fm-button--primary border-fm-accent bg-fm-accent text-fm-inverse shadow-fm-control hover:border-fm-strong hover:shadow-fm-control-hover active:shadow-fm-control-pressed",
         secondary:
-          "fm-button--secondary border-fm-border bg-fm-raised text-fm-primary shadow-[var(--fm-shadow-control)] hover:border-fm-strong hover:bg-fm-disabled hover:shadow-[var(--fm-shadow-control-hover)] active:shadow-[var(--fm-shadow-control-pressed)]",
+          "fm-button--secondary border-fm-border bg-fm-raised text-fm-primary shadow-fm-control hover:border-fm-strong hover:bg-fm-disabled hover:shadow-fm-control-hover active:shadow-fm-control-pressed",
         ghost:
           "fm-button--ghost border-transparent bg-transparent text-fm-secondary hover:bg-fm-disabled hover:text-fm-primary",
         danger:
           "fm-button--danger border-fm-danger bg-transparent text-fm-danger hover:bg-fm-disabled",
       },
       size: {
-        sm: "fm-button--sm h-fm-control-sm gap-2 px-2 text-[length:var(--fm-font-size-control)]",
-        md: "fm-button--md h-fm-control-md gap-2 px-3 text-[length:var(--fm-font-size-control)]",
-        icon: "fm-button--icon size-fm-control-sm p-0 text-[length:var(--fm-font-size-control)]",
+        sm: "fm-button--sm h-fm-control-sm gap-2 px-2 text-fm-control",
+        md: "fm-button--md h-fm-control-md gap-2 px-3 text-fm-control",
+        icon: "fm-button--icon size-fm-control-sm p-0 text-fm-control",
       },
     },
     defaultVariants: {

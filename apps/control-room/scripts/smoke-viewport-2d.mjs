@@ -58,6 +58,17 @@ async function main() {
       timeout: timeoutMs,
       waitUntil: "domcontentloaded",
     });
+    const open2d = page.getByRole("button", { name: "2D", exact: true });
+    await open2d.waitFor({ state: "visible", timeout: timeoutMs });
+    const initialOpenStarted = performance.now();
+    await open2d.click();
+    await assertFieldMapCanvas(page);
+    const initialOpenMs = performance.now() - initialOpenStarted;
+    if (initialOpenMs > 10_000) {
+      throw new Error(`initial 2D open exceeded 10 s: ${initialOpenMs}`);
+    }
+    const open3d = page.getByRole("button", { name: "3D", exact: true });
+    await open3d.click();
     await page.keyboard.press("2");
     await assertFieldMapCanvas(page);
     await page.screenshot({
@@ -65,20 +76,20 @@ async function main() {
       path: path.join(outputDir, "scalar-plane.png"),
     });
 
-    const performance = {};
-    performance.small_switch_ms = await timedMonitorSwitch(
+    const performanceMetrics = { initial_open_ms: initialOpenMs };
+    performanceMetrics.small_switch_ms = await timedMonitorSwitch(
       page,
       "xy-slab",
       128,
       path.join(outputDir, "slab-vectors.png"),
     );
-    performance.large_switch_ms = await timedMonitorSwitch(
+    performanceMetrics.large_switch_ms = await timedMonitorSwitch(
       page,
       required[0],
       1024,
     );
     if (backend === "fem") {
-      performance.surface_switch_ms = await timedMonitorSwitch(
+      performanceMetrics.surface_switch_ms = await timedMonitorSwitch(
         page,
         "object-surface",
         256,
@@ -125,7 +136,7 @@ async function main() {
       memory_before_bytes: memoryBefore,
       memory_growth_bytes: memoryGrowthBytes,
       pass: true,
-      performance,
+      performance: performanceMetrics,
       reduced_motion: true,
       planar_frame_preview_3d: true,
       schema_version: "viewport-2d-browser-smoke-v1",
@@ -222,23 +233,70 @@ async function assertFieldMapCanvas(page) {
 }
 
 async function waitForCanvasPaint(page) {
-  await page.waitForFunction(
-    () => {
+  try {
+    await page.waitForFunction(
+      () => {
+        const canvas = document.querySelector(".fm-field-map__canvas");
+        if (!(canvas instanceof HTMLCanvasElement)) return false;
+        const context = canvas.getContext("2d");
+        if (!context || canvas.width <= 0 || canvas.height <= 0) return false;
+        const pixels = context.getImageData(
+          0,
+          0,
+          canvas.width,
+          canvas.height,
+        ).data;
+        for (let index = 3; index < pixels.length; index += 4) {
+          if (pixels[index] !== 0) return true;
+        }
+        return false;
+      },
+      undefined,
+      { timeout: timeoutMs },
+    );
+  } catch (error) {
+    const diagnostic = await page.evaluate(() => {
       const canvas = document.querySelector(".fm-field-map__canvas");
-      if (!(canvas instanceof HTMLCanvasElement)) return false;
+      const activeModule = document
+        .querySelector("[data-slot-id='viewport-main']")
+        ?.getAttribute("data-active-module-id");
+      if (!(canvas instanceof HTMLCanvasElement)) {
+        return {
+          activeModule,
+          canvas: null,
+          status: document.querySelector(".fm-field-map")?.textContent,
+        };
+      }
       const context = canvas.getContext("2d");
-      if (!context || canvas.width <= 0 || canvas.height <= 0) return false;
-      const pixel = context.getImageData(
-        Math.floor(canvas.width / 2),
-        Math.floor(canvas.height / 2),
-        1,
-        1,
-      ).data;
-      return pixel[3] !== 0;
-    },
-    undefined,
-    { timeout: timeoutMs },
-  );
+      const center =
+        context && canvas.width > 0 && canvas.height > 0
+          ? Array.from(
+              context.getImageData(
+                Math.floor(canvas.width / 2),
+                Math.floor(canvas.height / 2),
+                1,
+                1,
+              ).data,
+            )
+          : null;
+      const rect = canvas.getBoundingClientRect();
+      return {
+        activeModule,
+        canvas: {
+          center,
+          cssHeight: rect.height,
+          cssWidth: rect.width,
+          height: canvas.height,
+          width: canvas.width,
+        },
+        status: document.querySelector(".fm-field-map")?.textContent,
+      };
+    });
+    throw new Error(
+      `2D canvas paint timed out: ${JSON.stringify(diagnostic)}`,
+      { cause: error },
+    );
+  }
 }
 
 async function selectMonitor(monitorId, resolution) {

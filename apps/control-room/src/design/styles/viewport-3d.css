@@ -644,9 +644,9 @@
 }
 
 .fm-viewport-3d__settings-switch-track {
-  width: 36px;
-  height: 20px;
-  border-radius: 10px;
+  width: var(--fm-inspector-nav-icon-size);
+  height: var(--fm-control-height-compact);
+  border-radius: var(--fm-radius-lg);
   background: var(--fm-border-default);
   transition: background-color var(--fm-transition-fast);
   position: relative;
@@ -657,8 +657,8 @@
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 16px;
-  height: 16px;
+  width: var(--fm-space-4);
+  height: var(--fm-space-4);
   border-radius: 50%;
   background: var(--fm-text-primary);
   transition: transform var(--fm-transition-fast);

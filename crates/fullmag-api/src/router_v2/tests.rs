@@ -2166,8 +2166,10 @@ async fn status_uses_fdm_artifact_layout_revision_before_first_live_step() {
         json["domain"]["generation_id"]
     );
     assert_eq!(
-        json["resources"]["topology_revision"],
+        json["resources"]["topology_revision"].as_u64(),
         json["domain"]["generation_id"]
+            .as_str()
+            .and_then(|value| value.parse::<u64>().ok())
     );
 }
 
@@ -2442,7 +2444,7 @@ async fn domain_slice_mesh_overlay_returns_json_for_fem() {
     assert_eq!(json["u_axis"], "x");
     assert_eq!(json["v_axis"], "y");
     assert_eq!(json["normal_axis"], "z");
-    assert_eq!(json["domain_generation_id"], 42);
+    assert_eq!(json["domain_generation_id"], "42");
     assert_eq!(json["topology_revision"], 31);
     assert_eq!(json["etag"], etag);
     assert_eq!(json["truncated"], false);
@@ -2922,7 +2924,7 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 5);
+    assert_eq!(json["schema_version"], 6);
     assert_eq!(
         json["quantity"]["active_quantity_id"],
         json["active_quantity_id"]
@@ -2930,7 +2932,17 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(json["layers"]["vectors"]["visible"], json["vector_glyphs"]);
     assert_eq!(json["layers"]["vectors"]["density"], json["vector_density"]);
     assert_eq!(json["layers"]["airbox"]["visible"], false);
+    assert_eq!(json["layers"]["airbox"]["surface"]["visible"], false);
     assert_eq!(json["layers"]["airbox"]["wireframe"]["visible"], true);
+    assert_eq!(json["targets"]["airbox"]["settings"]["visible"], false);
+    assert_eq!(
+        json["targets"]["airbox"]["settings"]["surface_visible"],
+        false
+    );
+    assert_eq!(
+        json["targets"]["airbox"]["settings"]["wireframe_visible"],
+        true
+    );
     assert_eq!(json["layers"]["airbox"]["vectors"]["domain"], "airbox_only");
     assert_eq!(json["sampling"]["max_points"], json["max_points"]);
     assert_eq!(json["fdm"]["x_chosen_size"], json["x_chosen_size"]);
@@ -3167,7 +3179,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 5);
+    assert_eq!(json["schema_version"], 6);
     assert_eq!(json["active_quantity_id"], "h_eff");
     assert_eq!(json["quantity"]["active_quantity_id"], "h_eff");
     assert_eq!(json["field_component"], "magnitude");
@@ -9966,7 +9978,7 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
         serde_json::from_value(serde_json::json!({
             "id": "monitor_xy",
             "name": "XY monitor",
-            "target": {"kind": "magnetic_domain"},
+            "target": {"kind": "domain"},
             "frame": {
                 "origin_m": [0.0, 0.0, 0.0],
                 "u_axis": [1.0, 0.0, 0.0],
@@ -10147,6 +10159,101 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
     assert_eq!(snapshot_without_stage.status(), StatusCode::BAD_REQUEST);
     let snapshot_without_stage = body_json(snapshot_without_stage).await;
     assert_eq!(snapshot_without_stage["code"], "snapshot_requires_stage");
+}
+
+#[tokio::test]
+async fn planar_field_fdm_object_target_uses_published_membership_and_grid_geometry() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    let grid_fingerprint = "00".repeat(32);
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": grid_fingerprint,
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [2, 1, 1],
+            "cell_m": [1.0, 1.0, 1.0],
+            "cell_count": 2,
+            "object_ids": ["body"],
+            "region_legend": [],
+            "encoding": "FMRM:u32_membership_le"
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    let mut membership = vec![0u8; 64 + 2 * 4];
+    membership[..4].copy_from_slice(b"FMRM");
+    membership[4] = 2;
+    membership[5] = 2;
+    membership[8..12].copy_from_slice(&2u32.to_le_bytes());
+    membership[12..16].copy_from_slice(&1u32.to_le_bytes());
+    membership[16..20].copy_from_slice(&1u32.to_le_bytes());
+    membership[20..24].copy_from_slice(&2u32.to_le_bytes());
+    membership[64..68].copy_from_slice(&0u32.to_le_bytes());
+    membership[68..72].copy_from_slice(&u32::MAX.to_le_bytes());
+    fs::write(mesh_dir.join("fdm_region_membership.v2.bin"), membership)
+        .expect("failed to write FDM membership binary");
+
+    let mut scene = sample_scene_document();
+    scene.monitors.planar.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "body-plane",
+            "name": "Body plane",
+            "target": {"kind": "object", "object_id": "body"},
+            "frame": {
+                "origin_m": [0.0, 0.0, 0.5],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+                "preset": "xy",
+                "normalization_version": "planar_frame_v1",
+                "extent": {
+                    "kind": "explicit",
+                    "u_min_m": 0.0,
+                    "u_max_m": 2.0,
+                    "v_min_m": 0.0,
+                    "v_max_m": 1.0
+                }
+            },
+            "operator": {"kind": "plane_sample"}
+        }))
+        .expect("FDM object monitor should deserialize"),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "mat_ms": {
+                "values": [4.0, 9.0],
+                "layout": {"grid_cells": [2, 1, 1]}
+            }
+        }))
+        .expect("mock FDM scalar field should deserialize");
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v2/sessions/current/data/fields/mat_ms/planar-monitors/body-plane/meta?component=scalar&resolution_x=16&resolution_y=16",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{body:#}");
+    assert!(body["occupancy"]["occupied"].as_u64().unwrap() > 0);
+    assert!(body["occupancy"]["empty"].as_u64().unwrap() > 0);
+    assert_eq!(body["scalar_min"], 4.0);
+    assert_eq!(body["scalar_max"], 4.0);
+
+    let _ = fs::remove_dir_all(&artifact_dir);
 }
 
 #[tokio::test]
@@ -10336,7 +10443,7 @@ async fn planar_field_snapshot_is_stage_scoped_and_uses_persisted_values() {
             serde_json::from_value(serde_json::json!({
                 "id": "snapshot_xy",
                 "name": "Snapshot XY",
-                "target": {"kind": "magnetic_domain"},
+                "target": {"kind": "domain"},
                 "frame": {
                     "origin_m": [0.0, 0.0, 0.0],
                     "u_axis": [1.0, 0.0, 0.0],
@@ -18815,6 +18922,25 @@ async fn artifact_download_accepts_encoded_relative_paths() {
 }
 
 #[tokio::test]
+async fn absent_fdm_region_membership_descriptor_is_not_applicable() {
+    let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fdm-region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(body_bytes(response).await.is_empty());
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn fdm_region_membership_descriptor_and_scoped_binary_are_revisioned() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     let mesh_dir = artifact_dir.join("mesh");
@@ -23292,6 +23418,9 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
     assert_eq!(json["trust"], "qualified");
     assert_eq!(json["nearest_integer"], 0);
     assert_eq!(json["integer_error"], 0.0);
+    assert!(json["computed_at_unix_ms"]
+        .as_u64()
+        .is_some_and(|value| value > 0));
     assert!(json["warnings"].as_array().unwrap().is_empty());
 }
 
@@ -23355,15 +23484,24 @@ async fn topological_charge_cache_key_tracks_field_revision() {
     )
     .await;
     assert_eq!(first["quality"]["valid_vertex_count"], 9);
+    assert_eq!(first["trust"], "qualified");
+    assert_eq!(first["quality"]["boundary_max_deviation_rad"], 0.0);
     assert!(first["warnings"].as_array().unwrap().is_empty());
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot
+        let magnetization = snapshot
             .live_state
             .as_mut()
             .unwrap()
             .latest_step
-            .magnetization = Some(vec![0.0; 27]);
+            .magnetization
+            .as_mut()
+            .unwrap();
+        magnetization[..3].copy_from_slice(&[
+            15.0_f64.to_radians().sin(),
+            0.0,
+            15.0_f64.to_radians().cos(),
+        ]);
     }
     let cached = body_json(
         app.clone()
@@ -23379,6 +23517,8 @@ async fn topological_charge_cache_key_tracks_field_revision() {
     )
     .await;
     assert_eq!(cached["quality"]["valid_vertex_count"], 9);
+    assert_eq!(cached["trust"], "qualified");
+    assert_eq!(cached["quality"]["boundary_max_deviation_rad"], 0.0);
     assert!(cached["warnings"].as_array().unwrap().is_empty());
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -23399,13 +23539,12 @@ async fn topological_charge_cache_key_tracks_field_revision() {
             .unwrap(),
     )
     .await;
-    assert_eq!(recomputed["status"], "invalid_magnetization");
-    assert_eq!(recomputed["quality"]["valid_vertex_count"], 0);
-    assert!(recomputed["charge"].is_null());
-    assert!(recomputed["nearest_integer"].is_null());
-    assert!(recomputed["integer_error"].is_null());
+    assert_eq!(recomputed["status"], "ready");
+    assert_eq!(recomputed["trust"], "diagnostic_boundary");
+    assert!(recomputed["quality"]["boundary_max_deviation_rad"]
+        .as_f64()
+        .is_some_and(|value| value > 0.0));
     assert!(recomputed.get("polarity").is_none());
-    assert_eq!(recomputed["warnings"][0]["code"], "invalid_magnetization");
 }
 
 #[tokio::test]

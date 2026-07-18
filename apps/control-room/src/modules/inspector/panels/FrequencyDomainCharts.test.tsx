@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -12,6 +13,17 @@ import {
 } from "./FrequencyDomainCharts";
 
 describe("FrequencyDomainCharts", () => {
+  it("never disposes an ECharts instance owned by another mounted frame", () => {
+    const source = readFileSync(
+      new URL("./FrequencyDomainCharts.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).not.toContain("oldestChart.dispose()");
+    expect(source).not.toContain("activeCharts.shift()");
+    expect(source).toContain("chartRef.current.dispose()");
+  });
+
   it("renders sub-GHz spectrum summaries in MHz", () => {
     const html = renderToStaticMarkup(
       <FrequencyDomainSpectrumChart

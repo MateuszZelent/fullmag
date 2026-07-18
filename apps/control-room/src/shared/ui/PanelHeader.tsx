@@ -15,7 +15,7 @@ interface PanelHeaderProps {
 
 /**
  * Shared panel header used by Explorer, Inspector, and Footer panels.
- * Provides a consistent min-height-38px header with title, optional subtitle, and trailing slot.
+ * Provides a consistent `--fm-panel-header-height` header with title, optional subtitle, and trailing slot.
  */
 export function PanelHeader({ title, subtitle, trailing, className }: PanelHeaderProps) {
   return (

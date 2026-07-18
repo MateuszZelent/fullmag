@@ -84,6 +84,8 @@ export default function FieldMapModule() {
     plan.monitorId,
     {
       component: planar?.component ?? state.component,
+      resolution_x: plan.query.resolution_x,
+      resolution_y: plan.query.resolution_y,
       u_m: pinned?.[0] ?? 0,
       v_m: pinned?.[1] ?? 0,
     },

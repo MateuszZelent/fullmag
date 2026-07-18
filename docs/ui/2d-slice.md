@@ -1,6 +1,8 @@
 # 2D Slice
 
-2D Slice is the spatial field view for inspecting a physical slice or projection of the active simulation domain. It is separate from scalar 2D time-series plots.
+The `field-map` module is the spatial field view for inspecting a physical slice or projection of the active simulation domain. Click **2D** in the workspace or press `2`. When monitors exist, the first usable monitor is selected automatically. When none exist, Fullmag opens an uncommitted `Midplane` draft in the Inspector; **Apply** is required before the canonical scene is changed.
+
+The view is a demand-driven Canvas 2D surface, not a second WebGL viewport. Only the active center surface is mounted.
 
 ## Heatmap / Quantity Overlay
 
@@ -15,9 +17,9 @@ Supported controls:
 
 ## Plane, Cut, Component
 
-Single-slice mode supports `xy`, `xz`, and `yz` planes through the shared slice toolbar state. FEM slice position uses physical coordinates when bounds are known; normalized position remains the fallback.
+Planar monitors support `xy`, `xz`, `yz`, and arbitrary right-handed frames. Operators are `plane_sample`, `slab_average`, `depth_projection`, and `surface_projection`.
 
-`all_layers` is a projection mode. It is not the same as slab mode.
+Slab averaging and depth projection are distinct physical reductions. They are not aliases for an unweighted all-layers average.
 
 ## Mesh Wireframe
 
@@ -54,9 +56,8 @@ Airbox vectors remain staged until vector-domain routing is split from magnetic 
 
 `all_layers` uses projection/reduction controls. Single-slice-only overlays such as FEM exact mesh and airbox wireframe are disabled or unavailable in projection mode unless a dedicated projection outline exists.
 
-## Known Limitations
+## Export and diagnostics
 
-- Contour and heatmap+contour are semantic-only staged controls.
-- Slab mode is not implemented; do not treat it as all-layers projection.
-- 2D primitive overlays are staged until authored primitives can be projected into the slice plane.
-- Airbox surface and point rendering are not production paths for 2D; wireframe is the supported P0 mode.
+`field-map.export-png` uses the revisioned planar `render.png` resource. The filename contains monitor, quantity, field revision, and a unit-safe slug. Surface overlap/fold occupancy remains visible as a degraded diagnostic rather than being silently discarded.
+
+The legacy FEM mesh-quality cross-section endpoint remains available for mesh diagnostics and export, but it is no longer a competing top-level center surface.

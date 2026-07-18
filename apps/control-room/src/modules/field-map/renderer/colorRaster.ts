@@ -1,3 +1,5 @@
+import { isRenderablePlanarOccupancy } from "../model/planarOccupancy";
+
 export interface ColorRange {
   max: number;
   min: number;
@@ -11,7 +13,7 @@ export function finiteScalarRange(
   let max = Number.NEGATIVE_INFINITY;
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index] ?? Number.NaN;
-    if (mask?.[index] || !Number.isFinite(value)) continue;
+    if (!isRenderablePlanarOccupancy(mask?.[index]) || !Number.isFinite(value)) continue;
     min = Math.min(min, value);
     max = Math.max(max, value);
   }
@@ -28,7 +30,7 @@ export function colorizeScalarRaster(
   for (let index = 0; index < values.length; index += 1) {
     const offset = index * 4;
     const value = values[index] ?? Number.NaN;
-    if (mask?.[index] || !Number.isFinite(value)) continue;
+    if (!isRenderablePlanarOccupancy(mask?.[index]) || !Number.isFinite(value)) continue;
     const t = Math.max(0, Math.min(1, (value - range.min) / span));
     pixels[offset] = Math.round(255 * t);
     pixels[offset + 1] = Math.round(255 * (1 - Math.abs(2 * t - 1)));

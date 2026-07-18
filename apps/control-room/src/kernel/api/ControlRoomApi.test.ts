@@ -3724,6 +3724,8 @@ describe("ControlRoomApi", () => {
     const descriptor = await api.data.fdmRegionMemberships();
     const membership = await api.data.fdmRegionMembershipRegionBytes("body:core");
 
+    expect(descriptor).not.toBeNull();
+    if (!descriptor) throw new Error("expected FDM membership descriptor");
     expect(descriptor.region_legend[0]?.numeric_id).toBe(1);
     expect(membership.status).toBe("ready");
     expect(membership.status === "ready" ? membership.data.byteLength : 0).toBe(68);
@@ -3731,6 +3733,19 @@ describe("ControlRoomApi", () => {
       "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-memberships",
       "GET http://127.0.0.1:8765/v2/sessions/current/data/fdm-region-membership/body%3Acore",
     ]);
+  });
+
+  it("treats an unpublished FDM membership descriptor as not applicable", async () => {
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async () =>
+        new Response(null, {
+          headers: { "x-api-contract-version": "1.0.0" },
+          status: 204,
+        }),
+    });
+
+    await expect(api.data.fdmRegionMemberships()).resolves.toBeNull();
   });
 
   it("commits object region and coupling writes through model transactions", async () => {

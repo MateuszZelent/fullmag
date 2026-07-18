@@ -21,7 +21,7 @@ export function AirboxMeshTopologyPanel({ selection }: InspectorPanelProps) {
   const part = findCanonicalAirboxPart(manifest.data?.mesh_parts);
 
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Airbox Mesh Topology" badge={manifest.status}>
         <FieldRow label="Canonical target" value="airbox" />
         <FieldRow label="Canonical marker" value="not published" />

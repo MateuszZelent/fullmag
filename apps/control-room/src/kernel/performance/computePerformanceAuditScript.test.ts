@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+
+import { runComputePerformanceAudit } from "../../../scripts/audit-compute-performance.mjs";
 
 import {
   DATA_SCALARS_PATH,
@@ -14,15 +14,9 @@ const auditScriptUrl = new URL(
   "../../../scripts/audit-compute-performance.mjs",
   import.meta.url,
 );
-const appRootUrl = new URL("../../..", import.meta.url);
-
 describe("compute performance audit script", () => {
   it("executes successfully so syntax errors fail the test suite", () => {
-    const output = execFileSync(
-      process.execPath,
-      [fileURLToPath(auditScriptUrl)],
-      { cwd: fileURLToPath(appRootUrl), encoding: "utf8" },
-    );
+    const output = runComputePerformanceAudit();
 
     expect(output).toContain("Compute performance audit passed.");
   });

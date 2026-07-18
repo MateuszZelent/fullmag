@@ -266,7 +266,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <PhysicsInteractionSelectionSection
         interactionId={interactionId}
         draft={draft}

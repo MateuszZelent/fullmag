@@ -569,7 +569,10 @@ function formatSpinWaveBc(value: string | null | undefined): string {
   if (parsed) {
     const kind = String(parsed.kind ?? "custom");
     const axes = Array.isArray(parsed.axes)
-      ? parsed.axes.map(String).filter(Boolean)
+      ? parsed.axes.flatMap((axis) => {
+          const value = String(axis);
+          return value ? [value] : [];
+        })
       : [];
     if (kind === "periodic") {
       return axes.length ? `periodic; axes ${axes.join(", ")}` : "periodic";

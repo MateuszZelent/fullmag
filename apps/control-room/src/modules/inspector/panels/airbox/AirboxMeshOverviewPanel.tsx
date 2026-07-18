@@ -51,7 +51,7 @@ export function AirboxMeshOverviewPanel({ selection }: InspectorPanelProps) {
     manifest.data != null && manifest.data.revision < resource.revision;
 
   return (
-    <div className="fm-inspector-panel grid min-w-0 gap-[var(--fm-inspector-group-gap)]">
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Airbox Mesh Overview" badge={stale ? "stale" : manifest.status}>
         <FieldRow label="Policy revision" value={String(resource.revision)} />
         <FieldRow label="Manifest revision" value={String(manifest.data?.revision ?? "unknown")} />

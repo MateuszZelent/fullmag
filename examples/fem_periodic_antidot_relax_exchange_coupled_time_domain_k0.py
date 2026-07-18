@@ -107,7 +107,7 @@ pulse_t0 = 1e-10
 study.stages.add_minimize(
     stage_id="relax",
     method="bb",
-    max_steps=10,
+    max_steps=500,
     tol=5.0e2,
 )
 
@@ -117,16 +117,17 @@ study.stages.add_minimize(
 #         id="k0-sinc-antenna",
 #         name="Uniform transverse k0 sinc antenna",
 #         target=fm.FieldTarget.global_domain(),
-#         amplitude_B_T=1e-3,
+#         amplitude_B_T=1e-9,
 #         direction=(0.0, 1.0, 0.0),
 #         spatial_profile=fm.UniformFieldProfile(),
 #         waveform=fm.SincPulse(cutoff_hz=f_cutoff, t0=pulse_t0),
 #         time_origin="stage_local",
+#         activation=fm.DriveActivation.stage_ids(["excite"]),
 #     ),
 # )
 
-# # Each command below is a separate visible workflow stage.  The final Run only
-# # advances the LLG solver; it does not hide any output or analysis settings.
+# Each command below is a separate visible workflow stage.  The final Run only
+# advances the LLG solver; it does not hide any output or analysis settings.
 # study.stages.tableautosave(
 #     t_sampling,
 #     quantities=[
@@ -139,12 +140,12 @@ study.stages.add_minimize(
 # )
 # study.stages.autosave("m", t_sampling, stage_id="autosave-m")
 # study.stages.fft_response("my", stage_id="analyse-k0-response")
-# study.solver(
-#     integrator="rk45",
-#     dt_initial=1e-15,  # opcjonalne; bez tego startuje dokładnie od dt_min
-#     dt_min=1e-16,
-#     dt_max=1e-14,
-#     max_err=1e-6,
-#     g=2.115,
-# )
-# study.stages.add_run(until=t_run)
+study.solver(
+    integrator="rk45",
+    dt_initial=1e-15,  # opcjonalne; bez tego startuje dokładnie od dt_min
+    dt_min=1e-16,
+    dt_max=1e-14,
+    max_err=1e-6,
+    g=2.115,
+)
+study.stages.add_run(until=t_run)
