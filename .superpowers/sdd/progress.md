@@ -4,7 +4,7 @@
 
 - Worktree: `/tmp/fullmag-llg-time-domain-remediation-phase2`
 - Branch: `codex/llg-time-domain-remediation-phase2`
-- Base: `7fce4da8d3dbd5f6a538cd36be7d26f948aeb681`
+- Base: `3130ac7a0950e456c8e4eaab220df2ba0da9dbb9`
 - Approved audit: `docs/audits/2026-07-16-llg-time-domain-solver-audit.md`
 - Canonical contract: `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
 - Implementation plan: `docs/superpowers/plans/2026-07-17-llg-time-domain-solver-remediation.md`
@@ -19,8 +19,8 @@
 | 6 | completed | q=2/q=4 order ignored; accepted steps could not shrink; dt_min force-retry; unsafe GPU candidate failure paths; max_err rtol=0 rejected | independent managed `verify-fem-time-domain-native-contract` exit 0; shared CPU/CUDA-host golden vectors and boundary/failure contracts green | spec APPROVED; quality APPROVED | `7471a615` |
 | 7 | completed | fixed RK23/RK45 emitted adaptive suggestions; adaptive floor could force-accept; CUDA ABI dropped authored controller policy; production CUDA loop reused immutable initial dt | engine 200/200; plan 230/230; runner 561/561; fdm-sys 1/1; CPU-only and CUDA managed native contracts PASS; feature-CUDA cargo check PASS | spec APPROVED; quality APPROVED after production dispatch correction | `22e224f7` |
 | 8 | completed | CPU relative-only airbox node produced zero scale; legacy FEM adaptive ABI was grown in place; helper-only tests did not prove production rollback | managed FEM CPU/CUDA gate PASS including executed CUDA zero/subnormal/NaN/Inf guard contract; plan 230/230; runner 561/561; production CPU norm/rotation/nonfinite rollback green | spec APPROVED; quality APPROVED after airbox-mask, ABI-v2, and runtime-test corrections | `141cfb77`, `f78e2d6e` |
-| 9 | completed | non-periodic Hypre, periodic MFEM CG, strict GPU Hypre, and FEM/BEM Hypre all published `max_iterations=1` candidates; `preconditioner=none` aborted through invalid `HypreIdentity::SetOperator` | `just verify-fem-demag-poisson-contract` exit 0 with actual CPU/periodic/FEM-BEM/GPU nonconvergence fixtures and failed-candidate publication guards | self-review complete; managed contract green | `ed7e7947` |
-| 10 | pending | pending | pending | pending | pending |
+| 9 | completed | non-periodic Hypre, periodic MFEM CG, strict GPU Hypre, and FEM/BEM Hypre all published `max_iterations=1` candidates; `preconditioner=none` aborted through invalid `HypreIdentity::SetOperator` | `just verify-fem-demag-poisson-contract` exit 0 with actual CPU/periodic/FEM-BEM/GPU nonconvergence fixtures and failed-candidate publication guards | self-review complete; managed contract green after rebase | `45f85564` |
+| 10 | completed | candidate, endpoint-refresh, and post-statistics failpoints previously leaked fields/controller/FSAL/cache state; adaptive retries restored only magnetization | managed `just verify-fem-time-domain-native-contract` exit 0 after rebase; CPU full-state failpoints, retry cache rollback, persistent CUDA device-to-device field/FSAL/Poisson rollback, and exactly-once success publication green | self-review complete; managed CPU/CUDA contract green after rebase | `81590e0a` |
 | 11 | pending | pending | pending | pending | pending |
 | 12 | pending | pending | pending | pending | pending |
 | 13 | pending | pending | pending | pending | pending |
@@ -38,11 +38,11 @@
 
 ### Routed remediation debt
 
-- Task 10 owns general post-backup `gpu_rk_run_stage_attempt` failure rollback;
-  Task 6 closes adaptive reduction, readback, decision-failure, and retry
-  candidate restoration only.
+- Task 10 closes general post-backup `gpu_rk_run_stage_attempt` failure
+  rollback, candidate field/cache rollback, and the final-statistics commit
+  boundary on CPU and CUDA.
 - FDM norm and per-spin rotation guard intent remains transported and fails
   closed; Task 8 implements and verifies the FEM CPU/GPU guard realization.
-- Task 10 owns candidate H/work/demag-cache rollback and atomic publication;
-  Task 7 proves rejected-step rollback only for magnetization, time, and exact
-  pre-attempt FSAL validity.
+- Task 10 closes candidate H/work/demag-cache rollback and atomic publication;
+  Task 7 remains the historical proof for magnetization/time/FSAL-only
+  rejected-step behavior before the complete transaction was added.
