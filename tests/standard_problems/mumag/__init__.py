@@ -1,0 +1,1 @@
+"""NIST µMAG standard problems."""

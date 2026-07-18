@@ -2,7 +2,7 @@
 
 - Status: zatwierdzony design
 - Data: 2026-07-18
-- Zakres: produkcyjny FEM CPU, MFEM/hypre, precyzja `double`
+- Zakres: produkcyjny strict FEM CPU i strict FEM GPU, MFEM/hypre, precyzja `double`
 - Źródło nadrzędne: [NIST µMAG Standard Problem 4](https://www.ctcms.nist.gov/~rdm/std4/spec4.html)
 - Dane referencyjne: [NIST/OOMMF Standard Problem 4 results](https://www.ctcms.nist.gov/~rdm/std4/Donahue.html)
 
@@ -56,8 +56,10 @@ materiał, pola, parametry LLG, wymagane wielkości i schemat artefaktów. Nie
 zawiera ustawień konkretnego backendu.
 
 `fem/problem.py` materializuje kontrakt jako publiczny skrypt Fullmag i jawnie
-wybiera FEM CPU, `double`, P1, MFEM/hypre oraz model demagnetyzacji
-`poisson_robin`. Każda zmiana realizacji pozostaje widoczna w proweniencji.
+wybiera FEM CPU albo FEM GPU, `double`, P1, MFEM/hypre oraz model
+demagnetyzacji `poisson_robin`. Strict GPU musi używać realizacji
+`device_hypre_poisson`; `hybrid_cpu_poisson` i każdy fallback unieważniają
+kwalifikację. Każda zmiana realizacji pozostaje widoczna w proweniencji.
 
 `common/metrics.py` i `common/validation.py` nie uruchamiają solvera. Czytają
 artefakty i porównują dowolną realizację z tym samym kontraktem NIST.
@@ -226,9 +228,10 @@ które daje mniejszy błąd.
 
 - maksymalne `abs(|m| - 1)` w zapisanych polach nie przekracza `1e-8`;
 - wszystkie wartości, energie i diagnostyki używane przez bramkę są skończone;
-- resolved engine jest produkcyjnym FEM CPU;
+- resolved engine jest żądanym produkcyjnym FEM CPU albo FEM GPU;
 - precision jest `double`;
 - nie wystąpił fallback;
+- GPU używa `device_hypre_poisson`, nigdy `hybrid_cpu_poisson`;
 - demag został rzeczywiście rozwiązany przez zadeklarowane
   `poisson_robin`, z dostępnym residualem i liczbą iteracji;
 - oba przypadki używają identycznego stanu S.
@@ -259,6 +262,12 @@ przejścia o mniej niż `20 ps`, a końcowe średnie o mniej niż `0.02` na
 składową. Rozmiary i `airbox_hmax` są zapisane w artefaktach oraz raporcie;
 brak tych danych unieważnia kwalifikację.
 
+Pełna macierz trzech meshów i obu airboxów jest obowiązkowa osobno dla CPU i
+GPU. Dodatkowo CPU/GPU muszą spełnić bramkę parytetu: RMSE trajektorii nie
+większe niż `0.02` na składową, różnica pierwszego przejścia `mx = 0` nie
+większa niż `10 ps` oraz różnica końcowych średnich nie większa niż `0.02` na
+składową.
+
 ## 8. Warstwy testów
 
 ### 8.1 Szybki kontrakt
@@ -271,8 +280,8 @@ syntetycznych fixture'ach.
 ### 8.2 Managed runtime smoke
 
 Krótki, grubszy przypadek dowodzi, że publiczny skrypt przechodzi przez
-ProblemIR, planner, runner i produkcyjny natywny FEM CPU, zapisując wymagane
-artefakty. Smoke nie może promować statusu `physics_validated`.
+ProblemIR, planner, runner i produkcyjny natywny FEM CPU/GPU, zapisując
+wymagane artefakty. Smoke nie może promować statusu `physics_validated`.
 
 ### 8.3 Pełna kwalifikacja fizyczna
 
@@ -283,7 +292,8 @@ just verify-fem-standard-problem-4
 ```
 
 używa `just ensure-managed-fem-runtime`, uruchamia pełną macierz dwóch pól,
-trzech meshów i testu airboxa, a następnie wykonuje walidator artefaktów. Jest
+trzech meshów i testu airboxa osobno na CPU i GPU, sprawdza parytet CPU/GPU, a
+następnie wykonuje walidator artefaktów. Jest
 bramką release/nightly, nie testem wykonywanym przy każdym szybkim PR.
 
 Każda zmiana kodu natywnego FEM wymagająca przebudowy runtime korzysta najpierw
