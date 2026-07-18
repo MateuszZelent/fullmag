@@ -304,6 +304,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           materialFields: modelMaterialFields.data,
           regions: modelRegions.data,
           regionMemberships: regionMemberships.data,
+          meshManifest: manifest.data,
         }),
         stageExecution.data,
       ),

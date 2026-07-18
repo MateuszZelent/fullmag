@@ -31,7 +31,7 @@ describe("ObjectVisualizationController", () => {
       surfaceOpacityPercent: 100,
       pointColor: "var(--fm-border-strong)",
       primitiveVisible: false,
-      renderMode: "surface+edges",
+      renderMode: "surface",
       shaderColorMode: "orientation",
       shaderMonoColor: "var(--fm-surface-magnetic)",
       shaderVisible: true,
@@ -44,14 +44,14 @@ describe("ObjectVisualizationController", () => {
       vectorsVisible: false,
       wireframeColor: "var(--fm-border-strong)",
       wireframeOpacityPercent: 100,
-      wireframeVisible: true,
+      wireframeVisible: false,
     });
     expect(DEFAULT_AIRBOX_VISUALIZATION).toMatchObject({
       activeQuantityId: "H_demag",
       geometryScope: "full",
       surfaceOpacityPercent: 28,
       pointColor: "var(--fm-info)",
-      renderMode: "wireframe",
+      renderMode: "off",
       shaderColorMode: "monochrome",
       shaderMonoColor: "var(--fm-airbox-fill)",
       shaderVisible: false,
@@ -64,9 +64,9 @@ describe("ObjectVisualizationController", () => {
       vectorsVisible: false,
       wireframeColor: "var(--fm-airbox-wire)",
       wireframeOpacityPercent: 100,
-      wireframeVisible: true,
+      wireframeVisible: false,
       airboxSyntheticVectorsEnabled: false,
-      visible: false,
+      visible: true,
     });
   });
 
@@ -419,8 +419,8 @@ describe("ObjectVisualizationController", () => {
           points: { opacity: 1, visible: false },
           surface: { opacity: 0.28, visible: false },
           vectors: { density: 1200, domain: "airbox_only", visible: false },
-          visible: false,
-          wireframe: { opacity: 1, visible: true },
+          visible: true,
+          wireframe: { opacity: 1, visible: false },
         },
       },
       overrides: [
@@ -691,7 +691,7 @@ describe("ObjectVisualizationController", () => {
 
     expect(controller.getSettings(target)).toMatchObject({
       surfaceOpacityPercent: 100,
-      renderMode: "surface+edges",
+      renderMode: "surface",
     });
   });
 

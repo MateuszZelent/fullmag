@@ -311,6 +311,21 @@ const FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED: FrequencyDomainSweepProgressRe
 };
 
 describe("buildModelTree", () => {
+  it("uses manifest ownership to mark a meshed object ready without a mesh-ready tag", () => {
+    const snapshot = modelTreeSnapshotFromScene(
+      {
+        objects: [{ id: "film", name: "Film", role: "magnet" }],
+      } as SceneResource,
+      {
+        meshManifest: {
+          object_segments: [{ object_id: "film" }],
+        } as never,
+      },
+    );
+
+    expect(snapshot.objects?.[0]?.meshStatus).toBe("mesh-ready");
+  });
+
   it("removes synthetic air-role scene objects before they can become Explorer nodes", () => {
     const snapshot = modelTreeSnapshotFromScene({
       objects: [

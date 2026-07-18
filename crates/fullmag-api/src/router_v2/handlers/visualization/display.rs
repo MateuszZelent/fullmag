@@ -658,27 +658,27 @@ fn vector_length_squared(vector: [f64; 3]) -> f64 {
 }
 
 fn default_visualization_layers(
-    presentation: &DisplayPresentationState,
+    _presentation: &DisplayPresentationState,
     vector_density: u32,
 ) -> VisualizationLayerState {
     VisualizationLayerState {
         bounds: basic_layer(false, 1.0),
         surface: basic_layer(true, 1.0),
-        quantity_overlay: basic_layer(true, 1.0),
+        quantity_overlay: basic_layer(false, 1.0),
         wireframe: basic_layer(false, 1.0),
         volume_mesh: basic_layer(false, 1.0),
         points: basic_layer(false, 1.0),
         vectors: VectorLayerState {
-            visible: presentation.vector_glyphs,
+            visible: false,
             density: vector_density,
             domain: VectorLayerDomain::Auto,
         },
         primitives: basic_layer(false, 1.0),
         airbox: AirboxLayerState {
-            visible: false,
+            visible: true,
             bounds: basic_layer(false, 1.0),
             surface: basic_layer(false, 0.18),
-            wireframe: basic_layer(true, 1.0),
+            wireframe: basic_layer(false, 1.0),
             points: basic_layer(false, 1.0),
             vectors: VectorLayerState {
                 visible: false,
@@ -2246,7 +2246,7 @@ fn visualization_target_render_mode(
     if settings.surface_visible {
         return VisualizationTargetRenderMode::Surface;
     }
-    VisualizationTargetRenderMode::Wireframe
+    VisualizationTargetRenderMode::Off
 }
 
 fn surface_color_source_from_vector_color_mode(color_mode: VectorColorMode) -> SurfaceColorSource {

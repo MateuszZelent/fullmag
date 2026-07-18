@@ -8549,7 +8549,7 @@ export interface components {
             parts: components["schemas"]["VisualizationTargetRegistryEntry"][];
         };
         /** @enum {string} */
-        VisualizationTargetRenderMode: "points" | "surface" | "surface+edges" | "wireframe";
+        VisualizationTargetRenderMode: "off" | "points" | "surface" | "surface+edges" | "wireframe";
         /** @enum {string} */
         VisualizationTargetSource: "airbox" | "scene_object" | "mesh_part";
         VisualizationTargetStyleOverride: {

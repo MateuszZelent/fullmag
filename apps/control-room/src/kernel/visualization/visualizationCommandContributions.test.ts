@@ -155,7 +155,7 @@ describe("visualization target commands", () => {
     });
     expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
       .toMatchObject({
-        wireframeVisible: true,
+        wireframeVisible: false,
       });
   });
 

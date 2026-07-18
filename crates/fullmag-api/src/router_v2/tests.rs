@@ -2931,19 +2931,26 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     );
     assert_eq!(json["layers"]["vectors"]["visible"], json["vector_glyphs"]);
     assert_eq!(json["layers"]["vectors"]["density"], json["vector_density"]);
-    assert_eq!(json["layers"]["airbox"]["visible"], false);
+    assert_eq!(json["layers"]["airbox"]["visible"], true);
     assert_eq!(json["layers"]["airbox"]["surface"]["visible"], false);
-    assert_eq!(json["layers"]["airbox"]["wireframe"]["visible"], true);
-    assert_eq!(json["targets"]["airbox"]["settings"]["visible"], false);
+    assert_eq!(json["layers"]["airbox"]["wireframe"]["visible"], false);
+    assert_eq!(json["layers"]["airbox"]["points"]["visible"], false);
+    assert_eq!(json["layers"]["airbox"]["vectors"]["visible"], false);
+    assert_eq!(json["targets"]["airbox"]["settings"]["visible"], true);
+    assert_eq!(json["targets"]["airbox"]["settings"]["render_mode"], "off");
     assert_eq!(
         json["targets"]["airbox"]["settings"]["surface_visible"],
         false
     );
     assert_eq!(
         json["targets"]["airbox"]["settings"]["wireframe_visible"],
-        true
+        false
     );
     assert_eq!(json["layers"]["airbox"]["vectors"]["domain"], "airbox_only");
+    assert_eq!(json["layers"]["surface"]["visible"], true);
+    assert_eq!(json["layers"]["wireframe"]["visible"], false);
+    assert_eq!(json["layers"]["points"]["visible"], false);
+    assert_eq!(json["layers"]["vectors"]["visible"], false);
     assert_eq!(json["sampling"]["max_points"], json["max_points"]);
     assert_eq!(json["fdm"]["x_chosen_size"], json["x_chosen_size"]);
     assert_eq!(json["slice"]["quantity_id"], json["active_quantity_id"]);

@@ -17,6 +17,7 @@ import {
 
 export type VisualizationTargetKind = "airbox" | "object" | "part" | "region";
 export type VisualizationRenderMode =
+  | "off"
   | "points"
   | "surface"
   | "surface+edges"
@@ -195,7 +196,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   primitiveMonoColor: "var(--fm-surface-magnetic)",
   primitiveOpacityPercent: 100,
   primitiveVisible: false,
-  renderMode: "surface+edges",
+  renderMode: "surface",
   scalarColorPalette: "viridis",
   shaderColorMode: "orientation",
   shaderMonoColor: "var(--fm-surface-magnetic)",
@@ -216,7 +217,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
   visible: true,
   wireframeColor: "var(--fm-border-strong)",
   wireframeOpacityPercent: 100,
-  wireframeVisible: true,
+  wireframeVisible: false,
 };
 
 export const DEFAULT_REGION_VISUALIZATION: VisualizationTargetSettings = {
@@ -242,7 +243,7 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   pointOpacityPercent: 100,
   pointsVisible: false,
   primitiveVisible: false,
-  renderMode: "wireframe",
+  renderMode: "off",
   scalarColorPalette: "viridis",
   shaderColorMode: "monochrome",
   shaderMonoColor: "var(--fm-airbox-fill)",
@@ -260,10 +261,10 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   vectorSurfaceOffsetScale: 0,
   vectorThickness: 1,
   vectorsVisible: false,
-  visible: false,
+  visible: true,
   wireframeColor: "var(--fm-airbox-wire)",
   wireframeOpacityPercent: 100,
-  wireframeVisible: true,
+  wireframeVisible: false,
 };
 
 function resolveAirboxCompatibleQuantityId(quantityId: string): string {
@@ -2125,7 +2126,8 @@ function resolveRenderMode({
   if (pointsVisible) return "points";
   if (shaderVisible && wireframeVisible) return "surface+edges";
   if (shaderVisible) return "surface";
-  return "wireframe";
+  if (wireframeVisible) return "wireframe";
+  return "off";
 }
 
 function samePatch(

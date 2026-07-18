@@ -2641,7 +2641,7 @@ describe("useViewport3DSceneModel", () => {
     visualization.patchTarget(regionTarget, {
       shaderVisible: true,
       visible: true,
-      wireframeVisible: true,
+      wireframeVisible: false,
     });
 
     expect(
@@ -2654,7 +2654,7 @@ describe("useViewport3DSceneModel", () => {
     ).toMatchObject({
       shaderVisible: true,
       visible: true,
-      wireframeVisible: true,
+      wireframeVisible: false,
     });
   });
 
@@ -2735,7 +2735,7 @@ describe("useViewport3DSceneModel", () => {
     ).toMatchObject({
       shaderVisible: true,
       visible: true,
-      wireframeVisible: true,
+      wireframeVisible: false,
     });
   });
 

@@ -2,6 +2,7 @@ import type {
   CouplingListResource,
   HysteresisExecutionTreeResource,
   MaterialParameterFieldListResource,
+  MeshSharedDomainManifestResource,
   MeshRegionMembershipResource,
   RegionListResource,
   SceneResource,
@@ -10,6 +11,7 @@ import type {
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import { apmFromTesla } from "@/shared/domain/physics/torqueUnits";
 import { resolveRegionMeshLifecycle } from "@/shared/domain/mesh/regionMeshLifecycle";
+import { manifestCarrierOwnershipAliases } from "@/kernel/visualization/visualizationDisplayResolution";
 
 import type {
   ExplorerNodeStatus,
@@ -45,6 +47,7 @@ interface ModelTreeResourceInputs {
   materialFields?: MaterialParameterFieldListResource | null;
   regions?: RegionListResource | null;
   regionMemberships?: readonly MeshRegionMembershipResource[] | null;
+  meshManifest?: MeshSharedDomainManifestResource | null;
 }
 
 export function modelTreeSnapshotFromScene(
@@ -84,6 +87,7 @@ export function modelTreeSnapshotFromScene(
             magnetizationById,
             authoredRegionsByObject,
             materialFieldsByObject,
+            resources.meshManifest,
           );
           if (snapshot) {
             objects.push(snapshot);
@@ -343,6 +347,7 @@ function sceneObjectSnapshot(
   magnetizationById: ReadonlyMap<string, SceneMagnetizationAssetSnapshot>,
   authoredRegionsByObject: ReadonlyMap<string, ModelTreeObjectRegionSnapshot[]>,
   materialFieldsByObject: ReadonlyMap<string, ModelTreeMaterialFieldSnapshot[]>,
+  meshManifest: MeshSharedDomainManifestResource | null | undefined,
 ): ModelTreeObjectSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const object = value as Record<string, unknown>;
@@ -373,7 +378,7 @@ function sceneObjectSnapshot(
     material: materialRef,
     materialLabel: material?.label ?? materialRef,
     materialPropertyKeys: material?.propertyKeys,
-    meshStatus: meshStatusFromTags(object.tags),
+    meshStatus: meshStatusFromTags(object.tags, id, meshManifest),
     objectRole: sceneObjectRole(object),
     physicsInteractions: sceneObjectPhysicsInteractions(
       object.physics_stack,
@@ -887,7 +892,11 @@ function shapeKind(value: unknown): string | null {
   return stringValue(shape?.kind) ?? stringValue(shape?.geometry_kind);
 }
 
-function meshStatusFromTags(value: unknown): ExplorerNodeStatus {
+function meshStatusFromTags(
+  value: unknown,
+  objectId: string,
+  meshManifest: MeshSharedDomainManifestResource | null | undefined,
+): ExplorerNodeStatus {
   const tags: string[] = [];
   if (Array.isArray(value)) {
     for (const tag of value) {
@@ -901,6 +910,21 @@ function meshStatusFromTags(value: unknown): ExplorerNodeStatus {
   if (tags.includes("mesh:validation-blocked")) return "validation-blocked";
   if (tags.includes("mesh:dirty")) return "mesh-stale";
   if (tags.includes("mesh:ready")) return "mesh-ready";
+  const objectAliases = new Set(
+    manifestCarrierOwnershipAliases({ object_id: objectId }),
+  );
+  for (const carrier of [
+    ...(meshManifest?.object_segments ?? []),
+    ...(meshManifest?.mesh_parts ?? []),
+  ]) {
+    if (
+      manifestCarrierOwnershipAliases(carrier).some((alias) =>
+        objectAliases.has(alias),
+      )
+    ) {
+      return "mesh-ready";
+    }
+  }
   return "primitive-only";
 }
 

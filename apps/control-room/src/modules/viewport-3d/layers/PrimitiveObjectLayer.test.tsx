@@ -190,7 +190,7 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       }),
     ).toBe(false);
     expect(shouldRenderPrimitiveTransformGizmo(DEFAULT_OBJECT_VISUALIZATION))
-      .toBe(true);
+      .toBe(false);
   });
 
   it("renders pre-mesh channels only before mesh-ready state", () => {
@@ -232,6 +232,7 @@ describe("PrimitiveObjectLayer geometry resources", () => {
         {
           ...settingsWithoutPrimitiveFlag,
           boundsVisible: false,
+          shaderVisible: false,
           wireframeVisible: false,
         },
       ),

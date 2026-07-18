@@ -71,7 +71,7 @@ impl Default for DisplayPresentationState {
             colormap: "viridis".to_string(),
             contrast_min: None,
             contrast_max: None,
-            vector_glyphs: true,
+            vector_glyphs: false,
             visualization_layers: None,
             visualization_domains: None,
             visualization_sampling: None,

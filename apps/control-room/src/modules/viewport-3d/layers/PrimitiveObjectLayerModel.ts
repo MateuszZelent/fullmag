@@ -162,6 +162,7 @@ export function shouldRenderPrimitiveObject(
     object.meshState !== "mesh-ready" &&
     settings.visible &&
     (settings.primitiveVisible === true ||
+      settings.shaderVisible ||
       settings.wireframeVisible ||
       settings.boundsVisible)
   );

@@ -1217,7 +1217,7 @@ describe("ribbon structure", () => {
     );
 
     expect(wireframeNode).toMatchObject({
-      checked: true,
+      checked: false,
       commandId: "visualization.target.set-wireframe-visible",
       disabled: false,
     });
@@ -1751,12 +1751,12 @@ describe("ribbon structure", () => {
 
     expect(airboxAction?.disabled).toBe(false);
     expect(visibleNode).toMatchObject({
-      checked: false,
+      checked: true,
       disabled: false,
     });
     expect(vectorsNode).toMatchObject({
       checked: false,
-      disabled: true,
+      disabled: false,
     });
 
     if (visibleNode?.type !== "checkbox" || vectorsNode?.type !== "checkbox") {
@@ -1918,8 +1918,8 @@ describe("ribbon structure", () => {
             points: { opacity: 1, visible: false },
             surface: { opacity: 0.28, visible: false },
             vectors: { density: 1200, domain: "airbox_only", visible: false },
-            visible: false,
-            wireframe: { opacity: 1, visible: true },
+            visible: true,
+            wireframe: { opacity: 1, visible: false },
           },
         },
         overrides: [

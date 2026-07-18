@@ -1,6 +1,6 @@
 # Canonical Visualization Startup Defaults
 
-**Status:** proposed
+**Status:** implemented
 **Date:** 2026-07-18
 
 ## Goal

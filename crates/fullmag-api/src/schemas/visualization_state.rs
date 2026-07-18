@@ -888,7 +888,7 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
             source: VisualizationTargetSource::Airbox,
             settings: VisualizationResolvedTargetSettings {
                 active_quantity_id: "H_demag".to_string(),
-                visible: false,
+                visible: true,
                 bounds_visible: false,
                 bounds_opacity: 1.0,
                 geometry_scope: VisualizationTargetGeometryScope::Full,
@@ -896,7 +896,7 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
                 point_color: "var(--fm-info)".to_string(),
                 point_opacity: 1.0,
                 points_visible: false,
-                render_mode: VisualizationTargetRenderMode::Wireframe,
+                render_mode: VisualizationTargetRenderMode::Off,
                 scalar_color_palette: "viridis".to_string(),
                 surface_color_source: SurfaceColorSource::Solid,
                 surface_mono_color: "var(--fm-airbox-fill)".to_string(),
@@ -913,7 +913,7 @@ fn default_visualization_target_registry_state() -> VisualizationTargetRegistryS
                 vectors_visible: false,
                 wireframe_color: "var(--fm-airbox-wire)".to_string(),
                 wireframe_opacity: 1.0,
-                wireframe_visible: true,
+                wireframe_visible: false,
             },
             override_state: None,
         },
@@ -976,6 +976,7 @@ pub struct VisualizationResolvedTargetSettings {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum VisualizationTargetRenderMode {
+    Off,
     Points,
     Surface,
     #[serde(rename = "surface+edges")]
