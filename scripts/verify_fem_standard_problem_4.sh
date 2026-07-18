@@ -31,8 +31,12 @@ for mesh in $meshes; do
     if [ "$airbox" = expanded ] && [ "$mesh" != medium ]; then continue; fi
     state_root="$root/states/$mesh/$airbox"
     mkdir -p "$state_root"
-    if [ "$resume" != 1 ] || [ ! -s "$state_root/artifacts/metadata.json" ] || \
-       [ ! -s "$state_root/artifacts/m_final.json" ] || [ ! -s "$state_root/initial_state.json" ]; then
+    state_ready=0
+    if [ "$resume" = 1 ] && [ -s "$state_root/initial_state.json" ] && \
+       python3 scripts/check_fem_sp4_relaxation.py "$state_root/artifacts"; then
+      state_ready=1
+    fi
+    if [ "$state_ready" != 1 ]; then
       FULLMAG_SP4_DEVICE=gpu FULLMAG_SP4_PHASE=relax FULLMAG_SP4_CASE=case-a \
         FULLMAG_SP4_MESH="$mesh" FULLMAG_SP4_AIRBOX="$airbox" \
         just fem-sp4-run gpu "$state_root/artifacts"
