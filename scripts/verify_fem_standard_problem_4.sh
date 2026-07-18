@@ -2,12 +2,14 @@
 set -euo pipefail
 
 root="${FULLMAG_SP4_REPORT_ROOT:-.fullmag/reports/standard-problems/mumag/sp4/fem}"
+root="$(realpath -m "$root")"
 devices="${FULLMAG_SP4_DEVICES:-cpu gpu}"
 meshes="${FULLMAG_SP4_MESH_LEVELS:-coarse medium fine}"
 cases="${FULLMAG_SP4_CASES:-case-a case-b}"
 airboxes="${FULLMAG_SP4_AIRBOXES:-baseline expanded}"
 duration="${FULLMAG_SP4_DURATION_S:-5e-9}"
 qualifying="${FULLMAG_SP4_QUALIFYING:-1}"
+resume="${FULLMAG_SP4_RESUME:-0}"
 
 mkdir -p "$root"
 export MPLCONFIGDIR="$root/.matplotlib"
@@ -29,19 +31,25 @@ for mesh in $meshes; do
     if [ "$airbox" = expanded ] && [ "$mesh" != medium ]; then continue; fi
     state_root="$root/states/$mesh/$airbox"
     mkdir -p "$state_root"
-    FULLMAG_SP4_DEVICE=gpu FULLMAG_SP4_PHASE=relax FULLMAG_SP4_CASE=case-a \
-      FULLMAG_SP4_MESH="$mesh" FULLMAG_SP4_AIRBOX="$airbox" \
-      just fem-sp4-run gpu "$state_root/artifacts"
-    python3 scripts/write_fem_magnetic_initial_state_from_shared_domain.py \
-      "$state_root/artifacts" "$state_root/initial_state.json"
-    sha256sum "$state_root/initial_state.json" > "$state_root/initial_state.sha256"
+    if [ "$resume" != 1 ] || [ ! -s "$state_root/artifacts/metadata.json" ] || \
+       [ ! -s "$state_root/artifacts/m_final.json" ] || [ ! -s "$state_root/initial_state.json" ]; then
+      FULLMAG_SP4_DEVICE=gpu FULLMAG_SP4_PHASE=relax FULLMAG_SP4_CASE=case-a \
+        FULLMAG_SP4_MESH="$mesh" FULLMAG_SP4_AIRBOX="$airbox" \
+        just fem-sp4-run gpu "$state_root/artifacts"
+      python3 scripts/write_fem_magnetic_initial_state_from_shared_domain.py \
+        "$state_root/artifacts" "$state_root/initial_state.json"
+      sha256sum "$state_root/initial_state.json" > "$state_root/initial_state.sha256"
+    fi
 
     for device in $devices; do
       for case_id in $cases; do
         run_root="$root/runs/$device/$mesh/$airbox/$case_id"
         mkdir -p "$run_root"
         awk '{print $1}' "$state_root/initial_state.sha256" > "$run_root/source_state.sha256"
-        run_phase "$device" dynamic "$case_id" "$mesh" "$airbox" "$state_root/initial_state.json" "$duration" "$run_root/artifacts"
+        if [ "$resume" != 1 ] || [ ! -s "$run_root/artifacts/metadata.json" ] || \
+           [ ! -s "$run_root/artifacts/scalars.csv" ] || [ ! -s "$run_root/artifacts/m_final.json" ]; then
+          run_phase "$device" dynamic "$case_id" "$mesh" "$airbox" "$state_root/initial_state.json" "$duration" "$run_root/artifacts"
+        fi
         if [ "$qualifying" = 1 ]; then
           read -r before after < <(python3 - "$run_root/artifacts/scalars.csv" <<'PY'
 import csv, sys
