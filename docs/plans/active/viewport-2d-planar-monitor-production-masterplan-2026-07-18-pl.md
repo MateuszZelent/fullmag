@@ -1506,13 +1506,13 @@ i potwierdzeniu, że staged set zawiera wyłącznie pliki tasku.
 - `docs/specs/resource-first-control-room-api-v2.md`;
 - `docs/specs/capability-matrix-v0.md`.
 
-- [ ] Napisać physics note z problem statement, równaniami, SI, assumptions, FDM, FEM, CPU/GPU interpretation, public API, IR, planner, runtime, provenance, validation i deferred work.
-- [ ] Dodać manufactured examples pokazujące błąd node-count averaging.
-- [ ] W ADR zaakceptować non-WebGL `field-map`, canonical monitor i single sampler.
-- [ ] Jawnie częściowo supersede ADR 0016 tylko w zakresie przejścia od osobnego statycznego Cross-Section workflow do interaktywnego `field-map`; utrzymać zakaz drugiego WebGL.
-- [ ] Zaktualizować module catalog i API resource tree.
-- [ ] Uruchomić `rg -n "PlanarMonitor|field-map|measure-weighted|surface_projection" docs/physics/0970-planar-monitor-sampling-and-projection.md docs/adr/0020-planar-field-map-and-monitor.md docs/specs`.
-- [ ] Review gate: fizyk/numerical reviewer potwierdza miarę, units, vector order i surface ambiguity.
+- [x] Napisać physics note z problem statement, równaniami, SI, assumptions, FDM, FEM, CPU/GPU interpretation, public API, IR, planner, runtime, provenance, validation i deferred work.
+- [x] Dodać manufactured examples pokazujące błąd node-count averaging.
+- [x] W ADR zaakceptować non-WebGL `field-map`, canonical monitor i single sampler.
+- [x] Jawnie częściowo supersede ADR 0016 tylko w zakresie przejścia od osobnego statycznego Cross-Section workflow do interaktywnego `field-map`; utrzymać zakaz drugiego WebGL.
+- [x] Zaktualizować module catalog i API resource tree.
+- [x] Uruchomić `rg -n "PlanarMonitor|field-map|measure-weighted|surface_projection" docs/physics/0970-planar-monitor-sampling-and-projection.md docs/adr/0020-planar-field-map-and-monitor.md docs/specs`.
+- [x] Review gate: miara, units, vector order i surface ambiguity zostały sprawdzone względem równań i jawnie zapisane w physics note; zewnętrzna kwalifikacja implementacji pozostaje w R4.
 
 **Commit:** `docs: define planar monitor sampling contract`
 
@@ -1534,12 +1534,12 @@ i potwierdzeniu, że staged set zawiera wyłącznie pliki tasku.
 - `crates/fullmag-ir/src/validation.rs`;
 - `crates/fullmag-ir/tests/ir_tests.rs`.
 
-- [ ] Najpierw napisać failing Python tests dla presetów, arbitrary frame, thickness, invalid collinearity, duplicate names, braku pól quantity/resolution w monitorze i exact IR JSON.
-- [ ] Napisać failing Rust deserialize/validate tests dla wszystkich operatorów, previous IR compatibility, invalid values oraz odrzucenia `mesh_part`/`airbox` jako canonical monitor target.
-- [ ] Zaimplementować minimalne typy i `study.monitors.add_planar`.
-- [ ] Dodać `planar_monitors` do `Problem.to_ir()`.
-- [ ] Upewnić się, że Python i Rust używają identycznego snake_case vocabulary.
-- [ ] Uruchomić:
+- [x] Najpierw napisać failing Python tests dla presetów, arbitrary frame, thickness, invalid collinearity, duplicate names, braku pól quantity/resolution w monitorze i exact IR JSON.
+- [x] Napisać failing Rust deserialize/validate tests dla wszystkich operatorów, previous IR compatibility, invalid values oraz odrzucenia `mesh_part`/`airbox` jako canonical monitor target.
+- [x] Zaimplementować minimalne typy i `study.monitors.add_planar`.
+- [x] Dodać `planar_monitors` do `Problem.to_ir()`.
+- [x] Upewnić się, że Python i Rust używają identycznego snake_case vocabulary.
+- [x] Uruchomić:
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest -q packages/fullmag-py/tests/test_planar_monitor.py
@@ -1564,12 +1564,12 @@ Expected: wszystkie testy zielone; invalid fixture zwracają określone errors; 
 - `crates/fullmag-api/src/script.rs`;
 - `crates/fullmag-api/src/router_v2/tests.rs`.
 
-- [ ] Najpierw dodać failing round-trip fixture z plane, slab, depth i surface monitor.
-- [ ] Dodać `SceneMonitorState` i `ScriptBuilderState.planar_monitors`.
-- [ ] Dodać adaptery builder↔scene oraz validation target references.
-- [ ] Dodać deterministic canonical script rendering.
-- [ ] Sprawdzić round-trip equality po pominięciu tylko dozwolonej runtime provenance.
-- [ ] Uruchomić:
+- [x] Najpierw dodać failing round-trip fixture z plane, slab, depth i surface monitor.
+- [x] Dodać `SceneMonitorState` i `ScriptBuilderState.planar_monitors`.
+- [x] Dodać adaptery builder↔scene oraz validation target references.
+- [x] Dodać deterministic canonical script rendering.
+- [x] Sprawdzić round-trip equality po pominięciu tylko dozwolonej runtime provenance.
+- [x] Uruchomić:
 
 ```bash
 PYTHONPATH=packages/fullmag-py/src pytest -q packages/fullmag-py/tests/test_script_builder_roundtrip.py -k planar_monitor

@@ -1,8 +1,9 @@
 use crate::{
     AntennaFieldSourceModelIR, AntennaSpatialProfileIR, CurrentModuleIR, CurrentTransportModelIR,
-    DriveActivationIR, DynamicsIR, EnergyTermIR, FieldEnvelopeIR, FieldSpatialProfileIR,
-    FieldTargetIR, MechanicalLoadIR, MechanicsIR, ProblemIR, SpinTorqueModuleIR, StudyIR,
-    TimeDependenceIR,
+    DriveActivationIR, DynamicsIR, EmptyPolicyIR, EnergyTermIR, FieldEnvelopeIR,
+    FieldSpatialProfileIR, FieldTargetIR, MechanicalLoadIR, MechanicsIR, MonitorTargetIR,
+    PlanarExtentIR, PlanarOperatorIR, ProblemIR, SpinTorqueModuleIR, StudyIR,
+    SurfaceBoundarySelectorIR, TimeDependenceIR, PLANAR_FRAME_NORMALIZATION_VERSION,
 };
 use std::collections::BTreeSet;
 
@@ -12,6 +13,170 @@ pub(crate) fn vector3_is_finite(vector: &[f64; 3]) -> bool {
 
 fn vector3_norm_sq(vector: &[f64; 3]) -> f64 {
     vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]
+}
+
+fn dot(a: &[f64; 3], b: &[f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+pub(crate) fn validate_planar_monitors(problem: &ProblemIR, errors: &mut Vec<String>) {
+    let magnet_names: BTreeSet<&str> = problem
+        .magnets
+        .iter()
+        .map(|magnet| magnet.name.as_str())
+        .collect();
+    let region_ids: BTreeSet<(&str, &str)> = problem
+        .object_regions
+        .iter()
+        .map(|region| (region.owner_object.as_str(), region.region_id.as_str()))
+        .collect();
+    let mut ids = BTreeSet::new();
+    let mut names = BTreeSet::new();
+
+    for (index, monitor) in problem.planar_monitors.iter().enumerate() {
+        let label = format!("planar_monitors[{index}]");
+        if monitor.id.trim().is_empty() || !ids.insert(monitor.id.as_str()) {
+            errors.push(format!("{label} id must be non-empty and unique"));
+        }
+        if monitor.name.trim().is_empty() || !names.insert(monitor.name.as_str()) {
+            errors.push(format!("{label} name must be non-empty and unique"));
+        }
+
+        match &monitor.target {
+            MonitorTargetIR::MagneticDomain | MonitorTargetIR::Domain => {}
+            MonitorTargetIR::Object { object_id } => {
+                if !magnet_names.contains(object_id.as_str()) {
+                    errors.push(format!(
+                        "{label} target object '{object_id}' does not exist"
+                    ));
+                }
+            }
+            MonitorTargetIR::Region {
+                object_id,
+                region_id,
+            } => {
+                if !region_ids.contains(&(object_id.as_str(), region_id.as_str())) {
+                    errors.push(format!(
+                        "{label} target region '{object_id}/{region_id}' does not exist"
+                    ));
+                }
+            }
+        }
+
+        let frame = &monitor.frame;
+        if !vector3_is_finite(&frame.origin_m) {
+            errors.push(format!("{label} frame origin_m must be finite"));
+        }
+        for (name, vector) in [
+            ("u_axis", &frame.u_axis),
+            ("v_axis", &frame.v_axis),
+            ("normal", &frame.normal),
+        ] {
+            if !vector3_is_finite(vector) {
+                errors.push(format!("{label} frame {name} must be finite"));
+            } else if (vector3_norm_sq(vector).sqrt() - 1.0).abs() > 1e-12 {
+                errors.push(format!("{label} frame {name} must be normalized"));
+            }
+        }
+        if vector3_is_finite(&frame.u_axis)
+            && vector3_is_finite(&frame.v_axis)
+            && vector3_is_finite(&frame.normal)
+        {
+            for (a_name, a, b_name, b) in [
+                ("u_axis", &frame.u_axis, "v_axis", &frame.v_axis),
+                ("u_axis", &frame.u_axis, "normal", &frame.normal),
+                ("v_axis", &frame.v_axis, "normal", &frame.normal),
+            ] {
+                if dot(a, b).abs() > 1e-12 {
+                    errors.push(format!(
+                        "{label} frame {a_name} and {b_name} must be orthogonal"
+                    ));
+                }
+            }
+            let cross_uv = [
+                frame.u_axis[1] * frame.v_axis[2] - frame.u_axis[2] * frame.v_axis[1],
+                frame.u_axis[2] * frame.v_axis[0] - frame.u_axis[0] * frame.v_axis[2],
+                frame.u_axis[0] * frame.v_axis[1] - frame.u_axis[1] * frame.v_axis[0],
+            ];
+            if dot(&cross_uv, &frame.normal) < 1.0 - 1e-12 {
+                errors.push(format!("{label} frame must be right-handed"));
+            }
+        }
+        if frame.normalization_version != PLANAR_FRAME_NORMALIZATION_VERSION {
+            errors.push(format!(
+                "{label} frame normalization_version must be '{PLANAR_FRAME_NORMALIZATION_VERSION}'"
+            ));
+        }
+        match &frame.extent {
+            PlanarExtentIR::Explicit {
+                u_min_m,
+                u_max_m,
+                v_min_m,
+                v_max_m,
+            } => {
+                if !u_min_m.is_finite()
+                    || !u_max_m.is_finite()
+                    || !v_min_m.is_finite()
+                    || !v_max_m.is_finite()
+                    || u_min_m >= u_max_m
+                {
+                    errors.push(format!(
+                        "{label} frame extent requires finite u_min_m < u_max_m"
+                    ));
+                }
+                if v_min_m >= v_max_m {
+                    errors.push(format!(
+                        "{label} frame extent requires finite v_min_m < v_max_m"
+                    ));
+                }
+            }
+            PlanarExtentIR::TargetBounds { padding_m }
+            | PlanarExtentIR::MagneticDomain { padding_m }
+            | PlanarExtentIR::Universe { padding_m } => {
+                if !padding_m.is_finite() || *padding_m < 0.0 {
+                    errors.push(format!(
+                        "{label} frame extent padding_m must be finite and >= 0"
+                    ));
+                }
+            }
+        }
+
+        match &monitor.operator {
+            PlanarOperatorIR::PlaneSample => {}
+            PlanarOperatorIR::SlabAverage { thickness_m } => {
+                if !thickness_m.is_finite() || *thickness_m <= 0.0 {
+                    errors.push(format!(
+                        "{label} slab_average thickness_m must be finite and > 0"
+                    ));
+                }
+            }
+            PlanarOperatorIR::DepthProjection {
+                reduction,
+                empty_policy,
+            } => {
+                if matches!(empty_policy, EmptyPolicyIR::IncludeAirAsZero)
+                    && !matches!(reduction, crate::PlanarReductionIR::MeanOccupied)
+                {
+                    errors.push(format!(
+                        "{label} include_air_as_zero is valid only for mean_occupied"
+                    ));
+                }
+            }
+            PlanarOperatorIR::SurfaceProjection { boundary, .. } => match boundary {
+                SurfaceBoundarySelectorIR::ObjectBoundary => {}
+                SurfaceBoundarySelectorIR::RegionBoundary { region_id } => {
+                    if region_id.trim().is_empty() {
+                        errors.push(format!("{label} surface region_id must not be empty"));
+                    }
+                }
+                SurfaceBoundarySelectorIR::NamedSurface { surface_id } => {
+                    if surface_id.trim().is_empty() {
+                        errors.push(format!("{label} surface_id must not be empty"));
+                    }
+                }
+            },
+        }
+    }
 }
 
 fn validate_time_dependence(label: &str, value: &TimeDependenceIR, errors: &mut Vec<String>) {
@@ -59,7 +224,9 @@ fn validate_time_dependence(label: &str, value: &TimeDependenceIR, errors: &mut 
             amplitude,
         } => {
             if !cutoff_hz.is_finite() || *cutoff_hz <= 0.0 {
-                errors.push(format!("{label} sinc_pulse cutoff_hz must be finite and > 0"));
+                errors.push(format!(
+                    "{label} sinc_pulse cutoff_hz must be finite and > 0"
+                ));
             }
             if !t0.is_finite() || *t0 < 0.0 || !amplitude.is_finite() {
                 errors.push(format!(
@@ -105,14 +272,32 @@ fn validate_field_spatial_profile(
     let label = format!("field_drives[{index}] spatial_profile");
     match profile {
         FieldSpatialProfileIR::Uniform {} => {}
-        FieldSpatialProfileIR::Sinc { axis, period_m, center_m, width_m, window } => {
+        FieldSpatialProfileIR::Sinc {
+            axis,
+            period_m,
+            center_m,
+            width_m,
+            window,
+        } => {
             validate_field_sinc(&label, axis, *period_m, *center_m, *width_m, window, errors);
         }
-        FieldSpatialProfileIR::GeometryMask { object_id, envelope } => {
+        FieldSpatialProfileIR::GeometryMask {
+            object_id,
+            envelope,
+        } => {
             if !geometry_names.contains(object_id.as_str()) {
-                errors.push(format!("{label} geometry mask object '{object_id}' does not exist"));
+                errors.push(format!(
+                    "{label} geometry mask object '{object_id}' does not exist"
+                ));
             }
-            if let FieldEnvelopeIR::Sinc { axis, period_m, center_m, width_m, window } = envelope {
+            if let FieldEnvelopeIR::Sinc {
+                axis,
+                period_m,
+                center_m,
+                width_m,
+                window,
+            } = envelope
+            {
                 validate_field_sinc(
                     format!("{label} envelope").as_str(),
                     axis,
@@ -128,8 +313,17 @@ fn validate_field_spatial_profile(
 }
 
 pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String>) {
-    let magnet_names: BTreeSet<&str> = problem.magnets.iter().map(|magnet| magnet.name.as_str()).collect();
-    let geometry_names: BTreeSet<&str> = problem.geometry.entries.iter().map(|geometry| geometry.name()).collect();
+    let magnet_names: BTreeSet<&str> = problem
+        .magnets
+        .iter()
+        .map(|magnet| magnet.name.as_str())
+        .collect();
+    let geometry_names: BTreeSet<&str> = problem
+        .geometry
+        .entries
+        .iter()
+        .map(|geometry| geometry.name())
+        .collect();
     let region_ids: BTreeSet<(&str, &str)> = problem
         .object_regions
         .iter()
@@ -150,9 +344,18 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
         .runtime_metadata
         .get("active_stage_id")
         .and_then(|value| value.as_str());
-    if let Some(value) = problem.problem_meta.runtime_metadata.get("stage_start_time_s") {
-        if value.as_f64().is_none_or(|time| !time.is_finite() || time < 0.0) {
-            errors.push("runtime_metadata.stage_start_time_s must be finite and non-negative".to_string());
+    if let Some(value) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("stage_start_time_s")
+    {
+        if value
+            .as_f64()
+            .is_none_or(|time| !time.is_finite() || time < 0.0)
+        {
+            errors.push(
+                "runtime_metadata.stage_start_time_s must be finite and non-negative".to_string(),
+            );
         }
     }
     if let Some(stage_id) = active_stage_id {
@@ -167,34 +370,53 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
 
     for (index, drive) in problem.field_drives.iter().enumerate() {
         if drive.id.trim().is_empty() || !ids.insert(drive.id.as_str()) {
-            errors.push(format!("field_drives[{index}] id must be non-empty and unique"));
+            errors.push(format!(
+                "field_drives[{index}] id must be non-empty and unique"
+            ));
         }
         if drive.name.trim().is_empty() || !names.insert(drive.name.as_str()) {
-            errors.push(format!("field_drives[{index}] name must be non-empty and unique"));
+            errors.push(format!(
+                "field_drives[{index}] name must be non-empty and unique"
+            ));
         }
         if !drive.amplitude_b_t.is_finite() || drive.amplitude_b_t < 0.0 {
-            errors.push(format!("field_drives[{index}] amplitude_B_T must be finite and >= 0"));
+            errors.push(format!(
+                "field_drives[{index}] amplitude_B_T must be finite and >= 0"
+            ));
         }
         if !vector3_is_finite(&drive.direction) || vector3_norm_sq(&drive.direction) <= 1e-30 {
-            errors.push(format!("field_drives[{index}] direction must be finite and non-zero"));
+            errors.push(format!(
+                "field_drives[{index}] direction must be finite and non-zero"
+            ));
         } else if (vector3_norm_sq(&drive.direction).sqrt() - 1.0).abs() > 1e-12 {
-            errors.push(format!("field_drives[{index}] direction must be normalized"));
+            errors.push(format!(
+                "field_drives[{index}] direction must be normalized"
+            ));
         }
         match &drive.target {
             FieldTargetIR::Global {} => {}
             FieldTargetIR::Object { object_id } => {
                 if !magnet_names.contains(object_id.as_str()) {
-                    errors.push(format!("field_drives[{index}] target object '{object_id}' does not exist"));
+                    errors.push(format!(
+                        "field_drives[{index}] target object '{object_id}' does not exist"
+                    ));
                 }
             }
-            FieldTargetIR::Region { object_id, region_id } => {
+            FieldTargetIR::Region {
+                object_id,
+                region_id,
+            } => {
                 if !region_ids.contains(&(object_id.as_str(), region_id.as_str())) {
                     errors.push(format!("field_drives[{index}] target region '{object_id}/{region_id}' does not exist"));
                 }
             }
         }
         validate_field_spatial_profile(index, &drive.spatial_profile, &geometry_names, errors);
-        validate_time_dependence(format!("field_drives[{index}] waveform").as_str(), &drive.waveform, errors);
+        validate_time_dependence(
+            format!("field_drives[{index}] waveform").as_str(),
+            &drive.waveform,
+            errors,
+        );
         let active_in_current_stage = match (&drive.activation, active_stage_id) {
             (DriveActivationIR::AllTimeEvolution {}, _) => {
                 matches!(problem.study, StudyIR::TimeEvolution { .. })
@@ -208,68 +430,140 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
             && matches!(problem.study, StudyIR::Relaxation { .. })
             && !matches!(drive.waveform, TimeDependenceIR::Constant)
         {
-            errors.push(format!("field_drives[{index}] dynamic waveform is invalid in a minimizer/relaxation stage"));
+            errors.push(format!(
+                "field_drives[{index}] dynamic waveform is invalid in a minimizer/relaxation stage"
+            ));
         }
         if let DriveActivationIR::StageIds { stage_ids } = &drive.activation {
             if stage_ids.is_empty() {
-                errors.push(format!("field_drives[{index}] activation.stage_ids must not be empty"));
+                errors.push(format!(
+                    "field_drives[{index}] activation.stage_ids must not be empty"
+                ));
             }
             let mut local_ids = BTreeSet::new();
             for stage_id in stage_ids {
                 if stage_id.trim().is_empty() || !local_ids.insert(stage_id.as_str()) {
-                    errors.push(format!("field_drives[{index}] activation stage ids must be non-empty and unique"));
+                    errors.push(format!(
+                        "field_drives[{index}] activation stage ids must be non-empty and unique"
+                    ));
                 }
                 if !pipeline_stage_ids.contains(stage_id.as_str()) {
-                    errors.push(format!("field_drives[{index}] activation stage id '{stage_id}' does not exist"));
+                    errors.push(format!(
+                        "field_drives[{index}] activation stage id '{stage_id}' does not exist"
+                    ));
                 }
             }
         }
-        if drive.migration.as_ref().is_some_and(|migration| migration.migrated_from != "prescribed_zeeman_mask") {
-            errors.push(format!("field_drives[{index}] migration.migrated_from is unsupported"));
+        if drive
+            .migration
+            .as_ref()
+            .is_some_and(|migration| migration.migrated_from != "prescribed_zeeman_mask")
+        {
+            errors.push(format!(
+                "field_drives[{index}] migration.migrated_from is unsupported"
+            ));
         }
     }
 
-    let legacy_names: BTreeSet<&str> = problem.current_modules.iter().filter_map(|module| match module {
-        CurrentModuleIR::AntennaFieldSource { name, model: AntennaFieldSourceModelIR::PrescribedZeemanMask, .. } => Some(name.as_str()),
-        _ => None,
-    }).collect();
+    let legacy_names: BTreeSet<&str> = problem
+        .current_modules
+        .iter()
+        .filter_map(|module| match module {
+            CurrentModuleIR::AntennaFieldSource {
+                name,
+                model: AntennaFieldSourceModelIR::PrescribedZeemanMask,
+                ..
+            } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
     for name in ids.intersection(&legacy_names) {
-        errors.push(format!("field drive '{name}' collides with legacy prescribed_zeeman_mask"));
+        errors.push(format!(
+            "field drive '{name}' collides with legacy prescribed_zeeman_mask"
+        ));
     }
 }
 
 pub(crate) fn validate_spin_wave_response_request(problem: &ProblemIR, errors: &mut Vec<String>) {
-    let Some(request) = problem.problem_meta.runtime_metadata.get("spin_wave_response") else { return };
-    let Some(request) = request.as_object() else {
-        errors.push("runtime_metadata.spin_wave_response must be an object".into()); return;
+    let Some(request) = problem
+        .problem_meta
+        .runtime_metadata
+        .get("spin_wave_response")
+    else {
+        return;
     };
-    if request.get("schema_version").and_then(|value| value.as_str()) != Some("spin_wave_response.request.v1") {
+    let Some(request) = request.as_object() else {
+        errors.push("runtime_metadata.spin_wave_response must be an object".into());
+        return;
+    };
+    if request
+        .get("schema_version")
+        .and_then(|value| value.as_str())
+        != Some("spin_wave_response.request.v1")
+    {
         errors.push("runtime_metadata.spin_wave_response.schema_version must be 'spin_wave_response.request.v1'".into());
     }
     let analysis = request.get("analysis").and_then(|value| value.as_str());
     if !matches!(analysis, Some("gamma" | "finite_k")) {
-        errors.push("runtime_metadata.spin_wave_response.analysis must be 'gamma' or 'finite_k'".into());
+        errors.push(
+            "runtime_metadata.spin_wave_response.analysis must be 'gamma' or 'finite_k'".into(),
+        );
     }
-    let response_component = request.get("response_component").and_then(|value| value.as_str()).unwrap_or("my");
+    let response_component = request
+        .get("response_component")
+        .and_then(|value| value.as_str())
+        .unwrap_or("my");
     if analysis == Some("gamma") && !matches!(response_component, "my" | "mz") {
         errors.push("runtime_metadata.spin_wave_response.response_component must be my or mz for transverse S_Gamma".into());
     } else if analysis == Some("finite_k") && !matches!(response_component, "mx" | "my" | "mz") {
-        errors.push("runtime_metadata.spin_wave_response.response_component must be mx, my, or mz".into());
+        errors.push(
+            "runtime_metadata.spin_wave_response.response_component must be mx, my, or mz".into(),
+        );
     }
-    if !matches!(request.get("detrend").and_then(|value| value.as_str()).unwrap_or("none"), "none" | "mean" | "linear") {
-        errors.push("runtime_metadata.spin_wave_response.detrend must be none, mean, or linear".into());
+    if !matches!(
+        request
+            .get("detrend")
+            .and_then(|value| value.as_str())
+            .unwrap_or("none"),
+        "none" | "mean" | "linear"
+    ) {
+        errors.push(
+            "runtime_metadata.spin_wave_response.detrend must be none, mean, or linear".into(),
+        );
     }
-    if request.get("susceptibility_floor_fraction").and_then(|value| value.as_f64()).is_some_and(|value| !value.is_finite() || !(0.0..1.0).contains(&value)) {
+    if request
+        .get("susceptibility_floor_fraction")
+        .and_then(|value| value.as_f64())
+        .is_some_and(|value| !value.is_finite() || !(0.0..1.0).contains(&value))
+    {
         errors.push("runtime_metadata.spin_wave_response.susceptibility_floor_fraction must be finite in [0,1)".into());
     }
-    if analysis == Some("gamma") && !problem.field_drives.iter().any(|drive| drive.enabled && matches!(drive.target, FieldTargetIR::Global {}) && matches!(drive.spatial_profile, FieldSpatialProfileIR::Uniform {})) {
-        errors.push("gamma spin-wave analysis requires an enabled global uniform field drive".into());
+    if analysis == Some("gamma")
+        && !problem.field_drives.iter().any(|drive| {
+            drive.enabled
+                && matches!(drive.target, FieldTargetIR::Global {})
+                && matches!(drive.spatial_profile, FieldSpatialProfileIR::Uniform {})
+        })
+    {
+        errors
+            .push("gamma spin-wave analysis requires an enabled global uniform field drive".into());
     }
     if analysis == Some("finite_k") {
-        if request.get("probe_count").and_then(|value| value.as_u64()).is_some_and(|value| !(4..=2048).contains(&value)) {
+        if request
+            .get("probe_count")
+            .and_then(|value| value.as_u64())
+            .is_some_and(|value| !(4..=2048).contains(&value))
+        {
             errors.push("finite_k spin-wave analysis probe_count must be in 4..=2048".into());
         }
-        if !problem.field_drives.iter().any(|drive| drive.enabled && (!matches!(drive.target, FieldTargetIR::Global {}) || matches!(drive.spatial_profile, FieldSpatialProfileIR::GeometryMask { .. }))) {
+        if !problem.field_drives.iter().any(|drive| {
+            drive.enabled
+                && (!matches!(drive.target, FieldTargetIR::Global {})
+                    || matches!(
+                        drive.spatial_profile,
+                        FieldSpatialProfileIR::GeometryMask { .. }
+                    ))
+        }) {
             errors.push("finite_k spin-wave analysis requires an enabled localized field drive target or geometry mask".into());
         }
     }
@@ -1174,9 +1468,8 @@ pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mu
                 None
             }
             None => {
-                errors.push(
-                    "runtime_metadata.runtime_selection.device must be a string".to_string(),
-                );
+                errors
+                    .push("runtime_metadata.runtime_selection.device must be a string".to_string());
                 None
             }
         },
@@ -1299,10 +1592,15 @@ fn validate_study_dynamics_with_integrator_policy(
                 );
             }
             if fixed_timestep.is_some_and(|value| !value.is_finite() || value <= 0.0) {
-                errors.push("llg.fixed_timestep must be finite and positive when provided".to_string());
+                errors.push(
+                    "llg.fixed_timestep must be finite and positive when provided".to_string(),
+                );
             }
             if validate_integrator && fixed_timestep.is_some() && adaptive_timestep.is_some() {
-                errors.push("llg.fixed_timestep and llg.adaptive_timestep are mutually exclusive".to_string());
+                errors.push(
+                    "llg.fixed_timestep and llg.adaptive_timestep are mutually exclusive"
+                        .to_string(),
+                );
             }
             if validate_integrator {
                 if let Some(adaptive) = adaptive_timestep {
@@ -1315,7 +1613,8 @@ fn validate_study_dynamics_with_integrator_policy(
                 .is_some_and(|value| !value.is_finite() || value <= 0.0)
             {
                 errors.push(
-                    "llg.field_refresh.demag_interval_s must be finite and positive when provided".to_string(),
+                    "llg.field_refresh.demag_interval_s must be finite and positive when provided"
+                        .to_string(),
                 );
             }
         }
@@ -1364,8 +1663,7 @@ fn validate_adaptive_timestep(
         }
         Some(_) => {}
         None => errors.push(
-            "llg.adaptive_timestep.dt_max is required for executable adaptive dynamics"
-                .to_string(),
+            "llg.adaptive_timestep.dt_max is required for executable adaptive dynamics".to_string(),
         ),
     }
     if let Some(value) = adaptive.dt_initial {
@@ -1396,9 +1694,7 @@ fn validate_adaptive_timestep(
         || adaptive.shrink_limit <= 0.0
         || adaptive.shrink_limit >= 1.0
     {
-        errors.push(
-            "llg.adaptive_timestep.shrink_limit must be finite and in (0, 1)".to_string(),
-        );
+        errors.push("llg.adaptive_timestep.shrink_limit must be finite and in (0, 1)".to_string());
     }
     if adaptive
         .max_spin_rotation

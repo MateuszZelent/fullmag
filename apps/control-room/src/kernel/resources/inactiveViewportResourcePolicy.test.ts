@@ -66,21 +66,21 @@ describe("inactiveViewportResourcePolicy", () => {
       runtimeStore,
     });
 
-    expect(runtimeStore.beginPauseMatching).not.toHaveBeenCalled();
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(1);
 
     layout.setActiveViewportMainModule("analysis-plots");
 
-    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(1);
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(2);
     expect(capturedPredicate).toBe(isViewport3DExclusiveResourceKey);
 
     layout.setActiveViewportMainModule("cross-section-image");
-    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(1);
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(2);
 
     layout.setActiveViewportMainModule("viewport-3d");
     expect(releasePause).toHaveBeenCalledTimes(1);
 
     dispose();
-    expect(releasePause).toHaveBeenCalledTimes(1);
+    expect(releasePause).toHaveBeenCalledTimes(2);
   });
 
   it("starts paused when the initial active center tab is non-3D and releases on dispose", () => {
@@ -96,10 +96,10 @@ describe("inactiveViewportResourcePolicy", () => {
       runtimeStore,
     });
 
-    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(1);
+    expect(runtimeStore.beginPauseMatching).toHaveBeenCalledTimes(2);
 
     dispose();
 
-    expect(releasePause).toHaveBeenCalledTimes(1);
+    expect(releasePause).toHaveBeenCalledTimes(2);
   });
 });

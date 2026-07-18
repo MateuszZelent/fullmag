@@ -25,7 +25,12 @@ pub(crate) fn mesh_part_surface_node_indices(
     }
 
     let boundary_face_indices = if !part.boundary_face_indices.is_empty() {
-        Some(part.boundary_face_indices.iter().copied().collect::<Vec<_>>())
+        Some(
+            part.boundary_face_indices
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+        )
     } else if part.boundary_face_count > 0 {
         Some(
             (part.boundary_face_start

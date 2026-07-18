@@ -325,20 +325,12 @@ fn normalize_axis(axis: [f64; 3]) -> Result<[f64; 3], String> {
     Ok([axis[0] / norm, axis[1] / norm, axis[2] / norm])
 }
 
-fn contains_cylinder_point(
-    radius: f64,
-    height: f64,
-    axis: [f64; 3],
-    point: [f64; 3],
-) -> bool {
+fn contains_cylinder_point(radius: f64, height: f64, axis: [f64; 3], point: [f64; 3]) -> bool {
     let axial = point[0] * axis[0] + point[1] * axis[1] + point[2] * axis[2];
     if axial.abs() > height * 0.5 {
         return false;
     }
-    let radial_sq = point[0] * point[0]
-        + point[1] * point[1]
-        + point[2] * point[2]
-        - axial * axial;
+    let radial_sq = point[0] * point[0] + point[1] * point[1] + point[2] * point[2] - axial * axial;
     radial_sq <= radius * radius
 }
 
@@ -381,13 +373,18 @@ impl GeometryShape {
                 arch_height,
                 z0,
             } => contains_arch_waveguide(
-                point[0], point[1], point[2], *length, *width, *height, *arch_height, *z0,
+                point[0],
+                point[1],
+                point[2],
+                *length,
+                *width,
+                *height,
+                *arch_height,
+                *z0,
             ),
-            Self::Translate { child, by } => child.contains([
-                point[0] - by[0],
-                point[1] - by[1],
-                point[2] - by[2],
-            ]),
+            Self::Translate { child, by } => {
+                child.contains([point[0] - by[0], point[1] - by[1], point[2] - by[2]])
+            }
             Self::Difference { base, tool } => base.contains(point) && !tool.contains(point),
             Self::Imported { .. } => false,
         }
@@ -473,7 +470,12 @@ pub(crate) fn voxelize_shape(
             let ny = (bbox[1] / cell_size[1]).round().max(1.0) as u32;
             let nz = (bbox[2] / cell_size[2]).round().max(1.0) as u32;
             let Some(n) = checked_voxel_count([nx, ny, nz], errors) else {
-                return (bbox, None, [nx, ny, nz], [-bbox[0] * 0.5, -bbox[1] * 0.5, -bbox[2] * 0.5]);
+                return (
+                    bbox,
+                    None,
+                    [nx, ny, nz],
+                    [-bbox[0] * 0.5, -bbox[1] * 0.5, -bbox[2] * 0.5],
+                );
             };
             let bounds_min = [-bbox[0] * 0.5, -bbox[1] * 0.5, -bbox[2] * 0.5];
             let mut mask = vec![false; n];
@@ -490,12 +492,7 @@ pub(crate) fn voxelize_shape(
                     }
                 }
             }
-            (
-                bbox,
-                Some(mask),
-                [nx, ny, nz],
-                bounds_min,
-            )
+            (bbox, Some(mask), [nx, ny, nz], bounds_min)
         }
         GeometryShape::SinWaveguide {
             length,
@@ -690,7 +687,11 @@ pub(crate) fn fdm_default_cell(hints: &FdmHintsIR) -> Result<[f64; 3], String> {
     if let Some(cell) = hints.default_cell {
         return Ok(cell);
     }
-    if hints.cell.iter().all(|component| *component > 0.0 && component.is_finite()) {
+    if hints
+        .cell
+        .iter()
+        .all(|component| *component > 0.0 && component.is_finite())
+    {
         return Ok(hints.cell);
     }
 
@@ -714,10 +715,7 @@ pub(crate) fn fdm_default_cell(hints: &FdmHintsIR) -> Result<[f64; 3], String> {
     }
 }
 
-pub(crate) fn cell_for_magnet(
-    hints: &FdmHintsIR,
-    magnet_name: &str,
-) -> Result<[f64; 3], String> {
+pub(crate) fn cell_for_magnet(hints: &FdmHintsIR, magnet_name: &str) -> Result<[f64; 3], String> {
     if let Some(cell) = hints
         .per_magnet
         .as_ref()
@@ -726,9 +724,7 @@ pub(crate) fn cell_for_magnet(
     {
         return Ok(cell);
     }
-    if hints
-        .default_cell
-        .is_none()
+    if hints.default_cell.is_none()
         && hints.cell.iter().all(|component| *component == 0.0)
         && hints.per_magnet.is_some()
     {

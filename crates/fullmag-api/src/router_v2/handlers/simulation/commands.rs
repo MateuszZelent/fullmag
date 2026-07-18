@@ -1525,10 +1525,12 @@ mod tests {
         .expect("canonical adaptive policy should deserialize");
         validate_solver_policy_controls(&request)
             .expect("omitted dt_initial must remain a valid adaptive request");
-        assert!(validate_solver_policy_lane(&request, "fdm", "gpu", "double")
-            .expect_err("adaptive FDM GPU must fail before enqueue")
-            .message
-            .contains("explicit CPU"));
+        assert!(
+            validate_solver_policy_lane(&request, "fdm", "gpu", "double")
+                .expect_err("adaptive FDM GPU must fail before enqueue")
+                .message
+                .contains("explicit CPU")
+        );
         let command = command_from_structured(request, "cmd-adaptive".to_string(), 123);
         assert_eq!(
             serde_json::to_value(command.solver_policy).unwrap(),
@@ -1541,32 +1543,36 @@ mod tests {
             })
         );
 
-        assert!(serde_json::from_value::<StructuredCommandRequest>(serde_json::json!({
-            "kind": "relax",
-            "solver_policy": {
-                "kind": "adaptive_max_error",
-                "integrator": "rk45",
-                "dt_min": 1e-16,
-                "max_err": 1e-6
-            }
-        }))
-        .is_err());
-        assert!(serde_json::from_value::<StructuredCommandRequest>(serde_json::json!({
-            "kind": "run",
-            "until_seconds": 1e-9,
-            "solver_policy": {
-                "kind": "adaptive_advanced",
-                "integrator": "rk4",
-                "dt_min": 1e-16,
-                "dt_max": 1e-14,
-                "atol": 1e-8,
-                "rtol": 1e-5,
-                "safety": 0.9,
-                "growth_limit": 2.0,
-                "shrink_limit": 0.2
-            }
-        }))
-        .is_err());
+        assert!(
+            serde_json::from_value::<StructuredCommandRequest>(serde_json::json!({
+                "kind": "relax",
+                "solver_policy": {
+                    "kind": "adaptive_max_error",
+                    "integrator": "rk45",
+                    "dt_min": 1e-16,
+                    "max_err": 1e-6
+                }
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<StructuredCommandRequest>(serde_json::json!({
+                "kind": "run",
+                "until_seconds": 1e-9,
+                "solver_policy": {
+                    "kind": "adaptive_advanced",
+                    "integrator": "rk4",
+                    "dt_min": 1e-16,
+                    "dt_max": 1e-14,
+                    "atol": 1e-8,
+                    "rtol": 1e-5,
+                    "safety": 0.9,
+                    "growth_limit": 2.0,
+                    "shrink_limit": 0.2
+                }
+            }))
+            .is_err()
+        );
 
         let mixed: StructuredCommandRequest = serde_json::from_value(serde_json::json!({
             "kind": "relax",

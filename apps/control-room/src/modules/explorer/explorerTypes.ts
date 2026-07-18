@@ -16,6 +16,9 @@ type ExplorerNodeKind =
   | "session.root"
   | "universe.root"
   | "objects.root"
+  | "definitions.root"
+  | "model.planar.monitors"
+  | "model.planar.monitor"
   | "object.root"
   | "object.geometry"
   | "object.antenna"
@@ -272,6 +275,7 @@ export interface ExplorerNode {
   measurementAxis?: string;
   meshIdentity?: string;
   meshPartId?: string;
+  monitorId?: string;
   visualizationTargetId?: string;
   modeIndex?: number;
   objectId?: string;

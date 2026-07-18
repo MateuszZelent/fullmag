@@ -314,9 +314,10 @@ pub(crate) fn execute_llg_overdamped(
         if paused {
             break;
         }
-        if drive_discontinuities.iter().any(|event|
-            (*event - current_time).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE
-        ) {
+        if drive_discontinuities
+            .iter()
+            .any(|event| (*event - current_time).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE)
+        {
             backend.invalidate_fsal()?;
         }
         let proposed_dt = dt.min(until_seconds - current_time);

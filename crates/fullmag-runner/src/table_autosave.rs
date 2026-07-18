@@ -505,11 +505,9 @@ mod tests {
             kind: "table_autosave".to_string(),
             table_id: DEFAULT_TABLE_ID.to_string(),
             sample_period_s: None,
-            sample_period_policy: Some(
-                fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
-                    nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
-                },
-            ),
+            sample_period_policy: Some(fullmag_ir::SamplingPeriodPolicyIR::AutoSincCutoff {
+                nyquist_guard_factor: fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR,
+            }),
             resolved_sample_period_s: None,
             quantities: vec!["t".to_string(), "my".to_string()],
         })
@@ -582,9 +580,9 @@ mod tests {
             "source_drive_ids": ["k0-sinc-antenna"],
             "target_stage_id": "excite"
         });
-        let store = TableStore::new(config(1.0 / 13.0e9).with_sampling_resolution(
-            Some(resolution.clone()),
-        ));
+        let store = TableStore::new(
+            config(1.0 / 13.0e9).with_sampling_resolution(Some(resolution.clone())),
+        );
         let artifact_dir = std::env::temp_dir().join(format!(
             "fullmag-table-auto-provenance-{}",
             std::process::id()

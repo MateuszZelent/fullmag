@@ -8,8 +8,8 @@ use fullmag_engine::{
     AdaptiveStepConfig, AxisBoundary, CellSize, CubicAnisotropyConfig, EffectiveFieldTerms,
     EngineError, EvaluationRequest, ExchangeLlgProblem, ExchangeLlgState, ExchangeLlgStateSoA,
     FdmBoundaryPolicy, FftWorkspace, GridShape, IntegratorBuffers, LlgConfig,
-    MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, SlonczewskiSttConfig,
-    RegionalFieldDriveTerm, ResolvedFdmPeriodicWorkspace, SotConfig, StepReport, TimeIntegrator,
+    MagnetoelasticTermConfig, MaterialParameters, OerstedCylinderConfig, RegionalFieldDriveTerm,
+    ResolvedFdmPeriodicWorkspace, SlonczewskiSttConfig, SotConfig, StepReport, TimeIntegrator,
     UniaxialAnisotropyConfig, Vector3, ZhangLiSttConfig,
 };
 use fullmag_ir::{
@@ -19,10 +19,7 @@ use fullmag_ir::{
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
-use crate::fdm::{
-    artifacts::select_state_observable_field,
-    validate_single_grid_budget,
-};
+use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_grid_preview_field, build_grid_scalar_preview_field, flatten_vectors, select_observables,
@@ -570,7 +567,7 @@ pub(crate) fn build_snapshot_problem_and_state(
             fullmag_ir::AxisBoundary::Periodic => AxisBoundary::Periodic,
             fullmag_ir::AxisBoundary::Open => AxisBoundary::Open,
         };
-    problem.boundary_policy = FdmBoundaryPolicy {
+        problem.boundary_policy = FdmBoundaryPolicy {
             x: map_axis(&pbc.axes[0]),
             y: map_axis(&pbc.axes[1]),
             z: map_axis(&pbc.axes[2]),
@@ -580,16 +577,14 @@ pub(crate) fn build_snapshot_problem_and_state(
         }
     }
     problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary(plan)?);
-    problem.set_resolved_periodic_workspace(
-        plan.resolved_periodic_images
-            .as_ref()
-            .map(|resolved| ResolvedFdmPeriodicWorkspace {
-                image_counts: resolved.resolved_image_counts,
-                padded_counts: resolved.padded_counts,
-                image_terms: resolved.image_terms,
-                estimated_bytes: resolved.estimated_bytes,
-            }),
-    );
+    problem.set_resolved_periodic_workspace(plan.resolved_periodic_images.as_ref().map(
+        |resolved| ResolvedFdmPeriodicWorkspace {
+            image_counts: resolved.resolved_image_counts,
+            padded_counts: resolved.padded_counts,
+            image_terms: resolved.image_terms,
+            estimated_bytes: resolved.estimated_bytes,
+        },
+    ));
     // Set thermal noise parameters
     problem.temperature = plan.temperature.unwrap_or(0.0);
     if let Some(dt) = plan.fixed_timestep {
@@ -831,7 +826,13 @@ pub(crate) fn execute_reference_fdm(
 
     if default_scalar_trace {
         record_scalar_snapshot(
-            &problem, &state, 0, state.time_seconds, 0, &mut steps, &mut artifacts,
+            &problem,
+            &state,
+            0,
+            state.time_seconds,
+            0,
+            &mut steps,
+            &mut artifacts,
         )?;
     } else {
         record_due_outputs(
@@ -1396,8 +1397,13 @@ fn record_due_outputs(
         && (!scalar_due || step_report.is_some())
     {
         if let Some(report) = step_report.filter(|_| scalar_due) {
-            let stats =
-                make_step_stats_from_report(step, report, wall_time_ns, state.magnetization(), problem);
+            let stats = make_step_stats_from_report(
+                step,
+                report,
+                wall_time_ns,
+                state.magnetization(),
+                problem,
+            );
             artifacts.record_scalar(&stats)?;
             steps.push(stats);
             advance_due_schedules(scalar_schedules, state.time_seconds);
@@ -1641,7 +1647,10 @@ fn observe_state_with_antenna_field(
             .zip(&drive_field)
             .enumerate()
             .filter(|(index, _)| {
-                !problem.active_mask.as_ref().is_some_and(|mask| !mask[*index])
+                !problem
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask[*index])
             })
             .map(|(_, (m, h))| m[0] * h[0] + m[1] * h[1] + m[2] * h[2])
             .sum::<f64>();
@@ -1659,10 +1668,8 @@ fn observe_state_with_antenna_field(
         problem.material.damping,
         problem.dynamics.precession_enabled,
     );
-    let max_torque_apm = max_torque_residual_apm_from_field(
-        &observables.magnetization,
-        &effective_field,
-    );
+    let max_torque_apm =
+        max_torque_residual_apm_from_field(&observables.magnetization, &effective_field);
 
     Ok(StateObservables {
         magnetization: observables.magnetization,
@@ -1711,7 +1718,10 @@ fn make_step_stats_from_report(
             .zip(&drive_field)
             .enumerate()
             .filter(|(index, _)| {
-                !problem.active_mask.as_ref().is_some_and(|mask| !mask[*index])
+                !problem
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask[*index])
             })
             .map(|(_, (m, h))| m[0] * h[0] + m[1] * h[1] + m[2] * h[2])
             .sum::<f64>();
@@ -2066,10 +2076,11 @@ fn project_component(
 mod tests {
     use super::*;
     use fullmag_ir::{
-        AdaptiveTimeStepIR, AdaptiveToleranceModeIR, DriveActivationIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR,
-        FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, GridDimensions,
-        IntegratorChoice, RelaxStopIR, RelaxationAlgorithmIR, RelaxationControlIR, StageStopReason,
-        RegionalFieldDriveIR, ResolvedRegionalFieldDriveBasisIR, TimeDependenceIR,
+        AdaptiveTimeStepIR, AdaptiveToleranceModeIR, DriveActivationIR, ExchangeBoundaryCondition,
+        ExecutionPrecision, FdmMaterialIR, FieldDriveKindIR, FieldSpatialProfileIR, FieldTargetIR,
+        FieldTimeOriginIR, GridDimensions, IntegratorChoice, RegionalFieldDriveIR, RelaxStopIR,
+        RelaxationAlgorithmIR, RelaxationControlIR, ResolvedRegionalFieldDriveBasisIR,
+        StageStopReason, TimeDependenceIR,
     };
 
     fn make_test_plan() -> FdmPlanIR {
@@ -2127,7 +2138,10 @@ mod tests {
 
     #[test]
     fn reference_construction_preserves_fixed_vs_adaptive_embedded_rk_policy() {
-        let fixed = FdmPlanIR { integrator: Some(IntegratorChoice::Rk45), ..make_test_plan() };
+        let fixed = FdmPlanIR {
+            integrator: Some(IntegratorChoice::Rk45),
+            ..make_test_plan()
+        };
         let (fixed_problem, _) = build_snapshot_problem_and_state(&fixed).expect("fixed problem");
         assert!(!fixed_problem.dynamics.adaptive_enabled);
 
@@ -2135,13 +2149,21 @@ mod tests {
             fixed_timestep: None,
             adaptive_timestep: Some(AdaptiveTimeStepIR {
                 tolerance_mode: AdaptiveToleranceModeIR::MaxError,
-                atol: 1e-6, rtol: 0.0, dt_initial: Some(1e-15), dt_min: 1e-16,
-                dt_max: Some(1e-14), safety: 0.9, growth_limit: 2.0, shrink_limit: 0.2,
-                max_spin_rotation: None, norm_tolerance: None,
+                atol: 1e-6,
+                rtol: 0.0,
+                dt_initial: Some(1e-15),
+                dt_min: 1e-16,
+                dt_max: Some(1e-14),
+                safety: 0.9,
+                growth_limit: 2.0,
+                shrink_limit: 0.2,
+                max_spin_rotation: None,
+                norm_tolerance: None,
             }),
             ..fixed
         };
-        let (adaptive_problem, _) = build_snapshot_problem_and_state(&adaptive).expect("adaptive problem");
+        let (adaptive_problem, _) =
+            build_snapshot_problem_and_state(&adaptive).expect("adaptive problem");
         assert!(adaptive_problem.dynamics.adaptive_enabled);
         assert_eq!(adaptive_problem.dynamics.adaptive.dt_min, 1e-16);
         assert_eq!(adaptive_problem.dynamics.adaptive.dt_max, 1e-14);
@@ -2150,18 +2172,25 @@ mod tests {
     #[test]
     fn regional_drive_produces_distinct_field_and_energy_outputs() {
         let drive = RegionalFieldDriveIR {
-            id: "drive".into(), name: "Drive".into(), kind: FieldDriveKindIR::Regional,
-            enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
-            direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
+            id: "drive".into(),
+            name: "Drive".into(),
+            kind: FieldDriveKindIR::Regional,
+            enabled: true,
+            target: FieldTargetIR::Global {},
+            amplitude_b_t: 1e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: FieldSpatialProfileIR::Uniform {},
             waveform: TimeDependenceIR::Constant,
             time_origin: FieldTimeOriginIR::StageLocal,
-            activation: DriveActivationIR::AllTimeEvolution {}, migration: None,
+            activation: DriveActivationIR::AllTimeEvolution {},
+            migration: None,
         };
         let h = 1e-3 / crate::MU0;
         let plan = FdmPlanIR {
             enable_exchange: false,
             regional_field_drive_bases: vec![ResolvedRegionalFieldDriveBasisIR {
-                drive: drive.clone(), field_xyz: vec![[0.0, h, 0.0]; 16],
+                drive: drive.clone(),
+                field_xyz: vec![[0.0, h, 0.0]; 16],
                 projection_signature: "test".into(),
             }],
             time_stage: Default::default(),
@@ -2169,13 +2198,22 @@ mod tests {
             ..make_test_plan()
         };
         let outputs = [
-            OutputIR::Field { name: "H_drive".into(), every_seconds: 1e-14 },
-            OutputIR::Scalar { name: "E_drive".into(), every_seconds: 1e-14 },
+            OutputIR::Field {
+                name: "H_drive".into(),
+                every_seconds: 1e-14,
+            },
+            OutputIR::Scalar {
+                name: "E_drive".into(),
+                every_seconds: 1e-14,
+            },
         ];
 
         let executed = execute_reference_fdm(&plan, 1e-14, &outputs, None, None)
             .expect("regional drive reference run should succeed");
-        let field = executed.field_snapshots.iter().find(|snapshot| snapshot.name == "H_drive")
+        let field = executed
+            .field_snapshots
+            .iter()
+            .find(|snapshot| snapshot.name == "H_drive")
             .expect("H_drive snapshot");
         assert!(field.values.iter().all(|value| *value == [0.0, h, 0.0]));
         assert!(executed.result.steps.iter().any(|step| step.e_drive != 0.0));
@@ -2188,17 +2226,28 @@ mod tests {
         plan.time_stage.start_time_s = 10.0;
         let make_basis = |time_origin, waveform| ResolvedRegionalFieldDriveBasisIR {
             drive: RegionalFieldDriveIR {
-                id: "clock".into(), name: "Clock".into(), kind: FieldDriveKindIR::Regional,
-                enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
-                direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
-                waveform, time_origin, activation: DriveActivationIR::AllTimeEvolution {},
+                id: "clock".into(),
+                name: "Clock".into(),
+                kind: FieldDriveKindIR::Regional,
+                enabled: true,
+                target: FieldTargetIR::Global {},
+                amplitude_b_t: 1e-3,
+                direction: [0.0, 1.0, 0.0],
+                spatial_profile: FieldSpatialProfileIR::Uniform {},
+                waveform,
+                time_origin,
+                activation: DriveActivationIR::AllTimeEvolution {},
                 migration: None,
             },
-            field_xyz: vec![[0.0, 1.0, 0.0]; 16], projection_signature: "clock".into(),
+            field_xyz: vec![[0.0, 1.0, 0.0]; 16],
+            projection_signature: "clock".into(),
         };
         plan.regional_field_drive_bases = vec![make_basis(
             FieldTimeOriginIR::StageLocal,
-            TimeDependenceIR::Pulse { t_on: 1.0, t_off: 2.0 },
+            TimeDependenceIR::Pulse {
+                t_on: 1.0,
+                t_off: 2.0,
+            },
         )];
         let local = resolved_regional_field_drives(&plan, plan.time_stage.start_time_s);
         assert_eq!(local[0].multiplier_at(11.5), 1.0);
@@ -2206,7 +2255,10 @@ mod tests {
 
         plan.regional_field_drive_bases = vec![make_basis(
             FieldTimeOriginIR::Absolute,
-            TimeDependenceIR::Pulse { t_on: 11.0, t_off: 12.0 },
+            TimeDependenceIR::Pulse {
+                t_on: 11.0,
+                t_off: 12.0,
+            },
         )];
         let absolute = resolved_regional_field_drives(&plan, plan.time_stage.start_time_s);
         assert_eq!(absolute[0].multiplier_at(11.5), 1.0);

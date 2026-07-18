@@ -4282,4 +4282,168 @@ describe("ControlRoomApi", () => {
 
     await expect(api.meshing.sharedDomainManifest()).resolves.toBeNull();
   });
+
+  it("uses the generated planar monitor and field resource routes", async () => {
+    const requests: Array<{
+      body: unknown;
+      method: string | undefined;
+      signal: AbortSignal | null | undefined;
+      url: string;
+    }> = [];
+    const controller = new AbortController();
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push({
+          body: init?.body ? parseRequestBody(init.body) : null,
+          method: init?.method,
+          signal: init?.signal,
+          url: String(url),
+        });
+        if (String(url).endsWith("/scalar")) {
+          return binaryResponse(new Uint8Array([1, 2]).buffer, {
+            headers: { etag: '"planar-field-1"', ...contractHeaders },
+          });
+        }
+        return jsonResponse(
+          String(url).includes("/data/fields/")
+            ? {
+                basis_order: 0,
+                canonical_unit: "1",
+                component: "z",
+                etag: '"planar-field-1"',
+                field_revision: 4,
+                field_source: "current",
+                fold_count: 0,
+                frame: {
+                  bounds_uv_m: [0, 1, 0, 1],
+                  normal: [0, 0, 1],
+                  origin_m: [0, 0, 0],
+                  u_axis: [1, 0, 0],
+                  v_axis: [0, 1, 0],
+                },
+                generation_id: 1,
+                integration_order: 1,
+                links: {
+                  empty_mask: "",
+                  mesh_overlay: "",
+                  probe: "",
+                  render_png: "",
+                  scalar: "",
+                  vectors: "",
+                },
+                mesh_revision: 2,
+                monitor_hash: "hash",
+                monitor_id: "plane/a",
+                monitor_revision: 3,
+                non_injective: false,
+                occupancy: {
+                  empty: 0,
+                  occupied: 1,
+                  occupied_measure: 1,
+                  partial: 0,
+                },
+                overlap_count: 0,
+                pixel_size_m: [1, 1],
+                quantity_id: "m",
+                resolution: [1, 1],
+                sample_support: "cell",
+                sampler_version: "1",
+                sampling_execution: "cpu",
+                sampling_method: "exact",
+                schema_version: "1",
+                scope_kind: "full",
+              }
+            : {
+                monitor: {
+                  frame: {
+                    extent: { kind: "universe", padding_m: 0 },
+                    normal: [0, 0, 1],
+                    normalization_version: "planar_frame_v1",
+                    origin_m: [0, 0, 0],
+                    preset: "xy",
+                    u_axis: [1, 0, 0],
+                    v_axis: [0, 1, 0],
+                  },
+                  id: "plane/a",
+                  name: "Plane A",
+                  operator: { kind: "plane_sample" },
+                  target: { kind: "domain" },
+                },
+                scene_revision: 8,
+              },
+        );
+      },
+    });
+
+    await api.model.planarMonitors.get("plane/a", {
+      signal: controller.signal,
+    });
+    await api.model.planarMonitors.patch(
+      "plane/a",
+      {
+        expected_scene_revision: 7,
+        monitor: {
+          frame: {
+            extent: { kind: "universe", padding_m: 0 },
+            normal: [0, 0, 1],
+            normalization_version: "planar_frame_v1",
+            origin_m: [0, 0, 0],
+            preset: "xy",
+            u_axis: [1, 0, 0],
+            v_axis: [0, 1, 0],
+          },
+          id: "plane/a",
+          name: "Plane A",
+          operator: { kind: "plane_sample" },
+          target: { kind: "domain" },
+        },
+      },
+      { signal: controller.signal },
+    );
+    await api.data.fields.planar.meta(
+      "m",
+      "plane/a",
+      { component: "z", resolution_x: 64 },
+      { signal: controller.signal },
+    );
+    const scalar = await api.data.fields.planar.scalar(
+      "m",
+      "plane/a",
+      { component: "z", resolution_x: 64 },
+      { etag: '"old"', signal: controller.signal },
+    );
+
+    expect(scalar.status).toBe("ready");
+    expect(requests.map(({ method, url }) => ({ method, url }))).toEqual([
+      {
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/planar-monitors/plane%2Fa",
+      },
+      {
+        method: "PATCH",
+        url: "http://127.0.0.1:8765/v2/sessions/current/model/planar-monitors/plane%2Fa",
+      },
+      {
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/planar-monitors/plane%2Fa/meta?component=z&resolution_x=64",
+      },
+      {
+        method: "GET",
+        url: "http://127.0.0.1:8765/v2/sessions/current/data/fields/m/planar-monitors/plane%2Fa/scalar?component=z&resolution_x=64",
+      },
+    ]);
+    expect(requests[1]?.body).toEqual({
+      expected_scene_revision: 7,
+      monitor: expect.objectContaining({
+        id: "plane/a",
+        name: "Plane A",
+        operator: { kind: "plane_sample" },
+        target: { kind: "domain" },
+      }),
+    });
+    expect(requests.every((request) => request.signal != null)).toBe(true);
+    controller.abort();
+    expect(requests.every((request) => request.signal?.aborted)).toBe(true);
+  });
 });

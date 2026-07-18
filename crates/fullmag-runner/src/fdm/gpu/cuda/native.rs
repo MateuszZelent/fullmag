@@ -14,6 +14,8 @@ use fullmag_fdm_sys as ffi;
 #[cfg(feature = "cuda")]
 use crate::derived_fields::compute_torque_field;
 #[cfg(feature = "cuda")]
+use crate::fdm::{validate_multilayer_grid_budget, validate_single_grid_budget};
+#[cfg(feature = "cuda")]
 use crate::preview::{
     build_grid_preview_field_from_flat_plan, plan_grid_preview, resample_grid_mask, GridPreviewPlan,
 };
@@ -21,8 +23,6 @@ use crate::preview::{
 use crate::quantities::normalized_quantity_name;
 #[cfg(feature = "cuda")]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
-#[cfg(feature = "cuda")]
-use crate::fdm::{validate_multilayer_grid_budget, validate_single_grid_budget};
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
 #[cfg(any(feature = "cuda", test))]
@@ -54,16 +54,34 @@ pub(crate) fn is_cuda_available() -> bool {
 }
 
 #[cfg(any(feature = "cuda", test))]
-fn validate_native_adaptive_policy(integrator: fullmag_ir::IntegratorChoice, adaptive: Option<&fullmag_ir::AdaptiveTimeStepIR>) -> Result<(), RunError> {
-    let Some(policy) = adaptive else { return Ok(()) };
-    if !matches!(integrator, fullmag_ir::IntegratorChoice::Rk23 | fullmag_ir::IntegratorChoice::Rk45) {
-        return Err(RunError { message: "adaptive CUDA FDM requires RK23 or RK45".to_string() });
+fn validate_native_adaptive_policy(
+    integrator: fullmag_ir::IntegratorChoice,
+    adaptive: Option<&fullmag_ir::AdaptiveTimeStepIR>,
+) -> Result<(), RunError> {
+    let Some(policy) = adaptive else {
+        return Ok(());
+    };
+    if !matches!(
+        integrator,
+        fullmag_ir::IntegratorChoice::Rk23 | fullmag_ir::IntegratorChoice::Rk45
+    ) {
+        return Err(RunError {
+            message: "adaptive CUDA FDM requires RK23 or RK45".to_string(),
+        });
     }
     match policy.tolerance_mode {
-        fullmag_ir::AdaptiveToleranceModeIR::MaxError if policy.rtol != 0.0 =>
-            return Err(RunError { message: "maximum-error CUDA FDM requires rtol=0".to_string() }),
-        fullmag_ir::AdaptiveToleranceModeIR::Advanced if policy.atol <= 0.0 && policy.rtol <= 0.0 =>
-            return Err(RunError { message: "advanced CUDA FDM requires positive atol or rtol".to_string() }),
+        fullmag_ir::AdaptiveToleranceModeIR::MaxError if policy.rtol != 0.0 => {
+            return Err(RunError {
+                message: "maximum-error CUDA FDM requires rtol=0".to_string(),
+            })
+        }
+        fullmag_ir::AdaptiveToleranceModeIR::Advanced
+            if policy.atol <= 0.0 && policy.rtol <= 0.0 =>
+        {
+            return Err(RunError {
+                message: "advanced CUDA FDM requires positive atol or rtol".to_string(),
+            })
+        }
         _ => {}
     }
     if policy.max_spin_rotation.is_some() || policy.norm_tolerance.is_some() {
@@ -73,47 +91,93 @@ fn validate_native_adaptive_policy(integrator: fullmag_ir::IntegratorChoice, ada
 }
 
 #[cfg(feature = "cuda")]
-fn native_time_policy(adaptive: Option<&fullmag_ir::AdaptiveTimeStepIR>) -> Result<ffi::fullmag_fdm_time_policy_desc_v2, RunError> {
+fn native_time_policy(
+    adaptive: Option<&fullmag_ir::AdaptiveTimeStepIR>,
+) -> Result<ffi::fullmag_fdm_time_policy_desc_v2, RunError> {
     let Some(policy) = adaptive else {
-        return Ok(ffi::fullmag_fdm_time_policy_desc_v2 { adaptive_enabled: 0,
-            adaptive_tolerance_mode: ffi::fullmag_fdm_adaptive_tolerance_mode::FULLMAG_FDM_ADAPTIVE_MAX_ERROR,
-            adaptive_atol: 0.0, adaptive_rtol: 0.0, adaptive_dt_min: 0.0, adaptive_dt_max: 0.0,
-            adaptive_safety: 0.0, adaptive_growth_limit: 0.0, adaptive_shrink_limit: 0.0,
-            has_adaptive_max_spin_rotation: 0, adaptive_max_spin_rotation: 0.0,
-            has_adaptive_norm_tolerance: 0, adaptive_norm_tolerance: 0.0 });
+        return Ok(ffi::fullmag_fdm_time_policy_desc_v2 {
+            adaptive_enabled: 0,
+            adaptive_tolerance_mode:
+                ffi::fullmag_fdm_adaptive_tolerance_mode::FULLMAG_FDM_ADAPTIVE_MAX_ERROR,
+            adaptive_atol: 0.0,
+            adaptive_rtol: 0.0,
+            adaptive_dt_min: 0.0,
+            adaptive_dt_max: 0.0,
+            adaptive_safety: 0.0,
+            adaptive_growth_limit: 0.0,
+            adaptive_shrink_limit: 0.0,
+            has_adaptive_max_spin_rotation: 0,
+            adaptive_max_spin_rotation: 0.0,
+            has_adaptive_norm_tolerance: 0,
+            adaptive_norm_tolerance: 0.0,
+        });
     };
     let mode = match policy.tolerance_mode {
-        fullmag_ir::AdaptiveToleranceModeIR::MaxError => ffi::fullmag_fdm_adaptive_tolerance_mode::FULLMAG_FDM_ADAPTIVE_MAX_ERROR,
-        fullmag_ir::AdaptiveToleranceModeIR::Advanced => ffi::fullmag_fdm_adaptive_tolerance_mode::FULLMAG_FDM_ADAPTIVE_ADVANCED,
+        fullmag_ir::AdaptiveToleranceModeIR::MaxError => {
+            ffi::fullmag_fdm_adaptive_tolerance_mode::FULLMAG_FDM_ADAPTIVE_MAX_ERROR
+        }
+        fullmag_ir::AdaptiveToleranceModeIR::Advanced => {
+            ffi::fullmag_fdm_adaptive_tolerance_mode::FULLMAG_FDM_ADAPTIVE_ADVANCED
+        }
     };
-    Ok(ffi::fullmag_fdm_time_policy_desc_v2 { adaptive_enabled: 1, adaptive_tolerance_mode: mode,
-        adaptive_atol: policy.atol, adaptive_rtol: policy.rtol, adaptive_dt_min: policy.dt_min,
-        adaptive_dt_max: policy.dt_max.ok_or_else(|| RunError { message: "adaptive CUDA FDM requires explicit dt_max".to_string() })?,
-        adaptive_safety: policy.safety, adaptive_growth_limit: policy.growth_limit,
+    Ok(ffi::fullmag_fdm_time_policy_desc_v2 {
+        adaptive_enabled: 1,
+        adaptive_tolerance_mode: mode,
+        adaptive_atol: policy.atol,
+        adaptive_rtol: policy.rtol,
+        adaptive_dt_min: policy.dt_min,
+        adaptive_dt_max: policy.dt_max.ok_or_else(|| RunError {
+            message: "adaptive CUDA FDM requires explicit dt_max".to_string(),
+        })?,
+        adaptive_safety: policy.safety,
+        adaptive_growth_limit: policy.growth_limit,
         adaptive_shrink_limit: policy.shrink_limit,
         has_adaptive_max_spin_rotation: i32::from(policy.max_spin_rotation.is_some()),
         adaptive_max_spin_rotation: policy.max_spin_rotation.unwrap_or(0.0),
         has_adaptive_norm_tolerance: i32::from(policy.norm_tolerance.is_some()),
-        adaptive_norm_tolerance: policy.norm_tolerance.unwrap_or(0.0) })
+        adaptive_norm_tolerance: policy.norm_tolerance.unwrap_or(0.0),
+    })
 }
 
 #[cfg(test)]
 mod adaptive_policy_validation_tests {
     use super::*;
     fn policy(mode: fullmag_ir::AdaptiveToleranceModeIR) -> fullmag_ir::AdaptiveTimeStepIR {
-        fullmag_ir::AdaptiveTimeStepIR { tolerance_mode: mode, atol: 1e-6, rtol: 0.0,
-            dt_initial: Some(1e-15), dt_min: 1e-16, dt_max: Some(1e-14), safety: 0.9,
-            growth_limit: 2.0, shrink_limit: 0.2, max_spin_rotation: None, norm_tolerance: None }
+        fullmag_ir::AdaptiveTimeStepIR {
+            tolerance_mode: mode,
+            atol: 1e-6,
+            rtol: 0.0,
+            dt_initial: Some(1e-15),
+            dt_min: 1e-16,
+            dt_max: Some(1e-14),
+            safety: 0.9,
+            growth_limit: 2.0,
+            shrink_limit: 0.2,
+            max_spin_rotation: None,
+            norm_tolerance: None,
+        }
     }
     #[test]
     fn incompatible_adaptive_cuda_policies_fail_before_ffi() {
-        assert!(validate_native_adaptive_policy(fullmag_ir::IntegratorChoice::Heun, Some(&policy(fullmag_ir::AdaptiveToleranceModeIR::MaxError))).is_err());
+        assert!(validate_native_adaptive_policy(
+            fullmag_ir::IntegratorChoice::Heun,
+            Some(&policy(fullmag_ir::AdaptiveToleranceModeIR::MaxError))
+        )
+        .is_err());
         let absolute = policy(fullmag_ir::AdaptiveToleranceModeIR::Advanced);
-        validate_native_adaptive_policy(fullmag_ir::IntegratorChoice::Rk45, Some(&absolute)).unwrap();
-        let mut relative = absolute.clone(); relative.atol = 0.0; relative.rtol = 1e-4;
-        validate_native_adaptive_policy(fullmag_ir::IntegratorChoice::Rk45, Some(&relative)).unwrap();
+        validate_native_adaptive_policy(fullmag_ir::IntegratorChoice::Rk45, Some(&absolute))
+            .unwrap();
+        let mut relative = absolute.clone();
+        relative.atol = 0.0;
+        relative.rtol = 1e-4;
+        validate_native_adaptive_policy(fullmag_ir::IntegratorChoice::Rk45, Some(&relative))
+            .unwrap();
         relative.rtol = 0.0;
-        assert!(validate_native_adaptive_policy(fullmag_ir::IntegratorChoice::Rk45, Some(&relative)).is_err());
+        assert!(validate_native_adaptive_policy(
+            fullmag_ir::IntegratorChoice::Rk45,
+            Some(&relative)
+        )
+        .is_err());
     }
 }
 
@@ -502,7 +566,11 @@ impl NativeFdmBackend {
     }
 
     pub fn create(plan: &fullmag_ir::FdmPlanIR) -> Result<Self, RunError> {
-        validate_native_adaptive_policy(plan.integrator.unwrap_or(fullmag_ir::IntegratorChoice::Heun), plan.adaptive_timestep.as_ref())?;
+        validate_native_adaptive_policy(
+            plan.integrator
+                .unwrap_or(fullmag_ir::IntegratorChoice::Heun),
+            plan.adaptive_timestep.as_ref(),
+        )?;
         validate_single_grid_budget(plan)?;
         let resolved_demag_boundary = crate::fdm::resolve_fdm_demag_boundary(plan)?;
         if plan.material.ms_field.is_some()

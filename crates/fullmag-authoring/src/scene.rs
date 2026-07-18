@@ -29,6 +29,8 @@ pub struct SceneDocument {
     #[serde(default)]
     pub field_drives: SceneFieldDrivesState,
     #[serde(default)]
+    pub monitors: SceneMonitorState,
+    #[serde(default)]
     pub current_modules: SceneCurrentModulesState,
     #[serde(default)]
     pub study: SceneStudyState,
@@ -43,6 +45,13 @@ pub struct SceneDocument {
 pub struct SceneFieldDrivesState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drives: Vec<fullmag_ir::RegionalFieldDriveIR>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SceneMonitorState {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planar: Vec<fullmag_ir::PlanarMonitorIR>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]

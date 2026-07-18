@@ -64,8 +64,13 @@ pub enum FieldDriveKindIR {
 #[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
 pub enum FieldTargetIR {
     Global {},
-    Object { object_id: String },
-    Region { object_id: String, region_id: String },
+    Object {
+        object_id: String,
+    },
+    Region {
+        object_id: String,
+        region_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

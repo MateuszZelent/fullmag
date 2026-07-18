@@ -35,7 +35,6 @@ use crate::schemas::mesh::{
     MeshObjectSegmentResource, MeshObjectSizeFieldResource, MeshPartResource,
     MeshPeriodicBoundaryFacePairResource, MeshPeriodicDomainNodePairCountsResource,
     MeshPeriodicPairResource, MeshPeriodicPairsResource, MeshQualityGatesResource,
-    PeriodicValidationStatus,
     MeshRealizedSizeFieldResource, MeshRealizedSizeFieldsPayload, MeshRealizedSizeFieldsResource,
     MeshRegionMembershipResource, MeshRegionQualityResource, MeshRegionResource,
     MeshSemanticsResource, MeshSharedDomainBuildReportResource,
@@ -43,7 +42,7 @@ use crate::schemas::mesh::{
     MeshSharedDomainManifestResource, MeshSharedDomainQualityResource,
     MeshSharedDomainReportResource, MeshSolverMeshResource, MeshSummaryResource,
     MeshUniverseConfigReplaceRequest, MeshUniverseConfigResource, MeshUniverseQualityResource,
-    MeshUniverseReportResource,
+    MeshUniverseReportResource, PeriodicValidationStatus,
 };
 use crate::session::current_artifact_dir;
 use crate::types::{AppState, SessionStateResponse};
@@ -1325,16 +1324,18 @@ pub async fn get_mesh_periodic_pairs_binary(
     let Some((resource, source_id)) = periodic_pairs_resource_for_snapshot(&snapshot)? else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    let body = crate::periodic_pairs_binary::encode_periodic_pairs_binary_v1(&resource)
-        .map_err(|error| ApiError::internal(format!("failed to encode periodic-pairs binary: {error}")))?;
+    let body = crate::periodic_pairs_binary::encode_periodic_pairs_binary_v1(&resource).map_err(
+        |error| ApiError::internal(format!("failed to encode periodic-pairs binary: {error}")),
+    )?;
     let etag = periodic_pairs_binary_etag(&source_id, &body);
     let content_type = HeaderValue::from_static("application/vnd.fullmag.periodic-pairs.v1");
-    let mut response = crate::router_v2::handlers::shared::conditional_binary_response_with_content_type(
-        &headers,
-        &etag,
-        body,
-        content_type,
-    );
+    let mut response =
+        crate::router_v2::handlers::shared::conditional_binary_response_with_content_type(
+            &headers,
+            &etag,
+            body,
+            content_type,
+        );
     response.headers_mut().insert(
         "x-fullmag-periodic-pairs-format",
         HeaderValue::from_static("FMPP.v1"),
@@ -1344,8 +1345,14 @@ pub async fn get_mesh_periodic_pairs_binary(
         HeaderValue::from_str(&resource.revision.to_string()).expect("u64 header is valid"),
     );
     for (header, value) in [
-        ("x-fullmag-mesh-generation-id", resource.mesh_generation_id.as_deref()),
-        ("x-fullmag-mesh-topology-fingerprint", resource.topology_fingerprint.as_deref()),
+        (
+            "x-fullmag-mesh-generation-id",
+            resource.mesh_generation_id.as_deref(),
+        ),
+        (
+            "x-fullmag-mesh-topology-fingerprint",
+            resource.topology_fingerprint.as_deref(),
+        ),
         (
             "x-fullmag-mesh-certificate-fingerprint",
             resource.certificate_fingerprint.as_deref(),
@@ -1412,7 +1419,10 @@ fn periodic_pairs_etag(
         ))
     })?;
     let canonical_payload = canonical_json(&payload);
-    let certificate_fingerprint = resource.certificate_fingerprint.as_deref().unwrap_or("none");
+    let certificate_fingerprint = resource
+        .certificate_fingerprint
+        .as_deref()
+        .unwrap_or("none");
     let mut identity = Sha256::new();
     identity.update(b"mesh-periodic-pairs:v1\0");
     for part in [mesh_generation, certificate_fingerprint, &canonical_payload] {
@@ -1445,8 +1455,7 @@ fn canonical_json(value: &Value) -> String {
             let fields = keys
                 .into_iter()
                 .map(|key| {
-                    let encoded_key =
-                        serde_json::to_string(key).unwrap_or_else(|_| "\"\"".into());
+                    let encoded_key = serde_json::to_string(key).unwrap_or_else(|_| "\"\"".into());
                     format!("{encoded_key}:{}", canonical_json(&values[key]))
                 })
                 .collect::<Vec<_>>();
@@ -1480,9 +1489,7 @@ fn periodic_pairs_resource_from_artifact(
     })?;
     if let Some(mesh) = live_mesh {
         let expected_topology = periodic_mesh_ir(mesh).topology_fingerprint_v6();
-        let actual_topology = value
-            .get("topology_fingerprint")
-            .and_then(Value::as_str);
+        let actual_topology = value.get("topology_fingerprint").and_then(Value::as_str);
         if actual_topology != Some(expected_topology.as_str()) {
             return Ok(None);
         }
@@ -1490,13 +1497,8 @@ fn periodic_pairs_resource_from_artifact(
             return Ok(None);
         }
     }
-    let artifact_source_scene_revision = value
-        .get("source_scene_revision")
-        .and_then(Value::as_u64);
-    let current_scene_revision = snapshot
-        .scene_document
-        .as_ref()
-        .map(|scene| scene.revision);
+    let artifact_source_scene_revision = value.get("source_scene_revision").and_then(Value::as_u64);
+    let current_scene_revision = snapshot.scene_document.as_ref().map(|scene| scene.revision);
     let expected_build_scene_revision = mesh_build_provenance(snapshot).source_scene_revision;
     let artifact_stale_reason = match current_scene_revision {
         Some(current) if artifact_source_scene_revision != Some(current) => Some(format!(
@@ -1520,12 +1522,8 @@ fn periodic_pairs_resource_from_artifact(
             .or_insert_with(|| json!(snapshot.mesh_revision));
         if object.get("status").is_none() {
             let status = match (
-                object
-                    .get("validation_status")
-                    .and_then(Value::as_str),
-                object
-                    .get("certificate_status")
-                    .and_then(Value::as_str),
+                object.get("validation_status").and_then(Value::as_str),
+                object.get("certificate_status").and_then(Value::as_str),
             ) {
                 (Some("ok"), Some("accepted")) => "valid",
                 (Some("failed"), _) | (_, Some("rejected")) => "invalid",
@@ -1595,7 +1593,10 @@ fn persisted_periodic_certificate_matches_live_mesh(
     let expected_fields = [
         ("schema_version", expected.schema_version.as_str()),
         ("certificate_status", expected.certificate_status.as_str()),
-        ("topology_fingerprint", expected.topology_fingerprint.as_str()),
+        (
+            "topology_fingerprint",
+            expected.topology_fingerprint.as_str(),
+        ),
         (
             "marker_map_fingerprint",
             expected.marker_map_fingerprint.as_str(),
@@ -3534,7 +3535,8 @@ fn build_periodic_pairs_resource(
                 .iter()
                 .map(|pair| pair.face_b)
                 .collect::<BTreeSet<_>>();
-            let source_face_count = boundary_face_indices_by_marker(mesh, boundary_pair.marker_a).len();
+            let source_face_count =
+                boundary_face_indices_by_marker(mesh, boundary_pair.marker_a).len();
             let destination_face_count =
                 boundary_face_indices_by_marker(mesh, boundary_pair.marker_b).len();
             let unpaired_source_node_count =
@@ -3545,9 +3547,8 @@ fn build_periodic_pairs_resource(
             let mixed_domain_pair = domain_node_pair_counts.magnetic
                 + domain_node_pair_counts.airbox
                 < node_pairs.len() as u32;
-            let mixed_domain_node_pair_count = (node_pairs.len() as u32).saturating_sub(
-                domain_node_pair_counts.magnetic + domain_node_pair_counts.airbox,
-            );
+            let mixed_domain_node_pair_count = (node_pairs.len() as u32)
+                .saturating_sub(domain_node_pair_counts.magnetic + domain_node_pair_counts.airbox);
             let status = if mixed_domain_pair {
                 "mixed_domain_pair".to_string()
             } else if diagnostics.status == "valid"
@@ -3580,9 +3581,11 @@ fn build_periodic_pairs_resource(
                 unpaired_source_node_count,
                 unpaired_destination_node_count,
                 unpaired_source_face_count: source_face_count
-                    .saturating_sub(paired_source_faces.len()) as u32,
+                    .saturating_sub(paired_source_faces.len())
+                    as u32,
                 unpaired_destination_face_count: destination_face_count
-                    .saturating_sub(paired_destination_faces.len()) as u32,
+                    .saturating_sub(paired_destination_faces.len())
+                    as u32,
                 boundary_face_pairs,
                 max_residual_m: diagnostics.max_residual_m,
                 rms_residual_m: diagnostics.rms_residual_m,
@@ -3602,9 +3605,8 @@ fn build_periodic_pairs_resource(
     if pairs.iter().any(|pair| pair.status != "valid") {
         status = PeriodicValidationStatus::Invalid;
         status_reasons.extend(pairs.iter().filter_map(|pair| {
-            (pair.status != "valid").then(|| {
-                format!("periodic pair '{}' status is {}", pair.pair_id, pair.status)
-            })
+            (pair.status != "valid")
+                .then(|| format!("periodic pair '{}' status is {}", pair.pair_id, pair.status))
         }));
     }
     let certificate_fingerprint = match mesh_ir.periodic_mesh_certificate_v6() {
@@ -4471,7 +4473,10 @@ mod tests {
         let mut second = serde_json::Map::new();
         second.insert("a".to_string(), json!({"b": 3, "y": 2}));
         second.insert("z".to_string(), json!(1));
-        assert_eq!(canonical_json(&Value::Object(first)), canonical_json(&Value::Object(second)));
+        assert_eq!(
+            canonical_json(&Value::Object(first)),
+            canonical_json(&Value::Object(second))
+        );
     }
 
     #[test]

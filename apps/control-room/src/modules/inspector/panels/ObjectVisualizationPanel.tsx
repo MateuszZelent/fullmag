@@ -85,6 +85,11 @@ import {
   viewportRenderingPreferencesPatch,
 } from "./ObjectVisualizationHelpers";
 import { ObjectVisualizationOverview } from "./ObjectVisualizationOverview";
+import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
+import {
+  VisualizationContextSwitch,
+  useVisualizationViewContext,
+} from "../visualization/VisualizationContextSwitch";
 
 interface ObjectVisualizationAppliedBaseline {
   overrides: VisualizationStateResource["overrides"];
@@ -649,6 +654,7 @@ type ResolvedObjectVisualizationPanelState = Omit<
 export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   const panel = useObjectVisualizationPanelState(selection);
   const { displaySettings, settings, target } = panel;
+  const visualizationViewContext = useVisualizationViewContext();
 
   if (!target || !settings || !displaySettings) {
     return (
@@ -660,11 +666,27 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
     );
   }
 
+  if (visualizationViewContext === "planar") {
+    return (
+      <div className="fm-inspector-panel">
+        <InspectorGroup title="View">
+          <VisualizationContextSwitch />
+        </InspectorGroup>
+        <PlanarVisualizationSection selection={selection} />
+      </div>
+    );
+  }
+
   return (
-    <ObjectVisualizationPanelView
-      key={visualizationTargetKey(target)}
-      panel={{ ...panel, displaySettings, settings, target }}
-    />
+    <>
+      <InspectorGroup title="View">
+        <VisualizationContextSwitch />
+      </InspectorGroup>
+      <ObjectVisualizationPanelView
+        key={visualizationTargetKey(target)}
+        panel={{ ...panel, displaySettings, settings, target }}
+      />
+    </>
   );
 }
 

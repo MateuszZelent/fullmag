@@ -38,6 +38,13 @@ import {
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELD_META_PATH,
+  DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
+  DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
+  DATA_PLANAR_FIELD_META_PATH,
+  DATA_PLANAR_FIELD_PROBE_PATH,
+  DATA_PLANAR_FIELD_RENDER_PNG_PATH,
+  DATA_PLANAR_FIELD_SCALAR_PATH,
+  DATA_PLANAR_FIELD_VECTORS_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
@@ -102,6 +109,9 @@ import {
   MODEL_OBJECT_REGIONS_REORDER_PATH,
   MODEL_OBJECT_REGIONS_PATH,
   MODEL_OBJECTS_PATH,
+  MODEL_PLANAR_MONITOR_DUPLICATE_PATH,
+  MODEL_PLANAR_MONITOR_PATH,
+  MODEL_PLANAR_MONITORS_PATH,
   MODEL_REGION_PATH,
   MODEL_REGION_DIAGNOSTICS_PATH,
   MODEL_REALIZED_REGIONS_PATH,
@@ -192,6 +202,16 @@ import type {
   FieldStateInspectRequest,
   FieldStateInspectResponse,
   FieldVectorQuery,
+  PlanarFieldMetaResource,
+  PlanarFieldProbeQuery,
+  PlanarFieldProbeResource,
+  PlanarFieldQuery,
+  PlanarMonitorCollectionResource,
+  PlanarMonitorCreateRequest,
+  PlanarMonitorDeleteRequest,
+  PlanarMonitorDuplicateRequest,
+  PlanarMonitorPatchRequest,
+  PlanarMonitorResource,
   GeometryCapabilitiesResource,
   GeometryDiagnosticsResource,
   GeometryRealizationRequest,
@@ -937,6 +957,96 @@ export class ControlRoomApi {
           options,
         ).then((result) => transformFieldVectorForDisplay(requestedQuantityId, result));
       },
+      planar: {
+        meta: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: RequestOptions,
+        ) =>
+          this.requestJson<PlanarFieldMetaResource>(
+            DATA_PLANAR_FIELD_META_PATH,
+            options,
+            {
+              path: { monitor_id: monitorId, quantity_id: quantityId },
+              query,
+            },
+          ),
+        scalar: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: BinaryRequestOptions,
+        ) =>
+          this.requestBinaryBytes(
+            DATA_PLANAR_FIELD_SCALAR_PATH,
+            options,
+            { monitor_id: monitorId, quantity_id: quantityId },
+            query,
+          ),
+        vectors: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: BinaryRequestOptions,
+        ) =>
+          this.requestBinaryBytes(
+            DATA_PLANAR_FIELD_VECTORS_PATH,
+            options,
+            { monitor_id: monitorId, quantity_id: quantityId },
+            query,
+          ),
+        emptyMask: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: BinaryRequestOptions,
+        ) =>
+          this.requestBinaryBytes(
+            DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
+            options,
+            { monitor_id: monitorId, quantity_id: quantityId },
+            query,
+          ),
+        meshOverlay: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: BinaryRequestOptions,
+        ) =>
+          this.requestBinaryBytes(
+            DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
+            options,
+            { monitor_id: monitorId, quantity_id: quantityId },
+            query,
+          ),
+        probe: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldProbeQuery,
+          options?: RequestOptions,
+        ) =>
+          this.requestJson<PlanarFieldProbeResource>(
+            DATA_PLANAR_FIELD_PROBE_PATH,
+            options,
+            {
+              path: { monitor_id: monitorId, quantity_id: quantityId },
+              query,
+            },
+          ),
+        renderPng: (
+          quantityId: string,
+          monitorId: string,
+          query: PlanarFieldQuery = {},
+          options?: BinaryRequestOptions,
+        ) =>
+          this.requestBinaryBytes(
+            DATA_PLANAR_FIELD_RENDER_PNG_PATH,
+            options,
+            { monitor_id: monitorId, quantity_id: quantityId },
+            query,
+          ),
+      },
     },
     meshRegionMembership: (regionId: string, options?: RequestOptions) =>
       this.requestJson<MeshRegionMembershipResource>(
@@ -1260,6 +1370,61 @@ export class ControlRoomApi {
   };
 
   readonly model = {
+    planarMonitors: {
+      list: (options?: RequestOptions) =>
+        this.requestJson<PlanarMonitorCollectionResource>(
+          MODEL_PLANAR_MONITORS_PATH,
+          options,
+        ),
+      get: (monitorId: string, options?: RequestOptions) =>
+        this.requestJson<PlanarMonitorResource>(
+          MODEL_PLANAR_MONITOR_PATH,
+          options,
+          { path: { monitor_id: monitorId } },
+        ),
+      create: (
+        request: PlanarMonitorCreateRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<PlanarMonitorResource, PlanarMonitorCreateRequest>(
+          MODEL_PLANAR_MONITORS_PATH,
+          request,
+          options,
+        ),
+      patch: (
+        monitorId: string,
+        request: PlanarMonitorPatchRequest,
+        options?: RequestOptions,
+      ) =>
+        this.patchJson<PlanarMonitorResource, PlanarMonitorPatchRequest>(
+          MODEL_PLANAR_MONITOR_PATH,
+          request,
+          options,
+          { path: { monitor_id: monitorId } },
+        ),
+      remove: (
+        monitorId: string,
+        request: PlanarMonitorDeleteRequest,
+        options?: RequestOptions,
+      ) =>
+        this.deleteJsonWithBody<
+          PlanarMonitorCollectionResource,
+          PlanarMonitorDeleteRequest
+        >(MODEL_PLANAR_MONITOR_PATH, request, options, {
+          path: { monitor_id: monitorId },
+        }),
+      duplicate: (
+        monitorId: string,
+        request: PlanarMonitorDuplicateRequest,
+        options?: RequestOptions,
+      ) =>
+        this.postJson<PlanarMonitorResource, PlanarMonitorDuplicateRequest>(
+          MODEL_PLANAR_MONITOR_DUPLICATE_PATH,
+          request,
+          options,
+          { path: { monitor_id: monitorId } },
+        ),
+    },
     commitTransaction: (
       transaction: AuthoringTransactionRequest,
       options?: RequestOptions,

@@ -15,9 +15,7 @@ use sha2::{Digest, Sha256};
 
 use crate::artifacts::{read_json_artifact_value, resolve_artifact_path};
 use crate::error::ApiError;
-use crate::schemas::mesh::{
-    FdmRegionLegendEntryResource, FdmRegionMembershipResource,
-};
+use crate::schemas::mesh::{FdmRegionLegendEntryResource, FdmRegionMembershipResource};
 use crate::session::current_artifact_dir;
 use crate::types::{AppState, SessionStateResponse};
 
@@ -149,10 +147,13 @@ async fn serve_fdm_region_membership_binary(
         scope,
         payload_hash,
     ));
-    let mut response = crate::router_v2::handlers::shared::conditional_binary_response(
-        &headers, &etag, payload,
+    let mut response =
+        crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, payload);
+    insert_header(
+        &mut response,
+        "x-fullmag-grid-fingerprint",
+        &descriptor.grid_fingerprint,
     );
-    insert_header(&mut response, "x-fullmag-grid-fingerprint", &descriptor.grid_fingerprint);
     insert_header(
         &mut response,
         "x-fullmag-region-membership-revision",
@@ -166,12 +167,12 @@ fn load_descriptor(
 ) -> Result<(FdmMembershipArtifactDescriptor, PathBuf), ApiError> {
     let artifact_dir = current_artifact_dir(snapshot)
         .ok_or_else(|| ApiError::not_found("no artifact directory for the active workspace"))?;
-    let descriptor_value = read_json_artifact_value(
-        &artifact_dir,
-        "mesh/fdm_region_membership.v1.json",
-    )?;
+    let descriptor_value =
+        read_json_artifact_value(&artifact_dir, "mesh/fdm_region_membership.v1.json")?;
     let descriptor: FdmMembershipArtifactDescriptor = serde_json::from_value(descriptor_value)
-        .map_err(|error| ApiError::internal(format!("invalid FDM membership descriptor: {error}")))?;
+        .map_err(|error| {
+            ApiError::internal(format!("invalid FDM membership descriptor: {error}"))
+        })?;
     if descriptor.schema_version != "fdm_region_membership.v1"
         || descriptor.encoding != "FMRM:u32_le"
     {
@@ -211,7 +212,9 @@ fn validate_fmrm_payload(
         return Err(ApiError::internal("invalid FMRM magic or truncated header"));
     }
     if payload[4] != 1 || payload[5] != 1 {
-        return Err(ApiError::internal("unsupported FMRM version or payload kind"));
+        return Err(ApiError::internal(
+            "unsupported FMRM version or payload kind",
+        ));
     }
     let counts = [
         u32::from_le_bytes(payload[8..12].try_into().unwrap()),
@@ -219,11 +222,15 @@ fn validate_fmrm_payload(
         u32::from_le_bytes(payload[16..20].try_into().unwrap()),
     ];
     if counts != descriptor.counts {
-        return Err(ApiError::internal("FMRM grid counts disagree with descriptor"));
+        return Err(ApiError::internal(
+            "FMRM grid counts disagree with descriptor",
+        ));
     }
     let mask_len = u32::from_le_bytes(payload[20..24].try_into().unwrap()) as u64;
     if mask_len != descriptor.cell_count {
-        return Err(ApiError::internal("FMRM mask length disagrees with descriptor"));
+        return Err(ApiError::internal(
+            "FMRM mask length disagrees with descriptor",
+        ));
     }
     let expected_len = FMRM_HEADER_LEN
         .checked_add(
@@ -250,8 +257,8 @@ fn decode_hex32(value: &str) -> Option<[u8; 32]> {
     }
     let mut output = [0u8; 32];
     for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
-        output[index] = (char::from(pair[0]).to_digit(16)? * 16
-            + char::from(pair[1]).to_digit(16)?) as u8;
+        output[index] =
+            (char::from(pair[0]).to_digit(16)? * 16 + char::from(pair[1]).to_digit(16)?) as u8;
     }
     Some(output)
 }

@@ -1442,6 +1442,7 @@ mod tests {
             scene: SceneMetadata::default(),
             universe: None,
             field_drives: crate::SceneFieldDrivesState::default(),
+            monitors: crate::SceneMonitorState::default(),
             current_modules: SceneCurrentModulesState::default(),
             study: SceneStudyState::default(),
             outputs: SceneOutputsState::default(),

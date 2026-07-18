@@ -4,7 +4,17 @@
 //! sampler. All heavy computation happens here, outside solver locks.
 
 use crate::error::ApiError;
-use crate::field_projection::{parse_component, project_values, ComponentSelection};
+#[cfg(test)]
+use crate::field_projection::project_values;
+use crate::field_projection::{parse_component, ComponentSelection};
+use crate::planar_sampling::{
+    FdmPlanarField, FemPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarComponent,
+    PlanarSamplingEngine, ResolvedPlanarSampleRequest,
+};
+use fullmag_ir::{
+    EmptyPolicyIR, PlanarExtentIR, PlanarFrameIR, PlanarOperatorIR, PlanarReductionIR,
+    PLANAR_FRAME_NORMALIZATION_VERSION,
+};
 use serde::{Deserialize, Serialize};
 
 // ── Slice plane ──────────────────────────────────────────────────────────────
@@ -493,6 +503,163 @@ pub struct ProjectionProfileResult {
 
 /// Sample a 2D slice from an FDM structured grid field.
 pub fn fdm_slice(field: &FdmField, q: &ResolvedSliceQuery) -> Result<SliceResult, ApiError> {
+    fdm_slice_via_planar_engine(field, q)
+}
+
+fn fdm_slice_via_planar_engine(
+    field: &FdmField,
+    q: &ResolvedSliceQuery,
+) -> Result<SliceResult, ApiError> {
+    use crate::planar_sampling::{
+        FdmPlanarField, PlanarComponent, PlanarSamplingEngine, ResolvedPlanarSampleRequest,
+    };
+    use fullmag_ir::{PlanarExtentIR, PlanarFrameIR, PlanarFramePresetIR, PlanarOperatorIR};
+
+    let origin = field.origin.unwrap_or([-0.5; 3]);
+    let spacing = field.spacing.unwrap_or([1.0; 3]);
+    let normal_axis = match q.plane {
+        SlicePlane::Xy => 2,
+        SlicePlane::Xz => 1,
+        SlicePlane::Yz => 0,
+    };
+    let normal_len = field.grid[normal_axis].max(1);
+    let cut_norm = if let Some(cut_world) = q.cut_world {
+        ((cut_world - origin[normal_axis]) / spacing[normal_axis] - 0.5)
+            / normal_len.saturating_sub(1).max(1) as f64
+    } else {
+        q.cut_norm
+    };
+    let normal_index = (cut_norm.clamp(0.0, 1.0) * normal_len.saturating_sub(1) as f64).round();
+    let cut_world = q
+        .cut_world
+        .unwrap_or(origin[normal_axis] + (normal_index + 0.5) * spacing[normal_axis]);
+    let (preset, u_axis, v_axis) = match q.plane {
+        SlicePlane::Xy => (PlanarFramePresetIR::Xy, 0, 1),
+        SlicePlane::Xz => (PlanarFramePresetIR::Xz, 0, 2),
+        SlicePlane::Yz => (PlanarFramePresetIR::Yz, 1, 2),
+    };
+    let axis_bounds = |axis: usize| {
+        if field.origin.is_some() && field.spacing.is_some() {
+            (
+                origin[axis],
+                origin[axis] + spacing[axis] * field.grid[axis] as f64,
+            )
+        } else if field.grid[axis] > 1 {
+            (0.0, field.grid[axis].saturating_sub(1) as f64)
+        } else {
+            (-0.5, 0.5)
+        }
+    };
+    let (u_min, u_max) = axis_bounds(u_axis);
+    let (v_min, v_max) = axis_bounds(v_axis);
+    let extent = PlanarExtentIR::Explicit {
+        u_min_m: u_min.min(u_max),
+        u_max_m: u_min.max(u_max),
+        v_min_m: v_min.min(v_max),
+        v_max_m: v_min.max(v_max),
+    };
+    let frame = PlanarFrameIR::axis_preset(preset, cut_world, extent);
+    let component = match q.component.clone() {
+        ComponentSelection::Full if field.n_comp == 1 => PlanarComponent::Scalar,
+        ComponentSelection::Magnitude => PlanarComponent::Magnitude,
+        ComponentSelection::Index(0) => PlanarComponent::WorldX,
+        ComponentSelection::Index(1) => PlanarComponent::WorldY,
+        ComponentSelection::Index(2) => PlanarComponent::WorldZ,
+        ComponentSelection::Full => PlanarComponent::Magnitude,
+        ComponentSelection::MagnitudeSquared => PlanarComponent::MagnitudeSquared,
+        ComponentSelection::AbsIndex(0) => PlanarComponent::AbsWorldX,
+        ComponentSelection::AbsIndex(1) => PlanarComponent::AbsWorldY,
+        ComponentSelection::AbsIndex(2) => PlanarComponent::AbsWorldZ,
+        ComponentSelection::AbsIndex(_) => {
+            return Err(ApiError::bad_request(
+                "invalid_component: planar vectors expose x, y, and z",
+            ))
+        }
+        ComponentSelection::Index(_) => {
+            return Err(ApiError::bad_request(
+                "invalid_component: planar vectors expose x, y, and z",
+            ))
+        }
+    };
+    let source = FdmPlanarField::new(
+        field.n_comp,
+        field.grid,
+        origin,
+        spacing,
+        field.values.clone(),
+    )?;
+    let sampled = PlanarSamplingEngine::sample_fdm(
+        &source,
+        &ResolvedPlanarSampleRequest {
+            monitor_id: "compat-slice".to_string(),
+            monitor_hash: "compat-slice-v1".to_string(),
+            frame,
+            operator: PlanarOperatorIR::PlaneSample,
+            resolution: [q.x_size, q.y_size],
+            component,
+        },
+    )?;
+    let full_vector_output = field.n_comp >= 3 && matches!(q.component, ComponentSelection::Full);
+    let scalar_values = if full_vector_output {
+        sampled
+            .vector_values
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .flat_map(|value| value.iter().copied())
+            .collect()
+    } else {
+        sampled.scalar_values
+    };
+    let (min, max) = scalar_values
+        .iter()
+        .filter(|value| value.is_finite())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), value| {
+            (min.min(*value), max.max(*value))
+        });
+    let vector_values = sampled.vector_values.unwrap_or_default();
+    let (arrow_values, arrow_count) = if q.include_arrows && field.n_comp >= 3 {
+        let values = vector_values
+            .iter()
+            .flat_map(|value| value.iter().copied())
+            .collect::<Vec<_>>();
+        build_arrows_fdm(
+            &values,
+            3,
+            q.x_size as usize,
+            q.y_size as usize,
+            q.plane,
+            q.arrow_every as usize,
+            q.max_arrows as usize,
+        )
+    } else {
+        (Vec::new(), 0)
+    };
+    Ok(SliceResult {
+        x_size: q.x_size,
+        y_size: q.y_size,
+        cut_world: field.origin.zip(field.spacing).map(|_| cut_world),
+        u_min: u_min.min(u_max),
+        u_max: u_min.max(u_max),
+        v_min: v_min.min(v_max),
+        v_max: v_min.max(v_max),
+        scalar_values,
+        n_comp_out: if full_vector_output { 3 } else { 1 },
+        min: if min.is_finite() { min } else { 0.0 },
+        max: if max.is_finite() { max } else { 0.0 },
+        empty_mask: sampled
+            .occupancy
+            .iter()
+            .map(|occupancy| u8::from(*occupancy == crate::planar_sampling::Occupancy::Empty))
+            .collect(),
+        arrow_values,
+        arrow_count,
+        sampling_method: "planar_sampling_fdm_cell_constant",
+    })
+}
+
+#[cfg(test)]
+fn fdm_slice_legacy(field: &FdmField, q: &ResolvedSliceQuery) -> Result<SliceResult, ApiError> {
     let [nx, ny, nz] = field.grid.map(|v| v as usize);
     if nx == 0 || ny == 0 || nz == 0 {
         return Err(ApiError::bad_request(
@@ -674,11 +841,248 @@ pub fn fdm_projection(
     q: &ResolvedProjectionQuery,
 ) -> Result<ProjectionResult, ApiError> {
     if q.adaptive {
+        let max_samples = q.samples.max(1);
+        let mut samples = q.min_samples.max(1).min(max_samples);
+        let tolerance = q.error_tolerance.unwrap_or(0.0).max(0.0);
+        let mut previous: Option<ProjectionResult> = None;
+        loop {
+            let mut current_query = q.clone();
+            current_query.adaptive = false;
+            current_query.samples = samples;
+            let mut current = fdm_projection_via_planar_engine(field, &current_query)?;
+            current.sampling_method = "fdm_layer_projection_adaptive_nearest";
+            if let Some(previous_projection) = previous.as_ref() {
+                let error = projection_max_abs_delta(
+                    &current.scalar_values,
+                    &previous_projection.scalar_values,
+                );
+                if error <= tolerance || samples >= max_samples {
+                    return Ok(current);
+                }
+            } else if samples >= max_samples {
+                return Ok(current);
+            }
+            previous = Some(current);
+            samples = samples.saturating_mul(2).min(max_samples);
+        }
+    }
+    fdm_projection_via_planar_engine(field, q)
+}
+
+fn fdm_projection_via_planar_engine(
+    field: &FdmField,
+    q: &ResolvedProjectionQuery,
+) -> Result<ProjectionResult, ApiError> {
+    let [nx, ny, nz] = field.grid;
+    if nx == 0 || ny == 0 || nz == 0 {
+        return Err(ApiError::bad_request(
+            "invalid_query: field grid has zero dimension",
+        ));
+    }
+    let (u_axis, v_axis, normal_axis, u_vector, v_vector, normal_vector) = match q.plane {
+        SlicePlane::Xy => (0, 1, 2, [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+        SlicePlane::Xz => (0, 2, 1, [1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]),
+        SlicePlane::Yz => (1, 2, 0, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+    };
+    let normal_len = field.grid[normal_axis] as usize;
+    let sample_count = (q.samples as usize).min(normal_len).max(1);
+    let selected_layers = (0..sample_count)
+        .map(|sample| {
+            if sample_count == 1 {
+                (normal_len - 1) / 2
+            } else {
+                (sample as f64 / (sample_count - 1) as f64 * (normal_len - 1) as f64).round()
+                    as usize
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut compact_grid = field.grid;
+    compact_grid[normal_axis] = sample_count as u32;
+    let mut compact_values = Vec::with_capacity(
+        compact_grid
+            .iter()
+            .map(|value| *value as usize)
+            .product::<usize>()
+            * field.n_comp,
+    );
+    for z in 0..compact_grid[2] as usize {
+        for y in 0..compact_grid[1] as usize {
+            for x in 0..compact_grid[0] as usize {
+                let mut source = [x, y, z];
+                source[normal_axis] = selected_layers[source[normal_axis]];
+                let source_cell = (source[2] * ny as usize + source[1]) * nx as usize + source[0];
+                let start = source_cell * field.n_comp;
+                compact_values.extend_from_slice(&field.values[start..start + field.n_comp]);
+            }
+        }
+    }
+    let mut source_origin = field.origin.unwrap_or([-0.5; 3]);
+    let spacing = field.spacing.unwrap_or([1.0; 3]);
+    source_origin[normal_axis] += selected_layers[0] as f64 * spacing[normal_axis];
+    let source = FdmPlanarField::new(
+        field.n_comp,
+        compact_grid,
+        source_origin,
+        spacing,
+        compact_values,
+    )?;
+    let internal_axis_bounds = |axis: usize| {
+        let origin = field.origin.unwrap_or([-0.5; 3])[axis];
+        (origin, origin + spacing[axis] * field.grid[axis] as f64)
+    };
+    let reported_axis_bounds = |axis: usize| {
+        if let (Some(origin), Some(spacing)) = (field.origin, field.spacing) {
+            (
+                origin[axis],
+                origin[axis] + spacing[axis] * field.grid[axis] as f64,
+            )
+        } else {
+            (0.0, field.grid[axis].saturating_sub(1) as f64)
+        }
+    };
+    let (full_u_min, full_u_max) = internal_axis_bounds(u_axis);
+    let (full_v_min, full_v_max) = internal_axis_bounds(v_axis);
+    let du = (full_u_max - full_u_min) / q.full_x_size.max(1) as f64;
+    let dv = (full_v_max - full_v_min) / q.full_y_size.max(1) as f64;
+    let tile_u_min = full_u_min + q.tile_origin_x as f64 * du;
+    let tile_v_min = full_v_min + q.tile_origin_y as f64 * dv;
+    let component = projection_planar_component(&q.component, field.n_comp)?;
+    let canonical_reduction = match q.reduction {
+        ProjectionReduction::MeanOccupied | ProjectionReduction::AreaWeightedMean => {
+            PlanarReductionIR::MeanOccupied
+        }
+        ProjectionReduction::ThicknessIntegral => PlanarReductionIR::ThicknessIntegral,
+        ProjectionReduction::Min => PlanarReductionIR::Min,
+        ProjectionReduction::Max => PlanarReductionIR::Max,
+        ProjectionReduction::Rms => PlanarReductionIR::Rms,
+        ProjectionReduction::AbsMax => PlanarReductionIR::AbsMax,
+        ProjectionReduction::Sum | ProjectionReduction::Stddev => PlanarReductionIR::MeanOccupied,
+    };
+    let request = ResolvedPlanarSampleRequest {
+        monitor_id: "legacy-fdm-projection".to_string(),
+        monitor_hash: "legacy-fdm-projection-v1".to_string(),
+        frame: PlanarFrameIR {
+            origin_m: [0.0; 3],
+            u_axis: u_vector,
+            v_axis: v_vector,
+            normal: normal_vector,
+            preset: None,
+            normalization_version: PLANAR_FRAME_NORMALIZATION_VERSION.to_string(),
+            extent: PlanarExtentIR::Explicit {
+                u_min_m: tile_u_min,
+                u_max_m: tile_u_min + q.x_size as f64 * du,
+                v_min_m: tile_v_min,
+                v_max_m: tile_v_min + q.y_size as f64 * dv,
+            },
+        },
+        operator: PlanarOperatorIR::DepthProjection {
+            reduction: canonical_reduction,
+            empty_policy: if q.include_air_as_zero {
+                EmptyPolicyIR::IncludeAirAsZero
+            } else {
+                EmptyPolicyIR::ExcludeEmpty
+            },
+        },
+        resolution: [q.x_size, q.y_size],
+        component,
+    };
+    let sampled = match q.reduction {
+        ProjectionReduction::Sum => PlanarSamplingEngine::sample_fdm_compatibility_depth(
+            &source,
+            &request,
+            PlanarCompatibilityReduction::SampleSum {
+                normal_step: spacing[normal_axis].abs(),
+            },
+            q.include_air_as_zero,
+        )?,
+        ProjectionReduction::Stddev => PlanarSamplingEngine::sample_fdm_compatibility_depth(
+            &source,
+            &request,
+            PlanarCompatibilityReduction::Stddev,
+            q.include_air_as_zero,
+        )?,
+        _ => PlanarSamplingEngine::sample_fdm(&source, &request)?,
+    };
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for value in sampled
+        .scalar_values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+    {
+        min = min.min(value);
+        max = max.max(value);
+    }
+    let (reported_u_min, reported_u_max) = reported_axis_bounds(u_axis);
+    let (reported_v_min, reported_v_max) = reported_axis_bounds(v_axis);
+    let reported_du =
+        (reported_u_max - reported_u_min) / q.full_x_size.saturating_sub(1).max(1) as f64;
+    let reported_dv =
+        (reported_v_max - reported_v_min) / q.full_y_size.saturating_sub(1).max(1) as f64;
+    let occupied_count = sampled.meta.occupied_count + sampled.meta.partial_count;
+    Ok(ProjectionResult {
+        x_size: q.x_size,
+        y_size: q.y_size,
+        samples: sample_count as u32,
+        u_min: reported_u_min + q.tile_origin_x as f64 * reported_du,
+        u_max: reported_u_min + (q.tile_origin_x + q.x_size.saturating_sub(1)) as f64 * reported_du,
+        v_min: reported_v_min + q.tile_origin_y as f64 * reported_dv,
+        v_max: reported_v_min + (q.tile_origin_y + q.y_size.saturating_sub(1)) as f64 * reported_dv,
+        scalar_values: sampled.scalar_values,
+        empty_mask: sampled
+            .occupancy
+            .iter()
+            .map(|occupancy| u8::from(*occupancy == Occupancy::Empty))
+            .collect(),
+        min: if min.is_finite() { min } else { 0.0 },
+        max: if max.is_finite() { max } else { 0.0 },
+        occupied_count,
+        empty_count: sampled.meta.empty_count,
+        occupied_measure: occupied_count as f64 * sample_count as f64 * spacing[normal_axis].abs(),
+        sampling_method: "fdm_layer_projection_nearest",
+    })
+}
+
+fn projection_planar_component(
+    component: &ComponentSelection,
+    n_comp: usize,
+) -> Result<PlanarComponent, ApiError> {
+    Ok(match component {
+        ComponentSelection::Full if n_comp == 1 => PlanarComponent::Scalar,
+        ComponentSelection::Full => {
+            return Err(ApiError::bad_request(
+                "invalid_query: projection/scalar requires a scalar component, not full",
+            ))
+        }
+        ComponentSelection::Magnitude => PlanarComponent::Magnitude,
+        ComponentSelection::MagnitudeSquared => PlanarComponent::MagnitudeSquared,
+        ComponentSelection::AbsIndex(0) => PlanarComponent::AbsWorldX,
+        ComponentSelection::AbsIndex(1) => PlanarComponent::AbsWorldY,
+        ComponentSelection::AbsIndex(2) => PlanarComponent::AbsWorldZ,
+        ComponentSelection::Index(0) => PlanarComponent::WorldX,
+        ComponentSelection::Index(1) => PlanarComponent::WorldY,
+        ComponentSelection::Index(2) => PlanarComponent::WorldZ,
+        ComponentSelection::AbsIndex(index) | ComponentSelection::Index(index) => {
+            return Err(ApiError::bad_request(format!(
+                "invalid_component: planar projection supports vector components 0..2, got {index}"
+            )))
+        }
+    })
+}
+
+#[cfg(test)]
+fn fdm_projection_legacy(
+    field: &FdmField,
+    q: &ResolvedProjectionQuery,
+) -> Result<ProjectionResult, ApiError> {
+    if q.adaptive {
         return fdm_projection_adaptive(field, q);
     }
     fdm_projection_fixed(field, q, "fdm_layer_projection_nearest")
 }
 
+#[cfg(test)]
 fn fdm_projection_adaptive(
     field: &FdmField,
     q: &ResolvedProjectionQuery,
@@ -725,6 +1129,7 @@ fn projection_max_abs_delta(left: &[f64], right: &[f64]) -> f64 {
         .fold(0.0, f64::max)
 }
 
+#[cfg(test)]
 fn fdm_projection_fixed(
     field: &FdmField,
     q: &ResolvedProjectionQuery,
@@ -912,166 +1317,151 @@ pub fn fem_projection_exact(
     field: &FemField,
     q: &ResolvedProjectionQuery,
 ) -> Result<ProjectionResult, ApiError> {
-    if field.nodes.is_empty() || field.elements.is_empty() {
-        return Err(ApiError::bad_request(
-            "invalid_query: FEM projection requires nodes and tetrahedral elements",
-        ));
-    }
-    if field.n_comp == 0 || field.values.len() < field.nodes.len().saturating_mul(field.n_comp) {
-        return Err(ApiError::bad_request(
-            "invalid_query: FEM projection field values do not match nodal topology",
-        ));
-    }
+    fem_projection_via_planar_engine(field, q)
+}
 
-    let axes = projection_axes(q.plane);
-    let (mut u_min, mut u_max, mut v_min, mut v_max) = (
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-    );
-    for node in &field.nodes {
-        u_min = u_min.min(node[axes.u]);
-        u_max = u_max.max(node[axes.u]);
-        v_min = v_min.min(node[axes.v]);
-        v_max = v_max.max(node[axes.v]);
-    }
-    let (u_min, u_max) = pad_axis_bounds(u_min, u_max);
-    let (v_min, v_max) = pad_axis_bounds(v_min, v_max);
-    let full_x = q.full_x_size.max(1) as usize;
-    let full_y = q.full_y_size.max(1) as usize;
-    let out_x = q.x_size as usize;
-    let out_y = q.y_size as usize;
-    let pixel_du = (u_max - u_min) / full_x as f64;
-    let pixel_dv = (v_max - v_min) / full_y as f64;
-    let pixel_area = (pixel_du * pixel_dv).abs().max(f64::EPSILON);
-    let cell_count = out_x.saturating_mul(out_y);
-
-    let mut weight_sum = vec![0.0; cell_count];
-    let mut value_sum = vec![0.0; cell_count];
-    let mut value_sq_sum = vec![0.0; cell_count];
-    let mut min_values = vec![f64::INFINITY; cell_count];
-    let mut max_values = vec![f64::NEG_INFINITY; cell_count];
-    let mut hit_count = vec![0u32; cell_count];
-
-    for (element_index, element) in field.elements.iter().enumerate() {
-        let marker = field
-            .element_markers
-            .get(element_index)
-            .copied()
-            .unwrap_or(1);
-        if marker == 0 {
-            continue;
+fn fem_projection_via_planar_engine(
+    field: &FemField,
+    q: &ResolvedProjectionQuery,
+) -> Result<ProjectionResult, ApiError> {
+    let (reduction, compatibility_reduction) = match q.reduction {
+        ProjectionReduction::MeanOccupied | ProjectionReduction::AreaWeightedMean => {
+            (PlanarReductionIR::MeanOccupied, None)
         }
-        let Some(nodes) = tetra_nodes(&field.nodes, element) else {
-            continue;
-        };
-        let volume = tetra_volume(nodes);
-        if !volume.is_finite() || volume <= 0.0 {
-            continue;
-        }
-        let mut value = 0.0;
-        for node_index in element {
-            value += component_sample(
-                &field.values,
-                *node_index as usize * field.n_comp,
-                field.n_comp,
-                &q.component,
-            );
-        }
-        value /= 4.0;
-
-        let projected = nodes.map(|node| [node[axes.u], node[axes.v]]);
-        let hull = convex_hull_2d(&projected);
-        if hull.len() < 3 {
-            continue;
-        }
-        let covered =
-            covered_projection_cells(&hull, u_min, v_min, pixel_du, pixel_dv, full_x, full_y, q);
-        if covered.is_empty() {
-            continue;
-        }
-        let overlap_sum = covered.iter().map(|(_, _, area)| *area).sum::<f64>();
-        let fallback_share = volume / covered.len() as f64;
-        for (local_x, local_y, overlap_area) in covered {
-            let idx = local_y * out_x + local_x;
-            let share = if overlap_sum > 0.0 {
-                volume * overlap_area / overlap_sum
-            } else {
-                fallback_share
-            };
-            weight_sum[idx] += share;
-            value_sum[idx] += value * share;
-            value_sq_sum[idx] += value * value * share;
-            min_values[idx] = min_values[idx].min(value);
-            max_values[idx] = max_values[idx].max(value);
-            hit_count[idx] = hit_count[idx].saturating_add(1);
-        }
-    }
-
-    let mut scalar_values = Vec::with_capacity(cell_count);
-    let mut empty_mask = Vec::with_capacity(cell_count);
-    let mut min = f64::INFINITY;
-    let mut max = f64::NEG_INFINITY;
-    let mut occupied_count = 0u32;
-    let mut occupied_measure = 0.0;
-
-    for idx in 0..cell_count {
-        let occupied = hit_count[idx] > 0 && weight_sum[idx] > 0.0;
-        empty_mask.push(u8::from(!occupied));
-        if !occupied {
-            scalar_values.push(if q.include_air_as_zero { 0.0 } else { f64::NAN });
-            continue;
-        }
-        occupied_count = occupied_count.saturating_add(1);
-        occupied_measure += weight_sum[idx];
-        let mean = value_sum[idx] / weight_sum[idx];
-        let value = match q.reduction {
-            ProjectionReduction::MeanOccupied | ProjectionReduction::AreaWeightedMean => mean,
-            ProjectionReduction::Sum => value_sum[idx],
-            ProjectionReduction::ThicknessIntegral => value_sum[idx] / pixel_area,
-            ProjectionReduction::Min => min_values[idx],
-            ProjectionReduction::Max => max_values[idx],
-            ProjectionReduction::Rms => (value_sq_sum[idx] / weight_sum[idx]).sqrt(),
-            ProjectionReduction::Stddev => (value_sq_sum[idx] / weight_sum[idx] - mean * mean)
-                .max(0.0)
-                .sqrt(),
-            ProjectionReduction::AbsMax => {
-                if min_values[idx].abs() >= max_values[idx].abs() {
-                    min_values[idx]
-                } else {
-                    max_values[idx]
-                }
+        ProjectionReduction::ThicknessIntegral => (PlanarReductionIR::ThicknessIntegral, None),
+        ProjectionReduction::Min => (PlanarReductionIR::Min, None),
+        ProjectionReduction::Max => (PlanarReductionIR::Max, None),
+        ProjectionReduction::Rms => (PlanarReductionIR::Rms, None),
+        ProjectionReduction::AbsMax => (PlanarReductionIR::AbsMax, None),
+        ProjectionReduction::Sum => (
+            PlanarReductionIR::MeanOccupied,
+            Some(PlanarCompatibilityReduction::WeightedSum),
+        ),
+        ProjectionReduction::Stddev => (
+            PlanarReductionIR::MeanOccupied,
+            Some(PlanarCompatibilityReduction::Stddev),
+        ),
+    };
+    (|| {
+        let component = match q.component {
+            ComponentSelection::Full if field.n_comp == 1 => PlanarComponent::Scalar,
+            ComponentSelection::Full => {
+                return Err(ApiError::bad_request(
+                    "invalid_query: projection/scalar requires a scalar component, not full",
+                ))
+            }
+            ComponentSelection::Magnitude => PlanarComponent::Magnitude,
+            ComponentSelection::MagnitudeSquared => PlanarComponent::MagnitudeSquared,
+            ComponentSelection::AbsIndex(0) => PlanarComponent::AbsWorldX,
+            ComponentSelection::AbsIndex(1) => PlanarComponent::AbsWorldY,
+            ComponentSelection::AbsIndex(2) => PlanarComponent::AbsWorldZ,
+            ComponentSelection::Index(0) => PlanarComponent::WorldX,
+            ComponentSelection::Index(1) => PlanarComponent::WorldY,
+            ComponentSelection::Index(2) => PlanarComponent::WorldZ,
+            ComponentSelection::AbsIndex(index) | ComponentSelection::Index(index) => {
+                return Err(ApiError::bad_request(format!(
+                    "invalid_component: planar projection supports vector components 0..2, got {index}"
+                )))
             }
         };
-        if value.is_finite() {
+        let (u_axis, v_axis, normal) = match q.plane {
+            SlicePlane::Xy => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+            SlicePlane::Xz => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]),
+            SlicePlane::Yz => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+        };
+        let axes = projection_axes(q.plane);
+        let (mut u_min, mut u_max, mut v_min, mut v_max) = (
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        for node in &field.nodes {
+            u_min = u_min.min(node[axes.u]);
+            u_max = u_max.max(node[axes.u]);
+            v_min = v_min.min(node[axes.v]);
+            v_max = v_max.max(node[axes.v]);
+        }
+        (u_min, u_max) = pad_axis_bounds(u_min, u_max);
+        (v_min, v_max) = pad_axis_bounds(v_min, v_max);
+        let du = (u_max - u_min) / q.full_x_size.max(1) as f64;
+        let dv = (v_max - v_min) / q.full_y_size.max(1) as f64;
+        let tile_u_min = u_min + q.tile_origin_x as f64 * du;
+        let tile_v_min = v_min + q.tile_origin_y as f64 * dv;
+        let frame = PlanarFrameIR {
+            origin_m: [0.0; 3],
+            u_axis,
+            v_axis,
+            normal,
+            preset: None,
+            normalization_version: PLANAR_FRAME_NORMALIZATION_VERSION.to_string(),
+            extent: PlanarExtentIR::Explicit {
+                u_min_m: tile_u_min,
+                u_max_m: tile_u_min + q.x_size as f64 * du,
+                v_min_m: tile_v_min,
+                v_max_m: tile_v_min + q.y_size as f64 * dv,
+            },
+        };
+        let source = FemPlanarField::new(
+            field.n_comp,
+            field.nodes.clone(),
+            field.elements.clone(),
+            field.element_markers.clone(),
+            field.values.clone(),
+        )?;
+        let request = ResolvedPlanarSampleRequest {
+            monitor_id: "legacy-projection".to_string(),
+            monitor_hash: "legacy-projection-v1".to_string(),
+            frame,
+            operator: PlanarOperatorIR::DepthProjection {
+                reduction,
+                empty_policy: if q.include_air_as_zero {
+                    EmptyPolicyIR::IncludeAirAsZero
+                } else {
+                    EmptyPolicyIR::ExcludeEmpty
+                },
+            },
+            resolution: [q.x_size, q.y_size],
+            component,
+        };
+        let sampled = if let Some(reduction) = compatibility_reduction {
+            PlanarSamplingEngine::sample_fem_compatibility_depth(&source, &request, reduction)?
+        } else {
+            PlanarSamplingEngine::sample_fem(&source, &request)?
+        };
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        for value in sampled
+            .scalar_values
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite())
+        {
             min = min.min(value);
             max = max.max(value);
         }
-        scalar_values.push(value);
-    }
-
-    let empty_count = cell_count as u32 - occupied_count;
-    let min = if min.is_infinite() { 0.0 } else { min };
-    let max = if max.is_infinite() { 0.0 } else { max };
-
-    Ok(ProjectionResult {
-        x_size: q.x_size,
-        y_size: q.y_size,
-        samples: q.samples,
-        u_min,
-        u_max,
-        v_min,
-        v_max,
-        scalar_values,
-        empty_mask,
-        min,
-        max,
-        occupied_count,
-        empty_count,
-        occupied_measure,
-        sampling_method: "fem_tetra_volume_projection_conservative",
-    })
+        Ok(ProjectionResult {
+            x_size: q.x_size,
+            y_size: q.y_size,
+            samples: q.samples,
+            u_min: tile_u_min,
+            u_max: tile_u_min + q.x_size as f64 * du,
+            v_min: tile_v_min,
+            v_max: tile_v_min + q.y_size as f64 * dv,
+            scalar_values: sampled.scalar_values,
+            empty_mask: sampled
+                .occupancy
+                .iter()
+                .map(|occupancy| u8::from(*occupancy == Occupancy::Empty))
+                .collect(),
+            min: if min.is_finite() { min } else { 0.0 },
+            max: if max.is_finite() { max } else { 0.0 },
+            occupied_count: sampled.meta.occupied_count + sampled.meta.partial_count,
+            empty_count: sampled.meta.empty_count,
+            occupied_measure: sampled.meta.occupied_measure,
+            sampling_method: "fem_tetra_volume_projection_conservative",
+        })
+    })()
 }
 
 pub fn fem_projection_profile(
@@ -1322,163 +1712,6 @@ fn point_in_convex_polygon(point: [f64; 2], polygon: &[[f64; 2]]) -> bool {
     true
 }
 
-fn covered_projection_cells(
-    hull: &[[f64; 2]],
-    u_min: f64,
-    v_min: f64,
-    pixel_du: f64,
-    pixel_dv: f64,
-    full_x: usize,
-    full_y: usize,
-    q: &ResolvedProjectionQuery,
-) -> Vec<(usize, usize, f64)> {
-    let (mut min_u, mut max_u, mut min_v, mut max_v) = (
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-    );
-    for point in hull {
-        min_u = min_u.min(point[0]);
-        max_u = max_u.max(point[0]);
-        min_v = min_v.min(point[1]);
-        max_v = max_v.max(point[1]);
-    }
-    let start_x = pixel_index_floor(min_u, u_min, pixel_du, full_x);
-    let end_x = pixel_index_floor(max_u, u_min, pixel_du, full_x);
-    let start_y = pixel_index_floor(min_v, v_min, pixel_dv, full_y);
-    let end_y = pixel_index_floor(max_v, v_min, pixel_dv, full_y);
-    let tile_x0 = q.tile_origin_x as usize;
-    let tile_y0 = q.tile_origin_y as usize;
-    let tile_x1 = tile_x0 + q.x_size as usize;
-    let tile_y1 = tile_y0 + q.y_size as usize;
-    let mut cells = Vec::new();
-    for global_y in start_y.max(tile_y0)..=end_y.min(tile_y1.saturating_sub(1)) {
-        for global_x in start_x.max(tile_x0)..=end_x.min(tile_x1.saturating_sub(1)) {
-            let rect_min_u = u_min + global_x as f64 * pixel_du;
-            let rect_max_u = rect_min_u + pixel_du;
-            let rect_min_v = v_min + global_y as f64 * pixel_dv;
-            let rect_max_v = rect_min_v + pixel_dv;
-            let clipped =
-                clip_polygon_to_rect(hull, rect_min_u, rect_max_u, rect_min_v, rect_max_v);
-            let area = polygon_area_abs(&clipped);
-            if area > 0.0 {
-                cells.push((global_x - tile_x0, global_y - tile_y0, area));
-            }
-        }
-    }
-    if cells.is_empty() {
-        let centroid = hull.iter().fold([0.0, 0.0], |acc, point| {
-            [acc[0] + point[0], acc[1] + point[1]]
-        });
-        let centroid = [
-            centroid[0] / hull.len() as f64,
-            centroid[1] / hull.len() as f64,
-        ];
-        let global_x = pixel_index_floor(centroid[0], u_min, pixel_du, full_x);
-        let global_y = pixel_index_floor(centroid[1], v_min, pixel_dv, full_y);
-        if global_x >= tile_x0 && global_x < tile_x1 && global_y >= tile_y0 && global_y < tile_y1 {
-            cells.push((global_x - tile_x0, global_y - tile_y0, 1.0));
-        }
-    }
-    cells
-}
-
-fn clip_polygon_to_rect(
-    polygon: &[[f64; 2]],
-    min_u: f64,
-    max_u: f64,
-    min_v: f64,
-    max_v: f64,
-) -> Vec<[f64; 2]> {
-    let mut out = polygon.to_vec();
-    out = clip_polygon_halfplane(
-        &out,
-        |point| point[0] >= min_u,
-        |a, b| intersect_vertical(a, b, min_u),
-    );
-    out = clip_polygon_halfplane(
-        &out,
-        |point| point[0] <= max_u,
-        |a, b| intersect_vertical(a, b, max_u),
-    );
-    out = clip_polygon_halfplane(
-        &out,
-        |point| point[1] >= min_v,
-        |a, b| intersect_horizontal(a, b, min_v),
-    );
-    clip_polygon_halfplane(
-        &out,
-        |point| point[1] <= max_v,
-        |a, b| intersect_horizontal(a, b, max_v),
-    )
-}
-
-fn clip_polygon_halfplane(
-    polygon: &[[f64; 2]],
-    inside: impl Fn([f64; 2]) -> bool,
-    intersect: impl Fn([f64; 2], [f64; 2]) -> [f64; 2],
-) -> Vec<[f64; 2]> {
-    if polygon.is_empty() {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    let mut previous = polygon[polygon.len() - 1];
-    let mut previous_inside = inside(previous);
-    for current in polygon {
-        let current_inside = inside(*current);
-        if current_inside {
-            if !previous_inside {
-                out.push(intersect(previous, *current));
-            }
-            out.push(*current);
-        } else if previous_inside {
-            out.push(intersect(previous, *current));
-        }
-        previous = *current;
-        previous_inside = current_inside;
-    }
-    out
-}
-
-fn intersect_vertical(a: [f64; 2], b: [f64; 2], u: f64) -> [f64; 2] {
-    let denom = b[0] - a[0];
-    if denom.abs() <= f64::EPSILON {
-        return [u, a[1]];
-    }
-    let t = ((u - a[0]) / denom).clamp(0.0, 1.0);
-    [u, a[1] + (b[1] - a[1]) * t]
-}
-
-fn intersect_horizontal(a: [f64; 2], b: [f64; 2], v: f64) -> [f64; 2] {
-    let denom = b[1] - a[1];
-    if denom.abs() <= f64::EPSILON {
-        return [a[0], v];
-    }
-    let t = ((v - a[1]) / denom).clamp(0.0, 1.0);
-    [a[0] + (b[0] - a[0]) * t, v]
-}
-
-fn polygon_area_abs(points: &[[f64; 2]]) -> f64 {
-    if points.len() < 3 {
-        return 0.0;
-    }
-    let mut area = 0.0;
-    for index in 0..points.len() {
-        let a = points[index];
-        let b = points[(index + 1) % points.len()];
-        area += a[0] * b[1] - b[0] * a[1];
-    }
-    (area * 0.5).abs()
-}
-
-fn pixel_index_floor(value: f64, origin: f64, step: f64, len: usize) -> usize {
-    if len <= 1 || !step.is_finite() || step.abs() <= f64::EPSILON {
-        return 0;
-    }
-    (((value - origin) / step).floor() as isize).clamp(0, len as isize - 1) as usize
-}
-
 /// FEM fallback path for slice sampling.
 ///
 /// Until exact FEM 2D sampling is enabled, we use the current nearest-neighbour sampler
@@ -1679,6 +1912,25 @@ mod tests {
     }
 
     #[test]
+    fn planar_sampling_compatibility_adapter_matches_legacy_fdm_slice() {
+        for plane in [SlicePlane::Xy, SlicePlane::Xz, SlicePlane::Yz] {
+            for cut_norm in [0.0, 1.0] {
+                let field = mock_fdm_field();
+                let query = resolve_slice_query(&mock_query(plane, cut_norm), 1).unwrap();
+                let current = fdm_slice(&field, &query).unwrap();
+                let legacy = fdm_slice_legacy(&field, &query).unwrap();
+                assert_eq!(current.scalar_values, legacy.scalar_values);
+                assert_eq!(current.x_size, legacy.x_size);
+                assert_eq!(current.y_size, legacy.y_size);
+                assert_eq!(current.u_min, legacy.u_min);
+                assert_eq!(current.u_max, legacy.u_max);
+                assert_eq!(current.v_min, legacy.v_min);
+                assert_eq!(current.v_max, legacy.v_max);
+            }
+        }
+    }
+
+    #[test]
     fn projection_supports_extrema_and_statistical_reductions() {
         let field = FdmField {
             n_comp: 1,
@@ -1719,6 +1971,46 @@ mod tests {
         assert!((rms.scalar_values[0] - 5.0_f64.sqrt()).abs() < 1e-12);
         assert!((stddev.scalar_values[0] - 1.0).abs() < 1e-12);
         assert_eq!(abs_max.scalar_values, vec![3.0]);
+    }
+
+    #[test]
+    fn planar_sampling_compatibility_adapter_matches_legacy_fdm_projection() {
+        let field = FdmField {
+            n_comp: 1,
+            grid: [1, 1, 3],
+            values: vec![1.0, 2.0, 4.0],
+            origin: None,
+            spacing: None,
+        };
+        for reduction in [
+            "mean_occupied",
+            "sum",
+            "thickness_integral",
+            "area_weighted_mean",
+            "min",
+            "max",
+            "rms",
+            "stddev",
+            "abs_max",
+        ] {
+            for samples in [1, 2, 3] {
+                let mut query = mock_projection_query(reduction);
+                query.samples = Some(samples);
+                let resolved = resolve_projection_query(&query, 1).unwrap();
+                let current = fdm_projection(&field, &resolved).unwrap();
+                let legacy = fdm_projection_legacy(&field, &resolved).unwrap();
+                assert_eq!(
+                    current.empty_mask, legacy.empty_mask,
+                    "{reduction}/{samples}"
+                );
+                for (current, legacy) in current.scalar_values.iter().zip(&legacy.scalar_values) {
+                    assert!(
+                        (current.is_nan() && legacy.is_nan()) || (current - legacy).abs() < 1.0e-12,
+                        "{reduction}/{samples}: current={current}, legacy={legacy}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -1784,6 +2076,31 @@ mod tests {
             .collect();
         assert_eq!(finite_values, vec![2.0, 2.0, 2.0]);
         assert!((result.occupied_measure - (1.0 / 6.0)).abs() < 1e-12);
+
+        let mut sum_query = query.clone();
+        sum_query.reduction = Some("sum".to_string());
+        let sum = fem_projection_exact(&field, &resolve_projection_query(&sum_query, 1).unwrap())
+            .unwrap();
+        assert!(
+            (sum.scalar_values
+                .iter()
+                .filter(|value| value.is_finite())
+                .sum::<f64>()
+                - 1.0 / 3.0)
+                .abs()
+                < 1.0e-12
+        );
+
+        let mut stddev_query = query;
+        stddev_query.reduction = Some("stddev".to_string());
+        let stddev =
+            fem_projection_exact(&field, &resolve_projection_query(&stddev_query, 1).unwrap())
+                .unwrap();
+        assert!(stddev
+            .scalar_values
+            .iter()
+            .filter(|value| value.is_finite())
+            .all(|value| value.abs() < 1.0e-12));
     }
 
     #[test]

@@ -221,6 +221,16 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
+  if (node.kind === "model.planar.monitor" && node.monitorId) {
+    return {
+      kind: "model.planar.monitor",
+      monitorId: node.monitorId,
+      nodeId: node.id,
+      type: "planar-monitor",
+      visualizationTargetId: `planar-monitor:${node.monitorId}`,
+    };
+  }
+
   if (
     node.kind === "visualizations-2d.draft" ||
     (node.kind === "visualizations-2d.parameter" && node.crossSectionDraftId)

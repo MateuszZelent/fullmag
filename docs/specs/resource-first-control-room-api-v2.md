@@ -179,6 +179,55 @@ Capability resources have distinct scopes:
 
 ## 3.3 Model authoring and Geometry object lifecycle
 
+### Planar monitor model and field resources
+
+`PlanarMonitor` is canonical model state, not a visualization-only draft. It
+round-trips through `SceneDocument`, `ProblemIR`, and canonical Python:
+
+```text
+GET    /v2/sessions/current/model/planar-monitors
+POST   /v2/sessions/current/model/planar-monitors
+GET    /v2/sessions/current/model/planar-monitors/{monitor_id}
+PATCH  /v2/sessions/current/model/planar-monitors/{monitor_id}
+DELETE /v2/sessions/current/model/planar-monitors/{monitor_id}
+POST   /v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate
+```
+
+Mutations carry `expected_scene_revision`, use the canonical scene transaction
+owner, update script export, and emit invalidation. Monitor JSON contains only
+physical target, frame, extent, and operator. Quantity and presentation state
+are not model fields.
+
+Spatial data uses separate revisioned resources:
+
+```text
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/meta
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/vectors
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/empty-mask
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/mesh-overlay
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/probe
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/render.png
+```
+
+`meta` is fetched before heavy payloads and supplies resolved frame/operator,
+shape, canonical URLs/ETags, revisions, occupancy, source/sampling execution,
+basis/integration order, and diagnostics. Scalar/vector/mask/overlay resources
+are bounded binary payloads using existing codecs where semantically valid.
+Resolution is limited to `16..2048` per axis and vector budget to
+`0..10000` before allocation.
+
+The query may select a live field or a validated stage/snapshot pair. A
+runtime-only `monitor_target | mesh_part | airbox` scope only narrows the
+physical target and is keyed by current mesh revision. Stable error reasons
+distinguish missing materialization, unsupported quantity/basis/scope,
+non-injective surface projection, stale monitor/mesh/field revisions, and
+sampling budget exhaustion.
+
+Existing `/samples/slice` and `/projection` resources remain compatibility
+adapters to the same `PlanarSamplingEngine` until a separately approved removal.
+They are not a second numerical implementation.
+
 The `model` family owns canonical authoring state. Geometry object creation is a model transaction first and a mesh build only after the scene commit succeeds.
 
 The control-room Model explorer is object-first. Ferromagnetic objects own the primary navigation path for geometry, regions, magnetic parameters, magnetic texture, mesh, and visualization. Material and magnetization entries may remain reusable assets in `SceneDocument`, but browser modules focus them through the selected object instead of exposing standalone top-level Model branches.

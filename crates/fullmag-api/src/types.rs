@@ -8,9 +8,9 @@ use crate::schemas::hysteresis::HysteresisBookmarkSchema;
 use crate::schemas::realtime::RealtimeResourceChange;
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
-    SamplingVisualizationState, SliceVisualizationState, TrimVisualizationState,
-    VectorStyleVisualizationState, VisualizationCameraState, VisualizationClientAckEntry,
-    VisualizationLayerState, VisualizationOverrideState,
+    PlanarVisualizationState, SamplingVisualizationState, SliceVisualizationState,
+    TrimVisualizationState, VectorStyleVisualizationState, VisualizationCameraState,
+    VisualizationClientAckEntry, VisualizationLayerState, VisualizationOverrideState,
 };
 use crate::schemas::workspace::{
     WorkspaceLayoutResource, WorkspaceRibbonResource, WorkspaceSelectionResource,
@@ -52,6 +52,8 @@ pub(crate) struct DisplayPresentationState {
     #[serde(default)]
     pub visualization_slice: Option<SliceVisualizationState>,
     #[serde(default)]
+    pub visualization_planar: Option<PlanarVisualizationState>,
+    #[serde(default)]
     pub visualization_trim: Option<TrimVisualizationState>,
     #[serde(default)]
     pub visualization_camera: Option<VisualizationCameraState>,
@@ -75,6 +77,7 @@ impl Default for DisplayPresentationState {
             visualization_sampling: None,
             visualization_fem: None,
             visualization_slice: None,
+            visualization_planar: None,
             visualization_trim: None,
             visualization_camera: None,
             visualization_clip: None,
@@ -1388,6 +1391,7 @@ mod tests {
             mesh_interfaces: Vec::new(),
             current_modules: Vec::new(),
             field_drives: Vec::new(),
+            planar_monitors: Vec::new(),
             excitation_analysis: None,
         }
     }

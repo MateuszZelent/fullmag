@@ -321,6 +321,7 @@ def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
             _export_current_module_entry(module) for module in base_problem.current_modules
         ],
         "field_drives": [drive.to_ir() for drive in base_problem.field_drives],
+        "planar_monitors": [monitor.to_ir() for monitor in base_problem.monitors],
         "spin_torques": [
             _export_spin_torque_entry(module) for module in base_problem.spin_torques
         ],
@@ -465,6 +466,15 @@ def render_loaded_problem_as_script(
     if coupling_lines:
         lines.append("")
         lines.extend(coupling_lines)
+
+    monitor_lines = _render_planar_monitors(
+        base_problem,
+        overrides=overrides,
+        surface=surface,
+    )
+    if monitor_lines:
+        lines.append("")
+        lines.extend(monitor_lines)
 
     demag_lines = _render_demag(base_problem, overrides=overrides, surface=surface)
     if demag_lines:
@@ -2167,6 +2177,144 @@ def _render_field_drives(problem: Problem, *, surface: str) -> list[str]:
         else:
             lines.append(f"fm.field_drive({expression})")
     return lines
+
+
+def _render_planar_monitors(
+    problem: Problem,
+    *,
+    overrides: dict[str, object],
+    surface: str,
+) -> list[str]:
+    override = overrides.get("planar_monitors")
+    if isinstance(override, list):
+        payloads = [
+            _normalize_mapping(item)
+            for item in override
+            if isinstance(item, dict)
+        ]
+    else:
+        payloads = [monitor.to_ir() for monitor in problem.monitors]
+    if not payloads:
+        return []
+    if surface != "study":
+        raise ValueError("canonical planar monitor rewrite requires the study API surface")
+
+    lines = ["# Planar monitors"]
+    for payload in payloads:
+        lines.append(
+            "study.monitors.add_planar("
+            f"monitor_id={_py_repr(str(payload.get('id', '')))}, "
+            f"name={_py_repr(str(payload.get('name', '')))}, "
+            f"target={_render_monitor_target(payload.get('target'))}, "
+            f"frame={_render_planar_frame(payload.get('frame'))}, "
+            f"operator={_render_planar_operator(payload.get('operator'))}"
+            ")"
+        )
+    return lines
+
+
+def _render_monitor_target(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kind = payload.get("kind")
+    if kind == "magnetic_domain":
+        return "fm.MonitorTarget.magnetic_domain()"
+    if kind == "domain":
+        return "fm.MonitorTarget.domain()"
+    if kind == "object":
+        return f"fm.MonitorTarget.object({_py_repr(str(payload.get('object_id', '')))})"
+    if kind == "region":
+        return (
+            "fm.MonitorTarget.region("
+            f"{_py_repr(str(payload.get('object_id', '')))}, "
+            f"{_py_repr(str(payload.get('region_id', '')))}"
+            ")"
+        )
+    raise ValueError(f"unsupported planar monitor target kind {kind!r}")
+
+
+def _render_planar_extent(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kind = payload.get("kind")
+    if kind == "explicit":
+        return (
+            "fm.PlanarExtent.explicit("
+            f"u=({_py_repr(payload.get('u_min_m'))}, {_py_repr(payload.get('u_max_m'))}), "
+            f"v=({_py_repr(payload.get('v_min_m'))}, {_py_repr(payload.get('v_max_m'))})"
+            ")"
+        )
+    if kind in {"target_bounds", "magnetic_domain", "universe"}:
+        return (
+            f"fm.PlanarExtent.{kind}("
+            f"padding={_py_repr(payload.get('padding_m', 0.0))}"
+            ")"
+        )
+    raise ValueError(f"unsupported planar extent kind {kind!r}")
+
+
+def _render_planar_frame(value: object) -> str:
+    payload = _normalize_mapping(value)
+    extent = _render_planar_extent(payload.get("extent"))
+    preset = payload.get("preset")
+    origin = payload.get("origin_m")
+    if preset in {"xy", "xz", "yz"} and isinstance(origin, list) and len(origin) == 3:
+        position_index = {"xy": 2, "xz": 1, "yz": 0}[str(preset)]
+        return (
+            f"fm.PlanarFrame.{preset}("
+            f"position={_py_repr(origin[position_index])}, extent={extent}"
+            ")"
+        )
+    return (
+        "fm.PlanarFrame("
+        f"origin={_py_repr(payload.get('origin_m'))}, "
+        f"normal={_py_repr(payload.get('normal'))}, "
+        f"u_axis={_py_repr(payload.get('u_axis'))}, "
+        f"extent={extent}"
+        ")"
+    )
+
+
+def _render_surface_boundary(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kind = payload.get("kind")
+    if kind == "object_boundary":
+        return "fm.SurfaceBoundary.object_boundary()"
+    if kind == "region_boundary":
+        return (
+            "fm.SurfaceBoundary.region_boundary("
+            f"{_py_repr(str(payload.get('region_id', '')))}"
+            ")"
+        )
+    if kind == "named_surface":
+        return (
+            "fm.SurfaceBoundary.named("
+            f"{_py_repr(str(payload.get('surface_id', '')))}"
+            ")"
+        )
+    raise ValueError(f"unsupported surface boundary kind {kind!r}")
+
+
+def _render_planar_operator(value: object) -> str:
+    payload = _normalize_mapping(value)
+    kind = payload.get("kind")
+    if kind == "plane_sample":
+        return "fm.PlaneSample()"
+    if kind == "slab_average":
+        return f"fm.SlabAverage(thickness={_py_repr(payload.get('thickness_m'))})"
+    if kind == "depth_projection":
+        return (
+            "fm.DepthProjection("
+            f"reduction={_py_repr(payload.get('reduction'))}, "
+            f"empty_policy={_py_repr(payload.get('empty_policy'))}"
+            ")"
+        )
+    if kind == "surface_projection":
+        return (
+            "fm.SurfaceProjection("
+            f"boundary={_render_surface_boundary(payload.get('boundary'))}, "
+            f"visibility_policy={_py_repr(payload.get('visibility_policy'))}"
+            ")"
+        )
+    raise ValueError(f"unsupported planar operator kind {kind!r}")
 
 
 def _render_spin_torques(
@@ -5383,8 +5531,11 @@ def _script_api_surface(
     runtime_metadata = _normalize_mapping(problem.runtime_metadata)
     surface = runtime_metadata.get("script_api_surface")
     couplings_override = (overrides or {}).get("couplings")
+    monitors_override = (overrides or {}).get("planar_monitors")
     if problem.couplings or (
         isinstance(couplings_override, list) and len(couplings_override) > 0
+    ) or problem.monitors or (
+        isinstance(monitors_override, list) and len(monitors_override) > 0
     ):
         return "study"
     return "study" if surface == "study" else "flat"

@@ -24,6 +24,8 @@ export interface LayoutState {
   activeModuleTab: RibbonTabId;
   /** Active center viewport surface module */
   activeViewportMainModuleId: ModuleId;
+  /** Last spatial center surface, retained while a non-spatial module is active. */
+  lastSpatialViewportMainModuleId?: "field-map" | "viewport-3d";
   /** Panel visibility */
   panelVisible: Record<PanelPosition, boolean>;
   /** Which slot currently has keyboard/interaction focus */
@@ -33,6 +35,7 @@ export interface LayoutState {
 export const DEFAULT_LAYOUT: LayoutState = {
   activeModuleTab: "home",
   activeViewportMainModuleId: "viewport-3d",
+  lastSpatialViewportMainModuleId: "viewport-3d",
   panelVisible: { left: true, right: true, bottom: true },
   focusedSlot: null,
 };

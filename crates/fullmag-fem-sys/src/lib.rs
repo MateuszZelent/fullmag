@@ -107,7 +107,10 @@ pub enum fullmag_fem_time_origin {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct fullmag_fem_time_point { pub time_s: f64, pub value: f64 }
+pub struct fullmag_fem_time_point {
+    pub time_s: f64,
+    pub value: f64,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -119,62 +122,96 @@ pub union fullmag_fem_time_dependence_parameters {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct fullmag_fem_sinusoidal_time_desc { pub frequency_hz: f64, pub phase_rad: f64, pub offset: f64 }
+pub struct fullmag_fem_sinusoidal_time_desc {
+    pub frequency_hz: f64,
+    pub phase_rad: f64,
+    pub offset: f64,
+}
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct fullmag_fem_pulse_time_desc { pub t_on_s: f64, pub t_off_s: f64 }
+pub struct fullmag_fem_pulse_time_desc {
+    pub t_on_s: f64,
+    pub t_off_s: f64,
+}
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct fullmag_fem_sinc_pulse_time_desc { pub cutoff_hz: f64, pub t0_s: f64, pub amplitude: f64 }
+pub struct fullmag_fem_sinc_pulse_time_desc {
+    pub cutoff_hz: f64,
+    pub t0_s: f64,
+    pub amplitude: f64,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct fullmag_fem_time_dependence_desc {
-    pub abi_version: u32, pub struct_size: u32, pub kind: u32,
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub kind: u32,
     pub parameters: fullmag_fem_time_dependence_parameters,
-    pub points: *const fullmag_fem_time_point, pub point_count: u64,
+    pub points: *const fullmag_fem_time_point,
+    pub point_count: u64,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_field_target_desc {
-    pub abi_version: u32, pub struct_size: u32, pub kind: u32,
-    pub element_markers: *const u32, pub element_marker_count: u64,
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub kind: u32,
+    pub element_markers: *const u32,
+    pub element_marker_count: u64,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_geometry_mask_node {
-    pub kind: u32, pub child_a: u32, pub child_b: u32,
-    pub center_m: [f64; 3], pub size_m: [f64; 3], pub axis: [f64; 3],
-    pub radius_m: f64, pub height_m: f64, pub translation_m: [f64; 3],
+    pub kind: u32,
+    pub child_a: u32,
+    pub child_b: u32,
+    pub center_m: [f64; 3],
+    pub size_m: [f64; 3],
+    pub axis: [f64; 3],
+    pub radius_m: f64,
+    pub height_m: f64,
+    pub translation_m: [f64; 3],
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_geometry_mask_desc {
-    pub abi_version: u32, pub struct_size: u32,
-    pub nodes: *const fullmag_fem_geometry_mask_node, pub node_count: u64,
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub nodes: *const fullmag_fem_geometry_mask_node,
+    pub node_count: u64,
     pub root_index: u32,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_spatial_profile_desc {
-    pub abi_version: u32, pub struct_size: u32, pub kind: u32,
-    pub sinc_axis: [f64; 3], pub sinc_period_m: f64, pub sinc_center_m: f64,
-    pub sinc_width_m: f64, pub sinc_window: u32,
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub kind: u32,
+    pub sinc_axis: [f64; 3],
+    pub sinc_period_m: f64,
+    pub sinc_center_m: f64,
+    pub sinc_width_m: f64,
+    pub sinc_window: u32,
     pub geometry_mask: *const fullmag_fem_geometry_mask_desc,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct fullmag_fem_regional_field_drive_desc {
-    pub abi_version: u32, pub struct_size: u32, pub stable_id_hash: u64,
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub stable_id_hash: u64,
     pub target: fullmag_fem_field_target_desc,
     pub spatial_profile: fullmag_fem_spatial_profile_desc,
-    pub amplitude_b_t: f64, pub direction: [f64; 3],
-    pub waveform: fullmag_fem_time_dependence_desc, pub time_origin: u32,
+    pub amplitude_b_t: f64,
+    pub direction: [f64; 3],
+    pub waveform: fullmag_fem_time_dependence_desc,
+    pub time_origin: u32,
 }
 
 #[repr(C)]
@@ -1476,22 +1513,56 @@ mod tests {
 
     #[test]
     fn regional_field_drive_ffi_layout_matches_native_runtime() {
-        let mut layout = std::mem::MaybeUninit::<fullmag_fem_regional_field_drive_abi_layout>::zeroed();
+        let mut layout =
+            std::mem::MaybeUninit::<fullmag_fem_regional_field_drive_abi_layout>::zeroed();
         let rc = unsafe { fullmag_fem_get_regional_field_drive_abi_layout(layout.as_mut_ptr()) };
         assert_eq!(rc, FULLMAG_FEM_OK);
         let layout = unsafe { layout.assume_init() };
-        assert_eq!(layout.abi_version, FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION);
+        assert_eq!(
+            layout.abi_version,
+            FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION
+        );
         assert_eq!(layout.struct_size as usize, std::mem::size_of_val(&layout));
-        assert_eq!(layout.time_dependence_desc_size as usize, std::mem::size_of::<fullmag_fem_time_dependence_desc>());
-        assert_eq!(layout.field_target_desc_size as usize, std::mem::size_of::<fullmag_fem_field_target_desc>());
-        assert_eq!(layout.spatial_profile_desc_size as usize, std::mem::size_of::<fullmag_fem_spatial_profile_desc>());
-        assert_eq!(layout.regional_field_drive_desc_size as usize, std::mem::size_of::<fullmag_fem_regional_field_drive_desc>());
-        assert_eq!(layout.plan_desc_size as usize, std::mem::size_of::<fullmag_fem_plan_desc>());
-        assert_eq!(layout.step_stats_size as usize, std::mem::size_of::<fullmag_fem_step_stats>());
-        assert_eq!(layout.plan_regional_field_drives_offset as usize, std::mem::offset_of!(fullmag_fem_plan_desc, regional_field_drives));
-        assert_eq!(layout.plan_regional_field_drive_count_offset as usize, std::mem::offset_of!(fullmag_fem_plan_desc, regional_field_drive_count));
-        assert_eq!(layout.plan_stage_start_time_s_offset as usize, std::mem::offset_of!(fullmag_fem_plan_desc, stage_start_time_s));
-        assert_eq!(layout.step_stats_drive_energy_joules_offset as usize, std::mem::offset_of!(fullmag_fem_step_stats, drive_energy_joules));
+        assert_eq!(
+            layout.time_dependence_desc_size as usize,
+            std::mem::size_of::<fullmag_fem_time_dependence_desc>()
+        );
+        assert_eq!(
+            layout.field_target_desc_size as usize,
+            std::mem::size_of::<fullmag_fem_field_target_desc>()
+        );
+        assert_eq!(
+            layout.spatial_profile_desc_size as usize,
+            std::mem::size_of::<fullmag_fem_spatial_profile_desc>()
+        );
+        assert_eq!(
+            layout.regional_field_drive_desc_size as usize,
+            std::mem::size_of::<fullmag_fem_regional_field_drive_desc>()
+        );
+        assert_eq!(
+            layout.plan_desc_size as usize,
+            std::mem::size_of::<fullmag_fem_plan_desc>()
+        );
+        assert_eq!(
+            layout.step_stats_size as usize,
+            std::mem::size_of::<fullmag_fem_step_stats>()
+        );
+        assert_eq!(
+            layout.plan_regional_field_drives_offset as usize,
+            std::mem::offset_of!(fullmag_fem_plan_desc, regional_field_drives)
+        );
+        assert_eq!(
+            layout.plan_regional_field_drive_count_offset as usize,
+            std::mem::offset_of!(fullmag_fem_plan_desc, regional_field_drive_count)
+        );
+        assert_eq!(
+            layout.plan_stage_start_time_s_offset as usize,
+            std::mem::offset_of!(fullmag_fem_plan_desc, stage_start_time_s)
+        );
+        assert_eq!(
+            layout.step_stats_drive_energy_joules_offset as usize,
+            std::mem::offset_of!(fullmag_fem_step_stats, drive_energy_joules)
+        );
     }
 
     /// Verify plan desc contains the use_consistent_mass field (FND-013).

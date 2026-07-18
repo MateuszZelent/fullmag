@@ -2197,13 +2197,15 @@ pub(crate) fn execute_fem<'a>(
                 live,
                 artifact_writer,
             )?;
-            if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
-                &normalized_plan.field_drives,
-                &normalized_plan.time_stage,
-                until_seconds,
-                outputs,
-                &executed.provenance,
-            )? {
+            if let Some(artifact) =
+                crate::regional_field_drive_artifacts::regional_field_drive_artifact(
+                    &normalized_plan.field_drives,
+                    &normalized_plan.time_stage,
+                    until_seconds,
+                    outputs,
+                    &executed.provenance,
+                )?
+            {
                 executed.auxiliary_artifacts.push(artifact);
             }
             return Ok(executed);
@@ -2247,13 +2249,15 @@ pub(crate) fn execute_fem<'a>(
                     live,
                     artifact_writer,
                 )?;
-                if let Some(artifact) = crate::regional_field_drive_artifacts::regional_field_drive_artifact(
-                    &normalized_plan.field_drives,
-                    &normalized_plan.time_stage,
-                    until_seconds,
-                    outputs,
-                    &executed.provenance,
-                )? {
+                if let Some(artifact) =
+                    crate::regional_field_drive_artifacts::regional_field_drive_artifact(
+                        &normalized_plan.field_drives,
+                        &normalized_plan.time_stage,
+                        until_seconds,
+                        outputs,
+                        &executed.provenance,
+                    )?
+                {
                     executed.auxiliary_artifacts.push(artifact);
                 }
                 return Ok(executed);
@@ -5443,24 +5447,21 @@ fn execute_native_fem(
     }
     let node_count = plan.mesh.nodes.len();
     let initial_magnetization = backend.copy_m(node_count)?;
-    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
-        plan.relaxation.as_ref(),
-    )
-    .is_some()
-    {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            if crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
-                crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
-            } else {
-                crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
-            },
-        )?)
-    };
+    let timestep_policy =
+        if crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref()).is_some() {
+            None
+        } else {
+            Some(crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                if crate::native_fem::native_fem_plan_requests_gpu_mfem_device(plan) {
+                    crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+                } else {
+                    crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+                },
+            )?)
+        };
     let dt_is_fixed = plan.fixed_timestep.is_some();
     let mut steps = Vec::new();
     let current_stats = if needs_initial_snapshot {
@@ -5527,7 +5528,8 @@ fn execute_native_fem(
             crate::relaxation::native_direct_minimizer_realization(
                 control.algorithm,
                 provenance.execution_engine == "fem_native_gpu",
-            ).map(str::to_string)
+            )
+            .map(str::to_string)
         });
     } else if crate::fem::relax::llg_overdamped::uses_pure_damping(plan) {
         provenance.energy_minimizer_realization =

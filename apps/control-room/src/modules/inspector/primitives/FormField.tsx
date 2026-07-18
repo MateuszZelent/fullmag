@@ -301,7 +301,7 @@ export function FormField(props: FormFieldProps) {
   ]);
   const inputClass = cn(
     "fm-inspector-input w-full",
-    mono === false ? "fm-inspector-input--text font-fm-ui" : "font-fm-mono",
+    mono === true ? "fm-inspector-input--mono font-fm-mono" : "font-fm-ui",
     controlVariants({ invalid: Boolean(invalid) }),
   );
   const inputType = type === "number" && unit ? "text" : type ?? "text";

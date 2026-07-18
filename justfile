@@ -3346,6 +3346,67 @@ run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_po
       printf "  fullmag: %s\n" "$app_log"; \
       printf "  smoke: %s\n" "$smoke_log"'
 
+run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" api_port="8194":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    bash -euo pipefail -c '\
+      backend="{{backend}}"; \
+      device="{{device}}"; \
+      case "$backend" in fdm|fem) ;; *) echo "unsupported backend: $backend (expected fdm or fem)" >&2; exit 2 ;; esac; \
+      case "$device" in cpu|gpu) ;; *) echo "unsupported device: $device (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+      if [ "$backend" = "fdm" ] && [ "$device" != "cpu" ]; then echo "the managed FDM planar smoke currently qualifies cpu only" >&2; exit 2; fi; \
+      if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
+      elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
+      else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
+      fixture="examples/viewport_2d_planar_monitor_${backend}_smoke.py"; \
+      report_dir="{{repo_root}}/.fullmag/reports/viewport-2d-planar-monitor-smoke/${backend}-${device}"; \
+      browser_dir="$report_dir/browser"; \
+      runtime_log="$report_dir/runtime.log"; \
+      browser_log="$report_dir/browser.log"; \
+      science_report="$report_dir/science-report.json"; \
+      mkdir -p "$browser_dir"; \
+      sim_pid=""; \
+      cleanup() { \
+        if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then \
+          kill "$sim_pid" >/dev/null 2>&1 || true; \
+          wait "$sim_pid" >/dev/null 2>&1 || true; \
+        fi; \
+      }; \
+      trap cleanup EXIT INT TERM; \
+      FULLMAG_PYTHON="{{repo_python}}" \
+      FULLMAG_PLANAR_DEVICE="$device" \
+      FULLMAG_FDM_EXECUTION="$device" \
+      FULLMAG_FEM_EXECUTION="$device" \
+      FULLMAG_RELAX_DEVICE="$device" \
+      FULLMAG_API_PORT="{{api_port}}" \
+      NEXT_PUBLIC_AUDIT_BUILD=1 \
+      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i "$fixture" \
+        > "$runtime_log" 2>&1 & \
+      sim_pid=$!; \
+      api_url="http://localhost:{{api_port}}"; \
+      web_url="http://localhost:{{web_port}}/workspace"; \
+      for _ in $(seq 1 600); do \
+        if curl -fsS "$api_url/v2/sessions/current/model/planar-monitors" >/dev/null 2>&1 && curl -fsS "$web_url" >/dev/null 2>&1; then break; fi; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then \
+          echo "planar fixture exited before API/workspace became ready; see $runtime_log" >&2; \
+          tail -n 120 "$runtime_log" >&2 || true; \
+          exit 1; \
+        fi; \
+        sleep 0.5; \
+      done; \
+      curl -fsS "$api_url/v2/sessions/current/model/planar-monitors" >/dev/null || { echo "planar API did not become ready; see $runtime_log" >&2; exit 1; }; \
+      "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py \
+        --api-base "$api_url" --backend "$backend" --device "$device" --output "$science_report"; \
+      CONTROL_ROOM_API_BASE_URL="$api_url" \
+      CONTROL_ROOM_URL="$web_url" \
+      CONTROL_ROOM_PLANAR_BACKEND="$backend" \
+      CONTROL_ROOM_PLANAR_OUTPUT_DIR="$browser_dir" \
+      $PNPM_CMD --dir apps/control-room smoke:viewport-2d | tee "$browser_log"; \
+      printf "\nViewport 2D planar-monitor reports:\n"; \
+      printf "  runtime: %s\n" "$runtime_log"; \
+      printf "  browser: %s\n" "$browser_log"; \
+      printf "  science: %s\n" "$science_report"'
+
 run-permalloy-skyrmion-relax fem_execution="gpu":
     just run-permalloy-skyrmion-relax-interactive "{{fem_execution}}"
 

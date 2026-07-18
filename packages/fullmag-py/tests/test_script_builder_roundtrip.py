@@ -7,7 +7,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import fullmag as fm
-from fullmag.runtime.scene_document import build_scene_document_from_builder
+from fullmag.runtime.scene_document import (
+    build_builder_from_scene_document,
+    build_scene_document_from_builder,
+)
 from fullmag.runtime.script_builder import (
     _requested_sampling_period_from_ir,
     export_builder_draft,
@@ -65,6 +68,93 @@ study.stages.add_run(stage_id="excite", until=4e-12)
 
 
 class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
+    def test_planar_monitors_roundtrip_through_scene_and_canonical_python(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("planar-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.monitors.add_planar(
+            monitor_id="plane",
+            name="Plane",
+            target=fm.MonitorTarget.object("film"),
+            frame=fm.PlanarFrame.xy(
+                position=0.0,
+                extent=fm.PlanarExtent.target_bounds(padding=1e-9),
+            ),
+            operator=fm.PlaneSample(),
+        )
+        study.monitors.add_planar(
+            monitor_id="slab",
+            name="Slab",
+            target=fm.MonitorTarget.magnetic_domain(),
+            frame=fm.PlanarFrame.yz(
+                position=2e-9,
+                extent=fm.PlanarExtent.magnetic_domain(),
+            ),
+            operator=fm.SlabAverage(thickness=3e-9),
+        )
+        study.monitors.add_planar(
+            monitor_id="depth",
+            name="Depth",
+            target=fm.MonitorTarget.domain(),
+            frame=fm.PlanarFrame(
+                origin=(0.0, 0.0, 0.0),
+                normal=(1.0, 1.0, 1.0),
+                u_axis=(1.0, -1.0, 0.0),
+                extent=fm.PlanarExtent.universe(padding=2e-9),
+            ),
+            operator=fm.DepthProjection(
+                reduction="thickness_integral",
+                empty_policy="exclude_empty",
+            ),
+        )
+        study.monitors.add_planar(
+            monitor_id="surface",
+            name="Surface",
+            target=fm.MonitorTarget.object("film"),
+            frame=fm.PlanarFrame.xz(
+                position=0.0,
+                extent=fm.PlanarExtent.explicit(
+                    u=(-50e-9, 50e-9),
+                    v=(-2.5e-9, 2.5e-9),
+                ),
+            ),
+            operator=fm.SurfaceProjection(
+                boundary=fm.SurfaceBoundary.object_boundary(),
+                visibility_policy="frontmost",
+            ),
+        )
+        study.stages.add_run(stage_id="run", until=1e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            draft = export_builder_draft(loaded)
+            scene = build_scene_document_from_builder(draft)
+            builder = build_builder_from_scene_document(scene)
+            rendered = rewrite_loaded_problem_script(
+                loaded,
+                overrides=builder,
+            )["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        expected = loaded.stages[-1].problem.to_ir(include_geometry_assets=False)[
+            "planar_monitors"
+        ]
+        actual = rewritten.stages[-1].problem.to_ir(include_geometry_assets=False)[
+            "planar_monitors"
+        ]
+        self.assertEqual(scene["monitors"]["planar"], expected)
+        self.assertEqual(builder["planar_monitors"], expected)
+        self.assertEqual(actual, expected)
+        self.assertEqual(rendered.count("study.monitors.add_planar("), 4)
+        self.assertNotIn('"quantity"', rendered)
+        self.assertNotIn('"resolution"', rendered)
+
     def test_add_field_drive_roundtrip_preserves_pipeline_order_without_global_leakage(self) -> None:
         script = """
         import fullmag as fm

@@ -85,7 +85,8 @@ fn interactive_time_event_schedule(
         stage_end_s,
         &[],
         crate::schedules::OUTPUT_TIME_TOLERANCE,
-    ).times_s;
+    )
+    .times_s;
     for period_s in output_periods_s {
         if period_s.is_finite() && period_s > 0.0 {
             let count = (duration_s / period_s).floor() as u64;
@@ -93,9 +94,7 @@ fn interactive_time_event_schedule(
         }
     }
     times.sort_by(f64::total_cmp);
-    times.dedup_by(|right, left| {
-        (*right - *left).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE
-    });
+    times.dedup_by(|right, left| (*right - *left).abs() <= crate::schedules::OUTPUT_TIME_TOLERANCE);
     times
 }
 
@@ -197,8 +196,9 @@ fn attach_resolved_fallback_to_provenance(
 #[cfg(test)]
 mod tests {
     use super::{
-        attach_resolved_fallback_to_provenance, cached_display_refresh_due, display_refresh_due,
-        cpu_execution_provenance, InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
+        attach_resolved_fallback_to_provenance, cached_display_refresh_due,
+        cpu_execution_provenance, display_refresh_due, InteractiveFdmPreviewRuntime,
+        InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
     use crate::fdm::cpu::reference::{
@@ -1146,7 +1146,10 @@ impl CpuInteractiveFdmPreviewRuntime {
         self.problem.regional_field_drives =
             cpu_reference::resolved_regional_field_drives(plan, base_time);
         let time_events = interactive_time_event_schedule(
-            &plan.field_drives, base_time, until_seconds, std::iter::empty(),
+            &plan.field_drives,
+            base_time,
+            until_seconds,
+            std::iter::empty(),
         );
         let mut dt = crate::resolve_timestep_policy(
             plan.integrator,
@@ -1246,7 +1249,9 @@ impl CpuInteractiveFdmPreviewRuntime {
 
             let proposed_dt = dt.min(until_seconds - (self.state.time_seconds - base_time));
             let dt_step = crate::time_events::cap_timestep_to_next_event(
-                self.state.time_seconds, proposed_dt, &time_events,
+                self.state.time_seconds,
+                proposed_dt,
+                &time_events,
                 crate::schedules::OUTPUT_TIME_TOLERANCE,
             );
             let wall_start = std::time::Instant::now();
@@ -1497,10 +1502,15 @@ impl CpuInteractiveFdmPreviewRuntime {
         let base_time = self.state.time_seconds;
         self.problem.regional_field_drives =
             cpu_reference::resolved_regional_field_drives(plan, base_time);
-        let output_periods = scalar_schedules.iter().chain(field_schedules.iter())
+        let output_periods = scalar_schedules
+            .iter()
+            .chain(field_schedules.iter())
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
-            &plan.field_drives, base_time, until_seconds, output_periods,
+            &plan.field_drives,
+            base_time,
+            until_seconds,
+            output_periods,
         );
         let mut dt = crate::resolve_timestep_policy(
             plan.integrator,
@@ -1579,7 +1589,9 @@ impl CpuInteractiveFdmPreviewRuntime {
 
             let proposed_dt = dt.min(until_seconds - (self.state.time_seconds - base_time));
             let dt_step = crate::time_events::cap_timestep_to_next_event(
-                self.state.time_seconds, proposed_dt, &time_events,
+                self.state.time_seconds,
+                proposed_dt,
+                &time_events,
                 crate::schedules::OUTPUT_TIME_TOLERANCE,
             );
             let wall_start = std::time::Instant::now();
@@ -1888,7 +1900,10 @@ impl CudaInteractiveFdmPreviewRuntime {
         let base_step = self.total_steps;
         let base_time = self.total_time;
         let time_events = interactive_time_event_schedule(
-            &plan.field_drives, base_time, until_seconds, std::iter::empty(),
+            &plan.field_drives,
+            base_time,
+            until_seconds,
+            std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
             plan.relaxation.as_ref(),
@@ -1997,7 +2012,9 @@ impl CudaInteractiveFdmPreviewRuntime {
 
             let proposed_dt = dt.min(until_seconds - (self.total_time - base_time));
             let dt_step = crate::time_events::cap_timestep_to_next_event(
-                self.total_time, proposed_dt, &time_events,
+                self.total_time,
+                proposed_dt,
+                &time_events,
                 crate::schedules::OUTPUT_TIME_TOLERANCE,
             );
             let Some(total_stats) = self
@@ -2198,10 +2215,15 @@ impl CudaInteractiveFdmPreviewRuntime {
 
         let base_step = self.total_steps;
         let base_time = self.total_time;
-        let output_periods = scalar_schedules.iter().chain(field_schedules.iter())
+        let output_periods = scalar_schedules
+            .iter()
+            .chain(field_schedules.iter())
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
-            &plan.field_drives, base_time, until_seconds, output_periods,
+            &plan.field_drives,
+            base_time,
+            until_seconds,
+            output_periods,
         );
         reject_non_llg_interactive_relaxation(
             plan.relaxation.as_ref(),
@@ -2307,7 +2329,9 @@ impl CudaInteractiveFdmPreviewRuntime {
 
             let proposed_dt = dt.min(until_seconds - (self.total_time - base_time));
             let dt_step = crate::time_events::cap_timestep_to_next_event(
-                self.total_time, proposed_dt, &time_events,
+                self.total_time,
+                proposed_dt,
+                &time_events,
                 crate::schedules::OUTPUT_TIME_TOLERANCE,
             );
             let Some(total_stats) = self
@@ -2584,7 +2608,10 @@ impl CpuInteractiveFemPreviewRuntime {
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
         let time_events = interactive_time_event_schedule(
-            &plan.field_drives, base_time, until_seconds, std::iter::empty(),
+            &plan.field_drives,
+            base_time,
+            until_seconds,
+            std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
             plan.relaxation.as_ref(),
@@ -2687,7 +2714,9 @@ impl CpuInteractiveFemPreviewRuntime {
 
             let proposed_dt = dt.min(until_seconds - (self.state.time_seconds - base_time));
             let dt_step = crate::time_events::cap_timestep_to_next_event(
-                self.state.time_seconds, proposed_dt, &time_events,
+                self.state.time_seconds,
+                proposed_dt,
+                &time_events,
                 crate::schedules::OUTPUT_TIME_TOLERANCE,
             );
             let wall_start = std::time::Instant::now();
@@ -2915,10 +2944,15 @@ impl CpuInteractiveFemPreviewRuntime {
         let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
         let base_step = self.total_steps;
         let base_time = self.state.time_seconds;
-        let output_periods = scalar_schedules.iter().chain(field_schedules.iter())
+        let output_periods = scalar_schedules
+            .iter()
+            .chain(field_schedules.iter())
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
-            &plan.field_drives, base_time, until_seconds, output_periods,
+            &plan.field_drives,
+            base_time,
+            until_seconds,
+            output_periods,
         );
         reject_non_llg_interactive_relaxation(
             plan.relaxation.as_ref(),
@@ -3001,7 +3035,9 @@ impl CpuInteractiveFemPreviewRuntime {
 
             let proposed_dt = dt.min(until_seconds - (self.state.time_seconds - base_time));
             let dt_step = crate::time_events::cap_timestep_to_next_event(
-                self.state.time_seconds, proposed_dt, &time_events,
+                self.state.time_seconds,
+                proposed_dt,
+                &time_events,
                 crate::schedules::OUTPUT_TIME_TOLERANCE,
             );
             let wall_start = std::time::Instant::now();
@@ -3312,7 +3348,10 @@ impl GpuInteractiveFemPreviewRuntime {
         let base_time = self.total_time;
         self.backend.begin_stage(base_time)?;
         let time_events = interactive_time_event_schedule(
-            &plan.field_drives, base_time, until_seconds, std::iter::empty(),
+            &plan.field_drives,
+            base_time,
+            until_seconds,
+            std::iter::empty(),
         );
         reject_non_llg_interactive_relaxation(
             plan.relaxation.as_ref(),
@@ -3405,7 +3444,9 @@ impl GpuInteractiveFemPreviewRuntime {
 
             let proposed_dt = dt.min(until_seconds - (self.total_time - base_time));
             let dt_step = crate::time_events::cap_timestep_to_next_event(
-                self.total_time, proposed_dt, &time_events,
+                self.total_time,
+                proposed_dt,
+                &time_events,
                 crate::schedules::OUTPUT_TIME_TOLERANCE,
             );
             let Some(total_stats) = self
@@ -3582,10 +3623,15 @@ impl GpuInteractiveFemPreviewRuntime {
         let base_step = self.total_steps;
         let base_time = self.total_time;
         self.backend.begin_stage(base_time)?;
-        let output_periods = scalar_schedules.iter().chain(field_schedules.iter())
+        let output_periods = scalar_schedules
+            .iter()
+            .chain(field_schedules.iter())
             .map(|schedule| schedule.every_seconds);
         let time_events = interactive_time_event_schedule(
-            &plan.field_drives, base_time, until_seconds, output_periods,
+            &plan.field_drives,
+            base_time,
+            until_seconds,
+            output_periods,
         );
         reject_non_llg_interactive_relaxation(
             plan.relaxation.as_ref(),
@@ -3658,7 +3704,9 @@ impl GpuInteractiveFemPreviewRuntime {
 
             let proposed_dt = dt.min(until_seconds - (self.total_time - base_time));
             let dt_step = crate::time_events::cap_timestep_to_next_event(
-                self.total_time, proposed_dt, &time_events,
+                self.total_time,
+                proposed_dt,
+                &time_events,
                 crate::schedules::OUTPUT_TIME_TOLERANCE,
             );
             let Some(total_stats) = self
@@ -4302,20 +4350,19 @@ fn copy_cuda_base_field_values(
 
 fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, RunError> {
     let fft_backend = cpu_reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
-    let timestep_policy = if crate::relaxation::direct_minimizer::direct_minimizer_control(
-        plan.relaxation.as_ref(),
-    )
-    .is_some()
-    {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            crate::types::TimestepExecutionLane::fdm_cpu(),
-        )?)
-    };
+    let timestep_policy =
+        if crate::relaxation::direct_minimizer::direct_minimizer_control(plan.relaxation.as_ref())
+            .is_some()
+        {
+            None
+        } else {
+            Some(crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                crate::types::TimestepExecutionLane::fdm_cpu(),
+            )?)
+        };
 
     Ok(ExecutionProvenance {
         execution_engine: "cpu_reference".to_string(),
@@ -4390,20 +4437,17 @@ fn cuda_execution_provenance(
     plan: &FdmPlanIR,
     device_info: &crate::fdm::gpu::cuda::native::DeviceInfo,
 ) -> Result<ExecutionProvenance, RunError> {
-    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
-        plan.relaxation.as_ref(),
-    )
-    .is_some()
-    {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
-        )?)
-    };
+    let timestep_policy =
+        if crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref()).is_some() {
+            None
+        } else {
+            Some(crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+            )?)
+        };
     Ok(ExecutionProvenance {
         execution_engine: "cuda_fdm".to_string(),
         precision: match plan.precision {
@@ -4491,24 +4535,21 @@ fn fem_gpu_execution_provenance(
     plan: &FemPlanIR,
     device_info: &FemDeviceInfo,
 ) -> Result<ExecutionProvenance, RunError> {
-    let timestep_policy = if crate::fem::relax::algorithm::native_step_control(
-        plan.relaxation.as_ref(),
-    )
-    .is_some()
-    {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            if plan.mfem_device_string.as_deref() == Some("cpu") {
-                crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
-            } else {
-                crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
-            },
-        )?)
-    };
+    let timestep_policy =
+        if crate::fem::relax::algorithm::native_step_control(plan.relaxation.as_ref()).is_some() {
+            None
+        } else {
+            Some(crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                if plan.mfem_device_string.as_deref() == Some("cpu") {
+                    crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+                } else {
+                    crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+                },
+            )?)
+        };
     let execution_engine = native_fem_backend_id(plan).provenance_name();
     let resolved_demag_realization = resolved_native_fem_demag(plan);
     let mut provenance = ExecutionProvenance {

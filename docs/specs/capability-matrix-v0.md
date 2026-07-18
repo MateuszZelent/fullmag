@@ -184,6 +184,47 @@ field-solve lanes fail; they do not silently choose another device.
 
 ## Current execution policy
 
+### Planar monitor postprocessing capability
+
+Planar sampling is postprocessing of a published spatial field. Solver
+execution device and sampling execution are separate capability dimensions.
+The first production sampler runs on CPU, including when `source_device=gpu`;
+that does not claim native GPU sampling.
+
+| Capability | FDM | FEM P1 | FEM high-order | Failure/degraded rule |
+|---|---|---|---|---|
+| `planar_monitor_authoring` | contract target | contract target | contract target | invalid authored frame/target rejects before execution |
+| `planar_plane_sample` axis frame | production target | production target | gated | no hidden basis-order fallback |
+| `planar_plane_sample` arbitrary frame | production target | production target | gated | invalid/unsupported frame returns stable reason |
+| `planar_slab_average` | cell-volume weighted | conservative tetra measure | gated | node-count averaging forbidden |
+| `planar_depth_projection` | cell-volume weighted | conservative tetra measure | gated | unsupported reduction rejects |
+| `planar_surface_projection` planar boundary | boundary measure | boundary triangle measure | gated | folded/non-injective surfaces are diagnostic |
+| `planar_vector_sampling` | published vector fields | published nodal vector fields | gated | unavailable component returns stable reason |
+| `planar_mesh_overlay` | optional grid outline | exact section topology | topology-gated | absence does not alter sampled values |
+| `planar_airbox_sampling` | full-domain quantities only | full-domain quantities and air mesh | gated | magnetic-only quantities do not become airbox fields |
+
+`contract target` and `production target` are not current validation claims.
+Promotion to `public-executable`, `browser-verified`, scientifically
+`validated`, or `production-ready` requires the current artifacts specified by
+`docs/physics/0970-planar-monitor-sampling-and-projection.md`. Strict and
+extended modes preserve the same monitor intent; no mode silently substitutes
+another operator. Hybrid sampling remains planned.
+
+Stable capability reasons are:
+
+- `quantity_not_spatial`;
+- `quantity_not_materialized`;
+- `target_outside_monitor`;
+- `fem_topology_required`;
+- `fem_basis_order_unsupported`;
+- `surface_projection_non_injective`;
+- `airbox_quantity_scope_unsupported`;
+- `vector_component_unavailable`;
+- `sampling_budget_exceeded`;
+- `stale_mesh_scope`;
+- `stale_monitor_revision`;
+- `stale_field_revision`.
+
 - `strict` means backend-neutral semantics only.
 - `extended` is reserved for future backend-specific features.
 - `hybrid` is explicit and requires both hybrid mode and hybrid backend.

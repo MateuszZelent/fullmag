@@ -1665,14 +1665,12 @@ fn validate_periodic_remesh_candidate(
     if candidate.periodic_boundary_pairs.is_empty() || candidate.periodic_node_pairs.is_empty() {
         bail!("periodic_remesh_requires_recertification");
     }
-    let certificate = candidate
-        .periodic_mesh_certificate_v6()
-        .map_err(|errors| {
-            anyhow!(
-                "periodic_remesh_candidate_recertification_failed: {}",
-                errors.join("; ")
-            )
-        })?;
+    let certificate = candidate.periodic_mesh_certificate_v6().map_err(|errors| {
+        anyhow!(
+            "periodic_remesh_candidate_recertification_failed: {}",
+            errors.join("; ")
+        )
+    })?;
     if certificate.certificate_status != "accepted" {
         bail!(
             "periodic_remesh_candidate_recertification_failed: status={}",
@@ -1819,8 +1817,7 @@ fn plan_materialized_stage_snapshot(stage: &ResolvedScriptStage) -> Result<Execu
         sampling.outputs.retain(|output| {
             !matches!(
                 output,
-                fullmag_ir::OutputIR::FieldAuto { .. }
-                    | fullmag_ir::OutputIR::ScalarAuto { .. }
+                fullmag_ir::OutputIR::FieldAuto { .. } | fullmag_ir::OutputIR::ScalarAuto { .. }
             )
         });
     }
@@ -3144,13 +3141,10 @@ fn execute_manual_interactive_remesh(
         apply_scene_problem_patch(&mut remesh_problem_source, patch);
     }
     if let Some(source_scene_revision) = mesh_source_scene_revision(&opts) {
-        remesh_problem_source
-            .problem_meta
-            .runtime_metadata
-            .insert(
-                "mesh_source_scene_revision".to_string(),
-                serde_json::json!(source_scene_revision),
-            );
+        remesh_problem_source.problem_meta.runtime_metadata.insert(
+            "mesh_source_scene_revision".to_string(),
+            serde_json::json!(source_scene_revision),
+        );
     }
     let mesh_reason = command
         .mesh_reason
@@ -3741,15 +3735,13 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         );
         return Ok(false);
     }
-    let resolved_convergence_metric = resolve_adaptive_convergence_metric(
-        &settings.convergence_metric,
-    )
-    .map_err(|reason| {
-        anyhow!(
-            "{reason}: no estimator is available for convergence metric '{}'",
-            settings.convergence_metric
-        )
-    })?;
+    let resolved_convergence_metric =
+        resolve_adaptive_convergence_metric(&settings.convergence_metric).map_err(|reason| {
+            anyhow!(
+                "{reason}: no estimator is available for convergence metric '{}'",
+                settings.convergence_metric
+            )
+        })?;
 
     let geometry_entry = stage
         .ir
@@ -3791,19 +3783,18 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             _ => break,
         };
         let current_solve_summary = latest_relaxation_solve_summary(stage_result);
-        let convergence_summary =
-            previous_solve_summary
-                .zip(current_solve_summary)
-                .map(|(previous, current)| {
-                    adaptive_convergence_summary(
-                        resolved_convergence_metric,
-                        settings.error_tolerance,
-                        previous,
-                        current,
-                    )
-                })
-                .transpose()
-                .map_err(|reason| anyhow!("{reason}"))?;
+        let convergence_summary = previous_solve_summary
+            .zip(current_solve_summary)
+            .map(|(previous, current)| {
+                adaptive_convergence_summary(
+                    resolved_convergence_metric,
+                    settings.error_tolerance,
+                    previous,
+                    current,
+                )
+            })
+            .transpose()
+            .map_err(|reason| anyhow!("{reason}"))?;
         if let Some(summary) = convergence_summary.as_ref() {
             if summary.converged {
                 let current_runtime_state = serde_json::json!({
@@ -9164,9 +9155,9 @@ mod tests {
         adaptive_remesh_legality_reason, apply_current_fem_overrides,
         apply_initial_magnetization_state_override, apply_live_step_update_to_workspace_state,
         apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
-        attach_initial_magnetization_state_override_metadata, classify_wait_for_solve_command,
-        attach_region_realization_revisions,
-        cumulative_rhs_evals, default_domain_region_markers, discard_active_paused_stage_execution,
+        attach_initial_magnetization_state_override_metadata, attach_region_realization_revisions,
+        classify_wait_for_solve_command, cumulative_rhs_evals, default_domain_region_markers,
+        discard_active_paused_stage_execution,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
         fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
@@ -9174,19 +9165,17 @@ mod tests {
         initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
         initial_step_update, interactive_session_should_stay_alive,
         live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
-        write_sampling_resolution_stage_record,
-        live_step_ingest_preview_len, mesh_build_pipeline_status_json,
-        mesh_source_scene_revision,
+        live_step_ingest_preview_len, mesh_build_pipeline_status_json, mesh_source_scene_revision,
         plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
-        resolve_adaptive_convergence_metric,
-        resolved_shared_domain_object_region_markers, scripted_stage_execution_state,
-        shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
-        validate_periodic_remesh_candidate,
+        resolve_adaptive_convergence_metric, resolved_shared_domain_object_region_markers,
+        scripted_stage_execution_state, shared_domain_object_region_mesh_specs,
+        stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
-        wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
-        ActiveSequenceState, LiveProgressCadence, LoadedInitialMagnetizationState,
+        validate_periodic_remesh_candidate, wait_for_solve_prompt, wait_for_solve_should_block,
+        wait_for_solve_supported, write_sampling_resolution_stage_record, ActiveSequenceState,
+        LiveProgressCadence, LoadedInitialMagnetizationState, RuntimeCommandPrecondition,
         SceneProblemPatch, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
-        LIVE_PROGRESS_PUBLISH_INTERVAL, RuntimeCommandPrecondition,
+        LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
 
     #[test]
@@ -9434,7 +9423,9 @@ mod tests {
 
         let error = validate_periodic_remesh_candidate(&previous, &candidate)
             .expect_err("periodic remesh must not publish a candidate without recertified pairs");
-        assert!(error.to_string().contains("periodic_remesh_requires_recertification"));
+        assert!(error
+            .to_string()
+            .contains("periodic_remesh_requires_recertification"));
     }
 
     #[test]

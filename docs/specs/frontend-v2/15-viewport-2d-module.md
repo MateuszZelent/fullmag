@@ -1,8 +1,9 @@
-# Frontend v2 - 2D Analysis Surfaces
+# Frontend v2 - Planar Field Map and 2D Analysis Surfaces
 
-**Status:** Superseded live WebGL viewport
-**Date:** 2026-05-30
-**Decision record:** `docs/adr/0016-center-viewport-tabbed-surfaces.md`
+**Status:** Active production contract; implementation and qualification in progress
+**Date:** 2026-07-18
+**Decision records:** `docs/adr/0016-center-viewport-tabbed-surfaces.md`,
+`docs/adr/0020-planar-field-map-and-monitor.md`
 
 The former `viewport-2d` R3F module is no longer part of the active control-room
 module registry. It was replaced by tabbed center surfaces:
@@ -69,12 +70,12 @@ They must not depend on `viewport-3d` internals or reuse 3D renderer buffers.
 
 ## 3.1 Field Map Surface
 
-`field-map` is a separate active-only center module for CST-like scientific
-field inspection. It consumes existing `data/fields/{field_id}/samples/slice`
-and `data/fields/{field_id}/projection` metadata and binary payloads through the
-typed API facade and resource hooks. It supports heatmap, contours, sparse
-arrows, probe, outlines, empty-mask state, and export without reconstructing a
-second field from geometry.
+`field-map` is the canonical active-only center module for scientific spatial
+field inspection. It consumes planar-monitor resources through the typed API
+facade and resource hooks. Existing slice/projection resources remain
+compatibility adapters during migration. It supports heatmap, contours, bounded
+vectors, probe, mesh/boundary overlays, occupancy, surface diagnostics, and
+export without reconstructing FDM/FEM fields in the browser.
 
 The renderer instance is created once per mount, updates only for resource
 revision or user-control changes, resizes through an observer, and is disposed
@@ -82,24 +83,59 @@ on unmount. Source k-spectrum and spin-wave dynamic-structure-factor products
 are read from `analysis` resources and rendered by `analysis-plots`; they are
 not inferred from a scalar magnitude image.
 
-## 4. Draft Cross-Section Flow
+The physical definition is a quantity- and resolution-independent
+`PlanarMonitor`: target, right-handed frame, extent policy, and one of
+`plane_sample`, `slab_average`, `depth_projection`, or `surface_projection`.
+Quantity/component/unit/range/palette and sampling resolution/quality belong to
+the planar visualization profile or data request. Runtime mesh-part and airbox
+scopes narrow a monitor target but never enter canonical Python or `ProblemIR`.
 
-The View ribbon or Inspector creates an editable cross-section draft. While the
-draft is active, the 3D viewport can show the cut-frame overlay because the user
-is still editing the spatial plane in 3D context. Committing the draft creates a
-saved plot entry and switches the center surface to `cross-section-image`.
+The backend performs physical sampling. FDM uses explicit cell reconstruction
+and cell-intersection measure. FEM P1 uses barycentric point evaluation and
+conservative tetrahedron/boundary measure. Node count is diagnostics only.
+Vector reduction precedes world or monitor-basis component derivation.
 
-Once the center surface is switched to the image tab, the PNG preview is served
-by the backend and no browser-side 2D WebGL scene is mounted.
+## 4. Planar Monitor Authoring Flow
 
-## 5. Tests
+The View ribbon or Inspector creates an editable monitor draft. While the draft
+is active, the 3D viewport may show a lightweight frame overlay. Apply commits
+the monitor through a revision-safe `SceneDocument` transaction, updates
+canonical Python, selects the returned monitor id, and opens `field-map`.
+Discard restores the committed monitor. A revision conflict must not overwrite
+the scene.
+
+The same semantic Inspector registry serves 3D and planar visualization
+contexts for objects, regions, mesh parts, airbox, spatial result fields,
+frequency/eigenmode fields when published, and monitor definitions. A `3D | 2D`
+control changes the active center-surface command; it is not a second local
+boolean. General material/physics forms do not acquire meaningless 2D copies.
+
+## 5. Renderer and interaction contract
+
+`field-map` uses a base raster canvas, an overlay canvas, and lightweight
+DOM/SVG chrome for axes, colorbar, labels, selection, and accessibility.
+Colorization, contours, and glyph preparation may use one worker. There is no
+React object per pixel/vector and no large typed array in React state.
+
+Wheel/pinch zoom is cursor anchored; drag pans; double click and `0` fit; arrow
+keys pan; `+/-` zoom. Hover probe is renderer-local and frame-throttled. A
+pinned probe resolves exact backend world coordinate/value. Draft position or
+thickness interaction may use a bounded preview request and commits the target
+resolution after pointer release.
+
+Scalar auto-range ignores empty/non-finite samples. Vectors expose
+world/monitor components and an explicit normal indicator. Contours stop at
+masked cells. Mesh overlays use physical monitor coordinates. Surface folds or
+overlaps remain visible degraded diagnostics.
+
+## 6. Tests
 
 Required tests:
 
 - center tab host renders all tab triggers but mounts only one active module;
 - stale persisted active tab ids repair to a registered module;
-- committing a cross-section draft switches `activeViewportMainModuleId` to
-  `cross-section-image`;
+- committing a monitor draft updates canonical model/script and switches
+  `activeViewportMainModuleId` to `field-map`;
 - the typed API exposes the cross-section PNG endpoint as a binary resource;
 - object URLs created by the image surface are revoked on replacement/unmount;
 - `field-map` reads slice/projection resources only through `ControlRoomApi`
@@ -110,3 +146,9 @@ Required tests:
   the active heavy surface and keeps memory growth bounded;
 - browser smoke confirms the workflow produces a PNG preview and does not mount
   the removed live 2D viewport.
+- manufactured FDM/FEM tests prove plane, slab, depth, surface, vector-basis,
+  occupancy, and refinement-invariant measure weighting;
+- object/region/part/airbox/result/monitor inspector coverage uses one registry
+  with independent 3D and planar profiles;
+- a 100-switch browser audit proves no increasing worker/listener/canvas count,
+  no idle RAF, bounded heap, and a healthy 3D WebGL context after returning.

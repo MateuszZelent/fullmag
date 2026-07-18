@@ -1342,7 +1342,11 @@ impl ExchangeLlgProblem {
         h_eff: &mut VectorFieldSoA,
     ) {
         self.effective_field_into_soa_fft_backend(magnetization, ws, h_eff);
-        for drive in self.regional_field_drives.iter().filter(|drive| drive.enabled) {
+        for drive in self
+            .regional_field_drives
+            .iter()
+            .filter(|drive| drive.enabled)
+        {
             let multiplier = drive.multiplier_at(evaluation_time_s);
             for (index, basis) in drive.basis_field.iter().enumerate().take(h_eff.len()) {
                 if self.is_active(index) {
@@ -2033,7 +2037,11 @@ impl ExchangeLlgProblem {
         // Oersted field from cylindrical conductor (STNO / MTJ)
         self.oersted_field_add_into(h_eff);
 
-        for drive in self.regional_field_drives.iter().filter(|drive| drive.enabled) {
+        for drive in self
+            .regional_field_drives
+            .iter()
+            .filter(|drive| drive.enabled)
+        {
             let multiplier = drive.multiplier_at(evaluation_time_s);
             for (index, (total, basis)) in h_eff.iter_mut().zip(&drive.basis_field).enumerate() {
                 if self.is_active(index) {

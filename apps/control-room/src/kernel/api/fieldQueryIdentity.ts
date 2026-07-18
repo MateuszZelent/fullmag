@@ -1,5 +1,8 @@
-import { DATA_FIELD_VECTOR_PATH } from "./apiPaths";
-import type { FieldVectorQuery } from "./apiTypes";
+import {
+  DATA_FIELD_VECTOR_PATH,
+  DATA_PLANAR_FIELD_META_PATH,
+} from "./apiPaths";
+import type { FieldVectorQuery, PlanarFieldQuery } from "./apiTypes";
 import { resolveCanonicalQuantityId } from "./quantityIds";
 
 export interface CanonicalFieldVectorQuery {
@@ -196,4 +199,59 @@ export function parseCanonicalFieldVectorResourceKey(
     stage_id: url.searchParams.get("stage_id") ?? undefined,
     view: url.searchParams.get("view") ?? undefined,
   });
+}
+
+const PLANAR_FIELD_QUERY_ORDER = [
+  "component",
+  "expected_field_revision",
+  "expected_mesh_revision",
+  "expected_monitor_revision",
+  "include_mesh",
+  "quality",
+  "resolution_x",
+  "resolution_y",
+  "scope_id",
+  "scope_kind",
+  "snapshot_id",
+  "stage_id",
+  "vector_budget",
+] as const satisfies readonly (keyof PlanarFieldQuery)[];
+
+export function normalizePlanarFieldQuery(
+  query: PlanarFieldQuery = {},
+): PlanarFieldQuery {
+  const normalized: PlanarFieldQuery = {
+    include_mesh: query.include_mesh ?? false,
+    quality: query.quality ?? "interactive",
+    resolution_x: query.resolution_x ?? 128,
+    resolution_y: query.resolution_y ?? 128,
+    scope_kind: query.scope_kind ?? "monitor_target",
+    vector_budget: query.vector_budget ?? 0,
+  };
+  for (const key of PLANAR_FIELD_QUERY_ORDER) {
+    const value = query[key];
+    if (value !== undefined && value !== null && value !== "") {
+      Object.assign(normalized, { [key]: value });
+    }
+  }
+  return normalized;
+}
+
+export function planarFieldResourceKey(
+  quantityId: string,
+  monitorId: string,
+  query: PlanarFieldQuery = {},
+  path: string = DATA_PLANAR_FIELD_META_PATH,
+): string {
+  const resolvedPath = path
+    .replace("{quantity_id}", encodeURIComponent(quantityId))
+    .replace("{monitor_id}", encodeURIComponent(monitorId));
+  const search = new URLSearchParams();
+  const normalized = normalizePlanarFieldQuery(query);
+  for (const key of PLANAR_FIELD_QUERY_ORDER) {
+    const value = normalized[key];
+    if (value !== undefined) search.set(key, String(value));
+  }
+  const serialized = search.toString();
+  return serialized ? `${resolvedPath}?${serialized}` : resolvedPath;
 }

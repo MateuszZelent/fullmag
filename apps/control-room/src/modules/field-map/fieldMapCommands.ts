@@ -1,0 +1,201 @@
+import type { CommandContribution } from "@/kernel/commands/commandTypes";
+import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
+import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
+
+import { fieldMapStore } from "./fieldMapStore";
+import { downloadPlanarPng, planarExportFilename } from "./fieldMapExport";
+
+const commandTitles = {
+  "field-map.export-data": "Export 2D Data",
+  "field-map.export-png": "Export 2D PNG",
+  "field-map.fit": "Fit 2D View",
+  "field-map.open": "Open 2D View",
+  "field-map.reset-view": "Reset 2D View",
+  "field-map.select-monitor": "Select Planar Monitor",
+  "field-map.toggle-contours": "Toggle 2D Contours",
+  "field-map.toggle-mesh": "Toggle 2D Mesh",
+  "field-map.toggle-vectors": "Toggle 2D Vectors",
+  "planar-monitor.delete": "Delete Planar Monitor",
+  "planar-monitor.duplicate": "Duplicate Planar Monitor",
+  "planar-monitor.rename": "Rename Planar Monitor",
+  "planar-monitor.show-frame-3d": "Show Monitor Frame in 3D",
+} as const;
+
+export const fieldMapCommands: CommandContribution[] = Object.entries(
+  commandTitles,
+).map(([id, title]) => ({
+  category: "Viewport",
+  group: "field-map",
+  id,
+  run: async (context) => {
+    const input =
+      context.input && typeof context.input === "object"
+        ? (context.input as { monitorId?: unknown; newName?: unknown })
+        : null;
+    if (id === "field-map.open" || id === "field-map.select-monitor") {
+      if (
+        id === "field-map.select-monitor" &&
+        typeof input?.monitorId === "string"
+      ) {
+        fieldMapStore.set({ activeMonitorId: input.monitorId });
+      }
+      context.layout?.setActiveViewportMainModule("field-map");
+      context.layout?.setFocusedSlot("viewport-main");
+    }
+    if (id === "planar-monitor.show-frame-3d") {
+      if (!context.api || typeof input?.monitorId !== "string") {
+        return {
+          message: "Planar field API or monitor id is missing.",
+          status: "failed",
+        };
+      }
+      const visualization = await context.api.visualization.state();
+      const planar = visualization.planar;
+      if (!planar) {
+        return {
+          message: "The server did not publish a planar visualization profile.",
+          status: "failed",
+        };
+      }
+      const meta = await context.api.data.fields.planar.meta(
+        planar.quantity_id,
+        input.monitorId,
+        {
+          component: planar.component,
+          resolution_x: planar.resolution.width,
+          resolution_y: planar.resolution.height,
+          scope_id:
+            planar.view_scope.kind === "mesh_part"
+              ? planar.view_scope.scope_id
+              : undefined,
+          scope_kind: planar.view_scope.kind,
+        },
+      );
+      planarMonitorFramePreviewStore.set({
+        boundsUvM: meta.frame.bounds_uv_m as [number, number, number, number],
+        monitorId: input.monitorId,
+        normal: meta.frame.normal as [number, number, number],
+        originM: meta.frame.origin_m as [number, number, number],
+        uAxis: meta.frame.u_axis as [number, number, number],
+        vAxis: meta.frame.v_axis as [number, number, number],
+      });
+      fieldMapStore.set({ activeMonitorId: input.monitorId });
+      context.layout?.setActiveViewportMainModule("viewport-3d");
+      context.layout?.setFocusedSlot("viewport-main");
+    }
+    if (id === "field-map.export-png") {
+      if (!context.api) {
+        return { message: "Planar field API is unavailable.", status: "failed" };
+      }
+      const visualization = await context.api.visualization.state();
+      const planar = visualization.planar;
+      if (!planar) {
+        return {
+          message: "The server did not publish a planar visualization profile.",
+          status: "failed",
+        };
+      }
+      const monitorId =
+        (typeof input?.monitorId === "string" ? input.monitorId : null) ??
+        planar.active_monitor_id ??
+        fieldMapStore.get().activeMonitorId;
+      if (!monitorId) {
+        return { message: "Select a planar monitor first.", status: "failed" };
+      }
+      const query = {
+        component: planar.component,
+        include_mesh: planar.layers.mesh,
+        quality: "export",
+        resolution_x: planar.resolution.width,
+        resolution_y: planar.resolution.height,
+        scope_id:
+          planar.view_scope.kind === "mesh_part"
+            ? planar.view_scope.scope_id
+            : undefined,
+        scope_kind: planar.view_scope.kind,
+        vector_budget: planar.resolution.vector_budget,
+      };
+      const [meta, monitor, png] = await Promise.all([
+        context.api.data.fields.planar.meta(
+          planar.quantity_id,
+          monitorId,
+          query,
+        ),
+        context.api.model.planarMonitors.get(monitorId),
+        context.api.data.fields.planar.renderPng(
+          planar.quantity_id,
+          monitorId,
+          query,
+        ),
+      ]);
+      if (png.status !== "ready") {
+        return {
+          message: "The planar PNG is not available for this revision.",
+          status: "failed",
+        };
+      }
+      downloadPlanarPng(
+        png.data,
+        planarExportFilename({
+          fieldRevision: meta.field_revision,
+          monitorName: monitor.monitor.name,
+          quantityId: planar.quantity_id,
+          unit: planar.display_unit ?? meta.canonical_unit,
+        }),
+      );
+    }
+    if (
+      id === "planar-monitor.delete" ||
+      id === "planar-monitor.duplicate" ||
+      id === "planar-monitor.rename"
+    ) {
+      if (!context.api || typeof input?.monitorId !== "string") {
+        return {
+          message: "Planar monitor API or monitor id is missing.",
+          status: "failed",
+        };
+      }
+      const collection = await context.api.model.planarMonitors.list();
+      let revision = collection.scene_revision;
+      if (id === "planar-monitor.delete") {
+        const response = await context.api.model.planarMonitors.remove(
+          input.monitorId,
+          { expected_scene_revision: revision },
+        );
+        revision = response.scene_revision;
+        if (fieldMapStore.get().activeMonitorId === input.monitorId) {
+          fieldMapStore.set({ activeMonitorId: null });
+        }
+      } else if (id === "planar-monitor.duplicate") {
+        const response = await context.api.model.planarMonitors.duplicate(
+          input.monitorId,
+          { expected_scene_revision: revision },
+        );
+        revision = response.scene_revision;
+        fieldMapStore.set({ activeMonitorId: response.monitor.id });
+      } else {
+        if (typeof input.newName !== "string" || !input.newName.trim()) {
+          return {
+            message: "A non-empty new monitor name is required.",
+            status: "failed",
+          };
+        }
+        const current = await context.api.model.planarMonitors.get(
+          input.monitorId,
+        );
+        const response = await context.api.model.planarMonitors.patch(
+          input.monitorId,
+          {
+            expected_scene_revision: revision,
+            monitor: { ...current.monitor, name: input.newName.trim() },
+          },
+        );
+        revision = response.scene_revision;
+      }
+      context.resources?.invalidate(MODEL_PLANAR_MONITORS_PATH, revision);
+    }
+    return { status: "completed" };
+  },
+  scope: "viewport",
+  title,
+}));

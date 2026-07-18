@@ -296,6 +296,9 @@ def build_scene_document_from_builder(builder: dict[str, Any]) -> dict[str, Any]
         "field_drives": {
             "drives": builder.get("field_drives") or [],
         },
+        "monitors": {
+            "planar": builder.get("planar_monitors") or [],
+        },
         "couplings": builder.get("couplings") or [],
         "study": {
             "backend": builder.get("backend"),
@@ -439,6 +442,7 @@ def build_builder_from_scene_document(scene: dict[str, Any]) -> dict[str, Any]:
         "couplings": scene.get("couplings") or [],
         "current_modules": current_modules.get("modules") or [],
         "field_drives": field_drives.get("drives") or [],
+        "planar_monitors": (scene.get("monitors") or {}).get("planar") or [],
         "excitation_analysis": current_modules.get("excitation_analysis"),
     }
 
@@ -593,6 +597,7 @@ def builder_overrides_from_scene_document(scene: dict[str, Any]) -> dict[str, An
         "initial_state": builder.get("initial_state"),
         "geometries": builder.get("geometries") or [],
         "couplings": builder.get("couplings") or [],
+        "planar_monitors": builder.get("planar_monitors") or [],
         "current_modules": builder.get("current_modules") or [],
         "excitation_analysis": builder.get("excitation_analysis"),
     }

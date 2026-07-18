@@ -2201,7 +2201,7 @@ mod tests {
     use super::{
         fem_mesh_topology_fingerprint, normalized_payload_element_markers, ExecutionProvenance,
         FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
-        LlgTimestepCapabilityId, LlgTimestepQualificationId, LivePreviewField,
+        LivePreviewField, LlgTimestepCapabilityId, LlgTimestepQualificationId,
         RequestedTimestepPolicy, ResolvedTimestepPolicy, StepStats, StepUpdate, TimestepBackend,
         TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
         TimestepValidationState,
@@ -2598,8 +2598,7 @@ mod tests {
                 norm_tolerance: None,
             },
             execution_identity: TimestepExecutionIdentity {
-                qualification_id:
-                    LlgTimestepQualificationId::ExplicitAdaptiveFdmCpuDouble,
+                qualification_id: LlgTimestepQualificationId::ExplicitAdaptiveFdmCpuDouble,
                 ..fdm_cpu_timestep_identity()
             },
         };

@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 fn auto_sampling_problem(cutoffs_hz: &[f64], active_stage_id: Option<&str>) -> ProblemIR {
     let mut problem = ProblemIR::bootstrap_example();
     if let Some(stage_id) = active_stage_id {
-        problem.problem_meta.runtime_metadata.insert(
-            "active_stage_id".into(),
-            serde_json::json!(stage_id),
-        );
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("active_stage_id".into(), serde_json::json!(stage_id));
     }
     problem.study.sampling_mut().table_autosave = Some(TableAutosaveIR {
         kind: "table_autosave".into(),
@@ -81,7 +81,10 @@ fn auto_sampling_uses_maximum_active_sinc_cutoff_with_guard() {
 
     let sampling = problem.study.sampling();
     assert_eq!(
-        sampling.table_autosave.as_ref().and_then(|table| table.resolved_sample_period_s),
+        sampling
+            .table_autosave
+            .as_ref()
+            .and_then(|table| table.resolved_sample_period_s),
         Some(1.0 / 13.0e9)
     );
     assert!(matches!(
@@ -127,9 +130,10 @@ fn auto_sampling_filters_disabled_inactive_and_non_sinc_drives() {
 
     let error = resolve_auto_sampling_for_stage(&mut problem)
         .expect_err("automatic sampling must fail without an applicable active sinc drive");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("active sinc") && reason.contains("excite")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("active sinc") && reason.contains("excite") }));
 }
 
 #[test]
@@ -2596,21 +2600,23 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
                     orientation: None,
                     pairing_policy: None,
                 }],
-                periodic_node_pairs: vec![fullmag_ir::MeshPeriodicNodePairIR {
-                    pair_id: "x_periodic".to_string(),
-                    node_a: 0,
-                    node_b: 3,
-                },
-                fullmag_ir::MeshPeriodicNodePairIR {
-                    pair_id: "x_periodic".to_string(),
-                    node_a: 1,
-                    node_b: 4,
-                },
-                fullmag_ir::MeshPeriodicNodePairIR {
-                    pair_id: "x_periodic".to_string(),
-                    node_a: 2,
-                    node_b: 5,
-                }],
+                periodic_node_pairs: vec![
+                    fullmag_ir::MeshPeriodicNodePairIR {
+                        pair_id: "x_periodic".to_string(),
+                        node_a: 0,
+                        node_b: 3,
+                    },
+                    fullmag_ir::MeshPeriodicNodePairIR {
+                        pair_id: "x_periodic".to_string(),
+                        node_a: 1,
+                        node_b: 4,
+                    },
+                    fullmag_ir::MeshPeriodicNodePairIR {
+                        pair_id: "x_periodic".to_string(),
+                        node_a: 2,
+                        node_b: 5,
+                    },
+                ],
                 per_domain_quality: std::collections::HashMap::new(),
             }),
             region_markers: vec![fullmag_ir::FemDomainRegionMarkerIR {
@@ -2720,11 +2726,9 @@ fn fem_static_time_domain_plans_exchange_only_periodic_mesh_pairs() {
         .demag = fullmag_ir::FdmDemagPeriodicityIR::PeriodicAirboxK0;
     let demag_planned =
         plan(&demag_ir).expect("periodic FEM static demag with periodic-airbox PBC should plan");
-    assert!(demag_planned
-        .provenance
-        .notes
-        .iter()
-        .any(|note| note.contains("periodic mesh certificate: schema=periodic_mesh_certificate.v6")
+    assert!(
+        demag_planned.provenance.notes.iter().any(|note| note
+            .contains("periodic mesh certificate: schema=periodic_mesh_certificate.v6")
             && note.contains("topology=sha256:")
             && note.contains("magnetic_classes=3")
             && note.contains("scalar_classes=3")),
@@ -4889,8 +4893,7 @@ fn fem_demag_projected_gradient_bb_resolves_strict_armijo_policy() {
 
 #[test]
 fn fem_demag_direct_minimizer_rejects_explicit_solver_policy_too_loose_for_armijo() {
-    let mut ir =
-        fem_demag_relaxation_policy_ir(fullmag_ir::RelaxationAlgorithmIR::NonlinearCg);
+    let mut ir = fem_demag_relaxation_policy_ir(fullmag_ir::RelaxationAlgorithmIR::NonlinearCg);
     ir.backend_policy
         .discretization_hints
         .as_mut()
@@ -5825,19 +5828,39 @@ fn staged_multilayer_rejects_adaptive_rk23() {
 #[test]
 fn staged_multilayer_rejects_adaptive_rk23_max_error_convenience() {
     let mut ir = stacked_two_body_multilayer_problem();
-    ir.problem_meta.runtime_metadata.insert("runtime_selection".to_string(), serde_json::json!({"device": "cpu"}));
-    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else { unreachable!() };
-    let fullmag_ir::DynamicsIR::Llg { integrator, fixed_timestep, adaptive_timestep, .. } = dynamics;
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cpu"}),
+    );
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+        unreachable!()
+    };
+    let fullmag_ir::DynamicsIR::Llg {
+        integrator,
+        fixed_timestep,
+        adaptive_timestep,
+        ..
+    } = dynamics;
     *integrator = "rk23".to_string();
     *fixed_timestep = None;
     *adaptive_timestep = Some(fullmag_ir::AdaptiveTimeStepIR {
         tolerance_mode: fullmag_ir::AdaptiveToleranceModeIR::MaxError,
-        atol: 1e-6, rtol: 0.0, dt_initial: Some(1e-15), dt_min: 1e-16,
-        dt_max: Some(1e-14), safety: 0.9, growth_limit: 2.0, shrink_limit: 0.2,
-        max_spin_rotation: None, norm_tolerance: None,
+        atol: 1e-6,
+        rtol: 0.0,
+        dt_initial: Some(1e-15),
+        dt_min: 1e-16,
+        dt_max: Some(1e-14),
+        safety: 0.9,
+        growth_limit: 2.0,
+        shrink_limit: 0.2,
+        max_spin_rotation: None,
+        norm_tolerance: None,
     });
     let err = plan(&ir).expect_err("staged CPU multilayer must reject max-error RK23");
-    assert!(err.reasons.iter().any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep")));
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("multilayer") && reason.contains("adaptive_timestep")));
 }
 
 fn set_adaptive_rk45(problem: &mut ProblemIR, mode: fullmag_ir::AdaptiveToleranceModeIR) {
@@ -5845,7 +5868,10 @@ fn set_adaptive_rk45(problem: &mut ProblemIR, mode: fullmag_ir::AdaptiveToleranc
         fullmag_ir::StudyIR::TimeEvolution { dynamics, .. }
         | fullmag_ir::StudyIR::Eigenmodes { dynamics, .. }
         | fullmag_ir::StudyIR::FrequencyResponse { dynamics, .. } => dynamics,
-        fullmag_ir::StudyIR::Relaxation { dynamics: Some(dynamics), .. } => dynamics,
+        fullmag_ir::StudyIR::Relaxation {
+            dynamics: Some(dynamics),
+            ..
+        } => dynamics,
         _ => panic!("fixture must have dynamics"),
     };
     let fullmag_ir::DynamicsIR::Llg {
@@ -5875,10 +5901,7 @@ fn set_adaptive_rk45(problem: &mut ProblemIR, mode: fullmag_ir::AdaptiveToleranc
 fn adaptive_fdm_requires_explicit_cpu_or_cuda_and_rejects_auto_routes() {
     for device in [None, Some("auto")] {
         let mut ir = ProblemIR::bootstrap_example();
-        set_adaptive_rk45(
-            &mut ir,
-            fullmag_ir::AdaptiveToleranceModeIR::Advanced,
-        );
+        set_adaptive_rk45(&mut ir, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
         if let Some(device) = device {
             ir.problem_meta.runtime_metadata.insert(
                 "runtime_selection".into(),
@@ -5886,17 +5909,15 @@ fn adaptive_fdm_requires_explicit_cpu_or_cuda_and_rejects_auto_routes() {
             );
         }
         let err = plan(&ir).expect_err("automatic adaptive FDM route must fail");
-        assert!(err
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("requires explicit")
-                && reason.contains("device='cuda'")));
+        assert!(
+            err.reasons
+                .iter()
+                .any(|reason| reason.contains("requires explicit")
+                    && reason.contains("device='cuda'"))
+        );
     }
     let mut cpu = ProblemIR::bootstrap_example();
-    set_adaptive_rk45(
-        &mut cpu,
-        fullmag_ir::AdaptiveToleranceModeIR::Advanced,
-    );
+    set_adaptive_rk45(&mut cpu, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
     cpu.problem_meta.runtime_metadata.insert(
         "runtime_selection".into(),
         serde_json::json!({"device": "cpu"}),
@@ -5905,8 +5926,16 @@ fn adaptive_fdm_requires_explicit_cpu_or_cuda_and_rejects_auto_routes() {
     for device in ["cuda", "gpu"] {
         let mut cuda = ProblemIR::bootstrap_example();
         set_adaptive_rk45(&mut cuda, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
-        cuda.problem_meta.runtime_metadata.insert("runtime_selection".into(), serde_json::json!({"device": device}));
-        plan(&cuda).unwrap_or_else(|err| panic!("explicit {device} adaptive FDM should be legal: {:?}", err.reasons));
+        cuda.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            serde_json::json!({"device": device}),
+        );
+        plan(&cuda).unwrap_or_else(|err| {
+            panic!(
+                "explicit {device} adaptive FDM should be legal: {:?}",
+                err.reasons
+            )
+        });
     }
 }
 
@@ -5915,10 +5944,7 @@ fn fem_adaptive_modes_and_geometry_guards_reach_native_plan_controls() {
     for zero_field in ["atol", "rtol"] {
         let mut ir = ProblemIR::bootstrap_example();
         ir.backend_policy.requested_backend = fullmag_ir::BackendTarget::Fem;
-        set_adaptive_rk45(
-            &mut ir,
-            fullmag_ir::AdaptiveToleranceModeIR::Advanced,
-        );
+        set_adaptive_rk45(&mut ir, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
         let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
             unreachable!()
         };
@@ -5951,7 +5977,9 @@ fn fem_adaptive_modes_and_geometry_guards_reach_native_plan_controls() {
     let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut max_error.study else {
         unreachable!()
     };
-    let fullmag_ir::DynamicsIR::Llg { adaptive_timestep, .. } = dynamics;
+    let fullmag_ir::DynamicsIR::Llg {
+        adaptive_timestep, ..
+    } = dynamics;
     let adaptive = adaptive_timestep.as_mut().expect("adaptive policy");
     adaptive.rtol = 0.0;
     let mut errors = Vec::new();
@@ -7943,7 +7971,8 @@ fn fem_frequency_response_rejects_unsupported_production_slice_cases() {
     let err = plan(&nonzero_k).expect_err("nonzero-k response should be gated");
     assert!(err.reasons.iter().any(|reason| {
         reason.contains("supported frequency-domain slices")
-            && reason.contains("nonzero-k Floquet/Bloch driven response requires spin_wave_bc=floquet")
+            && reason
+                .contains("nonzero-k Floquet/Bloch driven response requires spin_wave_bc=floquet")
     }));
 
     let mut periodic_without_pairs = fem_frequency_response_mesh_asset_problem();
@@ -9486,9 +9515,16 @@ fn fdm_translated_base_boundary_sdf_matches_active_mask_coordinates() {
     };
     assert_eq!(fdm.origin_m, [0.0, -20e-9, -2e-9]);
     let serialized = serde_json::to_value(&fdm).expect("FDM plan should serialize");
-    assert_eq!(serialized["origin_m"], serde_json::json!([0.0, -20e-9, -2e-9]));
-    let boundary = fdm.boundary_geometry.expect("translated base must retain SDF");
-    let active_mask = fdm.active_mask.expect("cylinder should have an active mask");
+    assert_eq!(
+        serialized["origin_m"],
+        serde_json::json!([0.0, -20e-9, -2e-9])
+    );
+    let boundary = fdm
+        .boundary_geometry
+        .expect("translated base must retain SDF");
+    let active_mask = fdm
+        .active_mask
+        .expect("cylinder should have an active mask");
     let active_index = active_mask
         .iter()
         .position(|active| *active)
@@ -9533,9 +9569,8 @@ fn fdm_translated_single_grid_asset_matches_multilayer_origin() {
         .expect("the same geometry must lower for multilayer");
     let expected_origin = std::array::from_fn(|axis| asset_origin[axis] + placed.translation[axis]);
     assert_eq!(single.origin_m, expected_origin);
-    let first_active_cell: [f64; 3] = std::array::from_fn(|axis| {
-        single.origin_m[axis] + 0.5 * single.cell_size[axis]
-    });
+    let first_active_cell: [f64; 3] =
+        std::array::from_fn(|axis| single.origin_m[axis] + 0.5 * single.cell_size[axis]);
     for (actual, expected) in first_active_cell.into_iter().zip([29e-9, -11e-9, 4e-9]) {
         assert!((actual - expected).abs() < 1e-21);
     }
@@ -9626,9 +9661,21 @@ fn fdm_boundary_params_none_when_not_set() {
 fn fdm_pbc_demag_resolution_matrix_is_lane_independent() {
     let axes = [
         [AxisBoundary::Open, AxisBoundary::Open, AxisBoundary::Open],
-        [AxisBoundary::Periodic, AxisBoundary::Open, AxisBoundary::Open],
-        [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Open],
-        [AxisBoundary::Periodic, AxisBoundary::Periodic, AxisBoundary::Periodic],
+        [
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+            AxisBoundary::Open,
+        ],
+        [
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
+            AxisBoundary::Open,
+        ],
+        [
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
+        ],
     ];
     for device in [None, Some("cuda")] {
         for axis_set in axes {
@@ -9652,9 +9699,7 @@ fn fdm_pbc_demag_resolution_matrix_is_lane_independent() {
                     image_counts: Some([4, 4, 4]),
                 });
                 let result = plan(&ir);
-                let has_periodic_axis = axis_set
-                    .iter()
-                    .any(|axis| *axis == AxisBoundary::Periodic);
+                let has_periodic_axis = axis_set.iter().any(|axis| *axis == AxisBoundary::Periodic);
                 if demag == FdmDemagPeriodicityIR::Open && has_periodic_axis {
                     let error = result.expect_err("periodic + open demag must fail closed");
                     assert!(
@@ -9716,8 +9761,7 @@ fn fdm_multilayer_periodic_axes_fail_closed_until_kernel_parity() {
 
     let error = plan(&ir).expect_err("multilayer periodic kernels must fail closed");
     assert!(error.reasons.iter().any(|reason| {
-        reason.contains("multilayer periodic axes")
-            && reason.contains("self/shifted demag kernels")
+        reason.contains("multilayer periodic axes") && reason.contains("self/shifted demag kernels")
     }));
 }
 
@@ -10056,25 +10100,44 @@ fn fdm_regional_field_drive_activation_is_resolved_for_active_stage() {
             {"id":"relax","enabled":true}, {"id":"excite","enabled":true}
         ]}),
     );
-    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("relax"));
-    ir.problem_meta.runtime_metadata.insert("stage_start_time_s".into(), serde_json::json!(2e-12));
+    ir.problem_meta
+        .runtime_metadata
+        .insert("active_stage_id".into(), serde_json::json!("relax"));
+    ir.problem_meta
+        .runtime_metadata
+        .insert("stage_start_time_s".into(), serde_json::json!(2e-12));
     ir.field_drives.push(RegionalFieldDriveIR {
-        id: "excite-only".into(), name: "Excite only".into(), kind: FieldDriveKindIR::Regional,
-        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
-        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
-        waveform: TimeDependenceIR::Constant, time_origin: FieldTimeOriginIR::StageLocal,
-        activation: DriveActivationIR::StageIds { stage_ids: vec!["excite".into()] }, migration: None,
+        id: "excite-only".into(),
+        name: "Excite only".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Constant,
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::StageIds {
+            stage_ids: vec!["excite".into()],
+        },
+        migration: None,
     });
     let relaxed = plan(&ir).expect("inactive drive should plan");
-    let BackendPlanIR::Fdm(relaxed) = relaxed.backend_plan else { panic!("expected FDM") };
+    let BackendPlanIR::Fdm(relaxed) = relaxed.backend_plan else {
+        panic!("expected FDM")
+    };
     assert!(relaxed.field_drives.is_empty());
     assert!(relaxed.regional_field_drive_bases.is_empty());
     assert_eq!(relaxed.time_stage.active_stage_id.as_deref(), Some("relax"));
     assert_eq!(relaxed.time_stage.start_time_s, 2e-12);
 
-    ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("excite"));
+    ir.problem_meta
+        .runtime_metadata
+        .insert("active_stage_id".into(), serde_json::json!("excite"));
     let excited = plan(&ir).expect("active drive should plan");
-    let BackendPlanIR::Fdm(excited) = excited.backend_plan else { panic!("expected FDM") };
+    let BackendPlanIR::Fdm(excited) = excited.backend_plan else {
+        panic!("expected FDM")
+    };
     assert_eq!(excited.field_drives.len(), 1);
     assert_eq!(excited.regional_field_drive_bases.len(), 1);
 }
@@ -10130,12 +10193,22 @@ fn all_time_evolution_drive_is_planned_only_for_time_evolution() {
 fn fdm_regional_field_drive_rejects_abm3_without_exact_stage_time_contract() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.field_drives.push(RegionalFieldDriveIR {
-        id: "pulse".into(), name: "Pulse".into(), kind: FieldDriveKindIR::Regional,
-        enabled: true, target: FieldTargetIR::Global {}, amplitude_b_t: 1e-3,
-        direction: [0.0, 1.0, 0.0], spatial_profile: FieldSpatialProfileIR::Uniform {},
-        waveform: TimeDependenceIR::SincPulse { cutoff_hz: 20e9, t0: 50e-12, amplitude: 1.0 },
+        id: "pulse".into(),
+        name: "Pulse".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse {
+            cutoff_hz: 20e9,
+            t0: 50e-12,
+            amplitude: 1.0,
+        },
         time_origin: FieldTimeOriginIR::StageLocal,
-        activation: DriveActivationIR::AllTimeEvolution {}, migration: None,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
     });
     if let StudyIR::TimeEvolution {
         dynamics: DynamicsIR::Llg { integrator, .. },
@@ -10146,7 +10219,10 @@ fn fdm_regional_field_drive_rejects_abm3_without_exact_stage_time_contract() {
     }
 
     let error = plan(&ir).expect_err("ABM3 drive must fail before runtime");
-    assert!(error.reasons.iter().any(|reason| reason.contains("ABM3") && reason.contains("RegionalFieldDrive")));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("ABM3") && reason.contains("RegionalFieldDrive")));
 }
 
 #[test]
@@ -10171,9 +10247,10 @@ fn fdm_cuda_regional_field_drive_fails_closed() {
         migration: None,
     });
     let error = plan(&ir).expect_err("CUDA FDM must not silently ignore field drives");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("fdm_cuda_regional_field_drive_unsupported")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("fdm_cuda_regional_field_drive_unsupported") }));
 }
 
 fn fem_minimal_test_ir() -> ProblemIR {
@@ -10361,11 +10438,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
                 fem.external_field = Some([1.0, 0.0, 0.0]);
                 fem.enable_demag = true;
             },
-            expected: Some((
-                "Ms_element_field",
-                "GPU material-state upload",
-                "gpu",
-            )),
+            expected: Some(("Ms_element_field", "GPU material-state upload", "gpu")),
         },
         Case {
             name: "CPU A Zeeman",
@@ -10408,15 +10481,17 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_ms: true,
             include_a: false,
             gpu: false,
-            configure: |fem| fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
-                algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
-                stop: fullmag_ir::RelaxStopIR {
-                    torque_tolerance_apm: Some(1e-3),
-                    energy_tolerance_j: None,
-                    max_steps: Some(1),
-                    max_relaxation_time_s: None,
-                },
-            }),
+            configure: |fem| {
+                fem.relaxation = Some(fullmag_ir::RelaxationControlIR {
+                    algorithm: fullmag_ir::RelaxationAlgorithmIR::ProjectedGradientBb,
+                    stop: fullmag_ir::RelaxStopIR {
+                        torque_tolerance_apm: Some(1e-3),
+                        energy_tolerance_j: None,
+                        max_steps: Some(1),
+                        max_relaxation_time_s: None,
+                    },
+                })
+            },
             expected: Some((
                 "Ms_element_field",
                 "native FEM handle lifecycle fallback",
@@ -10606,9 +10681,8 @@ fn fem_cpu_exchange_preserves_nodal_ms_and_conformal_element_a_payloads() {
         }
     }
 
-    let planned = plan(&ir).expect(
-        "CPU exchange must accept distinct nodal Ms and conformal element A realizations",
-    );
+    let planned = plan(&ir)
+        .expect("CPU exchange must accept distinct nodal Ms and conformal element A realizations");
     let BackendPlanIR::Fem(fem_plan) = planned.backend_plan else {
         panic!("expected FEM plan");
     };
@@ -10758,7 +10832,6 @@ fn fem_sharp_assignment_requires_conformal_in_strict() {
         "unexpected planner errors: {:?}",
         err.reasons
     );
-
 }
 
 #[test]
@@ -11639,9 +11712,10 @@ fn fdm_grid_count_overflow_is_rejected() {
         .reasons
         .iter()
         .any(|reason| reason.contains("fdm_grid_count_overflow")));
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("4294967295") && reason.contains("requested_counts")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("4294967295") && reason.contains("requested_counts") }));
 }
 
 #[test]
@@ -11654,9 +11728,10 @@ fn fdm_grid_memory_budget_is_rejected() {
         .reasons
         .iter()
         .any(|reason| reason.contains("fdm_grid_memory_budget_exceeded")));
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("1000") && reason.contains("requested_counts")
-    }));
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("1000") && reason.contains("requested_counts") }));
 }
 
 #[test]
@@ -11685,7 +11760,9 @@ fn fdm_per_magnet_cells_resolve_without_hidden_fallback() {
     };
 
     assert_eq!(cell_for_magnet(&hints, "left").unwrap(), [1e-9, 2e-9, 3e-9]);
-    assert!(cell_for_magnet(&hints, "missing").unwrap_err().contains("missing"));
+    assert!(cell_for_magnet(&hints, "missing")
+        .unwrap_err()
+        .contains("missing"));
     assert!(fdm_default_cell(&hints).is_err());
 }
 
@@ -11774,9 +11851,14 @@ fn fdm_multilayer_plan_rejects_missing_or_conflicting_per_magnet_cells() {
     fdm.default_cell = None;
     fdm.per_magnet = Some(only_free);
     let error = plan(&missing).expect_err("missing layer override must fail closed");
-    assert!(error.reasons.iter().any(|reason| {
-        reason.contains("ref") && reason.contains("missing cell override")
-    }), "unexpected reasons: {:?}", error.reasons);
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| { reason.contains("ref") && reason.contains("missing cell override") }),
+        "unexpected reasons: {:?}",
+        error.reasons
+    );
 
     let mut conflicting = stacked_two_body_multilayer_problem();
     let mut per_magnet = BTreeMap::new();
@@ -11831,7 +11913,10 @@ fn fdm_difference_preserves_translated_operand_and_finite_height() {
     .expect("difference should lower");
     let mut errors = Vec::new();
     let (_size, mask, cells, origin) = voxelize_shape(&shape, [1.0; 3], &mut errors);
-    assert!(errors.is_empty(), "unexpected voxelization errors: {errors:?}");
+    assert!(
+        errors.is_empty(),
+        "unexpected voxelization errors: {errors:?}"
+    );
     assert_eq!(cells, [4, 4, 4]);
     assert_eq!(origin, [-2.0, -2.0, -2.0]);
     let mask = mask.expect("bounded CSG should produce a mask");
@@ -11862,7 +11947,10 @@ fn fdm_difference_preserves_translated_operand_and_finite_height() {
     .expect("box difference should lower");
     let mut box_errors = Vec::new();
     let (_, box_mask, _, _) = voxelize_shape(&box_shape, [1.0; 3], &mut box_errors);
-    assert!(box_errors.is_empty(), "unexpected box CSG errors: {box_errors:?}");
+    assert!(
+        box_errors.is_empty(),
+        "unexpected box CSG errors: {box_errors:?}"
+    );
     let box_removed: Vec<usize> = box_mask
         .expect("bounded CSG should produce a mask")
         .iter()

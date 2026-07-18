@@ -16,7 +16,10 @@ fn direct_energy_minimizer_name(algorithm: RelaxationAlgorithmIR) -> Option<&'st
 pub(crate) const CPU_SOA_DIRECT_MINIMIZER_REALIZATION: &str = "cpu_soa_tangent_gradient";
 pub(crate) const NATIVE_LLG_TIME_INTEGRATOR_REALIZATION: &str = "native_llg_time_integrator";
 
-pub(crate) fn native_direct_minimizer_realization(algorithm: RelaxationAlgorithmIR, gpu: bool) -> Option<&'static str> {
+pub(crate) fn native_direct_minimizer_realization(
+    algorithm: RelaxationAlgorithmIR,
+    gpu: bool,
+) -> Option<&'static str> {
     match (algorithm, gpu) {
         (RelaxationAlgorithmIR::ProjectedGradientBb, false) => Some("native_mfem_pgbb"),
         (RelaxationAlgorithmIR::ProjectedGradientBb, true) => Some("native_cuda_pgbb"),

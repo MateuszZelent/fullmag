@@ -203,6 +203,34 @@ export const DATA_FIELDS_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields",
 );
 
+export const DATA_PLANAR_FIELD_META_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/meta",
+);
+
+export const DATA_PLANAR_FIELD_SCALAR_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar",
+);
+
+export const DATA_PLANAR_FIELD_VECTORS_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/vectors",
+);
+
+export const DATA_PLANAR_FIELD_EMPTY_MASK_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/empty-mask",
+);
+
+export const DATA_PLANAR_FIELD_MESH_OVERLAY_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/mesh-overlay",
+);
+
+export const DATA_PLANAR_FIELD_PROBE_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/probe",
+);
+
+export const DATA_PLANAR_FIELD_RENDER_PNG_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/render.png",
+);
+
 export const DATA_QUANTITIES_PATH = openApiV2Path(
   "/v2/sessions/current/data/quantities",
 );
@@ -489,6 +517,18 @@ export const MODEL_UNIVERSE_FIT_PATH = openApiV2Path(
 
 export const MODEL_SCENE_PATH = openApiV2Path(
   "/v2/sessions/current/model/scene",
+);
+
+export const MODEL_PLANAR_MONITORS_PATH = openApiV2Path(
+  "/v2/sessions/current/model/planar-monitors",
+);
+
+export const MODEL_PLANAR_MONITOR_PATH = openApiV2Path(
+  "/v2/sessions/current/model/planar-monitors/{monitor_id}",
+);
+
+export const MODEL_PLANAR_MONITOR_DUPLICATE_PATH = openApiV2Path(
+  "/v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate",
 );
 
 export const MODEL_STUDY_PATH = openApiV2Path(

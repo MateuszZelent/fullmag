@@ -1,9 +1,9 @@
 use crate::{SceneDocument, StudyPipelineDocument, StudyPipelineNode};
 use fullmag_ir::{
-    CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, ExchangeCouplingModeIR,
-    DriveActivationIR, FieldSpatialProfileIR, FieldTargetIR,
-    MaterialParameterAssignmentIR, MaterialParameterFieldIR, MaterialParameterNameIR,
-    MaterialTransitionSpecIR, ObjectRegionIR, RegionFrameIR, RegionMeshPolicyIR, RegionShapeIR,
+    CouplingEndpointIR, CouplingIR, CouplingKindIR, CouplingParametersIR, DriveActivationIR,
+    ExchangeCouplingModeIR, FieldSpatialProfileIR, FieldTargetIR, MaterialParameterAssignmentIR,
+    MaterialParameterFieldIR, MaterialParameterNameIR, MaterialTransitionSpecIR, MonitorTargetIR,
+    ObjectRegionIR, RegionFrameIR, RegionMeshPolicyIR, RegionShapeIR,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -130,7 +130,60 @@ pub fn validate_scene_document(scene: &SceneDocument) -> Result<(), SceneDocumen
         validate_study_pipeline_document(document)?;
     }
     validate_scene_field_drives(scene, &object_ids)?;
+    validate_scene_planar_monitors(scene, &object_ids)?;
 
+    Ok(())
+}
+
+fn validate_scene_planar_monitors(
+    scene: &SceneDocument,
+    object_ids: &BTreeSet<String>,
+) -> Result<(), SceneDocumentValidationError> {
+    let region_ids = scene
+        .objects
+        .iter()
+        .flat_map(|object| {
+            object
+                .regions
+                .iter()
+                .map(move |region| (object.id.as_str(), region.region_id.as_str()))
+        })
+        .collect::<BTreeSet<_>>();
+    let mut ids = BTreeSet::new();
+    let mut names = BTreeSet::new();
+
+    for (index, monitor) in scene.monitors.planar.iter().enumerate() {
+        if monitor.id.trim().is_empty() || !ids.insert(monitor.id.as_str()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "monitors.planar[{index}] id must be non-empty and unique"
+            )));
+        }
+        if monitor.name.trim().is_empty() || !names.insert(monitor.name.as_str()) {
+            return Err(SceneDocumentValidationError::new(format!(
+                "monitors.planar[{index}] name must be non-empty and unique"
+            )));
+        }
+        match &monitor.target {
+            MonitorTargetIR::MagneticDomain | MonitorTargetIR::Domain => {}
+            MonitorTargetIR::Object { object_id } => {
+                if !object_ids.contains(object_id) {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "monitors.planar[{index}] target object '{object_id}' does not exist"
+                    )));
+                }
+            }
+            MonitorTargetIR::Region {
+                object_id,
+                region_id,
+            } => {
+                if !region_ids.contains(&(object_id.as_str(), region_id.as_str())) {
+                    return Err(SceneDocumentValidationError::new(format!(
+                        "monitors.planar[{index}] target region '{object_id}/{region_id}' does not exist"
+                    )));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -166,9 +219,14 @@ fn validate_solver_state(
     executable: bool,
     context: &str,
 ) -> Result<(), SceneDocumentValidationError> {
-    let convenience = [&solver.dt_initial, &solver.dt_min, &solver.dt_max, &solver.max_err]
-        .iter()
-        .any(|value| !value.trim().is_empty());
+    let convenience = [
+        &solver.dt_initial,
+        &solver.dt_min,
+        &solver.dt_max,
+        &solver.max_err,
+    ]
+    .iter()
+    .any(|value| !value.trim().is_empty());
     let active = usize::from(!solver.fixed_timestep.trim().is_empty())
         + usize::from(convenience)
         + usize::from(solver.adaptive_timestep.is_some());
@@ -249,8 +307,14 @@ fn validate_adaptive_state(
             )))
         }
     }
-    validate_present_positive(&adaptive.max_spin_rotation, &format!("{context}.max_spin_rotation"))?;
-    validate_present_positive(&adaptive.norm_tolerance, &format!("{context}.norm_tolerance"))?;
+    validate_present_positive(
+        &adaptive.max_spin_rotation,
+        &format!("{context}.max_spin_rotation"),
+    )?;
+    validate_present_positive(
+        &adaptive.norm_tolerance,
+        &format!("{context}.norm_tolerance"),
+    )?;
     Ok(())
 }
 
@@ -271,7 +335,10 @@ fn validate_adaptive_values(
     let maximum = if maximum.trim().is_empty() && !require_maximum {
         None
     } else {
-        Some(parse_required_positive(maximum, &format!("{context}.dt_max"))?)
+        Some(parse_required_positive(
+            maximum,
+            &format!("{context}.dt_max"),
+        )?)
     };
     if maximum.is_some_and(|value| value < minimum) {
         return Err(SceneDocumentValidationError::new(format!(
@@ -395,9 +462,16 @@ fn validate_scene_field_drives(
                 region_id,
             } => {
                 require_object(object_id)?;
-                let object = scene.objects.iter().find(|object| object.id == *object_id).unwrap();
+                let object = scene
+                    .objects
+                    .iter()
+                    .find(|object| object.id == *object_id)
+                    .unwrap();
                 let exists = object.allocated_region_ids.iter().any(|id| id == region_id)
-                    || object.regions.iter().any(|region| region.region_id == *region_id);
+                    || object
+                        .regions
+                        .iter()
+                        .any(|region| region.region_id == *region_id);
                 if !exists {
                     return Err(SceneDocumentValidationError::new(format!(
                         "regional field drive '{}' references missing region '{}' on object '{}'",
@@ -545,19 +619,19 @@ mod tests {
 
     #[test]
     fn llg_stage_requires_explicit_timestep_policy() {
-        let mut stage: crate::ScriptBuilderStageState = serde_json::from_value(
-            serde_json::json!({
-                "kind": "relax",
-                "entrypoint_kind": "flat_relax",
-                "relax_algorithm": "llg_overdamped"
-            }),
-        )
+        let mut stage: crate::ScriptBuilderStageState = serde_json::from_value(serde_json::json!({
+            "kind": "relax",
+            "entrypoint_kind": "flat_relax",
+            "relax_algorithm": "llg_overdamped"
+        }))
         .expect("stage fixture should deserialize");
 
         let error = validate_stage_solver_state(&stage, 0)
             .expect_err("LLG stage without a timestep policy must fail closed");
         assert!(
-            error.message.contains("explicit fixed or adaptive timestep policy"),
+            error
+                .message
+                .contains("explicit fixed or adaptive timestep policy"),
             "{}",
             error.message
         );
@@ -605,7 +679,9 @@ mod tests {
         let error = validate_scene_document(&explicit_llg)
             .expect_err("public LLG stage without a timestep policy must fail closed");
         assert!(
-            error.message.contains("explicit fixed or adaptive timestep policy"),
+            error
+                .message
+                .contains("explicit fixed or adaptive timestep policy"),
             "{}",
             error.message
         );
@@ -625,7 +701,9 @@ mod tests {
         let error = validate_scene_document(&omitted_algorithm)
             .expect_err("the public default LLG stage must also require a timestep policy");
         assert!(
-            error.message.contains("explicit fixed or adaptive timestep policy"),
+            error
+                .message
+                .contains("explicit fixed or adaptive timestep policy"),
             "{}",
             error.message
         );
@@ -680,10 +758,15 @@ mod tests {
                 "time_origin": "stage_local",
                 "activation": { "kind": "all_time_evolution" }
             }]}
-        })).expect("scene fixture should deserialize");
+        }))
+        .expect("scene fixture should deserialize");
 
         let error = validate_scene_document(&scene).expect_err("missing target must fail closed");
-        assert!(error.message.contains("missing object 'missing'"), "{}", error.message);
+        assert!(
+            error.message.contains("missing object 'missing'"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
@@ -699,10 +782,15 @@ mod tests {
                 "time_origin": "stage_local",
                 "activation": { "kind": "stage_ids", "stage_ids": ["missing-stage"] }
             }]}
-        })).expect("scene fixture should deserialize");
+        }))
+        .expect("scene fixture should deserialize");
 
         let error = validate_scene_document(&scene).expect_err("missing stage must fail closed");
-        assert!(error.message.contains("missing stage 'missing-stage'"), "{}", error.message);
+        assert!(
+            error.message.contains("missing stage 'missing-stage'"),
+            "{}",
+            error.message
+        );
     }
 
     fn region_owned_scene() -> SceneDocument {

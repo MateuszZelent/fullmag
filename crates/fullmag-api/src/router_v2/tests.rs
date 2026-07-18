@@ -147,6 +147,7 @@ fn sample_scene_document() -> fullmag_authoring::SceneDocument {
         mesh_interfaces: Vec::new(),
         current_modules: Vec::new(),
         field_drives: Vec::new(),
+        planar_monitors: Vec::new(),
         excitation_analysis: None,
     };
     fullmag_authoring::scene_document_from_script_builder(&builder)
@@ -1572,7 +1573,6 @@ fn is_iso_calendar_date(value: &str) -> bool {
 async fn health_endpoint_returns_200() {
     let app = test_router();
     let response = app
-        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/health")
@@ -1632,7 +1632,6 @@ async fn health_reports_active_session_when_present() {
 async fn capabilities_endpoint_returns_200() {
     let app = test_router();
     let response = app
-        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/platform/capabilities")
@@ -3229,6 +3228,105 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
 }
 
 #[tokio::test]
+async fn visualization_state_planar_profile_round_trips_without_mutating_three_d_quantity() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    let before = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let before = body_json(before).await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "planar": {
+                            "active_monitor_id": "plane-1",
+                            "quantity_id": "h_demag",
+                            "component": "normal",
+                            "colormap": "coolwarm",
+                            "resolution": {
+                                "width": 640,
+                                "height": 320,
+                                "vector_budget": 750
+                            },
+                            "layers": {
+                                "raster": true,
+                                "contours": true,
+                                "mesh": false,
+                                "boundaries": true,
+                                "vectors": true,
+                                "probes": true
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["planar"]["active_monitor_id"], "plane-1");
+    assert_eq!(json["planar"]["quantity_id"], "h_demag");
+    assert_eq!(json["planar"]["component"], "normal");
+    assert_eq!(json["planar"]["resolution"]["width"], 640);
+    assert_eq!(json["planar"]["layers"]["vectors"], true);
+    assert_eq!(json["slice"]["quantity_id"], "h_demag");
+    assert_eq!(json["slice"]["component"], "magnitude");
+    assert_eq!(json["slice"]["colormap"], "coolwarm");
+    assert_eq!(json["slice"]["projection_resolution"], 512);
+    assert_eq!(json["slice"]["show_mesh"], false);
+    assert_eq!(json["slice"]["show_vectors"], true);
+    assert_eq!(json["quantity"], before["quantity"]);
+    assert_eq!(json["layers"], before["layers"]);
+    assert_eq!(json["camera"], before["camera"]);
+
+    let cleared = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "planar": {
+                            "active_monitor_id": null,
+                            "contrast_min": null,
+                            "contrast_max": null,
+                            "display_unit": null
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared.status(), StatusCode::OK);
+    let cleared = body_json(cleared).await;
+    assert_eq!(
+        cleared["planar"]["active_monitor_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(cleared["planar"]["contrast_min"], serde_json::Value::Null);
+    assert_eq!(cleared["planar"]["contrast_max"], serde_json::Value::Null);
+    assert_eq!(cleared["planar"]["display_unit"], serde_json::Value::Null);
+}
+
+#[tokio::test]
 async fn visualization_target_overrides_resolve_vector_budget_and_length_scale() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
@@ -3341,7 +3439,10 @@ async fn visualization_state_normalizes_legacy_airbox_overrides_with_canonical_p
     assert_eq!(overrides[0]["scope"], "airbox");
     assert_eq!(overrides[0]["scope_id"], "airbox");
     assert_eq!(overrides[0]["style"]["vector_budget"], 512);
-    assert_eq!(json["targets"]["airbox"]["settings"]["vectors_visible"], true);
+    assert_eq!(
+        json["targets"]["airbox"]["settings"]["vectors_visible"],
+        true
+    );
     assert_eq!(json["targets"]["airbox"]["settings"]["vector_budget"], 512);
 }
 
@@ -3373,7 +3474,10 @@ async fn visualization_state_migrates_a_legacy_synthetic_object_airbox_override(
     let json = body_json(response).await;
     assert_eq!(json["overrides"][0]["scope"], "airbox");
     assert_eq!(json["overrides"][0]["scope_id"], "airbox");
-    assert_eq!(json["targets"]["airbox"]["settings"]["vector_length_scale"], 1.5);
+    assert_eq!(
+        json["targets"]["airbox"]["settings"]["vector_length_scale"],
+        1.5
+    );
 }
 
 #[tokio::test]
@@ -7047,10 +7151,7 @@ async fn mesh_periodic_pairs_marks_unpaired_boundary_nodes_invalid() {
     assert_eq!(json["pairs"][0]["unpaired_destination_node_count"], 1);
     assert_eq!(json["pairs"][0]["unpaired_source_face_count"], 1);
     assert_eq!(json["pairs"][0]["unpaired_destination_face_count"], 1);
-    assert_eq!(
-        json["pairs"][0]["status"],
-        "unpaired_boundary_nodes"
-    );
+    assert_eq!(json["pairs"][0]["status"], "unpaired_boundary_nodes");
     assert_eq!(json["status"], "invalid");
     assert!(!json["status_reasons"].as_array().unwrap().is_empty());
 }
@@ -7120,7 +7221,10 @@ async fn mesh_periodic_pairs_marks_accepted_certificate_stale_after_scene_edit()
         .as_array()
         .unwrap()
         .iter()
-        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+        .any(|reason| reason
+            .as_str()
+            .unwrap_or_default()
+            .contains("source scene revision")));
 }
 
 #[tokio::test]
@@ -7202,7 +7306,10 @@ async fn mesh_periodic_pairs_marks_matching_topology_artifact_stale_after_scene_
         .as_array()
         .unwrap()
         .iter()
-        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+        .any(|reason| reason
+            .as_str()
+            .unwrap_or_default()
+            .contains("source scene revision")));
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }
@@ -7422,7 +7529,10 @@ async fn mesh_periodic_pairs_rejects_artifact_from_stale_scene_revision() {
         .as_array()
         .unwrap()
         .iter()
-        .any(|reason| reason.as_str().unwrap_or_default().contains("source scene revision")));
+        .any(|reason| reason
+            .as_str()
+            .unwrap_or_default()
+            .contains("source scene revision")));
 
     let _ = fs::remove_dir_all(&artifact_dir);
 }
@@ -9618,6 +9728,687 @@ async fn authoring_object_geometry_patch_marks_mesh_dirty_and_checks_revision() 
         .expect("object retained");
     assert_eq!(object.geometry.geometry_kind, "Box");
     assert!(object.tags.iter().any(|tag| tag == "mesh:dirty"));
+}
+
+#[tokio::test]
+async fn planar_monitor_crud_enforces_revision_and_target_validation() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 12;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 0.0]
+                ],
+                "layout": {"grid_cells": [2, 2, 1]}
+            }
+        }))
+        .unwrap();
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let monitor = serde_json::json!({
+        "id": "monitor_xy",
+        "name": "XY monitor",
+        "target": {"kind": "magnetic_domain"},
+        "frame": {
+            "origin_m": [0.0, 0.0, 0.0],
+            "u_axis": [1.0, 0.0, 0.0],
+            "v_axis": [0.0, 1.0, 0.0],
+            "normal": [0.0, 0.0, 1.0],
+            "preset": "xy",
+            "normalization_version": "planar_frame_v1",
+            "extent": {
+                "kind": "explicit",
+                "u_min_m": -1.0,
+                "u_max_m": 1.0,
+                "v_min_m": -1.0,
+                "v_max_m": 1.0
+            }
+        },
+        "operator": {"kind": "plane_sample"}
+    });
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/planar-monitors")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_scene_revision": 12,
+                        "monitor": monitor
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::OK);
+    let created = body_json(create).await;
+    let mut revision = created["scene_revision"].as_u64().unwrap();
+    assert_eq!(created["monitor"]["id"], "monitor_xy");
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/planar-monitors")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let list = body_json(list).await;
+    assert_eq!(list["count"], 1);
+    assert_eq!(list["monitors"][0]["id"], "monitor_xy");
+
+    let get = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/planar-monitors/monitor_xy")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    assert_eq!(body_json(get).await["monitor"]["name"], "XY monitor");
+
+    let mut patched_monitor = created["monitor"].clone();
+    patched_monitor["name"] = serde_json::json!("Patched XY monitor");
+    let patch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/model/planar-monitors/monitor_xy")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_scene_revision": revision,
+                        "monitor": patched_monitor
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch.status(), StatusCode::OK);
+    let patched = body_json(patch).await;
+    assert_eq!(patched["monitor"]["name"], "Patched XY monitor");
+    revision = patched["scene_revision"].as_u64().unwrap();
+
+    let duplicate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/planar-monitors/monitor_xy/duplicate")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_scene_revision": revision,
+                        "new_id": "monitor_xy_copy",
+                        "new_name": "XY monitor copy"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::OK);
+    let duplicate = body_json(duplicate).await;
+    assert_eq!(duplicate["monitor"]["id"], "monitor_xy_copy");
+    revision = duplicate["scene_revision"].as_u64().unwrap();
+
+    let delete = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/v2/sessions/current/model/planar-monitors/monitor_xy_copy")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({"expected_scene_revision": revision}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::OK);
+    let deleted = body_json(delete).await;
+    assert_eq!(deleted["count"], 1);
+    assert_eq!(deleted["monitors"][0]["id"], "monitor_xy");
+    revision = deleted["scene_revision"].as_u64().unwrap();
+
+    let stale = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/planar-monitors")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_scene_revision": 12,
+                        "monitor": {
+                            "id": "stale",
+                            "name": "Stale",
+                            "target": {"kind": "magnetic_domain"},
+                            "frame": created["monitor"]["frame"].clone(),
+                            "operator": {"kind": "plane_sample"}
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/model/planar-monitors/missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    let invalid_target = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/model/planar-monitors")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "expected_scene_revision": revision,
+                        "monitor": {
+                            "id": "invalid_target",
+                            "name": "Invalid target",
+                            "target": {"kind": "object", "object_id": "missing-object"},
+                            "frame": created["monitor"]["frame"].clone(),
+                            "operator": {"kind": "plane_sample"}
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_target.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 21;
+    scene.monitors.planar.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "monitor_xy",
+            "name": "XY monitor",
+            "target": {"kind": "magnetic_domain"},
+            "frame": {
+                "origin_m": [0.0, 0.0, 0.0],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+                "preset": "xy",
+                "normalization_version": "planar_frame_v1",
+                "extent": {"kind": "target_bounds", "padding_m": 0.0}
+            },
+            "operator": {"kind": "plane_sample"}
+        }))
+        .unwrap(),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 0.0]
+                ],
+                "layout": {"grid_cells": [2, 2, 1]}
+            }
+        }))
+        .unwrap();
+    }
+    let app = build_v2_router().with_state(state);
+    let base = "/v2/sessions/current/data/fields/m/planar-monitors/monitor_xy";
+    let query = "?component=magnitude&resolution_x=16&resolution_y=16";
+
+    let meta = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta{query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta.status(), StatusCode::OK);
+    let etag = meta.headers()["etag"].to_str().unwrap().to_string();
+    let meta_json = body_json(meta).await;
+    assert_eq!(meta_json["monitor_id"], "monitor_xy");
+    assert_eq!(meta_json["resolution"], serde_json::json!([16, 16]));
+    assert_eq!(meta_json["sampling_execution"], "cpu");
+
+    let not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta{query}"))
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+
+    for resource in ["scalar", "vectors", "empty-mask"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{base}/{resource}{query}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{resource}");
+    }
+
+    let probe = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/probe?u_m=0&v_m=0&component=magnitude"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(probe.status(), StatusCode::OK);
+    let probe = body_json(probe).await;
+    assert_eq!(probe["monitor_id"], "monitor_xy");
+    assert!(probe["cell_id"].is_number());
+    assert!(probe["element_id"].is_null());
+
+    let png = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/render.png{query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(png.status(), StatusCode::OK);
+    assert_eq!(png.headers()["content-type"], "image/png");
+
+    let overlay = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/mesh-overlay{query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(overlay.status(), StatusCode::NO_CONTENT);
+
+    let stale_mesh = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta{query}&expected_mesh_revision=999"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_mesh.status(), StatusCode::CONFLICT);
+    let stale_mesh = body_json(stale_mesh).await;
+    assert_eq!(stale_mesh["code"], "stale_mesh_revision");
+
+    let unbounded = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta?resolution_x=2048&resolution_y=2048"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unbounded.status(), StatusCode::BAD_REQUEST);
+
+    let status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    let status_wire = body_json(status).await.to_string();
+    for forbidden in [
+        "monitor_xy",
+        "scalar_values",
+        "vector_values",
+        "mesh_overlay",
+    ] {
+        assert!(
+            !status_wire.contains(forbidden),
+            "thin status must not embed planar payload {forbidden}"
+        );
+    }
+
+    let snapshot_without_stage = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta{query}&snapshot_id=point-1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(snapshot_without_stage.status(), StatusCode::BAD_REQUEST);
+    let snapshot_without_stage = body_json(snapshot_without_stage).await;
+    assert_eq!(snapshot_without_stage["code"], "snapshot_requires_stage");
+}
+
+#[tokio::test]
+async fn planar_field_fem_overlay_is_fmcs_v3_and_mesh_part_scope_changes_sampling() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.revision = 22;
+    scene.monitors.planar.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "fem_domain_xy",
+            "name": "FEM domain XY",
+            "target": {"kind": "domain"},
+            "frame": {
+                "origin_m": [0.0, 0.0, 0.0],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+                "preset": "xy",
+                "normalization_version": "planar_frame_v1",
+                "extent": {
+                    "kind": "explicit",
+                    "u_min_m": -1.0,
+                    "u_max_m": 2.0,
+                    "v_min_m": -1.0,
+                    "v_max_m": 2.0
+                }
+            },
+            "operator": {"kind": "plane_sample"}
+        }))
+        .expect("FEM planar monitor should deserialize"),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                    [0.0, 2.0, 0.0],
+                    [0.0, 2.0, 0.0]
+                ],
+                "layout": {"grid_cells": [8, 1, 1]}
+            }
+        }))
+        .expect("scoped FEM field should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+    let base = "/v2/sessions/current/data/fields/m/planar-monitors/fem_domain_xy";
+    let body_query =
+        "?component=magnitude&resolution_x=16&resolution_y=16&scope_kind=mesh_part&scope_id=body";
+    let air_query =
+        "?component=magnitude&resolution_x=16&resolution_y=16&scope_kind=mesh_part&scope_id=airbox";
+
+    let overlay = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/mesh-overlay{body_query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(overlay.status(), StatusCode::OK);
+    let overlay = body_bytes(overlay).await;
+    assert_eq!(&overlay[..4], b"FMCS");
+    assert_eq!(u32::from_le_bytes(overlay[4..8].try_into().unwrap()), 3);
+    assert!(
+        u32::from_le_bytes(overlay[8..12].try_into().unwrap()) > 0,
+        "FEM overlay must contain at least one clipped element polygon"
+    );
+
+    let body_mask = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/empty-mask{body_query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_mask.status(), StatusCode::OK);
+    let body_mask = body_bytes(body_mask).await;
+
+    let air_mask = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/empty-mask{air_query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(air_mask.status(), StatusCode::OK);
+    let air_mask = body_bytes(air_mask).await;
+    assert_ne!(
+        body_mask, air_mask,
+        "mesh-part scope must change the sampled occupancy, not only metadata"
+    );
+
+    let probe = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{base}/probe?u_m=0.2&v_m=0.2&component=magnitude&scope_kind=mesh_part&scope_id=body"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(probe.status(), StatusCode::OK);
+    let probe = body_json(probe).await;
+    assert!(probe["cell_id"].is_null());
+    assert!(probe["element_id"].is_number());
+
+    let stale_scope = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{base}/meta?component=magnitude&resolution_x=16&resolution_y=16&scope_kind=mesh_part&scope_id=removed-part"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_scope.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(stale_scope).await["code"], "stale_mesh_scope");
+}
+
+#[tokio::test]
+async fn planar_field_snapshot_is_stage_scoped_and_uses_persisted_values() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    set_running_stage_execution(&state, 23).await;
+    let snapshot_id = "hysteresis_point_002";
+    let snapshot_dir = artifact_dir.join("hysteresis_snapshots").join(snapshot_id);
+    fs::create_dir_all(&snapshot_dir).expect("snapshot directory should be writable");
+    fs::write(
+        snapshot_dir.join("m.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "quantity_id": "m",
+            "snapshot_id": snapshot_id,
+            "layout": {"grid_cells": [2, 1, 1]},
+            "values": [[9.0, 0.0, 0.0], [8.0, 0.0, 0.0]]
+        }))
+        .expect("snapshot should serialize"),
+    )
+    .expect("snapshot should be writable");
+    let stage_artifact_dir = artifact_dir.join("artifacts/stage-000");
+    fs::create_dir_all(&stage_artifact_dir).expect("stage artifact directory should be writable");
+    fs::write(
+        stage_artifact_dir.join("hysteresis_points.json"),
+        serde_json::to_vec(&serde_json::json!([{
+            "point_id": 1,
+            "field_value_mT": 25.0,
+            "m_parallel": 0.8,
+            "m_oop": 0.0,
+            "m_ip": 0.8,
+            "m_avg": [0.8, 0.0, 0.0],
+            "status": "completed",
+            "snapshot_id": snapshot_id
+        }]))
+        .expect("points should serialize"),
+    )
+    .expect("points should be writable");
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("test session should be active");
+        snapshot
+            .stage_execution
+            .as_mut()
+            .and_then(|execution| execution.stages.first_mut())
+            .expect("stage-000 should exist")
+            .kind = Some("flat_hysteresis".to_string());
+        let mut scene = sample_scene_document();
+        scene.monitors.planar.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "snapshot_xy",
+                "name": "Snapshot XY",
+                "target": {"kind": "magnetic_domain"},
+                "frame": {
+                    "origin_m": [0.0, 0.0, 0.0],
+                    "u_axis": [1.0, 0.0, 0.0],
+                    "v_axis": [0.0, 1.0, 0.0],
+                    "normal": [0.0, 0.0, 1.0],
+                    "preset": "xy",
+                    "normalization_version": "planar_frame_v1",
+                    "extent": {
+                        "kind": "explicit",
+                        "u_min_m": -0.5,
+                        "u_max_m": 1.5,
+                        "v_min_m": -0.5,
+                        "v_max_m": 0.5
+                    }
+                },
+                "operator": {"kind": "plane_sample"}
+            }))
+            .expect("snapshot monitor should deserialize"),
+        );
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+    }
+    let base = "/v2/sessions/current/data/fields/m/planar-monitors/snapshot_xy/meta";
+    let valid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{base}?component=x&resolution_x=16&resolution_y=16&stage_id=stage-000&snapshot_id={snapshot_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let valid_status = valid.status();
+    let valid = body_json(valid).await;
+    assert_eq!(valid_status, StatusCode::OK, "{valid:#}");
+    assert_eq!(
+        valid["field_source"],
+        format!("stage_snapshot:{snapshot_id}")
+    );
+    assert_eq!(valid["scalar_max"], 9.0);
+
+    let outside_stage = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{base}?component=x&resolution_x=16&resolution_y=16&stage_id=stage-999&snapshot_id={snapshot_id}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(outside_stage.status(), StatusCode::NOT_FOUND);
+
+    let missing_snapshot = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "{base}?component=x&resolution_x=16&resolution_y=16&stage_id=stage-000&snapshot_id=hysteresis_point_missing"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_snapshot.status(), StatusCode::NOT_FOUND);
+
+    let _ = fs::remove_dir_all(artifact_dir);
 }
 
 #[tokio::test]
@@ -14143,7 +14934,10 @@ async fn adaptive_command_rejects_single_precision_before_enqueue() {
     assert!(json["error"]
         .as_str()
         .is_some_and(|message| message.contains("double precision")));
-    assert_eq!(state.current_control_queue.lock().await.len(), queued_before);
+    assert_eq!(
+        state.current_control_queue.lock().await.len(),
+        queued_before
+    );
 }
 
 #[tokio::test]
@@ -18105,7 +18899,10 @@ async fn fdm_region_membership_descriptor_and_scoped_binary_are_revisioned() {
         let error = body_json(first).await;
         panic!("FDM binary failed: {error}");
     }
-    assert_eq!(first.headers()["x-fullmag-grid-fingerprint"], grid_fingerprint);
+    assert_eq!(
+        first.headers()["x-fullmag-grid-fingerprint"],
+        grid_fingerprint
+    );
     assert_eq!(first.headers()["x-fullmag-region-membership-revision"], "7");
     let etag = first.headers()["etag"].to_str().unwrap().to_string();
     let scoped = body_bytes(first).await;
@@ -23463,14 +24260,24 @@ async fn v2_field_vector_object_scope_prefers_mesh_part_node_indices() {
 
     assert_eq!(response.status(), StatusCode::OK);
     for required_header in [
-        "x-fullmag-field-revision", "x-fullmag-domain-generation-id",
-        "x-fullmag-quantity-id", "x-fullmag-component", "x-fullmag-encoding",
-        "x-fullmag-point-count", "x-fullmag-value-count", "x-fullmag-n-comp",
-        "x-fullmag-scope-kind", "x-fullmag-scope-id",
-        "x-fullmag-mesh-topology-hash", "x-fullmag-field-indexing",
+        "x-fullmag-field-revision",
+        "x-fullmag-domain-generation-id",
+        "x-fullmag-quantity-id",
+        "x-fullmag-component",
+        "x-fullmag-encoding",
+        "x-fullmag-point-count",
+        "x-fullmag-value-count",
+        "x-fullmag-n-comp",
+        "x-fullmag-scope-kind",
+        "x-fullmag-scope-id",
+        "x-fullmag-mesh-topology-hash",
+        "x-fullmag-field-indexing",
         "x-fullmag-node-index-count",
     ] {
-        assert!(response.headers().get(required_header).is_some(), "missing {required_header}");
+        assert!(
+            response.headers().get(required_header).is_some(),
+            "missing {required_header}"
+        );
     }
     assert!(response.headers().get("x-fullmag-snapshot-id").is_none());
     assert_eq!(
@@ -23969,7 +24776,10 @@ async fn field_vector_component_etag_304() {
         .unwrap();
 
     assert_eq!(first.status(), StatusCode::OK);
-    assert_eq!(first.headers().get("x-fullmag-encoding").unwrap(), "FMVP;version=2");
+    assert_eq!(
+        first.headers().get("x-fullmag-encoding").unwrap(),
+        "FMVP;version=2"
+    );
     for optional_header in [
         "x-fullmag-mesh-topology-hash",
         "x-fullmag-field-indexing",
@@ -24011,24 +24821,52 @@ async fn field_vector_topology_change_invalidates_etag_without_field_revision_ch
                 [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.0]
             ], "layout": { "grid_cells": [8, 1, 1] } }
-        })).unwrap();
+        }))
+        .unwrap();
     }
     let app = build_v2_router().with_state(state.clone());
     let uri = "/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=body";
-    let first = app.clone().oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap()).await.unwrap();
+    let first = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
     assert_eq!(first.status(), StatusCode::OK);
-    let etag = first.headers().get("etag").unwrap().to_str().unwrap().to_string();
-    let field_revision = first.headers().get("x-fullmag-field-revision").unwrap().clone();
+    let etag = first
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let field_revision = first
+        .headers()
+        .get("x-fullmag-field-revision")
+        .unwrap()
+        .clone();
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.fem_mesh.as_mut().unwrap().nodes[0][0] = 0.125;
     }
-    let second = app.oneshot(
-        Request::builder().uri(uri).header("if-none-match", &etag).body(Body::empty()).unwrap()
-    ).await.unwrap();
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(second.status(), StatusCode::OK);
-    assert_eq!(second.headers().get("x-fullmag-field-revision"), Some(&field_revision));
-    assert_ne!(second.headers().get("etag").unwrap().to_str().unwrap(), etag);
+    assert_eq!(
+        second.headers().get("x-fullmag-field-revision"),
+        Some(&field_revision)
+    );
+    assert_ne!(
+        second.headers().get("etag").unwrap().to_str().unwrap(),
+        etag
+    );
 }
 
 #[tokio::test]
@@ -24829,6 +25667,48 @@ fn openapi_contains_field_slice_paths() {
 }
 
 #[test]
+fn openapi_contains_planar_monitor_model_paths() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let paths = openapi["paths"]
+        .as_object()
+        .expect("OpenAPI paths must be an object");
+    let collection = paths
+        .get("/v2/sessions/current/model/planar-monitors")
+        .expect("planar monitor collection path");
+    assert!(collection.get("get").is_some());
+    assert!(collection.get("post").is_some());
+    let item = paths
+        .get("/v2/sessions/current/model/planar-monitors/{monitor_id}")
+        .expect("planar monitor item path");
+    assert!(item.get("get").is_some());
+    assert!(item.get("patch").is_some());
+    assert!(item.get("delete").is_some());
+    assert!(paths.contains_key("/v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate"));
+}
+
+#[test]
+fn openapi_contains_planar_field_data_paths() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let paths = openapi["paths"]
+        .as_object()
+        .expect("OpenAPI paths must be an object");
+    for resource in [
+        "meta",
+        "scalar",
+        "vectors",
+        "empty-mask",
+        "mesh-overlay",
+        "probe",
+        "render.png",
+    ] {
+        let path = format!(
+            "/v2/sessions/current/data/fields/{{quantity_id}}/planar-monitors/{{monitor_id}}/{resource}"
+        );
+        assert!(paths.contains_key(&path), "OpenAPI missing {path}");
+    }
+}
+
+#[test]
 fn openapi_contains_field_slice_contract() {
     let openapi = crate::openapi_v2::openapi_json();
     let value = openapi;
@@ -24861,14 +25741,25 @@ fn openapi_contains_field_slice_contract() {
         .as_object()
         .expect("vector 200 response headers missing");
     for header_name in [
-        "x-fullmag-field-revision", "x-fullmag-domain-generation-id",
-        "x-fullmag-quantity-id", "x-fullmag-component", "x-fullmag-encoding",
-        "x-fullmag-point-count", "x-fullmag-value-count", "x-fullmag-n-comp",
-        "x-fullmag-scope-kind", "x-fullmag-scope-id", "x-fullmag-snapshot-id",
-        "x-fullmag-mesh-topology-hash", "x-fullmag-field-indexing",
+        "x-fullmag-field-revision",
+        "x-fullmag-domain-generation-id",
+        "x-fullmag-quantity-id",
+        "x-fullmag-component",
+        "x-fullmag-encoding",
+        "x-fullmag-point-count",
+        "x-fullmag-value-count",
+        "x-fullmag-n-comp",
+        "x-fullmag-scope-kind",
+        "x-fullmag-scope-id",
+        "x-fullmag-snapshot-id",
+        "x-fullmag-mesh-topology-hash",
+        "x-fullmag-field-indexing",
         "x-fullmag-node-index-count",
     ] {
-        assert!(response_headers.contains_key(header_name), "missing documented response header {header_name}");
+        assert!(
+            response_headers.contains_key(header_name),
+            "missing documented response header {header_name}"
+        );
     }
 
     let slice_meta_get = paths
@@ -28837,7 +29728,16 @@ async fn spin_wave_gamma_resource_reads_typed_session_artifact() {
         })).expect("gamma fixture should serialize"),
     ).expect("gamma fixture should be written");
 
-    let response = app.oneshot(Request::builder().method("GET").uri("/v2/sessions/current/analysis/spin-wave/gamma.v1").body(Body::empty()).unwrap()).await.unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/spin-wave/gamma.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert_eq!(json["weighting"], "Ms_times_lumped_volume");
@@ -28849,8 +29749,8 @@ async fn dynamic_structure_factor_resource_bounds_json_and_keeps_full_artifact_r
     let (app, artifact_dir) = test_router_with_session_and_artifact_dir().await;
     let analysis_dir = artifact_dir.join("analysis");
     fs::create_dir_all(&analysis_dir).expect("analysis artifact directory should exist");
-    let axis=(0..80).map(|index|index as f64).collect::<Vec<_>>();
-    let matrix=vec![1.0;80*80];
+    let axis = (0..80).map(|index| index as f64).collect::<Vec<_>>();
+    let matrix = vec![1.0; 80 * 80];
     fs::write(
         analysis_dir.join("dynamic_structure_factor.1d.v1.json"),
         serde_json::to_vec(&serde_json::json!({
@@ -28864,10 +29764,22 @@ async fn dynamic_structure_factor_resource_bounds_json_and_keeps_full_artifact_r
         })).expect("finite-k fixture should serialize"),
     ).expect("finite-k fixture should be written");
 
-    let response = app.oneshot(Request::builder().method("GET").uri("/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1").body(Body::empty()).unwrap()).await.unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let json=body_json(response).await;
-    assert_eq!(json["artifact_ref"], "analysis/dynamic_structure_factor.1d.v1.json");
+    let json = body_json(response).await;
+    assert_eq!(
+        json["artifact_ref"],
+        "analysis/dynamic_structure_factor.1d.v1.json"
+    );
     assert_eq!(json["bounded"], true);
     assert!(json["power"].as_array().unwrap().len() <= 4096);
     assert_eq!(json["original_frequency_count"], 80);

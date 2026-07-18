@@ -15,7 +15,9 @@ use fullmag_engine::{
     ExchangeLlgProblem, ExchangeLlgState, GridShape, LlgConfig, MaterialParameters,
     UniaxialAnisotropyConfig, MU0,
 };
-use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy};
+use fullmag_fdm_demag::{
+    compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy,
+};
 use fullmag_ir::{
     ExchangeBoundaryCondition, ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR,
     FdmMultilayerPlanIR, FdmPlanIR, GridDimensions, IntegratorChoice, OutputIR,
@@ -24,10 +26,10 @@ use fullmag_ir::{
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::artifacts::select_state_observable_field;
-use crate::fdm::validate_multilayer_grid_budget;
 use crate::fdm::gpu::cuda::native::{is_cuda_available, DeviceInfo, NativeFdmBackend};
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
+use crate::fdm::validate_multilayer_grid_budget;
 use crate::relaxation::{
     llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
 };
@@ -319,9 +321,9 @@ fn build_contexts_and_states(
                 plan.periodicity
                     .as_ref()
                     .map(|periodicity| {
-                        periodicity.axes.map(|axis| {
-                            matches!(axis, fullmag_ir::AxisBoundary::Periodic)
-                        })
+                        periodicity
+                            .axes
+                            .map(|axis| matches!(axis, fullmag_ir::AxisBoundary::Periodic))
                     })
                     .unwrap_or([false; 3]),
             ),
@@ -1511,11 +1513,13 @@ fn build_multilayer_demag_runtime(
         .first()
         .map(|layer| layer.convolution_cell_size)
         .unwrap_or([1.0, 1.0, 1.0]);
-    let pair_capacity = plan.layers.len().checked_mul(plan.layers.len()).ok_or_else(|| {
-        RunError {
+    let pair_capacity = plan
+        .layers
+        .len()
+        .checked_mul(plan.layers.len())
+        .ok_or_else(|| RunError {
             message: "FDM multilayer kernel-pair count overflow before allocation".to_string(),
-        }
-    })?;
+        })?;
     let mut kernel_pairs = Vec::with_capacity(pair_capacity);
     for (src_index, src_layer) in plan.layers.iter().enumerate() {
         for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
@@ -1559,11 +1563,13 @@ fn build_multilayer_demag_runtime_f32(
         .first()
         .map(|layer| layer.convolution_cell_size)
         .unwrap_or([1.0, 1.0, 1.0]);
-    let pair_capacity = plan.layers.len().checked_mul(plan.layers.len()).ok_or_else(|| {
-        RunError {
+    let pair_capacity = plan
+        .layers
+        .len()
+        .checked_mul(plan.layers.len())
+        .ok_or_else(|| RunError {
             message: "FDM multilayer f32 kernel-pair count overflow before allocation".to_string(),
-        }
-    })?;
+        })?;
     let mut kernel_pairs = Vec::with_capacity(pair_capacity);
     for (src_index, src_layer) in plan.layers.iter().enumerate() {
         for (dst_index, dst_layer) in plan.layers.iter().enumerate() {
@@ -2933,9 +2939,7 @@ mod tests {
     use crate::fdm::cpu::multilayer_reference;
     use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
 
-    fn manufactured_rhs_single(
-        state: &[Vec<[f32; 3]>],
-    ) -> Result<Vec<Vec<[f32; 3]>>, RunError> {
+    fn manufactured_rhs_single(state: &[Vec<[f32; 3]>]) -> Result<Vec<Vec<[f32; 3]>>, RunError> {
         Ok(state
             .iter()
             .map(|layer| {
@@ -3254,7 +3258,10 @@ mod tests {
         let native = resolve_cuda_multilayer_execution_shape(&plan)
             .expect("native stacked RK45 should be a valid CUDA multilayer execution shape")
             .expect("plan should use native single-grid fast path");
-        assert_eq!(native.combined_plan.integrator, Some(IntegratorChoice::Rk45));
+        assert_eq!(
+            native.combined_plan.integrator,
+            Some(IntegratorChoice::Rk45)
+        );
 
         let mut assisted = make_assisted_plan(false, ExecutionPrecision::Double);
         assisted.integrator = IntegratorChoice::Rk23;

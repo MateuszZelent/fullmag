@@ -15,7 +15,8 @@ As of 2026-05-22, `apps/control-room` registers these manifests through `src/mod
 | `ribbon` | `src/modules/ribbon` | `ribbon` | implemented |
 | `explorer` | `src/modules/explorer` | `panel-left` | implemented |
 | `viewport-3d` | `src/modules/viewport-3d` | `viewport-main` | implemented |
-| `cross-section-image` | `src/modules/cross-section-image` | `viewport-main` | planned replacement for live mesh-section WebGL |
+| `cross-section-image` | `src/modules/cross-section-image` | `viewport-main` | implemented compatibility export/fallback; removed as a competing top-level workflow after field-map parity |
+| `field-map` | `src/modules/field-map` | `viewport-main` | production target for interactive planar spatial quantities; implementation tracked by ADR 0020 |
 | `analysis-plots` | `src/modules/analysis-plots` | `viewport-main` | planned center-surface chart module |
 | `viewport-aux` slot | `src/kernel/layout` | `viewport-aux` | implemented as an empty auxiliary dock slot, rendered only when a registered module targets it |
 | `inspector` | `src/modules/inspector` | `panel-right` | implemented |
@@ -70,8 +71,8 @@ Authoring modules never mutate local-only physics state. They submit semantic tr
 | Module | Slot | Responsibility | Data source |
 |---|---|---|---|
 | `viewport-3d` | `viewport-main` | 3D scene, mesh, field, glyph, overlay, selection visualization. | Mesh/topology/field binary resources. |
-| `cross-section-image` | `viewport-main` | Server-rendered mesh cross-section preview and PNG export. | Meshing cross-section image resource plus FMCS/FMQS statistics resources. |
-| `field-map` | `viewport-main` | Interactive scientific heatmaps, contours, probes, arrows, slices, and projections for revisioned scalar/vector fields such as antenna `J_charge`, `H_ant_basis`, `H_ant`, and `h_perp`. | Field slice/projection metadata plus binary scalar, arrow, empty-mask, and optional server PNG resources. |
+| `cross-section-image` | `viewport-main` during migration; export/fallback after cutover | Server-rendered mesh cross-section preview and PNG export. | Meshing cross-section image resource plus FMCS/FMQS statistics resources. |
+| `field-map` | `viewport-main` | Interactive heatmaps, contours, probes, vectors, mesh overlays, plane/slab/depth reductions, and surface projections for every compatible published spatial quantity. | Canonical planar-monitor metadata plus bounded scalar, vector, occupancy, mesh-overlay, probe, and PNG resources. |
 | `analysis-plots` | `viewport-main`, `panel-bottom` | Scalar histories, energies, convergence, profiles, and analysis series. | Scalar and analysis resources through a chart adapter. |
 | `viewport-2d` | disabled after replacement | Legacy live WebGL slices, projections, probes, line profiles, and mesh cross-sections. | Removed from default registration once `cross-section-image` is active. |
 | `legend-scale` | `viewport-main` overlay | Quantity legend, units, range, stale/degraded status. | Visualization state and field stats. |
@@ -86,6 +87,14 @@ active, and reads the standard field data plane through `ControlRoomApi` and
 resource hooks. Source k-spectrum and spin-wave `S(k,omega)` remain analysis
 products consumed by `analysis-plots`; a source heatmap must not be labeled as
 the magnetization response.
+
+The module renders a canonical `PlanarMonitor` but does not own that monitor.
+Committed monitor target/frame/operator state round-trips through
+`SceneDocument`, `ProblemIR`, and canonical Python. Quantity, component,
+display unit, palette, range, raster resolution, quality, vector budget, and
+runtime-only mesh-part/airbox scope belong to the planar visualization profile
+or data request. The renderer is Canvas 2D/worker based and must not import
+Three.js, R3F, or `viewport-3d` internals.
 
 `viewport-main` is a tabbed center surface when more than one visualization module targets it. The active tab is the only mounted heavy surface. Inactive `viewport-3d` must not keep WebGL, field-vector hooks, topology hooks, render-model builders, or client acknowledgement effects active.
 

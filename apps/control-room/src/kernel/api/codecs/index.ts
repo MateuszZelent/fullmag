@@ -1,4 +1,7 @@
-export { decodeCrossSection } from "./crossSectionCodec";
+export {
+  decodeCrossSection,
+  decodePlanarMeshOverlay,
+} from "./crossSectionCodec";
 export { decodeCrossSectionQuality } from "./crossSectionQualityCodec";
 export { asDecodedComplexFieldVector, decodeFieldVector } from "./fieldVectorCodec";
 export { decodeMeshQualityData } from "./meshQualityDataCodec";

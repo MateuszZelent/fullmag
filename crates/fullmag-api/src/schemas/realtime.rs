@@ -49,6 +49,8 @@ pub enum RealtimeResourceName {
     Commands,
     Stages,
     SceneDocument,
+    PlanarMonitors,
+    PlanarFields,
     Events,
     VisualizationState,
     VisualizationClientAcks,

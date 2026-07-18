@@ -1,0 +1,300 @@
+use crate::error::ApiError;
+use fullmag_ir::{EmptyPolicyIR, PlanarOperatorIR, PlanarReductionIR};
+
+use super::frame::ResolvedFrame;
+use super::geometry::{integrate_clipped_tetra, projected_pixel_bounds, LinearVertex};
+use super::provenance;
+use super::reduction::{AccumulatorReduction, WeightedAccumulator};
+use super::{
+    FdmPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarSampleResult,
+    ResolvedPlanarSampleRequest,
+};
+
+pub(super) fn sample(
+    field: &FdmPlanarField,
+    request: &ResolvedPlanarSampleRequest,
+) -> Result<PlanarSampleResult, ApiError> {
+    let frame = ResolvedFrame::try_from_ir(&request.frame)?;
+    match &request.operator {
+        PlanarOperatorIR::PlaneSample => sample_plane(field, request, frame),
+        PlanarOperatorIR::SlabAverage { thickness_m } => sample_volume(
+            field,
+            request,
+            frame,
+            Some(*thickness_m),
+            PlanarReductionIR::MeanOccupied.into(),
+            false,
+        ),
+        PlanarOperatorIR::DepthProjection {
+            reduction,
+            empty_policy,
+        } => sample_volume(
+            field,
+            request,
+            frame,
+            None,
+            (*reduction).into(),
+            *empty_policy == EmptyPolicyIR::IncludeAirAsZero,
+        ),
+        PlanarOperatorIR::SurfaceProjection { .. } => Err(ApiError::unprocessable_entity(
+            "unsupported_planar_operator: FDM boundary surface topology is not published",
+        )),
+    }
+}
+
+pub(super) fn sample_compatibility_depth(
+    field: &FdmPlanarField,
+    request: &ResolvedPlanarSampleRequest,
+    reduction: PlanarCompatibilityReduction,
+    include_air_as_zero: bool,
+) -> Result<PlanarSampleResult, ApiError> {
+    let frame = ResolvedFrame::try_from_ir(&request.frame)?;
+    let reduction = match reduction {
+        PlanarCompatibilityReduction::WeightedSum => AccumulatorReduction::WeightedSum,
+        PlanarCompatibilityReduction::SampleSum { normal_step } => {
+            AccumulatorReduction::SampleSum { normal_step }
+        }
+        PlanarCompatibilityReduction::Stddev => AccumulatorReduction::Stddev,
+    };
+    sample_volume(field, request, frame, None, reduction, include_air_as_zero)
+}
+
+fn sample_plane(
+    field: &FdmPlanarField,
+    request: &ResolvedPlanarSampleRequest,
+    frame: ResolvedFrame,
+) -> Result<PlanarSampleResult, ApiError> {
+    let pixel_count = request.resolution[0] as usize * request.resolution[1] as usize;
+    let mut occupancy = vec![Occupancy::Empty; pixel_count];
+    let mut vectors = vec![[f64::NAN; 3]; pixel_count];
+    let mut scalars = vec![f64::NAN; pixel_count];
+    let mut source_entity_ids = vec![None; pixel_count];
+    for y in 0..request.resolution[1] {
+        for x in 0..request.resolution[0] {
+            let uv = frame.pixel_center(x, y, request.resolution);
+            let point = frame.point(uv[0], uv[1], 0.0);
+            let index = (y * request.resolution[0] + x) as usize;
+            let Some((cell_id, value)) = cell_value_at(field, point) else {
+                continue;
+            };
+            occupancy[index] = Occupancy::Occupied;
+            source_entity_ids[index] = Some(cell_id);
+            write_value(value, &mut scalars[index], &mut vectors[index]);
+        }
+    }
+    Ok(PlanarSampleResult {
+        meta: provenance::meta(
+            request,
+            "fdm_cell_constant_plane",
+            &occupancy,
+            0.0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        scalar_values: scalars,
+        vector_values: (field.n_comp() >= 3).then_some(vectors),
+        occupancy,
+        source_entity_ids,
+        overlay: None,
+    })
+}
+
+fn sample_volume(
+    field: &FdmPlanarField,
+    request: &ResolvedPlanarSampleRequest,
+    frame: ResolvedFrame,
+    thickness: Option<f64>,
+    reduction: AccumulatorReduction,
+    include_air_as_zero: bool,
+) -> Result<PlanarSampleResult, ApiError> {
+    let pixel_count = request.resolution[0] as usize * request.resolution[1] as usize;
+    let mut accumulators = (0..pixel_count)
+        .map(|_| WeightedAccumulator::new(field.n_comp()))
+        .collect::<Vec<_>>();
+    let grid = field.grid();
+    let origin = field.origin();
+    let spacing = field.spacing();
+    let half = thickness.map(|value| value * 0.5);
+    let s_bounds = half
+        .map(|value| [-value, value])
+        .unwrap_or([f64::NEG_INFINITY, f64::INFINITY]);
+    let du = (frame.bounds[1] - frame.bounds[0]) / request.resolution[0] as f64;
+    let dv = (frame.bounds[3] - frame.bounds[2]) / request.resolution[1] as f64;
+    const CELL_TETRAHEDRA: [[usize; 4]; 6] = [
+        [0, 1, 3, 7],
+        [0, 3, 2, 7],
+        [0, 2, 6, 7],
+        [0, 6, 4, 7],
+        [0, 4, 5, 7],
+        [0, 5, 1, 7],
+    ];
+
+    for z in 0..grid[2] {
+        for y in 0..grid[1] {
+            for x in 0..grid[0] {
+                let cell = ((z * grid[1] + y) * grid[0] + x) as usize;
+                let start = cell * field.n_comp();
+                let value = field.values()[start..start + field.n_comp()].to_vec();
+                let low = [
+                    origin[0] + x as f64 * spacing[0],
+                    origin[1] + y as f64 * spacing[1],
+                    origin[2] + z as f64 * spacing[2],
+                ];
+                let corners = [
+                    [low[0], low[1], low[2]],
+                    [low[0] + spacing[0], low[1], low[2]],
+                    [low[0], low[1] + spacing[1], low[2]],
+                    [low[0] + spacing[0], low[1] + spacing[1], low[2]],
+                    [low[0], low[1], low[2] + spacing[2]],
+                    [low[0] + spacing[0], low[1], low[2] + spacing[2]],
+                    [low[0], low[1] + spacing[1], low[2] + spacing[2]],
+                    [
+                        low[0] + spacing[0],
+                        low[1] + spacing[1],
+                        low[2] + spacing[2],
+                    ],
+                ]
+                .map(|position| LinearVertex {
+                    position: frame.project(position),
+                    value: value.clone(),
+                });
+                for tetrahedron in CELL_TETRAHEDRA {
+                    let vertices = tetrahedron.map(|index| corners[index].clone());
+                    let Some((x_bounds, y_bounds)) = projected_pixel_bounds(
+                        &vertices,
+                        frame.bounds,
+                        request.resolution,
+                        s_bounds,
+                    ) else {
+                        continue;
+                    };
+                    for pixel_y in y_bounds[0]..=y_bounds[1] {
+                        for pixel_x in x_bounds[0]..=x_bounds[1] {
+                            let pixel = (pixel_y * request.resolution[0] + pixel_x) as usize;
+                            let u_min = frame.bounds[0] + pixel_x as f64 * du;
+                            let v_min = frame.bounds[2] + pixel_y as f64 * dv;
+                            let contribution = integrate_clipped_tetra(
+                                vertices.clone(),
+                                [
+                                    u_min,
+                                    u_min + du,
+                                    v_min,
+                                    v_min + dv,
+                                    s_bounds[0],
+                                    s_bounds[1],
+                                ],
+                            );
+                            if contribution.measure > 0.0 {
+                                accumulators[pixel].add(&value, contribution.measure);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let pixel_area = ((frame.bounds[1] - frame.bounds[0]) * (frame.bounds[3] - frame.bounds[2]))
+        .abs()
+        / pixel_count as f64;
+    finish_reduction(
+        field.n_comp(),
+        request,
+        accumulators,
+        reduction.into(),
+        pixel_area,
+        include_air_as_zero,
+        "fdm_cell_volume_weighted",
+        thickness.map(|value| pixel_area * value),
+    )
+}
+
+pub(super) fn finish_reduction(
+    n_comp: usize,
+    request: &ResolvedPlanarSampleRequest,
+    accumulators: Vec<WeightedAccumulator>,
+    reduction: AccumulatorReduction,
+    pixel_area: f64,
+    include_air_as_zero: bool,
+    method: &'static str,
+    full_measure: Option<f64>,
+) -> Result<PlanarSampleResult, ApiError> {
+    let mut occupancy = Vec::with_capacity(accumulators.len());
+    let mut scalar_values = Vec::with_capacity(accumulators.len());
+    let mut vector_values = Vec::with_capacity(accumulators.len());
+    let mut occupied_measure = 0.0;
+    for accumulator in accumulators {
+        occupied_measure += accumulator.weight();
+        match accumulator.finish(reduction, pixel_area) {
+            Some(value) => {
+                occupancy.push(
+                    if full_measure
+                        .is_some_and(|full| accumulator.weight() < full * (1.0 - 1.0e-10))
+                    {
+                        Occupancy::Partial
+                    } else {
+                        Occupancy::Occupied
+                    },
+                );
+                scalar_values.push(if n_comp == 1 {
+                    value[0]
+                } else {
+                    value
+                        .iter()
+                        .map(|component| component * component)
+                        .sum::<f64>()
+                        .sqrt()
+                });
+                vector_values.push(if n_comp >= 3 {
+                    [value[0], value[1], value[2]]
+                } else {
+                    [f64::NAN; 3]
+                });
+            }
+            None => {
+                occupancy.push(Occupancy::Empty);
+                scalar_values.push(if include_air_as_zero { 0.0 } else { f64::NAN });
+                vector_values.push([f64::NAN; 3]);
+            }
+        }
+    }
+    Ok(PlanarSampleResult {
+        meta: provenance::meta(request, method, &occupancy, occupied_measure, 0, 0, 0, 1),
+        scalar_values,
+        vector_values: (n_comp >= 3).then_some(vector_values),
+        source_entity_ids: vec![None; occupancy.len()],
+        occupancy,
+        overlay: None,
+    })
+}
+
+fn cell_value_at(field: &FdmPlanarField, point: [f64; 3]) -> Option<(u32, &[f64])> {
+    let mut index = [0u32; 3];
+    for axis in 0..3 {
+        let coordinate = (point[axis] - field.origin()[axis]) / field.spacing()[axis];
+        if coordinate < 0.0 || coordinate >= field.grid()[axis] as f64 {
+            return None;
+        }
+        index[axis] = coordinate.floor() as u32;
+    }
+    let cell = ((index[2] * field.grid()[1] + index[1]) * field.grid()[0] + index[0]) as usize;
+    let start = cell * field.n_comp();
+    Some((cell as u32, &field.values()[start..start + field.n_comp()]))
+}
+
+fn write_value(value: &[f64], scalar: &mut f64, vector: &mut [f64; 3]) {
+    *scalar = if value.len() == 1 {
+        value[0]
+    } else {
+        value
+            .iter()
+            .map(|component| component * component)
+            .sum::<f64>()
+            .sqrt()
+    };
+    if value.len() >= 3 {
+        *vector = [value[0], value[1], value[2]];
+    }
+}

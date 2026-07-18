@@ -242,7 +242,10 @@ fn provenance_with_runtime_threading(
     enriched
 }
 
-fn thermal_execution_provenance(plan: &fullmag_ir::ExecutionPlanIR, steps: &[StepStats]) -> Option<serde_json::Value> {
+fn thermal_execution_provenance(
+    plan: &fullmag_ir::ExecutionPlanIR,
+    steps: &[StepStats],
+) -> Option<serde_json::Value> {
     let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
         return None;
     };
@@ -1028,8 +1031,8 @@ pub(crate) fn write_artifacts(
     let mesh_metadata = mesh_runtime_metadata(plan);
     let region_realization_revisions = region_realization_revisions_metadata(problem);
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
-    let mut execution_provenance_json = serde_json::to_value(&execution_provenance)
-        .expect("ExecutionProvenance must serialize");
+    let mut execution_provenance_json =
+        serde_json::to_value(&execution_provenance).expect("ExecutionProvenance must serialize");
     if let Some(thermal) = thermal_execution_provenance(plan, &executed.result.steps) {
         execution_provenance_json
             .as_object_mut()
@@ -1152,11 +1155,7 @@ pub(crate) fn write_artifacts(
     }
 
     if should_write_plan_periodic_pairs_artifact(plan, executed) {
-        write_periodic_pairs_artifact(
-            output_dir,
-            plan,
-            problem_source_scene_revision(problem),
-        )?;
+        write_periodic_pairs_artifact(output_dir, plan, problem_source_scene_revision(problem))?;
     }
     write_fem_supercell_node_geometry_artifact(output_dir, problem, plan)?;
     write_static_pbc_demag_seam_diagnostics_artifact(
@@ -1574,8 +1573,8 @@ fn write_periodic_pairs_artifact(
         });
     let validation_status = if certificate.is_ok()
         && pairs
-        .iter()
-        .all(|pair| pair.get("status").and_then(serde_json::Value::as_str) == Some("valid"))
+            .iter()
+            .all(|pair| pair.get("status").and_then(serde_json::Value::as_str) == Some("valid"))
     {
         "ok"
     } else {
@@ -2225,7 +2224,10 @@ fn mesh_boundary_face_area(mesh: &fullmag_ir::MeshIR, face_index: usize) -> Opti
 }
 
 #[cfg(test)]
-fn mesh_boundary_face_unit_normal(mesh: &fullmag_ir::MeshIR, face_index: usize) -> Option<[f64; 3]> {
+fn mesh_boundary_face_unit_normal(
+    mesh: &fullmag_ir::MeshIR,
+    face_index: usize,
+) -> Option<[f64; 3]> {
     let face = mesh.boundary_faces.get(face_index)?;
     let a = mesh.nodes.get(face[0] as usize)?;
     let b = mesh.nodes.get(face[1] as usize)?;
@@ -2634,8 +2636,8 @@ fn write_table_autosave_artifacts(
     let Some(config_ir) = problem.study.sampling().table_autosave.as_ref() else {
         return Ok(());
     };
-    let config =
-        crate::table_autosave::TableAutosaveConfig::from_ir(config_ir).map_err(|error| {
+    let config = crate::table_autosave::TableAutosaveConfig::from_ir(config_ir)
+        .map_err(|error| {
             Error::new(
                 ErrorKind::InvalidInput,
                 format!("invalid table_autosave config: {error}"),
@@ -3074,9 +3076,9 @@ mod tests {
     }
 
     fn test_execution_plan(active_mask: Option<Vec<bool>>) -> ExecutionPlanIR {
-        let active_cells = active_mask
-            .as_deref()
-            .map_or(8, |mask| mask.iter().filter(|active| **active).count() as u64);
+        let active_cells = active_mask.as_deref().map_or(8, |mask| {
+            mask.iter().filter(|active| **active).count() as u64
+        });
         ExecutionPlanIR {
             common: CommonPlanMeta {
                 ir_version: "v0".to_string(),
@@ -3172,15 +3174,15 @@ mod tests {
             demag: fullmag_ir::FdmDemagPeriodicityIR::TruncatedImages,
             image_counts: Some([4, 0, 0]),
         });
-        fdm.resolved_periodic_images = fdm
-            .periodicity
-            .as_ref()
-            .and_then(|pbc| {
-                pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision)
-                    .expect("test PBC workspace should resolve")
-            });
+        fdm.resolved_periodic_images = fdm.periodicity.as_ref().and_then(|pbc| {
+            pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision)
+                .expect("test PBC workspace should resolve")
+        });
         let metadata = mesh_runtime_metadata(&plan);
-        assert_eq!(metadata["requested_periodicity"]["demag"], "truncated_images");
+        assert_eq!(
+            metadata["requested_periodicity"]["demag"],
+            "truncated_images"
+        );
         assert_eq!(
             metadata["resolved_demag_boundary"]["periodic_truncated_images"]["image_counts"],
             serde_json::json!([4, 0, 0])
@@ -3251,13 +3253,10 @@ mod tests {
             )
             .expect("FDM grid certificate should be valid"),
         );
-        fdm.resolved_periodic_images = fdm
-            .periodicity
-            .as_ref()
-            .and_then(|pbc| {
-                pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision)
-                    .expect("test PBC workspace should resolve")
-            });
+        fdm.resolved_periodic_images = fdm.periodicity.as_ref().and_then(|pbc| {
+            pbc.resolve_periodic_images(fdm.grid.cells, fdm.precision)
+                .expect("test PBC workspace should resolve")
+        });
         let provenance = ExecutionProvenance {
             demag_operator_kind: Some("tensor_fft_newell".to_string()),
             fft_backend: Some("rustfft".to_string()),
@@ -3276,16 +3275,25 @@ mod tests {
             value["requested_periodicity"]["axes"],
             serde_json::json!(["periodic", "open", "open"])
         );
-        assert_eq!(value["resolved"]["origin_m"], serde_json::json!([0.0, 0.0, 0.0]));
+        assert_eq!(
+            value["resolved"]["origin_m"],
+            serde_json::json!([0.0, 0.0, 0.0])
+        );
         assert_eq!(value["resolved"]["counts"], serde_json::json!([4, 2, 1]));
         assert!(value["resolved"]["grid_fingerprint"].as_str().is_some());
         assert_eq!(
             value["resolved"]["period_m"],
             serde_json::json!([8e-9, 4e-9, 5e-9])
         );
-        assert_eq!(value["resolved"]["padded_counts"], serde_json::json!([4, 4, 2]));
+        assert_eq!(
+            value["resolved"]["padded_counts"],
+            serde_json::json!([4, 4, 2])
+        );
         assert_eq!(value["resolved"]["fft_backend"], "rustfft");
-        assert_eq!(value["resolved"]["periodic_images"]["kernel"], "newell_truncated_images_fft");
+        assert_eq!(
+            value["resolved"]["periodic_images"]["kernel"],
+            "newell_truncated_images_fft"
+        );
     }
 
     #[test]
@@ -3325,8 +3333,14 @@ mod tests {
         let artifacts = crate::fdm::artifacts::region_membership_artifacts(&plan)
             .expect("membership artifacts should be produced");
         assert_eq!(artifacts.len(), 2);
-        assert_eq!(artifacts[0].relative_path, "mesh/fdm_region_membership.v1.json");
-        assert_eq!(artifacts[1].relative_path, "mesh/fdm_region_membership.v1.bin");
+        assert_eq!(
+            artifacts[0].relative_path,
+            "mesh/fdm_region_membership.v1.json"
+        );
+        assert_eq!(
+            artifacts[1].relative_path,
+            "mesh/fdm_region_membership.v1.bin"
+        );
         let descriptor: serde_json::Value = serde_json::from_slice(&artifacts[0].bytes)
             .expect("membership descriptor should be JSON");
         assert_eq!(descriptor["schema_version"], "fdm_region_membership.v1");
@@ -3334,21 +3348,23 @@ mod tests {
         assert_eq!(descriptor["region_legend"].as_array().unwrap().len(), 2);
         assert_eq!(&artifacts[1].bytes[..4], b"FMRM");
         assert_eq!(artifacts[1].bytes[4], 1);
-        assert_eq!(artifacts[1].bytes.len(), 64 + 8 * std::mem::size_of::<u32>());
+        assert_eq!(
+            artifacts[1].bytes.len(),
+            64 + 8 * std::mem::size_of::<u32>()
+        );
     }
 
     #[test]
     fn fem_mesh_metadata_preserves_shared_domain_build_report() {
         let mut plan = test_fem_execution_plan();
-        let report: fullmag_ir::FemSharedDomainBuildReportIR = serde_json::from_value(
-            serde_json::json!({
+        let report: fullmag_ir::FemSharedDomainBuildReportIR =
+            serde_json::from_value(serde_json::json!({
                 "build_mode": "generated_shared_domain_mesh",
                 "degraded": false,
                 "authored_regions_count": 2,
                 "realized_regions_count": 2
-            }),
-        )
-        .expect("minimal FEM build report should deserialize");
+            }))
+            .expect("minimal FEM build report should deserialize");
         let BackendPlanIR::Fem(fem) = &mut plan.backend_plan else {
             panic!("expected FEM plan");
         };
@@ -3360,7 +3376,10 @@ mod tests {
             metadata["topology_fingerprint"],
             metadata["mesh_generation_id"]
         );
-        assert_eq!(metadata["mesh_build_report"], serde_json::to_value(report).unwrap());
+        assert_eq!(
+            metadata["mesh_build_report"],
+            serde_json::to_value(report).unwrap()
+        );
     }
 
     fn test_multilayer_execution_plan() -> ExecutionPlanIR {
@@ -3473,12 +3492,17 @@ mod tests {
             metadata["transfer_boundary_policy"],
             serde_json::json!(["periodic", "open", "periodic"])
         );
-        assert_eq!(metadata["periodic_axes"], serde_json::json!([true, false, true]));
+        assert_eq!(
+            metadata["periodic_axes"],
+            serde_json::json!([true, false, true])
+        );
         assert!(metadata["target_grid_fingerprint"].as_str().is_some());
         assert_eq!(metadata["transfer_provenance"].as_array().unwrap().len(), 2);
-        assert!(metadata["transfer_provenance"][0]["source_grid_fingerprint"]
-            .as_str()
-            .is_some());
+        assert!(
+            metadata["transfer_provenance"][0]["source_grid_fingerprint"]
+                .as_str()
+                .is_some()
+        );
     }
 
     #[test]
@@ -5249,7 +5273,10 @@ mod tests {
         let face_pair = &artifact["pairs"][0]["boundary_face_pairs"][0];
         assert_eq!(face_pair["face_a"], 0);
         assert_eq!(face_pair["face_b"], 1);
-        assert_eq!(face_pair["translation_m"], serde_json::json!([1.0e-6, 0.0, 0.0]));
+        assert_eq!(
+            face_pair["translation_m"],
+            serde_json::json!([1.0e-6, 0.0, 0.0])
+        );
         assert_eq!(face_pair["normal_dot"], -1.0);
         assert_eq!(face_pair["orientation"], "opposed_normals");
         assert_eq!(
@@ -5391,7 +5418,10 @@ mod tests {
         assert_eq!(artifact["validation_status"], "failed");
         assert_eq!(artifact["certificate_status"], "rejected");
         assert_ne!(artifact["pairs"][0]["status"], "valid");
-        assert!(artifact["pairs"][0]["boundary_face_pairs"].as_array().unwrap().is_empty());
+        assert!(artifact["pairs"][0]["boundary_face_pairs"]
+            .as_array()
+            .unwrap()
+            .is_empty());
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }

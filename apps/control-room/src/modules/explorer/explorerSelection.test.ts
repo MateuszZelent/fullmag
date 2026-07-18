@@ -957,6 +957,31 @@ describe("selectExplorerNode", () => {
     });
   });
 
+  it("selects a canonical planar monitor with its monitor identity", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      id: "model:definitions:planar-monitors:midplane",
+      kind: "model.planar.monitor",
+      label: "Midplane",
+      monitorId: "midplane",
+      parentId: "model:definitions:planar-monitors",
+    };
+
+    selectExplorerNode(kernel, node, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "model.planar.monitor",
+      label: "Midplane",
+      nodeId: "model:definitions:planar-monitors:midplane",
+      ref: {
+        kind: "model.planar.monitor",
+        monitorId: "midplane",
+        type: "planar-monitor",
+        visualizationTargetId: "planar-monitor:midplane",
+      },
+    });
+  });
+
   it("selects concrete study stage nodes with stage id and index refs", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {

@@ -1,7 +1,6 @@
 #[allow(unused_imports)]
 use crate::{
-    validate_mesh_for_execution, FemDomainMeshModeIR, FemLinearSolverPolicy, MeshIR,
-    MeshQualityIR,
+    validate_mesh_for_execution, FemDomainMeshModeIR, FemLinearSolverPolicy, MeshIR, MeshQualityIR,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -47,7 +46,9 @@ mod mesh_asset_validation_tests {
             mesh: Some(inverted_mesh()),
         };
 
-        let errors = asset.validate().expect_err("inverted inline mesh must fail");
+        let errors = asset
+            .validate()
+            .expect_err("inverted inline mesh must fail");
         assert!(errors
             .iter()
             .any(|error| error.contains("negative tetra orientation")));

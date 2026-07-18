@@ -1,6 +1,5 @@
 use fullmag_ir::{
-    validate_mesh_for_execution, AirBoxConfigIR, FemDomainMeshAssetIR,
-    FemDomainMeshModeIR,
+    validate_mesh_for_execution, AirBoxConfigIR, FemDomainMeshAssetIR, FemDomainMeshModeIR,
     FemDomainRegionMarkerIR, FemMeshPartIR, FemMeshPartRole, FemMeshPartSelector,
     FemObjectSegmentIR, InitialMagnetizationIR, MeshIR, MeshQualityIR, ProblemIR,
 };
@@ -1363,18 +1362,19 @@ pub(crate) fn build_air_box_config(
 
     let (certified_marker, _certified_source) = certified_airbox_boundary_marker(mesh)?;
     let explicit_policy_marker = policy.and_then(|p| p.boundary_marker);
-    let (boundary_marker, boundary_marker_source): (u32, &'static str) =
-        if let Some(marker) = explicit_policy_marker {
-            if marker != certified_marker {
-                return Err(format!(
+    let (boundary_marker, boundary_marker_source): (u32, &'static str) = if let Some(marker) =
+        explicit_policy_marker
+    {
+        if marker != certified_marker {
+            return Err(format!(
                     "air_box_policy.boundary_marker={} does not match certified Gamma_out marker {} in mesh '{}'",
                     marker, certified_marker, mesh.mesh_name
                 ));
-            }
-            (marker, "user_policy")
-        } else {
-            (certified_marker, "certified_gamma_out")
-        };
+        }
+        (marker, "user_policy")
+    } else {
+        (certified_marker, "certified_gamma_out")
+    };
 
     let grading = policy
         .and_then(|p| p.grading)

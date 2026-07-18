@@ -1,10 +1,11 @@
 pub mod artifacts;
 pub mod domain;
+pub mod fdm_region_membership;
 pub(crate) mod field_resolution;
 pub mod fields;
-pub mod fdm_region_membership;
 pub mod material_fields;
 pub mod mesh_region_membership;
+pub mod planar_fields;
 pub mod quantities;
 pub(crate) mod resolved_vector_field;
 pub mod scalars;
@@ -12,10 +13,11 @@ pub mod tables;
 
 pub use artifacts::*;
 pub use domain::*;
-pub use fields::*;
 pub use fdm_region_membership::*;
+pub use fields::*;
 pub use material_fields::*;
 pub use mesh_region_membership::*;
+pub use planar_fields::*;
 pub use quantities::*;
 pub use scalars::*;
 pub use tables::*;

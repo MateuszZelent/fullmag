@@ -14,6 +14,19 @@ from .antenna import (
 )
 from .current_transport import CurrentTransport
 from .couplings import Coupling, CouplingEndpoint, CouplingRegistry
+from .planar_monitor import (
+    DepthProjection,
+    MonitorTarget,
+    PlanarExtent,
+    PlanarFrame,
+    PlanarMonitor,
+    PlanarOperator,
+    PlaneSample,
+    SlabAverage,
+    StudyMonitorRegistry,
+    SurfaceBoundary,
+    SurfaceProjection,
+)
 from .dynamics import (
     AdaptiveTimestep,
     Elastodynamics,
@@ -123,6 +136,17 @@ __all__ = [
     "Coupling",
     "CouplingEndpoint",
     "CouplingRegistry",
+    "DepthProjection",
+    "MonitorTarget",
+    "PlanarExtent",
+    "PlanarFrame",
+    "PlanarMonitor",
+    "PlanarOperator",
+    "PlaneSample",
+    "SlabAverage",
+    "StudyMonitorRegistry",
+    "SurfaceBoundary",
+    "SurfaceProjection",
     "Constant",
     "Cylinder",
     "Demag",

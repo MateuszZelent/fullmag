@@ -466,20 +466,19 @@ pub(crate) fn build_problem_and_state(
 
 pub(crate) fn execution_provenance(plan: &FemPlanIR) -> Result<ExecutionProvenance, RunError> {
     let resolved_demag_realization = reference_demag_provenance_name(plan);
-    let timestep_policy = if crate::relaxation::direct_minimizer::direct_minimizer_control(
-        plan.relaxation.as_ref(),
-    )
-    .is_some()
-    {
-        None
-    } else {
-        Some(crate::resolve_timestep_policy(
-            plan.integrator,
-            plan.fixed_timestep,
-            plan.adaptive_timestep.as_ref(),
-            crate::types::TimestepExecutionLane::fem_cpu(plan.precision),
-        )?)
-    };
+    let timestep_policy =
+        if crate::relaxation::direct_minimizer::direct_minimizer_control(plan.relaxation.as_ref())
+            .is_some()
+        {
+            None
+        } else {
+            Some(crate::resolve_timestep_policy(
+                plan.integrator,
+                plan.fixed_timestep,
+                plan.adaptive_timestep.as_ref(),
+                crate::types::TimestepExecutionLane::fem_cpu(plan.precision),
+            )?)
+        };
     let mut provenance = ExecutionProvenance {
         execution_engine: FemBackendId::CpuBaseline.provenance_name().to_string(),
         precision: "double".to_string(),

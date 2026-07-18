@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { Search, SlidersHorizontal } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, RefreshCw, Search, SlidersHorizontal } from "lucide-react";
 
 import type { LiveStatusResource } from "@/kernel/api/apiTypes";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
@@ -52,6 +52,7 @@ import {
 } from "@/kernel/object-extensions/useObjectExtensionActivation";
 import type { ModuleProps } from "@/kernel/types";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
+import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
 import {
   meshPipelineStatusIsActive,
   normalizeMeshPipelineStatus,
@@ -61,6 +62,7 @@ import {
 import {
   buildExplorerTree,
   buildModelTree,
+  collectExplorerNodeIds,
   filterExplorerNodes,
   findExplorerNodePath,
 } from "./builders/buildModelTree";
@@ -76,6 +78,7 @@ import {
 } from "./explorerCrossSections";
 import {
   activateTextureLoadNode,
+  collapseExplorerNodes,
   expandExplorerNodes,
   revealExplorerNode,
   setExplorerActiveTab,
@@ -197,6 +200,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     return ids;
   }, [crossSections]);
   const modelTabActive = activeTab === "model";
+  const planarMonitors = usePlanarMonitorsResource({ enabled: modelTabActive });
   const activeAnalysisFieldOverlay = useAnalysisFieldOverlay(
     kernel.analysisFieldOverlay,
   );
@@ -367,6 +371,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               frequencyDomainManifest: frequencyDomainManifest.data,
               frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
               frequencyDomainSpectrum: frequencyDomainSpectrum.data,
+              planarMonitors: planarMonitors.data,
             },
           )
         : buildExplorerTree(activeTab, {
@@ -393,6 +398,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelCouplings.data,
     modelMaterialFields.data,
     modelRegions.data,
+    planarMonitors.data,
     regionMemberships.data,
     stageExecution.data,
     hysteresisExecutionTree.data,
@@ -456,33 +462,67 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   return (
     <WorkspaceRenderProfiler id="ExplorerModule">
       <section className="fm-explorer" aria-label="Explorer">
-      <header className="fm-explorer__header">
-        <h2>Explorer</h2>
-      </header>
-      <ExplorerTabBar
-        activeTab={activeTab}
-        onTabChange={setExplorerActiveTab}
-      />
-      <label className="fm-explorer-filter">
-        <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
-        <input
-          aria-label="Filter explorer"
-          value={filterText}
-          onChange={(event) => setExplorerFilterText(event.target.value)}
-          placeholder="Filter nodes..."
-          type="search"
+        <ExplorerTabBar
+          activeTab={activeTab}
+          onTabChange={setExplorerActiveTab}
         />
-        <SlidersHorizontal size={13} aria-hidden="true" className="fm-explorer-filter__options-icon" />
-      </label>
-      <ExplorerTreeView
-        activeNodeId={selectedNodeId}
-        expandedIds={expandedIds}
-        keyboardRowId={keyboardRow}
-        kernel={kernel}
-        moduleId={moduleId}
-        nodes={nodes}
-        tabId={activeTab}
-      />
+        <label className="fm-explorer-filter">
+          <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
+          <input
+            aria-label="Filter explorer"
+            value={filterText}
+            onChange={(event) => setExplorerFilterText(event.target.value)}
+            placeholder="Filter nodes..."
+            type="search"
+          />
+          <SlidersHorizontal size={13} aria-hidden="true" className="fm-explorer-filter__options-icon" />
+        </label>
+        <ExplorerTreeView
+          activeNodeId={selectedNodeId}
+          expandedIds={expandedIds}
+          keyboardRowId={keyboardRow}
+          kernel={kernel}
+          moduleId={moduleId}
+          nodes={nodes}
+          tabId={activeTab}
+        />
+        <footer className="fm-explorer-toolbar">
+          <button
+            className="fm-explorer-toolbar__action"
+            title="Expand All"
+            type="button"
+            onClick={() => {
+              expandExplorerNodes(activeTab, collectExplorerNodeIds(buildExplorerTree(activeTab)));
+            }}
+          >
+            <ChevronsUpDown size={13} aria-hidden="true" />
+            <span>Expand All</span>
+          </button>
+          <button
+            className="fm-explorer-toolbar__action"
+            title="Collapse All"
+            type="button"
+            onClick={() => {
+              const allIds = collectExplorerNodeIds(buildExplorerTree(activeTab));
+              collapseExplorerNodes(activeTab, allIds);
+            }}
+          >
+            <ChevronsDownUp size={13} aria-hidden="true" />
+            <span>Collapse All</span>
+          </button>
+          <button
+            className="fm-explorer-toolbar__action"
+            title="Refresh"
+            type="button"
+            onClick={() => {
+              setExplorerFilterText("");
+              expandExplorerNodes(activeTab, collectExplorerNodeIds(buildExplorerTree(activeTab)));
+            }}
+          >
+            <RefreshCw size={13} aria-hidden="true" />
+            <span>Refresh</span>
+          </button>
+        </footer>
       </section>
     </WorkspaceRenderProfiler>
   );

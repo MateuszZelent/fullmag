@@ -44,7 +44,7 @@ export function StudyStageDraftEditor({
         <strong>
           Stage {index + 1}: {studyStageDraftKindLabel(draft.kind)}
         </strong>
-        <span>
+        <span data-has-issues={validation.length > 0 ? "true" : undefined}>
           {validation.length === 0 ? "valid" : `${validation.length} issue(s)`}
         </span>
       </div>

@@ -12,6 +12,7 @@ import {
   DATA_FIELDS_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
+  DATA_PLANAR_FIELD_META_PATH,
   DATA_TABLE_ROWS_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
@@ -95,6 +96,66 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision(SIMULATION_STAGES_EXECUTION_PATH)).toBe(
       dependentRevision(SIMULATION_COMMANDS_PATH, 5),
     );
+  });
+
+  it("invalidates subscribed planar resources without a heavy recommended fetch", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const mKey = DATA_PLANAR_FIELD_META_PATH.replace("{quantity_id}", "m")
+      .replace("{monitor_id}", "monitor-1");
+    const hKey = DATA_PLANAR_FIELD_META_PATH.replace("{quantity_id}", "H_eff")
+      .replace("{monitor_id}", "monitor-1");
+    resources.subscribe(mKey, () => {});
+    resources.subscribe(hKey, () => {});
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            broad: true,
+            domain_generation_id: "17",
+            quantity_ids: ["m"],
+            resource: "planar_fields",
+            resource_id: "field",
+            revision: 23,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(mKey)).toBe("generation:17:revision:23");
+    expect(resources.getRevision(hKey)).toBeNull();
+    expect(resources.getRevision("session:status")).toBeNull();
+  });
+
+  it("keeps planar field buffers valid for visualization-only profile changes", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const planarKey = DATA_PLANAR_FIELD_META_PATH.replace("{quantity_id}", "m")
+      .replace("{monitor_id}", "monitor-1");
+    resources.subscribe(planarKey, () => {});
+
+    const handled = bridge.handleEvent({
+      payload: {
+        changes: [
+          {
+            recommended_fetch: VISUALIZATION_STATE_PATH,
+            resource: "visualization",
+            revision: 24,
+          },
+        ],
+      },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(VISUALIZATION_STATE_PATH)).toBe(24);
+    expect(resources.getRevision(planarKey)).toBeNull();
+    expect(resources.getRevision("session:status")).toBeNull();
   });
 
   it("refreshes runtime lifecycle resources when command queue changes", () => {

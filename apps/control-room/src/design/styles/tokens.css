@@ -30,9 +30,9 @@
   --fm-slider-track-height: 4px;
   --fm-slider-thumb-size: 12px;
   --fm-inspector-padding-inline: 10px;
-  --fm-inspector-row-gap: 4px;
-  --fm-inspector-control-gap: 6px;
-  --fm-inspector-group-gap: 10px;
+  --fm-inspector-row-gap: 2px;
+  --fm-inspector-control-gap: 2px;
+  --fm-inspector-group-gap: 8px;
 
   /* Typography */
   --fm-font-ui: "Inter", "Aptos", sans-serif;

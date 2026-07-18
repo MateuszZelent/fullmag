@@ -57,6 +57,55 @@ export type FieldStateInspectResponse =
 export type FieldStateTargetRef =
   components["schemas"]["FieldStateTargetRef"];
 export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
+export type PlanarFieldMetaResource =
+  components["schemas"]["PlanarFieldMetaResource"];
+export type PlanarFieldProbeResource =
+  components["schemas"]["PlanarFieldProbeResource"];
+export type PlanarMonitorCollectionResource =
+  components["schemas"]["PlanarMonitorCollectionResource"];
+export type PlanarMonitorCreateRequest =
+  components["schemas"]["PlanarMonitorCreateRequest"];
+export type PlanarMonitorDeleteRequest =
+  components["schemas"]["PlanarMonitorDeleteRequest"];
+export type PlanarMonitorDuplicateRequest =
+  components["schemas"]["PlanarMonitorDuplicateRequest"];
+export type PlanarMonitorPatchRequest =
+  components["schemas"]["PlanarMonitorPatchRequest"];
+export type PlanarMonitorResource =
+  components["schemas"]["PlanarMonitorResource"];
+export type PlanarViewScopeState =
+  components["schemas"]["PlanarViewScopeState"];
+export interface PlanarFieldQuery {
+  [key: string]: boolean | number | string | undefined;
+  component?: string;
+  expected_field_revision?: number;
+  expected_mesh_revision?: number;
+  expected_monitor_revision?: number;
+  include_mesh?: boolean;
+  quality?: string;
+  resolution_x?: number;
+  resolution_y?: number;
+  scope_id?: string;
+  scope_kind?: string;
+  snapshot_id?: string;
+  stage_id?: string;
+  vector_budget?: number;
+}
+export interface PlanarFieldProbeQuery
+  extends Pick<
+    PlanarFieldQuery,
+    | "component"
+    | "expected_field_revision"
+    | "expected_mesh_revision"
+    | "expected_monitor_revision"
+    | "scope_id"
+    | "scope_kind"
+    | "snapshot_id"
+    | "stage_id"
+  > {
+  u_m: number;
+  v_m: number;
+}
 export type CrossSectionPlane = "xy" | "xz" | "yz";
 export type CrossSectionQualityMetric =
   components["schemas"]["CrossSectionQualityMetric"];

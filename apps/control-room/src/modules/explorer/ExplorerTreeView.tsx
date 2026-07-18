@@ -384,6 +384,16 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       onKeyDown={handleKeyDown}
       style={{ "--fm-tree-depth": depth } as CSSProperties}
     >
+      {depth > 0
+        ? Array.from({ length: depth }, (_, i) => (
+            <span
+              key={i}
+              aria-hidden="true"
+              className="fm-explorer-tree-guide"
+              style={{ left: `calc(var(--fm-space-1) + ${i} * 15px + 7px)` } as CSSProperties}
+            />
+          ))
+        : null}
       <span className="fm-explorer-tree-row__branch" aria-hidden="true">
         {hasChildren ? (
           <ChevronRight

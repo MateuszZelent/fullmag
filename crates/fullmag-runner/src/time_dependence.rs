@@ -11,7 +11,11 @@ pub(crate) fn evaluate_time_dependence(waveform: &TimeDependenceIR, t: f64) -> f
             offset,
         } => (2.0 * PI * frequency_hz * t + phase_rad).sin() + offset,
         TimeDependenceIR::Pulse { t_on, t_off } => {
-            if t >= *t_on && t < *t_off { 1.0 } else { 0.0 }
+            if t >= *t_on && t < *t_off {
+                1.0
+            } else {
+                0.0
+            }
         }
         TimeDependenceIR::PiecewiseLinear { points } => evaluate_piecewise_linear(points, t),
         TimeDependenceIR::SincPulse {
@@ -40,10 +44,16 @@ fn normalized_sinc(value: f64) -> f64 {
 }
 
 fn evaluate_piecewise_linear(points: &[[f64; 2]], t: f64) -> f64 {
-    let Some(first) = points.first() else { return 0.0 };
-    if t <= first[0] { return first[1] }
+    let Some(first) = points.first() else {
+        return 0.0;
+    };
+    if t <= first[0] {
+        return first[1];
+    }
     let last = points.last().expect("non-empty points");
-    if t >= last[0] { return last[1] }
+    if t >= last[0] {
+        return last[1];
+    }
     let upper = points.partition_point(|point| point[0] < t);
     let [t0, v0] = points[upper - 1];
     let [t1, v1] = points[upper];
@@ -68,7 +78,10 @@ mod tests {
 
     #[test]
     fn pulse_is_left_closed_and_right_open() {
-        let waveform = TimeDependenceIR::Pulse { t_on: 1.0, t_off: 2.0 };
+        let waveform = TimeDependenceIR::Pulse {
+            t_on: 1.0,
+            t_off: 2.0,
+        };
         assert_eq!(evaluate_time_dependence(&waveform, 1.0), 1.0);
         assert_eq!(evaluate_time_dependence(&waveform, 2.0), 0.0);
     }

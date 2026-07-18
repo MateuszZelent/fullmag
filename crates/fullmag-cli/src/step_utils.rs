@@ -582,11 +582,7 @@ pub(crate) fn materialize_script_stages(
         } else {
             resolve_script_until_seconds(&ir, default_until_seconds)?
         };
-        let mut stage = ResolvedScriptStage::solver(
-            ir,
-            until_seconds,
-            entrypoint_kind,
-        );
+        let mut stage = ResolvedScriptStage::solver(ir, until_seconds, entrypoint_kind);
         resolve_stage_auto_sampling(&mut stage)?;
         return Ok(vec![stage]);
     }
@@ -614,11 +610,8 @@ pub(crate) fn materialize_script_stages(
         } else {
             let until_seconds =
                 resolve_script_until_seconds(&stage.ir, stage.default_until_seconds)?;
-            let mut resolved = ResolvedScriptStage::solver(
-                stage.ir,
-                until_seconds,
-                stage.entrypoint_kind,
-            );
+            let mut resolved =
+                ResolvedScriptStage::solver(stage.ir, until_seconds, stage.entrypoint_kind);
             resolve_stage_auto_sampling(&mut resolved)?;
             materialized.push(resolved);
         }
@@ -627,8 +620,7 @@ pub(crate) fn materialize_script_stages(
 }
 
 fn resolve_stage_auto_sampling(stage: &mut ResolvedScriptStage) -> Result<()> {
-    if stage.action.is_none()
-        && matches!(stage.ir.study, fullmag_ir::StudyIR::TimeEvolution { .. })
+    if stage.action.is_none() && matches!(stage.ir.study, fullmag_ir::StudyIR::TimeEvolution { .. })
     {
         fullmag_plan::resolve_auto_sampling_for_stage(&mut stage.ir)
             .map_err(|error| anyhow::anyhow!(error.to_string().trim().to_owned()))?;
@@ -908,7 +900,11 @@ fn resolve_explicit_stage_action(
     } else {
         entrypoint_kind
     };
-    Ok(ResolvedScriptStage::synthetic(ir, entrypoint, resolved_action))
+    Ok(ResolvedScriptStage::synthetic(
+        ir,
+        entrypoint,
+        resolved_action,
+    ))
 }
 
 fn materialize_study_pipeline(
@@ -964,10 +960,11 @@ fn walk_study_pipeline_nodes(
                 )
                 .with_context(|| format!("failed to materialize study pipeline node '{label}'"))?
                 {
-                    stage.ir.problem_meta.runtime_metadata.insert(
-                        "active_stage_id".to_string(),
-                        Value::String(id.clone()),
-                    );
+                    stage
+                        .ir
+                        .problem_meta
+                        .runtime_metadata
+                        .insert("active_stage_id".to_string(), Value::String(id.clone()));
                     resolve_stage_auto_sampling(&mut stage)?;
                     out.push(stage);
                 }
@@ -991,10 +988,11 @@ fn walk_study_pipeline_nodes(
                 )
                 .with_context(|| format!("failed to materialize study pipeline node '{label}'"))?;
                 for stage in &mut stages {
-                    stage.ir.problem_meta.runtime_metadata.insert(
-                        "active_stage_id".to_string(),
-                        Value::String(id.clone()),
-                    );
+                    stage
+                        .ir
+                        .problem_meta
+                        .runtime_metadata
+                        .insert("active_stage_id".to_string(), Value::String(id.clone()));
                     resolve_stage_auto_sampling(stage)?;
                 }
                 out.extend(stages);
@@ -1078,7 +1076,10 @@ fn materialize_pipeline_table_autosave(
     current_ir: &mut ProblemIR,
     payload: &BTreeMap<String, Value>,
 ) -> Result<ResolvedScriptStage> {
-    let enabled = payload.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let enabled = payload
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let table_autosave = if enabled {
         let value = payload
             .get("table_autosave")
@@ -1117,15 +1118,18 @@ fn materialize_pipeline_autosave(
     current_ir: &mut ProblemIR,
     payload: &BTreeMap<String, Value>,
 ) -> Result<ResolvedScriptStage> {
-    let enabled = payload.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let enabled = payload
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let quantity = payload_string(payload, "quantity");
     let output = if enabled {
         let value = payload
             .get("output")
             .cloned()
             .context("enabled autosave stage requires payload.output")?;
-        let output: OutputIR = serde_json::from_value(value)
-            .context("autosave stage payload.output is invalid")?;
+        let output: OutputIR =
+            serde_json::from_value(value).context("autosave stage payload.output is invalid")?;
         let name = time_output_name(&output)
             .context("autosave stage supports field, scalar, or snapshot outputs")?;
         if quantity.as_deref().is_some_and(|quantity| quantity != name) {
@@ -1162,7 +1166,10 @@ fn materialize_pipeline_fft_response(
     current_ir: &mut ProblemIR,
     payload: &BTreeMap<String, Value>,
 ) -> Result<ResolvedScriptStage> {
-    let enabled = payload.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let enabled = payload
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let request = if enabled {
         let request = payload
             .get("request")
@@ -1207,15 +1214,25 @@ fn time_output_name(output: &OutputIR) -> Option<&str> {
 }
 
 fn ensure_field_drive_can_be_added(ir: &ProblemIR, drive: &RegionalFieldDriveIR) -> Result<()> {
-    if ir.field_drives.iter().any(|existing| existing.id == drive.id) {
-        bail!("study pipeline field drive id '{}' already exists", drive.id);
+    if ir
+        .field_drives
+        .iter()
+        .any(|existing| existing.id == drive.id)
+    {
+        bail!(
+            "study pipeline field drive id '{}' already exists",
+            drive.id
+        );
     }
     if ir
         .field_drives
         .iter()
         .any(|existing| existing.name == drive.name)
     {
-        bail!("study pipeline field drive name '{}' already exists", drive.name);
+        bail!(
+            "study pipeline field drive name '{}' already exists",
+            drive.name
+        );
     }
     Ok(())
 }
@@ -3758,8 +3775,7 @@ mod tests {
 
     #[test]
     fn interactive_adaptive_integrator_over_fixed_requires_complete_policy() {
-        let mut dynamics =
-            required_study_dynamics(&sample_problem_ir().study, "test").unwrap();
+        let mut dynamics = required_study_dynamics(&sample_problem_ir().study, "test").unwrap();
         let mut command = solver_command("run");
         command.integrator = Some("rk45".into());
         assert!(resolve_interactive_llg_policy(&mut dynamics, &command)
@@ -5167,8 +5183,7 @@ mod tests {
                         notes: None,
                         source: Some("ui_authored".to_string()),
                         stage_kind: "relax".to_string(),
-                        payload: serde_json::from_value(json!({"max_steps": 2}))
-                            .expect("payload"),
+                        payload: serde_json::from_value(json!({"max_steps": 2})).expect("payload"),
                     },
                     StudyPipelineNode::Primitive {
                         id: "add-k0-antenna".to_string(),
@@ -5256,53 +5271,89 @@ mod tests {
             study_pipeline: Some(StudyPipelineDocument {
                 version: "study_pipeline.v1".to_string(),
                 nodes: vec![
-                    primitive_node("clear-initial", "autosave", json!({
-                        "kind": "autosave", "enabled": false, "quantity": null, "output": null
-                    })),
-                    primitive_node("table-on", "table_autosave", json!({
-                        "kind": "table_autosave",
-                        "enabled": true,
-                        "table_autosave": {
+                    primitive_node(
+                        "clear-initial",
+                        "autosave",
+                        json!({
+                            "kind": "autosave", "enabled": false, "quantity": null, "output": null
+                        }),
+                    ),
+                    primitive_node(
+                        "table-on",
+                        "table_autosave",
+                        json!({
                             "kind": "table_autosave",
-                            "table_id": "default",
-                            "sample_period_s": 5e-13,
-                            "quantities": ["t", "mx", "my", "mz"]
-                        }
-                    })),
-                    primitive_node("autosave-m", "autosave", json!({
-                        "kind": "autosave",
-                        "enabled": true,
-                        "quantity": "m",
-                        "output": {"kind": "field", "name": "m", "every_seconds": 2e-12}
-                    })),
-                    primitive_node("fft-on", "fft_response", json!({
-                        "kind": "fft_response",
-                        "enabled": true,
-                        "request": {
-                            "schema_version": "spin_wave_response.request.v1",
-                            "analysis": "gamma",
-                            "response_component": "my",
-                            "weighting": "Ms_times_lumped_volume",
-                            "detrend": "linear",
-                            "window": "hann",
-                            "susceptibility_floor_fraction": 1e-6
-                        }
-                    })),
-                    primitive_node("sampled", "run", json!({
-                        "entrypoint_kind": "flat_run", "until_seconds": 2e-9
-                    })),
-                    primitive_node("table-off", "table_autosave", json!({
-                        "kind": "table_autosave", "enabled": false, "table_autosave": null
-                    })),
-                    primitive_node("autosave-off", "autosave", json!({
-                        "kind": "autosave", "enabled": false, "quantity": null, "output": null
-                    })),
-                    primitive_node("fft-off", "fft_response", json!({
-                        "kind": "fft_response", "enabled": false, "request": null
-                    })),
-                    primitive_node("unsampled", "run", json!({
-                        "entrypoint_kind": "flat_run", "until_seconds": 1e-9
-                    })),
+                            "enabled": true,
+                            "table_autosave": {
+                                "kind": "table_autosave",
+                                "table_id": "default",
+                                "sample_period_s": 5e-13,
+                                "quantities": ["t", "mx", "my", "mz"]
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "autosave-m",
+                        "autosave",
+                        json!({
+                            "kind": "autosave",
+                            "enabled": true,
+                            "quantity": "m",
+                            "output": {"kind": "field", "name": "m", "every_seconds": 2e-12}
+                        }),
+                    ),
+                    primitive_node(
+                        "fft-on",
+                        "fft_response",
+                        json!({
+                            "kind": "fft_response",
+                            "enabled": true,
+                            "request": {
+                                "schema_version": "spin_wave_response.request.v1",
+                                "analysis": "gamma",
+                                "response_component": "my",
+                                "weighting": "Ms_times_lumped_volume",
+                                "detrend": "linear",
+                                "window": "hann",
+                                "susceptibility_floor_fraction": 1e-6
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "sampled",
+                        "run",
+                        json!({
+                            "entrypoint_kind": "flat_run", "until_seconds": 2e-9
+                        }),
+                    ),
+                    primitive_node(
+                        "table-off",
+                        "table_autosave",
+                        json!({
+                            "kind": "table_autosave", "enabled": false, "table_autosave": null
+                        }),
+                    ),
+                    primitive_node(
+                        "autosave-off",
+                        "autosave",
+                        json!({
+                            "kind": "autosave", "enabled": false, "quantity": null, "output": null
+                        }),
+                    ),
+                    primitive_node(
+                        "fft-off",
+                        "fft_response",
+                        json!({
+                            "kind": "fft_response", "enabled": false, "request": null
+                        }),
+                    ),
+                    primitive_node(
+                        "unsampled",
+                        "run",
+                        json!({
+                            "entrypoint_kind": "flat_run", "until_seconds": 1e-9
+                        }),
+                    ),
                 ],
             }),
             stages: vec![],
@@ -5354,27 +5405,29 @@ mod tests {
 
     #[test]
     fn materialize_pipeline_resolves_auto_sampling_independently_for_each_run() {
-        let drive = |id: &str, cutoff_hz: f64, stage_id: &str| json!({
-            "kind": "add_field_drive",
-            "drive": {
-                "id": id,
-                "name": id,
-                "kind": "regional",
-                "enabled": true,
-                "target": {"kind": "global"},
-                "amplitude_B_T": 0.001,
-                "direction": [0.0, 1.0, 0.0],
-                "spatial_profile": {"kind": "uniform"},
-                "waveform": {
-                    "kind": "sinc_pulse",
-                    "cutoff_hz": cutoff_hz,
-                    "t0": 5e-11,
-                    "amplitude": 1.0
-                },
-                "time_origin": "stage_local",
-                "activation": {"kind": "stage_ids", "stage_ids": [stage_id]}
-            }
-        });
+        let drive = |id: &str, cutoff_hz: f64, stage_id: &str| {
+            json!({
+                "kind": "add_field_drive",
+                "drive": {
+                    "id": id,
+                    "name": id,
+                    "kind": "regional",
+                    "enabled": true,
+                    "target": {"kind": "global"},
+                    "amplitude_B_T": 0.001,
+                    "direction": [0.0, 1.0, 0.0],
+                    "spatial_profile": {"kind": "uniform"},
+                    "waveform": {
+                        "kind": "sinc_pulse",
+                        "cutoff_hz": cutoff_hz,
+                        "t0": 5e-11,
+                        "amplitude": 1.0
+                    },
+                    "time_origin": "stage_local",
+                    "activation": {"kind": "stage_ids", "stage_ids": [stage_id]}
+                }
+            })
+        };
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
             shared_geometry_assets: None,
@@ -5384,32 +5437,40 @@ mod tests {
                 nodes: vec![
                     primitive_node("add-3", "add_field_drive", drive("drive-3", 3e9, "run-3")),
                     primitive_node("add-5", "add_field_drive", drive("drive-5", 5e9, "run-5")),
-                    primitive_node("table-auto", "table_autosave", json!({
-                        "kind": "table_autosave",
-                        "enabled": true,
-                        "table_autosave": {
+                    primitive_node(
+                        "table-auto",
+                        "table_autosave",
+                        json!({
                             "kind": "table_autosave",
-                            "table_id": "default",
-                            "sample_period_policy": {
-                                "kind": "auto_sinc_cutoff",
-                                "nyquist_guard_factor": 1.3
-                            },
-                            "quantities": ["t", "my"]
-                        }
-                    })),
-                    primitive_node("m-auto", "autosave", json!({
-                        "kind": "autosave",
-                        "enabled": true,
-                        "quantity": "m",
-                        "output": {
-                            "kind": "field_auto",
-                            "name": "m",
-                            "sample_period_policy": {
-                                "kind": "auto_sinc_cutoff",
-                                "nyquist_guard_factor": 1.3
+                            "enabled": true,
+                            "table_autosave": {
+                                "kind": "table_autosave",
+                                "table_id": "default",
+                                "sample_period_policy": {
+                                    "kind": "auto_sinc_cutoff",
+                                    "nyquist_guard_factor": 1.3
+                                },
+                                "quantities": ["t", "my"]
                             }
-                        }
-                    })),
+                        }),
+                    ),
+                    primitive_node(
+                        "m-auto",
+                        "autosave",
+                        json!({
+                            "kind": "autosave",
+                            "enabled": true,
+                            "quantity": "m",
+                            "output": {
+                                "kind": "field_auto",
+                                "name": "m",
+                                "sample_period_policy": {
+                                    "kind": "auto_sinc_cutoff",
+                                    "nyquist_guard_factor": 1.3
+                                }
+                            }
+                        }),
+                    ),
                     primitive_node("run-3", "run", json!({"until_seconds": 1e-9})),
                     primitive_node("run-5", "run", json!({"until_seconds": 1e-9})),
                 ],
@@ -5417,8 +5478,8 @@ mod tests {
             stages: vec![],
         };
 
-        let stages = materialize_script_stages(config)
-            .expect("pipeline should resolve auto sampling");
+        let stages =
+            materialize_script_stages(config).expect("pipeline should resolve auto sampling");
         let run_3 = &stages[4].ir;
         let run_5 = &stages[5].ir;
         run_3.validate().expect("first resolved Run must be valid");
@@ -5512,11 +5573,15 @@ mod tests {
             default_until_seconds: Some(2e-9),
             study_pipeline: Some(StudyPipelineDocument {
                 version: "study_pipeline.v1".to_string(),
-                nodes: vec![primitive_node("run", "run", json!({
-                    "entrypoint_kind": "flat_run",
-                    "until_seconds": 2e-9,
-                    "fixed_timestep": 1e-13
-                }))],
+                nodes: vec![primitive_node(
+                    "run",
+                    "run",
+                    json!({
+                        "entrypoint_kind": "flat_run",
+                        "until_seconds": 2e-9,
+                        "fixed_timestep": 1e-13
+                    }),
+                )],
             }),
             stages: vec![],
         };

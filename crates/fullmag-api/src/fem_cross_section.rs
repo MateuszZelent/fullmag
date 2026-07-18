@@ -8,6 +8,8 @@ pub(crate) const FMQS_HEADER_LEN: usize = 20;
 
 const FMCS_VERSION: u32 = 2;
 const FMCS_FLAG_INTERSECTION_METADATA: u32 = 0b1;
+const FMCS_FLAG_PLANAR_FRAME: u32 = 0b10;
+const FMCS_PLANAR_V3_HEADER_LEN: usize = 160;
 const FMMQ_HEADER_LEN: usize = 32;
 const FMMQ_KIND_F64: u8 = 1;
 const FMMQ_FLAG_SICN: u32 = 0b001;
@@ -132,6 +134,70 @@ pub(crate) fn serialize_cross_section_fmcs(
         }
     }
 
+    bytes
+}
+
+pub(crate) fn serialize_planar_overlay_fmcs_v3(
+    overlay: &crate::planar_sampling::PlanarMeshOverlay,
+) -> Vec<u8> {
+    let polygon_count = overlay.polygons.len();
+    let vertex_count = overlay
+        .polygons
+        .iter()
+        .map(|polygon| polygon.vertices_uv_m.len())
+        .sum::<usize>();
+    let segment_count = overlay.segments.len();
+    let mut bytes = Vec::with_capacity(
+        FMCS_PLANAR_V3_HEADER_LEN
+            + vertex_count * 2 * std::mem::size_of::<f32>()
+            + (polygon_count + 1) * std::mem::size_of::<u32>()
+            + polygon_count * std::mem::size_of::<u32>()
+            + segment_count * 4 * std::mem::size_of::<f32>(),
+    );
+    bytes.extend_from_slice(b"FMCS");
+    write_u32(&mut bytes, 3);
+    write_u32(&mut bytes, polygon_count as u32);
+    write_u32(&mut bytes, vertex_count as u32);
+    write_u32(&mut bytes, segment_count as u32);
+    write_u32(&mut bytes, polygon_count as u32);
+    write_u32(&mut bytes, 0);
+    write_u32(&mut bytes, FMCS_FLAG_PLANAR_FRAME);
+    for value in overlay.bounds_uv_m {
+        write_f64(&mut bytes, value);
+    }
+    for vector in [
+        overlay.frame_origin_m,
+        overlay.frame_u_axis,
+        overlay.frame_v_axis,
+        overlay.frame_normal,
+    ] {
+        for value in vector {
+            write_f64(&mut bytes, value);
+        }
+    }
+    debug_assert_eq!(bytes.len(), FMCS_PLANAR_V3_HEADER_LEN);
+
+    for polygon in &overlay.polygons {
+        for vertex in &polygon.vertices_uv_m {
+            write_f32(&mut bytes, vertex[0] as f32);
+            write_f32(&mut bytes, vertex[1] as f32);
+        }
+    }
+    let mut offset = 0u32;
+    write_u32(&mut bytes, offset);
+    for polygon in &overlay.polygons {
+        offset = offset.saturating_add(polygon.vertices_uv_m.len() as u32);
+        write_u32(&mut bytes, offset);
+    }
+    for polygon in &overlay.polygons {
+        write_u32(&mut bytes, polygon.parent_element_id);
+    }
+    for segment in &overlay.segments {
+        write_f32(&mut bytes, segment.a_uv_m[0] as f32);
+        write_f32(&mut bytes, segment.a_uv_m[1] as f32);
+        write_f32(&mut bytes, segment.b_uv_m[0] as f32);
+        write_f32(&mut bytes, segment.b_uv_m[1] as f32);
+    }
     bytes
 }
 

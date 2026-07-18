@@ -10,6 +10,8 @@ import {
   commitCrossSectionDraft,
   crossSectionFramePreviewToClip,
   crossSectionWorkspaceStore,
+  isPlanarMonitorRevisionConflict,
+  planarMonitorCreateRequestFromDraft,
   resetCrossSectionWorkspaceForTests,
   updateCrossSectionDraft,
   updateCrossSectionPlot,
@@ -238,5 +240,51 @@ describe("crossSectionWorkspace", () => {
       flipped: false,
       position_percent: 12.5,
     });
+  });
+
+  it("lowers the compatibility axis draft into a revision-guarded planar monitor", () => {
+    resetCrossSectionWorkspaceForTests();
+    const draft = beginCrossSectionDraft(visualizationState);
+    const updated = updateCrossSectionDraft({
+      name: "Mid plane",
+      plane: "xz",
+      positionPercent: 25,
+      rotationDegrees: 90,
+    });
+    if (!updated) throw new Error("Expected an editable planar monitor draft");
+
+    const request = planarMonitorCreateRequestFromDraft(updated, 7, {
+      min: [-2, -4, -6],
+      max: [2, 4, 6],
+    });
+
+    expect(request.expected_scene_revision).toBe(7);
+    expect(request.monitor).toMatchObject({
+      id: "mid_plane_8",
+      name: "Mid plane",
+      operator: { kind: "plane_sample" },
+      target: { kind: "domain" },
+      frame: {
+        normal: [0, -1, 0],
+        origin_m: [0, -2, 0],
+        preset: "xz",
+      },
+    });
+    expect(request.monitor.frame.u_axis).toEqual([
+      expect.closeTo(0, 12),
+      0,
+      expect.closeTo(1, 12),
+    ]);
+    expect(request.monitor.frame.v_axis).toEqual([
+      expect.closeTo(-1, 12),
+      0,
+      expect.closeTo(0, 12),
+    ]);
+  });
+
+  it("recognizes a revision conflict without treating other failures as conflicts", () => {
+    expect(isPlanarMonitorRevisionConflict({ status: 409 })).toBe(true);
+    expect(isPlanarMonitorRevisionConflict({ status: 422 })).toBe(false);
+    expect(isPlanarMonitorRevisionConflict(new Error("network"))).toBe(false);
   });
 });

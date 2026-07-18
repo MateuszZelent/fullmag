@@ -9,6 +9,13 @@ import { CrossSectionDraftEditor } from "./CrossSectionDraftEditor";
 
 vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
+    api: {
+      model: {
+        planarMonitors: {
+          list: vi.fn(),
+        },
+      },
+    },
     layout: {
       setActiveViewportMainModule: vi.fn(),
       setFocusedSlot: vi.fn(),
@@ -16,6 +23,10 @@ vi.mock("@/kernel/KernelContext", () => ({
     },
     selection: {
       set: vi.fn(),
+    },
+    resources: {
+      getRevision: vi.fn(() => 0),
+      subscribe: vi.fn(() => () => undefined),
     },
     visualizationSync: {
       queuePatch: vi.fn(),
@@ -56,7 +67,7 @@ describe("CrossSectionDraftEditor", () => {
     expect(html).toContain('max="180"');
     expect(html).toContain('min="-180"');
     expect(html).not.toContain('aria-label="Rotation" disabled=""');
-    expect(html).toContain("Generate Image");
+    expect(html).toContain("Apply monitor");
   });
 
   it("keeps draft frame edits local instead of patching canonical visualization clip state", () => {

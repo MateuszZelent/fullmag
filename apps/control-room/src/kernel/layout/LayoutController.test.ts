@@ -41,6 +41,18 @@ describe("LayoutController", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves the last spatial viewport while analysis is active", () => {
+    const { controller } = setup();
+
+    controller.setActiveViewportMainModule("field-map");
+    controller.setActiveViewportMainModule("analysis-plots");
+
+    expect(controller.get()).toMatchObject({
+      activeViewportMainModuleId: "analysis-plots",
+      lastSpatialViewportMainModuleId: "field-map",
+    });
+  });
+
   it("setActiveTab() does not emit for same tab", () => {
     const { bus, controller } = setup();
     const listener = vi.fn();

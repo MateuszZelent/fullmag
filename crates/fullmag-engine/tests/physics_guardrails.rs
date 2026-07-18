@@ -492,7 +492,11 @@ fn guardrail_regional_drive_is_evaluated_at_requested_rhs_time() {
         1,
         5.0,
         TimeIntegrator::Heun,
-        EffectiveFieldTerms { exchange: false, demag: false, ..Default::default() },
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: false,
+            ..Default::default()
+        },
     );
     problem.regional_field_drives.push(RegionalFieldDriveTerm {
         basis_field: vec![[0.0, 2.0, 0.0], [0.0, -1.0, 0.0]],
@@ -520,11 +524,18 @@ fn guardrail_heun_uses_end_stage_time_for_regional_drive() {
         CellSize::new(1.0, 1.0, 1.0).unwrap(),
         MaterialParameters::new(1.0, 1.0, 0.0).unwrap(),
         LlgConfig::new(1.0, TimeIntegrator::Heun).unwrap(),
-        EffectiveFieldTerms { exchange: false, demag: false, ..Default::default() },
+        EffectiveFieldTerms {
+            exchange: false,
+            demag: false,
+            ..Default::default()
+        },
     );
     problem.regional_field_drives.push(RegionalFieldDriveTerm {
         basis_field: vec![[0.0, 1.0, 0.0]],
-        waveform: fullmag_ir::TimeDependenceIR::Pulse { t_on: 0.5, t_off: 1.5 },
+        waveform: fullmag_ir::TimeDependenceIR::Pulse {
+            t_on: 0.5,
+            t_off: 1.5,
+        },
         time_offset_s: 0.0,
         enabled: true,
     });
@@ -532,7 +543,12 @@ fn guardrail_heun_uses_end_stage_time_for_regional_drive() {
     let mut ws = problem.create_workspace();
     let mut buffers = problem.create_integrator_buffers();
 
-    problem.step_with_buffers(&mut state, 1.0, &mut ws, &mut buffers).unwrap();
+    problem
+        .step_with_buffers(&mut state, 1.0, &mut ws, &mut buffers)
+        .unwrap();
 
-    assert!(state.magnetization()[0][2] < -0.1, "end-stage pulse was frozen at t_n");
+    assert!(
+        state.magnetization()[0][2] < -0.1,
+        "end-stage pulse was frozen at t_n"
+    );
 }

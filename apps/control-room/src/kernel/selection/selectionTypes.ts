@@ -110,6 +110,13 @@ export function visualizationObjectIdForMeshPartLike(part: {
 
 export type SelectionRef =
   | {
+      kind: "model.planar.monitor";
+      monitorId: string;
+      nodeId: string;
+      type: "planar-monitor";
+      visualizationTargetId: `planar-monitor:${string}`;
+    }
+  | {
       boundaryFaceIndex?: number | null;
       carrierPartId?: string;
       kind: ObjectSelectionKind;
@@ -369,6 +376,14 @@ export function selectionRefEquals(
   if (left.type !== right.type) return false;
 
   switch (left.type) {
+    case "planar-monitor":
+      return (
+        right.type === "planar-monitor" &&
+        left.kind === right.kind &&
+        left.monitorId === right.monitorId &&
+        left.nodeId === right.nodeId &&
+        left.visualizationTargetId === right.visualizationTargetId
+      );
     case "scene-object":
       return (
         right.type === "scene-object" &&

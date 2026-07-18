@@ -133,12 +133,17 @@ export function StageInspectorFrame({
         badge={stage?.status ?? "not selected"}
       >
         <FieldRow label="Stage" value={stage?.label ?? kindLabel} />
-        <FieldRow label="Kind" value={stage?.kind ?? expectedKind} />
-        <FieldRow label="Stage ID" value={stage?.stageId ?? draft?.stageId ?? "n/a"} />
-        <FieldRow label="Status" value={stage?.status ?? "draft"} />
+        <FieldRow label="Kind" value={stage?.kind ?? expectedKind} mono />
+        <FieldRow label="Stage ID" value={stage?.stageId ?? draft?.stageId ?? "n/a"} mono />
+        <FieldRow
+          label="Status"
+          value={stage?.status ?? "draft"}
+          status={stage?.status}
+        />
         <FieldRow
           label="Execution revision"
           value={stageExecutionRevision ?? "not available"}
+          mono
         />
       </InspectorGroup>
 

@@ -12,7 +12,9 @@ use fullmag_engine::{
     ExchangeLlgState, FdmBoundaryPolicy, GridShape, LlgConfig, MaterialParameters,
     UniaxialAnisotropyConfig, MU0,
 };
-use fullmag_fdm_demag::{compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy};
+use fullmag_fdm_demag::{
+    compute_exact_self_kernel, compute_shifted_kernel, TransferBoundaryPolicy,
+};
 use fullmag_ir::{ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR};
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
@@ -454,12 +456,10 @@ fn build_contexts_and_states(
                 problem.demag_image_counts = ic;
             }
         }
-        problem.set_demag_boundary(
-            crate::fdm::resolve_fdm_demag_boundary_for_periodicity(
-                plan.periodicity.as_ref(),
-                plan.enable_demag,
-            )?,
-        );
+        problem.set_demag_boundary(crate::fdm::resolve_fdm_demag_boundary_for_periodicity(
+            plan.periodicity.as_ref(),
+            plan.enable_demag,
+        )?);
         let state = problem
             .new_state(layer.initial_magnetization.clone())
             .map_err(|error| RunError {
@@ -483,9 +483,9 @@ fn build_contexts_and_states(
                 plan.periodicity
                     .as_ref()
                     .map(|periodicity| {
-                        periodicity.axes.map(|axis| {
-                            matches!(axis, fullmag_ir::AxisBoundary::Periodic)
-                        })
+                        periodicity
+                            .axes
+                            .map(|axis| matches!(axis, fullmag_ir::AxisBoundary::Periodic))
                     })
                     .unwrap_or([false; 3]),
             ),
@@ -944,45 +944,45 @@ mod tests {
 
     fn make_plan(enable_demag: bool) -> FdmMultilayerPlanIR {
         let layers = vec![
-                FdmLayerPlanIR {
-                    magnet_name: "free".to_string(),
-                    native_grid: [4, 4, 1],
-                    native_cell_size: [2e-9, 2e-9, 1e-9],
-                    native_origin: [-4e-9, -4e-9, 0.0],
-                    native_active_mask: None,
-                    initial_magnetization: vec![[1.0, 0.0, 0.0]; 16],
-                    material: FdmMaterialIR {
-                        name: "Py".to_string(),
-                        saturation_magnetisation: 800e3,
-                        exchange_stiffness: 13e-12,
-                        damping: 0.1,
-                        ..Default::default()
-                    },
-                    convolution_grid: [4, 4, 1],
-                    convolution_cell_size: [2e-9, 2e-9, 1e-9],
-                    convolution_origin: [-4e-9, -4e-9, 0.0],
-                    transfer_kind: "identity".to_string(),
+            FdmLayerPlanIR {
+                magnet_name: "free".to_string(),
+                native_grid: [4, 4, 1],
+                native_cell_size: [2e-9, 2e-9, 1e-9],
+                native_origin: [-4e-9, -4e-9, 0.0],
+                native_active_mask: None,
+                initial_magnetization: vec![[1.0, 0.0, 0.0]; 16],
+                material: FdmMaterialIR {
+                    name: "Py".to_string(),
+                    saturation_magnetisation: 800e3,
+                    exchange_stiffness: 13e-12,
+                    damping: 0.1,
+                    ..Default::default()
                 },
-                FdmLayerPlanIR {
-                    magnet_name: "ref".to_string(),
-                    native_grid: [4, 4, 1],
-                    native_cell_size: [2e-9, 2e-9, 1e-9],
-                    native_origin: [-4e-9, -4e-9, 3e-9],
-                    native_active_mask: None,
-                    initial_magnetization: vec![[0.0, 1.0, 0.0]; 16],
-                    material: FdmMaterialIR {
-                        name: "Py".to_string(),
-                        saturation_magnetisation: 800e3,
-                        exchange_stiffness: 13e-12,
-                        damping: 0.1,
-                        ..Default::default()
-                    },
-                    convolution_grid: [4, 4, 1],
-                    convolution_cell_size: [2e-9, 2e-9, 1e-9],
-                    convolution_origin: [-4e-9, -4e-9, 3e-9],
-                    transfer_kind: "identity".to_string(),
+                convolution_grid: [4, 4, 1],
+                convolution_cell_size: [2e-9, 2e-9, 1e-9],
+                convolution_origin: [-4e-9, -4e-9, 0.0],
+                transfer_kind: "identity".to_string(),
+            },
+            FdmLayerPlanIR {
+                magnet_name: "ref".to_string(),
+                native_grid: [4, 4, 1],
+                native_cell_size: [2e-9, 2e-9, 1e-9],
+                native_origin: [-4e-9, -4e-9, 3e-9],
+                native_active_mask: None,
+                initial_magnetization: vec![[0.0, 1.0, 0.0]; 16],
+                material: FdmMaterialIR {
+                    name: "Py".to_string(),
+                    saturation_magnetisation: 800e3,
+                    exchange_stiffness: 13e-12,
+                    damping: 0.1,
+                    ..Default::default()
                 },
-            ];
+                convolution_grid: [4, 4, 1],
+                convolution_cell_size: [2e-9, 2e-9, 1e-9],
+                convolution_origin: [-4e-9, -4e-9, 3e-9],
+                transfer_kind: "identity".to_string(),
+            },
+        ];
         let mut plan = FdmMultilayerPlanIR {
             mode: "two_d_stack".to_string(),
             common_cells: [4, 4, 1],
@@ -1048,8 +1048,8 @@ mod tests {
             let mut plan = make_plan(false);
             plan.integrator = integrator;
             plan.fixed_timestep = None;
-            let error = execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
-                .unwrap_err();
+            let error =
+                execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None).unwrap_err();
             assert!(
                 error.message.contains("explicit fixed_timestep"),
                 "{integrator:?} must fail closed without fixed_timestep"

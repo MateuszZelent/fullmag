@@ -7,9 +7,7 @@ use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
 ///
 /// The runner never reconstructs certificate values from geometry; it only
 /// publishes the validated resolved certificate carried by the execution plan.
-pub(crate) fn grid_certificate_artifacts(
-    plan: &ExecutionPlanIR,
-) -> Vec<AuxiliaryArtifact> {
+pub(crate) fn grid_certificate_artifacts(plan: &ExecutionPlanIR) -> Vec<AuxiliaryArtifact> {
     let certificate = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => fdm.grid_certificate.as_ref(),
         BackendPlanIR::FdmMultilayer(multilayer) => multilayer.grid_certificate.as_ref(),
@@ -59,7 +57,8 @@ pub(crate) fn region_membership_artifacts(
     if fdm.region_mask.len() != expected_cells {
         return Err(format!(
             "FDM region membership mask length {} disagrees with grid cell count {}",
-            fdm.region_mask.len(), expected_cells
+            fdm.region_mask.len(),
+            expected_cells
         ));
     }
 
@@ -128,9 +127,7 @@ fn decode_grid_fingerprint(value: &str) -> Result<[u8; 32], String> {
 /// Persist the resolved native-to-convolution transfer contract for a
 /// multilayer FDM run.  The artifact is intentionally derived from the
 /// planner certificate and periodicity, never from runtime-local grid state.
-pub(crate) fn transfer_provenance_artifacts(
-    plan: &ExecutionPlanIR,
-) -> Vec<AuxiliaryArtifact> {
+pub(crate) fn transfer_provenance_artifacts(plan: &ExecutionPlanIR) -> Vec<AuxiliaryArtifact> {
     let BackendPlanIR::FdmMultilayer(multilayer) = &plan.backend_plan else {
         return Vec::new();
     };
@@ -225,9 +222,7 @@ pub(crate) fn pbc_provenance_artifacts(
         grid_fingerprint,
         enable_demag,
         resolved_periodic_images,
-    ) = match
-        &plan.backend_plan
-    {
+    ) = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => (
             fdm.periodicity.as_ref(),
             fdm.origin_m,
@@ -266,8 +261,8 @@ pub(crate) fn pbc_provenance_artifacts(
         f64::from(counts[1]) * cell_m[1],
         f64::from(counts[2]) * cell_m[2],
     ];
-    let resolved_demag_boundary = requested_periodicity
-        .and_then(|pbc| pbc.resolve_demag_boundary(enable_demag).ok());
+    let resolved_demag_boundary =
+        requested_periodicity.and_then(|pbc| pbc.resolve_demag_boundary(enable_demag).ok());
     let resolved_periodic_images = resolved_periodic_images.cloned();
     let padded_counts = resolved_periodic_images
         .as_ref()

@@ -61,6 +61,9 @@ pub fn scene_document_from_script_builder(builder: &ScriptBuilderState) -> Scene
         field_drives: crate::SceneFieldDrivesState {
             drives: builder.field_drives.clone(),
         },
+        monitors: crate::SceneMonitorState {
+            planar: builder.planar_monitors.clone(),
+        },
         current_modules: SceneCurrentModulesState {
             modules: builder.current_modules.clone(),
             excitation_analysis: builder.excitation_analysis.clone(),
@@ -218,6 +221,7 @@ pub fn scene_document_to_script_builder(
             .map(builder_mesh_interface_from_scene)
             .collect(),
         field_drives: normalized_scene.field_drives.drives.clone(),
+        planar_monitors: normalized_scene.monitors.planar.clone(),
         current_modules: normalized_scene.current_modules.modules.clone(),
         excitation_analysis: normalized_scene.current_modules.excitation_analysis.clone(),
     })
@@ -352,6 +356,7 @@ pub fn scene_document_to_script_builder_overrides(
             .iter()
             .map(|coupling| serde_json::to_value(coupling).unwrap_or(Value::Null))
             .collect::<Vec<_>>(),
+        "planar_monitors": builder.planar_monitors,
         "current_modules": builder.current_modules.iter().map(|module| serde_json::json!({
             "kind": module.kind,
             "name": module.name,
@@ -417,9 +422,18 @@ fn solver_override_value(solver: &crate::ScriptBuilderSolverState) -> Value {
             "dt_initial".to_string(),
             parse_optional_text_f64(&solver.dt_initial),
         );
-        value.insert("dt_min".to_string(), parse_optional_text_f64(&solver.dt_min));
-        value.insert("dt_max".to_string(), parse_optional_text_f64(&solver.dt_max));
-        value.insert("max_err".to_string(), parse_optional_text_f64(&solver.max_err));
+        value.insert(
+            "dt_min".to_string(),
+            parse_optional_text_f64(&solver.dt_min),
+        );
+        value.insert(
+            "dt_max".to_string(),
+            parse_optional_text_f64(&solver.dt_max),
+        );
+        value.insert(
+            "max_err".to_string(),
+            parse_optional_text_f64(&solver.max_err),
+        );
     }
     value.insert(
         "relax".to_string(),
@@ -433,9 +447,7 @@ fn solver_override_value(solver: &crate::ScriptBuilderSolverState) -> Value {
     Value::Object(value)
 }
 
-fn adaptive_timestep_override_value(
-    adaptive: &crate::ScriptBuilderAdaptiveTimestepState,
-) -> Value {
+fn adaptive_timestep_override_value(adaptive: &crate::ScriptBuilderAdaptiveTimestepState) -> Value {
     serde_json::json!({
         "tolerance_mode": adaptive.tolerance_mode,
         "atol": parse_optional_text_f64(&adaptive.atol),
@@ -1881,7 +1893,10 @@ mod tests {
         let scene: SceneDocument = serde_json::from_value(value).expect("typed scene should parse");
         assert_eq!(scene.field_drives.drives[0].id, "pulse");
         let encoded = serde_json::to_value(scene).expect("typed scene should serialize");
-        assert_eq!(encoded["field_drives"]["drives"][0]["target"]["kind"], "global");
+        assert_eq!(
+            encoded["field_drives"]["drives"][0]["target"]["kind"],
+            "global"
+        );
     }
 
     fn sample_builder() -> ScriptBuilderState {
@@ -2209,6 +2224,7 @@ mod tests {
                 },
             }],
             field_drives: Vec::new(),
+            planar_monitors: Vec::new(),
             current_modules: vec![ScriptBuilderCurrentModuleState {
                 kind: "antenna_field_source".to_string(),
                 name: "cpw_1".to_string(),
@@ -2398,14 +2414,16 @@ mod tests {
         conflict.solver.dt_min = "1e-16".to_string();
         conflict.solver.dt_max = "1e-14".to_string();
         conflict.solver.max_err = "1e-6".to_string();
-        let error = scene_document_problem_projection(&scene_document_from_script_builder(&conflict))
-            .expect_err("fixed and adaptive scene state must fail closed");
+        let error =
+            scene_document_problem_projection(&scene_document_from_script_builder(&conflict))
+                .expect_err("fixed and adaptive scene state must fail closed");
         assert!(error.message.contains("mutually exclusive"));
 
         let mut malformed = sample_builder();
         malformed.solver.fixed_timestep = "not-a-number".to_string();
-        let error = scene_document_problem_projection(&scene_document_from_script_builder(&malformed))
-            .expect_err("malformed present numerics must not normalize to null");
+        let error =
+            scene_document_problem_projection(&scene_document_from_script_builder(&malformed))
+                .expect_err("malformed present numerics must not normalize to null");
         assert!(error.message.contains("fixed_timestep"));
     }
 
@@ -2426,8 +2444,9 @@ mod tests {
             "shrink_limit": "0.2"
         });
         let builder: ScriptBuilderState = serde_json::from_value(encoded).unwrap();
-        let projection = scene_document_problem_projection(&scene_document_from_script_builder(&builder))
-            .expect("valid stage adaptive policy should project");
+        let projection =
+            scene_document_problem_projection(&scene_document_from_script_builder(&builder))
+                .expect("valid stage adaptive policy should project");
         assert_eq!(
             projection.rewrite_overrides["stages"][0]["adaptive_timestep"]["dt_max"],
             serde_json::json!(1e-13)
@@ -2458,11 +2477,14 @@ mod tests {
     #[test]
     fn scene_document_validation_rejects_owner_rotation_and_scale_until_fdm_support_exists() {
         let mut scene = scene_document_from_script_builder(&sample_builder());
-        scene.objects[0].transform.rotation_quat = [0.0, 0.0, 0.7071067811865476, 0.7071067811865476];
+        scene.objects[0].transform.rotation_quat =
+            [0.0, 0.0, 0.7071067811865476, 0.7071067811865476];
         scene.objects[0].transform.scale = [2.0, 1.0, 1.0];
         let error = scene_document_to_script_builder(&scene)
             .expect_err("owner rotation/scale must not be silently dropped");
-        assert!(error.message.contains("owner_transform_rotation_scale_unsupported"));
+        assert!(error
+            .message
+            .contains("owner_transform_rotation_scale_unsupported"));
     }
 
     #[test]
@@ -2802,5 +2824,33 @@ mod tests {
             panic!("first projected study node should be primitive");
         };
         assert_eq!(projected_first_node.label, expected_id);
+    }
+
+    #[test]
+    fn scene_document_round_trips_planar_monitors_without_view_state() {
+        let mut builder = sample_builder();
+        builder.planar_monitors = vec![fullmag_ir::PlanarMonitorIR {
+            id: "midplane".into(),
+            name: "Midplane".into(),
+            target: fullmag_ir::MonitorTargetIR::Object {
+                object_id: builder.geometries[0].name.clone(),
+            },
+            frame: fullmag_ir::PlanarFrameIR::axis_preset(
+                fullmag_ir::PlanarFramePresetIR::Xy,
+                0.0,
+                fullmag_ir::PlanarExtentIR::TargetBounds { padding_m: 1e-9 },
+            ),
+            operator: fullmag_ir::PlanarOperatorIR::SlabAverage { thickness_m: 5e-9 },
+        }];
+
+        let scene = scene_document_from_script_builder(&builder);
+        let round_trip =
+            scene_document_to_script_builder(&scene).expect("monitor scene must validate");
+
+        assert_eq!(scene.monitors.planar, builder.planar_monitors);
+        assert_eq!(round_trip.planar_monitors, builder.planar_monitors);
+        let encoded = serde_json::to_value(scene).unwrap();
+        assert!(encoded["monitors"]["planar"][0].get("quantity").is_none());
+        assert!(encoded["monitors"]["planar"][0].get("resolution").is_none());
     }
 }

@@ -70,6 +70,7 @@ import {
   crossSectionFramePreviewToClip,
 } from "@/kernel/workspace/crossSectionWorkspace";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
+import { usePlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   resolveDefaultVisualizationSettings,
@@ -2278,6 +2279,7 @@ export function useViewport3DSceneModel({
     () => crossSectionFramePreviewToClip(crossSectionFramePreview),
     [crossSectionFramePreview],
   );
+  const planarMonitorFramePreview = usePlanarMonitorFramePreview();
   const cameraRegistryCamera = useCameraRegistryCamera();
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
   const computeRunning = useSessionStatusSelector(selectViewport3DComputeRunning);
@@ -4104,6 +4106,7 @@ export function useViewport3DSceneModel({
     crossSectionFrameClip,
     crossSectionFrameRotationDegrees:
       crossSectionFramePreview?.rotationDegrees ?? 0,
+    planarMonitorFramePreview,
     diagnostics,
     domainId: domainMeta.data?.domain_id,
     domainSummary,

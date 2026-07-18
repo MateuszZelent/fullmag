@@ -1,6 +1,4 @@
-use fullmag_ir::{
-    GeometryAssetsIR, OutputIR, ProblemIR, RegionalFieldDriveIR, TableAutosaveIR,
-};
+use fullmag_ir::{GeometryAssetsIR, OutputIR, ProblemIR, RegionalFieldDriveIR, TableAutosaveIR};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};

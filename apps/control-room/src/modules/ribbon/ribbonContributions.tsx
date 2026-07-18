@@ -877,7 +877,7 @@ function buildHomeWorkspaceGroup(
 function activeViewportMainModuleValue(context: RibbonBuildContext): string {
   const activeModuleId =
     context.commandContext?.layout?.get().activeViewportMainModuleId;
-  if (activeModuleId === "cross-section-image") return "cross-section";
+  if (activeModuleId === "field-map") return "field-map";
   if (activeModuleId === "analysis-plots") return "analysis";
   return "3d";
 }

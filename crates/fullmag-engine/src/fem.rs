@@ -3657,8 +3657,8 @@ mod tests {
             per_domain_quality: std::collections::HashMap::new(),
         };
 
-        let error = MeshTopology::from_ir(&mesh)
-            .expect_err("inverted mesh must fail before assembly");
+        let error =
+            MeshTopology::from_ir(&mesh).expect_err("inverted mesh must fail before assembly");
         assert!(error.to_string().contains("negative tetra orientation"));
     }
 

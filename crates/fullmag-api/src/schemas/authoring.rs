@@ -190,8 +190,13 @@ pub enum FieldDriveKindResource {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FieldTargetResource {
     Global {},
-    Object { object_id: String },
-    Region { object_id: String, region_id: String },
+    Object {
+        object_id: String,
+    },
+    Region {
+        object_id: String,
+        region_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -245,8 +250,13 @@ pub enum TimeDependenceResource {
         #[serde(default)]
         offset: f64,
     },
-    Pulse { t_on: f64, t_off: f64 },
-    PiecewiseLinear { points: Vec<[f64; 2]> },
+    Pulse {
+        t_on: f64,
+        t_off: f64,
+    },
+    PiecewiseLinear {
+        points: Vec<[f64; 2]>,
+    },
     SincPulse {
         cutoff_hz: f64,
         #[serde(default)]

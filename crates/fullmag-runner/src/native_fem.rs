@@ -77,9 +77,9 @@ use plan::{
 };
 
 #[cfg(feature = "fem-gpu")]
-use std::collections::{BTreeSet, HashMap};
-#[cfg(feature = "fem-gpu")]
 use sha2::{Digest, Sha256};
+#[cfg(feature = "fem-gpu")]
+use std::collections::{BTreeSet, HashMap};
 #[cfg(feature = "fem-gpu")]
 use std::ffi::c_void;
 #[cfg(feature = "fem-gpu")]
@@ -93,13 +93,25 @@ use std::ptr;
 
 #[cfg(feature = "fem-gpu")]
 fn checked_native_finite(label: &str, value: f64) -> Result<f64, RunError> {
-    if value.is_finite() { Ok(value) } else { Err(RunError { message: format!("native FEM returned non-finite {label}") }) }
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(RunError {
+            message: format!("native FEM returned non-finite {label}"),
+        })
+    }
 }
 
 #[cfg(feature = "fem-gpu")]
 fn checked_native_nonnegative(label: &str, value: f64) -> Result<f64, RunError> {
     let value = checked_native_finite(label, value)?;
-    if value >= 0.0 { Ok(value) } else { Err(RunError { message: format!("native FEM returned negative {label}") }) }
+    if value >= 0.0 {
+        Ok(value)
+    } else {
+        Err(RunError {
+            message: format!("native FEM returned negative {label}"),
+        })
+    }
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -112,14 +124,21 @@ fn validate_native_step_stats(stats: &ffi::fullmag_fem_step_stats) -> Result<f64
         ("anisotropy_energy_joules", stats.anisotropy_energy_joules),
         ("dmi_energy_joules", stats.dmi_energy_joules),
         ("total_energy_joules", stats.total_energy_joules),
-    ] { checked_native_finite(label, value)?; }
+    ] {
+        checked_native_finite(label, value)?;
+    }
     for (label, value) in [
         ("max_rhs_amplitude", stats.max_rhs_amplitude),
-        ("max_effective_field_amplitude", stats.max_effective_field_amplitude),
+        (
+            "max_effective_field_amplitude",
+            stats.max_effective_field_amplitude,
+        ),
         ("max_demag_field_amplitude", stats.max_demag_field_amplitude),
         ("error_estimate", stats.error_estimate),
         ("demag_linear_residual", stats.demag_linear_residual),
-    ] { checked_native_nonnegative(label, value)?; }
+    ] {
+        checked_native_nonnegative(label, value)?;
+    }
     checked_native_nonnegative("max_torque_Apm", stats.max_torque_Apm)
 }
 
@@ -501,16 +520,18 @@ fn resolved_drive_target_markers(
     let (object_id, region_id) = match target {
         FieldTargetIR::Global {} => return Ok(Vec::new()),
         FieldTargetIR::Object { object_id } => (object_id.as_str(), None),
-        FieldTargetIR::Region { object_id, region_id } => {
-            (object_id.as_str(), Some(region_id.as_str()))
-        }
+        FieldTargetIR::Region {
+            object_id,
+            region_id,
+        } => (object_id.as_str(), Some(region_id.as_str())),
     };
     let mut markers = BTreeSet::new();
     for part in &plan.mesh_parts {
-        if part.object_id.as_deref() != Some(object_id) ||
-            region_id.is_some_and(|region| {
+        if part.object_id.as_deref() != Some(object_id)
+            || region_id.is_some_and(|region| {
                 part.id != region && part.geometry_id.as_deref() != Some(region)
-            }) {
+            })
+        {
             continue;
         }
         match &part.element_selector {
@@ -535,7 +556,9 @@ fn resolved_drive_target_markers(
     }
     if markers.is_empty() && region_id.is_none() {
         for segment in &plan.object_segments {
-            if segment.object_id != object_id { continue; }
+            if segment.object_id != object_id {
+                continue;
+            }
             let start = segment.element_start as usize;
             let end = start + segment.element_count as usize;
             if end <= plan.mesh.element_markers.len() {
@@ -562,8 +585,15 @@ fn flatten_native_geometry_mask(
 ) -> Result<u32, RunError> {
     use fullmag_ir::GeometryEntryIR;
     let blank = |kind, child_a, child_b| ffi::fullmag_fem_geometry_mask_node {
-        kind, child_a, child_b, center_m: [0.0; 3], size_m: [0.0; 3],
-        axis: [0.0; 3], radius_m: 0.0, height_m: 0.0, translation_m: [0.0; 3],
+        kind,
+        child_a,
+        child_b,
+        center_m: [0.0; 3],
+        size_m: [0.0; 3],
+        axis: [0.0; 3],
+        radius_m: 0.0,
+        height_m: 0.0,
+        translation_m: [0.0; 3],
     };
     let node = match geometry {
         GeometryEntryIR::Box { size, .. } => {
@@ -603,13 +633,16 @@ fn flatten_native_geometry_mask(
 #[cfg(feature = "fem-gpu")]
 fn pack_native_regional_field_drives(
     plan: &fullmag_ir::FemPlanIR,
-) -> Result<(
-    Vec<ffi::fullmag_fem_regional_field_drive_desc>,
-    Vec<Vec<u32>>,
-    Vec<Vec<ffi::fullmag_fem_time_point>>,
-    Vec<Vec<ffi::fullmag_fem_geometry_mask_node>>,
-    Vec<Option<ffi::fullmag_fem_geometry_mask_desc>>,
-), RunError> {
+) -> Result<
+    (
+        Vec<ffi::fullmag_fem_regional_field_drive_desc>,
+        Vec<Vec<u32>>,
+        Vec<Vec<ffi::fullmag_fem_time_point>>,
+        Vec<Vec<ffi::fullmag_fem_geometry_mask_node>>,
+        Vec<Option<ffi::fullmag_fem_geometry_mask_desc>>,
+    ),
+    RunError,
+> {
     use fullmag_ir::{FieldSpatialProfileIR, FieldTargetIR, FieldTimeOriginIR, TimeDependenceIR};
     let mut marker_storage = Vec::with_capacity(plan.field_drives.len());
     let mut point_storage = Vec::with_capacity(plan.field_drives.len());
@@ -617,8 +650,12 @@ fn pack_native_regional_field_drives(
     for drive in plan.field_drives.iter().filter(|drive| drive.enabled) {
         marker_storage.push(resolved_drive_target_markers(plan, &drive.target)?);
         point_storage.push(match &drive.waveform {
-            TimeDependenceIR::PiecewiseLinear { points } => points.iter()
-                .map(|point| ffi::fullmag_fem_time_point { time_s: point[0], value: point[1] })
+            TimeDependenceIR::PiecewiseLinear { points } => points
+                .iter()
+                .map(|point| ffi::fullmag_fem_time_point {
+                    time_s: point[0],
+                    value: point[1],
+                })
                 .collect(),
             _ => Vec::new(),
         });
@@ -634,19 +671,27 @@ fn pack_native_regional_field_drives(
         geometry_node_storage.push(nodes);
     }
     let geometry_desc_storage: Vec<Option<ffi::fullmag_fem_geometry_mask_desc>> =
-        geometry_node_storage.iter().map(|nodes| (!nodes.is_empty()).then(|| {
-            ffi::fullmag_fem_geometry_mask_desc {
-                abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
-                struct_size: std::mem::size_of::<ffi::fullmag_fem_geometry_mask_desc>() as u32,
-                nodes: nodes.as_ptr(), node_count: nodes.len() as u64,
-                root_index: (nodes.len() - 1) as u32,
-            }
-        })).collect();
+        geometry_node_storage
+            .iter()
+            .map(|nodes| {
+                (!nodes.is_empty()).then(|| ffi::fullmag_fem_geometry_mask_desc {
+                    abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
+                    struct_size: std::mem::size_of::<ffi::fullmag_fem_geometry_mask_desc>() as u32,
+                    nodes: nodes.as_ptr(),
+                    node_count: nodes.len() as u64,
+                    root_index: (nodes.len() - 1) as u32,
+                })
+            })
+            .collect();
     let mut descriptors = Vec::with_capacity(marker_storage.len());
-    for (index, ((drive, markers), points)) in plan.field_drives.iter()
+    for (index, ((drive, markers), points)) in plan
+        .field_drives
+        .iter()
         .filter(|drive| drive.enabled)
         .zip(&marker_storage)
-        .zip(&point_storage).enumerate() {
+        .zip(&point_storage)
+        .enumerate()
+    {
         let target_kind = match drive.target {
             FieldTargetIR::Global {} => 0,
             FieldTargetIR::Object { .. } | FieldTargetIR::Region { .. } => 1,
@@ -655,52 +700,104 @@ fn pack_native_regional_field_drives(
             FieldSpatialProfileIR::Uniform {} => ffi::fullmag_fem_spatial_profile_desc {
                 abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
                 struct_size: std::mem::size_of::<ffi::fullmag_fem_spatial_profile_desc>() as u32,
-                kind: 0, sinc_axis: [0.0; 3], sinc_period_m: 0.0, sinc_center_m: 0.0,
-                sinc_width_m: 0.0, sinc_window: 0, geometry_mask: std::ptr::null(),
+                kind: 0,
+                sinc_axis: [0.0; 3],
+                sinc_period_m: 0.0,
+                sinc_center_m: 0.0,
+                sinc_width_m: 0.0,
+                sinc_window: 0,
+                geometry_mask: std::ptr::null(),
             },
-            FieldSpatialProfileIR::Sinc { axis, period_m, center_m, width_m, window } => ffi::fullmag_fem_spatial_profile_desc {
+            FieldSpatialProfileIR::Sinc {
+                axis,
+                period_m,
+                center_m,
+                width_m,
+                window,
+            } => ffi::fullmag_fem_spatial_profile_desc {
                 abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
                 struct_size: std::mem::size_of::<ffi::fullmag_fem_spatial_profile_desc>() as u32,
-                kind: 1, sinc_axis: *axis, sinc_period_m: *period_m, sinc_center_m: *center_m,
-                sinc_width_m: width_m.unwrap_or(0.0), sinc_window: if window == "hann" { 1 } else { 0 },
+                kind: 1,
+                sinc_axis: *axis,
+                sinc_period_m: *period_m,
+                sinc_center_m: *center_m,
+                sinc_width_m: width_m.unwrap_or(0.0),
+                sinc_window: if window == "hann" { 1 } else { 0 },
                 geometry_mask: std::ptr::null(),
             },
             FieldSpatialProfileIR::GeometryMask { envelope, .. } => {
                 let (axis, period, center, width, window) = match envelope {
                     fullmag_ir::FieldEnvelopeIR::Uniform {} => ([0.0; 3], 0.0, 0.0, 0.0, 0),
-                    fullmag_ir::FieldEnvelopeIR::Sinc { axis, period_m, center_m, width_m, window } =>
-                        (*axis, *period_m, *center_m, width_m.unwrap_or(0.0), if window == "hann" { 1 } else { 0 }),
+                    fullmag_ir::FieldEnvelopeIR::Sinc {
+                        axis,
+                        period_m,
+                        center_m,
+                        width_m,
+                        window,
+                    } => (
+                        *axis,
+                        *period_m,
+                        *center_m,
+                        width_m.unwrap_or(0.0),
+                        if window == "hann" { 1 } else { 0 },
+                    ),
                 };
                 ffi::fullmag_fem_spatial_profile_desc {
                     abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
-                    struct_size: std::mem::size_of::<ffi::fullmag_fem_spatial_profile_desc>() as u32,
-                    kind: 2, sinc_axis: axis, sinc_period_m: period, sinc_center_m: center,
-                    sinc_width_m: width, sinc_window: window,
-                    geometry_mask: geometry_desc_storage[index].as_ref()
+                    struct_size: std::mem::size_of::<ffi::fullmag_fem_spatial_profile_desc>()
+                        as u32,
+                    kind: 2,
+                    sinc_axis: axis,
+                    sinc_period_m: period,
+                    sinc_center_m: center,
+                    sinc_width_m: width,
+                    sinc_window: window,
+                    geometry_mask: geometry_desc_storage[index]
+                        .as_ref()
                         .map_or(std::ptr::null(), |descriptor| descriptor as *const _),
                 }
             }
         };
         let mut parameters = ffi::fullmag_fem_time_dependence_parameters {
             sinusoidal: ffi::fullmag_fem_sinusoidal_time_desc {
-                frequency_hz: 0.0, phase_rad: 0.0, offset: 0.0,
+                frequency_hz: 0.0,
+                phase_rad: 0.0,
+                offset: 0.0,
             },
         };
         let waveform_kind = match &drive.waveform {
             TimeDependenceIR::Constant => 0,
-            TimeDependenceIR::Sinusoidal { frequency_hz, phase_rad, offset } => {
+            TimeDependenceIR::Sinusoidal {
+                frequency_hz,
+                phase_rad,
+                offset,
+            } => {
                 parameters.sinusoidal = ffi::fullmag_fem_sinusoidal_time_desc {
-                    frequency_hz: *frequency_hz, phase_rad: *phase_rad, offset: *offset,
-                }; 1
+                    frequency_hz: *frequency_hz,
+                    phase_rad: *phase_rad,
+                    offset: *offset,
+                };
+                1
             }
             TimeDependenceIR::Pulse { t_on, t_off } => {
-                parameters.pulse = ffi::fullmag_fem_pulse_time_desc { t_on_s: *t_on, t_off_s: *t_off }; 2
+                parameters.pulse = ffi::fullmag_fem_pulse_time_desc {
+                    t_on_s: *t_on,
+                    t_off_s: *t_off,
+                };
+                2
             }
             TimeDependenceIR::PiecewiseLinear { .. } => 3,
-            TimeDependenceIR::SincPulse { cutoff_hz, t0, amplitude } => {
+            TimeDependenceIR::SincPulse {
+                cutoff_hz,
+                t0,
+                amplitude,
+            } => {
                 parameters.sinc_pulse = ffi::fullmag_fem_sinc_pulse_time_desc {
-                    cutoff_hz: *cutoff_hz, t0_s: *t0, amplitude: *amplitude,
-                }; 4
+                    cutoff_hz: *cutoff_hz,
+                    t0_s: *t0,
+                    amplitude: *amplitude,
+                };
+                4
             }
         };
         let digest = Sha256::digest(drive.id.as_bytes());
@@ -722,8 +819,10 @@ fn pack_native_regional_field_drives(
             waveform: ffi::fullmag_fem_time_dependence_desc {
                 abi_version: ffi::FULLMAG_FEM_REGIONAL_FIELD_DRIVE_ABI_VERSION,
                 struct_size: std::mem::size_of::<ffi::fullmag_fem_time_dependence_desc>() as u32,
-                kind: waveform_kind, parameters,
-                points: optional_slice_ptr(points), point_count: points.len() as u64,
+                kind: waveform_kind,
+                parameters,
+                points: optional_slice_ptr(points),
+                point_count: points.len() as u64,
             },
             time_origin: match drive.time_origin {
                 FieldTimeOriginIR::StageLocal => 0,
@@ -731,7 +830,13 @@ fn pack_native_regional_field_drives(
             },
         });
     }
-    Ok((descriptors, marker_storage, point_storage, geometry_node_storage, geometry_desc_storage))
+    Ok((
+        descriptors,
+        marker_storage,
+        point_storage,
+        geometry_node_storage,
+        geometry_desc_storage,
+    ))
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1164,9 +1269,13 @@ impl NativeFemBackend {
             .iter()
             .flat_map(|v| v.iter().copied())
             .collect();
-        let (regional_field_drive_descs, _regional_marker_storage, _regional_point_storage,
-            _regional_geometry_node_storage, _regional_geometry_desc_storage) =
-            pack_native_regional_field_drives(plan)?;
+        let (
+            regional_field_drive_descs,
+            _regional_marker_storage,
+            _regional_point_storage,
+            _regional_geometry_node_storage,
+            _regional_geometry_desc_storage,
+        ) = pack_native_regional_field_drives(plan)?;
 
         let mesh = ffi::fullmag_fem_mesh_desc {
             nodes_xyz: nodes_flat.as_ptr(),
@@ -1644,40 +1753,42 @@ impl NativeFemBackend {
         let adaptive_cfg = plan
             .adaptive_timestep
             .as_ref()
-            .map(|a| -> Result<ffi::fullmag_fem_adaptive_config_v2, RunError> {
-                let policy = crate::resolve_timestep_policy(
-                    plan.integrator,
-                    plan.fixed_timestep,
-                    Some(a),
-                    if native_fem_plan_requests_gpu_mfem_device(plan) {
-                        crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
-                    } else {
-                        crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
-                    },
-                )?;
-                Ok(ffi::fullmag_fem_adaptive_config_v2 {
-                    abi_version: ffi::FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION,
-                    struct_size: std::mem::size_of::<ffi::fullmag_fem_adaptive_config_v2>()
-                        as u32,
-                    base: ffi::fullmag_fem_adaptive_config {
-                        atol: a.atol,
-                        rtol: a.rtol,
-                        dt_initial: policy.initial_dt(),
-                        dt_min: a.dt_min,
-                        dt_max: a.dt_max.ok_or_else(|| RunError {
-                            message: "adaptive timestep requires explicit dt_max".to_string(),
-                        })?,
-                        safety: a.safety,
-                        growth_limit: a.growth_limit,
-                        shrink_limit: a.shrink_limit,
-                        max_reject: 50,
-                    },
-                    has_max_spin_rotation: i32::from(a.max_spin_rotation.is_some()),
-                    max_spin_rotation: a.max_spin_rotation.unwrap_or(0.0),
-                    has_norm_tolerance: i32::from(a.norm_tolerance.is_some()),
-                    norm_tolerance: a.norm_tolerance.unwrap_or(0.0),
-                })
-            })
+            .map(
+                |a| -> Result<ffi::fullmag_fem_adaptive_config_v2, RunError> {
+                    let policy = crate::resolve_timestep_policy(
+                        plan.integrator,
+                        plan.fixed_timestep,
+                        Some(a),
+                        if native_fem_plan_requests_gpu_mfem_device(plan) {
+                            crate::types::TimestepExecutionLane::fem_gpu(plan.precision)
+                        } else {
+                            crate::types::TimestepExecutionLane::fem_cpu(plan.precision)
+                        },
+                    )?;
+                    Ok(ffi::fullmag_fem_adaptive_config_v2 {
+                        abi_version: ffi::FULLMAG_FEM_ADAPTIVE_CONFIG_V2_ABI_VERSION,
+                        struct_size: std::mem::size_of::<ffi::fullmag_fem_adaptive_config_v2>()
+                            as u32,
+                        base: ffi::fullmag_fem_adaptive_config {
+                            atol: a.atol,
+                            rtol: a.rtol,
+                            dt_initial: policy.initial_dt(),
+                            dt_min: a.dt_min,
+                            dt_max: a.dt_max.ok_or_else(|| RunError {
+                                message: "adaptive timestep requires explicit dt_max".to_string(),
+                            })?,
+                            safety: a.safety,
+                            growth_limit: a.growth_limit,
+                            shrink_limit: a.shrink_limit,
+                            max_reject: 50,
+                        },
+                        has_max_spin_rotation: i32::from(a.max_spin_rotation.is_some()),
+                        max_spin_rotation: a.max_spin_rotation.unwrap_or(0.0),
+                        has_norm_tolerance: i32::from(a.norm_tolerance.is_some()),
+                        norm_tolerance: a.norm_tolerance.unwrap_or(0.0),
+                    })
+                },
+            )
             .transpose()?;
         if let Some(ref cfg) = adaptive_cfg {
             plan_desc.adaptive_config = &cfg.base as *const ffi::fullmag_fem_adaptive_config;
@@ -3066,7 +3177,10 @@ mod tests {
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
             assert!(checked_native_nonnegative("max_torque_Apm", value).is_err());
         }
-        assert_eq!(checked_native_nonnegative("max_torque_Apm", 0.0).unwrap(), 0.0);
+        assert_eq!(
+            checked_native_nonnegative("max_torque_Apm", 0.0).unwrap(),
+            0.0
+        );
     }
 
     #[test]

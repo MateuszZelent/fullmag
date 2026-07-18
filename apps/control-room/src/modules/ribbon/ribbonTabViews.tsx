@@ -206,9 +206,9 @@ export const homeTab: RibbonTabContent = {
                   value: "3d",
                 },
                 {
-                  commandId: "cross-section-image.open",
-                  label: "Cross-section image",
-                  value: "cross-section",
+                  commandId: "field-map.open",
+                  label: "2D field map",
+                  value: "field-map",
                 },
                 {
                   commandId: "analysis-plots.open",
@@ -245,7 +245,7 @@ export const homeTab: RibbonTabContent = {
             },
           ],
         },
-        { id: "ws-2d",      icon: icon(Columns2),  label: "2D",      shortcut: "2", commandId: "cross-section-image.open", iconColor: C.sky },
+        { id: "ws-2d",      icon: icon(Columns2),  label: "2D",      shortcut: "2", commandId: "field-map.open", iconColor: C.sky },
         { id: "ws-analyze", icon: icon(BarChart3), label: "Analyze",               commandId: "analysis-plots.open",       iconColor: C.green },
         {
           id: "ws-panel",
@@ -621,33 +621,33 @@ export const viewTab: RibbonTabContent = {
       ],
     },
 
-    // ── Group 3: Cross-Section ──────────────────────────────────────────────
+    // ── Group 3: Planar field map ───────────────────────────────────────────
     {
       id: "view-slice-2d",
-      title: "Cross-Section",
-      subtitle: "image tabs",
+      title: "2D View",
+      subtitle: "planar monitor",
       tone: "neutral",
       actions: [
         {
           id: RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
           icon: icon(Scissors),
-          label: "2D Cross",
+          label: "Monitor",
           iconColor: "text-orange-300",
-          tooltip: "Create 2D cross-section draft",
+          tooltip: "Create a planar monitor draft",
         },
         {
-          id: "cross-section-image.open",
+          id: "field-map.open",
           icon: icon(Triangle),
-          label: "Image",
+          label: "Open",
           iconColor: "text-sky-300",
-          tooltip: "Open generated cross-section image",
+          tooltip: "Open the active monitor in 2D View",
         },
         {
-          id: "analysis-plots.open",
-          icon: icon(BarChart3),
-          label: "Analysis",
+          id: "field-map.export-png",
+          icon: icon(Download),
+          label: "Export",
           iconColor: "text-amber-300",
-          tooltip: "Open analysis plots",
+          tooltip: "Export the current 2D field map",
         },
       ],
     },

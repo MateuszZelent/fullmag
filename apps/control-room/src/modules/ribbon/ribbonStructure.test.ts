@@ -421,7 +421,7 @@ describe("ribbon structure", () => {
     );
 
     expect(twoDimensionalAction).toMatchObject({
-      commandId: "cross-section-image.open",
+      commandId: "field-map.open",
       disabled: false,
     });
     expect(analysisAction).toMatchObject({
@@ -2863,7 +2863,7 @@ describe("ribbon structure", () => {
     ]);
   });
 
-  it("keeps the View Cross-Section group scoped to image workflows", () => {
+  it("routes the View 2D group through the field-map command source", () => {
     const { context } = createVisualizationRibbonContext({});
     const content = buildRibbonTabContent("view", context);
     const sliceGroup = content?.groups.find((group) => group.id === "view-slice-2d");
@@ -2874,13 +2874,13 @@ describe("ribbon structure", () => {
       ) ?? [];
 
     expect(sliceGroup).toMatchObject({
-      subtitle: "image tabs",
-      title: "Cross-Section",
+      subtitle: "planar monitor",
+      title: "2D View",
     });
     expect(actionIds).toEqual([
       RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
-      "cross-section-image.open",
-      "analysis-plots.open",
+      "field-map.open",
+      "field-map.export-png",
     ]);
     expect(menuNodeIds).not.toEqual(
       expect.arrayContaining([

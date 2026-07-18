@@ -66,6 +66,10 @@ from fullmag.model.dynamics import (
     LLG,
 )
 from fullmag.model.outputs import SaveField, SaveScalar, SaveSpectrum, SaveMode, SaveDispersion, SaveResponse, Snapshot, parse_snapshot_quantity
+from fullmag.model.planar_monitor import (
+    PlanarMonitor,
+    StudyMonitorRegistry,
+)
 from fullmag.model.study import (
     AdaptiveRefinement,
     Eigenmodes,
@@ -1855,6 +1859,7 @@ class _WorldState:
     _table_autosave: TableAutosave | None = None
     _current_modules: list[AntennaFieldSource | CurrentTransport] = field(default_factory=list)
     _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
+    _planar_monitors: list[PlanarMonitor] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
     _last_result: Any | None = None
     _last_step: Any | None = None
@@ -3997,6 +4002,7 @@ class StudyBuilder:
         _state._api_surface = "study"
         self.stages = StudyStagesBuilder()
         self.field_drives = StudyFieldDriveRegistry()
+        self.monitors = StudyMonitorRegistry(_state._planar_monitors)
         self.universe = StudyUniverseHandle(self)
         self.airbox = StudyAirboxHandle(self)
         self.objects = StudyObjectsHandle(self)
@@ -6946,6 +6952,7 @@ def _build_problem(
         auxiliary_geometries=tuple(s._auxiliary_geometries),
         current_modules=tuple(s._current_modules),
         field_drives=tuple(s._field_drives),
+        monitors=tuple(s._planar_monitors),
         couplings=s._couplings.items(),
         excitation_analysis=s._excitation_analysis,
         geometry_asset_cache=s._geometry_asset_cache,

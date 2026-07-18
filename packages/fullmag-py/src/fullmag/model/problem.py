@@ -45,6 +45,7 @@ from fullmag.model.outputs import (
     SaveSpectrum,
     Snapshot,
 )
+from fullmag.model.planar_monitor import PlanarMonitor
 from fullmag.model.structure import (
     Ferromagnet,
     Material,
@@ -1081,6 +1082,7 @@ def build_problem_builder_manifest(
             "energy_terms": [term.to_ir() for term in problem.energy],
             "current_modules": [module.to_ir() for module in problem.current_modules],
             "field_drives": [drive.to_ir() for drive in problem.field_drives],
+            "planar_monitors": [monitor.to_ir() for monitor in problem.monitors],
             "excitation_analysis": problem.excitation_analysis.to_ir()
             if problem.excitation_analysis is not None
             else None,
@@ -1148,6 +1150,7 @@ class Problem:
     current_modules: Sequence[CurrentModule] = ()
     field_drives: Sequence[RegionalFieldDrive] = ()
     couplings: Sequence[Coupling] = ()
+    monitors: Sequence[PlanarMonitor] = ()
     excitation_analysis: SpinWaveExcitationAnalysis | None = None
     geometry_asset_cache: dict[str, dict[str, Any] | None] = field(
         default_factory=dict,
@@ -1244,6 +1247,13 @@ class Problem:
                     )
         ensure_unique_names(
             (coupling.coupling_id for coupling in self.couplings), "coupling ids"
+        )
+        if any(not isinstance(monitor, PlanarMonitor) for monitor in self.monitors):
+            raise TypeError("Problem.monitors must contain PlanarMonitor objects")
+        ensure_unique_names((monitor.id for monitor in self.monitors), "planar monitor ids")
+        ensure_unique_names(
+            (monitor.name for monitor in self.monitors),
+            "planar monitor names",
         )
         current_modules_by_name = _current_module_name_map(self.current_modules)
         if self.excitation_analysis is not None:
@@ -1417,6 +1427,7 @@ class Problem:
                 for assignment in self._collect_material_parameter_fields()
             ],
             "couplings": [coupling.to_ir() for coupling in self.couplings],
+            "planar_monitors": [monitor.to_ir() for monitor in self.monitors],
             "magnets": magnets_ir,
             "energy_terms": [term.to_ir() for term in self.energy],
             "current_modules": [module.to_ir() for module in self.current_modules],

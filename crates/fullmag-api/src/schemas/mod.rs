@@ -10,6 +10,8 @@ pub mod fields;
 pub mod hysteresis;
 pub mod logs;
 pub mod mesh;
+pub mod planar_fields;
+pub mod planar_monitors;
 pub mod quantities;
 pub mod realtime;
 pub mod relaxation;
@@ -19,3 +21,6 @@ pub mod status;
 pub mod tables;
 pub mod visualization_state;
 pub mod workspace;
+
+pub use planar_fields::*;
+pub use planar_monitors::*;

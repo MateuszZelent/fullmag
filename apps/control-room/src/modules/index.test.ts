@@ -9,5 +9,6 @@ describe("control-room module runtime flags", () => {
     expect(modules.map((module) => module.id)).not.toContain("viewport-3d");
     expect(modules.map((module) => module.id)).toContain("cross-section-image");
     expect(modules.map((module) => module.id)).toContain("analysis-plots");
+    expect(modules.map((module) => module.id)).toContain("field-map");
   });
 });

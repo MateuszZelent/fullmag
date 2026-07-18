@@ -45,6 +45,13 @@ impl ApiError {
             message: message.into(),
         }
     }
+
+    pub fn unprocessable_entity(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: message.into(),
+        }
+    }
 }
 
 impl From<std::io::Error> for ApiError {
@@ -55,10 +62,38 @@ impl From<std::io::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let code = self
+            .message
+            .split_once(':')
+            .map(|(candidate, _)| candidate)
+            .filter(|candidate| {
+                !candidate.is_empty()
+                    && candidate
+                        .chars()
+                        .all(|character| character.is_ascii_lowercase() || character == '_')
+            })
+            .unwrap_or_else(|| match self.status {
+                StatusCode::BAD_REQUEST => "bad_request",
+                StatusCode::NOT_FOUND => "not_found",
+                StatusCode::CONFLICT => "conflict",
+                StatusCode::UNPROCESSABLE_ENTITY => "unsupported_capability",
+                StatusCode::SERVICE_UNAVAILABLE => "service_unavailable",
+                _ => "internal_error",
+            })
+            .to_string();
+        let message = self.message;
         (
             self.status,
             Json(serde_json::json!({
-                "error": self.message,
+                "code": code,
+                "error": message,
+                "message": message,
+                "capability_reason": if self.status == StatusCode::UNPROCESSABLE_ENTITY {
+                    Some(code)
+                } else {
+                    None
+                },
+                "revision_context": serde_json::Value::Null,
             })),
         )
             .into_response()

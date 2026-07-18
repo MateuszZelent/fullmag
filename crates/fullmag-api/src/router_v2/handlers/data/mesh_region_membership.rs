@@ -50,10 +50,8 @@ pub async fn get_mesh_region_membership(
         snapshot.region_realization_revisions.membership,
         &region_id,
     )
-        .map(Json)
-        .ok_or_else(|| {
-            ApiError::not_found(format!("mesh region membership '{region_id}' not found"))
-        })
+    .map(Json)
+    .ok_or_else(|| ApiError::not_found(format!("mesh region membership '{region_id}' not found")))
 }
 
 #[utoipa::path(
@@ -84,15 +82,13 @@ pub async fn get_mesh_region_memberships(
     let mut memberships = Vec::new();
     let mut unresolved_region_ids = Vec::new();
     for region_id in enabled_authored_region_ids(scene) {
-        if let Some(membership) =
-            build_mesh_region_membership(
-                scene,
-                mesh,
-                snapshot.mesh_revision,
-                snapshot.region_realization_revisions.membership,
-                &region_id,
-            )
-        {
+        if let Some(membership) = build_mesh_region_membership(
+            scene,
+            mesh,
+            snapshot.mesh_revision,
+            snapshot.region_realization_revisions.membership,
+            &region_id,
+        ) {
             memberships.push(membership);
         } else {
             unresolved_region_ids.push(region_id);

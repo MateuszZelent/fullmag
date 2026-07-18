@@ -2,9 +2,9 @@
 
 use crate::{
     CellSize, EffectiveFieldObservables, EffectiveFieldTerms, EngineError, EvaluationRequest,
-    ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace, GridShape,
-    IntegratorBuffers, LlgConfig, MaterialParameters, ResolvedFdmPeriodicWorkspace, Result,
-    RegionalFieldDriveTerm, StepReport, TimeIntegrator, Vector3,
+    ExchangeLlgState, ExchangeLlgStateSoA, FdmBoundaryPolicy, FdmDemagBoundary, FftWorkspace,
+    GridShape, IntegratorBuffers, LlgConfig, MaterialParameters, RegionalFieldDriveTerm,
+    ResolvedFdmPeriodicWorkspace, Result, StepReport, TimeIntegrator, Vector3,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -115,7 +115,11 @@ impl ExchangeLlgProblem {
 
     pub fn regional_drive_field_at_time(&self, evaluation_time_s: f64) -> Vec<Vector3> {
         let mut field = vec![[0.0; 3]; self.grid.cell_count()];
-        for drive in self.regional_field_drives.iter().filter(|drive| drive.enabled) {
+        for drive in self
+            .regional_field_drives
+            .iter()
+            .filter(|drive| drive.enabled)
+        {
             let multiplier = drive.multiplier_at(evaluation_time_s);
             for (total, basis) in field.iter_mut().zip(&drive.basis_field) {
                 total[0] += multiplier * basis[0];
@@ -150,8 +154,7 @@ impl ExchangeLlgProblem {
                 FdmDemagBoundary::PeriodicTruncatedImages { .. }
             )
         {
-            let FdmDemagBoundary::PeriodicTruncatedImages { image_counts } =
-                self.demag_boundary
+            let FdmDemagBoundary::PeriodicTruncatedImages { image_counts } = self.demag_boundary
             else {
                 unreachable!()
             };

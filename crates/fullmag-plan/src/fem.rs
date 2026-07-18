@@ -4,8 +4,8 @@ use fullmag_ir::{
     FemEigenDispersionValidationIR, FemEigenK0KittelValidationIR, FemEigenPlanIR,
     FemFrequencyDomainEquilibriumProvenanceIR, FemFrequencyResponsePlanIR, FemMagnetoelasticPlanIR,
     FemMechanicalModeIR, FemMechanicalPlanIR, FemPlanIR, GeometryEntryIR, MagnetostrictionLawIR,
-    MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, TimeDependenceIR, IR_VERSION,
-    SeedPolicy, ThermalSeedConfig,
+    MechanicalLoadIR, OutputPlanIR, ProblemIR, ProvenancePlanIR, SeedPolicy, ThermalSeedConfig,
+    TimeDependenceIR, IR_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1290,10 +1290,8 @@ fn build_region_material_fields(
     let mut dind_values = vec![base_material.interfacial_dmi.unwrap_or(0.0); node_count];
     let mut dbulk_values = vec![base_material.bulk_dmi.unwrap_or(0.0); node_count];
 
-    let sharp_conformal_aex_regions = sharp_conformal_parameter_regions(
-        problem,
-        fullmag_ir::MaterialParameterNameIR::Aex,
-    )?;
+    let sharp_conformal_aex_regions =
+        sharp_conformal_parameter_regions(problem, fullmag_ir::MaterialParameterNameIR::Aex)?;
 
     for segment in object_segments {
         if segment.object_id == AIR_OBJECT_SEGMENT_ID {
@@ -1405,7 +1403,11 @@ fn sharp_conformal_parameter_regions(
     parameter: fullmag_ir::MaterialParameterNameIR,
 ) -> Result<BTreeSet<String>, PlanError> {
     let mut region_ids = BTreeSet::new();
-    for region in problem.object_regions.iter().filter(|region| region.enabled) {
+    for region in problem
+        .object_regions
+        .iter()
+        .filter(|region| region.enabled)
+    {
         if region.realization_policy != fullmag_ir::RegionRealizationPolicyIR::Project
             && crate::validate::region_is_conformal(problem, region)
             && sharp_constant_region_parameter(problem, region, parameter)?.is_some()
@@ -1946,7 +1948,10 @@ pub(crate) fn plan_fem(
                 }
                 if let Some(problem_temperature) = thermal_temperature {
                     if (problem_temperature - *temperature).abs() > 1.0e-6 {
-                        errors.push("ThermalNoise temperature disagrees with Problem temperature".to_string());
+                        errors.push(
+                            "ThermalNoise temperature disagrees with Problem temperature"
+                                .to_string(),
+                        );
                     }
                 }
                 thermal_temperature = Some(*temperature);
@@ -1954,7 +1959,11 @@ pub(crate) fn plan_fem(
                     errors.push("ThermalNoise seed must be positive; use system entropy for an unspecified seed".to_string());
                 }
                 thermal_seed_config = Some(ThermalSeedConfig {
-                    policy: if seed.is_some() { SeedPolicy::Fixed } else { SeedPolicy::SystemEntropy },
+                    policy: if seed.is_some() {
+                        SeedPolicy::Fixed
+                    } else {
+                        SeedPolicy::SystemEntropy
+                    },
                     seed: *seed,
                 });
             }
@@ -2052,7 +2061,10 @@ pub(crate) fn plan_fem(
         bulk_dmi.is_some() || has_material_bulk_dmi,
         true,
         has_magnetoelastic,
-        problem.energy_terms.iter().any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
+        problem
+            .energy_terms
+            .iter()
+            .any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. })),
         has_mqs_antenna_field_source(problem) || has_prescribed_zeeman_mask_source(problem),
         !problem.field_drives.is_empty(),
         &mut errors,
@@ -2274,11 +2286,13 @@ pub(crate) fn plan_fem(
             });
         }
         periodic_mesh_certificate_v6 = Some(mesh.periodic_mesh_certificate_v6().map_err(
-            |certificate_errors| PlanError {
-                reasons: certificate_errors
-                    .into_iter()
-                    .map(|reason| format!("FEM periodic mesh certificate v6: {reason}"))
-                    .collect(),
+            |certificate_errors| {
+                PlanError {
+                    reasons: certificate_errors
+                        .into_iter()
+                        .map(|reason| format!("FEM periodic mesh certificate v6: {reason}"))
+                        .collect(),
+                }
             },
         )?);
         // Demag PBC with open boundary: allowed (P^T A P reduction via Rust reference path).
@@ -2342,11 +2356,9 @@ pub(crate) fn plan_fem(
         &object_segments,
         &magnet_materials,
     )?;
-    if let Some(reason) = exclusive_coefficient_realization_error(
-        &material,
-        &ms_element_field,
-        &a_element_field,
-    ) {
+    if let Some(reason) =
+        exclusive_coefficient_realization_error(&material, &ms_element_field, &a_element_field)
+    {
         return Err(PlanError {
             reasons: vec![reason],
         });
@@ -2472,15 +2484,28 @@ pub(crate) fn plan_fem(
     let dind_field = material.dind_field.clone();
     let dbulk_field = material.dbulk_field.clone();
     let antenna_zeeman_masks = resolve_prescribed_zeeman_masks(problem, &mesh.nodes, None)?;
-    let active_field_drives: Vec<_> = problem.field_drives.iter()
+    let active_field_drives: Vec<_> = problem
+        .field_drives
+        .iter()
         .filter(|drive| crate::util::field_drive_is_active(drive, problem))
-        .cloned().collect();
-    let field_drive_geometry_masks = active_field_drives.iter().filter_map(|drive| {
-        let fullmag_ir::FieldSpatialProfileIR::GeometryMask { object_id, .. } = &drive.spatial_profile else {
-            return None;
-        };
-        problem.geometry.entries.iter().find(|entry| entry.name() == object_id).cloned()
-    }).collect();
+        .cloned()
+        .collect();
+    let field_drive_geometry_masks = active_field_drives
+        .iter()
+        .filter_map(|drive| {
+            let fullmag_ir::FieldSpatialProfileIR::GeometryMask { object_id, .. } =
+                &drive.spatial_profile
+            else {
+                return None;
+            };
+            problem
+                .geometry
+                .entries
+                .iter()
+                .find(|entry| entry.name() == object_id)
+                .cloned()
+        })
+        .collect();
 
     let mut fem_plan = FemPlanIR {
         mesh_name: mesh_name.clone(),

@@ -497,7 +497,9 @@ mod tests {
         };
         assert_ne!(
             common("resolution=auto:support=midplane:profile=None:snapshot=None:stage=None"),
-            common("resolution=auto:support=layer_profile:profile=Some(33):snapshot=None:stage=None"),
+            common(
+                "resolution=auto:support=layer_profile:profile=Some(33):snapshot=None:stage=None"
+            ),
         );
     }
 }

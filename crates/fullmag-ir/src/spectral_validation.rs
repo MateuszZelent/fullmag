@@ -55,16 +55,12 @@ impl BlochWavevectorIR {
                 Some(other) => errors.push(format!(
                     "periodic_mesh_certificate.v6 contains unsupported axis '{other}'"
                 )),
-                None => errors.push(
-                    "periodic_mesh_certificate.v6 axis pair is missing its axis".to_string(),
-                ),
+                None => errors
+                    .push("periodic_mesh_certificate.v6 axis pair is missing its axis".to_string()),
             }
         }
-        for (index, (&component, active)) in self
-            .k_vector_rad_per_m
-            .iter()
-            .zip(active_axes)
-            .enumerate()
+        for (index, (&component, active)) in
+            self.k_vector_rad_per_m.iter().zip(active_axes).enumerate()
         {
             if component != 0.0 && !active {
                 errors.push(format!(
@@ -134,7 +130,10 @@ mod tests {
             k_vector_rad_per_m: [f64::NAN, 0.0, f64::INFINITY],
         };
         let errors = vector
-            .validate_against_certificate(Some(&certificate("accepted", "periodic_mesh_certificate.v6")))
+            .validate_against_certificate(Some(&certificate(
+                "accepted",
+                "periodic_mesh_certificate.v6",
+            )))
             .expect_err("non-finite wavevector must be rejected");
         assert!(errors.iter().any(|error| error.contains("finite")));
     }
@@ -159,9 +158,14 @@ mod tests {
         assert!(missing.iter().any(|error| error.contains("accepted")));
 
         let stale = vector
-            .validate_against_certificate(Some(&certificate("stale", "periodic_mesh_certificate.v5")))
+            .validate_against_certificate(Some(&certificate(
+                "stale",
+                "periodic_mesh_certificate.v5",
+            )))
             .expect_err("stale certificate must be rejected");
-        assert!(stale.iter().any(|error| error.contains("schema='periodic_mesh_certificate.v5'")));
+        assert!(stale
+            .iter()
+            .any(|error| error.contains("schema='periodic_mesh_certificate.v5'")));
     }
 
     #[test]
@@ -185,7 +189,10 @@ mod tests {
             k_vector_rad_per_m: [0.0, 1.0e7, 0.0],
         };
         let errors = vector
-            .validate_against_certificate(Some(&certificate("accepted", "periodic_mesh_certificate.v6")))
+            .validate_against_certificate(Some(&certificate(
+                "accepted",
+                "periodic_mesh_certificate.v6",
+            )))
             .expect_err("nonzero y component must be rejected without y periodicity");
         assert!(errors
             .iter()

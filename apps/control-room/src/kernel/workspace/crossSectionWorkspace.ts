@@ -5,6 +5,7 @@ import type {
   CrossSectionQuery,
   SliceMeshColorScale,
   VisualizationStateResource,
+  PlanarMonitorCreateRequest,
 } from "@/kernel/api/apiTypes";
 
 type ClipAxis = VisualizationStateResource["clip"]["axis"];
@@ -56,6 +57,102 @@ export interface CrossSectionFramePreview {
   axis: ClipAxis;
   positionPercent: number;
   rotationDegrees: number;
+}
+
+export type PlanarMonitorDraft = CrossSectionDraft;
+
+export function isPlanarMonitorRevisionConflict(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    error.status === 409
+  );
+}
+
+export function planarMonitorCreateRequestFromDraft(
+  draft: PlanarMonitorDraft,
+  expectedSceneRevision: number,
+  bounds: {
+    max: readonly [number, number, number];
+    min: readonly [number, number, number];
+  },
+): PlanarMonitorCreateRequest {
+  const axis = crossSectionAxisFromPlane(draft.plane);
+  const axisIndex = axis === "x" ? 0 : axis === "y" ? 1 : 2;
+  const positionM =
+    bounds.min[axisIndex] +
+    (draft.positionPercent / 100) *
+      (bounds.max[axisIndex] - bounds.min[axisIndex]);
+  const frame = planarFrameFromDraft(draft, positionM);
+  const idBase =
+    draft.name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "") || "planar_monitor";
+  return {
+    expected_scene_revision: expectedSceneRevision,
+    monitor: {
+      frame,
+      id: `${idBase}_${expectedSceneRevision + 1}`,
+      name: draft.name,
+      operator: { kind: "plane_sample" },
+      target: {
+        kind: draft.frameExtent === "universe" ? "domain" : "magnetic_domain",
+      },
+    },
+  } as PlanarMonitorCreateRequest;
+}
+
+function planarFrameFromDraft(draft: PlanarMonitorDraft, positionM: number) {
+  const preset = draft.plane;
+  const base =
+    preset === "xy"
+      ? {
+          normal: [0, 0, 1],
+          origin: [0, 0, positionM],
+          u: [1, 0, 0],
+          v: [0, 1, 0],
+        }
+      : preset === "xz"
+        ? {
+            normal: [0, -1, 0],
+            origin: [0, positionM, 0],
+            u: [1, 0, 0],
+            v: [0, 0, 1],
+          }
+        : {
+            normal: [1, 0, 0],
+            origin: [positionM, 0, 0],
+            u: [0, 1, 0],
+            v: [0, 0, 1],
+          };
+  const radians = (draft.rotationDegrees * Math.PI) / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  const rotate = (left: number[], right: number[], sign: number) =>
+    left.map(
+      (value, index) =>
+        cosine * value + sign * sine * (right[index] ?? 0),
+    );
+  return {
+    extent: {
+      kind:
+        draft.frameExtent === "universe"
+          ? "universe"
+          : draft.frameExtent === "magnetic_domain"
+            ? "magnetic_domain"
+            : "target_bounds",
+      padding_m: 0,
+    },
+    normal: base.normal,
+    normalization_version: "planar_frame_v1",
+    origin_m: base.origin,
+    preset,
+    u_axis: rotate(base.u, base.v, 1),
+    v_axis: rotate(base.v, base.u, -1),
+  };
 }
 
 export interface CrossSectionWorkspaceState {
@@ -175,6 +272,12 @@ export function updateCrossSectionDraft(
     draft,
   });
   return draft;
+}
+
+export function discardCrossSectionDraft(): void {
+  const state = crossSectionWorkspaceStore.getSnapshot();
+  if (!state.draft) return;
+  crossSectionWorkspaceStore.setState({ ...state, draft: null });
 }
 
 export function commitCrossSectionDraft(): CrossSectionPlot | null {

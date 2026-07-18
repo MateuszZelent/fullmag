@@ -2,6 +2,7 @@
 
 import type { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
 import {
   viewport3DAirboxLayerEnabledFromBrowserConfig,
@@ -114,7 +115,11 @@ import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
 import { VectorGlyphDerivedBufferCacheProvider } from "./vectorGlyphDerivedBufferRuntime";
 import { HysteresisReplayGlyphLayer } from "./HysteresisReplayGlyphLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
-import { ClipPlaneFramePreviewLayer, ClipPlaneLayer } from "./ClipPlaneLayer";
+import {
+  ClipPlaneFramePreviewLayer,
+  ClipPlaneLayer,
+  PlanarMonitorFramePreviewLayer,
+} from "./ClipPlaneLayer";
 import { pickRegionOverlayFromRay } from "./regionOverlayPicking";
 import type { ClipPlaneIntersectionMarkerBuffers } from "./clipPlaneModel";
 import {
@@ -148,6 +153,7 @@ interface Viewport3DSceneProps {
   clipIntersectionMarkers: ClipPlaneIntersectionMarkerBuffers | null;
   crossSectionFrameClip: VisualizationStateResource["clip"] | null;
   crossSectionFrameRotationDegrees: number;
+  planarMonitorFramePreview: PlanarMonitorFramePreview | null;
   dimensionFrameDensity: Viewport3DDimensionFrameDensity;
   dimensionFrameMode: Viewport3DDimensionFrameMode;
   airboxSettings: VisualizationTargetSettings;
@@ -651,6 +657,7 @@ function Viewport3DOverlayLayerStack({
   colors,
   crossSectionFrameClip,
   crossSectionFrameRotationDegrees,
+  planarMonitorFramePreview,
   dimensionFrameDensity,
   dimensionFrameMode,
   fdmSettings,
@@ -671,6 +678,7 @@ function Viewport3DOverlayLayerStack({
   | "colors"
   | "crossSectionFrameClip"
   | "crossSectionFrameRotationDegrees"
+  | "planarMonitorFramePreview"
   | "dimensionFrameDensity"
   | "dimensionFrameMode"
   | "fdmSettings"
@@ -698,12 +706,22 @@ function Viewport3DOverlayLayerStack({
       ) : null}
       {viewport3DClipLayersEnabledFromBrowserConfig() &&
       crossSectionFrameClip?.enabled &&
-      !clip?.enabled ? (
+      !clip?.enabled &&
+      !planarMonitorFramePreview ? (
         <ClipPlaneFramePreviewLayer
           bounds={bounds}
           clip={crossSectionFrameClip}
           colors={colors}
           frameRotationDegrees={crossSectionFrameRotationDegrees}
+          tracker={tracker}
+        />
+      ) : null}
+      {viewport3DClipLayersEnabledFromBrowserConfig() &&
+      planarMonitorFramePreview &&
+      !clip?.enabled ? (
+        <PlanarMonitorFramePreviewLayer
+          colors={colors}
+          preview={planarMonitorFramePreview}
           tracker={tracker}
         />
       ) : null}
@@ -1205,6 +1223,7 @@ export function Viewport3DScene({
   clipIntersectionMarkers,
   crossSectionFrameClip,
   crossSectionFrameRotationDegrees,
+  planarMonitorFramePreview,
   dimensionFrameDensity,
   dimensionFrameMode,
   airboxSettings,
@@ -1359,6 +1378,7 @@ export function Viewport3DScene({
         colors={colors}
         crossSectionFrameClip={crossSectionFrameClip}
         crossSectionFrameRotationDegrees={crossSectionFrameRotationDegrees}
+        planarMonitorFramePreview={planarMonitorFramePreview}
         dimensionFrameDensity={dimensionFrameDensity}
         dimensionFrameMode={dimensionFrameMode}
         fdmSettings={fdmSettings}

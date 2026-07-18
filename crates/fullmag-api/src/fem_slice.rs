@@ -4,6 +4,12 @@ use crate::error::ApiError;
 use crate::fem_spatial_index::FemNormalAxisIndex;
 use crate::field_projection::project_values;
 use crate::field_slice::{FemField, ResolvedSliceQuery, SlicePlane, SliceResult};
+use crate::planar_sampling::{
+    FemPlanarField, Occupancy, PlanarComponent, PlanarSamplingEngine, ResolvedPlanarSampleRequest,
+};
+use fullmag_ir::{
+    PlanarExtentIR, PlanarFrameIR, PlanarOperatorIR, PLANAR_FRAME_NORMALIZATION_VERSION,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SlabAggregation {
@@ -69,6 +75,160 @@ struct SliceVertex {
 }
 
 pub(crate) fn fem_tetra_linear_slice(
+    field: &FemField,
+    q: &ResolvedSliceQuery,
+    _spatial_index: Option<&FemNormalAxisIndex>,
+) -> Result<SliceResult, ApiError> {
+    fem_tetra_linear_slice_via_planar_engine(field, q)
+}
+
+fn fem_tetra_linear_slice_via_planar_engine(
+    field: &FemField,
+    q: &ResolvedSliceQuery,
+) -> Result<SliceResult, ApiError> {
+    validate_fem_field(field, "FEM slice")?;
+    let frame = resolve_frame(field, q)?;
+    let (u_axis, v_axis, normal) = match q.plane {
+        SlicePlane::Xy => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+        SlicePlane::Xz => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]),
+        SlicePlane::Yz => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+    };
+    let mut origin_m = [0.0; 3];
+    origin_m[frame.normal_axis] = frame.cut_world;
+    let component = match q.component {
+        crate::field_projection::ComponentSelection::Full if field.n_comp == 1 => {
+            PlanarComponent::Scalar
+        }
+        crate::field_projection::ComponentSelection::Full => PlanarComponent::Magnitude,
+        crate::field_projection::ComponentSelection::Magnitude => PlanarComponent::Magnitude,
+        crate::field_projection::ComponentSelection::MagnitudeSquared => {
+            PlanarComponent::MagnitudeSquared
+        }
+        crate::field_projection::ComponentSelection::AbsIndex(0) => PlanarComponent::AbsWorldX,
+        crate::field_projection::ComponentSelection::AbsIndex(1) => PlanarComponent::AbsWorldY,
+        crate::field_projection::ComponentSelection::AbsIndex(2) => PlanarComponent::AbsWorldZ,
+        crate::field_projection::ComponentSelection::Index(0) => PlanarComponent::WorldX,
+        crate::field_projection::ComponentSelection::Index(1) => PlanarComponent::WorldY,
+        crate::field_projection::ComponentSelection::Index(2) => PlanarComponent::WorldZ,
+        crate::field_projection::ComponentSelection::AbsIndex(index)
+        | crate::field_projection::ComponentSelection::Index(index) => {
+            return Err(ApiError::bad_request(format!(
+                "invalid_component: FEM planar slice supports vector components 0..2, got {index}"
+            )))
+        }
+    };
+    let source = FemPlanarField::new(
+        field.n_comp,
+        field.nodes.clone(),
+        field.elements.clone(),
+        field.element_markers.clone(),
+        field.values.clone(),
+    )?;
+    let sampled = PlanarSamplingEngine::sample_fem(
+        &source,
+        &ResolvedPlanarSampleRequest {
+            monitor_id: "legacy-fem-slice".to_string(),
+            monitor_hash: "legacy-fem-slice-v1".to_string(),
+            frame: PlanarFrameIR {
+                origin_m,
+                u_axis,
+                v_axis,
+                normal,
+                preset: None,
+                normalization_version: PLANAR_FRAME_NORMALIZATION_VERSION.to_string(),
+                extent: PlanarExtentIR::Explicit {
+                    u_min_m: frame.u_min,
+                    u_max_m: frame.u_max,
+                    v_min_m: frame.v_min,
+                    v_max_m: frame.v_max,
+                },
+            },
+            operator: PlanarOperatorIR::PlaneSample,
+            resolution: [q.x_size, q.y_size],
+            component,
+        },
+    )?;
+    let empty_mask = sampled
+        .occupancy
+        .iter()
+        .map(|occupancy| u8::from(*occupancy == Occupancy::Empty))
+        .collect::<Vec<_>>();
+    let (scalar_values, n_comp_out) = if matches!(
+        q.component,
+        crate::field_projection::ComponentSelection::Full
+    ) && field.n_comp > 1
+    {
+        (
+            sampled
+                .vector_values
+                .as_ref()
+                .ok_or_else(|| {
+                    ApiError::bad_request(
+                        "invalid_component: full FEM slice requires a vector-valued field",
+                    )
+                })?
+                .iter()
+                .flat_map(|vector| vector.iter().copied())
+                .collect(),
+            3,
+        )
+    } else {
+        (sampled.scalar_values, 1)
+    };
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for value in scalar_values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+    {
+        min = min.min(value);
+        max = max.max(value);
+    }
+    let (arrow_values, arrow_count) = if q.include_arrows && field.n_comp >= 3 {
+        let vectors = sampled.vector_values.as_deref().unwrap_or(&[]);
+        let raw_values = vectors
+            .iter()
+            .flat_map(|vector| vector.iter().copied())
+            .collect::<Vec<_>>();
+        let hit_count = empty_mask
+            .iter()
+            .map(|empty| u32::from(*empty == 0))
+            .collect::<Vec<_>>();
+        build_arrows(
+            &raw_values,
+            &hit_count,
+            3,
+            q.x_size as usize,
+            q.y_size as usize,
+            q.plane,
+            q.arrow_every as usize,
+            q.max_arrows as usize,
+        )
+    } else {
+        (Vec::new(), 0)
+    };
+    Ok(SliceResult {
+        x_size: q.x_size,
+        y_size: q.y_size,
+        cut_world: Some(frame.cut_world),
+        u_min: frame.u_min,
+        u_max: frame.u_max,
+        v_min: frame.v_min,
+        v_max: frame.v_max,
+        scalar_values,
+        n_comp_out,
+        min: if min.is_finite() { min } else { 0.0 },
+        max: if max.is_finite() { max } else { 0.0 },
+        empty_mask,
+        arrow_values,
+        arrow_count,
+        sampling_method: "fem_tetra_linear_slice",
+    })
+}
+
+#[cfg(test)]
+fn fem_tetra_linear_slice_legacy(
     field: &FemField,
     q: &ResolvedSliceQuery,
     spatial_index: Option<&FemNormalAxisIndex>,
@@ -730,12 +890,26 @@ mod tests {
         }
     }
 
+    fn assert_slice_parity(current: &SliceResult, legacy: &SliceResult) {
+        assert_eq!(current.empty_mask, legacy.empty_mask);
+        assert_eq!(current.x_size, legacy.x_size);
+        assert_eq!(current.y_size, legacy.y_size);
+        for (current, legacy) in current.scalar_values.iter().zip(&legacy.scalar_values) {
+            assert!(
+                (current.is_nan() && legacy.is_nan()) || (current - legacy).abs() < 1.0e-12,
+                "current={current}, legacy={legacy}"
+            );
+        }
+    }
+
     #[test]
     fn single_tetra_exact_constant_is_constant_for_all_planes() {
         for plane in [SlicePlane::Xy, SlicePlane::Xz, SlicePlane::Yz] {
             let field = single_tetra_constant(2.0);
             let q = resolve(exact_query(plane));
             let result = fem_tetra_linear_slice(&field, &q, None).unwrap();
+            let legacy = fem_tetra_linear_slice_legacy(&field, &q, None).unwrap();
+            assert_slice_parity(&result, &legacy);
             let finite: Vec<f64> = result
                 .scalar_values
                 .iter()
@@ -764,6 +938,8 @@ mod tests {
         };
         let q = resolve(exact_query(SlicePlane::Xy));
         let result = fem_tetra_linear_slice(&field, &q, None).unwrap();
+        let legacy = fem_tetra_linear_slice_legacy(&field, &q, None).unwrap();
+        assert_slice_parity(&result, &legacy);
         let du = (result.u_max - result.u_min) / result.x_size as f64;
         let dv = (result.v_max - result.v_min) / result.y_size as f64;
         for py in 0..result.y_size as usize {

@@ -393,6 +393,49 @@ mod tests {
     }
 
     #[test]
+    fn planar_monitor_round_trip_survives_api_scene_projection() {
+        let scene: SceneDocument = serde_json::from_value(serde_json::json!({
+            "version": "scene.v2",
+            "revision": 7,
+            "monitors": {
+                "planar": [{
+                    "id": "domain-plane",
+                    "name": "Domain plane",
+                    "target": {"kind": "domain"},
+                    "frame": {
+                        "origin_m": [0.0, 0.0, 0.0],
+                        "u_axis": [1.0, 0.0, 0.0],
+                        "v_axis": [0.0, 1.0, 0.0],
+                        "normal": [0.0, 0.0, 1.0],
+                        "preset": "xy",
+                        "normalization_version": "planar_frame_v1",
+                        "extent": {"kind": "universe", "padding_m": 0.0}
+                    },
+                    "operator": {
+                        "kind": "depth_projection",
+                        "reduction": "mean_occupied",
+                        "empty_policy": "exclude_empty"
+                    }
+                }]
+            }
+        }))
+        .expect("planar scene should deserialize");
+
+        let builder =
+            scene_document_builder_projection(&scene).expect("scene projection should validate");
+        let overrides = scene_document_overrides(&scene).expect("overrides should build");
+
+        assert_eq!(builder.revision, 7);
+        assert_eq!(builder.planar_monitors, scene.monitors.planar);
+        assert_eq!(
+            overrides["planar_monitors"][0]["id"],
+            serde_json::json!("domain-plane")
+        );
+        assert!(overrides["planar_monitors"][0].get("quantity").is_none());
+        assert!(overrides["planar_monitors"][0].get("resolution").is_none());
+    }
+
+    #[test]
     fn load_scene_document_state_preserves_script_object_regions() {
         let root = repo_root();
         let script_path =

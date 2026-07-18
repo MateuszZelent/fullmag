@@ -128,8 +128,7 @@ pub(crate) fn resolve_timestep_policy(
             ) && (adaptive.atol <= 0.0 || adaptive.rtol != 0.0)
             {
                 return Err(RunError {
-                    message: "max_error tolerance mode requires atol > 0 and rtol == 0"
-                        .to_string(),
+                    message: "max_error tolerance mode requires atol > 0 and rtol == 0".to_string(),
                 });
             }
             if !adaptive.safety.is_finite()
@@ -216,12 +215,7 @@ fn resolve_timestep_execution_identity(
     use TimestepBackend::{Fdm, Fem};
     use TimestepDevice::{Cpu, Cuda, Gpu};
 
-    let qualification_id = match (
-        adaptive,
-        lane.backend,
-        lane.device,
-        lane.precision,
-    ) {
+    let qualification_id = match (adaptive, lane.backend, lane.device, lane.precision) {
         (false, Fdm, Cpu, Double) => ExplicitFixedFdmCpuDouble,
         (false, Fdm, Cuda, Double) => ExplicitFixedFdmCudaDouble,
         (false, Fdm, Cuda, Single) => ExplicitFixedFdmCudaSingle,
@@ -278,9 +272,9 @@ pub use solver_profile::{
 };
 pub use types::{
     fem_mesh_topology_fingerprint, ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment,
-    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
-    LlgTimestepCapabilityId, LlgTimestepQualificationId, LivePreviewField, LivePreviewRequest,
-    LiveVectorFieldSnapshot, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
+    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy, LivePreviewField,
+    LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
+    LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
     RunError, RunResult, RunStatus, RuntimeEngineInfo, StepAction, StepStats, StepUpdate,
     TimestepBackend, TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
     TimestepValidationState,
@@ -1163,7 +1157,9 @@ mod initial_timestep_tests {
             TimestepExecutionLane::fdm_cuda(fullmag_ir::ExecutionPrecision::Double),
         )
         .expect_err("adaptive CUDA must not acquire executable provenance");
-        assert!(error.message.contains("no executable LLG timestep capability row"));
+        assert!(error
+            .message
+            .contains("no executable LLG timestep capability row"));
     }
 
     #[test]
@@ -1280,9 +1276,7 @@ fn validate_sampling_resolution_provenance(
         .problem_meta
         .runtime_metadata
         .get("sampling_resolution");
-    if (automatic_table_period.is_some() || !automatic_outputs.is_empty())
-        && metadata.is_none()
-    {
+    if (automatic_table_period.is_some() || !automatic_outputs.is_empty()) && metadata.is_none() {
         return Err(RunError {
             message: "resolved automatic table or output sampling requires runtime_metadata.sampling_resolution provenance".into(),
         });
@@ -1292,8 +1286,8 @@ fn validate_sampling_resolution_provenance(
     };
     let resolution: fullmag_plan::SamplingResolutionIR = serde_json::from_value(metadata.clone())
         .map_err(|error| RunError {
-            message: format!("runtime_metadata.sampling_resolution is malformed: {error}"),
-        })?;
+        message: format!("runtime_metadata.sampling_resolution is malformed: {error}"),
+    })?;
     if resolution.schema_version != fullmag_plan::SAMPLING_RESOLUTION_SCHEMA_VERSION {
         return Err(RunError {
             message: format!(
@@ -1321,7 +1315,9 @@ fn validate_sampling_resolution_provenance(
     } = resolution.requested_policy;
     if requested_guard_factor != fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR {
         return Err(RunError {
-            message: "sampling_resolution.requested_policy.nyquist_guard_factor must be exactly 1.3".into(),
+            message:
+                "sampling_resolution.requested_policy.nyquist_guard_factor must be exactly 1.3"
+                    .into(),
         });
     }
     if resolution.nyquist_guard_factor != fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR {
@@ -1333,17 +1329,20 @@ fn validate_sampling_resolution_provenance(
         != fullmag_ir::AUTO_SINC_NYQUIST_GUARD_FACTOR * resolution.maximum_cutoff_hz
     {
         return Err(RunError {
-            message: "sampling_resolution.target_nyquist_hz must equal 1.3 * maximum_cutoff_hz".into(),
+            message: "sampling_resolution.target_nyquist_hz must equal 1.3 * maximum_cutoff_hz"
+                .into(),
         });
     }
     if resolution.sampling_frequency_hz != 2.0 * resolution.target_nyquist_hz {
         return Err(RunError {
-            message: "sampling_resolution.sampling_frequency_hz must equal 2 * target_nyquist_hz".into(),
+            message: "sampling_resolution.sampling_frequency_hz must equal 2 * target_nyquist_hz"
+                .into(),
         });
     }
     if resolution.sample_period_s != 1.0 / resolution.sampling_frequency_hz {
         return Err(RunError {
-            message: "sampling_resolution.sample_period_s must equal 1 / sampling_frequency_hz".into(),
+            message: "sampling_resolution.sample_period_s must equal 1 / sampling_frequency_hz"
+                .into(),
         });
     }
     if automatic_table_period.is_some_and(|period| period != resolution.sample_period_s) {
@@ -1375,7 +1374,9 @@ fn validate_sampling_resolution_provenance(
         .filter(|stage_id| !stage_id.trim().is_empty());
     if active_stage_id != Some(resolution.target_stage_id.as_str()) {
         return Err(RunError {
-            message: "sampling_resolution.target_stage_id must match runtime_metadata.active_stage_id".into(),
+            message:
+                "sampling_resolution.target_stage_id must match runtime_metadata.active_stage_id"
+                    .into(),
         });
     }
     let mut expected_source_drive_ids = Vec::new();
@@ -1538,9 +1539,11 @@ pub fn run_planned_problem(
     };
     let pipeline_summary = pipeline_summary?;
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
-    executed.auxiliary_artifacts.extend(
-        spin_wave_sampling::requested_finite_k_artifacts(problem, plan, output_dir)?,
-    );
+    executed
+        .auxiliary_artifacts
+        .extend(spin_wave_sampling::requested_finite_k_artifacts(
+            problem, plan, output_dir,
+        )?);
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -1830,9 +1833,11 @@ pub fn run_planned_problem_with_callback(
     };
     let pipeline_summary = pipeline_summary?;
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
-    executed.auxiliary_artifacts.extend(
-        spin_wave_sampling::requested_finite_k_artifacts(problem, plan, output_dir)?,
-    );
+    executed
+        .auxiliary_artifacts
+        .extend(spin_wave_sampling::requested_finite_k_artifacts(
+            problem, plan, output_dir,
+        )?);
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -2147,9 +2152,11 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     };
     let pipeline_summary = pipeline_summary?;
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
-    executed.auxiliary_artifacts.extend(
-        spin_wave_sampling::requested_finite_k_artifacts(problem, plan, output_dir)?,
-    );
+    executed
+        .auxiliary_artifacts
+        .extend(spin_wave_sampling::requested_finite_k_artifacts(
+            problem, plan, output_dir,
+        )?);
 
     if let Err(e) = artifacts::write_artifacts(
         output_dir,
@@ -3203,10 +3210,10 @@ mod tests {
 
     fn resolved_auto_sampling_problem() -> (ProblemIR, fullmag_ir::ExecutionPlanIR) {
         let mut problem = ProblemIR::bootstrap_example();
-        problem.problem_meta.runtime_metadata.insert(
-            "active_stage_id".into(),
-            json!("excite"),
-        );
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("active_stage_id".into(), json!("excite"));
         problem.problem_meta.runtime_metadata.insert(
             "study_pipeline".into(),
             json!({
@@ -3280,7 +3287,8 @@ mod tests {
             .expect("canonical automatic resolution should dispatch");
 
         let explicit = ProblemIR::bootstrap_example();
-        let explicit_plan = fullmag_plan::plan(&explicit).expect("explicit legacy problem should plan");
+        let explicit_plan =
+            fullmag_plan::plan(&explicit).expect("explicit legacy problem should plan");
         require_resolved_runtime_sampling(&explicit, &explicit_plan)
             .expect("explicit legacy sampling should not require automatic provenance");
     }
@@ -3290,7 +3298,10 @@ mod tests {
         let (problem, plan) = resolved_auto_sampling_problem();
 
         let mut missing = problem.clone();
-        missing.problem_meta.runtime_metadata.remove("sampling_resolution");
+        missing
+            .problem_meta
+            .runtime_metadata
+            .remove("sampling_resolution");
         assert!(require_resolved_runtime_sampling(&missing, &plan)
             .expect_err("resolved automatic table without provenance must fail")
             .message
@@ -3329,7 +3340,10 @@ mod tests {
     fn runtime_sampling_rejects_output_only_auto_without_provenance_or_with_wrong_cadence() {
         let (mut problem, plan) = resolved_auto_sampling_problem();
         problem.study.sampling_mut().table_autosave = None;
-        problem.problem_meta.runtime_metadata.remove("sampling_resolution");
+        problem
+            .problem_meta
+            .runtime_metadata
+            .remove("sampling_resolution");
         let error = require_resolved_runtime_sampling(&problem, &plan)
             .expect_err("output-only resolved auto must retain provenance");
         assert!(error.message.contains("sampling_resolution"));
@@ -3405,7 +3419,8 @@ mod tests {
         ))
         .expect("read interactive runtime");
         assert!(
-            interactive_source.contains("crate::require_resolved_runtime_sampling(problem, plan)?;"),
+            interactive_source
+                .contains("crate::require_resolved_runtime_sampling(problem, plan)?;"),
             "direct InteractiveRuntime::execute_planned_streaming calls must fail closed"
         );
     }

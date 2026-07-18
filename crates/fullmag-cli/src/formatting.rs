@@ -11,8 +11,8 @@ use crate::types::{EngineLogEntry, ResolvedScriptStage};
 mod origin_tests {
     use super::current_artifact_layout;
     use fullmag_ir::{
-        BackendPlanIR, BackendTarget, CommonPlanMeta, ExecutionMode, ExecutionPlanIR,
-        FdmPlanIR, OutputPlanIR, ProvenancePlanIR, ProblemIR,
+        BackendPlanIR, BackendTarget, CommonPlanMeta, ExecutionMode, ExecutionPlanIR, FdmPlanIR,
+        OutputPlanIR, ProblemIR, ProvenancePlanIR,
     };
 
     #[test]
@@ -31,7 +31,9 @@ mod origin_tests {
                 material_field_plans: Vec::new(),
             },
             backend_plan: BackendPlanIR::Fdm(fdm),
-            output_plan: OutputPlanIR { outputs: Vec::new() },
+            output_plan: OutputPlanIR {
+                outputs: Vec::new(),
+            },
             provenance: ProvenancePlanIR { notes: Vec::new() },
         };
 

@@ -10,6 +10,7 @@ pub mod mesh_assets;
 pub mod mesh_hints;
 pub mod model;
 pub mod plan;
+pub mod planar_monitor;
 pub mod quantities;
 pub mod spectral_validation;
 pub mod study;
@@ -22,6 +23,7 @@ pub use mesh_assets::*;
 pub use mesh_hints::*;
 pub use model::*;
 pub use plan::*;
+pub use planar_monitor::*;
 pub use quantities::{
     field_to_quantity_output, scalar_to_quantity_output, OutputSinkIR, QuantityOutputIR,
 };
@@ -34,7 +36,9 @@ pub const CURRENT_IR_VERSION: &str = IR_VERSION;
 pub const PREVIOUS_PUBLIC_IR_VERSION: &str = "0.2.0";
 pub const LEGACY_PUBLIC_IR_VERSION: &str = "0.1.0";
 pub const SUPPORTED_READ_IR_VERSIONS: &[&str] = &[
-    CURRENT_IR_VERSION, PREVIOUS_PUBLIC_IR_VERSION, LEGACY_PUBLIC_IR_VERSION,
+    CURRENT_IR_VERSION,
+    PREVIOUS_PUBLIC_IR_VERSION,
+    LEGACY_PUBLIC_IR_VERSION,
 ];
 const MU0_H_PER_M: f64 = 1.256_637_061_435_917_2e-6;
 
@@ -88,11 +92,13 @@ fn migrate_legacy_cylinder_axes(value: &mut Value) {
 }
 
 fn migrate_dynamics_adaptive_tolerance_mode(value: &mut Value) {
-    if let Some(adaptive) = value.as_object_mut()
+    if let Some(adaptive) = value
+        .as_object_mut()
         .and_then(|dynamics| dynamics.get_mut("adaptive_timestep"))
         .and_then(Value::as_object_mut)
     {
-        adaptive.entry("tolerance_mode".to_string())
+        adaptive
+            .entry("tolerance_mode".to_string())
             .or_insert_with(|| Value::String("advanced".to_string()));
     }
 }
@@ -139,17 +145,27 @@ pub fn migrate_problem_ir_json_value(value: &mut Value) -> Result<bool, String> 
                     return Err(format!("ProblemIR.ir_version '{source_version}' conflicts with problem_meta.{key} '{value}'"));
                 }
                 if value == source_version {
-                    meta.insert(key.to_string(), Value::String(CURRENT_IR_VERSION.to_string()));
+                    meta.insert(
+                        key.to_string(),
+                        Value::String(CURRENT_IR_VERSION.to_string()),
+                    );
                 }
             }
         }
     }
 
     if source_version == LEGACY_PUBLIC_IR_VERSION {
-        for value in object.values_mut() { migrate_legacy_cylinder_axes(value); }
+        for value in object.values_mut() {
+            migrate_legacy_cylinder_axes(value);
+        }
     }
-    if matches!(source_version.as_str(), PREVIOUS_PUBLIC_IR_VERSION | LEGACY_PUBLIC_IR_VERSION) {
-        if let Some(study) = object.get_mut("study") { migrate_study_adaptive_tolerance_modes(study); }
+    if matches!(
+        source_version.as_str(),
+        PREVIOUS_PUBLIC_IR_VERSION | LEGACY_PUBLIC_IR_VERSION
+    ) {
+        if let Some(study) = object.get_mut("study") {
+            migrate_study_adaptive_tolerance_modes(study);
+        }
     }
 
     Ok(true)
@@ -170,6 +186,8 @@ pub struct ProblemIR {
     pub magnets: Vec<MagnetIR>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub couplings: Vec<CouplingIR>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planar_monitors: Vec<PlanarMonitorIR>,
     pub energy_terms: Vec<EnergyTermIR>,
     pub study: StudyIR,
     pub backend_policy: BackendPolicyIR,
@@ -269,6 +287,8 @@ impl<'de> Deserialize<'de> for ProblemIR {
             magnets: Vec<MagnetIR>,
             #[serde(default)]
             couplings: Vec<CouplingIR>,
+            #[serde(default)]
+            planar_monitors: Vec<PlanarMonitorIR>,
             energy_terms: Vec<EnergyTermIR>,
             study: StudyIR,
             backend_policy: BackendPolicyIR,
@@ -329,6 +349,7 @@ impl<'de> Deserialize<'de> for ProblemIR {
             material_parameter_fields: wire.material_parameter_fields,
             magnets: wire.magnets,
             couplings: wire.couplings,
+            planar_monitors: wire.planar_monitors,
             energy_terms: wire.energy_terms,
             study: wire.study,
             backend_policy: wire.backend_policy,
@@ -422,6 +443,7 @@ impl ProblemIR {
                 initial_magnetization: Some(InitialMagnetizationIR::RandomSeeded { seed: 42 }),
             }],
             couplings: Vec::new(),
+            planar_monitors: Vec::new(),
             energy_terms: vec![EnergyTermIR::Exchange],
             study: StudyIR::TimeEvolution {
                 dynamics: DynamicsIR::Llg {
@@ -545,6 +567,7 @@ impl ProblemIR {
         }
         validate_current_modules(self, &mut errors);
         validate_field_drives(self, &mut errors);
+        validate_planar_monitors(self, &mut errors);
         validate_spin_wave_response_request(self, &mut errors);
         validate_oersted_energy_terms(self, &mut errors);
         validate_dmi_energy_terms(self, &mut errors);
@@ -1470,9 +1493,7 @@ impl ProblemIR {
                             name
                         ));
                     } else {
-                        let norm_sq = axis[0] * axis[0]
-                            + axis[1] * axis[1]
-                            + axis[2] * axis[2];
+                        let norm_sq = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
                         if norm_sq <= 1e-30 {
                             errors.push(format!(
                                 "cylinder geometry '{}' axis must be non-zero",
@@ -1660,15 +1681,17 @@ impl ProblemIR {
 
         if let Some(hints) = &self.backend_policy.discretization_hints {
             if let Some(fdm) = &hints.fdm {
-                let legacy_cell = (!fdm.cell.iter().all(|component| *component == 0.0))
-                    .then_some(fdm.cell);
+                let legacy_cell =
+                    (!fdm.cell.iter().all(|component| *component == 0.0)).then_some(fdm.cell);
                 let default_cell = fdm.default_cell.or(legacy_cell);
                 if let Some(cell) = default_cell {
                     if cell
                         .iter()
                         .any(|component| !component.is_finite() || *component <= 0.0)
                     {
-                        errors.push("fdm.default_cell components must be finite and positive".to_string());
+                        errors.push(
+                            "fdm.default_cell components must be finite and positive".to_string(),
+                        );
                     }
                 }
                 if let Some(per_magnet) = &fdm.per_magnet {

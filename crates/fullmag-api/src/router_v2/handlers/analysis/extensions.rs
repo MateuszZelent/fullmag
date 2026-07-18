@@ -1,25 +1,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::analysis::topological_charge::{
-    BoundaryQualification, OrientedChargeInput, OrientedChargeQuality,
-    SupportTopologyQualification, TopologicalChargeWarningCode, compute_oriented_charge,
-    fdm_weighted_mean, fem_midpoint_weights, qualify_boundary, qualify_support_topology,
+    compute_oriented_charge, fdm_weighted_mean, fem_midpoint_weights, qualify_boundary,
+    qualify_support_topology, BoundaryQualification, OrientedChargeInput, OrientedChargeQuality,
+    SupportTopologyQualification, TopologicalChargeWarningCode,
 };
 use crate::error::ApiError;
 use crate::fem_slice_overlay::{
-    FemSliceOverlayInput, SliceOverlayPoint, collect_fem_slice_overlay,
+    collect_fem_slice_overlay, FemSliceOverlayInput, SliceOverlayPoint,
 };
-use crate::field_slice::{FemField, FieldSliceQuery, SlicePlane, resolve_slice_query};
+use crate::field_slice::{resolve_slice_query, FemField, FieldSliceQuery, SlicePlane};
 use crate::router_v2::handlers::data::resolved_vector_field::{
-    ResolvedFieldSourceKind, ResolvedObjectVectorField, expand_compact_fem_node_values,
-    resolve_topological_charge_magnetization,
+    expand_compact_fem_node_values, resolve_topological_charge_magnetization,
+    ResolvedFieldSourceKind, ResolvedObjectVectorField,
 };
 use crate::router_v2::handlers::sessions::status::{domain_generation_id, field_quantity_revision};
 use crate::schemas::analysis_extensions::{
@@ -1894,12 +1894,12 @@ mod tests {
     use crate::fem_slice_overlay::SliceOverlayPointKind;
 
     use super::{
-        ComputedTopologicalCharge, FdmProfileGeometry, FieldSampleSummary, SliceOverlayPoint,
-        TopologicalChargeLayerSample, TopologicalChargeResource, TopologicalChargeStatus,
-        TopologicalChargeTrustV2, cut_point_key, deduplicate_oriented_triangles,
-        fdm_requires_object_mask, fdm_result_warnings, fem_fe_order_from_plan_summary,
-        fem_profile_bin_weight_m, qualify_regular_fdm_midplane, topological_charge_cache_digest,
-        topological_charge_profile_response,
+        cut_point_key, deduplicate_oriented_triangles, fdm_requires_object_mask,
+        fdm_result_warnings, fem_fe_order_from_plan_summary, fem_profile_bin_weight_m,
+        qualify_regular_fdm_midplane, topological_charge_cache_digest,
+        topological_charge_profile_response, ComputedTopologicalCharge, FdmProfileGeometry,
+        FieldSampleSummary, SliceOverlayPoint, TopologicalChargeLayerSample,
+        TopologicalChargeResource, TopologicalChargeStatus, TopologicalChargeTrustV2,
     };
 
     #[test]
