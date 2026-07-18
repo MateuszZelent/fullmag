@@ -19,15 +19,15 @@
   position: fixed;
   inset: 0;
   background: color-mix(in srgb, var(--fm-bg-app) 76%, transparent);
-  z-index: 90;
-  animation: fm-overlay-in 100ms ease-out both;
+  z-index: var(--fm-z-dialog);
+  animation: fm-overlay-in var(--fm-duration-normal) ease-out both;
 }
 
 .fm-command-palette {
   position: fixed;
   top: 12vh;
   left: 50%;
-  width: min(640px, calc(100vw - 32px));
+  width: min(640px, calc(100vw - var(--fm-space-8)));
   max-height: min(560px, calc(100vh - 96px));
   overflow: hidden;
   border: 1px solid var(--fm-border-default);
@@ -35,8 +35,8 @@
   background: var(--fm-bg-overlay);
   box-shadow: var(--fm-shadow-panel);
   transform: translateX(-50%);
-  z-index: 100;
-  animation: fm-palette-in 150ms ease-out both;
+  z-index: var(--fm-z-dialog-content);
+  animation: fm-palette-in var(--fm-duration-moderate) ease-out both;
 }
 
 .fm-command-palette__title,

@@ -29,7 +29,7 @@ export const controlVariants = cva(
 );
 
 export const controlTextVariants = cva(
-  "min-w-0 font-fm-ui text-fm-control leading-[var(--fm-line-height-control)]",
+  "min-w-0 font-fm-ui text-fm-control leading-fm-control",
   {
     variants: {
       tone: {

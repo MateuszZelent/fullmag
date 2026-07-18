@@ -1,7 +1,7 @@
 /* ── Registry Inspector Dialog ──────────────────────────────────────────── */
 
 .fm-registry-inspector.fm-dialog {
-  width: min(860px, calc(100vw - 32px));
+  width: min(860px, calc(100vw - var(--fm-space-8)));
   max-height: min(780px, calc(100vh - 80px));
   grid-template-rows: auto auto 1fr;
   gap: 0;
@@ -69,7 +69,7 @@
 .fm-registry-inspector__tab-badge {
   padding: 1px 6px;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   background: var(--fm-bg-muted);
   color: var(--fm-text-muted);
   font-family: var(--fm-font-mono, monospace);
@@ -143,7 +143,7 @@
   width: 0.9em;
   font-size: var(--fm-font-size-2xs);
   color: var(--fm-text-muted);
-  transition: transform 100ms;
+  transition: transform var(--fm-duration-normal);
   flex-shrink: 0;
 }
 

@@ -10,7 +10,7 @@
 
 ::-webkit-scrollbar-thumb {
   background: var(--fm-border-default);
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   transition: background var(--fm-transition-fast);
 }
 
@@ -25,7 +25,7 @@
 
 /* ── Tooltip ── */
 .fm-tooltip {
-  z-index: 140;
+  z-index: var(--fm-z-portal);
   max-width: 280px;
   overflow: hidden;
   border: 1px solid var(--fm-border-default);
@@ -36,7 +36,7 @@
   font-size: var(--fm-font-size-xs);
   line-height: 1.4;
   padding: var(--fm-space-2) var(--fm-space-3);
-  animation: fm-tooltip-in 100ms ease-out;
+  animation: fm-tooltip-in var(--fm-duration-normal) ease-out;
   pointer-events: none;
 }
 
@@ -65,7 +65,7 @@
   flex-shrink: 0;
   cursor: pointer;
   align-items: center;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   border: 1px solid var(--fm-border-default);
   background: var(--fm-bg-canvas);
   padding: 1px;
@@ -389,7 +389,7 @@
 .fm-scroll-area__thumb {
   position: relative;
   flex: 1;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   background: var(--fm-border-default);
   transition: background var(--fm-transition-fast);
 }
@@ -400,7 +400,7 @@
 
 /* ── Popover ── */
 .fm-popover {
-  z-index: 130;
+  z-index: var(--fm-z-overlay-raised);
   min-width: 200px;
   max-width: 360px;
   border: 1px solid var(--fm-border-default);
@@ -448,7 +448,7 @@
   width: 100%;
   flex-grow: 1;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   border: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-disabled);
 }
@@ -507,9 +507,9 @@
 .fm-sheet__overlay {
   position: fixed;
   inset: 0;
-  z-index: 140;
+  z-index: var(--fm-z-portal);
   background: var(--fm-scrim);
-  animation: fm-sheet-overlay-in 150ms ease-out;
+  animation: fm-sheet-overlay-in var(--fm-duration-moderate) ease-out;
 }
 
 @keyframes fm-sheet-overlay-in {
@@ -519,7 +519,7 @@
 
 .fm-sheet__content {
   position: fixed;
-  z-index: 141;
+  z-index: var(--fm-z-portal-top);
   display: flex;
   flex-direction: column;
   gap: var(--fm-space-3);
@@ -535,28 +535,28 @@
   inset: 0 0 0 auto;
   width: min(380px, 85vw);
   padding: var(--fm-space-4);
-  animation: fm-sheet-slide-right 200ms ease-out;
+  animation: fm-sheet-slide-right var(--fm-duration-slow) ease-out;
 }
 
 .fm-sheet__content--left {
   inset: 0 auto 0 0;
   width: min(380px, 85vw);
   padding: var(--fm-space-4);
-  animation: fm-sheet-slide-left 200ms ease-out;
+  animation: fm-sheet-slide-left var(--fm-duration-slow) ease-out;
 }
 
 .fm-sheet__content--top {
   inset: 0 0 auto 0;
   max-height: 60vh;
   padding: var(--fm-space-4);
-  animation: fm-sheet-slide-top 200ms ease-out;
+  animation: fm-sheet-slide-top var(--fm-duration-slow) ease-out;
 }
 
 .fm-sheet__content--bottom {
   inset: auto 0 0 0;
   max-height: 60vh;
   padding: var(--fm-space-4);
-  animation: fm-sheet-slide-bottom 200ms ease-out;
+  animation: fm-sheet-slide-bottom var(--fm-duration-slow) ease-out;
 }
 
 @keyframes fm-sheet-slide-right {
@@ -634,7 +634,7 @@
   position: fixed;
   bottom: var(--fm-space-4);
   right: var(--fm-space-4);
-  z-index: 200;
+  z-index: var(--fm-z-toast);
   display: flex;
   flex-direction: column;
   gap: var(--fm-space-2);
@@ -658,7 +658,7 @@
   background: var(--fm-bg-overlay);
   color: var(--fm-text-primary);
   box-shadow: var(--fm-shadow-lg);
-  animation: fm-toast-in 200ms ease-out;
+  animation: fm-toast-in var(--fm-duration-slow) ease-out;
 }
 
 .fm-toast[data-variant="success"] {
@@ -674,7 +674,7 @@
 }
 
 .fm-toast[data-state="closed"] {
-  animation: fm-toast-out 100ms ease-in;
+  animation: fm-toast-out var(--fm-duration-normal) ease-in;
 }
 
 @keyframes fm-toast-in {
@@ -760,7 +760,7 @@
 /* ── DraggablePanel ── */
 .fm-draggable-panel {
   position: fixed;
-  z-index: 120;
+  z-index: var(--fm-z-overlay);
   display: grid;
   width: min(620px, calc(100vw - 16px));
   max-height: min(620px, calc(100vh - 16px));
@@ -774,7 +774,7 @@
 
 .fm-draggable-panel__handle {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  grid-template-columns: var(--fm-icon-sm) minmax(0, 1fr) auto auto;
   gap: var(--fm-space-2);
   align-items: center;
   cursor: grab;
@@ -816,7 +816,7 @@
 /* ── OverlayToolbar ── */
 .fm-overlay-toolbar {
   position: absolute;
-  z-index: 50;
+  z-index: var(--fm-z-panel);
   display: flex;
   align-items: center;
   gap: var(--fm-space-1);
@@ -882,16 +882,16 @@
 
 .fm-select-content {
   position: relative;
-  z-index: 150;
+  z-index: var(--fm-z-floating);
   max-height: 280px;
-  min-width: 120px;
+  min-width: var(--fm-panel-section-min-width);
   overflow: hidden;
   border-radius: var(--fm-radius-md);
   border: 1px solid var(--fm-border-default);
   background: var(--fm-bg-overlay);
   color: var(--fm-text-primary);
   box-shadow: var(--fm-shadow-md);
-  animation: fm-select-in 100ms ease-out;
+  animation: fm-select-in var(--fm-duration-normal) ease-out;
 }
 
 @keyframes fm-select-in {

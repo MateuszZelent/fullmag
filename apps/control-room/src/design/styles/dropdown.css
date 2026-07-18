@@ -1,6 +1,6 @@
 .fm-dropdown-content {
-  z-index: 100;
-  min-width: 224px;
+  z-index: var(--fm-z-dialog-content);
+  min-width: var(--fm-dropdown-min-width);
   overflow: hidden;
   border: 1px solid var(--fm-border-default);
   border-radius: var(--fm-radius-md);

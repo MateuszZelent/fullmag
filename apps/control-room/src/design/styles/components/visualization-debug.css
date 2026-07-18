@@ -94,7 +94,7 @@
 .fm-visualization-debug-table thead th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--fm-z-base);
   background: var(--fm-bg-chrome);
   color: var(--fm-text-muted);
   font-family: var(--fm-font-ui);

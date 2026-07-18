@@ -49,7 +49,7 @@
 /* ── Frequency-domain visualization color compatibility ── */
 .fm-visualization-color-field__control {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-columns: var(--fm-space-8) minmax(0, 1fr);
   align-items: center;
   gap: var(--fm-space-2);
 }
@@ -300,7 +300,7 @@
     background var(--fm-transition-fast),
     border-color var(--fm-transition-fast),
     color var(--fm-transition-fast),
-    transform 100ms ease;
+    transform var(--fm-duration-normal) ease;
   will-change: transform;
 }
 
@@ -338,7 +338,7 @@
   justify-content: center;
   width: var(--fm-control-height-compact);
   height: var(--fm-control-height-compact);
-  transition: transform 150ms ease;
+  transition: transform var(--fm-duration-moderate) ease;
 }
 
 .fm-viz-render-mode-tile:hover .fm-viz-render-mode-tile__icon {
@@ -393,7 +393,7 @@
     border-color var(--fm-transition-fast),
     color var(--fm-transition-fast),
     box-shadow var(--fm-transition-fast),
-    transform 80ms ease-out;
+    transform var(--fm-duration-fast) ease-out;
 }
 
 .fm-viz-layer-chip:hover:not(:disabled) {
@@ -548,7 +548,7 @@
 
 /* InspectorGroup content: animate open/close */
 [data-slot="inspector-group-content"] {
-  transition: opacity 150ms ease;
+  transition: opacity var(--fm-duration-moderate) ease;
 }
 
 [data-collapsible="true"][data-open="false"] [data-slot="inspector-group-content"] {
@@ -563,7 +563,7 @@
 .fm-inspector-group-nav-trigger {
   transition:
     background var(--fm-transition-fast),
-    transform 100ms ease;
+    transform var(--fm-duration-normal) ease;
 }
 
 .fm-inspector-group-nav-trigger:hover {
@@ -581,7 +581,7 @@
 /* Nav row chevron: nudge on hover */
 .fm-inspector-group-nav-trigger:hover > svg:last-child {
   transform: translateX(2px);
-  transition: transform 150ms ease;
+  transition: transform var(--fm-duration-moderate) ease;
 }
 
 /* Toggle chip: scale press feedback */
@@ -641,7 +641,7 @@
 /* Action bar buttons: crisp press feel */
 .fm-inspector__action-btn:active:not(:disabled) {
   transform: scale(0.96) translateY(1px);
-  transition: transform 80ms ease;
+  transition: transform var(--fm-duration-fast) ease;
 }
 
 /* InspectorGroup icon box: scale when parent trigger is hovered */
@@ -673,23 +673,23 @@ button:hover > .fm-inspector-group-icon-box {
 }
 
 .fm-viz-vector-accounting .fm-inspector-field-row__value {
-  animation: fm-fade-in 200ms ease;
+  animation: fm-fade-in var(--fm-duration-slow) ease;
 }
 
 /* Scope note: subtle slide in */
 .fm-visualization-scope-note {
-  animation: fm-slide-down 200ms ease;
+  animation: fm-slide-down var(--fm-duration-slow) ease;
 }
 
 /* Vector subgroup: fade in when visible */
 .fm-viz-vector-subgroup {
-  animation: fm-fade-in 150ms ease;
+  animation: fm-fade-in var(--fm-duration-moderate) ease;
 }
 
 /* Toggle grid: stagger children slightly (CSS only) */
 .fm-visualization-toggle-grid > :nth-child(1) { animation-delay: 0ms; }
 .fm-visualization-toggle-grid > :nth-child(2) { animation-delay: 30ms; }
-.fm-visualization-toggle-grid > :nth-child(3) { animation-delay: 60ms; }
+.fm-visualization-toggle-grid > :nth-child(3) { animation-delay: var(--fm-duration-instant); }
 
 /* Overview sections: fade up on mount */
 @keyframes fm-rise {
@@ -709,14 +709,14 @@ button:hover > .fm-inspector-group-icon-box {
 
 .fm-object-visualization-overview > :nth-child(1) { animation-delay: 0ms; }
 .fm-object-visualization-overview > :nth-child(2) { animation-delay: 40ms; }
-.fm-object-visualization-overview > :nth-child(3) { animation-delay: 80ms; }
+.fm-object-visualization-overview > :nth-child(3) { animation-delay: var(--fm-duration-fast); }
 
 /* Quantity source dropdown: smooth focus ring */
 .fm-viz-display-card select:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 30%, transparent);
   border-color: var(--fm-accent);
   outline: none;
-  transition: box-shadow 150ms ease, border-color 150ms ease;
+  transition: box-shadow var(--fm-duration-moderate) ease, border-color var(--fm-duration-moderate) ease;
 }
 
 /* Render mode label sizing */
@@ -755,7 +755,7 @@ button:hover > .fm-inspector-group-icon-box {
   height: var(--fm-space-1);
   border: 0;
   background: color-mix(in srgb, var(--fm-accent) 10%, var(--fm-bg-disabled));
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
 }
 
 /* Target sliders inside visualization number control property rows */

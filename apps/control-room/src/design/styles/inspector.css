@@ -750,7 +750,7 @@
   transition:
     color var(--fm-transition-fast),
     border-color var(--fm-transition-fast),
-    transform 80ms ease-out;
+    transform var(--fm-duration-fast) ease-out;
 }
 
 .fm-inspector__tab-list .fm-tabs-trigger:hover {

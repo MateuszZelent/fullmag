@@ -1,7 +1,7 @@
 .fm-simulation-startup {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: var(--fm-z-dialog-backdrop);
   display: grid;
   place-items: center;
   padding: var(--fm-space-6);
@@ -10,10 +10,10 @@
 
 .fm-simulation-startup__panel {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-columns: var(--fm-space-8) minmax(0, 1fr);
   gap: var(--fm-space-4);
   align-items: center;
-  width: min(460px, calc(100vw - 32px));
+  width: min(460px, calc(100vw - var(--fm-space-8)));
   border: 1px solid var(--fm-border-default);
   border-radius: var(--fm-radius-lg);
   background: var(--fm-bg-overlay);
@@ -28,7 +28,7 @@
   border: 3px solid color-mix(in srgb, var(--fm-accent) 22%, transparent);
   border-top-color: var(--fm-accent);
   border-radius: 50%;
-  animation: fm-simulation-startup-spin 900ms linear infinite;
+  animation: fm-simulation-startup-spin var(--fm-duration-loading) linear infinite;
 }
 
 .fm-simulation-startup__copy {

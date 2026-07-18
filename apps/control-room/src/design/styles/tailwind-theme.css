@@ -34,6 +34,8 @@
   --spacing-fm-4: var(--fm-space-4);
   --spacing-fm-5: var(--fm-space-5);
   --spacing-fm-6: var(--fm-space-6);
+  --spacing-fm-7: var(--fm-space-7);
+  --spacing-fm-8: var(--fm-space-8);
   /* Spacing — inspector-specific (enables px-fm-inline, gap-fm-inspector-control, etc.) */
   --spacing-fm-inline: var(--fm-inspector-padding-inline);
   --spacing-fm-inspector-control: var(--fm-inspector-control-gap);
@@ -74,4 +76,7 @@
   --text-fm-label: var(--fm-font-size-field-label);
   --text-fm-control: var(--fm-font-size-control);
   --text-fm-help: var(--fm-font-size-help);
+  /* Named line heights — enables leading-fm-control, leading-fm-tight */
+  --leading-fm-control: var(--fm-line-height-control);
+  --leading-fm-tight: var(--fm-line-height-tight);
 }

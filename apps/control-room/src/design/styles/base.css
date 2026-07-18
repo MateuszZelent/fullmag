@@ -53,7 +53,7 @@ textarea {
     border-color var(--fm-transition-fast),
     box-shadow var(--fm-transition-fast),
     color var(--fm-transition-fast),
-    transform 80ms ease-out;
+    transform var(--fm-duration-fast) ease-out;
   user-select: none;
 }
 
@@ -65,7 +65,7 @@ textarea {
 /* Apple: respond on pointer-down — instant press feedback */
 .fm-button:active:not(:disabled):not([data-disabled="true"]) {
   transform: scale(0.97) translateY(0);
-  transition-duration: 60ms;
+  transition-duration: var(--fm-duration-instant);
 }
 
 .fm-button:focus-visible {

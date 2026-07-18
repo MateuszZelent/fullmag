@@ -7,7 +7,7 @@
 .fm-footer-command-audit__row {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) 150px 92px minmax(220px, 1fr);
-  min-width: 760px;
+  min-width: var(--fm-panel-command-audit-min-width);
   align-items: center;
   gap: var(--fm-space-2);
   border-bottom: 1px solid var(--fm-border-subtle);

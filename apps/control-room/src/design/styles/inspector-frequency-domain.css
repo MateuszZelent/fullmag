@@ -35,7 +35,7 @@
   display: grid;
   gap: var(--fm-space-2);
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  max-height: 190px;
+  max-height: var(--fm-inspector-freq-domain-max-height);
   overflow: auto;
   padding-right: var(--fm-space-1);
   color: var(--fm-text-muted);

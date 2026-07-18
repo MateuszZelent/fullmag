@@ -1,6 +1,6 @@
 .fm-material-library.fm-dialog {
-  width: min(1180px, calc(100vw - 32px));
-  max-height: min(780px, calc(100vh - 32px));
+  width: min(1180px, calc(100vw - var(--fm-space-8)));
+  max-height: min(780px, calc(100vh - var(--fm-space-8)));
   overflow: hidden;
 }
 

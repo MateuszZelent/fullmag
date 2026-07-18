@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Eye } from "lucide-react";
 
-import type { ECharts, EChartsOption } from "echarts";
+import type { ECharts, EChartsOption, LineSeriesOption } from "echarts";
 
 import type {
   EigenDispersionPoint,
@@ -622,8 +622,7 @@ export function buildSpectrumOption(
   );
 
   // Build Lorentzian envelope when damping rates are available
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const envelopeSeries: any[] = [];
+  const envelopeSeries: LineSeriesOption[] = [];
   if (hasDamping && data.length > 0) {
     const fMin = Math.min(...data.map((p) => p.frequencyValue));
     const fMax = Math.max(...data.map((p) => p.frequencyValue));

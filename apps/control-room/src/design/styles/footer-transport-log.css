@@ -64,7 +64,7 @@
   grid-template-columns:
     92px minmax(280px, 1fr) 62px 78px 90px 84px
     78px;
-  min-width: 860px;
+  min-width: var(--fm-panel-transport-log-min-width);
   align-items: center;
   gap: var(--fm-space-2);
   border-bottom: 1px solid var(--fm-border-subtle);
@@ -76,7 +76,7 @@
 .fm-footer-log__row--header {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--fm-z-base);
   background: var(--fm-bg-panel);
   color: var(--fm-text-muted);
   font-family: var(--fm-font-ui);
@@ -191,7 +191,7 @@
 }
 
 .fm-footer-log-dialog {
-  width: min(760px, calc(100vw - 32px));
+  width: min(760px, calc(100vw - var(--fm-space-8)));
 }
 
 .fm-footer-log-dialog__raw {
