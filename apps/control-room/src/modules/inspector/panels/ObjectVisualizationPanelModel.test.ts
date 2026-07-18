@@ -46,10 +46,12 @@ import {
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowSurfaceFieldColorbar,
+  shouldShowVectorFieldColorbar,
   surfaceFieldProjectionModePatch,
   SURFACE_COLOR_SOURCE_ITEMS,
   SURFACE_FIELD_PROJECTION_ITEMS,
   surfaceColorSourceFieldMetaComponent,
+  vectorColorModeFieldMetaComponent,
   surfaceSolidColorPatch,
   renderModeDisplayPatch,
   regionVisualizationCarrierSupportsFieldMeta,
@@ -675,6 +677,25 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(shouldShowSurfaceFieldColorbar("solid", "m")).toBe(false);
   });
 
+  it("shows vector colorbars only for numeric component color modes", () => {
+    expect(vectorColorModeFieldMetaComponent("x", "m")).toBe("x");
+    expect(vectorColorModeFieldMetaComponent("y", "H_eff")).toBe("y");
+    expect(vectorColorModeFieldMetaComponent("z", "H_demag")).toBe("z");
+    expect(vectorColorModeFieldMetaComponent("magnitude", "m")).toBe("magnitude");
+    expect(vectorColorModeFieldMetaComponent("orientation", "m")).toBeUndefined();
+    expect(vectorColorModeFieldMetaComponent("monochrome", "m")).toBeUndefined();
+    expect(shouldShowVectorFieldColorbar("x", "m")).toBe(true);
+    expect(shouldShowVectorFieldColorbar("magnitude", "H_demag")).toBe(true);
+    expect(shouldShowVectorFieldColorbar("orientation", "m")).toBe(false);
+    expect(shouldShowVectorFieldColorbar("monochrome", "m")).toBe(false);
+    expect(
+      shouldShowVectorFieldColorbar(
+        "x",
+        "analysis:eigen:sample-0000:mode-0002",
+      ),
+    ).toBe(false);
+  });
+
   it("maps visualization targets to scoped field metadata queries", () => {
     expect(
       fieldMetaScopeQueryForVisualizationTarget({
@@ -908,7 +929,7 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toMatchObject({ id: "object:projection-film", kind: "object" });
   });
 
-  it("applies a part-vector patch immediately until a newer registry revision acknowledges it", () => {
+  it("keeps a part-vector patch until the backend returns the matching override", () => {
     const controller = new ObjectVisualizationController();
     const queuedPatches: unknown[] = [];
     const state = {
@@ -925,13 +946,13 @@ describe("ObjectVisualizationPanelModel", () => {
           },
         ],
       },
-    } as never;
+    };
 
     const target = queuePartVectorVisibilityPatch({
       controller,
       part: { id: "part-film", object_id: "projection-film" } as MeshPart,
       sceneObjectIds: new Set(["projection-film"]),
-      state,
+      state: state as never,
       sync: { queuePatch: (patch) => queuedPatches.push(patch) },
       visible: false,
     });
@@ -952,18 +973,37 @@ describe("ObjectVisualizationPanelModel", () => {
       resolveTargetVisualization({
         snapshot: controller.getSnapshot(),
         target,
-        visualizationState: state,
+        visualizationState: state as never,
       }).settings.vectorsVisible,
     ).toBe(false);
 
-    controller.acknowledgePendingTargetPatches(8);
+    const acknowledgedState = {
+      ...state,
+      revision: 8,
+      overrides: [
+        {
+          display: { vectors: { visible: false } },
+          scope: "part",
+          scope_id: "part-film",
+        },
+      ],
+      targets: {
+        ...state.targets,
+        parts: state.targets.parts.map((entry) => ({
+          ...entry,
+          settings: { ...entry.settings, vectors_visible: false },
+        })),
+      },
+    };
+    controller.acknowledgePendingTargetPatches(acknowledgedState as never);
     expect(
       resolveTargetVisualization({
         snapshot: controller.getSnapshot(),
         target,
-        visualizationState: state,
+        visualizationState: acknowledgedState as never,
       }).settings.vectorsVisible,
-    ).toBe(true);
+    ).toBe(false);
+    expect(controller.getSnapshot().pendingOverrides).toEqual({});
   });
 
   it("builds scalar palette patches for the visualization quantity colormap", () => {
@@ -1188,7 +1228,6 @@ describe("ObjectVisualizationPanelModel", () => {
       "wireframe",
       "vectors",
       "geometry-scope",
-      "opacity",
       "overrides",
     ]);
     expect(sections.find((section) => section.id === "surface-coloring"))
@@ -1197,6 +1236,10 @@ describe("ObjectVisualizationPanelModel", () => {
         fields: expect.arrayContaining([
           expect.objectContaining({ id: "surfaceColorSource" }),
           expect.objectContaining({ id: "shaderMonoColor" }),
+          expect.objectContaining({
+            id: "opacityPercent",
+            label: "Surface opacity",
+          }),
         ]),
       });
     expect(sections.find((section) => section.id === "quantity-source"))

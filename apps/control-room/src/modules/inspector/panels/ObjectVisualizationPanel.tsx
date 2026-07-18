@@ -108,7 +108,6 @@ import {
   VisualizationWireframeSection,
   VisualizationVectorsSection,
   VisualizationGeometryScopeSection,
-  VisualizationOpacitySection,
   VisualizationOverridesSection,
   ColorField,
   VisualizationRadioGroup,
@@ -884,8 +883,10 @@ function ObjectVisualizationPanelView({
               patchColor={patchColor}
               patchNumber={patchNumber}
               pending={pending}
+              regionCarrier={regionCarrier}
               sectionDisabled={sectionDisabled}
               settings={settings}
+              target={target}
               targetKind={target.kind}
               vectorBudgetRange={vectorBudgetRange}
               vectorTopologyHash={vectorTopologyHash}
@@ -918,7 +919,6 @@ function ObjectVisualizationPanelView({
         vectorBudgetRange={vectorBudgetRange}
         vectorBudgetRanges={vectorBudgetRanges}
       />
-      <VisualizationOpacitySection patch={patch} settings={settings} />
       {renderWarning ? (
         <div className="fm-inspector__diagnostic-warning">{renderWarning}</div>
       ) : null}

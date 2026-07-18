@@ -851,10 +851,13 @@ export function buildViewport3DFieldRenderModel(
           resolveNodeSelectionCount(vectorSelection, topology),
     );
     const partScalarColorMode = targetRenderPlan
+      ? targetRenderPlan.colorbar.scalarColorMode
+      : options.partScalarColorModes?.get(partId);
+    const partSurfaceScalarColorMode = targetRenderPlan
       ? targetRenderPlan.shader.visible
         ? targetRenderPlan.shader.scalarColorMode
         : null
-      : options.partScalarColorModes?.get(partId);
+      : partScalarColorMode;
     const partQuantityId =
       targetRenderPlan?.quantityId ?? options.partQuantityIds?.get(partId);
     const partScalarColorPalette =
@@ -863,9 +866,11 @@ export function buildViewport3DFieldRenderModel(
       options.scalarColorPalette;
     const partScalarColorModes =
       targetRenderPlan
-        ? partScalarColorMode
-          ? new Set([partScalarColorMode])
-          : null
+        ? new Set(
+            [partSurfaceScalarColorMode, partScalarColorMode].filter(
+              (mode): mode is string => mode != null,
+            ),
+          )
         : partScalarColorMode === undefined
         ? partFieldVector && partFieldVector !== renderFieldVector
           ? requestedScalarColorModes
@@ -998,9 +1003,9 @@ export function buildViewport3DFieldRenderModel(
     });
     partVectorBuilds.set(partId, partVectorBuildReference);
     const activePartScalarColors =
-      partScalarColorMode == null
+      partSurfaceScalarColorMode == null
         ? null
-        : partScalarColorsByMode?.get(partScalarColorMode) ?? null;
+        : partScalarColorsByMode?.get(partSurfaceScalarColorMode) ?? null;
     targetPasses.set(partId, {
       fieldBuffer: explicitPartFieldBuffer
         ? targetFieldBufferSource(explicitPartFieldBuffer)
@@ -1012,7 +1017,7 @@ export function buildViewport3DFieldRenderModel(
       }),
       surface: {
         degradation: resolveViewport3DTargetSurfaceDegradation({
-          colorMode: partScalarColorMode ?? null,
+          colorMode: partSurfaceScalarColorMode ?? null,
           explicitPartFieldBuffer,
           quantityId: partQuantityId,
           scalarColors: activePartScalarColors,
@@ -1020,7 +1025,7 @@ export function buildViewport3DFieldRenderModel(
         passId: `${partId}:surface`,
         projectionMode:
           targetRenderPlan?.shader.projectionMode ?? "raw_nodal",
-        scalarColorMode: partScalarColorMode ?? null,
+        scalarColorMode: partSurfaceScalarColorMode ?? null,
         scalarColors: activePartScalarColors,
       },
       vectors: {

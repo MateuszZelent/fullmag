@@ -136,9 +136,8 @@ export function planViewport3DColorbars({
   }>();
 
   for (const target of targets) {
-    if (target.targetKind === "airbox") continue;
     if (!target.visible || !target.colorbar.viewportVisible) continue;
-    const colorMode = target.shader.scalarColorMode;
+    const colorMode = target.colorbar.scalarColorMode;
     if (!colorMode || !viewport3DColorModeHasNumericColorbar(colorMode)) {
       continue;
     }
@@ -222,6 +221,12 @@ export function resolveViewport3DColorbarRangeStates({
     Boolean(fieldModel?.targetPasses) &&
     (fieldModel?.targetPasses?.size ?? 0) > 0;
   for (const plan of plans) {
+    const scopedScalarColors =
+      plan.scopeId == null
+        ? null
+        : fieldModel?.scalarColorsByPartAndMode
+            .get(plan.scopeId)
+            ?.get(plan.colorMode) ?? null;
     const candidate =
       plan.scopeKind === "full" && fdmSurfaceColors
         ? fdmSurfaceColors
@@ -238,7 +243,8 @@ export function resolveViewport3DColorbarRangeStates({
           ? targetPassModelAuthoritative
             ? null
             : fieldModel?.scalarColorsByMode.get(plan.colorMode) ?? null
-          : resolveViewport3DTargetSurfaceLayerInput({
+          : scopedScalarColors ??
+            resolveViewport3DTargetSurfaceLayerInput({
               fieldModel: fieldModel ?? null,
               partId: plan.scopeId,
               scalarColorMode: plan.colorMode,

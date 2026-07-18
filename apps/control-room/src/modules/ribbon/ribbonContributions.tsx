@@ -2011,7 +2011,7 @@ function buildSurfaceAction(
       {
         type: "slider",
         id: "surface:opacity",
-        label: "Opacity",
+        label: "Surface opacity",
         value: settings.opacityPercent,
         min: 0,
         max: 100,

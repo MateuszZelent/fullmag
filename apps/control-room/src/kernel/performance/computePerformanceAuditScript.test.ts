@@ -83,12 +83,12 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("setDraftOverride(null)");
     expect(auditScript).not.toContain("VISUALIZATION_NUMBER_COMMIT_DELAY_MS");
     expect(auditScript).toContain("Wireframe opacity");
-    expect(auditScript).toContain('label="Opacity"');
+    expect(auditScript).toContain('label="Vector opacity"');
     expect(auditScript).toContain('label="Thickness"');
     expect(auditScript).toContain("Arrow length");
     expect(auditScript).toContain("Arrow budget");
     expect(auditScript).toContain("Extra surface gap");
-    expect(auditScript).toContain("label=\"Opacity\"");
+    expect(auditScript).toContain('label="Surface opacity"');
     expect(auditScript).toContain('patchNumber("vectorBudget"');
     expect(auditScript).toContain('patchNumber("vectorThickness"');
     expect(auditScript).toContain('patchNumber("vectorLengthScale"');

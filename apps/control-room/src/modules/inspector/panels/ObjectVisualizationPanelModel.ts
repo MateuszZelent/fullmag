@@ -205,6 +205,33 @@ export function shouldShowSurfaceFieldColorbar(
   );
 }
 
+export function vectorColorModeFieldMetaComponent(
+  vectorColorMode: VisualizationColorMode,
+  activeQuantityId: string,
+): "magnitude" | "x" | "y" | "z" | undefined {
+  if (isAnalysisFieldQuantityId(activeQuantityId)) return undefined;
+  switch (vectorColorMode) {
+    case "x":
+    case "y":
+    case "z":
+    case "magnitude":
+      return vectorColorMode;
+    case "orientation":
+    case "monochrome":
+      return undefined;
+  }
+}
+
+export function shouldShowVectorFieldColorbar(
+  vectorColorMode: VisualizationColorMode,
+  activeQuantityId: string,
+): boolean {
+  return (
+    vectorColorModeFieldMetaComponent(vectorColorMode, activeQuantityId) !==
+    undefined
+  );
+}
+
 export function fieldMetaScopeQueryForVisualizationTarget(
   target: VisualizationTargetRef | null | undefined,
   carrier?: RegionVisualizationCarrier | null,
@@ -1579,6 +1606,7 @@ export function buildVisualizationPanelSections({
       fields: [
         { id: "surfaceColorSource", kind: "mode", label: "Color source" },
         { id: "shaderMonoColor", kind: "color", label: "Solid color" },
+        { id: "opacityPercent", kind: "number", label: "Surface opacity" },
       ],
       id: "surface-coloring",
       title: "Surface Coloring",
@@ -1607,7 +1635,7 @@ export function buildVisualizationPanelSections({
       fields: [
         { id: "vectorColorMode", kind: "mode", label: "Vector coloring" },
         { id: "vectorMonoColor", kind: "color", label: "Vector mono color" },
-        { id: "vectorAlphaPercent", kind: "number", label: "Vector alpha" },
+        { id: "vectorAlphaPercent", kind: "number", label: "Vector opacity" },
         { id: "vectorThickness", kind: "number", label: "Vector thickness" },
         { id: "vectorLengthScale", kind: "number", label: "Arrow length" },
         { id: "vectorBudget", kind: "number", label: "Arrow budget" },
@@ -1624,12 +1652,6 @@ export function buildVisualizationPanelSections({
       fields: [{ id: "geometryScope", kind: "mode", label: "Geometry scope" }],
       id: "geometry-scope",
       title: "Geometry Scope",
-    },
-    {
-      disabled: passDisabled,
-      fields: [{ id: "opacityPercent", kind: "number", label: "Opacity" }],
-      id: "opacity",
-      title: "Opacity",
     },
     {
       disabled: false,

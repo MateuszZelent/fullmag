@@ -824,10 +824,10 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
     "export function VisualizationVectorsSection",
     "function displayControlDisabledDescription",
   );
-  const opacitySection = blockBetween(
+  const surfaceColoringSection = blockBetween(
     source,
-    "export function VisualizationOpacitySection",
-    "export function VisualizationOverridesSection",
+    "export function VisualizationSurfaceColoringSection",
+    "export function ScalarColorbarControl",
   );
 
   requireTokens(numberField, "ObjectVisualizationPanel NumberField commit boundary", [
@@ -851,7 +851,7 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
   ]);
   requireTokens(vectorsSection, "ObjectVisualizationPanel vector range debounce", [
     "<NumberField",
-    'label="Opacity"',
+    'label="Vector opacity"',
     'label="Thickness"',
     'label="Arrow length"',
     'label="Arrow budget"',
@@ -862,9 +862,9 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
     'patchNumber("vectorBudget"',
     'patchNumber("vectorSurfaceOffsetScale"',
   ]);
-  requireTokens(opacitySection, "ObjectVisualizationPanel opacity range debounce", [
+  requireTokens(surfaceColoringSection, "ObjectVisualizationPanel surface opacity commit boundary", [
     "<NumberField",
-    'label="Opacity"',
+    'label="Surface opacity"',
     "patch({ opacityPercent: value })",
   ]);
 }

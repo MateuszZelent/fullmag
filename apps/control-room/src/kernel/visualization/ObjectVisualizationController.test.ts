@@ -70,6 +70,29 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
+  it("does not expose a magnetic-only quantity as the Airbox field source", () => {
+    const resolved = resolveTargetVisualization({
+      snapshot: new ObjectVisualizationController().getSnapshot(),
+      target: AIRBOX_VISUALIZATION_TARGET,
+      visualizationState: {
+        revision: 3,
+        targets: {
+          airbox: {
+            scope: "airbox",
+            scope_id: "airbox",
+            settings: {
+              active_quantity_id: "m",
+            },
+          },
+          objects: [],
+          parts: [],
+        },
+      } as never,
+    });
+
+    expect(resolved.settings.activeQuantityId).toBe("H_demag");
+  });
+
   it("keeps region visualization hidden by default", () => {
     const controller = new ObjectVisualizationController();
     const target = {
@@ -322,9 +345,8 @@ describe("ObjectVisualizationController", () => {
           display: {
             bounds: { visible: true },
             geometry_scope: "surface",
-            opacity: 0.44,
             points: { visible: true },
-            surface: { visible: true },
+            surface: { opacity: 0.44, visible: true },
             vectors: { visible: true },
             visible: true,
             wireframe: { opacity: 0.75, visible: true },
@@ -1199,13 +1221,13 @@ describe("ObjectVisualizationController", () => {
     const unrelatedNewerState = {
       ...stateAtPendingRevision,
       revision: 15,
-    } as never;
-    controller.acknowledgePendingTargetPatches(unrelatedNewerState);
+    };
+    controller.acknowledgePendingTargetPatches(unrelatedNewerState as never);
     expect(
       resolveTargetVisualization({
         snapshot: controller.getSnapshot(),
         target,
-        visualizationState: unrelatedNewerState,
+        visualizationState: unrelatedNewerState as never,
       }).settings,
     ).toMatchObject({
       shaderVisible: false,
@@ -1223,7 +1245,7 @@ describe("ObjectVisualizationController", () => {
           display: { surface: { visible: false } },
         },
       ],
-    });
+    } as never);
     expect(controller.getSnapshot().pendingOverrides).toEqual({});
   });
 
@@ -1496,7 +1518,7 @@ describe("ObjectVisualizationController", () => {
     ).toMatchObject({
       display: {
         geometry_scope: "surface",
-        opacity: 0.35,
+        surface: { opacity: 0.35 },
         vectors: { visible: false },
         visible: true,
         wireframe: { opacity: 0.45, visible: true },
@@ -1521,6 +1543,38 @@ describe("ObjectVisualizationController", () => {
         wireframe_color: "#111111",
       },
       visible: true,
+    });
+  });
+
+  it("serializes surface, wireframe, and vector opacity independently", () => {
+    const target = { id: "free-layer", kind: "object" as const };
+
+    expect(
+      visualizationStateOverrideFromTargetPatch(target, {
+        opacityPercent: 35,
+      }),
+    ).toEqual({
+      display: { surface: { opacity: 0.35 } },
+      scope: "object",
+      scope_id: "free-layer",
+    });
+    expect(
+      visualizationStateOverrideFromTargetPatch(target, {
+        wireframeOpacityPercent: 45,
+      }),
+    ).toEqual({
+      display: { wireframe: { opacity: 0.45 } },
+      scope: "object",
+      scope_id: "free-layer",
+    });
+    expect(
+      visualizationStateOverrideFromTargetPatch(target, {
+        vectorAlphaPercent: 55,
+      }),
+    ).toEqual({
+      scope: "object",
+      scope_id: "free-layer",
+      style: { vector_alpha: 0.55 },
     });
   });
 
@@ -1613,6 +1667,37 @@ describe("ObjectVisualizationController", () => {
         "surfaceColorSource",
       ),
     ).toEqual([]);
+  });
+
+  it("removes surface opacity without removing surface visibility", () => {
+    expect(
+      removeTargetOverrideField(
+        [
+          {
+            scope: "object",
+            scope_id: "free-layer",
+            display: {
+              opacity: 0.2,
+              surface: { opacity: 0.35, visible: true },
+              wireframe: { opacity: 0.45, visible: true },
+            },
+            style: { vector_alpha: 0.55 },
+          },
+        ],
+        { id: "free-layer", kind: "object" },
+        "opacityPercent",
+      ),
+    ).toEqual([
+      {
+        scope: "object",
+        scope_id: "free-layer",
+        display: {
+          surface: { visible: true },
+          wireframe: { opacity: 0.45, visible: true },
+        },
+        style: { vector_alpha: 0.55 },
+      },
+    ]);
   });
 
   it("returns to the owner style after inherited deletion and a resource reload", () => {

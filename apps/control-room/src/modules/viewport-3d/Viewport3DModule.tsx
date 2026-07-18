@@ -31,6 +31,7 @@ import {
 } from "@/kernel/browserFullmagConfig";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import { useMeshHistogramBinElementsResource } from "@/kernel/resources/geometryLifecycleResources";
+import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
 import {
   selectionSnapshotEquals,
   useSelectionActions,
@@ -304,6 +305,8 @@ interface Viewport3DColorbarLegend {
   paletteGradient: string;
   quantityId?: string;
   range?: MeshQualityRange | null;
+  scopeId?: string | null;
+  scopeKind?: Viewport3DColorbarPlan["scopeKind"];
   sourceUnit?: string | null;
 }
 
@@ -470,6 +473,8 @@ function resolveViewport3DColorbarLegendFromPlan({
       paletteGradient: viewport3DColorPaletteGradientCss(plan.palette),
       quantityId: plan.quantityId,
       range: plan.range,
+      scopeId: plan.scopeId,
+      scopeKind: plan.scopeKind,
       sourceUnit: unit || null,
     },
   };
@@ -655,7 +660,10 @@ export function buildViewport3DColorbarTargetPlans({
 function isViewport3DColorbarTargetPartEligible(
   part: Viewport3DColorbarTargetPart,
 ): boolean {
-  return !isVisualizationAirboxIdentity(part) && part.role !== "interface";
+  return (
+    part.role !== "interface" &&
+    (part.targetKind === "airbox" || !isVisualizationAirboxIdentity(part))
+  );
 }
 
 export function resolveViewport3DColorbarLegendsFromPlans({
@@ -1859,12 +1867,28 @@ const Viewport3DColorbar = memo(function Viewport3DColorbar({
 }: {
   legend: Viewport3DColorbarLegend;
 }) {
+  const fieldMeta = useFieldMetaResource({
+    component: legend.colorMode ?? null,
+    enabled: Boolean(!legend.range && legend.colorMode && legend.quantityId),
+    quantityId: legend.quantityId ?? "m",
+    scope_id: legend.scopeKind === "airbox" ? null : legend.scopeId ?? null,
+    scope_kind: legend.scopeKind ?? null,
+  });
+  const metadataRange =
+    typeof fieldMeta.data?.stats?.min === "number" &&
+    typeof fieldMeta.data.stats.max === "number"
+      ? {
+          max: fieldMeta.data.stats.max,
+          min: fieldMeta.data.stats.min,
+        }
+      : null;
+  const range = legend.range ?? metadataRange;
   const [selectedDisplayUnit, setSelectedDisplayUnit] = useState(
     legend.displayUnit ?? "",
   );
   const displayUnitItems = displayUnitItemsForSourceUnit(legend.sourceUnit);
   const hasUnitOptions =
-    Boolean(legend.range) && hasDisplayUnitOptions(legend.sourceUnit);
+    Boolean(range) && hasDisplayUnitOptions(legend.sourceUnit);
   const effectiveDisplayUnit = hasUnitOptions
     ? normalizeDisplayUnit(
         legend.sourceUnit,
@@ -1880,17 +1904,17 @@ const Viewport3DColorbar = memo(function Viewport3DColorbar({
         })}`
       : legend.label;
   const minLabel =
-    hasUnitOptions && legend.range
+    hasUnitOptions && range
       ? formatValueWithDisplayUnit(
-          legend.range.min,
+          range.min,
           legend.sourceUnit,
           effectiveDisplayUnit,
         )
       : legend.minLabel;
   const maxLabel =
-    hasUnitOptions && legend.range
+    hasUnitOptions && range
       ? formatValueWithDisplayUnit(
-          legend.range.max,
+          range.max,
           legend.sourceUnit,
           effectiveDisplayUnit,
         )

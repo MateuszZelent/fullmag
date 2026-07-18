@@ -899,6 +899,36 @@ describe("resolveViewport3DColorbarLegend", () => {
     ]);
   });
 
+  it("includes numeric vector-only Airbox targets in viewport colorbar planning", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      parts: [
+        {
+          id: "airbox",
+          label: "Airbox",
+          role: "airbox",
+          settings: visualizationSettings({
+            activeQuantityId: "H_demag",
+            shaderVisible: false,
+            surfaceColorSource: "solid",
+            vectorColorMode: "x",
+            vectorsVisible: true,
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "airbox",
+        },
+      ],
+    });
+
+    expect(planViewport3DColorbars({ targets })).toMatchObject([
+      {
+        colorMode: "x",
+        quantityId: "H_demag",
+        scopeKind: "airbox",
+        targetIds: ["airbox"],
+      },
+    ]);
+  });
+
   it("does not plan a second viewport colorbar for air-interface parts", () => {
     const targets = buildViewport3DColorbarTargetPlans({
       parts: [
@@ -1065,12 +1095,18 @@ buildReference: null,
       targets,
     });
 
-    expect(plans).toHaveLength(1);
-    expect(plans[0]).toMatchObject({
+    expect(plans).toHaveLength(2);
+    expect(plans.find((plan) => plan.targetIds.includes("part-a"))).toMatchObject({
       colorMode: "x",
       range: { max: 0.25, min: -0.75 },
       rangeState: "current",
       targetIds: ["part-a"],
+    });
+    expect(plans.find((plan) => plan.targetIds.includes("part-c"))).toMatchObject({
+      colorMode: "magnitude",
+      range: null,
+      rangeState: "pending",
+      targetIds: ["part-c"],
     });
   });
 

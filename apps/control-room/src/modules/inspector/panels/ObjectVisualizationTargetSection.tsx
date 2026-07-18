@@ -46,9 +46,11 @@ import {
   scalarColorbarSupportsDisplayUnits,
   SCALAR_COLOR_PALETTE_ITEMS,
   shouldShowSurfaceFieldColorbar,
+  shouldShowVectorFieldColorbar,
   SURFACE_FIELD_PROJECTION_ITEMS,
   surfaceFieldProjectionModePatch,
   surfaceColorSourceFieldMetaComponent,
+  vectorColorModeFieldMetaComponent,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
   regionVisualizationCarrierSupportsFieldMeta,
@@ -430,6 +432,16 @@ export function VisualizationSurfaceColoringSection({
           onChange={(value) => patchColor("shaderMonoColor", value)}
         />
       ) : null}
+      <NumberField
+        disabled={pending || sectionDisabled("surface-coloring")}
+        label="Surface opacity"
+        max={100}
+        min={0}
+        step={1}
+        unit="%"
+        value={settings.opacityPercent}
+        onChange={(value) => void patch({ opacityPercent: value })}
+      />
       <InspectorPropertyRow label="Field status">
         <span className="font-fm-mono text-fm-control text-fm-secondary">
           {surfaceFieldStatus(
@@ -688,8 +700,10 @@ export function VisualizationVectorsSection({
   patchColor,
   patchNumber,
   pending,
+  regionCarrier,
   sectionDisabled,
   settings,
+  target,
   targetKind,
   vectorBudgetRange,
   vectorTopologyHash,
@@ -713,12 +727,44 @@ export function VisualizationVectorsSection({
     value: number,
   ) => void;
   pending: boolean;
+  regionCarrier?: RegionVisualizationCarrier | null;
   sectionDisabled: SectionDisabled;
   settings: VisualizationTargetSettings;
+  target: VisualizationTargetRef;
   targetKind: VisualizationTargetKind;
   vectorBudgetRange: VisualizationVectorBudgetRange;
   vectorTopologyHash: string | null;
 }) {
+  const colorbarComponent = vectorColorModeFieldMetaComponent(
+    settings.vectorColorMode,
+    settings.activeQuantityId,
+  );
+  const showColorbar = shouldShowVectorFieldColorbar(
+    settings.vectorColorMode,
+    settings.activeQuantityId,
+  );
+  const fieldMetaScopeQuery = fieldMetaScopeQueryForVisualizationTarget(
+    target,
+    regionCarrier,
+  );
+  const regionFieldWarning =
+    target.kind === "region" ? regionVisualizationFieldWarning(regionCarrier) : null;
+  const regionFieldMetaUnavailable =
+    target.kind === "region" &&
+    !regionVisualizationCarrierSupportsFieldMeta(regionCarrier);
+  const fieldMeta = useFieldMetaResource({
+    component: colorbarComponent ?? null,
+    enabled: showColorbar && !regionFieldMetaUnavailable,
+    quantityId: settings.activeQuantityId,
+    ...fieldMetaScopeQuery,
+  });
+  const colorbarRangeIdentity = [
+    "vectors",
+    settings.activeQuantityId,
+    colorbarComponent ?? "none",
+    fieldMetaScopeQuery.scope_kind ?? "full",
+    fieldMetaScopeQuery.scope_id ?? "full",
+  ].join(":");
   const vectorBudgetValue = Math.max(
     vectorBudgetRange.min,
     Math.min(vectorBudgetRange.max, settings.vectorBudget),
@@ -752,6 +798,30 @@ export function VisualizationVectorsSection({
         value={settings.vectorColorMode}
         onValueChange={(value) => void patch({ vectorColorMode: value })}
       />
+      {regionFieldWarning && showColorbar ? (
+        <FeedbackBanner kind="warning" message={regionFieldWarning} />
+      ) : null}
+      {showColorbar && !regionFieldMetaUnavailable ? (
+        <ScalarColorbarControl
+          disabled={vectorsDisabled}
+          fieldMeta={fieldMeta}
+          palette={settings.scalarColorPalette}
+          patch={patch}
+          rangeIdentity={colorbarRangeIdentity}
+        />
+      ) : null}
+      {showColorbar && !regionFieldMetaUnavailable ? (
+        <InspectorPropertyRow label="Viewport colorbar">
+          <Switch
+            aria-label="Add vector colorbar to viewport"
+            checked={settings.viewportColorbarVisible}
+            disabled={vectorsDisabled}
+            onCheckedChange={(checked) =>
+              void patch({ viewportColorbarVisible: checked })
+            }
+          />
+        </InspectorPropertyRow>
+      ) : null}
       {settings.vectorColorMode === "monochrome" ? (
         <ColorField
           disabled={vectorsDisabled}
@@ -761,7 +831,7 @@ export function VisualizationVectorsSection({
         />
       ) : null}
       <div className="fm-viz-vector-subgroup">
-        <NumberField disabled={vectorsDisabled} label="Opacity" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
+        <NumberField disabled={vectorsDisabled} label="Vector opacity" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
         <NumberField disabled={vectorsDisabled} label="Thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
         <NumberField disabled={vectorsDisabled} label="Arrow length" max={5} min={0.1} step={0.1} unit="×" value={settings.vectorLengthScale} onChange={(value) => patchNumber("vectorLengthScale", value)} />
       </div>
@@ -903,29 +973,6 @@ export function VisualizationGeometryScopeSection({
             }),
           })
         }
-      />
-    </InspectorGroup>
-  );
-}
-
-export function VisualizationOpacitySection({
-  patch,
-  settings,
-}: {
-  patch: PatchVisualizationTarget;
-  settings: VisualizationTargetSettings;
-}) {
-  return (
-    <InspectorGroup title="Opacity">
-      <NumberField
-        disabled={!settings.visible}
-        label="Opacity"
-        max={100}
-        min={0}
-        step={1}
-        unit="%"
-        value={settings.opacityPercent}
-        onChange={(value) => void patch({ opacityPercent: value })}
       />
     </InspectorGroup>
   );
