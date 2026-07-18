@@ -3474,6 +3474,23 @@ fem-managed-headless fem_execution script:
     FULLMAG_CPU_THREADS=auto \
     '{{gpu_runtime_bin}}' {{script}} --backend fem --headless --json
 
+fem-sp4-run fem_execution output_dir:
+    just ensure-python
+    just ensure-managed-fem-runtime
+    mode="{{fem_execution}}"; case "$mode" in cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported SP4 FEM device: $mode" >&2; exit 2 ;; esac; \
+    FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="$mode" FULLMAG_RELAX_DEVICE="$mode" FULLMAG_CPU_THREADS=auto \
+    '{{gpu_runtime_bin}}' tests/standard_problems/mumag/sp4/fem/problem.py --backend fem --headless --json --output-dir "{{output_dir}}"
+
+verify-fem-standard-problem-4:
+    just verify-fem-time-domain-native-contract
+    just ensure-managed-fem-runtime
+    FULLMAG_SP4_QUALIFYING=1 ./scripts/verify_fem_standard_problem_4.sh
+
+verify-fem-standard-problem-4-smoke:
+    just verify-fem-time-domain-native-contract
+    just ensure-managed-fem-runtime
+    FULLMAG_SP4_QUALIFYING=0 FULLMAG_SP4_DEVICES="cpu gpu" FULLMAG_SP4_MESH_LEVELS=coarse FULLMAG_SP4_CASES="case-a case-b" FULLMAG_SP4_AIRBOXES=baseline FULLMAG_SP4_DURATION_S=2e-12 FULLMAG_SP4_RELAX_MAX_STEPS=1 ./scripts/verify_fem_standard_problem_4.sh
+
 fem-managed-container-headless fem_execution script:
     just ensure-managed-fem-runtime
     mode="{{fem_execution}}"; \

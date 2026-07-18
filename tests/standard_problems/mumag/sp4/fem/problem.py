@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
 from pathlib import Path
 
 import fullmag as fm
 
-from ..common.contract import CONTRACT, validate_device
+from tests.standard_problems.mumag.sp4.common.contract import CONTRACT, validate_device
 
 
-@dataclass(frozen=True)
 class SP4RunRequest:
-    phase: str
-    case: str
-    device: str
-    mesh: str
-    airbox: str
-    initial_state: Path | None
-    duration_s: float
+    def __init__(self, phase, case, device, mesh, airbox, initial_state, duration_s):
+        self.phase = phase
+        self.case = case
+        self.device = device
+        self.mesh = mesh
+        self.airbox = airbox
+        self.initial_state = initial_state
+        self.duration_s = duration_s
 
     @classmethod
     def from_environment(cls) -> "SP4RunRequest":
@@ -59,13 +58,24 @@ def build_study(request: SP4RunRequest):
     body.Aex = CONTRACT.aex_j_per_m
     body.alpha = 1.0 if request.phase == "relax" else CONTRACT.alpha
     body.m = (fm.init.UniformMagnetization(CONTRACT.initial_m) if request.initial_state is None else fm.load_magnetization(request.initial_state, format="json"))
+    # NIST/OOMMF resolves the 3 nm thickness with one 3 nm cell.  A forced
+    # multi-layer conforming airbox creates pathological sub-nanometre tets;
+    # keep the same through-thickness interpretation for this qualification.
     body.mesh(maximum_element_size=mesh.hmax_m, order=1)
     study.demag(realization="poisson_robin")
     study.build_domain_mesh()
     study.solver(integrator="rk45", gamma=CONTRACT.gamma_mu0_m_per_as, dt_initial=1e-15, dt_min=1e-17, dt_max=1e-12, max_error=1e-7)
     study.tableautosave(CONTRACT.sample_period_s, quantities=["step", "t", "mx", "my", "mz", "e_total", "max_torque_T"])
     if request.phase == "relax":
-        study.relax(algorithm="llg_overdamped", solver="rk45", max_error=1e-7, dt_min=1e-17, max_steps=int(os.environ.get("FULLMAG_SP4_RELAX_MAX_STEPS", "200000")), tol=1e-5)
+        algorithm = os.environ.get("FULLMAG_SP4_RELAX_ALGORITHM", "projected_gradient_bb")
+        maximum_steps = int(os.environ.get("FULLMAG_SP4_RELAX_MAX_STEPS", "50000"))
+        torque_tolerance_apm = float(os.environ.get("FULLMAG_SP4_RELAX_TOL_APM", "7.957747154594767"))
+        if algorithm == "llg_overdamped":
+            study.relax(algorithm=algorithm, solver="rk45", max_error=1e-7, dt_min=1e-17, dt_max=1e-12, max_steps=maximum_steps, tol=torque_tolerance_apm)
+        elif algorithm in {"projected_gradient_bb", "nonlinear_cg"}:
+            study.relax(algorithm=algorithm, max_steps=maximum_steps, tol=torque_tolerance_apm, energy_tolerance=1e-27)
+        else:
+            raise ValueError(f"unsupported SP4 relaxation algorithm: {algorithm}")
     else:
         study.b_ext(*case.field_t)
         study.run(request.duration_s)
