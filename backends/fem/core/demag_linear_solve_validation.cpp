@@ -32,7 +32,7 @@ bool validate_demag_linear_solve_result(
         result.max_iterations > 0 &&
         static_cast<uint32_t>(result.iterations) <= result.max_iterations;
 
-    if (result.solver_reported_converged &&
+    if ((result.solver_reported_converged || result.residual_independently_certified) &&
         relative_residual_valid &&
         absolute_residual_valid &&
         iterations_valid &&
@@ -45,6 +45,8 @@ bool validate_demag_linear_solve_result(
             << "FEM demag linear solve rejected: solver_kind=" << result.solver_kind
             << ", solver_reported_converged="
             << (result.solver_reported_converged ? "true" : "false")
+            << ", residual_independently_certified="
+            << (result.residual_independently_certified ? "true" : "false")
             << ", iterations=" << result.iterations
             << ", residual=" << result.relative_residual
             << ", relative_tolerance=" << result.relative_tolerance

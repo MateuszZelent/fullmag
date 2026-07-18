@@ -74,6 +74,7 @@ struct PoissonDemagRuntimeState {
     uint64_t step_energy_wall_time_ns = 0;
     bool last_solver_setup_reused = false;
     uint32_t solves_current_step = 0;
+    bool fresh_initial_guess_required = false;
 
     mfem::HypreParMatrix *cached_hypre_par = nullptr;
     mfem::HypreSolver *cached_hypre_preconditioner = nullptr;

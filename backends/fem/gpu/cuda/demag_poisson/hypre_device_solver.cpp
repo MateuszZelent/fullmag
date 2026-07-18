@@ -24,6 +24,7 @@
 #endif
 
 #include <climits>
+#include <cmath>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -247,6 +248,8 @@ bool initialize_demag_poisson_hypre_device_solver(
         ctx.gpu_state.device.demag_poisson.poisson_solution,
         workspace.row_starts,
         true);
+    workspace.residual = std::make_unique<mfem::Vector>(static_cast<int>(glob_size));
+    workspace.residual->UseDevice(true);
     return true;
 #else
     (void)ctx;
@@ -376,17 +379,33 @@ bool validate_demag_poisson_hypre_device_solve(
     read_demag_poisson_hypre_solver_stats(
         ctx, workspace, iterations, residual, solver_reported_converged);
 
+    bool residual_independently_certified = false;
+    double absolute_residual = 0.0;
+    const double rhs_norm = workspace.b_par == nullptr ? 0.0 : workspace.b_par->Norml2();
+    if (!solver_reported_converged &&
+        workspace.A_par != nullptr &&
+        workspace.x_par != nullptr &&
+        workspace.b_par != nullptr &&
+        workspace.residual != nullptr) {
+        workspace.A_par->Mult(*workspace.x_par, *workspace.residual);
+        workspace.residual->Add(-1.0, *workspace.b_par);
+        absolute_residual = workspace.residual->Norml2();
+        residual = rhs_norm > 0.0 ? absolute_residual / rhs_norm : absolute_residual;
+        residual_independently_certified = std::isfinite(absolute_residual);
+    }
+
     DemagLinearSolveResult result;
     result.solver_kind = ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES
         ? "gpu_poisson_hypre/gmres"
         : "gpu_poisson_hypre/cg";
     result.solver_reported_converged = solver_reported_converged;
+    result.residual_independently_certified = residual_independently_certified;
     result.iterations = iterations;
     result.relative_residual = residual;
     result.has_absolute_residual =
         ctx.demag.solver.has_absolute_tolerance != 0 && workspace.b_par != nullptr;
     result.absolute_residual = result.has_absolute_residual
-        ? residual * workspace.b_par->Norml2()
+        ? (residual_independently_certified ? absolute_residual : residual * rhs_norm)
         : 0.0;
     result.relative_tolerance = ctx.demag.solver.relative_tolerance;
     result.has_absolute_tolerance = ctx.demag.solver.has_absolute_tolerance != 0;

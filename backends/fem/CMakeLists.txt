@@ -663,6 +663,16 @@ target_include_directories(fem_rk_explicit_contract PRIVATE
 )
 add_test(NAME fem_rk_explicit_contract COMMAND fem_rk_explicit_contract)
 
+add_executable(
+    fem_llg_time_domain_qualification
+    tests/llg_time_domain_qualification.cpp
+)
+target_link_libraries(fem_llg_time_domain_qualification PRIVATE fullmag_fem)
+target_include_directories(fem_llg_time_domain_qualification PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_executable(fem_heun_step_contract tests/heun_step_contract.cpp)
 target_link_libraries(fem_heun_step_contract PRIVATE fullmag_fem)
 target_include_directories(fem_heun_step_contract PRIVATE

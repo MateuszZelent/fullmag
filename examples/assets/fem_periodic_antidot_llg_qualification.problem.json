@@ -1,0 +1,57 @@
+{
+  "schema_version": "fem_periodic_antidot_llg_qualification_problem.v1",
+  "mesh_asset": "fem_periodic_antidot_llg_qualification.mesh.json",
+  "mesh_sha256": "087b87f922c17b1200d7adc4011721f34e7998b1939907677a06e0df6ab35540",
+  "reduction_provenance": {
+    "source_pipeline": "fullmag generated shared-domain conformal OCC mesh",
+    "source_problem": "fem_periodic_antidot_time_domain_gamma small-baseline",
+    "reduction_rule": "scale the audited lateral cell and hole radius by 0.4, use 8 nm film thickness, preserve the complete v6-certified generated shared-domain mesh",
+    "magnetic_hmin_m": 6e-9,
+    "magnetic_hmax_m": 1.6e-8,
+    "airbox_hmin_m": 1e-8,
+    "airbox_hmax_m": 2e-7
+  },
+  "geometry": {
+    "film_size_m": [8e-8, 8e-8, 8e-9],
+    "hole_radius_m": 1e-8,
+    "airbox_size_m": [8e-8, 8e-8, 7.2e-8],
+    "magnetic_region_marker": 1,
+    "magnetic_refinement_region_marker": 2,
+    "air_region_marker": 0
+  },
+  "periodicity": {
+    "axes": ["periodic", "periodic", "open"],
+    "demag": "periodic_airbox_k0",
+    "pair_ids": ["x_faces", "y_faces"]
+  },
+  "material": {
+    "Ms_A_per_m": 800000.0,
+    "Aex_J_per_m": 1.3e-11,
+    "alpha": 10.0,
+    "g": 2.115
+  },
+  "field": {
+    "B_ext_T": [0.01, 0.0, 0.0]
+  },
+  "solver": {
+    "integrator": "rk45",
+    "dt_initial_s": 1e-15,
+    "dt_min_s": 1e-16,
+    "dt_max_s": 1e-14,
+    "max_err": 1e-6
+  },
+  "demag_solver": {
+    "solver": "CG",
+    "preconditioner": "AMG",
+    "rtol": 1e-12,
+    "max_iterations": 500
+  },
+  "expected_counts": {
+    "nodes": 1781,
+    "elements": 8530,
+    "magnetic_elements": 1769,
+    "air_elements": 6761,
+    "magnetic_nodes": 623,
+    "periodic_node_pairs": 384
+  }
+}

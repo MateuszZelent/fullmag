@@ -8,6 +8,7 @@ namespace fullmag::fem {
 struct DemagLinearSolveResult {
     const char *solver_kind = "unknown";
     bool solver_reported_converged = false;
+    bool residual_independently_certified = false;
     int iterations = 0;
     double relative_residual = 0.0;
     bool has_absolute_residual = false;

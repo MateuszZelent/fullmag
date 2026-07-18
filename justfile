@@ -161,6 +161,71 @@ verify-fem-time-domain-native-contract:
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_oersted_contract fem_state_io_contract fem_snapshot_contract fem_llg_rhs_contract fem_aos_field_contract fem_adaptive_dt_contract fem_rk_explicit_contract fem_stt_contract fem_cuda_tetra_gradient_contract fem_cuda_rk_guard_contract fem_thermal_brown_contract fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_relaxation_operator_contract fem_source_facade_gpu_rk_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_oersted_contract && native/build/backends/fem/fem_state_io_contract && native/build/backends/fem/fem_snapshot_contract && native/build/backends/fem/fem_llg_rhs_contract && native/build/backends/fem/fem_aos_field_contract && native/build/backends/fem/fem_adaptive_dt_contract && native/build/backends/fem/fem_rk_explicit_contract && native/build/backends/fem/fem_stt_contract && native/build/backends/fem/fem_cuda_tetra_gradient_contract && native/build/backends/fem/fem_cuda_rk_guard_contract && native/build/backends/fem/fem_thermal_brown_contract && native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_relaxation_operator_contract && native/build/backends/fem/fem_source_facade_gpu_rk_contract'
 
+verify-fem-llg-time-domain-qualification:
+    rm -rf .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64
+    mkdir -p .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_llg_time_domain_qualification && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_llg_time_domain_qualification .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json'
+    python3 scripts/validate_fem_llg_time_domain_qualification.py .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json
+
+verify-fem-llg-time-domain-qualification-gpu:
+    rm -rf .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64
+    mkdir -p .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64
+    docker compose --profile fem-gpu run --rm \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_llg_time_domain_qualification && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_llg_time_domain_qualification .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/qualification.json gpu'
+    python3 scripts/validate_fem_llg_time_domain_qualification.py .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/qualification.json --device gpu
+
+verify-fem-llg-time-domain-qualification-production:
+    just verify-fem-llg-time-domain-qualification
+    just verify-fem-llg-time-domain-qualification-gpu
+    python3 scripts/compare_fem_llg_time_domain_qualification.py --cpu .fullmag/reports/fem-llg-time-domain-qualification/cpu-fp64/qualification.json --gpu .fullmag/reports/fem-llg-time-domain-qualification/gpu-fp64/qualification.json --output .fullmag/reports/fem-llg-time-domain-qualification/parity-fp64.json
+
+verify-fem-llg-periodic-antidot-qualification-runtime device="cpu":
+    python3 scripts/validate_fem_periodic_antidot_llg_qualification_asset.py examples/assets/fem_periodic_antidot_llg_qualification.problem.json
+    just ensure-managed-fem-runtime
+    mode="{{device}}"; case "$mode" in cpu|gpu) ;; *) echo "device must be cpu or gpu" >&2; exit 2 ;; esac; \
+      root=".fullmag/reports/fem-llg-periodic-antidot-qualification/$mode"; \
+      rm -rf "$root"; mkdir -p "$root"; \
+      if [ "$mode" = cpu ]; then \
+        FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu \
+        FULLMAG_FEM_EXECUTION=cpu FULLMAG_RELAX_DEVICE=cpu FULLMAG_FEM_MFEM_DEVICE=cpu \
+        FULLMAG_CPU_THREADS=auto \
+        '{{gpu_runtime_bin}}' examples/fem_periodic_antidot_llg_qualification.py \
+          --backend fem --headless --json --output-dir "$root/artifacts" \
+          2>&1 | tee "$root/runtime.log"; \
+      else \
+        docker compose --profile fem-gpu run --rm \
+          -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+          -e FULLMAG_PYTHON=/usr/bin/python3 \
+          -e FULLMAG_FDM_EXECUTION=cpu \
+          -e FULLMAG_FEM_EXECUTION=gpu \
+          -e FULLMAG_RELAX_DEVICE=gpu \
+          -e FULLMAG_FEM_MFEM_DEVICE=cuda \
+          -e FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson \
+          -e FULLMAG_CPU_THREADS=auto \
+          -e FULLMAG_HOST_UID="$(id -u)" \
+          -e FULLMAG_HOST_GID="$(id -g)" \
+          fem-gpu bash -lc 'cd /workspace && \
+            trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" .fullmag/reports/fem-llg-periodic-antidot-qualification/gpu 2>/dev/null || true'\'' EXIT && \
+            .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+              examples/fem_periodic_antidot_llg_qualification.py \
+              --backend fem --headless --json \
+              --output-dir .fullmag/reports/fem-llg-periodic-antidot-qualification/gpu/artifacts \
+              2>&1 | tee .fullmag/reports/fem-llg-periodic-antidot-qualification/gpu/runtime.log'; \
+      fi; \
+      python3 scripts/validate_fem_periodic_antidot_llg_qualification_runtime.py \
+        "$root" --device "$mode"
+
+verify-fem-llg-periodic-antidot-qualification-production:
+    just verify-fem-llg-periodic-antidot-qualification-runtime cpu
+    just verify-fem-llg-periodic-antidot-qualification-runtime gpu
+    python3 scripts/compare_fem_periodic_antidot_llg_qualification.py \
+      --cpu .fullmag/reports/fem-llg-periodic-antidot-qualification/cpu \
+      --gpu .fullmag/reports/fem-llg-periodic-antidot-qualification/gpu \
+      --output .fullmag/reports/fem-llg-periodic-antidot-qualification/parity-fp64.json
+
 verify-fdm-time-domain-native-contract:
     docker compose --profile fem-gpu run --rm \
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \

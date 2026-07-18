@@ -14,6 +14,7 @@
 #include "fem_common.hpp"
 
 #include <climits>
+#include <cmath>
 #include <cstdlib>
 #include <cstdint>
 #include <string>
@@ -32,11 +33,13 @@ struct PoissonHypreWorkspace {
         HYPRE_BigInt glob_size,
         HYPRE_BigInt *row_starts)
         : rhs_bc(static_cast<int>(glob_size))
+        , residual(static_cast<int>(glob_size))
         , b_par(comm, glob_size, row_starts)
         , x_par(comm, glob_size, row_starts)
     {}
 
     mfem::Vector rhs_bc;
+    mfem::Vector residual;
     mfem::HypreParVector b_par;
     mfem::HypreParVector x_par;
     bool x_par_contains_solution = false;
@@ -379,16 +382,37 @@ bool solve_demag_poisson_hypre(
         break;
     }
     ctx.poisson_demag.last_iterations = iterations;
+    const double rhs_norm = b_par.Norml2();
+    bool residual_independently_certified = false;
+    double absolute_residual = 0.0;
+    if (!solver_reported_converged) {
+        auto *active_operator = static_cast<mfem::HypreParMatrix *>(
+            ctx.poisson_demag.cached_hypre_par);
+        if (active_operator == nullptr) {
+            error = "independent CPU Poisson residual certification requires the cached Hypre operator";
+            return false;
+        }
+        active_operator->Mult(x_par, poisson_hypre_workspace->residual);
+        poisson_hypre_workspace->residual.Add(-1.0, b_par);
+        absolute_residual = poisson_hypre_workspace->residual.Norml2();
+        final_residual = rhs_norm > 0.0
+            ? static_cast<mfem::real_t>(absolute_residual / rhs_norm)
+            : static_cast<mfem::real_t>(absolute_residual);
+        residual_independently_certified = std::isfinite(absolute_residual);
+    }
     ctx.poisson_demag.last_residual = static_cast<double>(final_residual);
 
     DemagLinearSolveResult result;
     result.solver_kind = solver_kind;
     result.solver_reported_converged = solver_reported_converged;
+    result.residual_independently_certified = residual_independently_certified;
     result.iterations = iterations;
     result.relative_residual = static_cast<double>(final_residual);
     result.has_absolute_residual = ctx.demag.solver.has_absolute_tolerance != 0;
     result.absolute_residual = result.has_absolute_residual
-        ? result.relative_residual * b_par.Norml2()
+        ? (residual_independently_certified
+            ? absolute_residual
+            : result.relative_residual * rhs_norm)
         : 0.0;
     result.relative_tolerance = ctx.demag.solver.relative_tolerance;
     result.has_absolute_tolerance = ctx.demag.solver.has_absolute_tolerance != 0;

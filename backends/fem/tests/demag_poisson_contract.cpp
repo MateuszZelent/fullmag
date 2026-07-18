@@ -68,6 +68,10 @@ void demag_linear_solve_validation_rejects_invalid_results() {
     result.solver_reported_converged = false;
     check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
           "false convergence is rejected even with a small residual");
+    result.residual_independently_certified = true;
+    check(fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "independently certified residual accepts a Hypre zero-iteration solution");
+    result.residual_independently_certified = false;
     result.solver_reported_converged = true;
     result.relative_residual = 1.0e-3;
     check(!fullmag::fem::validate_demag_linear_solve_result(result, error),

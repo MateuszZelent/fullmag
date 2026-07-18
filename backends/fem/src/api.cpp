@@ -2603,6 +2603,8 @@ int fullmag_fem_backend_begin_stage(
     ctx.stepper.workspace.fsal_valid = false;
     ctx.adaptive_dt.prev_error_norm = 1.0;
     ctx.adaptive_dt.has_prev_error_norm = false;
+    ctx.poisson_demag.fresh_initial_guess_required =
+        ctx.demag.enabled && ctx.gpu_state.device.lifecycle.allocated;
     std::fill(ctx.zeeman.h_drive_xyz.begin(), ctx.zeeman.h_drive_xyz.end(), 0.0);
     std::fill(ctx.effective_field.h_xyz.begin(), ctx.effective_field.h_xyz.end(), 0.0);
     handle->last_error.clear();
