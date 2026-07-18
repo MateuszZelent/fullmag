@@ -8,6 +8,7 @@
 #include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
 
 #include "context.hpp"
+#include "core/demag_linear_solve_validation.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
 #include "fem_common.hpp"
@@ -252,7 +253,6 @@ bool solve_demag_poisson_hypre(
             break;
         case FULLMAG_FEM_PRECONDITIONER_NONE: {
             auto *identity = new mfem::HypreIdentity();
-            identity->SetOperator(*A_par);
             preconditioner = identity;
             break;
         }
@@ -348,23 +348,29 @@ bool solve_demag_poisson_hypre(
     solver->Mult(b_par, x_par);
     ctx.poisson_demag.last_solver_apply_wall_time_ns = elapsed_ns(solver_apply_wall_start);
 
-    zero_poisson_essential_values(ctx, x_par);
-    solved_solution = &x_par;
-    poisson_hypre_workspace->x_par_contains_solution = true;
-
     mfem::real_t final_residual = 0.0;
     int iterations = 0;
+    bool solver_reported_converged = false;
+    const char *solver_kind = "cpu_poisson_hypre/unknown";
     switch (ctx.demag.solver.solver) {
     case FULLMAG_FEM_LINEAR_SOLVER_CG: {
         auto *pcg = static_cast<mfem::HyprePCG *>(ctx.poisson_demag.cached_hypre_solver);
         pcg->GetNumIterations(iterations);
         pcg->GetFinalResidualNorm(final_residual);
+        HYPRE_Int converged = 0;
+        HYPRE_PCGGetConverged(static_cast<HYPRE_Solver>(*pcg), &converged);
+        solver_reported_converged = converged != 0;
+        solver_kind = "cpu_poisson_hypre/cg";
         break;
     }
     case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
         auto *gmres = static_cast<mfem::HypreGMRES *>(ctx.poisson_demag.cached_hypre_solver);
         gmres->GetNumIterations(iterations);
         gmres->GetFinalResidualNorm(final_residual);
+        HYPRE_Int converged = 0;
+        HYPRE_GMRESGetConverged(static_cast<HYPRE_Solver>(*gmres), &converged);
+        solver_reported_converged = converged != 0;
+        solver_kind = "cpu_poisson_hypre/gmres";
         break;
     }
     default:
@@ -374,6 +380,29 @@ bool solve_demag_poisson_hypre(
     }
     ctx.poisson_demag.last_iterations = iterations;
     ctx.poisson_demag.last_residual = static_cast<double>(final_residual);
+
+    DemagLinearSolveResult result;
+    result.solver_kind = solver_kind;
+    result.solver_reported_converged = solver_reported_converged;
+    result.iterations = iterations;
+    result.relative_residual = static_cast<double>(final_residual);
+    result.has_absolute_residual = ctx.demag.solver.has_absolute_tolerance != 0;
+    result.absolute_residual = result.has_absolute_residual
+        ? result.relative_residual * b_par.Norml2()
+        : 0.0;
+    result.relative_tolerance = ctx.demag.solver.relative_tolerance;
+    result.has_absolute_tolerance = ctx.demag.solver.has_absolute_tolerance != 0;
+    result.absolute_tolerance = ctx.demag.solver.absolute_tolerance;
+    result.max_iterations = ctx.demag.solver.max_iterations;
+    if (!validate_demag_linear_solve_result(result, error)) {
+        x_par = 0.0;
+        poisson_hypre_workspace->x_par_contains_solution = false;
+        return false;
+    }
+
+    zero_poisson_essential_values(ctx, x_par);
+    solved_solution = &x_par;
+    poisson_hypre_workspace->x_par_contains_solution = true;
 
     return true;
 #else

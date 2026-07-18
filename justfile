@@ -451,7 +451,7 @@ verify-fem-frequency-domain-gpu:
 verify-fem-demag-poisson-contract:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_demag_poisson_contract && cmake --build native/build --target fem_cuda_periodic_demag_contract && cmake --build native/build --target fem_cuda_periodic_exchange_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_demag_poisson_contract && native/build/backends/fem/fem_cuda_periodic_demag_contract && native/build/backends/fem/fem_cuda_periodic_exchange_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_demag_poisson_contract fem_demag_fem_bem_contract fem_cuda_periodic_demag_contract fem_cuda_periodic_exchange_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_demag_poisson_contract && native/build/backends/fem/fem_demag_fem_bem_contract && native/build/backends/fem/fem_cuda_periodic_demag_contract && native/build/backends/fem/fem_cuda_periodic_exchange_contract'
 
 verify-fem-frequency-domain-runtime-suite:
     just verify-fem-frequency-domain-runtime

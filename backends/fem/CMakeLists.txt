@@ -23,6 +23,7 @@ set(FEM_PUBLIC_HEADERS
 set(FEM_SOURCES
     core/fem_field_buffers.cpp
     core/fem_context_builder.cpp
+    core/demag_linear_solve_validation.cpp
     core/fem_element_quadrature_material.cpp
     core/fem_material_fields.cpp
     core/fem_material_runtime.cpp
@@ -400,6 +401,21 @@ add_executable(fem_cuda_demag_timing_contract tests/cuda_demag_timing_contract.c
 add_test(NAME fem_cuda_demag_timing_contract COMMAND fem_cuda_demag_timing_contract)
 
 add_executable(fem_cuda_periodic_demag_contract tests/cuda_periodic_demag_contract.cpp)
+target_link_libraries(fem_cuda_periodic_demag_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_cuda_periodic_demag_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_cuda_periodic_demag_contract PRIVATE mfem)
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        target_link_libraries(fem_cuda_periodic_demag_contract PRIVATE CUDA::cudart)
+    endif()
+endif()
+target_include_directories(fem_cuda_periodic_demag_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 add_test(NAME fem_cuda_periodic_demag_contract COMMAND fem_cuda_periodic_demag_contract)
 
 add_executable(fem_cuda_periodic_exchange_contract tests/cuda_periodic_exchange_contract.cpp)
@@ -888,6 +904,16 @@ add_test(NAME fem_demag_poisson_contract COMMAND fem_demag_poisson_contract)
 
 add_executable(fem_demag_fem_bem_contract tests/demag_fem_bem_contract.cpp)
 target_link_libraries(fem_demag_fem_bem_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_demag_fem_bem_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_demag_fem_bem_contract PRIVATE mfem)
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        target_link_libraries(fem_demag_fem_bem_contract PRIVATE CUDA::cudart)
+    endif()
+endif()
 target_include_directories(fem_demag_fem_bem_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include

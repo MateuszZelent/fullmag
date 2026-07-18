@@ -11,6 +11,7 @@
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
 
 #include "context.hpp"
+#include "core/demag_linear_solve_validation.hpp"
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
 
@@ -136,7 +137,6 @@ bool configure_demag_poisson_hypre_preconditioner(
         return true;
     case FULLMAG_FEM_PRECONDITIONER_NONE: {
         auto identity = std::make_unique<mfem::HypreIdentity>();
-        identity->SetOperator(*workspace.A_par);
         workspace.preconditioner = std::move(identity);
         return true;
     }
@@ -327,10 +327,12 @@ void read_demag_poisson_hypre_solver_stats(
     const Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
     int &iterations,
-    double &residual)
+    double &residual,
+    bool &solver_reported_converged)
 {
     iterations = 0;
     residual = 0.0;
+    solver_reported_converged = false;
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     mfem::real_t raw_residual = 0.0;
     switch (ctx.demag.solver.solver) {
@@ -338,12 +340,18 @@ void read_demag_poisson_hypre_solver_stats(
         auto *pcg = static_cast<mfem::HyprePCG *>(workspace.solver.get());
         pcg->GetNumIterations(iterations);
         pcg->GetFinalResidualNorm(raw_residual);
+        HYPRE_Int converged = 0;
+        HYPRE_PCGGetConverged(static_cast<HYPRE_Solver>(*pcg), &converged);
+        solver_reported_converged = converged != 0;
         break;
     }
     case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
         auto *gmres = static_cast<mfem::HypreGMRES *>(workspace.solver.get());
         gmres->GetNumIterations(iterations);
         gmres->GetFinalResidualNorm(raw_residual);
+        HYPRE_Int converged = 0;
+        HYPRE_GMRESGetConverged(static_cast<HYPRE_Solver>(*gmres), &converged);
+        solver_reported_converged = converged != 0;
         break;
     }
     default:
@@ -353,6 +361,45 @@ void read_demag_poisson_hypre_solver_stats(
 #else
     (void)ctx;
     (void)workspace;
+#endif
+}
+
+bool validate_demag_poisson_hypre_device_solve(
+    const Context &ctx,
+    GpuDemagPoissonWorkspace &workspace,
+    int &iterations,
+    double &residual,
+    std::string &error)
+{
+#if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
+    bool solver_reported_converged = false;
+    read_demag_poisson_hypre_solver_stats(
+        ctx, workspace, iterations, residual, solver_reported_converged);
+
+    DemagLinearSolveResult result;
+    result.solver_kind = ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES
+        ? "gpu_poisson_hypre/gmres"
+        : "gpu_poisson_hypre/cg";
+    result.solver_reported_converged = solver_reported_converged;
+    result.iterations = iterations;
+    result.relative_residual = residual;
+    result.has_absolute_residual =
+        ctx.demag.solver.has_absolute_tolerance != 0 && workspace.b_par != nullptr;
+    result.absolute_residual = result.has_absolute_residual
+        ? residual * workspace.b_par->Norml2()
+        : 0.0;
+    result.relative_tolerance = ctx.demag.solver.relative_tolerance;
+    result.has_absolute_tolerance = ctx.demag.solver.has_absolute_tolerance != 0;
+    result.absolute_tolerance = ctx.demag.solver.absolute_tolerance;
+    result.max_iterations = ctx.demag.solver.max_iterations;
+    return validate_demag_linear_solve_result(result, error);
+#else
+    (void)ctx;
+    (void)workspace;
+    iterations = 0;
+    residual = 0.0;
+    error = "strict FEM GPU demag convergence validation requires MFEM MPI and hypre";
+    return false;
 #endif
 }
 

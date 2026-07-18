@@ -231,11 +231,24 @@ bool compute_device_demag_for_device_stage_impl(
 
     int iterations = 0;
     double residual = 0.0;
-    read_demag_poisson_hypre_solver_stats(ctx, *workspace, iterations, residual);
+    const bool solve_converged = validate_demag_poisson_hypre_device_solve(
+        ctx, *workspace, iterations, residual, reason);
     ctx.poisson_demag.last_iterations = iterations;
     ctx.poisson_demag.last_residual = residual;
     ctx.poisson_demag.last_setup_wall_time_ns = 0;
     ctx.poisson_demag.last_solver_setup_reused = true;
+    if (!solve_converged) {
+        if (!cuda_ok(cudaMemset(
+                gpu.demag_poisson.poisson_solution,
+                0,
+                static_cast<size_t>(gpu.lifecycle.node_count) * sizeof(double)),
+                "cudaMemset rejected GPU Poisson demag candidate",
+                reason)) {
+            return false;
+        }
+        workspace->x_par->HypreWrite();
+        return false;
+    }
 
     if (workspace->hypre_done_event != nullptr) {
         if (!cuda_ok(cudaEventRecord(workspace->hypre_done_event, nullptr),

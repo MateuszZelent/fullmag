@@ -8,6 +8,7 @@
 #include "cpu/mfem/interactions/demag_fem_bem_linear_solve.hpp"
 
 #include "context.hpp"
+#include "core/demag_linear_solve_validation.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
 
@@ -74,9 +75,11 @@ bool solve_demag_fem_bem_serial_system(
     double &residual,
     std::string &error)
 {
-    if (solution.Size() != rhs.Size()) {
-        solution.SetSize(rhs.Size());
-        solution = 0.0;
+    mfem::Vector candidate(rhs.Size());
+    if (solution.Size() == rhs.Size()) {
+        candidate = solution;
+    } else {
+        candidate = 0.0;
     }
 
     const int max_iterations = std::max(1, static_cast<int>(ctx.demag.solver.max_iterations));
@@ -85,8 +88,10 @@ bool solve_demag_fem_bem_serial_system(
     const double abs_tol =
         ctx.demag.solver.has_absolute_tolerance && ctx.demag.solver.absolute_tolerance > 0.0
             ? ctx.demag.solver.absolute_tolerance
-            : 1.0e-24;
+            : 0.0;
 
+    bool solver_reported_converged = false;
+    const char *solver_kind = "fem_bem_serial/unknown";
     if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
         mfem::DSmoother preconditioner(op);
         mfem::GMRESSolver solver;
@@ -97,7 +102,10 @@ bool solve_demag_fem_bem_serial_system(
         solver.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
         solver.SetPreconditioner(preconditioner);
         solver.SetOperator(op);
-        solver.Mult(rhs, solution);
+        solver.Mult(rhs, candidate);
+        iterations = solver.GetNumIterations();
+        solver_reported_converged = solver.GetConverged();
+        solver_kind = "fem_bem_serial/gmres";
     } else {
         mfem::GSSmoother preconditioner(op);
         mfem::CGSolver solver;
@@ -107,24 +115,52 @@ bool solve_demag_fem_bem_serial_system(
         solver.SetPrintLevel(static_cast<int>(ctx.demag.solver.print_level));
         solver.SetPreconditioner(preconditioner);
         solver.SetOperator(op);
-        solver.Mult(rhs, solution);
+        solver.Mult(rhs, candidate);
+        iterations = solver.GetNumIterations();
+        solver_reported_converged = solver.GetConverged();
+        solver_kind = "fem_bem_serial/cg";
     }
 
     mfem::Vector check(rhs.Size());
-    op.Mult(solution, check);
+    op.Mult(candidate, check);
     check -= rhs;
-    residual = check.Norml2();
-    iterations = 0;
-    if (!std::isfinite(residual) || !std::isfinite(solution.Norml2())) {
-        error = "FEM/BEM demag serial sparse solve produced non-finite values";
+    const double absolute_residual = check.Norml2();
+    const double rhs_norm = rhs.Norml2();
+    const double relative_residual = rhs_norm > 0.0
+        ? absolute_residual / rhs_norm
+        : absolute_residual;
+    residual = relative_residual;
+    if (!std::isfinite(candidate.Norml2())) {
+        DemagLinearSolveResult nonfinite_result;
+        nonfinite_result.solver_kind = solver_kind;
+        nonfinite_result.solver_reported_converged = false;
+        nonfinite_result.iterations = iterations;
+        nonfinite_result.relative_residual = relative_residual;
+        nonfinite_result.has_absolute_residual = true;
+        nonfinite_result.absolute_residual = absolute_residual;
+        nonfinite_result.relative_tolerance = rel_tol;
+        nonfinite_result.has_absolute_tolerance = abs_tol > 0.0;
+        nonfinite_result.absolute_tolerance = abs_tol;
+        nonfinite_result.max_iterations = static_cast<uint32_t>(max_iterations);
+        validate_demag_linear_solve_result(nonfinite_result, error);
         return false;
     }
-    const double residual_limit =
-        std::max(abs_tol, rel_tol * std::max(1.0, rhs.Norml2()));
-    if (residual > residual_limit) {
-        error = "FEM/BEM demag serial sparse solve did not converge";
+
+    DemagLinearSolveResult result;
+    result.solver_kind = solver_kind;
+    result.solver_reported_converged = solver_reported_converged;
+    result.iterations = iterations;
+    result.relative_residual = relative_residual;
+    result.has_absolute_residual = true;
+    result.absolute_residual = absolute_residual;
+    result.relative_tolerance = rel_tol;
+    result.has_absolute_tolerance = abs_tol > 0.0;
+    result.absolute_tolerance = abs_tol;
+    result.max_iterations = static_cast<uint32_t>(max_iterations);
+    if (!validate_demag_linear_solve_result(result, error)) {
         return false;
     }
+    solution = candidate;
     return true;
 }
 
@@ -192,7 +228,6 @@ bool solve_demag_fem_bem_sparse_system(
             break;
         case FULLMAG_FEM_PRECONDITIONER_NONE: {
             auto identity = std::make_unique<mfem::HypreIdentity>();
-            identity->SetOperator(*cache->A_par);
             cache->preconditioner = std::move(identity);
             break;
         }
@@ -245,24 +280,61 @@ bool solve_demag_fem_bem_sparse_system(
     // Solve with cached setup.
     cache->solver->Mult(*cache->b_par, *cache->x_par);
     mfem::real_t final_residual = 0.0;
+    bool solver_reported_converged = false;
+    const char *solver_kind = "fem_bem_hypre/unknown";
     if (ctx.demag.solver.solver == FULLMAG_FEM_LINEAR_SOLVER_GMRES) {
         auto *gmres = static_cast<mfem::HypreGMRES *>(cache->solver.get());
         gmres->GetNumIterations(iterations);
         gmres->GetFinalResidualNorm(final_residual);
+        HYPRE_Int converged = 0;
+        HYPRE_GMRESGetConverged(static_cast<HYPRE_Solver>(*gmres), &converged);
+        solver_reported_converged = converged != 0;
+        solver_kind = "fem_bem_hypre/gmres";
     } else {
         auto *pcg = static_cast<mfem::HyprePCG *>(cache->solver.get());
         pcg->GetNumIterations(iterations);
         pcg->GetFinalResidualNorm(final_residual);
+        HYPRE_Int converged = 0;
+        HYPRE_PCGGetConverged(static_cast<HYPRE_Solver>(*pcg), &converged);
+        solver_reported_converged = converged != 0;
+        solver_kind = "fem_bem_hypre/cg";
     }
-    residual = static_cast<double>(final_residual);
 
-    // Copy solution back.
+    // Validate a host candidate before publishing it to the caller.
     const double *solved_host = audited_host_read(*cache->x_par);
-    solution.SetSize(rhs.Size());
-    double *solution_host = audited_host_write(solution);
+    mfem::Vector candidate(rhs.Size());
+    double *candidate_host = audited_host_write(candidate);
     for (int i = 0; i < rhs.Size(); ++i) {
-        solution_host[i] = solved_host[i];
+        candidate_host[i] = solved_host[i];
     }
+    mfem::Vector check(rhs.Size());
+    op.Mult(candidate, check);
+    check -= rhs;
+    const double absolute_residual = check.Norml2();
+    const double rhs_norm = rhs.Norml2();
+    const double relative_residual = rhs_norm > 0.0
+        ? absolute_residual / rhs_norm
+        : absolute_residual;
+    residual = relative_residual;
+
+    DemagLinearSolveResult result;
+    result.solver_kind = solver_kind;
+    result.solver_reported_converged = solver_reported_converged;
+    result.iterations = iterations;
+    result.relative_residual = relative_residual;
+    result.has_absolute_residual = true;
+    result.absolute_residual = absolute_residual;
+    result.relative_tolerance = ctx.demag.solver.relative_tolerance;
+    result.has_absolute_tolerance =
+        ctx.demag.solver.has_absolute_tolerance != 0 &&
+        ctx.demag.solver.absolute_tolerance > 0.0;
+    result.absolute_tolerance = ctx.demag.solver.absolute_tolerance;
+    result.max_iterations = ctx.demag.solver.max_iterations;
+    if (!validate_demag_linear_solve_result(result, error)) {
+        *cache->x_par = 0.0;
+        return false;
+    }
+    solution = candidate;
     return true;
 #else
     (void)cache;

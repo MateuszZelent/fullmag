@@ -7,10 +7,12 @@
  */
 
 #include "context.hpp"
+#include "core/demag_linear_solve_validation.hpp"
 #include "core/fem_material_runtime.hpp"
 #include "cpu/mfem/interactions/demag_poisson.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "cpu/mfem/interactions/demag_poisson_field.hpp"
+#include "cpu/mfem/interactions/demag_poisson_hypre.hpp"
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
@@ -50,6 +52,117 @@ void check(bool condition, const char *msg) {
         std::exit(1);
     }
 }
+
+void demag_linear_solve_validation_rejects_invalid_results() {
+    fullmag::fem::DemagLinearSolveResult result;
+    result.solver_kind = "contract/cg";
+    result.solver_reported_converged = true;
+    result.iterations = 4;
+    result.relative_residual = 1.0e-8;
+    result.relative_tolerance = 1.0e-6;
+    result.max_iterations = 100;
+    std::string error;
+    check(fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "valid converged demag solve result is accepted");
+
+    result.solver_reported_converged = false;
+    check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "false convergence is rejected even with a small residual");
+    result.solver_reported_converged = true;
+    result.relative_residual = 1.0e-3;
+    check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "residual above requested tolerance is rejected");
+    result.relative_residual = std::nan("");
+    check(!fullmag::fem::validate_demag_linear_solve_result(result, error),
+          "non-finite residual is rejected");
+}
+
+#if FULLMAG_HAS_MFEM_STACK
+mfem::SparseMatrix nontrivial_spd_matrix(int size) {
+    mfem::SparseMatrix op(size, size);
+    for (int i = 0; i < size; ++i) {
+        op.Add(i, i, 3.0 + static_cast<double>(i));
+        if (i + 1 < size) {
+            op.Add(i, i + 1, -1.0);
+            op.Add(i + 1, i, -1.0);
+        }
+    }
+    op.Finalize();
+    return op;
+}
+
+void configure_one_iteration_demag_solver(fullmag::fem::Context &ctx) {
+    ctx.demag.solver.solver = FULLMAG_FEM_LINEAR_SOLVER_CG;
+    ctx.demag.solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_NONE;
+    ctx.demag.solver.relative_tolerance = 1.0e-14;
+    ctx.demag.solver.has_absolute_tolerance = 0;
+    ctx.demag.solver.absolute_tolerance = 0.0;
+    ctx.demag.solver.max_iterations = 1;
+    ctx.demag.solver.print_level = 0;
+}
+
+void nonperiodic_hypre_demag_rejects_one_iteration_candidate() {
+    fullmag::fem::Context ctx;
+    configure_one_iteration_demag_solver(ctx);
+    mfem::SparseMatrix op = nontrivial_spd_matrix(8);
+    ctx.poisson_demag.poisson_bc_op = &op;
+
+    mfem::Vector rhs(8);
+    mfem::Vector warm_start(8);
+    warm_start = 0.0;
+    for (int i = 0; i < rhs.Size(); ++i) {
+        rhs(i) = 1.0 + static_cast<double>(i % 3);
+    }
+    const mfem::Vector *solved = reinterpret_cast<const mfem::Vector *>(0x1);
+    std::string error;
+    const bool ok = fullmag::fem::solve_demag_poisson_hypre(
+        ctx, rhs, warm_start, solved, error);
+    check(!ok, "non-periodic Hypre demag must reject a nonconverged one-iteration solve");
+    check(solved == nullptr, "failed non-periodic Hypre demag must not publish a solution");
+    check(error.find("solver_kind=") != std::string::npos, "failure includes solver kind");
+    check(error.find("iterations=1") != std::string::npos, "failure includes iterations");
+    check(error.find("residual=") != std::string::npos, "failure includes residual");
+    check(error.find("relative_tolerance=") != std::string::npos, "failure includes tolerance");
+    check(error.find("max_iterations=1") != std::string::npos, "failure includes maximum iterations");
+    check(!fullmag::fem::demag_poisson_hypre_has_warm_start(ctx),
+          "failed non-periodic Hypre candidate must not become a warm start");
+    fullmag::fem::destroy_demag_poisson_hypre_workspace(ctx);
+    ctx.poisson_demag.poisson_bc_op = nullptr;
+}
+
+void periodic_demag_rejects_one_iteration_candidate() {
+    fullmag::fem::Context ctx;
+    configure_one_iteration_demag_solver(ctx);
+    ctx.demag.enabled = true;
+    ctx.mesh.n_nodes = 8;
+    ctx.mesh.periodic_node_pairs = {0u, 7u};
+    ctx.mesh.periodic_reduced_node = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 0u};
+    ctx.mesh.periodic_representative_nodes = {0u, 1u, 2u, 3u, 4u, 5u, 6u};
+    ctx.mesh.periodic_reduced_node_count = 7;
+    mfem::SparseMatrix op = nontrivial_spd_matrix(8);
+    ctx.poisson_demag.poisson_bc_op = &op;
+    std::string error;
+    check(fullmag::fem::initialize_demag_periodic_poisson_reduction(ctx, error),
+          "periodic test reduction initializes");
+
+    mfem::Vector rhs(8);
+    for (int i = 0; i < rhs.Size(); ++i) {
+        rhs(i) = 1.0 + static_cast<double>(i % 3);
+    }
+    mfem::Vector *solved = reinterpret_cast<mfem::Vector *>(0x1);
+    uint64_t solve_wall_time_ns = 0;
+    error.clear();
+    const bool ok = fullmag::fem::solve_demag_periodic_poisson_reduced(
+        ctx, rhs, solved, solve_wall_time_ns, error);
+    check(!ok, "periodic demag must reject a nonconverged one-iteration solve");
+    check(solved == nullptr, "failed periodic demag must not publish a lifted solution");
+    check(error.find("solver_kind=") != std::string::npos, "periodic failure includes solver kind");
+    check(error.find("max_iterations=1") != std::string::npos,
+          "periodic failure includes maximum iterations");
+    fullmag::fem::destroy_demag_periodic_poisson_reduction(ctx);
+    ctx.poisson_demag.poisson_bc_op = nullptr;
+}
+#endif
 
 std::string read_text_file(const std::filesystem::path &path) {
     std::ifstream in(path);
@@ -885,8 +998,11 @@ void demag_periodic_reduction_is_owned_by_poisson_periodic_module() {
         periodic.find("periodic_workspace->solver.GetNumIterations()") != std::string::npos,
         "Poisson periodic reduced solve must publish actual CG iteration telemetry");
     check(
-        periodic.find("periodic_workspace->solver.GetFinalNorm()") != std::string::npos,
-        "Poisson periodic reduced solve must publish actual CG residual telemetry");
+        periodic.find("periodic_workspace->solver.GetConverged()") != std::string::npos &&
+            periodic.find("validate_demag_linear_solve_result(result, error)") !=
+                std::string::npos &&
+            periodic.find("residual_vector.Norml2()") != std::string::npos,
+        "Poisson periodic reduced solve must validate convergence with a recomputed true residual");
     check(
         periodic.find("*x_p = 0.0;\n    const auto solver_apply_wall_start") !=
             std::string::npos,
@@ -1569,6 +1685,7 @@ void demag_recovered_field_finalize_projects_periodic_and_syncs_visual() {
 } // namespace
 
 int main() {
+    demag_linear_solve_validation_rejects_invalid_results();
     poisson_runtime_wrappers_are_owned_by_separate_modules();
     poisson_aggregate_header_documents_submodule_boundaries();
     poisson_source_files_document_module_boundaries();
@@ -1586,6 +1703,8 @@ int main() {
     sharp_ms_demag_rhs_uses_typed_element_accessor();
 #if FULLMAG_HAS_MFEM_STACK
     sharp_ms_demag_rhs_matches_elementwise_p1_gradient_oracle();
+    nonperiodic_hypre_demag_rejects_one_iteration_candidate();
+    periodic_demag_rejects_one_iteration_candidate();
 #endif
     demag_boundary_operator_is_owned_by_poisson_boundary_module();
     demag_periodic_reduction_is_owned_by_poisson_periodic_module();
