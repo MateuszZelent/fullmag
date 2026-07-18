@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from tests.standard_problems.mumag.sp4.common.references import load_reference_manifest
 from tests.standard_problems.mumag.sp4.common.contract import CONTRACT, validate_device
@@ -13,6 +14,11 @@ from tests.standard_problems.mumag.sp4.common.references import (
     parse_albuquerque_trace,
     parse_oommf_odt,
     parse_ovf2_rectangular,
+)
+from tests.standard_problems.mumag.sp4.fem.verify import (
+    equilibrium_metrics,
+    load_artifact_field,
+    provenance_errors,
 )
 import numpy as np
 import pytest
@@ -86,3 +92,57 @@ def test_metrics_are_fail_closed_and_report_component_values():
     without_crossing = Trajectory(time, np.ones((3, 3)), "bad")
     with pytest.raises(ReferenceDataError):
         find_first_zero_crossing(without_crossing)
+
+
+def test_validator_provenance_rejects_gpu_hybrid_and_fallback():
+    metadata = {
+        "requested_execution": {
+            "backend": "fem", "device": "gpu", "precision": "double",
+            "mode": "strict", "fallback_policy": "forbidden",
+        },
+        "execution_provenance": {
+            "execution_engine": "fem_native_gpu", "precision": "double",
+            "lossy_fallback_used": False,
+            "fem_demag_operator_mode": "device_hypre_poisson",
+            "hypre_execution_policy": "device", "uses_gpu_poisson": True,
+        },
+        "demag_runtime": {"actual_iterations": 7, "final_residual_norm": 1e-10},
+    }
+    assert provenance_errors(metadata, "gpu") == []
+    metadata["execution_provenance"]["fem_demag_operator_mode"] = "hybrid_cpu_poisson"
+    assert "GPU demag is not device_hypre_poisson" in provenance_errors(metadata, "gpu")
+    metadata["execution_provenance"]["lossy_fallback_used"] = True
+    assert "fallback was used or not proven absent" in provenance_errors(metadata, "gpu")
+
+
+def test_validator_loads_magnetic_slice_and_checks_norm(tmp_path):
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "metadata.json").write_text(json.dumps({
+        "execution_plan": {"backend_plan": {
+            "mesh": {"nodes": [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [9, 9, 9]]},
+            "object_segments": [
+                {"object_id": "film", "node_start": 0, "node_count": 4},
+                {"object_id": "__air__", "node_start": 4, "node_count": 1},
+            ],
+        }},
+    }))
+    (artifacts / "m_final.json").write_text(json.dumps({
+        "values": [[1, 0, 0], [0, 1, 0], [0, 0, 1], [-1, 0, 0], [0, 0, 0]],
+    }))
+    nodes, values, info = load_artifact_field(artifacts)
+    assert nodes.shape == values.shape == (4, 3)
+    assert info["norm_defect"] == 0.0
+
+
+def test_equilibrium_gate_requires_full_window_and_reports_drift():
+    rows = [
+        {"time": index * 1e-12, "mx": 0.5 + index * 1e-7, "my": 0.1,
+         "mz": 0.0, "max_torque_T": 5e-6}
+        for index in range(52)
+    ]
+    result = equilibrium_metrics(rows)
+    assert result["maximum_torque_T"] == 5e-6
+    assert max(result["component_drift"]) < 1e-4
+    with pytest.raises(Exception, match="50 ps"):
+        equilibrium_metrics(rows[:20])

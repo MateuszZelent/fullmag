@@ -10,6 +10,8 @@ duration="${FULLMAG_SP4_DURATION_S:-5e-9}"
 qualifying="${FULLMAG_SP4_QUALIFYING:-1}"
 
 mkdir -p "$root"
+export MPLCONFIGDIR="$root/.matplotlib"
+mkdir -p "$MPLCONFIGDIR"
 export FULLMAG_GMSH_THREADS=1
 export FULLMAG_FEM_GPU_DEMAG_MODE=device_hypre_poisson
 
@@ -37,6 +39,8 @@ for mesh in $meshes; do
     for device in $devices; do
       for case_id in $cases; do
         run_root="$root/runs/$device/$mesh/$airbox/$case_id"
+        mkdir -p "$run_root"
+        awk '{print $1}' "$state_root/initial_state.sha256" > "$run_root/source_state.sha256"
         run_phase "$device" dynamic "$case_id" "$mesh" "$airbox" "$state_root/initial_state.json" "$duration" "$run_root/artifacts"
         if [ "$qualifying" = 1 ]; then
           read -r before after < <(python3 - "$run_root/artifacts/scalars.csv" <<'PY'
