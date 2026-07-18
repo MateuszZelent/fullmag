@@ -18,6 +18,8 @@ def test_full_target_is_managed_strict_cpu_gpu_and_fail_closed():
     assert "set -euo pipefail" in script
     assert "replay-before" in script and "replay-after" in script
     assert "tests.standard_problems.mumag.sp4.fem.verify" in script
+    assert script.count('python3 scripts/check_fem_sp4_relaxation.py "$state_root/artifacts"') >= 2
+    assert "fresh SP4 relaxation did not satisfy the qualification gate" in script
 
 
 def test_smoke_is_explicitly_nonqualifying():

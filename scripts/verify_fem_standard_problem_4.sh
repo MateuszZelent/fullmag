@@ -40,6 +40,11 @@ for mesh in $meshes; do
       FULLMAG_SP4_DEVICE=gpu FULLMAG_SP4_PHASE=relax FULLMAG_SP4_CASE=case-a \
         FULLMAG_SP4_MESH="$mesh" FULLMAG_SP4_AIRBOX="$airbox" \
         just fem-sp4-run gpu "$state_root/artifacts"
+      if [ "$qualifying" = 1 ] && \
+         ! python3 scripts/check_fem_sp4_relaxation.py "$state_root/artifacts"; then
+        echo "fresh SP4 relaxation did not satisfy the qualification gate: $mesh/$airbox" >&2
+        exit 1
+      fi
       python3 scripts/write_fem_magnetic_initial_state_from_shared_domain.py \
         "$state_root/artifacts" "$state_root/initial_state.json"
       sha256sum "$state_root/initial_state.json" > "$state_root/initial_state.sha256"
