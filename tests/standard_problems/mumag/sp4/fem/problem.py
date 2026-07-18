@@ -7,7 +7,11 @@ from pathlib import Path
 
 import fullmag as fm
 
-from tests.standard_problems.mumag.sp4.common.contract import CONTRACT, validate_device
+from tests.standard_problems.mumag.sp4.common.contract import (
+    CONTRACT,
+    DEFAULT_RELAXATION_ALGORITHM,
+    validate_device,
+)
 
 
 class SP4RunRequest:
@@ -67,7 +71,7 @@ def build_study(request: SP4RunRequest):
     study.solver(integrator="rk45", gamma=CONTRACT.gamma_mu0_m_per_as, dt_initial=1e-15, dt_min=1e-17, dt_max=1e-12, max_error=1e-7)
     study.tableautosave(CONTRACT.sample_period_s, quantities=["step", "t", "mx", "my", "mz", "e_total", "max_torque_T"])
     if request.phase == "relax":
-        algorithm = os.environ.get("FULLMAG_SP4_RELAX_ALGORITHM", "projected_gradient_bb")
+        algorithm = os.environ.get("FULLMAG_SP4_RELAX_ALGORITHM", DEFAULT_RELAXATION_ALGORITHM)
         maximum_steps = int(os.environ.get("FULLMAG_SP4_RELAX_MAX_STEPS", "50000"))
         torque_tolerance_apm = float(os.environ.get("FULLMAG_SP4_RELAX_TOL_APM", "7.957747154594767"))
         if algorithm == "llg_overdamped":

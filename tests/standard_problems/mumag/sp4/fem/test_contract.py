@@ -2,7 +2,11 @@ from pathlib import Path
 import json
 
 from tests.standard_problems.mumag.sp4.common.references import load_reference_manifest
-from tests.standard_problems.mumag.sp4.common.contract import CONTRACT, validate_device
+from tests.standard_problems.mumag.sp4.common.contract import (
+    CONTRACT,
+    DEFAULT_RELAXATION_ALGORITHM,
+    validate_device,
+)
 from tests.standard_problems.mumag.sp4.common.metrics import (
     find_first_zero_crossing,
     parity_metrics,
@@ -65,6 +69,10 @@ def test_contract_has_exact_nist_si_values_and_cpu_gpu_lanes():
     assert validate_device("gpu") == "gpu"
     with pytest.raises(ValueError):
         validate_device("auto")
+
+
+def test_qualification_defaults_to_monotone_overdamped_llg_relaxation():
+    assert DEFAULT_RELAXATION_ALGORITHM == "llg_overdamped"
 
 
 def test_real_reference_parsers_and_crossings():

@@ -4,6 +4,9 @@ from dataclasses import dataclass
 import math
 
 
+DEFAULT_RELAXATION_ALGORITHM = "llg_overdamped"
+
+
 @dataclass(frozen=True)
 class SP4Case:
     id: str
