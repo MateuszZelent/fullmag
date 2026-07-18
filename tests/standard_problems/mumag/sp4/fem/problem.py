@@ -67,6 +67,7 @@ def build_study(request: SP4RunRequest):
     # keep the same through-thickness interpretation for this qualification.
     body.mesh(maximum_element_size=mesh.hmax_m, order=1)
     study.demag(realization="poisson_robin")
+    study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1e-12, max_iterations=500)
     study.build_domain_mesh()
     study.solver(integrator="rk45", gamma=CONTRACT.gamma_mu0_m_per_as, dt_initial=1e-15, dt_min=1e-17, dt_max=1e-12, max_error=1e-7)
     study.tableautosave(CONTRACT.sample_period_s, quantities=["step", "t", "mx", "my", "mz", "e_total", "max_torque_T"])
