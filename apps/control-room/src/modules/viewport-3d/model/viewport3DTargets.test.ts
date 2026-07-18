@@ -334,7 +334,7 @@ describe("viewport3DTargets", () => {
         },
       } as unknown as VisualizationStateResource),
     ).toMatchObject({
-      opacityPercent: 45,
+      surfaceOpacityPercent: 45,
       pointsVisible: true,
       renderMode: "points",
       shaderVisible: false,
@@ -371,9 +371,9 @@ describe("viewport3DTargets", () => {
       resolveAirboxVisualizationSettingsFromState({
         layers: {
           airbox: {
-            opacity: 0.35,
+            opacity: 0.9,
             points: { opacity: 1, visible: false },
-            surface: { opacity: 1, visible: false },
+            surface: { opacity: 0.35, visible: false },
             vectors: { density: 128, domain: "airbox_only", visible: true },
             visible: true,
             wireframe: { opacity: 1, visible: true },
@@ -381,7 +381,7 @@ describe("viewport3DTargets", () => {
         },
       } as VisualizationStateResource),
     ).toMatchObject({
-      opacityPercent: 35,
+      surfaceOpacityPercent: 35,
       renderMode: "wireframe",
       shaderVisible: false,
       vectorsVisible: true,

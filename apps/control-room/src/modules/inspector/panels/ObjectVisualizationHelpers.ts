@@ -213,6 +213,12 @@ export function viewportRenderingPreferencesPatch(
     ...(patch.primitiveVisible === undefined
       ? {}
       : { primitiveVisible: patch.primitiveVisible }),
+    ...(patch.primitiveMonoColor === undefined
+      ? {}
+      : { primitiveMonoColor: patch.primitiveMonoColor }),
+    ...(patch.primitiveOpacityPercent === undefined
+      ? {}
+      : { primitiveOpacityPercent: patch.primitiveOpacityPercent }),
     ...(patch.vectorCenteringEnabled === undefined
       ? {}
       : { vectorCenteringEnabled: patch.vectorCenteringEnabled }),

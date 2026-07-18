@@ -963,6 +963,9 @@ fn apply_airbox_layer_patch(state: &mut AirboxLayerState, patch: &AirboxLayerPat
     }
     if let Some(surface) = &patch.surface {
         apply_basic_layer_patch(&mut state.surface, surface);
+        if let Some(opacity) = surface.opacity {
+            state.opacity = opacity;
+        }
     }
     if let Some(wireframe) = &patch.wireframe {
         apply_basic_layer_patch(&mut state.wireframe, wireframe);
@@ -975,6 +978,14 @@ fn apply_airbox_layer_patch(state: &mut AirboxLayerState, patch: &AirboxLayerPat
     }
     if let Some(opacity) = patch.opacity {
         state.opacity = opacity;
+        if patch
+            .surface
+            .as_ref()
+            .and_then(|surface| surface.opacity)
+            .is_none()
+        {
+            state.surface.opacity = opacity;
+        }
     }
 }
 
@@ -2047,14 +2058,17 @@ fn object_target_settings(
         active_quantity_id: active_quantity_id.to_string(),
         visible: true,
         bounds_visible: layers.bounds.visible,
+        bounds_opacity: layers.bounds.opacity,
         geometry_scope: VisualizationTargetGeometryScope::Full,
         opacity: layers.surface.opacity,
         point_color: "var(--fm-border-strong)".to_string(),
+        point_opacity: layers.points.opacity,
         points_visible: layers.points.visible,
         render_mode: VisualizationTargetRenderMode::Surface,
         scalar_color_palette: scalar_color_palette.to_string(),
         surface_color_source: surface_color_source_from_vector_color_mode(vector_style.color_mode),
         surface_mono_color: vector_style.mono_color.clone(),
+        surface_opacity: layers.surface.opacity,
         surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
         surface_visible: layers.surface.visible,
         viewport_colorbar_visible: false,
@@ -2083,14 +2097,17 @@ fn airbox_target_settings(
         active_quantity_id: active_quantity_id.to_string(),
         visible: layers.airbox.visible,
         bounds_visible: layers.airbox.bounds.visible,
+        bounds_opacity: layers.airbox.bounds.opacity,
         geometry_scope: VisualizationTargetGeometryScope::Full,
-        opacity: layers.airbox.opacity,
+        opacity: layers.airbox.surface.opacity,
         point_color: "var(--fm-info)".to_string(),
+        point_opacity: layers.airbox.points.opacity,
         points_visible: layers.airbox.points.visible,
         render_mode: VisualizationTargetRenderMode::Wireframe,
         scalar_color_palette: scalar_color_palette.to_string(),
         surface_color_source: SurfaceColorSource::Solid,
         surface_mono_color: "var(--fm-airbox-fill)".to_string(),
+        surface_opacity: layers.airbox.surface.opacity,
         surface_projection_mode: SurfaceFieldProjectionMode::RawNodal,
         surface_visible: layers.airbox.surface.visible,
         viewport_colorbar_visible: false,
@@ -2124,13 +2141,18 @@ fn apply_visualization_target_override(
             if let Some(visible) = bounds.visible {
                 settings.bounds_visible = visible;
             }
+            if let Some(opacity) = bounds.opacity {
+                settings.bounds_opacity = opacity;
+            }
         }
+        let nested_surface_opacity = display.surface.as_ref().and_then(|surface| surface.opacity);
         if let Some(surface) = &display.surface {
             if let Some(visible) = surface.visible {
                 settings.surface_visible = visible;
             }
             if let Some(opacity) = surface.opacity {
                 settings.opacity = opacity;
+                settings.surface_opacity = opacity;
             }
         }
         if let Some(wireframe) = &display.wireframe {
@@ -2145,14 +2167,20 @@ fn apply_visualization_target_override(
             if let Some(visible) = points.visible {
                 settings.points_visible = visible;
             }
+            if let Some(opacity) = points.opacity {
+                settings.point_opacity = opacity;
+            }
         }
         if let Some(vectors) = &display.vectors {
             if let Some(visible) = vectors.visible {
                 settings.vectors_visible = visible;
             }
         }
-        if let Some(opacity) = display.opacity {
-            settings.opacity = opacity;
+        if nested_surface_opacity.is_none() {
+            if let Some(opacity) = display.opacity {
+                settings.surface_opacity = opacity;
+                settings.opacity = opacity;
+            }
         }
         if let Some(geometry_scope) = display.geometry_scope {
             settings.geometry_scope = geometry_scope;

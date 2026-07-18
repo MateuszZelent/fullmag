@@ -4,8 +4,6 @@ import type { ThreeEvent } from "@react-three/fiber";
 import { useMemo } from "react";
 import { Quaternion, Vector3 } from "three";
 
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
-
 import {
   buildRegionOverlayModels,
   type RegionOverlayInput,
@@ -19,7 +17,6 @@ export interface RegionOverlaySelection {
 }
 
 export interface RegionOverlayLayerProps {
-  getRegionSettings?: (region: RegionOverlayInput) => VisualizationTargetSettings;
   onSelectRegion?: (selection: RegionOverlaySelection) => void;
   regions: readonly RegionOverlayInput[];
   selectedObjectId?: string | null;
@@ -43,7 +40,6 @@ function resolveCssColorToken(color: string): string {
 }
 
 export function RegionOverlayLayer({
-  getRegionSettings,
   onSelectRegion,
   regions,
   selectedObjectId = null,
@@ -54,12 +50,11 @@ export function RegionOverlayLayer({
   const models = useMemo(
     () =>
       buildRegionOverlayModels(regions, {
-        resolveSettings: getRegionSettings,
         selectedObjectId,
         selectedRegionId,
         theme,
       }),
-    [getRegionSettings, regions, selectedObjectId, selectedRegionId, theme],
+    [regions, selectedObjectId, selectedRegionId, theme],
   );
 
   if (!visible || models.length === 0) return null;
@@ -104,7 +99,6 @@ function RegionOverlayShape({
   );
 
   const wireframeScale = model.style.wireframeScale;
-  const fillColor = resolveCssColorToken(model.style.surfaceColor ?? model.color);
   const wireframeColor = resolveCssColorToken(
     model.style.wireframeColor ?? model.color,
   );
@@ -120,22 +114,6 @@ function RegionOverlayShape({
         position={model.center}
         quaternion={quaternion}
       >
-        {model.style.fillVisible ? (
-          <mesh
-            onClick={selectRegionFromClick}
-            onPointerDown={handlePointerDown}
-            renderOrder={42}
-          >
-            <RegionOverlayGeometry model={model} />
-            <meshBasicMaterial
-              color={fillColor}
-              depthTest
-              depthWrite={false}
-              opacity={model.style.fillOpacity}
-              transparent
-            />
-          </mesh>
-        ) : null}
         {model.style.wireframeVisible ? (
           <mesh
             onClick={selectRegionFromClick}

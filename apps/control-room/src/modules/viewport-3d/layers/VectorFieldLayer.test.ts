@@ -426,7 +426,7 @@ describe("VectorFieldLayer style mapping", () => {
   it("maps target display settings into shader wireframe and vector layer styles", () => {
     const settings = {
       ...DEFAULT_OBJECT_VISUALIZATION,
-      opacityPercent: 50,
+      surfaceOpacityPercent: 50,
       shaderColorMode: "monochrome",
       shaderMonoColor: "#ff3366",
       surfaceColorSource: "solid",
@@ -440,13 +440,12 @@ describe("VectorFieldLayer style mapping", () => {
     expect(shaderColorFromSettings(settings, "#dddddd")).toBe("#ff3366");
     expect(shaderUsesVertexColors(settings)).toBe(false);
     expect(surfaceScalarColorModeFromSettings(settings)).toBeNull();
-    expect(wireframeOpacityFromSettings(settings)).toBe(0.15);
+    expect(wireframeOpacityFromSettings(settings)).toBe(0.3);
     expect(
       wireframeOpacityFromSettings(settings, { opacity: 0.42 }),
-    ).toBe(0.063);
+    ).toBe(0.126);
     expect(vectorColorModeFromSettings(settings, "orientation")).toBe("x");
     expect(vectorStyleFromSettings(settings, {})).toEqual({
-      alpha: 0.4,
       monoColor: "#44ccff",
       thickness: 2,
     });

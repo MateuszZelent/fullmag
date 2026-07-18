@@ -865,7 +865,7 @@ function checkObjectVisualizationPanelNumberFieldCommitBoundary() {
   requireTokens(surfaceColoringSection, "ObjectVisualizationPanel surface opacity commit boundary", [
     "<NumberField",
     'label="Surface opacity"',
-    "patch({ opacityPercent: value })",
+    "patch({ surfaceOpacityPercent: value })",
   ]);
 }
 

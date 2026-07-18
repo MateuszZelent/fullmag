@@ -12,7 +12,7 @@ export const VERTEX_COLOR_MATERIAL_COLOR = 0xffffff;
 export function opacityFromSettings(
   settings: VisualizationTargetSettings,
 ): number {
-  return percentToUnit(settings.opacityPercent);
+  return percentToUnit(settings.surfaceOpacityPercent);
 }
 
 export function percentToUnit(value: number): number {
@@ -75,7 +75,6 @@ export function vectorStyleFromSettings(
   fallback: VectorFieldLayerVectorStyle,
 ): VectorFieldLayerVectorStyle {
   return {
-    alpha: percentToUnit(settings.vectorAlphaPercent),
     monoColor: renderableStringColor(
       settings.vectorMonoColor,
       fallback.monoColor ?? null,
@@ -102,12 +101,7 @@ export function wireframeOpacityFromSettings(
   settings: VisualizationTargetSettings,
   featureEdges?: Viewport3DMaterialProfile["featureEdges"],
 ): number {
-  const baseOpacity = settings.shaderVisible
-    ? opacityFromSettings(settings)
-    : 1.0;
-  const opacity =
-    baseOpacity *
-    percentToUnit(settings.wireframeOpacityPercent);
+  const opacity = percentToUnit(settings.wireframeOpacityPercent);
   return Math.max(0, Math.min(1, opacity * (featureEdges?.opacity ?? 1)));
 }
 

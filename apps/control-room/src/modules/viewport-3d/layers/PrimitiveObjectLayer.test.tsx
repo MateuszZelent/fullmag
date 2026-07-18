@@ -53,6 +53,23 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     expect(modelSource).not.toContain("computeVertexNormals");
   });
 
+  it("keeps Primitive field-free and driven only by its monochrome local style", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./PrimitiveObjectLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+    const primitiveSurfaceSource = source.slice(
+      source.indexOf("function RenderablePrimitiveObject"),
+      source.indexOf("function PrimitiveObjectGizmo"),
+    );
+
+    expect(primitiveSurfaceSource).toContain("settings.primitiveMonoColor");
+    expect(primitiveSurfaceSource).toContain("renderPlan.primitive.opacity");
+    expect(primitiveSurfaceSource).not.toContain("fieldModel");
+    expect(primitiveSurfaceSource).not.toContain("scalarColors");
+    expect(primitiveSurfaceSource).not.toContain("magnetizationTexturePreview");
+  });
+
   it("creates primitive geometry variants from object bounds", () => {
     expect(createPrimitiveObjectGeometry(primitiveObject("box")).type).toBe(
       "BoxGeometry",
@@ -176,7 +193,7 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       .toBe(true);
   });
 
-  it("does not render primitive surface for mesh-ready objects", () => {
+  it("renders pre-mesh channels only before mesh-ready state", () => {
     expect(
       shouldRenderPrimitiveObject(
         { ...primitiveObject("box"), meshState: "mesh-ready" },
@@ -188,7 +205,7 @@ describe("PrimitiveObjectLayer geometry resources", () => {
         { ...primitiveObject("box"), meshState: "primitive-only" },
         DEFAULT_OBJECT_VISUALIZATION,
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldRenderPrimitiveObject(
         { ...primitiveObject("box"), meshState: "primitive-only" },
@@ -197,7 +214,7 @@ describe("PrimitiveObjectLayer geometry resources", () => {
     ).toBe(true);
   });
 
-  it("requires an explicit primitive visibility opt-in", () => {
+  it("keeps pre-mesh wireframe and bounds independent from primitive fill", () => {
     const settingsWithoutPrimitiveFlag = {
       ...DEFAULT_OBJECT_VISUALIZATION,
     };
@@ -207,6 +224,16 @@ describe("PrimitiveObjectLayer geometry resources", () => {
       shouldRenderPrimitiveObject(
         { ...primitiveObject("box"), meshState: "primitive-only" },
         settingsWithoutPrimitiveFlag,
+      ),
+    ).toBe(true);
+    expect(
+      shouldRenderPrimitiveObject(
+        { ...primitiveObject("box"), meshState: "primitive-only" },
+        {
+          ...settingsWithoutPrimitiveFlag,
+          boundsVisible: false,
+          wireframeVisible: false,
+        },
       ),
     ).toBe(false);
   });

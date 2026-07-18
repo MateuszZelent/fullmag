@@ -161,6 +161,8 @@ export function shouldRenderPrimitiveObject(
   return (
     object.meshState !== "mesh-ready" &&
     settings.visible &&
-    settings.primitiveVisible === true
+    (settings.primitiveVisible === true ||
+      settings.wireframeVisible ||
+      settings.boundsVisible)
   );
 }

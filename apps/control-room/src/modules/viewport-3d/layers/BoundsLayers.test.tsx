@@ -54,7 +54,7 @@ const visibleWireframeAirbox: VisualizationTargetSettings = {
   ...DEFAULT_AIRBOX_VISUALIZATION,
   boundsVisible: false,
   geometryScope: "surface",
-  opacityPercent: 35,
+  surfaceOpacityPercent: 35,
   pointsVisible: false,
   renderMode: "wireframe",
   shaderVisible: false,
@@ -82,7 +82,7 @@ it("lets diagnostics bypass airbox field-color buffer application", () => {
   );
   expect(boundsLayersSource).toContain("useViewport3DScalarColorUpload");
   expect(boundsLayersSource).toContain(
-    "geometry && renderSettings.shaderVisible && fieldColorLayersEnabled",
+    "geometry && renderPlan.surface.visible && fieldColorLayersEnabled",
   );
 });
 
@@ -303,7 +303,7 @@ describe("AirboxLayer", () => {
 
   it("routes the airbox render branch through the parallel wireframe layers", () => {
     expect(boundsLayersSource).toContain(
-      'renderSettings.wireframeVisible && (',
+      'renderPlan.wireframe.visible && (',
     );
     expect(boundsLayersSource).toContain(
       'geometryScope === "full" || !edgeGeometry',
@@ -318,7 +318,7 @@ describe("AirboxLayer", () => {
     expect(
       airboxWireframeOpacityFromSettings({
         ...visibleWireframeAirbox,
-        opacityPercent: 20,
+        surfaceOpacityPercent: 20,
         wireframeOpacityPercent: 100,
       }),
     ).toBe(1);
@@ -326,7 +326,7 @@ describe("AirboxLayer", () => {
       airboxWireframeOpacityFromSettings(
         {
           ...visibleWireframeAirbox,
-          opacityPercent: 20,
+          surfaceOpacityPercent: 20,
           wireframeOpacityPercent: 80,
         },
         { opacity: 0.5 },
@@ -560,15 +560,13 @@ describe("SelectionHighlightLayer", () => {
     });
   });
 
-  it("passes null bounds through to the bounds renderer for no selection", () => {
+  it("does not create a selection pass when there is no selection", () => {
     const element = SelectionHighlightLayerContent({
       bounds: null,
       colors,
       materialProfile,
     });
-    const boundsBox = element as ReactElement<{ bounds: null }>;
-
-    expect(boundsBox.props.bounds).toBeNull();
+    expect(element).toBeNull();
   });
 });
 

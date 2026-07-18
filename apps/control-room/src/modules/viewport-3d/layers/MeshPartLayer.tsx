@@ -62,7 +62,6 @@ import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { eventIntersectsRegionOverlay } from "./regionOverlayPicking";
 import {
-  opacityFromSettings,
   pointColorFromSettings,
   resolveMeshPartSurfaceMaterialColor,
   shaderUsesVertexColors,
@@ -70,8 +69,8 @@ import {
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
   wireframeColorFromSettings,
-  wireframeOpacityFromSettings,
 } from "./viewport3DLayerSettings";
+import { resolveViewport3DTargetRenderPlan } from "./viewport3DTargetRenderPlan";
 import {
   resolveViewport3DTargetSurfaceLayerInput,
   resolveViewport3DTargetLayerRequestedSourceIdentity,
@@ -82,6 +81,10 @@ import type {
   Viewport3DRenderAdoptionReceipt,
   Viewport3DRenderAdoptionRegistry,
 } from "../model/viewport3DRenderAdoptionRegistry";
+import {
+  buildMeshPartSurfaceGeometryUploadKey,
+  resolveMeshPartSurfaceGeometryProjection,
+} from "./meshPartGeometryPlan";
 
 const MESH_PART_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
 
@@ -379,12 +382,10 @@ export const MeshPartLayer = memo(function MeshPartLayer({
   const part = partModel.part;
   const topologyRevision = topologyModel?.meshRevision ?? null;
   const surfaceIndices = partModel.surfaceIndices;
-  const expandSurfaceFaces =
-    renderSettings.surfaceProjectionMode !== "raw_nodal" &&
-    renderSettings.surfaceColorSource !== "solid";
-  const surfaceGeometryProjection = expandSurfaceFaces
-    ? renderSettings.surfaceProjectionMode
-    : "indexed";
+  const surfaceGeometryProjection = resolveMeshPartSurfaceGeometryProjection(
+    renderSettings,
+  );
+  const expandSurfaceFaces = surfaceGeometryProjection !== "indexed";
   const surfaceVertexCount = expandSurfaceFaces
     ? surfaceIndices?.length ?? 0
     : topologyModel?.nodeCount ?? 0;
@@ -406,7 +407,13 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       (surfaceIndices?.byteLength ?? 0),
     invalidate,
     itemCount: surfaceIndices?.length ?? 0,
-    key: `mesh-part-surface:${part.id}:projection=${surfaceGeometryProjection}:topology=${topologyRevision ?? "none"}:positions=${topologyModel?.positions.byteLength ?? 0}:indices=${surfaceIndices?.byteLength ?? 0}`,
+    key: buildMeshPartSurfaceGeometryUploadKey({
+      indicesByteLength: surfaceIndices?.byteLength ?? 0,
+      partId: part.id,
+      positionsByteLength: topologyModel?.positions.byteLength ?? 0,
+      projection: surfaceGeometryProjection,
+      topologyRevision,
+    }),
     lane: "topology-index",
     targetRevision: topologyRevision === null ? null : String(topologyRevision),
     tracker,
@@ -652,7 +659,11 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     vertexColorsEnabled,
     visibleScalarColors,
   });
-  const surfaceOpacity = opacityFromSettings(renderSettings);
+  const renderPlan = resolveViewport3DTargetRenderPlan(
+    renderSettings,
+    materialProfile,
+  );
+  const surfaceOpacity = renderPlan.surface.opacity;
   const surfacePolicy = useMemo(
     () => surfaceMaterialPolicyProps(surfaceOpacity),
     [surfaceOpacity],
@@ -703,11 +714,11 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     partId: part.id,
   });
   const hasAnyVisibleRenderableSubLayer =
-    (renderSettings.shaderVisible && Boolean(geometry)) ||
-    (renderSettings.wireframeVisible && Boolean(edgeGeometry)) ||
-    (renderSettings.pointsVisible && Boolean(pointGeometry)) ||
-    renderSettings.boundsVisible ||
-    (renderSettings.vectorsVisible &&
+    (renderPlan.surface.visible && Boolean(geometry)) ||
+    (renderPlan.wireframe.visible && Boolean(edgeGeometry)) ||
+    (renderPlan.points.visible && Boolean(pointGeometry)) ||
+    renderPlan.bounds.visible ||
+    (renderPlan.vectors.visible &&
       viewport3DVectorLayersEnabledFromBrowserConfig() &&
       Boolean(vectorLayerInput.segments));
 
@@ -738,7 +749,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       onPointerDown={handlePointerDown}
       userData={{ viewportSemanticPickPriority: VIEWPORT_3D_PICK_PRIORITY.meshPart }}
     >
-      {renderSettings.shaderVisible && geometry ? (
+      {renderPlan.surface.visible && geometry ? (
         <mesh
           geometry={geometry}
           renderOrder={surfacePolicy.transparent
@@ -759,36 +770,33 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           )}
         </mesh>
       ) : null}
-      {renderSettings.wireframeVisible && edgeGeometry ? (
+      {renderPlan.wireframe.visible && edgeGeometry ? (
         <lineSegments
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(renderSettings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(
-              renderSettings,
-              materialProfile.featureEdges,
-            )}
+            opacity={renderPlan.wireframe.opacity}
             {...materialPolicyProps("featureEdges")}
           />
         </lineSegments>
       ) : null}
-      {renderSettings.boundsVisible ? (
+      {renderPlan.bounds.visible ? (
         <BoundsBox
           bounds={resolveMeshPartBounds(part)}
           color={colors.accent}
-          opacity={Math.max(opacityFromSettings(renderSettings), 0.35)}
+          opacity={renderPlan.bounds.opacity}
         />
       ) : null}
-      {renderSettings.pointsVisible && pointGeometry ? (
+      {renderPlan.points.visible && pointGeometry ? (
         <points
           geometry={pointGeometry}
           renderOrder={RENDER_POLICIES.points.renderOrder}
         >
           <pointsMaterial
             color={pointColorFromSettings(renderSettings, colors.wire)}
-            opacity={surfaceOpacity}
+            opacity={renderPlan.points.opacity}
             sizeAttenuation={false}
             size={3}
             {...materialPolicyProps("points")}
@@ -796,7 +804,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
         </points>
       ) : null}
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      renderSettings.vectorsVisible ? (
+      renderPlan.vectors.visible ? (
         <VectorFieldLayer
           adoptionRegistry={adoptionRegistry}
           buildReference={vectorLayerInput.buildReference}
@@ -804,7 +812,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
           materialProfile={materialProfile.glyphs}
-          opacity={surfaceOpacity}
+          opacity={renderPlan.vectors.opacity}
           segments={vectorLayerInput.segments}
           fieldBufferId={requestedFieldBufferId}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}

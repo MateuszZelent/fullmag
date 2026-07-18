@@ -1777,9 +1777,8 @@ describe("ribbon structure", () => {
       createVisualizationRibbonContext({
         layers: {
           airbox: {
-            opacity: 0.28,
             points: { opacity: 1, visible: false },
-            surface: { opacity: 1, visible: false },
+            surface: { opacity: 0.28, visible: false },
             vectors: { density: 128, domain: "airbox_only", visible: false },
             visible: true,
             wireframe: { opacity: 1, visible: true },
@@ -1916,9 +1915,8 @@ describe("ribbon structure", () => {
         layers: {
           airbox: {
             bounds: { opacity: 1, visible: false },
-            opacity: 0.28,
             points: { opacity: 1, visible: false },
-            surface: { opacity: 1, visible: false },
+            surface: { opacity: 0.28, visible: false },
             vectors: { density: 1200, domain: "airbox_only", visible: false },
             visible: false,
             wireframe: { opacity: 1, visible: true },

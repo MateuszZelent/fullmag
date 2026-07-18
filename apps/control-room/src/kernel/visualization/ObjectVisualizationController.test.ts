@@ -28,7 +28,7 @@ describe("ObjectVisualizationController", () => {
   it("keeps production style defaults for object and airbox targets", () => {
     expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
       geometryScope: "surface",
-      opacityPercent: 100,
+      surfaceOpacityPercent: 100,
       pointColor: "var(--fm-border-strong)",
       primitiveVisible: false,
       renderMode: "surface+edges",
@@ -49,7 +49,7 @@ describe("ObjectVisualizationController", () => {
     expect(DEFAULT_AIRBOX_VISUALIZATION).toMatchObject({
       activeQuantityId: "H_demag",
       geometryScope: "full",
-      opacityPercent: 28,
+      surfaceOpacityPercent: 28,
       pointColor: "var(--fm-info)",
       renderMode: "wireframe",
       shaderColorMode: "monochrome",
@@ -304,7 +304,7 @@ describe("ObjectVisualizationController", () => {
         activeQuantityId: "h_eff",
         boundsVisible: true,
         geometryScope: "surface",
-        opacityPercent: 44,
+        surfaceOpacityPercent: 44,
         shaderColorMode: "monochrome",
         shaderMonoColor: "#ffffff",
         surfaceColorSource: "solid",
@@ -330,9 +330,8 @@ describe("ObjectVisualizationController", () => {
       layers: {
         airbox: {
           bounds: { visible: true },
-          opacity: 0.44,
           points: { visible: true },
-          surface: { visible: true },
+          surface: { opacity: 0.44, visible: true },
           vectors: { density: 256, domain: "airbox_only", visible: true },
           visible: true,
           wireframe: { opacity: 0.75, visible: true },
@@ -417,9 +416,8 @@ describe("ObjectVisualizationController", () => {
       layers: {
         airbox: {
           bounds: { opacity: 1, visible: false },
-          opacity: 0.28,
           points: { opacity: 1, visible: false },
-          surface: { opacity: 1, visible: false },
+          surface: { opacity: 0.28, visible: false },
           vectors: { density: 1200, domain: "airbox_only", visible: false },
           visible: false,
           wireframe: { opacity: 1, visible: true },
@@ -668,20 +666,20 @@ describe("ObjectVisualizationController", () => {
     const target = { id: "free-layer", kind: "object" as const };
 
     controller.patchTarget(target, {
-      opacityPercent: 41,
+      surfaceOpacityPercent: 41,
       renderMode: "wireframe",
       vectorsVisible: true,
     });
 
     expect(controller.getSettings(target)).toMatchObject({
-      opacityPercent: 41,
+      surfaceOpacityPercent: 41,
       shaderVisible: false,
       vectorsVisible: true,
       wireframeVisible: true,
     });
     expect(controller.getSnapshot().overrides[visualizationTargetKey(target)])
       .toMatchObject({
-        opacityPercent: 41,
+        surfaceOpacityPercent: 41,
         pointsVisible: false,
         shaderVisible: false,
         wireframeVisible: true,
@@ -692,7 +690,7 @@ describe("ObjectVisualizationController", () => {
     controller.clearTarget(target);
 
     expect(controller.getSettings(target)).toMatchObject({
-      opacityPercent: 100,
+      surfaceOpacityPercent: 100,
       renderMode: "surface+edges",
     });
   });
@@ -706,14 +704,14 @@ describe("ObjectVisualizationController", () => {
     };
 
     controller.patchTarget(objectTarget, { visible: false });
-    controller.patchTarget(regionTarget, { opacityPercent: 35 });
+    controller.patchTarget(regionTarget, { surfaceOpacityPercent: 35 });
 
     expect(controller.getSnapshot().overrides[visualizationTargetKey(objectTarget)])
       .toMatchObject({ visible: false });
     expect(controller.getSnapshot().overrides[visualizationTargetKey(regionTarget)])
-      .toMatchObject({ opacityPercent: 35 });
+      .toMatchObject({ surfaceOpacityPercent: 35 });
     expect(controller.getSettings(regionTarget)).toMatchObject({
-      opacityPercent: 35,
+      surfaceOpacityPercent: 35,
       visible: false,
     });
   });
@@ -817,7 +815,7 @@ describe("ObjectVisualizationController", () => {
     expect(controller.getSnapshot()).toBe(initial);
 
     controller.patchTarget(target, {
-      opacityPercent: 41,
+      surfaceOpacityPercent: 41,
       renderMode: "wireframe",
     });
 
@@ -826,7 +824,7 @@ describe("ObjectVisualizationController", () => {
     expect(controller.getSnapshot()).toBe(patched);
 
     controller.patchTarget(target, {
-      opacityPercent: 41,
+      surfaceOpacityPercent: 41,
       renderMode: "wireframe",
     });
 
@@ -908,7 +906,7 @@ describe("ObjectVisualizationController", () => {
     const target = { id: "free-layer", kind: "object" as const };
 
     controller.patchTarget(target, {
-      opacityPercent: 35,
+      surfaceOpacityPercent: 35,
       wireframeVisible: true,
     });
 
@@ -917,7 +915,7 @@ describe("ObjectVisualizationController", () => {
         ...DEFAULT_OBJECT_VISUALIZATION,
         boundsVisible: false,
         geometryScope: "full",
-        opacityPercent: 80,
+        surfaceOpacityPercent: 80,
         pointsVisible: true,
         renderMode: "points",
         shaderVisible: false,
@@ -926,7 +924,7 @@ describe("ObjectVisualizationController", () => {
         wireframeVisible: false,
       }),
     ).toMatchObject({
-      opacityPercent: 35,
+      surfaceOpacityPercent: 35,
       boundsVisible: false,
       pointsVisible: true,
       shaderVisible: false,
@@ -1429,9 +1427,11 @@ describe("ObjectVisualizationController", () => {
           overrides: [
             {
               display: {
+                bounds: { opacity: 0.2, visible: true },
                 geometry_scope: "surface",
                 opacity: 0.35,
-                surface: { visible: false },
+                points: { opacity: 0.7, visible: true },
+                surface: { opacity: 0.3, visible: false },
                 vectors: { visible: true },
                 visible: true,
                 wireframe: { opacity: 0.45, visible: true },
@@ -1464,8 +1464,12 @@ describe("ObjectVisualizationController", () => {
     ).toMatchObject({
       settings: {
         activeQuantityId: "H_demag",
+        boundsOpacityPercent: 20,
+        boundsVisible: true,
         geometryScope: "surface",
-        opacityPercent: 35,
+        pointOpacityPercent: 70,
+        pointsVisible: true,
+        surfaceOpacityPercent: 30,
         scalarColorPalette: "inferno",
         shaderMonoColor: "#00ffaa",
         shaderVisible: false,
@@ -1490,7 +1494,7 @@ describe("ObjectVisualizationController", () => {
   it("serializes target patches into backend-owned display and style overrides", () => {
     const patchWithProjection = {
       geometryScope: "surface",
-      opacityPercent: 35,
+      surfaceOpacityPercent: 35,
       scalarColorPalette: "inferno",
       shaderMonoColor: "#00ffaa",
       surfaceColorSource: "solid",
@@ -1551,7 +1555,7 @@ describe("ObjectVisualizationController", () => {
 
     expect(
       visualizationStateOverrideFromTargetPatch(target, {
-        opacityPercent: 35,
+        surfaceOpacityPercent: 35,
       }),
     ).toEqual({
       display: { surface: { opacity: 0.35 } },
@@ -1685,7 +1689,7 @@ describe("ObjectVisualizationController", () => {
           },
         ],
         { id: "free-layer", kind: "object" },
-        "opacityPercent",
+        "surfaceOpacityPercent",
       ),
     ).toEqual([
       {
@@ -1806,7 +1810,7 @@ describe("ObjectVisualizationController", () => {
           airbox: {
             opacity: 0.31,
             points: { opacity: 1, visible: true },
-            surface: { opacity: 1, visible: false },
+            surface: { opacity: 0.31, visible: false },
             vectors: { density: 64, domain: "airbox_only", visible: true },
             visible: true,
             wireframe: { opacity: 1, visible: true },
@@ -1814,7 +1818,7 @@ describe("ObjectVisualizationController", () => {
         },
       }),
     ).toMatchObject({
-      opacityPercent: 31,
+      surfaceOpacityPercent: 31,
       pointsVisible: true,
       renderMode: "points",
       shaderVisible: false,
@@ -1835,16 +1839,19 @@ describe("ObjectVisualizationController", () => {
             scope_id: "airbox",
             settings: {
               active_quantity_id: "H_demag",
+              bounds_opacity: 1,
               bounds_visible: false,
               geometry_scope: "full",
               opacity: 0.28,
               point_color: "var(--fm-info)",
+              point_opacity: 1,
               points_visible: false,
               render_mode: "surface",
               scalar_color_palette: "viridis",
               surface_color_source: "solid",
               surface_projection_mode: "raw_nodal",
               surface_mono_color: "var(--fm-airbox-fill)",
+              surface_opacity: 0.28,
               surface_visible: false,
               viewport_colorbar_visible: false,
               vector_alpha: 1,
@@ -1880,7 +1887,7 @@ describe("ObjectVisualizationController", () => {
           airbox: {
             opacity: 0.31,
             points: { opacity: 1, visible: false },
-            surface: { opacity: 1, visible: false },
+            surface: { opacity: 0.31, visible: false },
             vectors: { density: 64, domain: "airbox_only", visible: false },
             visible: true,
             wireframe: { opacity: 1, visible: true },
@@ -1894,15 +1901,18 @@ describe("ObjectVisualizationController", () => {
             settings: {
               ...DEFAULT_AIRBOX_VISUALIZATION,
               active_quantity_id: "h_eff",
+              bounds_opacity: 1,
               bounds_visible: true,
               geometry_scope: "surface",
               opacity: 0.28,
+              point_opacity: 1,
               points_visible: false,
               render_mode: "wireframe",
               scalar_color_palette: "inferno",
               surface_color_source: "solid",
               surface_projection_mode: "raw_nodal",
               surface_mono_color: "#112233",
+              surface_opacity: 0.28,
               surface_visible: false,
               viewport_colorbar_visible: false,
               vector_alpha: 0.5,
@@ -1927,7 +1937,7 @@ describe("ObjectVisualizationController", () => {
     ).toMatchObject({
       boundsVisible: true,
       geometryScope: "surface",
-      opacityPercent: 31,
+      surfaceOpacityPercent: 31,
       scalarColorPalette: "inferno",
       shaderMonoColor: "#112233",
       vectorAlphaPercent: 50,
@@ -1996,16 +2006,19 @@ describe("ObjectVisualizationController", () => {
             scope_id: "airbox",
             settings: {
               active_quantity_id: "H_demag",
+              bounds_opacity: 1,
               bounds_visible: false,
               geometry_scope: "full",
               opacity: 0.28,
               point_color: "var(--fm-info)",
+              point_opacity: 1,
               points_visible: false,
               render_mode: "surface",
               scalar_color_palette: "viridis",
               surface_color_source: "solid",
               surface_projection_mode: "raw_nodal",
               surface_mono_color: "var(--fm-airbox-fill)",
+              surface_opacity: 0.28,
               surface_visible: true,
               viewport_colorbar_visible: false,
               vector_alpha: 1,
@@ -2136,7 +2149,7 @@ describe("ObjectVisualizationController", () => {
     expect(
       airboxVisualizationStatePatchFromTargetPatch({
         boundsVisible: true,
-        opacityPercent: 25,
+        surfaceOpacityPercent: 25,
         shaderVisible: true,
         vectorBudget: 64,
         vectorsVisible: true,
@@ -2147,8 +2160,7 @@ describe("ObjectVisualizationController", () => {
       layers: {
         airbox: {
           bounds: { visible: true },
-          opacity: 0.25,
-          surface: { visible: true },
+          surface: { opacity: 0.25, visible: true },
           vectors: { density: 64, domain: "airbox_only", visible: true },
           visible: false,
           wireframe: { visible: false },
@@ -2329,7 +2341,7 @@ describe("ObjectVisualizationController", () => {
     expect(
       visualizationStatePatchFromDefaultTargetPatch({
         boundsVisible: true,
-        opacityPercent: 42,
+        surfaceOpacityPercent: 42,
         pointsVisible: true,
         shaderMonoColor: "#00ffaa",
         surfaceColorSource: "solid",

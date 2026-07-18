@@ -317,9 +317,6 @@ function cloneRegionOverlayWorkerRequest(
     id,
     magneticParts: input.magneticParts.map((part) => ({ ...part })),
     regions: input.regions.map((region) => ({ ...region })),
-    settingsByRegionId: input.settingsByRegionId?.map(
-      ([regionId, settings]) => [regionId, { ...settings }] as const,
-    ),
     topology: cloneRegionOverlayTopology(input.topology),
   };
 }

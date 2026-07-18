@@ -2012,7 +2012,7 @@ function buildSurfaceAction(
         type: "slider",
         id: "surface:opacity",
         label: "Surface opacity",
-        value: settings.opacityPercent,
+        value: settings.surfaceOpacityPercent,
         min: 0,
         max: 100,
         step: 1,
@@ -2020,7 +2020,7 @@ function buildSurfaceAction(
         disabled: passControlsDisabled,
         commandId: RIBBON_VISUALIZATION_PATCH_DEFAULTS_COMMAND,
         commandInput: (value: number) =>
-          visualizationDefaultsCommandInput({ opacityPercent: value }),
+          visualizationDefaultsCommandInput({ surfaceOpacityPercent: value }),
       },
     ],
   };
@@ -2450,7 +2450,7 @@ function buildMeshViewAction(
     shaderVisible: layers?.surface?.visible ?? true,
     wireframeVisible: layers?.wireframe?.visible ?? false,
   });
-  const opacityPercent = layerOpacityPercent(
+  const surfaceOpacityPercent = layerOpacityPercent(
     layers?.surface?.opacity ??
       layers?.wireframe?.opacity ??
       layers?.points?.opacity ??
@@ -2480,7 +2480,7 @@ function buildMeshViewAction(
         type: "slider",
         id: "layers:opacity",
         label: "Mesh opacity",
-        value: opacityPercent,
+        value: surfaceOpacityPercent,
         min: 0,
         max: 100,
         step: 1,
@@ -2862,14 +2862,14 @@ function buildAirboxAction(
         type: "slider",
         id: "airbox:opacity",
         label: "Opacity",
-        value: settings.opacityPercent,
+        value: settings.surfaceOpacityPercent,
         min: 0,
         max: 100,
         step: 1,
         unit: "%",
         commandId: RIBBON_VISUALIZATION_PATCH_AIRBOX_COMMAND,
         commandInput: (value: number) =>
-          visualizationAirboxCommandInput({ opacityPercent: value }),
+          visualizationAirboxCommandInput({ surfaceOpacityPercent: value }),
       },
       { type: "separator", id: "airbox:s0" },
       {
@@ -3427,7 +3427,7 @@ function buildSelectedVisualizationGroup(
             type: "slider",
             id: "selected-opacity:slider",
             label: "Opacity",
-            value: settings?.opacityPercent ?? 100,
+            value: settings?.surfaceOpacityPercent ?? 100,
             min: 0,
             max: 100,
             step: 1,

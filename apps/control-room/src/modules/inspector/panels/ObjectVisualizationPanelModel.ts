@@ -1588,6 +1588,7 @@ export function buildVisualizationPanelSections({
       fields: [
         { id: "visible", kind: "toggle", label: "Visible" },
         { id: "boundsVisible", kind: "toggle", label: "Frame" },
+        { id: "boundsOpacityPercent", kind: "number", label: "Bounds opacity" },
         { id: "vectorsVisible", kind: "toggle", label: "Vectors" },
       ],
       id: "display-passes",
@@ -1606,14 +1607,17 @@ export function buildVisualizationPanelSections({
       fields: [
         { id: "surfaceColorSource", kind: "mode", label: "Color source" },
         { id: "shaderMonoColor", kind: "color", label: "Solid color" },
-        { id: "opacityPercent", kind: "number", label: "Surface opacity" },
+        { id: "surfaceOpacityPercent", kind: "number", label: "Surface opacity" },
       ],
       id: "surface-coloring",
       title: "Surface Coloring",
     },
     {
       disabled: passDisabled || !effectiveSettings.pointsVisible,
-      fields: [{ id: "pointColor", kind: "color", label: "Point color" }],
+      fields: [
+        { id: "pointColor", kind: "color", label: "Point color" },
+        { id: "pointOpacityPercent", kind: "number", label: "Point opacity" },
+      ],
       id: "points",
       title: "Points",
     },

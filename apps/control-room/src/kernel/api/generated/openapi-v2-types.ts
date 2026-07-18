@@ -8355,16 +8355,25 @@ export interface components {
         };
         VisualizationResolvedTargetSettings: {
             active_quantity_id: string;
+            /** Format: double */
+            bounds_opacity: number;
             bounds_visible: boolean;
             geometry_scope: components["schemas"]["VisualizationTargetGeometryScope"];
-            /** Format: double */
+            /**
+             * Format: double
+             * @description Legacy compatibility projection of `surface_opacity`.
+             */
             opacity: number;
             point_color: string;
+            /** Format: double */
+            point_opacity: number;
             points_visible: boolean;
             render_mode: components["schemas"]["VisualizationTargetRenderMode"];
             scalar_color_palette: string;
             surface_color_source: components["schemas"]["SurfaceColorSource"];
             surface_mono_color: string;
+            /** Format: double */
+            surface_opacity: number;
             surface_projection_mode: components["schemas"]["SurfaceFieldProjectionMode"];
             surface_visible: boolean;
             /** Format: double */

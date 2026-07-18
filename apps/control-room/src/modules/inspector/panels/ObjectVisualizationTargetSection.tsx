@@ -8,6 +8,7 @@ import {
   Eye,
   EyeOff,
   ArrowRightLeft,
+  Box,
   SquareDashed,
 } from "lucide-react";
 import React, { useState, useId } from "react";
@@ -161,6 +162,28 @@ export function VisualizationDisplayPassesSection({
           </button>
         ) : null}
 
+        {primitiveDisplayToggleVisible ? (
+          <button
+            aria-label="Toggle monochrome primitive preview"
+            aria-pressed={Boolean(
+              displaySettings.primitiveVisible && displaySettings.visible,
+            )}
+            className={`fm-viz-layer-chip${
+              displaySettings.primitiveVisible && displaySettings.visible
+                ? " fm-viz-layer-chip--on"
+                : ""
+            }`}
+            disabled={passControlsDisabled}
+            type="button"
+            onClick={() =>
+              void patch({ primitiveVisible: !settings.primitiveVisible })
+            }
+          >
+            <Box size={13} strokeWidth={1.75} aria-hidden="true" />
+            Primitive
+          </button>
+        ) : null}
+
         <button
           aria-label="Toggle vector field arrows"
           aria-pressed={displaySettings.vectorsVisible && displaySettings.visible}
@@ -180,7 +203,44 @@ export function VisualizationDisplayPassesSection({
         </button>
       </div>
 
-      {primitiveDisplayToggleVisible ? <ViewportPreferenceScopeNote /> : null}
+      {capabilities.showBoundsControl && settings.boundsVisible ? (
+        <NumberField
+          disabled={pending || passControlsDisabled}
+          label="Bounds opacity"
+          max={100}
+          min={0}
+          step={1}
+          unit="%"
+          value={settings.boundsOpacityPercent}
+          onChange={(value) => void patch({ boundsOpacityPercent: value })}
+        />
+      ) : null}
+
+      {primitiveDisplayToggleVisible && settings.primitiveVisible ? (
+        <div className="grid min-w-0 gap-fm-inspector-row pt-fm-inspector-row">
+          <ColorField
+            disabled={pending}
+            label="Primitive color"
+            value={settings.primitiveMonoColor ?? settings.shaderMonoColor}
+            onChange={(value) => void patch({ primitiveMonoColor: value })}
+          />
+          <NumberField
+            disabled={pending}
+            label="Primitive opacity"
+            max={100}
+            min={0}
+            step={1}
+            unit="%"
+            value={settings.primitiveOpacityPercent ?? 100}
+            onChange={(value) =>
+              void patch({ primitiveOpacityPercent: value })
+            }
+          />
+          <ViewportPreferenceScopeNote />
+        </div>
+      ) : primitiveDisplayToggleVisible ? (
+        <ViewportPreferenceScopeNote />
+      ) : null}
     </div>
   );
 }
@@ -439,8 +499,8 @@ export function VisualizationSurfaceColoringSection({
         min={0}
         step={1}
         unit="%"
-        value={settings.opacityPercent}
-        onChange={(value) => void patch({ opacityPercent: value })}
+        value={settings.surfaceOpacityPercent}
+        onChange={(value) => void patch({ surfaceOpacityPercent: value })}
       />
       <InspectorPropertyRow label="Field status">
         <span className="font-fm-mono text-fm-control text-fm-secondary">
@@ -650,11 +710,13 @@ export function VisualizationQuantitySection({
 }
 
 export function VisualizationPointsSection({
+  patch,
   patchColor,
   pending,
   sectionDisabled,
   settings,
 }: {
+  patch: PatchVisualizationTarget;
   patchColor: (field: "pointColor", value: string) => void;
   pending: boolean;
   sectionDisabled: SectionDisabled;
@@ -667,6 +729,16 @@ export function VisualizationPointsSection({
         label="Point color"
         value={settings.pointColor}
         onChange={(value) => patchColor("pointColor", value)}
+      />
+      <NumberField
+        disabled={pending || sectionDisabled("points")}
+        label="Point opacity"
+        max={100}
+        min={0}
+        step={1}
+        unit="%"
+        value={settings.pointOpacityPercent}
+        onChange={(value) => void patch({ pointOpacityPercent: value })}
       />
     </InspectorGroup>
   );

@@ -195,7 +195,6 @@ interface Viewport3DSceneProps {
   orbitDebugCommitRevision: number;
   orbitDebugRevision: number;
   fallbackSettings: VisualizationTargetSettings;
-  getRegionSettings: (region: RegionOverlayInput) => VisualizationTargetSettings;
   primitiveModel: Viewport3DPrimitiveRenderModel | null;
   resetCameraRevision: number;
   requestDiagnostics: RequestDiagnosticsController;
@@ -782,7 +781,6 @@ function Viewport3DModelLayerStack({
   fieldVector,
   fallbackSettings,
   femDomain,
-  getRegionSettings,
   hysteresisReplayGlyphModel,
   getObjectSettings,
   getPartSettings,
@@ -829,7 +827,6 @@ function Viewport3DModelLayerStack({
   | "fieldVector"
   | "fallbackSettings"
   | "femDomain"
-  | "getRegionSettings"
   | "getObjectSettings"
   | "getPartSettings"
   | "hysteresisReplayGlyphModel"
@@ -879,21 +876,6 @@ function Viewport3DModelLayerStack({
   });
   const stageVisibility =
     resolveViewport3DModelLayerStageVisibility(modelLayerStage);
-  const renderedMeshRegionSurfacePartIds = useMemo(
-    () =>
-      new Set(
-        femDomain.magneticParts.flatMap((part) => (part.id ? [part.id] : [])),
-    ),
-    [femDomain.magneticParts],
-  );
-  const renderedMeshRegionSurfacePartIdList = useMemo(
-    () => [...renderedMeshRegionSurfacePartIds].toSorted(),
-    [renderedMeshRegionSurfacePartIds],
-  );
-  const meshRegionOverlaySettingsByRegionId = useMemo(
-    () => resolveRegionSettingsEntries(meshRegionOverlays, getRegionSettings),
-    [getRegionSettings, meshRegionOverlays],
-  );
   const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
   const overlayLayersEnabled = viewport3DOverlayLayersEnabledFromBrowserConfig();
   const realizedRegionOverlaysVisible =
@@ -907,11 +889,8 @@ function Viewport3DModelLayerStack({
     enabled: realizedRegionOverlaysVisible,
     magneticParts: meshRegionOverlayParts,
     regions: meshRegionOverlays,
-    renderedSurfacePartIds: renderedMeshRegionSurfacePartIdList,
     selectedObjectId,
     selectedRegionId,
-    settingsByRegionId: meshRegionOverlaySettingsByRegionId,
-    targetVisualizationRevision: visualizationRevision,
     topology,
     topologyRevision,
   });
@@ -943,7 +922,6 @@ function Viewport3DModelLayerStack({
     <>
       {authoredRegionOverlaysVisible ? (
         <RegionOverlayNativePickingLayer
-          getRegionSettings={getRegionSettings}
           onSelectRegion={onSelectRegion}
           regions={regionOverlays}
           selectedObjectId={selectedObjectId}
@@ -1036,7 +1014,6 @@ function Viewport3DModelLayerStack({
       <PeriodicPairsOverlayLayer model={periodicOverlayModel} tracker={tracker} />
       {authoredRegionOverlaysVisible ? (
         <RegionOverlayLayer
-          getRegionSettings={getRegionSettings}
           onSelectRegion={onSelectRegion}
           regions={regionOverlays}
           selectedObjectId={selectedObjectId}
@@ -1063,13 +1040,11 @@ function Viewport3DModelLayerStack({
 }
 
 function RegionOverlayNativePickingLayer({
-  getRegionSettings,
   onSelectRegion,
   regions,
   selectedObjectId,
   selectedRegionId,
 }: {
-  getRegionSettings: (region: RegionOverlayInput) => VisualizationTargetSettings;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
   regions: readonly RegionOverlayInput[];
   selectedObjectId: string | null;
@@ -1079,11 +1054,10 @@ function RegionOverlayNativePickingLayer({
   const regionPickModels = useMemo(
     () =>
       buildRegionOverlayModels(regions, {
-        resolveSettings: getRegionSettings,
         selectedObjectId,
         selectedRegionId,
       }),
-    [getRegionSettings, regions, selectedObjectId, selectedRegionId],
+    [regions, selectedObjectId, selectedRegionId],
   );
   const handleSelectRegion = useEffectEvent(onSelectRegion);
 
@@ -1122,23 +1096,6 @@ function RegionOverlayNativePickingLayer({
   }, [camera, gl, regionPickModels]);
 
   return null;
-}
-
-function resolveRegionSettingsEntries(
-  regions: readonly RegionOverlayInput[],
-  getRegionSettings: (region: RegionOverlayInput) => VisualizationTargetSettings,
-): Array<readonly [string, VisualizationTargetSettings]> {
-  return regions.flatMap((region) =>
-    typeof region.region_id === "string"
-      ? [[region.region_id, getRegionSettings(region)] as const]
-      : [],
-  );
-}
-
-export function hasExplicitVisibleRegionSettings(
-  entries: readonly (readonly [string, VisualizationTargetSettings])[],
-): boolean {
-  return entries.some(([, settings]) => settings.visible);
 }
 
 function Viewport3DInteractionAndHudStack({
@@ -1238,7 +1195,6 @@ export function Viewport3DScene({
   fallbackSettings,
   getObjectSettings,
   getPartSettings,
-  getRegionSettings,
   hysteresisReplayGlyphModel,
   magnetizationTexturePreviews,
   meshQualityColors,
@@ -1406,7 +1362,6 @@ export function Viewport3DScene({
         femDomain={femDomain}
         getObjectSettings={getObjectSettings}
         getPartSettings={getPartSettings}
-        getRegionSettings={getRegionSettings}
         hysteresisReplayGlyphModel={hysteresisReplayGlyphModel}
         magnetizationTexturePreviews={magnetizationTexturePreviews}
         materialProfile={materialProfile}

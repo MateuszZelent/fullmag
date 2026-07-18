@@ -94,7 +94,12 @@ import {
 import { Viewport3DScene } from "./layers/Viewport3DScene";
 import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
 import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
-import type { RegionOverlayMode } from "./regionOverlayMode";
+import {
+  DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE,
+  regionDiagnosticOverlayMode,
+  type RegionDiagnosticOverlaySource,
+  type RegionDiagnosticOverlayState,
+} from "./regionOverlayMode";
 import { Viewport3DCameraDialog } from "./components/Viewport3DCameraDialog";
 import { Viewport3DSettingsDialog } from "./components/Viewport3DSettingsDialog";
 import { Viewport3DCanvas } from "./Viewport3DCanvas";
@@ -673,9 +678,41 @@ export function resolveViewport3DColorbarLegendsFromPlans({
   labelByTargetId: ReadonlyMap<string, string>;
   plans: readonly Viewport3DColorbarPlan[];
 }): Viewport3DScopedColorbarLegend[] {
-  return plans.map((plan) =>
+  const sharedScalePlans = new Map<string, Viewport3DColorbarPlan>();
+  for (const plan of plans) {
+    const scaleKey = viewport3DColorbarEffectiveScaleKey(plan);
+    const existing = sharedScalePlans.get(scaleKey);
+    if (!existing) {
+      sharedScalePlans.set(scaleKey, plan);
+      continue;
+    }
+    sharedScalePlans.set(scaleKey, {
+      ...existing,
+      renderKey: `viewport-3d-colorbar:shared:${scaleKey}`,
+      targetIds: Array.from(
+        new Set([...existing.targetIds, ...plan.targetIds]),
+      ).toSorted(),
+    });
+  }
+
+  return Array.from(sharedScalePlans.values(), (plan) =>
     resolveViewport3DColorbarLegendFromPlan({ labelByTargetId, plan }),
   );
+}
+
+function viewport3DColorbarEffectiveScaleKey(
+  plan: Viewport3DColorbarPlan,
+): string {
+  return [
+    resolveCanonicalQuantityId(plan.quantityId),
+    plan.colorMode,
+    plan.palette,
+    plan.projectionMode,
+    plan.rangeSource,
+    plan.rangeState,
+    plan.range?.min ?? "none",
+    plan.range?.max ?? "none",
+  ].join(":");
 }
 
 export function resolveViewport3DScalarColorbarLegends({
@@ -1074,7 +1111,9 @@ interface Viewport3DFrameProps
     patch: NonNullable<VisualizationStatePatch["camera"]>,
   ) => void;
   onClearSelection: () => void;
-  onRegionOverlayModeChange: (mode: RegionOverlayMode) => void;
+  onRegionOverlaySourceChange: (source: RegionDiagnosticOverlaySource) => void;
+  onRegionOverlayVisibilityChange: (visible: boolean) => void;
+  regionDiagnosticOverlayState: RegionDiagnosticOverlayState;
   quantityId: string;
   renderedMeshRevision: number | string | null;
   scalarColorPalette: string;
@@ -1107,8 +1146,10 @@ export default function Viewport3DModule({
   const resourceCounts = useViewport3DResourceCounts(tracker);
   const commandState = useViewport3DCommandState();
   const meshSizeHighlight = useMeshSizeHistogramHighlight(kernel.bus);
-  const [regionOverlayMode, setRegionOverlayMode] =
-    useState<RegionOverlayMode>("auto");
+  const [regionDiagnosticOverlayState, setRegionDiagnosticOverlayState] =
+    useState<RegionDiagnosticOverlayState>(
+      DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE,
+    );
   const meshHistogramBinElements = useMeshHistogramBinElementsResource(
     meshSizeHighlight?.resource ?? null,
   );
@@ -1188,6 +1229,15 @@ export default function Viewport3DModule({
   const endCameraInteraction = useCallback(() => {
     kernel.cameraRegistry.endInteraction();
   }, [kernel.cameraRegistry]);
+  const changeRegionOverlaySource = useCallback(
+    (source: RegionDiagnosticOverlaySource) => {
+      setRegionDiagnosticOverlayState((state) => ({ ...state, source }));
+    },
+    [],
+  );
+  const changeRegionOverlayVisibility = useCallback((visible: boolean) => {
+    setRegionDiagnosticOverlayState((state) => ({ ...state, visible }));
+  }, []);
 
   return (
     <Viewport3DErrorBoundary diagnosticRecorder={kernel.diagnosticRecorder}>
@@ -1207,7 +1257,8 @@ export default function Viewport3DModule({
       kernel={kernel}
       onCameraPatch={patchCameraState}
       onClearSelection={clear}
-      onRegionOverlayModeChange={setRegionOverlayMode}
+      onRegionOverlaySourceChange={changeRegionOverlaySource}
+      onRegionOverlayVisibilityChange={changeRegionOverlayVisibility}
       onSelectDomain={onSelectDomain}
       onSelectObject={onSelectObject}
       onSelectPart={onSelectPart}
@@ -1221,7 +1272,8 @@ export default function Viewport3DModule({
       inspectRevision={commandState.widgets.inspectRevision}
       requestDiagnostics={kernel.diagnostics}
       resetCameraRevision={commandState.resetCameraRevision}
-      regionOverlayMode={regionOverlayMode}
+      regionDiagnosticOverlayState={regionDiagnosticOverlayState}
+      regionOverlayMode={regionDiagnosticOverlayMode(regionDiagnosticOverlayState)}
       rotationMode={commandState.widgets.rotationMode}
       scaleLabelsVisible={commandState.widgets.scaleLabelsVisible}
       scaleUnitMode={commandState.widgets.scaleUnitMode}
@@ -1303,7 +1355,9 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   meshQualityRange,
   onCameraPatch,
   onClearSelection,
-  onRegionOverlayModeChange,
+  onRegionOverlaySourceChange,
+  onRegionOverlayVisibilityChange,
+  regionDiagnosticOverlayState,
   quantityId,
   selectedLabel,
   slotId,
@@ -1736,9 +1790,23 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             aria-label="Region overlays"
             className="fm-viewport-3d__region-modes"
           >
+            <Button
+              aria-pressed={regionDiagnosticOverlayState.visible}
+              size="sm"
+              type="button"
+              variant={
+                regionDiagnosticOverlayState.visible ? "primary" : "secondary"
+              }
+              onClick={() =>
+                onRegionOverlayVisibilityChange(
+                  !regionDiagnosticOverlayState.visible,
+                )
+              }
+            >
+              Regions
+            </Button>
             {(
               [
-                ["off", "Off"],
                 ["auto", "Auto"],
                 ["authored", "Authored"],
                 ["realized", "Realized"],
@@ -1747,19 +1815,20 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
             ).map(([mode, label]) => (
               <Button
                 key={mode}
-                aria-pressed={sceneProps.regionOverlayMode === mode}
+                aria-pressed={regionDiagnosticOverlayState.source === mode}
                 disabled={
-                  mode === "realized" &&
-                  sceneProps.meshRegionOverlays.length === 0
+                  !regionDiagnosticOverlayState.visible ||
+                  (mode === "realized" &&
+                    sceneProps.meshRegionOverlays.length === 0)
                 }
                 size="sm"
                 type="button"
                 variant={
-                  sceneProps.regionOverlayMode === mode
+                  regionDiagnosticOverlayState.source === mode
                     ? "primary"
                     : "secondary"
                 }
-                onClick={() => onRegionOverlayModeChange(mode)}
+                onClick={() => onRegionOverlaySourceChange(mode)}
               >
                 {label}
               </Button>

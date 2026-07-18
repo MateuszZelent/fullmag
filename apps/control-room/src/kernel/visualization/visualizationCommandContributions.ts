@@ -251,7 +251,7 @@ function numberPatchCommand(
   title: string,
   patchKey: keyof Pick<
     VisualizationTargetPatch,
-    | "opacityPercent"
+    | "surfaceOpacityPercent"
     | "vectorAlphaPercent"
     | "vectorThickness"
     | "wireframeOpacityPercent"
@@ -345,7 +345,7 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
   numberPatchCommand(
     "visualization.target.set-opacity-percent",
     "Set selected target surface opacity",
-    "opacityPercent",
+    "surfaceOpacityPercent",
   ),
   numberPatchCommand(
     "visualization.target.set-vector-alpha-percent",

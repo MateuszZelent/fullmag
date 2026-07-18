@@ -1237,7 +1237,7 @@ describe("ObjectVisualizationPanelModel", () => {
           expect.objectContaining({ id: "surfaceColorSource" }),
           expect.objectContaining({ id: "shaderMonoColor" }),
           expect.objectContaining({
-            id: "opacityPercent",
+            id: "surfaceOpacityPercent",
             label: "Surface opacity",
           }),
         ]),

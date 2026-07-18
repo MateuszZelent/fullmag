@@ -57,7 +57,6 @@ import {
 } from "./viewport3DLayerPassInputs";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import {
-  opacityFromSettings,
   pointColorFromSettings,
   shaderUsesVertexColors,
   surfaceMaterialColorFromSettings,
@@ -65,8 +64,11 @@ import {
   vectorColorModeFromSettings,
   vectorStyleFromSettings,
   wireframeColorFromSettings,
-  wireframeOpacityFromSettings,
 } from "./viewport3DLayerSettings";
+import {
+  resolveViewport3DTargetRenderPlan,
+  type Viewport3DTargetRenderPlan,
+} from "./viewport3DTargetRenderPlan";
 
 const FALLBACK_TOPOLOGY_GEOMETRY_UPLOAD_FRAME_BUDGET_MS = 3;
 
@@ -261,7 +263,11 @@ export function FallbackTopologyMeshLayer({
     vertexColorsEnabled &&
     canUseVertexScalarColors &&
     visibleScalarColors === effectiveScalarColors;
-  const surfaceOpacity = opacityFromSettings(renderSettings);
+  const renderPlan = resolveViewport3DTargetRenderPlan(
+    renderSettings,
+    materialProfile,
+  );
+  const surfaceOpacity = renderPlan.surface.opacity;
   const surfacePolicy = useMemo(
     () => surfaceMaterialPolicyProps(surfaceOpacity),
     [surfaceOpacity],
@@ -302,11 +308,11 @@ export function FallbackTopologyMeshLayer({
   }, [scalarShaderMaterial, surfaceOpacity, visibleShaderScalarColors]);
 
   const hasAnyVisibleSubLayer =
-    renderSettings.shaderVisible ||
-    renderSettings.wireframeVisible ||
-    renderSettings.pointsVisible ||
-    renderSettings.vectorsVisible ||
-    renderSettings.boundsVisible;
+    renderPlan.surface.visible ||
+    renderPlan.wireframe.visible ||
+    renderPlan.points.visible ||
+    renderPlan.vectors.visible ||
+    renderPlan.bounds.visible;
   if (
     !renderSettings.visible ||
     !hasAnyVisibleSubLayer
@@ -339,6 +345,7 @@ export function FallbackTopologyMeshLayer({
       onPointerDown={handlePointerDown}
       pointGeometry={pointGeometry}
       renderSettings={renderSettings}
+      renderPlan={renderPlan}
       scalarShaderMaterial={scalarShaderMaterial}
       surfaceOpacity={surfaceOpacity}
       surfacePolicy={surfacePolicy}
@@ -360,6 +367,7 @@ function FallbackTopologyMeshPrimitives({
   onPointerDown,
   pointGeometry,
   renderSettings,
+  renderPlan,
   scalarShaderMaterial,
   surfaceOpacity,
   surfacePolicy,
@@ -377,6 +385,7 @@ function FallbackTopologyMeshPrimitives({
   onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
   pointGeometry: BufferGeometry | null;
   renderSettings: VisualizationTargetSettings;
+  renderPlan: Viewport3DTargetRenderPlan;
   scalarShaderMaterial: ReturnType<typeof createScalarSurfaceShaderMaterial> | null;
   surfaceOpacity: number;
   surfacePolicy: ReturnType<typeof surfaceMaterialPolicyProps>;
@@ -388,7 +397,7 @@ function FallbackTopologyMeshPrimitives({
 }) {
   return (
     <group onPointerDown={onPointerDown}>
-      {renderSettings.shaderVisible && geometry ? (
+      {renderPlan.surface.visible && geometry ? (
         <mesh
           geometry={geometry}
           renderOrder={
@@ -414,29 +423,26 @@ function FallbackTopologyMeshPrimitives({
           )}
         </mesh>
       ) : null}
-      {renderSettings.wireframeVisible && edgeGeometry ? (
+      {renderPlan.wireframe.visible && edgeGeometry ? (
         <lineSegments
           geometry={edgeGeometry}
           renderOrder={RENDER_POLICIES.featureEdges.renderOrder}
         >
           <lineBasicMaterial
             color={wireframeColorFromSettings(renderSettings, colors.wire)}
-            opacity={wireframeOpacityFromSettings(
-              renderSettings,
-              materialProfile.featureEdges,
-            )}
+            opacity={renderPlan.wireframe.opacity}
             {...materialPolicyProps("featureEdges")}
           />
         </lineSegments>
       ) : null}
-      {renderSettings.pointsVisible && pointGeometry ? (
+      {renderPlan.points.visible && pointGeometry ? (
         <points
           geometry={pointGeometry}
           renderOrder={RENDER_POLICIES.points.renderOrder}
         >
           <pointsMaterial
             color={pointColorFromSettings(renderSettings, colors.wire)}
-            opacity={surfaceOpacity}
+            opacity={renderPlan.points.opacity}
             sizeAttenuation={false}
             size={3}
             {...materialPolicyProps("points")}
@@ -444,7 +450,7 @@ function FallbackTopologyMeshPrimitives({
         </points>
       ) : null}
       {viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      renderSettings.vectorsVisible ? (
+      renderPlan.vectors.visible ? (
         <VectorFieldLayer
           buildReference={vectorBuildReference}
           colors={colors}
@@ -453,7 +459,7 @@ function FallbackTopologyMeshPrimitives({
             vectorColorMode,
           )}
           materialProfile={materialProfile.glyphs}
-          opacity={surfaceOpacity}
+          opacity={renderPlan.vectors.opacity}
           segments={vectorSegments}
           style={vectorStyleFromSettings(renderSettings, vectorStyle)}
           tracker={tracker}

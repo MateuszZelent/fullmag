@@ -75,10 +75,12 @@ function visualizationSettings(
   return {
     activeQuantityId: patch.activeQuantityId ?? "m",
     airboxSyntheticVectorsEnabled: patch.airboxSyntheticVectorsEnabled ?? false,
+    boundsOpacityPercent: patch.boundsOpacityPercent ?? 100,
     boundsVisible: patch.boundsVisible ?? true,
     geometryScope: patch.geometryScope ?? "full",
-    opacityPercent: patch.opacityPercent ?? 100,
+    surfaceOpacityPercent: patch.surfaceOpacityPercent ?? 100,
     pointColor: patch.pointColor ?? "#ffffff",
+    pointOpacityPercent: patch.pointOpacityPercent ?? 100,
     pointsVisible: patch.pointsVisible ?? false,
     primitiveVisible: patch.primitiveVisible,
     renderMode: patch.renderMode ?? "surface",
@@ -899,6 +901,93 @@ describe("resolveViewport3DColorbarLegend", () => {
     ]);
   });
 
+  it("merges parent and inherited region legends when their effective scale is identical", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      parts: [
+        {
+          id: "part:film",
+          label: "Film",
+          settings: visualizationSettings({
+            surfaceColorSource: "component_z",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "part",
+        },
+        {
+          id: "part:film:r1",
+          label: "Film: r1",
+          settings: visualizationSettings({
+            surfaceColorSource: "component_z",
+            viewportColorbarVisible: true,
+          }),
+          targetKind: "part",
+        },
+      ],
+    });
+    const requested = planViewport3DColorbars({ targets });
+    const rangeStates = new Map(
+      requested.map((plan) => [
+        plan.groupKey,
+        { range: { max: 0.05868, min: -0.05923 }, state: "current" as const },
+      ]),
+    );
+    const plans = planViewport3DColorbars({
+      rangeStatesByGroupKey: rangeStates,
+      targets,
+    });
+
+    const legends = resolveViewport3DColorbarLegendsFromPlans({
+      labelByTargetId: new Map([
+        ["part:film", "Film"],
+        ["part:film:r1", "Film: r1"],
+      ]),
+      plans,
+    });
+
+    expect(plans).toHaveLength(2);
+    expect(legends).toHaveLength(1);
+    expect(legends[0]?.legend.label).toBe("2 targets: m z [1]");
+  });
+
+  it("keeps separate legends when targets have different effective ranges", () => {
+    const targets = buildViewport3DColorbarTargetPlans({
+      parts: [
+        {
+          id: "part:a",
+          label: "A",
+          settings: visualizationSettings({ surfaceColorSource: "component_z" }),
+          targetKind: "part",
+        },
+        {
+          id: "part:b",
+          label: "B",
+          settings: visualizationSettings({ surfaceColorSource: "component_z" }),
+          targetKind: "part",
+        },
+      ],
+    });
+    const requested = planViewport3DColorbars({ targets });
+    const plans = planViewport3DColorbars({
+      rangeStatesByGroupKey: new Map(
+        requested.map((plan, index) => [
+          plan.groupKey,
+          {
+            range: { max: index + 1, min: -(index + 1) },
+            state: "current" as const,
+          },
+        ]),
+      ),
+      targets,
+    });
+
+    expect(
+      resolveViewport3DColorbarLegendsFromPlans({
+        labelByTargetId: new Map(),
+        plans,
+      }),
+    ).toHaveLength(2);
+  });
+
   it("includes numeric vector-only Airbox targets in viewport colorbar planning", () => {
     const targets = buildViewport3DColorbarTargetPlans({
       parts: [
@@ -1633,15 +1722,16 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("onAnglesCommit={commitOrbitDebugAngles}");
   });
 
-  it("offers disabled, automatic, authored, realized, and combined region overlay modes", () => {
+  it("keeps diagnostic region visibility off by default and source selection separate", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
     );
 
-    expect(source).toContain('useState<RegionOverlayMode>("auto")');
+    expect(source).toContain("DEFAULT_REGION_DIAGNOSTIC_OVERLAY_STATE");
     expect(source).toContain('aria-label="Region overlays"');
-    expect(source).toContain("Off");
+    expect(source).toContain("Regions");
+    expect(source).toContain("regionDiagnosticOverlayState.visible");
     expect(source).toContain("Auto");
     expect(source).toContain("Authored");
     expect(source).toContain("Realized");

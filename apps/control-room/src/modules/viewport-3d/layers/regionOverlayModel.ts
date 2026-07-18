@@ -1,7 +1,5 @@
 import type { components } from "@/kernel/api/generated/openapi-v2-types";
 import type { DecodedTopology } from "@/kernel/api/codecs";
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
-
 import { buildSurfaceEdgeIndices } from "../viewport3dSurfaceEdges";
 import {
   buildPartSurfaceIndices,
@@ -32,19 +30,12 @@ export interface RegionOverlayInput {
 }
 
 export interface RegionOverlayOptions {
-  resolveSettings?: (
-    region: RegionOverlayInput,
-  ) => VisualizationTargetSettings | undefined;
-  renderedSurfacePartIds?: ReadonlySet<string>;
   selectedObjectId?: string | null;
   selectedRegionId?: string | null;
   theme?: RegionOverlayTheme;
 }
 
 export interface RegionOverlayStyle {
-  fillOpacity: number;
-  fillVisible: boolean;
-  surfaceColor: string | null;
   wireframeOpacity: number;
   wireframeScale: number;
   wireframeVisible: boolean;
@@ -118,7 +109,6 @@ export interface RegionMeshOverlayOwnerPart {
 export interface RegionMeshOverlayModel extends RegionOverlayBaseModel {
   edgeIndices: Uint32Array | null;
   positions: Float32Array;
-  surfaceOverlayVisible: boolean;
   surfaceEdgeIndices: Uint32Array | null;
   surfaceIndices: Uint32Array | null;
 }
@@ -173,43 +163,17 @@ export function resolveRegionOverlayColor(
 
 export function resolveRegionOverlayStyle({
   enabled,
-  realizedSurface = false,
   selected,
-  settings,
 }: {
   enabled: boolean;
-  realizedSurface?: boolean;
   selected: boolean;
-  settings?: VisualizationTargetSettings | null;
 }): RegionOverlayStyle {
-  const targetVisible = settings?.visible ?? true;
-  const fillVisible = enabled && targetVisible && (settings?.shaderVisible ?? true);
-  const wireframeRequested = settings?.wireframeVisible ?? true;
-  const wireframeVisible =
-    enabled && targetVisible && wireframeRequested && !fillVisible;
-  const opacityScale = Math.max(0, Math.min(100, settings?.opacityPercent ?? 100)) / 100;
-  const wireframeOpacityScale =
-    Math.max(0, Math.min(100, settings?.wireframeOpacityPercent ?? 100)) / 100;
-  const fillOpacityBase = realizedSurface ? 1 : selected ? 1 : 0.14;
+  const wireframeVisible = enabled;
   return {
-    fillOpacity: fillVisible
-      ? selected
-        ? fillOpacityBase
-        : fillOpacityBase * opacityScale
-      : 0,
-    fillVisible,
-    surfaceColor:
-      settings &&
-      (settings.surfaceColorSource === undefined ||
-        settings.surfaceColorSource === "solid")
-        ? settings.shaderMonoColor
-        : null,
-    wireframeOpacity: wireframeVisible
-      ? (selected ? 1 : 0.72) * wireframeOpacityScale
-      : 0,
+    wireframeOpacity: wireframeVisible ? (selected ? 1 : 0.72) : 0,
     wireframeScale: selected ? 1.008 : 1.004,
     wireframeVisible,
-    wireframeColor: settings?.wireframeColor ?? null,
+    wireframeColor: null,
   };
 }
 
@@ -267,10 +231,6 @@ export function buildRegionMeshOverlayModels(
         selected: region.selected,
         slot: region.slot,
         style: region.style,
-        surfaceOverlayVisible: !meshPartSurfaceAlreadyRendered(
-          region.meshPartIds,
-          options.renderedSurfacePartIds,
-        ),
         surfaceEdgeIndices: geometry.surfaceEdgeIndices,
         surfaceIndices: geometry.surfaceIndices,
         transform: defaultRegionTransform(),
@@ -361,14 +321,6 @@ function regionMeshOverlayOwnerPartCacheKey(
     id: part.id ?? null,
     surface_faces: part.surface_faces ?? null,
   });
-}
-
-function meshPartSurfaceAlreadyRendered(
-  meshPartIdsValue: readonly string[] | null,
-  renderedSurfacePartIds: ReadonlySet<string> | null | undefined,
-): boolean {
-  if (!meshPartIdsValue?.length || !renderedSurfacePartIds?.size) return false;
-  return meshPartIdsValue.every((id) => renderedSurfacePartIds.has(id));
 }
 
 function positionsForTopology(topology: DecodedTopology): Float32Array {
@@ -478,14 +430,11 @@ function buildRegionMeshOverlaySelectionModels(
 
       const enabled = region.enabled !== false;
       const selected = options.selectedRegionId === regionId;
-      const settings = options.resolveSettings?.(region) ?? null;
       const style = resolveRegionOverlayStyle({
         enabled,
-        realizedSurface: true,
         selected,
-        settings,
       });
-      if (!style.fillVisible && !style.wireframeVisible) return [];
+      if (!style.wireframeVisible) return [];
 
       return [
         {
@@ -528,9 +477,8 @@ function normalizeRegionOverlayModel(
 
   const enabled = region.enabled !== false;
   const selected = options.selectedRegionId === regionId;
-  const settings = options.resolveSettings?.(region) ?? null;
-  const style = resolveRegionOverlayStyle({ enabled, selected, settings });
-  if (!style.fillVisible && !style.wireframeVisible) return [];
+  const style = resolveRegionOverlayStyle({ enabled, selected });
+  if (!style.wireframeVisible) return [];
   const frame = nonEmptyString(region.frame)?.toLowerCase() ?? "object";
   const transform =
     frame === "world" ? defaultRegionTransform() : ownerTransform(region);

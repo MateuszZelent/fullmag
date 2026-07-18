@@ -3142,10 +3142,10 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
                                 "visible": true,
                                 "display": {
                                     "visible": true,
-                                    "bounds": { "visible": true },
-                                    "surface": { "visible": true },
+                                    "bounds": { "visible": true, "opacity": 0.35 },
+                                    "surface": { "visible": true, "opacity": 0.25 },
                                     "wireframe": { "visible": true, "opacity": 0.65 },
-                                    "points": { "visible": false },
+                                    "points": { "visible": false, "opacity": 0.75 },
                                     "vectors": { "visible": false },
                                     "opacity": 0.55,
                                     "geometry_scope": "surface"
@@ -3236,6 +3236,22 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(
         json["targets"]["objects"][0]["settings"]["active_quantity_id"],
         "h_demag"
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["surface_opacity"],
+        0.25
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["wireframe_opacity"],
+        0.65
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["point_opacity"],
+        0.75
+    );
+    assert_eq!(
+        json["targets"]["objects"][0]["settings"]["bounds_opacity"],
+        0.35
     );
 }
 
@@ -26350,9 +26366,13 @@ fn openapi_visualization_state_schema_exposes_v2_layers() {
         "active_quantity_id",
         "visible",
         "bounds_visible",
+        "bounds_opacity",
         "surface_visible",
+        "surface_opacity",
         "wireframe_visible",
+        "wireframe_opacity",
         "point_color",
+        "point_opacity",
         "points_visible",
         "vectors_visible",
         "render_mode",

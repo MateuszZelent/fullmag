@@ -12,7 +12,7 @@ Every renderable visualization target can be configured independently:
 - airbox visualization;
 - future 2D slice/projection views for the same targets.
 
-The user must be able to choose, per target, whether the viewport shows shader surface, vectors, wireframe, points, visibility, opacity, arrow budget, and arrow length. The View ribbon `Per selected object` group, explorer `Visualization` nodes, inspector panel, and viewport renderer all read and write the same target registry.
+The user must be able to choose, per target, whether the viewport shows shader surface, vectors, wireframe, points, bounds, visibility, each pass opacity, arrow budget, and arrow length. The View ribbon `Per selected object` group, explorer `Visualization` nodes, inspector panel, and viewport renderer all read and write the same target registry.
 
 ## 2. Target Identity
 
@@ -52,14 +52,13 @@ frontend-only `scope_kind=region`. If no manifest-backed mesh parts exist, regio
 field visualization must be reported as unavailable or degraded; authored and
 projection overlays may still be shown as diagnostic overlays.
 
-When a new object is committed but no current mesh exists yet, the target id still exists as `object:<object_id>`. Its default display uses primitive surface plus simplified wireframe fallback in Geometry context. Target visualization state must not imply that solver topology or field data exists.
+When a new object is committed but no current mesh exists yet, the target id still exists as `object:<object_id>`. Geometry context may show a viewport-local, monochrome `Primitive` fill derived from authored geometry/bounds, plus independent wireframe and bounds passes. Primitive is suppressed as soon as the object has a current mesh carrier. Primitive color, opacity, and visibility are viewport preferences, never physical field state or persisted target overrides. Target visualization state must not imply that solver topology or field data exists.
 
-Region defaults are intentionally safer than object defaults. A region target is
-hidden by default: surface, wireframe, points, vectors, primitive display, and
-master visibility start inactive. Region targets may inherit object quantity,
-palette, and style as baseline values, but the active display passes remain off
-until the user explicitly enables the region target. Selecting a region must not
-silently enable a region-colored overlay.
+At initial resolution a region inherits every effective visualization setting
+from its parent object. Only explicit sparse region overrides replace inherited
+values. This includes visibility, passes, quantities, palettes, colors, and
+per-pass opacity. Selecting a region must not mutate this state or silently
+enable a diagnostic overlay.
 
 ## 3. State Ownership
 
@@ -83,7 +82,7 @@ The registry stores only small display preferences:
 - wireframe visible;
 - points visible;
 - vectors visible;
-- opacity percent;
+- independent surface, wireframe, point, vector, and bounds opacity;
 - arrow budget;
 - arrow length scale;
 - geometry scope for pass sampling (`surface` or `full`);
@@ -93,9 +92,11 @@ It must not store topology, field arrays, mesh manifests, scene documents, or ba
 
 Diagnostic region overlay mode is not the same state as region field
 visualization. Authored, realized, and comparison overlays describe region
-geometry/realization status. They must not be interpreted as `m`, `mx`, HSL, or
-other physical field coloring unless the overlay is explicitly backed by the
-normal mesh-part field rendering path.
+geometry/realization status. Diagnostics are viewport-local, off by default,
+and outline-only; their source selection (`auto`, `authored`, `realized`, or
+`both`) is independent from visibility. They must not create a filled surface or
+be interpreted as `m`, `mx`, HSL, or other physical field coloring. Physical
+region coloring always uses the normal manifest-backed mesh-part field path.
 
 ### 3.1 Configured vs effective display state
 

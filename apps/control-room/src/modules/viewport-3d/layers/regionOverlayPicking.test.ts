@@ -18,9 +18,6 @@ const baseRegion = {
   selected: false,
   slot: 0,
   style: {
-    fillOpacity: 0.14,
-    fillVisible: true,
-    surfaceColor: null,
     wireframeColor: null,
     wireframeOpacity: 0.72,
     wireframeScale: 1.004,

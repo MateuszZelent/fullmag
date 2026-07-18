@@ -114,18 +114,6 @@ function RegionMeshOverlayShape({
   uploadManager: Viewport3DGpuUploadManager;
 }) {
   const invalidate = useBatchedInvalidate();
-  const surfaceGeometry = useRegionMeshOverlayGeometryUpload({
-    dirtyReason: "region-mesh-overlay",
-    enabled: Boolean(model.surfaceIndices?.length && model.style.fillVisible),
-    indices: model.surfaceIndices ?? null,
-    invalidate,
-    kind: "surface",
-    model,
-    targetVisualizationRevision,
-    topologyRevision,
-    tracker,
-    uploadManager,
-  });
   const edgeGeometry = useRegionMeshOverlayGeometryUpload({
     dirtyReason: "region-mesh-overlay",
     enabled: Boolean(
@@ -142,7 +130,7 @@ function RegionMeshOverlayShape({
     uploadManager,
   });
 
-  if (!surfaceGeometry && !edgeGeometry) return null;
+  if (!edgeGeometry) return null;
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -152,7 +140,6 @@ function RegionMeshOverlayShape({
     event.stopPropagation();
     onSelectRegion?.({ objectId: model.objectId, regionId: model.regionId });
   };
-  const fillColor = resolveCssColorToken(model.style.surfaceColor ?? model.color);
   const wireframeColor = resolveCssColorToken(
     model.style.wireframeColor ?? model.color,
   );
@@ -163,23 +150,6 @@ function RegionMeshOverlayShape({
       onClick={selectRegionFromClick}
       onPointerDown={handlePointerDown}
     >
-      {surfaceGeometry ? (
-        <mesh
-          geometry={surfaceGeometry}
-          renderOrder={RENDER_POLICIES.selectionShell.renderOrder}
-        >
-          <meshBasicMaterial
-            color={fillColor}
-            colorWrite={model.surfaceOverlayVisible}
-            opacity={model.surfaceOverlayVisible ? model.style.fillOpacity : 0}
-            {...materialPolicyProps("selectionShell")}
-            depthWrite={
-              model.surfaceOverlayVisible && model.style.fillOpacity >= 1
-            }
-            transparent={!model.surfaceOverlayVisible || model.style.fillOpacity < 1}
-          />
-        </mesh>
-      ) : null}
       {edgeGeometry ? (
         <lineSegments
           geometry={edgeGeometry}

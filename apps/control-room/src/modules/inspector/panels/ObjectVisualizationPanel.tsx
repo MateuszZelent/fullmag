@@ -896,6 +896,7 @@ function ObjectVisualizationPanelView({
 
       {settings.pointsVisible ? (
         <VisualizationPointsSection
+            patch={patch}
             patchColor={patchColor}
             pending={pending}
             sectionDisabled={sectionDisabled}

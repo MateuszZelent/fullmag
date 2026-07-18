@@ -3,6 +3,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_OBJECT_VISUALIZATION,
+  type VisualizationTargetSettings,
+} from "@/kernel/visualization/ObjectVisualizationController";
+
+import {
   createMeshPartSurfaceGeometry,
   resolveMeshPartBoundaryFaceIndexForPick,
   resolveMeshPartVisibleScalarColorState,
@@ -13,10 +18,34 @@ import {
   resolveMeshPartPointNodeSelection,
   recordMeshPartSurfaceAdoption,
 } from "./MeshPartLayer";
+import {
+  buildMeshPartSurfaceGeometryUploadKey,
+  resolveMeshPartSurfaceGeometryProjection,
+} from "./meshPartGeometryPlan";
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
 
 describe("MeshPartLayer", () => {
+  it("keeps geometry upload identity stable across quantity, component, and colormap changes", () => {
+    const geometryKey = (patch: Partial<VisualizationTargetSettings>) =>
+      buildMeshPartSurfaceGeometryUploadKey({
+        indicesByteLength: 96,
+        partId: "part:film",
+        positionsByteLength: 384,
+        projection: resolveMeshPartSurfaceGeometryProjection({
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          surfaceColorSource: "component_x",
+          ...patch,
+        }),
+        topologyRevision: 7,
+      });
+    const initial = geometryKey({});
+
+    expect(geometryKey({ activeQuantityId: "H_eff" })).toBe(initial);
+    expect(geometryKey({ surfaceColorSource: "component_y" })).toBe(initial);
+    expect(geometryKey({ scalarColorPalette: "magma" })).toBe(initial);
+  });
+
   it("uses the effective full node selection for the points pass", () => {
     const fullNodeSelection = { nodeIndices: [4, 5, 6] };
     expect(
@@ -204,12 +233,24 @@ describe("MeshPartLayer", () => {
   });
 
   it("expands surface geometry for every projected surface mode", () => {
-    const source = readFileSync(
-      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
-      "utf8",
-    );
-
-    expect(source).toContain('renderSettings.surfaceProjectionMode !== "raw_nodal"');
+    expect(
+      resolveMeshPartSurfaceGeometryProjection({
+        surfaceColorSource: "component_x",
+        surfaceProjectionMode: "surface_faces",
+      }),
+    ).toBe("surface_faces");
+    expect(
+      resolveMeshPartSurfaceGeometryProjection({
+        surfaceColorSource: "component_x",
+        surfaceProjectionMode: "thickness_average_z",
+      }),
+    ).toBe("thickness_average_z");
+    expect(
+      resolveMeshPartSurfaceGeometryProjection({
+        surfaceColorSource: "component_x",
+        surfaceProjectionMode: "raw_nodal",
+      }),
+    ).toBe("indexed");
   });
 
   it("maps face-expanded picks back to canonical boundary face indices", () => {

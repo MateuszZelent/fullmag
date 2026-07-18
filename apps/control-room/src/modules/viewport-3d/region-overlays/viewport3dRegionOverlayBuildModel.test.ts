@@ -29,19 +29,6 @@ describe("viewport3dRegionOverlayBuildModel", () => {
         },
       ],
       selectedRegionId: "film:core",
-      settingsByRegionId: [
-        [
-          "film:core",
-          {
-            opacityPercent: 40,
-            shaderMonoColor: "#123456",
-            shaderVisible: true,
-            surfaceColorSource: "solid",
-            visible: true,
-            wireframeVisible: false,
-          } as never,
-        ],
-      ],
       theme: "mocha",
       topology: {
         boundaryFaceCount: 0,
@@ -67,10 +54,7 @@ describe("viewport3dRegionOverlayBuildModel", () => {
       regionId: "film:core",
       selected: true,
       style: {
-        fillOpacity: 1,
-        fillVisible: true,
-        surfaceColor: "#123456",
-        wireframeVisible: false,
+        wireframeVisible: true,
       },
     });
     expect(Array.from(result.models[0].positions)).toEqual([

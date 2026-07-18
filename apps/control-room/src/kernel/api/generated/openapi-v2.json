@@ -21126,6 +21126,10 @@
           "active_quantity_id": {
             "type": "string"
           },
+          "bounds_opacity": {
+            "format": "double",
+            "type": "number"
+          },
           "bounds_visible": {
             "type": "boolean"
           },
@@ -21133,11 +21137,16 @@
             "$ref": "#/components/schemas/VisualizationTargetGeometryScope"
           },
           "opacity": {
+            "description": "Legacy compatibility projection of `surface_opacity`.",
             "format": "double",
             "type": "number"
           },
           "point_color": {
             "type": "string"
+          },
+          "point_opacity": {
+            "format": "double",
+            "type": "number"
           },
           "points_visible": {
             "type": "boolean"
@@ -21153,6 +21162,10 @@
           },
           "surface_mono_color": {
             "type": "string"
+          },
+          "surface_opacity": {
+            "format": "double",
+            "type": "number"
           },
           "surface_projection_mode": {
             "$ref": "#/components/schemas/SurfaceFieldProjectionMode"
@@ -21207,14 +21220,17 @@
           "active_quantity_id",
           "visible",
           "bounds_visible",
+          "bounds_opacity",
           "geometry_scope",
           "opacity",
           "point_color",
+          "point_opacity",
           "points_visible",
           "render_mode",
           "scalar_color_palette",
           "surface_color_source",
           "surface_mono_color",
+          "surface_opacity",
           "surface_projection_mode",
           "surface_visible",
           "viewport_colorbar_visible",

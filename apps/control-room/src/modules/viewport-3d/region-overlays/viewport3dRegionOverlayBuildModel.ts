@@ -1,6 +1,4 @@
 import type { DecodedTopology } from "@/kernel/api/codecs";
-import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
-
 import {
   buildRegionMeshOverlayModels,
   type RegionMeshOverlayModel,
@@ -12,13 +10,8 @@ import {
 export interface Viewport3DRegionOverlayBuildRequest {
   magneticParts: readonly RegionMeshOverlayOwnerPart[];
   regions: readonly RegionOverlayInput[];
-  renderedSurfacePartIds?: readonly string[];
   selectedObjectId?: string | null;
   selectedRegionId?: string | null;
-  settingsByRegionId?: readonly (readonly [
-    string,
-    VisualizationTargetSettings,
-  ])[];
   theme?: RegionOverlayTheme;
   topology: DecodedTopology;
 }
@@ -36,23 +29,13 @@ export interface Viewport3DRegionOverlayBuildByteEstimateInput {
 export function buildViewport3DRegionOverlayModels({
   magneticParts,
   regions,
-  renderedSurfacePartIds,
   selectedObjectId,
   selectedRegionId,
-  settingsByRegionId,
   theme,
   topology,
 }: Viewport3DRegionOverlayBuildRequest): Viewport3DRegionOverlayBuildResult {
-  const settings = new Map(settingsByRegionId ?? []);
   return {
     models: buildRegionMeshOverlayModels(regions, topology, magneticParts, {
-      renderedSurfacePartIds: renderedSurfacePartIds
-        ? new Set(renderedSurfacePartIds)
-        : undefined,
-      resolveSettings: (region) => {
-        const regionId = region.region_id;
-        return typeof regionId === "string" ? settings.get(regionId) : undefined;
-      },
       selectedObjectId,
       selectedRegionId,
       theme,
