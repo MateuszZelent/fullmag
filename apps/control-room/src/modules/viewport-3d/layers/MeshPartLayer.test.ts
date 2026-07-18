@@ -19,6 +19,10 @@ import {
   recordMeshPartSurfaceAdoption,
 } from "./MeshPartLayer";
 import {
+  buildMeshPartScalarColorRetentionKey,
+  resolveMeshPartCommittedScalarColorState,
+} from "./meshPartScalarTransition";
+import {
   buildMeshPartSurfaceGeometryUploadKey,
   resolveMeshPartSurfaceGeometryProjection,
 } from "./meshPartGeometryPlan";
@@ -26,6 +30,65 @@ import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRende
 import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
 
 describe("MeshPartLayer", () => {
+  it("keeps scalar upload retention identity stable across style and quantity changes", () => {
+    const key = ({
+      mode = "orientation",
+      palette = "viridis",
+      quantityId = "m",
+    }: {
+      mode?: string;
+      palette?: string;
+      quantityId?: string;
+    } = {}) =>
+      buildMeshPartScalarColorRetentionKey({
+        mode,
+        partId: "part:film",
+        projection: "indexed",
+        quantityId,
+        scalarColorPalette: palette,
+        topologyRevision: 7,
+        vertexCount: 12,
+      });
+
+    const initial = key();
+    expect(key({ mode: "x" })).toBe(initial);
+    expect(key({ palette: "magma" })).toBe(initial);
+    expect(key({ quantityId: "H_eff" })).toBe(initial);
+  });
+
+  it("keeps the committed shader visible while requested vertex colors are pending", () => {
+    const committedShader = {
+      colors: new Float32Array(0),
+      colorMode: "orientation",
+      range: { max: 1, min: 0 },
+      vectorValues: new Float32Array(6),
+    };
+
+    expect(
+      resolveMeshPartCommittedScalarColorState({
+        requestedPipeline: "vertex",
+        visibleShaderColors: committedShader,
+        visibleVertexColors: null,
+      }),
+    ).toEqual({ buffer: committedShader, pipeline: "shader" });
+  });
+
+  it("keeps committed vertex colors visible while a requested shader is pending", () => {
+    const committedVertex = {
+      colors: new Float32Array(6),
+      colorMode: "orientation",
+      range: { max: 1, min: 0 },
+    };
+
+    expect(
+      resolveMeshPartCommittedScalarColorState({
+        requestedPipeline: "shader",
+        visibleShaderColors: null,
+        visibleVertexColors: committedVertex,
+      }),
+    ).toEqual({ buffer: committedVertex, pipeline: "vertex" });
+  });
+
   it("keeps geometry upload identity stable across quantity, component, and colormap changes", () => {
     const geometryKey = (patch: Partial<VisualizationTargetSettings>) =>
       buildMeshPartSurfaceGeometryUploadKey({
@@ -295,21 +358,17 @@ describe("MeshPartLayer", () => {
     expect(uploadEffect).not.toContain("useEffect(() => {\n    store.publish(null);");
   });
 
-  it("keys scalar color upload retention by per-part color semantics", () => {
+  it("keys scalar color upload retention by stable carrier semantics", () => {
     const source = readFileSync(
       fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
       "utf8",
     );
 
     expect(source).toContain("const scalarColorRetentionKey = useMemo");
-    expect(source).toContain("`part=${part.id}`");
-    expect(source).toContain("`mode=${scalarColorMode}`");
-    expect(source).toContain(
-      "`quantity=${resolveCanonicalQuantityId(renderSettings.activeQuantityId)}`",
-    );
-    expect(source).toContain(
-      "`palette=${renderSettings.scalarColorPalette ?? \"default\"}`",
-    );
+    expect(source).toContain("buildMeshPartScalarColorRetentionKey({");
+    expect(source).toContain("partId: part.id");
+    expect(source).toContain("mode: scalarColorMode");
+    expect(source).toContain("quantityId: renderSettings.activeQuantityId");
     expect(source).toContain("retentionKey: scalarColorRetentionKey");
   });
 
@@ -750,7 +809,7 @@ buildReference: null,
     ).toBe(replacementY);
   });
 
-  it("does not retain a stale scalar texture from a different quantity", () => {
+  it("retains the last renderable scalar texture while a different quantity is pending", () => {
     const previousMagnetizationY = {
       colors: new Float32Array(0),
       colorMode: "y",
@@ -771,7 +830,7 @@ buildReference: null,
         },
         vertexCount: 2,
       }),
-    ).toBeNull();
+    ).toBe(previousMagnetizationY);
   });
 
   it("retains the last same-mode scalar texture while replacement data is building", () => {
@@ -851,7 +910,7 @@ buildReference: null,
     ).toBeNull();
   });
 
-  it("does not retain scalar textures across quantity or solid-color changes", () => {
+  it("retains scalar textures across pending quantity changes but not solid color", () => {
     const previousMagnetizationY = {
       colors: new Float32Array(0),
       colorMode: "y",
@@ -872,7 +931,7 @@ buildReference: null,
         },
         vertexCount: 2,
       }),
-    ).toBeNull();
+    ).toBe(previousMagnetizationY);
     expect(
       resolveRetainedMeshPartScalarColors({
         current: null,

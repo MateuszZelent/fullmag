@@ -211,6 +211,17 @@ export function useViewport3DScalarColorUpload({
       vertexCount,
     );
     if (!uploadPlan) {
+      const current = store.getSnapshot();
+      if (canRetainViewport3DScalarUploadBuffer({
+        allowRetention: vertexColorsEnabled,
+        buffer: current.buffer,
+        geometry: current.geometry,
+        requestedGeometry: geometry,
+        requestedRetentionKey: retentionKey,
+        retentionKey: current.retentionKey,
+      })) {
+        return;
+      }
       applyVertexScalarColorBuffer(geometry, null, vertexCount);
       store.publish(null, geometry, null);
       tracker.recordDirtyFrame(dirtyReason);
@@ -379,6 +390,17 @@ export function useViewport3DScalarShaderColorUpload({
       vertexCount,
     );
     if (!uploadPlan) {
+      const current = store.getSnapshot();
+      if (canRetainViewport3DScalarUploadBuffer({
+        allowRetention: true,
+        buffer: current.buffer,
+        geometry: current.geometry,
+        requestedGeometry: geometry,
+        requestedRetentionKey: retentionKey,
+        retentionKey: current.retentionKey,
+      })) {
+        return;
+      }
       store.publish(null, geometry, null);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
