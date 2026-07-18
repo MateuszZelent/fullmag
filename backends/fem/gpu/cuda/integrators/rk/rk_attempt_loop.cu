@@ -13,8 +13,10 @@
 #include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_stage_schedule.hpp"
+#include "cpu/mfem/integrators/rk_step_transaction.hpp"
 
 #include <cstdio>
+#include <memory>
 #include <string>
 
 namespace fullmag::fem {
@@ -57,6 +59,10 @@ bool gpu_rk_run_accepted_attempt_loop(
 
     for (;;) {
         ctx.adaptive_dt.current_dt = active_dt;
+        std::unique_ptr<RkAttemptCacheSnapshot> attempt_cache;
+        if (adaptive) {
+            attempt_cache = std::make_unique<RkAttemptCacheSnapshot>(ctx);
+        }
         GpuRkStageAttemptResult stage_attempt{};
         if (!gpu_rk_run_stage_attempt(
                 ctx,
@@ -127,6 +133,11 @@ bool gpu_rk_run_accepted_attempt_loop(
                 if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
                     return false;
                 }
+                attempt_cache->restore_preserving_attempt_counters();
+                if (!rk_restore_active_step_device_checkpoint(ctx, reason)) {
+                    return false;
+                }
+                gpu.rk.fsal_valid = false;
                 active_dt = adaptive_result.dt_next;
                 ctx.base_plan.dt_seconds = active_dt;
                 ctx.adaptive_dt.current_dt = active_dt;

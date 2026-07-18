@@ -18,6 +18,7 @@
 #include "gpu/cuda/integrators/rk/rk4_stage_sequence.hpp"
 #include "gpu/cuda/integrators/rk/rk45_stage_sequence.hpp"
 #include "gpu/cuda/integrators/rk/rk_attempt_setup.hpp"
+#include "cpu/mfem/integrators/rk_step_failure_injection.hpp"
 #include "gpu/cuda/fields/vector_field_kernels.hpp"
 #include "gpu/cuda/state/gpu_state.hpp"
 
@@ -97,6 +98,13 @@ bool gpu_rk_run_stage_attempt(
         return false;
     }
     if (!cuda_launch_ok("launch GPU RK accept/normalize", reason)) {
+        gpu.rk.fsal_valid = false;
+        return false;
+    }
+    if (rk_step_inject_failure(
+            ctx,
+            RkStepFailurePoint::AfterCandidateMagnetization,
+            reason)) {
         gpu.rk.fsal_valid = false;
         return false;
     }

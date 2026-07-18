@@ -300,6 +300,21 @@ Any rejection or error restores the complete pre-attempt state. Failure after
 candidate construction, during final field refresh, or during statistics
 collection cannot leak a partial commit.
 
+The native explicit FEM realization implements this boundary with a
+solver-local transaction that spans backend dispatch through final statistics.
+The CPU high-order magnetization is constructed in a private candidate buffer;
+the live magnetization is exchanged only after the endpoint field refresh has
+succeeded.  The transaction snapshots published interaction fields and
+energies, demagnetization field/cache and potential warm-start state, FSAL
+state, adaptive-controller state, stage-completion state, transfer/timing
+counters, and accepted time/index.  The CUDA realization additionally keeps
+persistent device-to-device rollback storage for magnetization, dynamic field
+components, FSAL `k0`, and Poisson solution buffers, so rollback does not depend
+on an unbounded device-to-host round trip.  Device residency metadata is
+committed or restored with those buffers.  Deterministic internal failpoints at
+post-candidate, endpoint-refresh, and final-statistics boundaries are reserved
+for native atomicity contracts and are disabled by default.
+
 ### 3.6 Demagnetization convergence
 
 Every iterative demagnetization realization must report solver kind,

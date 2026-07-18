@@ -4,6 +4,7 @@
 #include "cpu/mfem/interactions/stt.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace fullmag::fem {
@@ -27,12 +28,25 @@ struct StepperWorkspace {
     std::vector<double> m_backup;                  // backup of m before stage loop
     std::vector<double> k[MAX_RK_STAGES];          // stage derivatives k_i
     std::vector<double> m_stage;                   // temp: m at stage evaluation point
+    std::vector<double> m_candidate;               // private high-order candidate
     std::vector<double> h_ex_tmp;                  // temp exchange field
     std::vector<double> h_demag_tmp;               // temp demag field
     std::vector<double> h_eff_tmp;                 // temp effective field
     SttWorkspace stt;                              // temp direct-torque scratch
     std::vector<double> err;                       // error = h*(b_hi - b_lo) . K
     bool fsal_valid = false;                       // true when k[0] holds valid FSAL RHS
+};
+
+enum class RkStepFailurePoint : uint32_t {
+    None = 0,
+    AfterCandidateMagnetization = 1,
+    DuringFinalFieldRefresh = 2,
+    DuringFinalStatistics = 3,
+};
+
+struct RkStepFailureInjectionState {
+    RkStepFailurePoint next = RkStepFailurePoint::None;
+    uint64_t injected_count = 0;
 };
 
 /*
@@ -44,6 +58,7 @@ struct StepperWorkspace {
  */
 struct RkStepperRuntimeState {
     StepperWorkspace workspace{};
+    RkStepFailureInjectionState failure_injection{};
 };
 
 } // namespace fullmag::fem

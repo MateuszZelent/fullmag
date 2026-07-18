@@ -120,6 +120,8 @@ set(FEM_SOURCES
     cpu/mfem/integrators/llg_rhs.cpp
     cpu/mfem/integrators/rk_explicit.cpp
     cpu/mfem/integrators/rk_explicit_step.cpp
+    cpu/mfem/integrators/rk_step_failure_injection.cpp
+    cpu/mfem/integrators/rk_step_transaction.cpp
     cpu/mfem/integrators/rk_stage_rhs.cpp
     cpu/mfem/integrators/rk4.cpp
     cpu/mfem/integrators/rk23.cpp
@@ -261,6 +263,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_stage_predictor_kernels.cu
             gpu/cuda/integrators/rk/rk_stage_schedule.cu
             gpu/cuda/integrators/rk/rk_step_preflight.cu
+            gpu/cuda/integrators/rk/rk_step_transaction_device.cu
             gpu/cuda/integrators/rk/rk_step_stats.cu
             gpu/cuda/integrators/rk/rk_thermal_field.cu
             gpu/cuda/integrators/rk/rk_total_energy_reduction.cu
