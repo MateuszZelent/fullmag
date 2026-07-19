@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
 
+use anyhow::{anyhow, Result};
+
 use crate::communication_policy::{
     LIVE_PUBLISH_FAST_INTERVAL, LIVE_PUBLISH_MIN_INTERVAL, LIVE_SCALAR_TELEMETRY_INTERVAL,
 };
@@ -11,7 +13,10 @@ use crate::control_room::{
 };
 use crate::feature_flags::FeatureFlags;
 use crate::formatting::{push_engine_log, unix_time_millis};
-use crate::simulation_preparation::SimulationPreparationState;
+use crate::python_bridge::{python_mesh_preparation_update, PythonMeshPreparationUpdate};
+use crate::simulation_preparation::{
+    PreparationLogLevel, PreparationStageId, PreparationTransitionError, SimulationPreparationState,
+};
 use crate::types::*;
 
 /// Global feature flags resolved once at startup.
@@ -282,6 +287,22 @@ impl LocalLiveWorkspace {
     pub fn set_publish_fast_mode(&self, enabled: bool) {
         self.publisher.set_fast_mode(enabled);
     }
+}
+
+pub(crate) fn transition_preparation(
+    workspace: &LocalLiveWorkspace,
+    update: impl FnOnce(
+        &mut SimulationPreparationState,
+    ) -> std::result::Result<(), PreparationTransitionError>,
+) -> Result<()> {
+    let mut transition_result = Err(anyhow!("simulation preparation state is not initialized"));
+    workspace.update(|state| {
+        transition_result = match state.simulation_preparation.as_mut() {
+            Some(preparation) => update(preparation).map_err(Into::into),
+            None => Err(anyhow!("simulation preparation state is not initialized")),
+        };
+    });
+    transition_result
 }
 
 fn merge_preview_field_payloads(
@@ -781,12 +802,14 @@ impl CurrentLivePublisher {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_python_progress_event, bootstrap_live_state, merge_pending_publish_payload,
-        replace_cached_preview_fields, CurrentLivePublisher, CurrentLiveScalarRow,
-        CurrentLiveSnapshotPayload, LiveTelemetryPublishGate, LocalLiveWorkspace,
-        LocalLiveWorkspaceState,
+        apply_python_progress_event, bootstrap_live_state, merge_detailed_mesh_workspace,
+        merge_pending_publish_payload, replace_cached_preview_fields, CurrentLivePublisher,
+        CurrentLiveScalarRow, CurrentLiveSnapshotPayload, LiveTelemetryPublishGate,
+        LocalLiveWorkspace, LocalLiveWorkspaceState,
     };
-    use crate::simulation_preparation::SimulationPreparationState;
+    use crate::simulation_preparation::{
+        PreparationStageId, PreparationStageStatus, SimulationPreparationState,
+    };
     use crate::types::{
         CurrentLiveRuntimeFrameRequest, CurrentLiveSessionFrameRequest, PythonProgressEvent,
         RunManifest, SessionManifest,
@@ -977,6 +1000,129 @@ mod tests {
         preparation.revision = revision;
         state.simulation_preparation = Some(preparation);
         state
+    }
+
+    fn workspace_in_preparation_stage(stage_id: PreparationStageId) -> LocalLiveWorkspace {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        let mut preparation = SimulationPreparationState::new("prep-events", 1_700_000_000_000);
+        preparation
+            .begin_stage(stage_id, 1_700_000_000_000, "Preparing simulation")
+            .expect("test preparation stage should start");
+        state.simulation_preparation = Some(preparation);
+        state.mesh_workspace = Some(serde_json::json!({
+            "mesh_id": "authoritative-mesh-resource",
+            "mesh_revision": 17,
+        }));
+        LocalLiveWorkspace::new(state, no_op_publisher())
+    }
+
+    fn structured_event(kind: &str, payload: serde_json::Value) -> PythonProgressEvent {
+        PythonProgressEvent::Structured {
+            kind: kind.to_string(),
+            payload,
+        }
+    }
+
+    #[test]
+    fn mesh_events_update_canonical_preparation_stages() {
+        let workspace = workspace_in_preparation_stage(PreparationStageId::DomainPreparation);
+
+        apply_python_progress_event(
+            &workspace,
+            structured_event(
+                "mesh_build_phase",
+                serde_json::json!({
+                    "phase": "meshing",
+                    "progress_percent": 63,
+                    "progress_label": "142580 / 226318 elements",
+                    "duration_ms": 16_200,
+                    "message": "Optimizing element quality",
+                }),
+            ),
+        );
+
+        let snapshot = workspace.snapshot();
+        let preparation = snapshot
+            .simulation_preparation
+            .expect("preparation should remain available");
+        assert_eq!(
+            preparation.active_stage_id,
+            Some(PreparationStageId::Meshing)
+        );
+        let active_stage = preparation
+            .stages
+            .iter()
+            .find(|stage| stage.id == PreparationStageId::Meshing)
+            .expect("meshing stage");
+        assert_eq!(active_stage.status, PreparationStageStatus::Active);
+        assert_eq!(active_stage.progress_percent, Some(63));
+        assert_eq!(
+            active_stage.progress_label.as_deref(),
+            Some("142580 / 226318 elements")
+        );
+        assert_eq!(
+            snapshot
+                .mesh_workspace
+                .as_ref()
+                .and_then(|resource| resource.get("mesh_id")),
+            Some(&serde_json::json!("authoritative-mesh-resource")),
+            "preparation projection must not replace the detailed mesh resource"
+        );
+        let merged_resource = merge_detailed_mesh_workspace(
+            Some(serde_json::json!({
+                "mesh_id": "planned-mesh",
+                "node_count": 226_318,
+            })),
+            snapshot.mesh_workspace.as_ref(),
+        )
+        .expect("merged mesh resource");
+        assert_eq!(merged_resource["mesh_id"], "planned-mesh");
+        assert_eq!(merged_resource["node_count"], 226_318);
+        assert!(merged_resource["mesh_pipeline_status"]
+            .as_array()
+            .is_some_and(|stages| stages
+                .iter()
+                .any(|stage| { stage["id"] == "meshing" && stage["status"] == "active" })));
+    }
+
+    #[test]
+    fn mesh_failure_uses_safe_preparation_summary_and_keeps_raw_mesh_diagnostics() {
+        let workspace = workspace_in_preparation_stage(PreparationStageId::Meshing);
+
+        apply_python_progress_event(
+            &workspace,
+            structured_event(
+                "mesh_build_failed",
+                serde_json::json!({
+                    "phase": "meshing",
+                    "error": "raw mesher stderr with /private/model/path",
+                    "message": "Shared-domain mesh build failed",
+                }),
+            ),
+        );
+
+        let snapshot = workspace.snapshot();
+        let preparation = snapshot
+            .simulation_preparation
+            .expect("preparation should remain available");
+        let failure = preparation.failure.expect("mesh failure should be owned");
+        assert_eq!(failure.stage_id, PreparationStageId::Meshing);
+        assert_eq!(failure.error_code, "mesh_build_failed");
+        assert_eq!(failure.summary, "Shared-domain mesh build failed");
+        assert!(preparation
+            .log_tail
+            .iter()
+            .all(|entry| !entry.message.contains("/private/model/path")));
+        assert_eq!(
+            snapshot
+                .mesh_workspace
+                .as_ref()
+                .and_then(|resource| resource.get("last_build_error")),
+            Some(&serde_json::json!(
+                "raw mesher stderr with /private/model/path"
+            )),
+            "raw mesh diagnostics remain owned by the detailed mesh resource"
+        );
     }
 
     #[test]
@@ -1815,6 +1961,180 @@ fn upsert_mesh_build_overlay(
     );
 }
 
+fn preparation_log_once(
+    preparation: &mut SimulationPreparationState,
+    timestamp_unix_ms: u64,
+    level: PreparationLogLevel,
+    stage_id: PreparationStageId,
+    message: &str,
+) {
+    let is_duplicate = preparation.log_tail.back().is_some_and(|entry| {
+        entry.level == level && entry.stage_id == stage_id && entry.message == message
+    });
+    if !is_duplicate {
+        preparation.push_log(timestamp_unix_ms, level, stage_id, message);
+    }
+}
+
+fn begin_mesh_preparation_stage(
+    preparation: &mut SimulationPreparationState,
+    stage_id: PreparationStageId,
+    timestamp_unix_ms: u64,
+    detail: &str,
+) -> std::result::Result<(), PreparationTransitionError> {
+    if preparation.active_stage_id == Some(stage_id) {
+        return preparation.begin_stage(stage_id, timestamp_unix_ms, detail);
+    }
+
+    match (preparation.active_stage_id, stage_id) {
+        (
+            Some(PreparationStageId::DomainPreparation),
+            PreparationStageId::Meshing | PreparationStageId::MeshPostprocessing,
+        ) => {
+            preparation.complete_stage(
+                PreparationStageId::DomainPreparation,
+                timestamp_unix_ms,
+                "Shared-domain inputs prepared",
+            )?;
+            if stage_id == PreparationStageId::MeshPostprocessing {
+                preparation.skip_stage(
+                    PreparationStageId::Meshing,
+                    "No standalone meshing phase was required",
+                )?;
+            }
+        }
+        (Some(PreparationStageId::Meshing), PreparationStageId::MeshPostprocessing) => {
+            preparation.complete_stage(
+                PreparationStageId::Meshing,
+                timestamp_unix_ms,
+                "Shared-domain mesh generated",
+            )?;
+        }
+        (None, _) => {}
+        _ => {
+            return Err(PreparationTransitionError::StageIsNotActive {
+                stage_id,
+                active_stage_id: preparation.active_stage_id,
+            });
+        }
+    }
+
+    preparation.begin_stage(stage_id, timestamp_unix_ms, detail)
+}
+
+fn apply_mesh_preparation_update(
+    preparation: &mut SimulationPreparationState,
+    update: PythonMeshPreparationUpdate,
+    timestamp_unix_ms: u64,
+) -> std::result::Result<(), PreparationTransitionError> {
+    match update {
+        PythonMeshPreparationUpdate::StageProgress {
+            stage_id,
+            detail,
+            progress_percent,
+            progress_label,
+        } => {
+            begin_mesh_preparation_stage(preparation, stage_id, timestamp_unix_ms, &detail)?;
+            if let Some(progress_percent) = progress_percent {
+                preparation.update_progress(
+                    stage_id,
+                    progress_percent,
+                    progress_label.unwrap_or_else(|| detail.clone()),
+                    timestamp_unix_ms,
+                )?;
+            }
+            preparation_log_once(
+                preparation,
+                timestamp_unix_ms,
+                PreparationLogLevel::Info,
+                stage_id,
+                &detail,
+            );
+        }
+        PythonMeshPreparationUpdate::Completed { detail } => {
+            begin_mesh_preparation_stage(
+                preparation,
+                PreparationStageId::MeshPostprocessing,
+                timestamp_unix_ms,
+                &detail,
+            )?;
+            preparation.complete_stage(
+                PreparationStageId::MeshPostprocessing,
+                timestamp_unix_ms,
+                &detail,
+            )?;
+            preparation_log_once(
+                preparation,
+                timestamp_unix_ms,
+                PreparationLogLevel::Info,
+                PreparationStageId::MeshPostprocessing,
+                &detail,
+            );
+        }
+        PythonMeshPreparationUpdate::Failed { stage_id, summary } => {
+            let owning_stage_id = match preparation.active_stage_id {
+                Some(
+                    active_stage_id @ (PreparationStageId::DomainPreparation
+                    | PreparationStageId::Meshing
+                    | PreparationStageId::MeshPostprocessing),
+                ) => active_stage_id,
+                _ => stage_id,
+            };
+            if preparation.active_stage_id != Some(owning_stage_id) {
+                begin_mesh_preparation_stage(
+                    preparation,
+                    owning_stage_id,
+                    timestamp_unix_ms,
+                    &summary,
+                )?;
+            }
+            preparation.fail_stage(
+                owning_stage_id,
+                timestamp_unix_ms,
+                "mesh_build_failed",
+                &summary,
+            )?;
+            preparation_log_once(
+                preparation,
+                timestamp_unix_ms,
+                PreparationLogLevel::Error,
+                owning_stage_id,
+                &summary,
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn merge_detailed_mesh_workspace(
+    mut planned_resource: Option<serde_json::Value>,
+    detailed_resource: Option<&serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let Some(detailed_resource) = detailed_resource.and_then(serde_json::Value::as_object) else {
+        return planned_resource;
+    };
+    let planned = planned_resource.get_or_insert_with(|| serde_json::json!({}));
+    if !planned.is_object() {
+        *planned = serde_json::json!({});
+    }
+    let planned = planned
+        .as_object_mut()
+        .expect("planned mesh workspace should be an object");
+    for key in [
+        "active_build",
+        "effective_airbox_target",
+        "effective_per_object_targets",
+        "last_build_summary",
+        "last_build_error",
+        "mesh_pipeline_status",
+    ] {
+        if let Some(value) = detailed_resource.get(key) {
+            planned.insert(key.to_string(), value.clone());
+        }
+    }
+    planned_resource
+}
+
 pub(crate) fn apply_python_progress_event(
     live_workspace: &LocalLiveWorkspace,
     event: PythonProgressEvent,
@@ -1848,6 +2168,11 @@ pub(crate) fn apply_python_progress_event(
         }
         PythonProgressEvent::Structured { kind, payload } => {
             live_workspace.update(|state| {
+                let preparation_update = python_mesh_preparation_update(&kind, &payload);
+                let preparation_timestamp_unix_ms = unix_time_millis()
+                    .ok()
+                    .and_then(|value| u64::try_from(value).ok())
+                    .unwrap_or(0);
                 let message = payload
                     .get("message")
                     .and_then(|value| value.as_str())
@@ -1951,6 +2276,30 @@ pub(crate) fn apply_python_progress_event(
                         );
                     }
                     _ => {}
+                }
+                if let (Some(preparation), Some(preparation_update)) =
+                    (state.simulation_preparation.as_mut(), preparation_update)
+                {
+                    if matches!(
+                        preparation.active_stage_id,
+                        Some(
+                            PreparationStageId::DomainPreparation
+                                | PreparationStageId::Meshing
+                                | PreparationStageId::MeshPostprocessing
+                        )
+                    ) {
+                        if let Err(error) = apply_mesh_preparation_update(
+                            preparation,
+                            preparation_update,
+                            preparation_timestamp_unix_ms,
+                        ) {
+                            push_engine_log(
+                                &mut state.engine_log,
+                                "warn",
+                                format!("Simulation preparation update skipped: {error}"),
+                            );
+                        }
+                    }
                 }
                 if let Some(message) = message {
                     push_engine_log(&mut state.engine_log, "info", message);

@@ -19,6 +19,9 @@ use crate::formatting::*;
 use crate::interactive_runtime_host::{CurrentLiveDisplaySelectionHandle, InteractiveRuntimeHost};
 use crate::live_workspace::*;
 use crate::python_bridge::*;
+use crate::simulation_preparation::{
+    PreparationLogLevel, PreparationStageId, SimulationPreparationState,
+};
 use crate::step_utils::*;
 use crate::types::*;
 
@@ -26,6 +29,408 @@ use crate::types::*;
 
 const FEM_FREQUENCY_RESPONSE_PROGRESS_KEY: &str = "fem_frequency_response_progress";
 const FREQUENCY_RESPONSE_TERMINAL_BAR_WIDTH: usize = 16;
+
+fn preparation_unix_time_millis() -> Result<u64> {
+    u64::try_from(unix_time_millis()?).context("preparation timestamp exceeds u64")
+}
+
+fn new_simulation_preparation(
+    preparation_id: impl Into<String>,
+    started_at_unix_ms: u64,
+) -> Result<SimulationPreparationState> {
+    let mut preparation = SimulationPreparationState::new(preparation_id, started_at_unix_ms);
+    begin_preparation_stage(
+        &mut preparation,
+        PreparationStageId::RuntimeStartup,
+        started_at_unix_ms,
+        "Starting the local simulation runtime",
+    )?;
+    Ok(preparation)
+}
+
+fn push_preparation_log_once(
+    preparation: &mut SimulationPreparationState,
+    timestamp_unix_ms: u64,
+    level: PreparationLogLevel,
+    stage_id: PreparationStageId,
+    message: &str,
+) {
+    let is_duplicate = preparation.log_tail.back().is_some_and(|entry| {
+        entry.level == level && entry.stage_id == stage_id && entry.message == message
+    });
+    if !is_duplicate {
+        preparation.push_log(timestamp_unix_ms, level, stage_id, message);
+    }
+}
+
+fn begin_preparation_stage(
+    preparation: &mut SimulationPreparationState,
+    stage_id: PreparationStageId,
+    timestamp_unix_ms: u64,
+    detail: &str,
+) -> std::result::Result<(), crate::simulation_preparation::PreparationTransitionError> {
+    preparation.begin_stage(stage_id, timestamp_unix_ms, detail)?;
+    push_preparation_log_once(
+        preparation,
+        timestamp_unix_ms,
+        PreparationLogLevel::Info,
+        stage_id,
+        detail,
+    );
+    Ok(())
+}
+
+fn complete_preparation_stage(
+    preparation: &mut SimulationPreparationState,
+    stage_id: PreparationStageId,
+    timestamp_unix_ms: u64,
+    detail: &str,
+) -> std::result::Result<(), crate::simulation_preparation::PreparationTransitionError> {
+    preparation.complete_stage(stage_id, timestamp_unix_ms, detail)?;
+    push_preparation_log_once(
+        preparation,
+        timestamp_unix_ms,
+        PreparationLogLevel::Info,
+        stage_id,
+        detail,
+    );
+    Ok(())
+}
+
+fn skip_preparation_stage(
+    preparation: &mut SimulationPreparationState,
+    stage_id: PreparationStageId,
+    timestamp_unix_ms: u64,
+    detail: &str,
+) -> std::result::Result<(), crate::simulation_preparation::PreparationTransitionError> {
+    preparation.skip_stage(stage_id, detail)?;
+    push_preparation_log_once(
+        preparation,
+        timestamp_unix_ms,
+        PreparationLogLevel::Info,
+        stage_id,
+        detail,
+    );
+    Ok(())
+}
+
+fn fail_owned_preparation_stage(
+    workspace: &LocalLiveWorkspace,
+    stage_id: PreparationStageId,
+    error_code: &str,
+    safe_summary: &str,
+) -> Result<()> {
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        preparation.fail_stage(stage_id, timestamp_unix_ms, error_code, safe_summary)?;
+        push_preparation_log_once(
+            preparation,
+            timestamp_unix_ms,
+            PreparationLogLevel::Error,
+            stage_id,
+            safe_summary,
+        );
+        Ok(())
+    })
+}
+
+fn fail_active_preparation_stage(
+    workspace: &LocalLiveWorkspace,
+    error_code: &str,
+    safe_summary: &str,
+) -> Result<()> {
+    let active_stage_id = workspace
+        .snapshot()
+        .simulation_preparation
+        .as_ref()
+        .and_then(|preparation| preparation.active_stage_id);
+    if let Some(active_stage_id) = active_stage_id {
+        fail_owned_preparation_stage(workspace, active_stage_id, error_code, safe_summary)?;
+    }
+    Ok(())
+}
+
+fn run_active_preparation_operation<T>(
+    workspace: &LocalLiveWorkspace,
+    error_code: &str,
+    safe_failure_summary: &str,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    match operation() {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            fail_active_preparation_stage(workspace, error_code, safe_failure_summary)?;
+            Err(error)
+        }
+    }
+}
+
+fn begin_script_materialization(workspace: &LocalLiveWorkspace) -> Result<()> {
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        complete_preparation_stage(
+            preparation,
+            PreparationStageId::RuntimeStartup,
+            timestamp_unix_ms,
+            "Local simulation runtime started",
+        )?;
+        begin_preparation_stage(
+            preparation,
+            PreparationStageId::ScriptMaterialization,
+            timestamp_unix_ms,
+            "Materializing the Python simulation script",
+        )?;
+        Ok(())
+    })
+}
+
+fn run_owned_preparation_stage<T>(
+    workspace: &LocalLiveWorkspace,
+    stage_id: PreparationStageId,
+    active_detail: &str,
+    completed_detail: &str,
+    skip_on_success: bool,
+    error_code: &str,
+    safe_failure_summary: &str,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let started_at_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        if stage_id == PreparationStageId::SolverInitialization
+            && preparation.active_stage_id == Some(PreparationStageId::MeshPostprocessing)
+        {
+            complete_preparation_stage(
+                preparation,
+                PreparationStageId::MeshPostprocessing,
+                started_at_unix_ms,
+                "Mesh preparation complete",
+            )?;
+        }
+        begin_preparation_stage(preparation, stage_id, started_at_unix_ms, active_detail)?;
+        Ok(())
+    })?;
+
+    match operation() {
+        Ok(value) => {
+            let completed_at_unix_ms = preparation_unix_time_millis()?;
+            transition_preparation(workspace, |preparation| {
+                if skip_on_success {
+                    skip_preparation_stage(
+                        preparation,
+                        stage_id,
+                        completed_at_unix_ms,
+                        completed_detail,
+                    )?;
+                } else {
+                    complete_preparation_stage(
+                        preparation,
+                        stage_id,
+                        completed_at_unix_ms,
+                        completed_detail,
+                    )?;
+                }
+                Ok(())
+            })?;
+            Ok(value)
+        }
+        Err(error) => {
+            fail_owned_preparation_stage(workspace, stage_id, error_code, safe_failure_summary)?;
+            Err(error)
+        }
+    }
+}
+
+fn run_script_preparation_preflight(
+    workspace: &LocalLiveWorkspace,
+    validate: impl FnOnce() -> Result<()>,
+    plan: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let materialized_at_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        complete_preparation_stage(
+            preparation,
+            PreparationStageId::ScriptMaterialization,
+            materialized_at_unix_ms,
+            "Python script materialized",
+        )?;
+        Ok(())
+    })?;
+    run_owned_preparation_stage(
+        workspace,
+        PreparationStageId::Validation,
+        "Validating the canonical simulation problem",
+        "Simulation problem validated",
+        false,
+        "validation_failed",
+        "Simulation validation failed",
+        validate,
+    )?;
+    run_owned_preparation_stage(
+        workspace,
+        PreparationStageId::Planning,
+        "Resolving the simulation execution plan",
+        "Simulation execution plan resolved",
+        false,
+        "planning_failed",
+        "Simulation planning failed",
+        plan,
+    )?;
+    let domain_started_at_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        begin_preparation_stage(
+            preparation,
+            PreparationStageId::DomainPreparation,
+            domain_started_at_unix_ms,
+            "Preparing simulation domain inputs",
+        )?;
+        Ok(())
+    })
+}
+
+fn finish_mesh_preparation(
+    workspace: &LocalLiveWorkspace,
+    mesh_was_materialized: bool,
+) -> Result<()> {
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        match preparation.active_stage_id {
+            Some(PreparationStageId::DomainPreparation) => {
+                if mesh_was_materialized {
+                    complete_preparation_stage(
+                        preparation,
+                        PreparationStageId::DomainPreparation,
+                        timestamp_unix_ms,
+                        "Shared-domain inputs prepared during full materialization",
+                    )?;
+                    begin_preparation_stage(
+                        preparation,
+                        PreparationStageId::Meshing,
+                        timestamp_unix_ms,
+                        "Mesh generated during full materialization",
+                    )?;
+                    complete_preparation_stage(
+                        preparation,
+                        PreparationStageId::Meshing,
+                        timestamp_unix_ms,
+                        "Mesh generated during full materialization",
+                    )?;
+                    begin_preparation_stage(
+                        preparation,
+                        PreparationStageId::MeshPostprocessing,
+                        timestamp_unix_ms,
+                        "Mesh postprocessed during full materialization",
+                    )?;
+                    complete_preparation_stage(
+                        preparation,
+                        PreparationStageId::MeshPostprocessing,
+                        timestamp_unix_ms,
+                        "Mesh preparation complete",
+                    )?;
+                } else {
+                    skip_preparation_stage(
+                        preparation,
+                        PreparationStageId::DomainPreparation,
+                        timestamp_unix_ms,
+                        "No shared-domain preparation was required",
+                    )?;
+                    skip_preparation_stage(
+                        preparation,
+                        PreparationStageId::Meshing,
+                        timestamp_unix_ms,
+                        "No meshing phase was required",
+                    )?;
+                    skip_preparation_stage(
+                        preparation,
+                        PreparationStageId::MeshPostprocessing,
+                        timestamp_unix_ms,
+                        "No mesh postprocessing phase was required",
+                    )?;
+                }
+            }
+            Some(PreparationStageId::Meshing) => {
+                complete_preparation_stage(
+                    preparation,
+                    PreparationStageId::Meshing,
+                    timestamp_unix_ms,
+                    "Mesh generated",
+                )?;
+                skip_preparation_stage(
+                    preparation,
+                    PreparationStageId::MeshPostprocessing,
+                    timestamp_unix_ms,
+                    "No separate mesh postprocessing phase was reported",
+                )?;
+            }
+            Some(PreparationStageId::MeshPostprocessing) => {
+                complete_preparation_stage(
+                    preparation,
+                    PreparationStageId::MeshPostprocessing,
+                    timestamp_unix_ms,
+                    "Mesh preparation complete",
+                )?;
+            }
+            None => {}
+            _ => {
+                return Err(
+                    crate::simulation_preparation::PreparationTransitionError::StageIsNotActive {
+                        stage_id: PreparationStageId::MeshPostprocessing,
+                        active_stage_id: preparation.active_stage_id,
+                    },
+                );
+            }
+        }
+        Ok(())
+    })
+}
+
+fn mark_preparation_ready(workspace: &LocalLiveWorkspace, detail: &str) -> Result<()> {
+    let ready_at_unix_ms = preparation_unix_time_millis()?;
+    transition_preparation(workspace, |preparation| {
+        preparation.mark_ready(ready_at_unix_ms, detail)?;
+        push_preparation_log_once(
+            preparation,
+            ready_at_unix_ms,
+            PreparationLogLevel::Info,
+            PreparationStageId::Ready,
+            detail,
+        );
+        Ok(())
+    })
+}
+
+fn mark_ui_shell_preparation_ready(workspace: &LocalLiveWorkspace) -> Result<()> {
+    let timestamp_unix_ms = preparation_unix_time_millis()?;
+    const SKIP_DETAIL: &str =
+        "The UI launch prepares an authoring workspace without materializing a simulation";
+    transition_preparation(workspace, |preparation| {
+        complete_preparation_stage(
+            preparation,
+            PreparationStageId::RuntimeStartup,
+            timestamp_unix_ms,
+            "Authoring workspace runtime started",
+        )?;
+        for stage_id in [
+            PreparationStageId::ScriptMaterialization,
+            PreparationStageId::Validation,
+            PreparationStageId::Planning,
+            PreparationStageId::DomainPreparation,
+            PreparationStageId::Meshing,
+            PreparationStageId::MeshPostprocessing,
+            PreparationStageId::SolverInitialization,
+        ] {
+            skip_preparation_stage(preparation, stage_id, timestamp_unix_ms, SKIP_DETAIL)?;
+        }
+        preparation.mark_ready(timestamp_unix_ms, "Authoring workspace ready")?;
+        push_preparation_log_once(
+            preparation,
+            timestamp_unix_ms,
+            PreparationLogLevel::Info,
+            PreparationStageId::Ready,
+            "Authoring workspace ready",
+        );
+        Ok(())
+    })
+}
 
 fn interactive_dense_ram_budget_bytes(available_ram: u64) -> u64 {
     let available_budget = (available_ram as f64 * 0.8) as u64;
@@ -5275,6 +5680,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let bootstrapping_run_manifest =
         build_run_manifest(&run_id, &session_id, "bootstrapping", &artifact_dir);
     let bootstrap_live_state_manifest = bootstrap_live_state("bootstrapping");
+    let simulation_preparation = new_simulation_preparation(
+        format!("preparation-{session_id}"),
+        u64::try_from(started_at_unix_ms).context("preparation start timestamp exceeds u64")?,
+    )?;
     let live_workspace = LocalLiveWorkspace::new(
         LocalLiveWorkspaceState {
             session: bootstrapping_session_manifest.clone(),
@@ -5283,7 +5692,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
-            simulation_preparation: None,
+            simulation_preparation: Some(simulation_preparation),
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
@@ -5328,6 +5737,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // The control room (API + frontend) starts concurrently.
     // This gives the frontend early metadata (~300ms) while the mesh builds.
     live_workspace.publish_snapshot();
+    begin_script_materialization(&live_workspace)?;
     live_workspace.update(|state| {
         state.session.status = "materializing_script".to_string();
         state.run.status = "materializing_script".to_string();
@@ -5404,7 +5814,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     }
 
     // Join Phase 1 and push early metadata to the already-loaded frontend.
-    match phase1_handle
+    let early_config = match phase1_handle
         .join()
         .unwrap_or_else(|_| Err(anyhow::anyhow!("phase-1 thread panicked")))
     {
@@ -5446,12 +5856,57 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     geometry_names.len()
                 ),
             );
+            Some(early_config)
         }
         Err(err) => {
             // Phase 1 failure is non-fatal — Phase 2 will produce the real error if needed.
             eprintln!("[fullmag] phase-1 pre-pass skipped: {:#}", err);
+            let timestamp_unix_ms = preparation_unix_time_millis()?;
+            transition_preparation(&live_workspace, |preparation| {
+                push_preparation_log_once(
+                    preparation,
+                    timestamp_unix_ms,
+                    PreparationLogLevel::Warning,
+                    PreparationStageId::ScriptMaterialization,
+                    "Lightweight script preflight was unavailable; using full materialization",
+                );
+                Ok(())
+            })?;
+            None
         }
-    }
+    };
+    let early_preflight_completed = if let Some(early_config) = early_config {
+        let early_stages = run_active_preparation_operation(
+            &live_workspace,
+            "script_materialization_failed",
+            "Python script materialization failed",
+            || materialize_script_stages(early_config),
+        )?;
+        run_script_preparation_preflight(
+            &live_workspace,
+            || {
+                if early_stages.is_empty() {
+                    bail!("script did not produce any executable stages");
+                }
+                for stage in &early_stages {
+                    validate_ir(&stage.ir)?;
+                }
+                Ok(())
+            },
+            || {
+                for stage in &early_stages {
+                    stage
+                        .ir
+                        .plan_for(args.backend.map(BackendTarget::from))
+                        .map_err(join_errors)?;
+                }
+                Ok(())
+            },
+        )?;
+        true
+    } else {
+        false
+    };
     let script_config = match export_script_execution_config_via_python(
         &script_path,
         &args,
@@ -5480,8 +5935,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     ) {
         Ok(config) => config,
         Err(error) => {
+            fail_active_preparation_stage(
+                &live_workspace,
+                "materialization_failed",
+                "Simulation materialization failed",
+            )?;
             let failed_at_unix_ms = unix_time_millis()?;
-            let previous_engine_log = live_workspace.snapshot().engine_log;
+            let failed_snapshot = live_workspace.snapshot();
             let failed_runtime = requested_runtime_selection(
                 &requested_backend_name,
                 false,
@@ -5513,16 +5973,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     live_state.latest_step.finished = true;
                     live_state
                 },
-                metadata: None,
-                mesh_workspace: None,
+                metadata: failed_snapshot.metadata,
+                mesh_workspace: failed_snapshot.mesh_workspace,
                 stage_execution: None,
-                simulation_preparation: None,
+                simulation_preparation: failed_snapshot.simulation_preparation,
                 latest_scalar_row: None,
                 latest_fields: CurrentLiveLatestFields::default(),
                 preview_fields: CurrentLivePreviewFieldCache::default(),
                 pending_preview_fields: CurrentLivePreviewFieldCache::default(),
                 clear_preview_cache: false,
-                engine_log: previous_engine_log,
+                engine_log: failed_snapshot.engine_log,
                 solver_profile: fullmag_runner::SolverProfileState::default(),
                 published_fem_mesh_generation_id: None,
             });
@@ -5530,37 +5990,111 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             return Err(error);
         }
     };
-    let mut stages = materialize_script_stages(script_config)?;
-    if stages.is_empty() {
-        bail!("script did not produce any executable stages");
-    }
-    let initial_magnetization_override = initial_magnetization_state_override(&args)?;
-    apply_initial_magnetization_state_override(
-        &mut stages[0].ir,
-        initial_magnetization_override.as_ref(),
+    let mut stages = run_active_preparation_operation(
+        &live_workspace,
+        "script_materialization_failed",
+        "Simulation stage materialization failed",
+        || materialize_script_stages(script_config),
     )?;
-    for stage in &stages {
-        validate_ir(&stage.ir)?;
+    if !early_preflight_completed {
+        run_script_preparation_preflight(
+            &live_workspace,
+            || {
+                if stages.is_empty() {
+                    bail!("script did not produce any executable stages");
+                }
+                for stage in &stages {
+                    validate_ir(&stage.ir)?;
+                }
+                Ok(())
+            },
+            || {
+                for stage in &stages {
+                    stage
+                        .ir
+                        .plan_for(args.backend.map(BackendTarget::from))
+                        .map_err(join_errors)?;
+                }
+                Ok(())
+            },
+        )?;
     }
-    let mut stage_execution_plans = stages
+    let detailed_mesh_workspace = live_workspace.snapshot().mesh_workspace;
+    let mesh_was_materialized = detailed_mesh_workspace
+        .as_ref()
+        .and_then(|resource| resource.get("last_build_summary"))
+        .is_some_and(|summary| !summary.is_null());
+    finish_mesh_preparation(&live_workspace, mesh_was_materialized)?;
+    let solver_initialization_required = stages
         .iter()
-        .map(plan_materialized_stage_snapshot)
-        .collect::<Result<Vec<_>>>()?;
+        .any(|stage| stage.action.is_none() && stage.entrypoint_kind != "flat_workspace");
+    let solver_active_detail = if solver_initialization_required {
+        "Validating the materialized problem and initializing the solver"
+    } else {
+        "Validating materialized workspace resources"
+    };
+    let solver_completed_detail = if solver_initialization_required {
+        "Solver initialization complete"
+    } else {
+        "No solver stage is present in this workspace preparation"
+    };
 
-    let mut current_plan_summary = stages[0]
-        .ir
-        .plan_for(args.backend.map(BackendTarget::from))
-        .map_err(join_errors)?;
+    let (
+        mut stage_execution_plans,
+        mut current_plan_summary,
+        initial_execution_plan,
+        initial_live_state,
+    ) = run_owned_preparation_stage(
+        &live_workspace,
+        PreparationStageId::SolverInitialization,
+        solver_active_detail,
+        solver_completed_detail,
+        !solver_initialization_required,
+        "solver_initialization_failed",
+        "Solver initialization failed",
+        || {
+            if stages.is_empty() {
+                bail!("script did not produce any executable stages");
+            }
+            let initial_magnetization_override = initial_magnetization_state_override(&args)?;
+            apply_initial_magnetization_state_override(
+                &mut stages[0].ir,
+                initial_magnetization_override.as_ref(),
+            )?;
+            for stage in &stages {
+                validate_ir(&stage.ir)?;
+            }
+            let stage_execution_plans = stages
+                .iter()
+                .map(plan_materialized_stage_snapshot)
+                .collect::<Result<Vec<_>>>()?;
+            let current_plan_summary = stages[0]
+                .ir
+                .plan_for(args.backend.map(BackendTarget::from))
+                .map_err(join_errors)?;
+            let initial_execution_plan = stage_execution_plans[0].clone();
+            let initial_update = initial_step_update(&initial_execution_plan.backend_plan);
+            let initial_magnetization_override_values = initial_magnetization_override
+                .as_ref()
+                .map(|state| state.values.clone());
+            let initial_live_state = initial_live_state_manifest_from_backend_plan(
+                &initial_update,
+                &initial_execution_plan.backend_plan,
+                initial_magnetization_override_values.as_deref(),
+            )?;
+            Ok((
+                stage_execution_plans,
+                current_plan_summary,
+                initial_execution_plan,
+                initial_live_state,
+            ))
+        },
+    )?;
     let mut current_mesh_history = Vec::<serde_json::Value>::new();
     let mut current_mesh_quality: Option<crate::python_bridge::RemeshQualitySummary> = None;
     let mut current_fem_mesh_override: Option<fullmag_ir::MeshIR> = None;
     let mut current_fem_hmax_override: Option<f64> = None;
     let mut current_adaptive_runtime_state: Option<serde_json::Value> = None;
-    let initial_execution_plan = stage_execution_plans[0].clone();
-    let initial_update = initial_step_update(&initial_execution_plan.backend_plan);
-    let initial_magnetization_override_values = initial_magnetization_override
-        .as_ref()
-        .map(|state| state.values.clone());
 
     let final_problem_name = stages
         .last()
@@ -5629,7 +6163,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             )
         });
 
-    let previous_engine_log = live_workspace.snapshot().engine_log;
+    let previous_workspace = live_workspace.snapshot();
     let initial_runtime = session_runtime_selection_for_problem(
         &stages[0].ir,
         backend_target_name(final_requested_backend),
@@ -5651,34 +6185,34 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             plan_summary_json(&current_plan_summary),
         ),
         run: build_run_manifest(&run_id, &session_id, "running", &artifact_dir),
-        live_state: initial_live_state_manifest_from_backend_plan(
-            &initial_update,
-            &initial_execution_plan.backend_plan,
-            initial_magnetization_override_values.as_deref(),
-        )?,
+        live_state: initial_live_state,
         metadata: Some(current_live_metadata(
             &stages[0].ir,
             &initial_execution_plan,
             "running",
         )),
-        mesh_workspace: current_mesh_workspace(
-            &stages[0].ir,
-            &initial_execution_plan,
-            "running",
-            current_mesh_quality.as_ref(),
-            &current_mesh_history,
+        mesh_workspace: merge_detailed_mesh_workspace(
+            current_mesh_workspace(
+                &stages[0].ir,
+                &initial_execution_plan,
+                "running",
+                current_mesh_quality.as_ref(),
+                &current_mesh_history,
+            ),
+            previous_workspace.mesh_workspace.as_ref(),
         ),
         stage_execution: None,
-        simulation_preparation: None,
+        simulation_preparation: previous_workspace.simulation_preparation,
         latest_scalar_row: None,
         latest_fields: CurrentLiveLatestFields::default(),
         preview_fields: CurrentLivePreviewFieldCache::default(),
         pending_preview_fields: CurrentLivePreviewFieldCache::default(),
         clear_preview_cache: false,
-        engine_log: previous_engine_log,
+        engine_log: previous_workspace.engine_log,
         solver_profile: fullmag_runner::SolverProfileState::default(),
         published_fem_mesh_generation_id: None,
     });
+    mark_preparation_ready(&live_workspace, "Simulation is ready")?;
     live_workspace.push_log(
         "system",
         format!(
@@ -9174,6 +9708,10 @@ pub(crate) fn prepare_live_workspace_for_ui(
     let bootstrapping_run_manifest =
         build_run_manifest(&run_id, &session_id, "bootstrapping", &artifact_dir);
     let bootstrap_live_state_manifest = bootstrap_live_state("bootstrapping");
+    let simulation_preparation = new_simulation_preparation(
+        format!("preparation-{session_id}"),
+        u64::try_from(started_at_unix_ms).context("preparation start timestamp exceeds u64")?,
+    )?;
     let live_workspace = LocalLiveWorkspace::new(
         LocalLiveWorkspaceState {
             session: bootstrapping_session_manifest,
@@ -9182,7 +9720,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
-            simulation_preparation: None,
+            simulation_preparation: Some(simulation_preparation),
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
@@ -9211,7 +9749,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
             requested_backend_name, requested_mode_name, requested_precision_name
         ),
     );
-    live_workspace.publish_snapshot();
+    mark_ui_shell_preparation_ready(&live_workspace)?;
     Ok((session_id, live_workspace))
 }
 
@@ -9231,9 +9769,11 @@ mod tests {
         initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
         initial_step_update, interactive_session_should_stay_alive,
         live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
-        live_step_ingest_preview_len, mesh_build_pipeline_status_json, mesh_source_scene_revision,
+        live_step_ingest_preview_len, mark_ui_shell_preparation_ready,
+        mesh_build_pipeline_status_json, mesh_source_scene_revision,
         plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
         resolve_adaptive_convergence_metric, resolved_shared_domain_object_region_markers,
+        run_owned_preparation_stage, run_script_preparation_preflight,
         scripted_stage_execution_state, shared_domain_object_region_mesh_specs,
         stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
@@ -9242,6 +9782,10 @@ mod tests {
         LiveProgressCadence, LoadedInitialMagnetizationState, RuntimeCommandPrecondition,
         SceneProblemPatch, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
         LIVE_PROGRESS_PUBLISH_INTERVAL,
+    };
+    use crate::live_workspace::{CurrentLivePublisher, LocalLiveWorkspace};
+    use crate::simulation_preparation::{
+        PreparationStageId, PreparationStageStatus, PreparationStatus, SimulationPreparationState,
     };
 
     #[test]
@@ -9711,6 +10255,238 @@ mod tests {
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
             published_fem_mesh_generation_id: None,
+        }
+    }
+
+    fn preparation_workspace(active_stage: PreparationStageId) -> LocalLiveWorkspace {
+        let mut state = test_workspace_state();
+        let mut preparation = SimulationPreparationState::new("prep-orchestration", 1_000);
+        preparation
+            .begin_stage(active_stage, 1_000, "Preparing simulation")
+            .expect("test stage should start");
+        state.simulation_preparation = Some(preparation);
+        LocalLiveWorkspace::new(
+            state,
+            CurrentLivePublisher::spawn("prep-orchestration-test"),
+        )
+    }
+
+    fn assert_owned_preparation_failure(
+        workspace: &LocalLiveWorkspace,
+        stage_id: PreparationStageId,
+        error_code: &str,
+        safe_summary: &str,
+        raw_error: &str,
+    ) {
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        assert_eq!(preparation.status, PreparationStatus::Failed);
+        let failure = preparation.failure.expect("owned failure");
+        assert_eq!(failure.stage_id, stage_id);
+        assert_eq!(failure.error_code, error_code);
+        assert_eq!(failure.summary, safe_summary);
+        assert!(preparation
+            .log_tail
+            .iter()
+            .all(|entry| !entry.message.contains(raw_error)));
+    }
+
+    #[test]
+    fn script_preflight_emits_validation_then_planning_before_domain_preparation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let calls = std::cell::RefCell::new(Vec::new());
+
+        run_script_preparation_preflight(
+            &workspace,
+            || {
+                calls.borrow_mut().push("validation");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("planning");
+                Ok(())
+            },
+        )
+        .expect("preflight should succeed");
+
+        assert_eq!(calls.into_inner(), vec!["validation", "planning"]);
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        assert_eq!(
+            preparation.active_stage_id,
+            Some(PreparationStageId::DomainPreparation)
+        );
+        assert_eq!(
+            preparation
+                .stages
+                .iter()
+                .find(|stage| stage.id == PreparationStageId::Validation)
+                .expect("validation stage")
+                .status,
+            PreparationStageStatus::Completed
+        );
+        assert_eq!(
+            preparation
+                .stages
+                .iter()
+                .find(|stage| stage.id == PreparationStageId::Planning)
+                .expect("planning stage")
+                .status,
+            PreparationStageStatus::Completed
+        );
+    }
+
+    #[test]
+    fn validation_failure_is_owned_before_propagation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "validator leaked /private/model/path";
+
+        let error = run_script_preparation_preflight(
+            &workspace,
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+            || panic!("planning must not run after validation failure"),
+        )
+        .expect_err("validation should fail");
+
+        assert!(error.to_string().contains(raw_error));
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::Validation,
+            "validation_failed",
+            "Simulation validation failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn planner_failure_is_owned_before_propagation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "planner leaked backend internals";
+
+        let error = run_script_preparation_preflight(
+            &workspace,
+            || Ok(()),
+            || Err(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("planning should fail");
+
+        assert!(error.to_string().contains(raw_error));
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::Planning,
+            "planning_failed",
+            "Simulation planning failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn solver_construction_failure_is_owned_before_propagation() {
+        let workspace = preparation_workspace(PreparationStageId::MeshPostprocessing);
+        let raw_error = "solver constructor leaked native path";
+
+        let error = run_owned_preparation_stage(
+            &workspace,
+            PreparationStageId::SolverInitialization,
+            "Initializing the solver",
+            "Solver initialized",
+            false,
+            "solver_initialization_failed",
+            "Solver initialization failed",
+            || Err::<(), _>(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("solver construction should fail");
+
+        assert!(error.to_string().contains(raw_error));
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::SolverInitialization,
+            "solver_initialization_failed",
+            "Solver initialization failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn workspace_only_preparation_skips_solver_initialization() {
+        let workspace = preparation_workspace(PreparationStageId::MeshPostprocessing);
+
+        run_owned_preparation_stage(
+            &workspace,
+            PreparationStageId::SolverInitialization,
+            "Validating materialized workspace resources",
+            "No solver stage is present in this workspace preparation",
+            true,
+            "solver_initialization_failed",
+            "Solver initialization failed",
+            || Ok(()),
+        )
+        .expect("workspace resource validation should succeed");
+
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        assert_eq!(
+            preparation
+                .stages
+                .iter()
+                .find(|stage| stage.id == PreparationStageId::SolverInitialization)
+                .expect("solver initialization stage")
+                .status,
+            PreparationStageStatus::Skipped
+        );
+    }
+
+    #[test]
+    fn ui_shell_launch_skips_simulation_only_stages_before_ready() {
+        let workspace = preparation_workspace(PreparationStageId::RuntimeStartup);
+
+        mark_ui_shell_preparation_ready(&workspace).expect("UI shell should become ready");
+
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        assert_eq!(preparation.status, PreparationStatus::Ready);
+        for stage_id in [
+            PreparationStageId::ScriptMaterialization,
+            PreparationStageId::Validation,
+            PreparationStageId::Planning,
+            PreparationStageId::DomainPreparation,
+            PreparationStageId::Meshing,
+            PreparationStageId::MeshPostprocessing,
+            PreparationStageId::SolverInitialization,
+        ] {
+            assert_eq!(
+                preparation
+                    .stages
+                    .iter()
+                    .find(|stage| stage.id == stage_id)
+                    .expect("canonical stage")
+                    .status,
+                PreparationStageStatus::Skipped
+            );
+        }
+        for stage_id in [
+            PreparationStageId::RuntimeStartup,
+            PreparationStageId::ScriptMaterialization,
+            PreparationStageId::Validation,
+            PreparationStageId::Planning,
+            PreparationStageId::DomainPreparation,
+            PreparationStageId::Meshing,
+            PreparationStageId::MeshPostprocessing,
+            PreparationStageId::SolverInitialization,
+            PreparationStageId::Ready,
+        ] {
+            assert!(preparation
+                .log_tail
+                .iter()
+                .any(|entry| entry.stage_id == stage_id));
         }
     }
 
