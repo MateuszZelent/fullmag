@@ -192,6 +192,7 @@ pub(crate) fn build_live_status(
         mesh_build_revision: snapshot.mesh_build_revision,
         commands_revision,
         stages_revision: snapshot.stage_execution_revision,
+        simulation_preparation_revision: snapshot.simulation_preparation_revision,
         scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
         region_topology_revision: snapshot.region_realization_revisions.topology,
         region_membership_revision: snapshot.region_realization_revisions.membership,

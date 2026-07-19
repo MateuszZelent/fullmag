@@ -23,6 +23,11 @@ use crate::schemas::hysteresis::{
     HysteresisSettleTraceEntrySchema, HysteresisStagePlanSchema, HysteresisStageSaturationSchema,
     HysteresisStorageEstimateSchema,
 };
+use crate::schemas::preparation::{
+    PreparationExecutionSummary, PreparationFailureResource, PreparationLogEntryResource,
+    PreparationLogLevel, PreparationProgressStage, PreparationStageId, PreparationStageStatus,
+    PreparationStatus, SimulationPreparationResource,
+};
 use crate::schemas::relaxation::{
     canonical_torque_apm, torque_t_from_apm, RelaxationAlgorithm, StageMetricKind, StageMetricUnit,
     StageStopReason,
@@ -56,6 +61,214 @@ pub struct HysteresisExecutionTreeQuery {
     pub include_bookmarks: Option<bool>,
     pub include_warnings: Option<bool>,
     pub include_snapshots: Option<bool>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/simulation/preparation",
+    responses(
+        (status = 200, description = "Current simulation preparation resource", body = SimulationPreparationResource),
+        (status = 404, description = "Simulation preparation is not available", body = crate::schemas::common::ApiErrorResponse),
+    ),
+    tag = "simulation"
+)]
+pub async fn get_simulation_preparation(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<SimulationPreparationResource>, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let preparation = snapshot
+        .simulation_preparation
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("simulation preparation unavailable"))?;
+
+    if preparation.stages.len() > 9 {
+        return Err(ApiError::internal(
+            "simulation preparation contains more than nine canonical stages",
+        ));
+    }
+
+    let stages = preparation
+        .stages
+        .iter()
+        .map(|stage| {
+            if stage.progress_percent.is_some_and(|percent| percent > 100) {
+                return Err(ApiError::internal(format!(
+                    "simulation preparation stage '{}' has progress above 100",
+                    stage.id
+                )));
+            }
+            Ok(PreparationProgressStage {
+                id: preparation_stage_id(&stage.id)?,
+                label: bounded_preparation_string(&stage.label, 128),
+                detail: bounded_preparation_string(&stage.detail, 1024),
+                status: preparation_stage_status(&stage.status)?,
+                started_at_unix_ms: stage.started_at_unix_ms,
+                completed_at_unix_ms: stage.completed_at_unix_ms,
+                duration_ms: stage.duration_ms,
+                progress_percent: stage.progress_percent,
+                progress_label: stage
+                    .progress_label
+                    .as_deref()
+                    .map(|value| bounded_preparation_string(value, 256)),
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let log_tail_start = preparation.log_tail.len().saturating_sub(200);
+    let log_tail = preparation.log_tail[log_tail_start..]
+        .iter()
+        .map(|entry| {
+            Ok(PreparationLogEntryResource {
+                timestamp_unix_ms: entry.timestamp_unix_ms,
+                level: preparation_log_level(&entry.level)?,
+                stage_id: preparation_stage_id(&entry.stage_id)?,
+                message: bounded_preparation_string(&entry.message, 2048),
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let failure = preparation
+        .failure
+        .as_ref()
+        .map(|failure| -> Result<PreparationFailureResource, ApiError> {
+            Ok(PreparationFailureResource {
+                error_code: bounded_preparation_string(&failure.error_code, 128),
+                summary: bounded_preparation_string(&failure.summary, 1024),
+                stage_id: preparation_stage_id(&failure.stage_id)?,
+                diagnostics_correlation_id: failure
+                    .diagnostics_correlation_id
+                    .as_deref()
+                    .map(|value| bounded_preparation_string(value, 256)),
+            })
+        })
+        .transpose()?;
+
+    Ok(Json(SimulationPreparationResource {
+        preparation_id: bounded_preparation_string(&preparation.preparation_id, 128),
+        revision: preparation.revision,
+        status: preparation_status(&preparation.status)?,
+        active_stage_id: preparation
+            .active_stage_id
+            .as_deref()
+            .map(preparation_stage_id)
+            .transpose()?,
+        started_at_unix_ms: preparation.started_at_unix_ms,
+        completed_at_unix_ms: preparation.completed_at_unix_ms,
+        requested_execution: PreparationExecutionSummary {
+            backend: Some(bounded_preparation_string(
+                &snapshot.session.requested_backend,
+                128,
+            )),
+            device: Some(bounded_preparation_string(
+                &snapshot.session.requested_device,
+                128,
+            )),
+            precision: Some(bounded_preparation_string(
+                &snapshot.session.requested_precision,
+                128,
+            )),
+            mode: Some(bounded_preparation_string(
+                &snapshot.session.requested_mode,
+                128,
+            )),
+            runtime_family: None,
+            engine_id: None,
+            worker: None,
+        },
+        resolved_execution: resolved_preparation_execution(snapshot),
+        stages,
+        log_tail,
+        failure,
+    }))
+}
+
+fn resolved_preparation_execution(
+    snapshot: &SessionStateResponse,
+) -> Option<PreparationExecutionSummary> {
+    let session = &snapshot.session;
+    if session.resolved_backend.is_none()
+        && session.resolved_device.is_none()
+        && session.resolved_precision.is_none()
+        && session.resolved_mode.is_none()
+        && session.resolved_runtime_family.is_none()
+        && session.resolved_engine_id.is_none()
+        && session.resolved_worker.is_none()
+    {
+        return None;
+    }
+    Some(PreparationExecutionSummary {
+        backend: bounded_preparation_optional_string(session.resolved_backend.as_deref()),
+        device: bounded_preparation_optional_string(session.resolved_device.as_deref()),
+        precision: bounded_preparation_optional_string(session.resolved_precision.as_deref()),
+        mode: bounded_preparation_optional_string(session.resolved_mode.as_deref()),
+        runtime_family: bounded_preparation_optional_string(
+            session.resolved_runtime_family.as_deref(),
+        ),
+        engine_id: bounded_preparation_optional_string(session.resolved_engine_id.as_deref()),
+        worker: bounded_preparation_optional_string(session.resolved_worker.as_deref()),
+    })
+}
+
+fn bounded_preparation_optional_string(value: Option<&str>) -> Option<String> {
+    value.map(|value| bounded_preparation_string(value, 128))
+}
+
+fn bounded_preparation_string(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn preparation_status(value: &str) -> Result<PreparationStatus, ApiError> {
+    match value {
+        "connecting" => Ok(PreparationStatus::Connecting),
+        "running" => Ok(PreparationStatus::Running),
+        "ready" => Ok(PreparationStatus::Ready),
+        "failed" => Ok(PreparationStatus::Failed),
+        other => Err(ApiError::internal(format!(
+            "unknown simulation preparation status: {other}"
+        ))),
+    }
+}
+
+fn preparation_stage_id(value: &str) -> Result<PreparationStageId, ApiError> {
+    match value {
+        "runtime_startup" => Ok(PreparationStageId::RuntimeStartup),
+        "script_materialization" => Ok(PreparationStageId::ScriptMaterialization),
+        "validation" => Ok(PreparationStageId::Validation),
+        "planning" => Ok(PreparationStageId::Planning),
+        "domain_preparation" => Ok(PreparationStageId::DomainPreparation),
+        "meshing" => Ok(PreparationStageId::Meshing),
+        "mesh_postprocessing" => Ok(PreparationStageId::MeshPostprocessing),
+        "solver_initialization" => Ok(PreparationStageId::SolverInitialization),
+        "ready" => Ok(PreparationStageId::Ready),
+        other => Err(ApiError::internal(format!(
+            "unknown simulation preparation stage: {other}"
+        ))),
+    }
+}
+
+fn preparation_stage_status(value: &str) -> Result<PreparationStageStatus, ApiError> {
+    match value {
+        "pending" => Ok(PreparationStageStatus::Pending),
+        "active" => Ok(PreparationStageStatus::Active),
+        "completed" => Ok(PreparationStageStatus::Completed),
+        "failed" => Ok(PreparationStageStatus::Failed),
+        "skipped" => Ok(PreparationStageStatus::Skipped),
+        other => Err(ApiError::internal(format!(
+            "unknown simulation preparation stage status: {other}"
+        ))),
+    }
+}
+
+fn preparation_log_level(value: &str) -> Result<PreparationLogLevel, ApiError> {
+    match value {
+        "info" => Ok(PreparationLogLevel::Info),
+        "warning" => Ok(PreparationLogLevel::Warning),
+        "error" => Ok(PreparationLogLevel::Error),
+        other => Err(ApiError::internal(format!(
+            "unknown simulation preparation log level: {other}"
+        ))),
+    }
 }
 
 #[utoipa::path(

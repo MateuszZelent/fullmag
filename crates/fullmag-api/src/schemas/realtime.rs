@@ -28,6 +28,7 @@ pub struct RealtimeResourceRevisionMap {
     pub mesh_build_revision: u64,
     pub commands_revision: u64,
     pub stages_revision: u64,
+    pub simulation_preparation_revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_revision: Option<u64>,
     pub visualization_state_revision: u64,

@@ -29,8 +29,10 @@ use crate::types::{
     CurrentLiveSnapshotRequest, CurrentWorkspaceLayout, CurrentWorkspaceRibbon,
     CurrentWorkspaceSelection, DisplayPresentationState, LatestFields, LiveState, RunManifest,
     RuntimeLifecycleState, RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest,
-    SessionStateResponse, StageExecutionRecord, StageExecutionState, StageLifecycleState,
-    StepUpdateView, TrackedCommandRecord,
+    SessionStateResponse, SimulationPreparationFailureSnapshot,
+    SimulationPreparationLogEntrySnapshot, SimulationPreparationSnapshot,
+    SimulationPreparationStageSnapshot, StageExecutionRecord, StageExecutionState,
+    StageLifecycleState, StepUpdateView, TrackedCommandRecord,
 };
 use crate::uuid_v4_hex;
 use fullmag_runner::eigen::{
@@ -733,6 +735,89 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
 
     *state.current_live_state.write().await = Some(snapshot);
 
+    state
+}
+
+fn simulation_preparation_fixture(status: &str) -> SimulationPreparationSnapshot {
+    let stage_ids = [
+        "runtime_startup",
+        "script_materialization",
+        "validation",
+        "planning",
+        "domain_preparation",
+        "meshing",
+        "mesh_postprocessing",
+        "solver_initialization",
+        "ready",
+    ];
+    let terminal_stage_index = match status {
+        "ready" => stage_ids.len(),
+        "failed" | "running" => 5,
+        other => panic!("unsupported preparation fixture status: {other}"),
+    };
+    let stages = stage_ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let stage_status = if status == "failed" && index == terminal_stage_index {
+                "failed"
+            } else if status == "running" && index == terminal_stage_index {
+                "active"
+            } else if index < terminal_stage_index || status == "ready" {
+                "completed"
+            } else {
+                "pending"
+            };
+            SimulationPreparationStageSnapshot {
+                id: id.to_string(),
+                label: id.replace('_', " "),
+                detail: if id == "meshing" {
+                    "Optimizing element quality".to_string()
+                } else {
+                    String::new()
+                },
+                status: stage_status.to_string(),
+                started_at_unix_ms: (index <= terminal_stage_index)
+                    .then_some(1_700_000_000_000 + index as u64 * 100),
+                completed_at_unix_ms: (stage_status == "completed")
+                    .then_some(1_700_000_000_090 + index as u64 * 100),
+                duration_ms: (stage_status != "pending").then_some(90),
+                progress_percent: (status == "running" && id == "meshing").then_some(63),
+                progress_label: (status == "running" && id == "meshing")
+                    .then(|| "142580 / 226318 elements".to_string()),
+            }
+        })
+        .collect();
+
+    SimulationPreparationSnapshot {
+        preparation_id: "prep-contract-test".to_string(),
+        revision: 7,
+        status: status.to_string(),
+        active_stage_id: (status == "running").then(|| "meshing".to_string()),
+        started_at_unix_ms: 1_700_000_000_000,
+        completed_at_unix_ms: (status != "running").then_some(1_700_000_001_000),
+        stages,
+        log_tail: vec![SimulationPreparationLogEntrySnapshot {
+            timestamp_unix_ms: 1_700_000_000_550,
+            level: if status == "failed" { "error" } else { "info" }.to_string(),
+            stage_id: "meshing".to_string(),
+            message: "Optimizing element quality".to_string(),
+        }],
+        failure: (status == "failed").then(|| SimulationPreparationFailureSnapshot {
+            error_code: "mesh_generation_failed".to_string(),
+            summary: "Mesh generation failed".to_string(),
+            stage_id: "meshing".to_string(),
+            diagnostics_correlation_id: Some("diag-prep-7".to_string()),
+        }),
+    }
+}
+
+async fn test_app_state_with_simulation_preparation(status: &str) -> Arc<AppState> {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.simulation_preparation = Some(simulation_preparation_fixture(status));
+        snapshot.simulation_preparation_revision = 7;
+    }
     state
 }
 
@@ -15132,6 +15217,222 @@ async fn current_run_endpoint_returns_runtime_summary() {
 }
 
 #[tokio::test]
+async fn simulation_preparation_returns_active_projection() {
+    let state = test_app_state_with_simulation_preparation("running").await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["preparation_id"], "prep-contract-test");
+    assert_eq!(body["revision"], 7);
+    assert_eq!(body["status"], "running");
+    assert_eq!(body["active_stage_id"], "meshing");
+    assert_eq!(body["stages"][5]["progress_percent"], 63);
+    assert_eq!(
+        body["stages"][5]["progress_label"],
+        "142580 / 226318 elements"
+    );
+    assert_eq!(body["log_tail"].as_array().map(Vec::len), Some(1));
+    assert_eq!(body["requested_execution"]["backend"], "cpu-fdm");
+    assert_eq!(body["requested_execution"]["device"], "auto");
+    assert_eq!(body["resolved_execution"]["backend"], "cpu-fdm");
+    assert_eq!(body["resolved_execution"]["device"], "cpu");
+}
+
+#[tokio::test]
+async fn simulation_preparation_returns_ready_projection() {
+    let state = test_app_state_with_simulation_preparation("ready").await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["status"], "ready");
+    assert!(body["active_stage_id"].is_null());
+    assert_eq!(body["stages"].as_array().map(Vec::len), Some(9));
+    assert!(body["stages"]
+        .as_array()
+        .is_some_and(|stages| stages.iter().all(|stage| stage["status"] == "completed")));
+    assert!(body["completed_at_unix_ms"].is_number());
+    assert!(body["failure"].is_null());
+}
+
+#[tokio::test]
+async fn simulation_preparation_returns_failed_projection() {
+    let state = test_app_state_with_simulation_preparation("failed").await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["status"], "failed");
+    assert_eq!(body["stages"][5]["status"], "failed");
+    assert_eq!(body["failure"]["error_code"], "mesh_generation_failed");
+    assert_eq!(body["failure"]["stage_id"], "meshing");
+    assert_eq!(body["failure"]["diagnostics_correlation_id"], "diag-prep-7");
+}
+
+#[tokio::test]
+async fn simulation_preparation_returns_404_when_unavailable() {
+    let state = test_app_state_with_live_session().await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn simulation_preparation_status_exposes_only_revision_pointer() {
+    let state = test_app_state_with_simulation_preparation("running").await;
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["resources"]["simulation_preparation_revision"], 7);
+    assert!(body.get("simulation_preparation").is_none());
+    assert!(body["resources"].get("simulation_preparation").is_none());
+}
+
+#[test]
+fn simulation_preparation_openapi_registers_route_and_bounded_schemas() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let get = &openapi["paths"]["/v2/sessions/current/simulation/preparation"]["get"];
+    assert_eq!(
+        get["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/SimulationPreparationResource"
+    );
+    assert!(get["responses"].get("404").is_some());
+
+    let schemas = &openapi["components"]["schemas"];
+    assert_eq!(
+        schemas["PreparationProgressStage"]["properties"]["progress_percent"]["minimum"],
+        0
+    );
+    assert_eq!(
+        schemas["PreparationProgressStage"]["properties"]["progress_percent"]["maximum"],
+        100
+    );
+    assert_eq!(
+        schemas["SimulationPreparationResource"]["properties"]["log_tail"]["maxItems"],
+        200
+    );
+    assert!(schemas["PreparationStatus"]["enum"]
+        .as_array()
+        .is_some_and(|values| values.iter().any(|value| value == "ready")));
+    assert!(schemas["PreparationStageId"]["enum"]
+        .as_array()
+        .is_some_and(|values| values.iter().any(|value| value == "mesh_postprocessing")));
+    assert!(schemas["PreparationFailureResource"]["properties"]
+        .get("diagnostics_correlation_id")
+        .is_some());
+    assert!(schemas["PreparationExecutionSummary"]["properties"]
+        .get("backend")
+        .is_some());
+}
+
+#[tokio::test]
+async fn simulation_preparation_invalidation_is_revision_only() {
+    let state = test_app_state_with_simulation_preparation("running").await;
+    let snapshot = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .expect("live snapshot")
+        .clone();
+    let realtime_state =
+        crate::current_live_realtime_state_from_snapshot(&state, &snapshot, 0).await;
+    let unchanged = crate::current_live_realtime_changes_since(
+        &realtime_state,
+        Some(&realtime_state.revisions),
+    );
+    assert!(unchanged
+        .iter()
+        .all(|change| change.resource_id.as_deref() != Some("simulation/preparation")));
+    let mut previous_revisions = realtime_state.revisions.clone();
+    previous_revisions.simulation_preparation_revision = 6;
+    let changed =
+        crate::current_live_realtime_changes_since(&realtime_state, Some(&previous_revisions));
+    assert!(changed.iter().any(|change| {
+        change.resource_id.as_deref() == Some("simulation/preparation") && change.revision == 7
+    }));
+    let mut events = state.current_live_realtime_events.subscribe();
+
+    crate::publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0)
+        .await
+        .expect("preparation invalidation should publish");
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+        .await
+        .expect("invalidation event should arrive")
+        .expect("realtime channel should stay open");
+    let body: serde_json::Value =
+        serde_json::from_str(&event.json).expect("invalidation event should be JSON");
+    assert_eq!(body["type"], "resource.batch_changed");
+    let change = body["payload"]["changes"]
+        .as_array()
+        .and_then(|changes| {
+            changes
+                .iter()
+                .find(|change| change["resource_id"] == "simulation/preparation")
+        })
+        .expect("simulation preparation invalidation");
+    assert_eq!(change["revision"], 7);
+    assert_eq!(change["resource"], "stages");
+    assert_eq!(
+        change["recommended_fetch"],
+        "/v2/sessions/current/simulation/preparation"
+    );
+    for forbidden in ["stages", "log_tail", "failure", "requested_execution"] {
+        assert!(
+            change.get(forbidden).is_none(),
+            "websocket invalidation must not carry `{forbidden}` resource content"
+        );
+    }
+}
+
+#[tokio::test]
 async fn run_by_id_endpoint_returns_active_run_when_id_matches() {
     let app = test_router_with_runtime_read_models().await;
     let response = app
@@ -19166,6 +19467,7 @@ async fn asyncapi_document_matches_realtime_rust_schema_names() {
         mesh_build_revision: 1,
         commands_revision: 1,
         stages_revision: 1,
+        simulation_preparation_revision: 1,
         scene_revision: Some(1),
         visualization_state_revision: 1,
     })
