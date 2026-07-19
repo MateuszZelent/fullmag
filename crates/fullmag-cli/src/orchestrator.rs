@@ -424,6 +424,10 @@ fn deferred_mesh_failure_stage(
         .and_then(serde_json::Value::as_str)
         .filter(|error| !error.trim().is_empty())?;
     let payload = workspace.get("last_build_summary")?;
+    match payload.get("phase").and_then(serde_json::Value::as_str) {
+        Some("preparing_domain" | "meshing" | "postprocessing") => {}
+        _ => return None,
+    }
     match python_mesh_preparation_update("mesh_build_failed", payload)? {
         PythonMeshPreparationUpdate::Failed { stage_id, .. } => Some(stage_id),
         _ => None,
@@ -10000,7 +10004,7 @@ mod tests {
         apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
         attach_initial_magnetization_state_override_metadata, attach_region_realization_revisions,
         classify_wait_for_solve_command, cumulative_rhs_evals, default_domain_region_markers,
-        discard_active_paused_stage_execution,
+        deferred_mesh_failure_stage, discard_active_paused_stage_execution,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
         fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
@@ -10745,6 +10749,93 @@ mod tests {
             "Simulation materialization failed",
             raw_error,
         );
+    }
+
+    #[test]
+    fn deferred_mesh_failure_rejects_missing_phase() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "missing-phase mesher failure";
+        crate::live_workspace::apply_python_progress_event(
+            &workspace,
+            PythonProgressEvent::Structured {
+                kind: "mesh_build_failed".to_string(),
+                payload: serde_json::json!({
+                    "error": raw_error,
+                    "message": "Shared-domain mesh build failed"
+                }),
+            },
+        );
+        let snapshot = workspace.snapshot();
+
+        assert_eq!(
+            deferred_mesh_failure_stage(snapshot.mesh_workspace.as_ref()),
+            None
+        );
+        let error = project_script_export_failure(&workspace, false, anyhow::anyhow!(raw_error))
+            .expect("missing phase should remain a generic helper failure");
+        assert_eq!(error.to_string(), raw_error);
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::ScriptMaterialization,
+            "materialization_failed",
+            "Simulation materialization failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn deferred_mesh_failure_rejects_unknown_phase() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "unknown-phase mesher failure";
+        crate::live_workspace::apply_python_progress_event(
+            &workspace,
+            PythonProgressEvent::Structured {
+                kind: "mesh_build_failed".to_string(),
+                payload: serde_json::json!({
+                    "phase": "finalizing",
+                    "error": raw_error,
+                    "message": "Shared-domain mesh build failed"
+                }),
+            },
+        );
+        let snapshot = workspace.snapshot();
+
+        assert_eq!(
+            deferred_mesh_failure_stage(snapshot.mesh_workspace.as_ref()),
+            None
+        );
+        let error = project_script_export_failure(&workspace, false, anyhow::anyhow!(raw_error))
+            .expect("unknown phase should remain a generic helper failure");
+        assert_eq!(error.to_string(), raw_error);
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::ScriptMaterialization,
+            "materialization_failed",
+            "Simulation materialization failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn deferred_mesh_failure_accepts_recognized_phase() {
+        for (phase, stage_id) in [
+            ("preparing_domain", PreparationStageId::DomainPreparation),
+            ("meshing", PreparationStageId::Meshing),
+            ("postprocessing", PreparationStageId::MeshPostprocessing),
+        ] {
+            let workspace = serde_json::json!({
+                "last_build_error": "raw mesher failure",
+                "last_build_summary": {
+                    "phase": phase,
+                    "message": "Shared-domain mesh build failed"
+                }
+            });
+
+            assert_eq!(
+                deferred_mesh_failure_stage(Some(&workspace)),
+                Some(stage_id)
+            );
+        }
     }
 
     #[test]
