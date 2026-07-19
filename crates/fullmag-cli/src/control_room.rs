@@ -923,17 +923,21 @@ fn sync_current_live_field_frame(
     Ok(())
 }
 
-pub(crate) fn sync_current_live_delta(
-    session_id: &str,
-    payload: &CurrentLiveSnapshotPayload,
-) -> Result<()> {
-    if payload.session.is_some()
+fn payload_routes_to_current_live_session_frame(payload: &CurrentLiveSnapshotPayload) -> bool {
+    payload.session.is_some()
         || payload.session_status.is_some()
         || payload.metadata.is_some()
         || payload.mesh_workspace.is_some()
         || payload.stage_execution.is_some()
+        || payload.simulation_preparation.is_some()
         || payload.run.is_some()
-    {
+}
+
+pub(crate) fn sync_current_live_delta(
+    session_id: &str,
+    payload: &CurrentLiveSnapshotPayload,
+) -> Result<()> {
+    if payload_routes_to_current_live_session_frame(payload) {
         sync_current_live_session_frame(session_id, payload)?;
     }
 
@@ -957,6 +961,26 @@ pub(crate) fn sync_current_live_delta(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod live_delta_routing_tests {
+    use super::payload_routes_to_current_live_session_frame;
+    use crate::simulation_preparation::SimulationPreparationState;
+    use crate::types::CurrentLiveSnapshotPayload;
+
+    #[test]
+    fn preparation_only_delta_routes_to_session_frame() {
+        let payload = CurrentLiveSnapshotPayload {
+            simulation_preparation: Some(SimulationPreparationState::new(
+                "prep-routing",
+                1_700_000_000_000,
+            )),
+            ..CurrentLiveSnapshotPayload::default()
+        };
+
+        assert!(payload_routes_to_current_live_session_frame(&payload));
+    }
 }
 
 /// Send a full `VisualizationStatePatch` JSON body to the visualization state endpoint before
