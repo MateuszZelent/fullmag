@@ -705,6 +705,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
+        simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
@@ -726,6 +727,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
@@ -1305,6 +1307,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
+        simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
@@ -1326,6 +1329,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
@@ -1457,6 +1461,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
+        simulation_preparation: None,
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
@@ -1478,6 +1483,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
     };
 
@@ -2549,6 +2555,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: Some(LiveState {
                     status: "running".into(),
@@ -6129,6 +6136,7 @@ async fn mesh_build_snapshot_for_current_scene_clears_mesh_dirty_tags() {
                     }
                 })),
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: None,
                 latest_scalar_row: None,
@@ -6174,6 +6182,7 @@ async fn fem_mesh_snapshot_for_current_scene_clears_mesh_dirty_tags() {
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: None,
                 latest_scalar_row: None,
@@ -6226,6 +6235,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: None,
                 latest_scalar_row: None,
@@ -6258,6 +6268,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: None,
                 latest_scalar_row: None,

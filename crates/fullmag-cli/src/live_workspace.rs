@@ -11,6 +11,7 @@ use crate::control_room::{
 };
 use crate::feature_flags::FeatureFlags;
 use crate::formatting::{push_engine_log, unix_time_millis};
+use crate::simulation_preparation::SimulationPreparationState;
 use crate::types::*;
 
 /// Global feature flags resolved once at startup.
@@ -35,6 +36,7 @@ pub(crate) struct LocalLiveWorkspaceState {
     pub metadata: Option<serde_json::Value>,
     pub mesh_workspace: Option<serde_json::Value>,
     pub stage_execution: Option<CurrentLiveStageExecutionState>,
+    pub simulation_preparation: Option<SimulationPreparationState>,
     pub latest_scalar_row: Option<CurrentLiveScalarRow>,
     pub latest_fields: CurrentLiveLatestFields,
     pub preview_fields: CurrentLivePreviewFieldCache,
@@ -74,6 +76,7 @@ impl LocalLiveWorkspaceState {
             metadata,
             run: Some(self.run.clone()),
             stage_execution: self.stage_execution.clone(),
+            simulation_preparation: self.simulation_preparation.clone(),
             runtime_status: live_state.runtime_status,
             live_state: Some(live_state),
             mesh_workspace: self.mesh_workspace.clone(),
@@ -783,7 +786,11 @@ mod tests {
         CurrentLiveSnapshotPayload, LiveTelemetryPublishGate, LocalLiveWorkspace,
         LocalLiveWorkspaceState,
     };
-    use crate::types::{PythonProgressEvent, RunManifest, SessionManifest};
+    use crate::simulation_preparation::SimulationPreparationState;
+    use crate::types::{
+        CurrentLiveRuntimeFrameRequest, CurrentLiveSessionFrameRequest, PythonProgressEvent,
+        RunManifest, SessionManifest,
+    };
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -950,6 +957,7 @@ mod tests {
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 latest_scalar_row: None,
                 latest_fields: Default::default(),
                 preview_fields: Default::default(),
@@ -961,6 +969,51 @@ mod tests {
             },
             no_op_publisher(),
         )
+    }
+
+    fn workspace_state_with_preparation(revision: u64) -> LocalLiveWorkspaceState {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        let mut preparation = SimulationPreparationState::new("prep-test", 1_700_000_000_000);
+        preparation.revision = revision;
+        state.simulation_preparation = Some(preparation);
+        state
+    }
+
+    #[test]
+    fn snapshot_publishes_preparation_in_session_frame() {
+        let state = workspace_state_with_preparation(7);
+        let payload = state.snapshot();
+        assert_eq!(
+            payload
+                .simulation_preparation
+                .as_ref()
+                .expect("snapshot preparation")
+                .revision,
+            7
+        );
+
+        let session_frame = serde_json::to_value(CurrentLiveSessionFrameRequest {
+            session_id: "test-session",
+            session: payload.session.as_ref(),
+            session_status: payload.session_status.as_deref(),
+            metadata: payload.metadata.as_ref(),
+            mesh_workspace: payload.mesh_workspace.as_ref(),
+            stage_execution: payload.stage_execution.as_ref(),
+            run: payload.run.as_ref(),
+            simulation_preparation: payload.simulation_preparation.as_ref(),
+        })
+        .expect("session frame should serialize");
+        assert_eq!(session_frame["simulation_preparation"]["revision"], 7);
+
+        let runtime_frame = serde_json::to_value(CurrentLiveRuntimeFrameRequest {
+            session_id: "test-session",
+            live_state: payload.live_state.as_ref(),
+            engine_log: payload.engine_log.as_deref(),
+            solver_profile: payload.solver_profile.as_ref(),
+            fem_mesh: payload.fem_mesh.as_ref(),
+        })
+        .expect("runtime frame should serialize");
+        assert!(runtime_frame.get("simulation_preparation").is_none());
     }
 
     #[test]

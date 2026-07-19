@@ -826,6 +826,7 @@ pub(crate) fn sync_current_live_snapshot(
             metadata: payload.metadata.as_ref(),
             mesh_workspace: payload.mesh_workspace.as_ref(),
             stage_execution: payload.stage_execution.as_ref(),
+            simulation_preparation: payload.simulation_preparation.as_ref(),
             run: payload.run.as_ref(),
             live_state: payload.live_state.as_ref(),
             latest_scalar_row: payload.latest_scalar_row.as_ref(),
@@ -856,6 +857,7 @@ fn sync_current_live_session_frame(
             metadata: payload.metadata.as_ref(),
             mesh_workspace: payload.mesh_workspace.as_ref(),
             stage_execution: payload.stage_execution.as_ref(),
+            simulation_preparation: payload.simulation_preparation.as_ref(),
             run: payload.run.as_ref(),
         })
         .send()

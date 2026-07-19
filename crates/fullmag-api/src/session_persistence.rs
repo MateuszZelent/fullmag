@@ -100,6 +100,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             metadata: value.metadata,
             mesh_workspace: value.mesh_workspace,
             stage_execution: value.stage_execution,
+            simulation_preparation: None,
             scene_document: value.scene_document,
             scalar_rows: value.scalar_rows,
             engine_log: value.engine_log,
@@ -121,6 +122,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             field_samples_revision: 0,
             field_quantity_revisions: BTreeMap::new(),
             stage_execution_revision: 0,
+            simulation_preparation_revision: 0,
             region_realization_revisions: value.region_realization_revisions,
         }
     }

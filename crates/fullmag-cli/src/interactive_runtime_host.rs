@@ -1004,6 +1004,7 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),

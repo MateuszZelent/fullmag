@@ -2171,6 +2171,7 @@ where
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: None,
                 latest_scalar_row: None,

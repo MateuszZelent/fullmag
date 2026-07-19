@@ -870,6 +870,12 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         .or_else(|| req.run.as_ref().map(|run| run.artifact_dir.clone()))
         .unwrap_or_default();
 
+    let simulation_preparation_revision = req
+        .simulation_preparation
+        .as_ref()
+        .map(|preparation| preparation.revision)
+        .unwrap_or_default();
+
     SessionStateResponse {
         session_protocol_version: "2026-04-04".to_string(),
         capability_profile_version: "2026-04-04".to_string(),
@@ -909,6 +915,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         metadata: None,
         mesh_workspace: None,
         stage_execution: None,
+        simulation_preparation: req.simulation_preparation.clone(),
         scene_document: None,
         scalar_rows: Vec::new(),
         engine_log: Vec::new(),
@@ -930,7 +937,26 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         stage_execution_revision: 0,
+        simulation_preparation_revision,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
+    }
+}
+
+fn merge_simulation_preparation(
+    current: &mut SessionStateResponse,
+    incoming: Option<SimulationPreparationSnapshot>,
+) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    let should_replace = current
+        .simulation_preparation
+        .as_ref()
+        .map(|existing| incoming.revision >= existing.revision)
+        .unwrap_or(true);
+    if should_replace {
+        current.simulation_preparation_revision = incoming.revision;
+        current.simulation_preparation = Some(incoming);
     }
 }
 
@@ -1355,6 +1381,7 @@ pub(crate) fn apply_current_live_snapshot(
     if let Some(mesh_workspace) = req.mesh_workspace {
         apply_mesh_workspace_update(current, mesh_workspace);
     }
+    merge_simulation_preparation(current, req.simulation_preparation);
     if let Some(mut stage_execution) = req.stage_execution {
         merge_stage_execution_linkage(current.stage_execution.as_ref(), &mut stage_execution);
         current.stage_execution = Some(stage_execution);
@@ -1446,6 +1473,7 @@ pub(crate) fn apply_current_live_session_frame(
     if let Some(mesh_workspace) = frame.mesh_workspace {
         apply_mesh_workspace_update(current, mesh_workspace);
     }
+    merge_simulation_preparation(current, frame.simulation_preparation);
     if let Some(mut stage_execution) = frame.stage_execution {
         merge_stage_execution_linkage(current.stage_execution.as_ref(), &mut stage_execution);
         current.stage_execution = Some(stage_execution);
@@ -1668,6 +1696,117 @@ pub(crate) fn unix_time_millis_now() -> u128 {
 mod tests {
     use super::*;
 
+    fn simulation_preparation(revision: u64) -> SimulationPreparationSnapshot {
+        serde_json::from_value(json!({
+            "preparation_id": "prep-test",
+            "revision": revision,
+            "status": "running",
+            "active_stage_id": "validation",
+            "started_at_unix_ms": 1_700_000_000_000_u64,
+            "completed_at_unix_ms": null,
+            "stages": [],
+            "log_tail": [],
+            "failure": null
+        }))
+        .expect("preparation fixture should deserialize")
+    }
+
+    #[test]
+    fn current_session_keeps_newest_preparation_revision() {
+        let mut current = default_current_live_state(&CurrentLiveSnapshotRequest {
+            session_id: "test-session".to_string(),
+            session: None,
+            session_status: None,
+            metadata: None,
+            mesh_workspace: None,
+            stage_execution: None,
+            simulation_preparation: Some(simulation_preparation(7)),
+            run: None,
+            live_state: None,
+            latest_scalar_row: None,
+            latest_fields: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+            engine_log: None,
+            solver_profile: None,
+            fem_mesh: None,
+        });
+
+        apply_current_live_session_frame(
+            &mut current,
+            CurrentLiveSessionFrameRequest {
+                session_id: "test-session".to_string(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                simulation_preparation: Some(simulation_preparation(6)),
+                run: None,
+            },
+        )
+        .expect("older session frame should be accepted");
+
+        assert_eq!(
+            current
+                .simulation_preparation
+                .as_ref()
+                .expect("preparation snapshot")
+                .revision,
+            7
+        );
+        assert_eq!(current.simulation_preparation_revision, 7);
+
+        let mut equal_revision = simulation_preparation(7);
+        equal_revision.status = "ready".to_string();
+        apply_current_live_session_frame(
+            &mut current,
+            CurrentLiveSessionFrameRequest {
+                session_id: "test-session".to_string(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                simulation_preparation: Some(equal_revision),
+                run: None,
+            },
+        )
+        .expect("equal-revision session frame should be accepted");
+        assert_eq!(
+            current
+                .simulation_preparation
+                .as_ref()
+                .expect("equal-revision preparation snapshot")
+                .status,
+            "ready"
+        );
+
+        apply_current_live_session_frame(
+            &mut current,
+            CurrentLiveSessionFrameRequest {
+                session_id: "test-session".to_string(),
+                session: None,
+                session_status: None,
+                metadata: None,
+                mesh_workspace: None,
+                stage_execution: None,
+                simulation_preparation: Some(simulation_preparation(8)),
+                run: None,
+            },
+        )
+        .expect("newer session frame should be accepted");
+        assert_eq!(
+            current
+                .simulation_preparation
+                .as_ref()
+                .expect("newer preparation snapshot")
+                .revision,
+            8
+        );
+        assert_eq!(current.simulation_preparation_revision, 8);
+    }
+
     fn scalar_row(step: u64, e_total: f64) -> ScalarRow {
         ScalarRow {
             step,
@@ -1758,6 +1897,7 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             run: None,
             live_state: None,
             latest_scalar_row: None,
@@ -1806,6 +1946,7 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             run: None,
             live_state: None,
             latest_scalar_row: None,
@@ -1955,6 +2096,7 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             run: None,
             live_state: None,
             latest_scalar_row: None,
@@ -2027,6 +2169,7 @@ mod tests {
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: Some(live_state_with_magnetization(
                     1,
@@ -2058,6 +2201,7 @@ mod tests {
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: Some(live_state_with_magnetization(
                     10,
@@ -2093,6 +2237,7 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             run: None,
             live_state: None,
             latest_scalar_row: None,
@@ -2535,6 +2680,7 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             run: None,
             live_state: None,
             latest_scalar_row: None,
@@ -2634,6 +2780,7 @@ mod tests {
                     active_stage_kind: None,
                     runtime_state: RuntimeLifecycleState::Completed,
                 }),
+                simulation_preparation: None,
                 run: None,
             },
         )
@@ -2744,6 +2891,7 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             run: None,
             live_state: None,
             latest_scalar_row: None,
@@ -2835,6 +2983,7 @@ mod tests {
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: Some(RunManifest {
                     run_id: "run-region-owned".to_string(),
                     session_id: "test-session".to_string(),
@@ -3033,6 +3182,7 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             run: None,
             live_state: Some(LiveState {
                 status: "running".into(),
@@ -3126,6 +3276,7 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             run: None,
             live_state: None,
             latest_scalar_row: None,

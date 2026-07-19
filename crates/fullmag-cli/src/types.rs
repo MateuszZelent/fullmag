@@ -4,6 +4,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use crate::simulation_preparation::SimulationPreparationState;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum MeshCommandTarget {
@@ -875,6 +877,8 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     pub mesh_workspace: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<CurrentLiveStageExecutionState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub simulation_preparation: Option<SimulationPreparationState>,
     /// Typed runtime status for the frontend typed protocol.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_status: Option<fullmag_runner::RuntimeStatus>,
@@ -962,6 +966,8 @@ pub(crate) struct CurrentLiveSnapshotRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<&'a CurrentLiveStageExecutionState>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub simulation_preparation: Option<&'a SimulationPreparationState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_mesh: Option<&'a fullmag_runner::FemMeshPayload>,
 }
 
@@ -978,6 +984,8 @@ pub(crate) struct CurrentLiveSessionFrameRequest<'a> {
     pub mesh_workspace: Option<&'a serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<&'a CurrentLiveStageExecutionState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub simulation_preparation: Option<&'a SimulationPreparationState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run: Option<&'a RunManifest>,
 }
