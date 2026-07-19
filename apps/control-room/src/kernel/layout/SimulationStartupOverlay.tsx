@@ -185,7 +185,9 @@ export function SimulationStartupOverlayView({
             <span className="fm-simulation-startup__progress-label">
               {state.progress.kind === "determinate"
                 ? `${state.progress.value}%`
-                : state.activeStage?.stateLabel ?? "Connecting"}
+                : state.progress.kind === "terminal"
+                  ? "Failed"
+                  : state.activeStage?.stateLabel ?? "Connecting"}
             </span>
           </div>
           {state.progressLabel ? (
@@ -297,6 +299,9 @@ function stageStatusGlyph(
 function resolveProgressValueText(
   state: SimulationStartupOverlayState,
 ): string {
+  if (state.progress.kind === "terminal") {
+    return "Simulation preparation failed";
+  }
   if (state.progress.kind === "determinate") {
     return state.progressLabel
       ? `${state.progress.value} percent, ${state.progressLabel}`

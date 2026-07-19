@@ -380,6 +380,11 @@ describe("SimulationStartupOverlay", () => {
     expect(html).toContain("Mesh generation did not converge.");
     expect(html).toContain("Copy diagnostics");
     expect(html).toContain("Open full diagnostics");
+    expect(html).toContain('data-kind="terminal"');
+    expect(html).toContain('aria-valuetext="Simulation preparation failed"');
+    expect(html).not.toContain("Connecting to the simulation backend");
+    expect(html).not.toContain('aria-valuenow="');
+    expect(html).toContain("Failed");
     expect(html).not.toContain("viewport-main");
   });
 

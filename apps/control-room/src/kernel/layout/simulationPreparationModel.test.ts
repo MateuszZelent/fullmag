@@ -198,6 +198,37 @@ describe("resolveSimulationPreparationViewModel", () => {
     expect(model.activeStage?.label).toBe("Meshing");
   });
 
+  it("does not treat routine stale session-status polling as reconnecting", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource(preparationFixture()),
+      statusResource("stale"),
+      19_700,
+    );
+
+    expect(model.kind).toBe("running");
+    expect(model.reconnectingTitle).toBeNull();
+    expect(model.reconnectingMessage).toBeNull();
+  });
+
+  it("keeps the polite summary stable across display-only elapsed ticks", () => {
+    const beforeTick = resolveSimulationPreparationViewModel(
+      resource(preparationFixture()),
+      statusResource(),
+      18_700,
+    );
+    const afterTick = resolveSimulationPreparationViewModel(
+      resource(preparationFixture()),
+      statusResource(),
+      19_700,
+    );
+
+    expect(afterTick.activeStage?.elapsedLabel).not.toBe(
+      beforeTick.activeStage?.elapsedLabel,
+    );
+    expect(afterTick.liveSummary).toBe(beforeTick.liveSummary);
+    expect(afterTick.liveSummary).not.toMatch(/elapsed|\d+\.\d+s/i);
+  });
+
   it("resolves ready as terminal and releases the startup gate", () => {
     const model = resolveSimulationPreparationViewModel(
       resource(
@@ -243,6 +274,7 @@ describe("resolveSimulationPreparationViewModel", () => {
       isTerminal: true,
       isVisible: true,
       kind: "failed",
+      progress: { kind: "terminal" },
     });
     expect(model.stages[0]?.stateLabel).toBe("Failed");
   });

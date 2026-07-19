@@ -38,7 +38,8 @@ export interface SimulationPreparationFailureView {
 
 export type SimulationPreparationProgressView =
   | { readonly kind: "determinate"; readonly value: number }
-  | { readonly kind: "indeterminate" };
+  | { readonly kind: "indeterminate" }
+  | { readonly kind: "terminal" };
 
 export interface SimulationPreparationViewModel {
   readonly activeStage: SimulationPreparationStageView | null;
@@ -81,7 +82,7 @@ export function resolveSimulationPreparationViewModel(
     null;
   const stageLabels = new Map(stages.map((stage) => [stage.id, stage.label]));
   const progress = resolveProgress(activeStage, snapshot);
-  const isStale = preparation.status === "stale" || sessionStatus.status === "stale";
+  const isStale = preparation.status === "stale";
   const isFailed = snapshot.status === "failed";
   const isReady = snapshot.status === "ready";
   const failure = snapshot.failure
@@ -134,13 +135,13 @@ export function resolveSimulationPreparationViewModel(
       activeStage,
       failure,
       isStale,
-      progress,
       title,
     }),
     logEntries,
     preparation: snapshot,
     progress,
-    progressLabel: activeStage?.progressLabel ?? null,
+    progressLabel:
+      progress.kind === "terminal" ? null : activeStage?.progressLabel ?? null,
     reconnectingMessage: isStale
       ? "Displayed progress may be out of date."
       : null,
@@ -257,6 +258,9 @@ function resolveProgress(
   activeStage: SimulationPreparationStageView | null,
   snapshot: SimulationPreparationResource,
 ): SimulationPreparationProgressView {
+  if (snapshot.status === "failed") {
+    return { kind: "terminal" };
+  }
   const source = snapshot.stages.find((stage) => stage.id === activeStage?.id);
   const value = source?.progress_percent;
   return typeof value === "number" && value >= 0 && value <= 100
@@ -277,13 +281,11 @@ function resolveLiveSummary({
   activeStage,
   failure,
   isStale,
-  progress,
   title,
 }: {
   activeStage: SimulationPreparationStageView | null;
   failure: SimulationPreparationFailureView | null;
   isStale: boolean;
-  progress: SimulationPreparationProgressView;
   title: string;
 }): string {
   if (isStale) {
@@ -292,16 +294,9 @@ function resolveLiveSummary({
   if (failure) {
     return `${title}. ${failure.summary}`;
   }
-  const parts = [
-    activeStage ? `${activeStage.label} ${activeStage.stateLabel.toLowerCase()}.` : `${title}.`,
-  ];
-  if (progress.kind === "determinate") {
-    parts.push(`${progress.value} percent complete.`);
-  }
-  if (activeStage && activeStage.elapsedLabel !== "—") {
-    parts.push(`${activeStage.elapsedLabel} elapsed.`);
-  }
-  return parts.join(" ");
+  return activeStage
+    ? `${activeStage.label} ${activeStage.stateLabel.toLowerCase()}.`
+    : `${title}.`;
 }
 
 function formatExecutionSummary(
