@@ -14,45 +14,45 @@ success.
 
 | Finding | Stage | Required implementation outcome | Acceptance evidence | Status |
 |---|---:|---|---|---|
-| FDM-EXEC-001 | 2 | Typed forced GPU request fails when unavailable; auto retains fallback trail on every run path. | planner and batch/live/interactive/hysteresis unavailable-GPU tests | in progress |
-| FDM-XCH-001 | 5 | T0/T1 FP64 applies exchange stiffness exactly once and clears inactive output. | manufactured Laplacian plus stale-buffer CUDA test | open |
-| FDM-SUBCELL-FP32-001 | 5–6 | FP32 sub-cell field/energy is implemented with parity or rejected before ABI launch. | strict planner rejection or FP32 field-energy parity gate | open |
-| FDM-DEMAG-ABI-001 | 6 | Auto-Newell either uploads validated spectra or returns unavailable. | native ABI missing-spectra failure test | open |
-| FDM-DMI-001 | 7 | CUDA bulk-DMI field has canonical variational sign. | chiral-helix CPU/CUDA sign and derivative gate | open |
-| FDM-SOT-001 | 10 | SOT is published as `tau_sot [1/s]` after central gamma conversion. | macrospin amplitude/unit oracle | open |
-| FDM-MASK-001 | 10 | All CUDA torque paths preserve zero inactive cells. | FP64/FP32 inactive-mask evolution test | open |
-| FDM-CPU-001 | 9 | CPU batch uses thermal, spatial material, and resolved PBC plan data. | batch/snapshot materialization identity test | open |
-| FDM-THERM-002 | 9 | CUDA consumes per-attempt dt, canonical gamma0, and seeded RNG counter. | replay and Brown-variance CPU/CUDA gate | open |
-| FDM-ML-001 | 11/14 | Native-stacked Zeeman energy has no self-energy half factor. | two-layer analytic Zeeman energy test | open |
+| FDM-EXEC-001 | 2 | Typed forced GPU request fails when unavailable; auto retains fallback trail on every run path. | planner and batch/live/interactive/hysteresis unavailable-GPU tests | closed |
+| FDM-XCH-001 | 5 | T0/T1 FP64 applies exchange stiffness exactly once and clears inactive output. | manufactured Laplacian plus stale-buffer CUDA test | in progress |
+| FDM-SUBCELL-FP32-001 | 5–6 | FP32 sub-cell field/energy is implemented with parity or rejected before ABI launch. | strict planner rejection or FP32 field-energy parity gate | closed |
+| FDM-DEMAG-ABI-001 | 6 | Auto-Newell either uploads validated spectra or returns unavailable. | native ABI missing-spectra failure test | closed |
+| FDM-DMI-001 | 7 | CUDA bulk-DMI field has canonical variational sign. | chiral-helix CPU/CUDA sign and derivative gate | in progress |
+| FDM-SOT-001 | 10 | CPU and CUDA SOT convert the field amplitude through `gamma_mu0` and the Gilbert projection before adding RHS torque. | CPU macrospin and CUDA source contracts; device amplitude/unit oracle still required | in progress |
+| FDM-MASK-001 | 10 | Single-grid CUDA LLG RHS freezes inactive cells before every torque contribution. | FP64/FP32 source contract; device evolution test still required | in progress |
+| FDM-CPU-001 | 9 | CPU batch uses thermal, spatial material, and resolved PBC plan data. | batch/snapshot materialization identity tests | closed |
+| FDM-THERM-002 | 9 | CUDA uses the attempted `dt`, bare `gamma_mu0`, and a seed/accepted-step/cell counter; the ABI resolves entropy when its seed is zero. | native and CPU Brown contracts; replay and variance CPU/CUDA device gate still required | in progress |
+| FDM-ML-001 | 11/14 | Native-stacked Zeeman energy has no self-energy half factor. | two-layer analytic Zeeman energy test | closed |
 | FDM-ML-DRIVE-001 | 4/14 | Multilayer field drives are lossless or fail closed. | planner rejection test until plan owns drives | closed |
-| FDM-ENERGY-001 | 11/13 | Regional drive participates in the canonical conservative energy used by minimizers. | regional-drive finite-difference gradient test | open |
-| PYIR-001 | 3 | Material-only anisotropy round-trips without unsupported energy tags. | Python JSON to Rust IR and script round-trip test | open |
+| FDM-ENERGY-001 | 11/13 | Regional drive participates in the canonical conservative energy used by minimizers. | regional-drive finite-difference gradient test | closed |
+| PYIR-001 | 3 | Material-only anisotropy round-trips without unsupported energy tags. | Python JSON to Rust IR and script round-trip test | closed |
 | UI-OVERRIDE-001 | 17 | One versioned override schema is emitted and consumed by Rust/Python/rendering. | cross-adapter schema equivalence test | open |
 | UI-EXEC-001 | 17 | Execution selection survives SceneDocument to script to ProblemIR. | UI transaction round-trip equality test | open |
 | UI-FIELD-001 | 17 | Regional field drives survive model sync and script export. | changed-drive export/parse equality test | open |
-| FDM-THERM-003 | 3/9 | One thermal config preserves temperature and seed and validates `H_therm`. | legacy migration and quantity validation tests | open |
-| FDM-T0-002 | 5 | Unsupported boundary SDF is strict failure, never warning-only downgrade. | unsupported-shape planner rejection test | open |
+| FDM-THERM-003 | 3/9 | `ThermalNoise(temperature, seed)` lowers into one FDM temperature/seed policy, flat-script rewrites preserve it, and unmaterialized `H_therm` fails explicitly instead of emitting an empty field. | planner lowering/rejection tests, CPU materialization test, Python flat-script round-trip | closed |
+| FDM-T0-002 | 5 | Unsupported boundary SDF is strict failure, never warning-only downgrade. | unsupported-shape planner rejection test | closed |
 | FDM-T0-003 | 5/11 | Partial-cell weights are shared across fields and energies. | partial-cell derivative and weighting identity tests | open |
-| FDM-PBC-001 | 3 | Python rejects FEM-only PBC modes for FDM at authoring time. | Python API invalid-PBC test | open |
-| FDM-DMI-002 | 7 | Free-surface bulk DMI has natural boundary closure or is rejected. | boundary manufactured-solution gate | open |
-| FDM-DMI-003 | 7 | Interface normal/region coupling is lowered or rejected explicitly. | normal reversal and region-isolation tests | open |
-| FDM-ANI-001 | 8 | CPU and CUDA share public Kc3 semantics. | Kc3-specific cubic-minima parity test | open |
-| FDM-OE-001 | 4/10 | CPU Oersted capability matches executable dispatch. | plan legality/reason-code test | open |
+| FDM-PBC-001 | 3 | Python rejects FEM-only PBC modes for FDM at authoring time. | Python API invalid-PBC test | closed |
+| FDM-DMI-002 | 7 | Free-surface bulk DMI is rejected until a natural boundary closure exists. | open-boundary planner rejection; fully periodic DMI remains legal | closed |
+| FDM-DMI-003 | 7 | Unsupported interface normals and spatial DMI material fields are rejected before native launch. | non-+z-normal and `dind_field` planner-rejection tests | closed |
+| FDM-ANI-001 | 8 | CPU and CUDA share public Kc3 semantics. | Kc3-specific cubic-minima parity test | in progress |
+| FDM-OE-001 | 4/10 | CPU Oersted capability matches executable dispatch. | plan legality/reason-code test | closed |
 | FDM-OE-002 | 10/12 | Oersted supports documented axes and stage time. | rotated-cylinder and RK order tests | open |
-| FDM-STT-001 | 10 | CUDA Zhang-Li stencil applies PBC and active mask. | periodic seam and inactive-mask tests | open |
-| FDM-OBS-001 | 11 | Dynamic CUDA StepStats equals snapshot energy coverage. | dynamic-vs-snapshot observable identity test | open |
-| FDM-OBS-002 | 11 | Legal DMI lane materializes `H_dmi` or returns explicit unsupported. | quantity materialization test | open |
-| FDM-OBS-003 | 11 | External/Oersted energy and `E_total` match active RHS contract. | scalar-total and derivative tests | open |
-| FDM-INT-001 | 12 | Upload/source/dt events reset FSAL and ABM history. | restart and discontinuity equivalence tests | open |
-| FDM-INT-002 | 9/12 | Stochastic adaptive policy is qualified or rejected; counters are deterministic. | rejected-attempt replay test | open |
-| FDM-INT-003 | 4/12 | Adaptive CUDA is planner-illegal until runtime identity exists. | CUDA-adaptive legality test | open |
+| FDM-STT-001 | 10 | CUDA Zhang-Li upwind stencils consume all planned periodic axes; the common RHS already freezes inactive cells. | FP64/FP32 source contract; periodic-seam and inactive-mask device tests still required | in progress |
+| FDM-OBS-001 | 11 | Dynamic CUDA `StepStats` now maps cubic anisotropy and DMI exactly as the snapshot adapter; CPU observable H_eff also includes cylindrical Oersted, matching the stepping field. | dynamic mapping source contract and CPU cache regressions pass; CUDA device identity test remains required | in progress |
+| FDM-OBS-002 | 11 | CPU FDM materializes `H_dmi` through the direct DMI accessor; CUDA FDM rejects that output until its native observable is materialized. | CPU quantity materialization test; CUDA planner fail-closed guard | closed |
+| FDM-OBS-003 | 11 | CPU AoS/SoA scalars now include static cylindrical Oersted energy; native CUDA FP64/FP32 reductions include `oersted_field_scale * H_oe_static` under a managed source contract. | CPU scalar-total and derivative tests plus managed native CPU/CUDA source contract; device numerical parity remains required | in progress |
+| FDM-INT-001 | 12 | Native magnetization uploads reset FSAL and ABM history through one helper. | ABI/source contract; restart and discontinuity device equivalence tests remain required | in progress |
+| FDM-INT-002 | 9/12 | Planner rejects adaptive Brown dynamics until an accepted-step SDE replay contract is qualified. | planner rejection test; rejected-attempt replay device test remains deferred | in progress |
+| FDM-INT-003 | 4/12 | Adaptive CUDA is planner-illegal until runtime identity exists. | CUDA-adaptive legality test | closed |
 | FDM-ML-002 | 4/14 | Every multilayer profile advertises only its executable scope. | profile matrix planner/UI gate test | open |
-| FDM-ML-003 | 14/15 | Assisted multilayer exposes transfer count and residency honestly. | provenance/telemetry transfer test | open |
+| FDM-ML-003 | 14/15 | Assisted multilayer records host-authoritative residency plus measured vector H2D/D2H counts and bytes in execution provenance. | CUDA-feature transfer-counter and provenance-contract tests | closed |
 | CAP-001 | 4/16 | Host, intrinsic, and session legality have distinct owners/shared reasons. | planner/API/UI same-reason test | open |
-| CAP-002 | 4 | Capability entries match executable Oersted, SOT, thermal, and magnetoelastic scope. | capability-catalog contract test | open |
-| IR-001 | 2/3 | Literal requested and resolved execution/integrator values reach provenance. | CPU/CUDA provenance round-trip tests | open |
-| IR-002 | 3 | `allow_single_grid_fallback` is removed or produces explicit provenance. | public API migration test | open |
-| IR-003 | 3/8 | Easy-plane anisotropy has one public material semantic. | anisotropy validation parity test | open |
+| CAP-002 | 4 | Capability entries match executable Oersted, SOT, thermal, and magnetoelastic scope. | capability-catalog contract test | closed |
+| IR-001 | 2/3 | FDM plans retain typed literal requested/resolved integrator provenance and artifact finalization emits public lower-case values; `gpu_count>1` now fails at Python/ProblemIR boundary because no multi-GPU realization exists. Runtime-selection metadata key unification remains open. | CPU/CUDA provenance round-trip plus Python/ProblemIR multi-GPU rejection tests; browser metadata contract still required | in progress |
+| IR-002 | 3 | `allow_single_grid_fallback` is removed or produces explicit provenance. | public API migration test | closed |
+| IR-003 | 3/8 | Easy-plane anisotropy has one public material semantic. | anisotropy validation parity test | closed |
 | UI-002 | 17 | PBC, thermal/seed, and torque are authored or absent from writable UI. | supported-control round-trip and deferred-control tests | open |
 | UI-003 | 17 | RK4/ABM3 and lane-specific legality appear in the study UI. | inspector model and command-gating tests | open |
 | UI-004 | 16/17 | Artifact resource revision precedes facade/hook/browser implementation. | revision, facade, and Results resource tests | open |

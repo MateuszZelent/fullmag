@@ -110,6 +110,7 @@ impl GpuInteractiveFemPreviewRuntime {
         )?
         .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -263,7 +264,7 @@ impl GpuInteractiveFemPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -289,6 +290,7 @@ impl GpuInteractiveFemPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: None,
+                torque_confirmed: false,
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),
@@ -354,6 +356,7 @@ impl GpuInteractiveFemPreviewRuntime {
         )?
         .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -477,7 +480,7 @@ impl GpuInteractiveFemPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -516,6 +519,7 @@ impl GpuInteractiveFemPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: None,
+                torque_confirmed: false,
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),

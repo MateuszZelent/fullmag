@@ -24,7 +24,8 @@ use crate::fdm::artifacts::select_state_observable_field;
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
+    RelaxationTorqueConfirmation,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -123,6 +124,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
         requested_demag_realization: None,
         resolved_demag_realization: None,
         timestep_policy: Some(timestep_policy),
+        fdm_multilayer_transfer_telemetry: None,
         dt_policy: None,
         llg_mode: None,
         mfem_device: None,
@@ -190,6 +192,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     )?;
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut completion_metrics = crate::relaxation::RelaxationCompletionMetrics::default();
     let mut cancelled = false;
     let mut paused = false;
@@ -266,16 +269,9 @@ pub(crate) fn execute_reference_fdm_multilayer(
         }
 
         let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
-        completion_metrics = crate::relaxation::RelaxationCompletionMetrics {
-            max_torque_apm: Some(latest_stats.max_torque_Apm),
-            accepted_energy_plateau_range_j: energy_plateau_range,
-            steps: step_count,
-            relaxation_time_s: Some(latest_stats.time),
-            numerical_stagnation: false,
-        };
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                || relaxation_converged(
+                || torque_confirmation.observe_stats(
                     control,
                     &latest_stats,
                     energy_plateau_range,
@@ -284,6 +280,14 @@ pub(crate) fn execute_reference_fdm_multilayer(
                     pure_damping_relax,
                 )
         });
+        completion_metrics = crate::relaxation::RelaxationCompletionMetrics {
+            max_torque_apm: Some(latest_stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
+            accepted_energy_plateau_range_j: energy_plateau_range,
+            steps: step_count,
+            relaxation_time_s: Some(latest_stats.time),
+            numerical_stagnation: false,
+        };
         if stop_for_relaxation {
             break;
         }
@@ -412,10 +416,15 @@ fn build_contexts_and_states(
                         axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
                     }
                 }),
-                cubic_anisotropy: layer.material.cubic_anisotropy_kc1.map(|kc1| {
-                    CubicAnisotropyConfig {
-                        kc1,
+                cubic_anisotropy: layer
+                    .material
+                    .cubic_anisotropy_kc1
+                    .or(layer.material.cubic_anisotropy_kc2)
+                    .or(layer.material.cubic_anisotropy_kc3)
+                    .map(|_| CubicAnisotropyConfig {
+                        kc1: layer.material.cubic_anisotropy_kc1.unwrap_or(0.0),
                         kc2: layer.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+                        kc3: layer.material.cubic_anisotropy_kc3.unwrap_or(0.0),
                         axis1: layer
                             .material
                             .cubic_anisotropy_axis1
@@ -424,8 +433,7 @@ fn build_contexts_and_states(
                             .material
                             .cubic_anisotropy_axis2
                             .unwrap_or([0.0, 1.0, 0.0]),
-                    }
-                }),
+                    }),
                 interfacial_dmi: plan.interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,

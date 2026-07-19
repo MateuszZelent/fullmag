@@ -137,10 +137,9 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             }
             "eden_ani" => {
                 let magnetization = self.base_values("m", name)?.to_vec();
-                let field = self.base_values("H_ani", name)?.to_vec();
                 Ok(self
                     .problem
-                    .anisotropy_energy_density_from_field(&magnetization, &field))
+                    .anisotropy_energy_density_from_vectors(&magnetization))
             }
             "eden_dmi" => self
                 .problem

@@ -268,6 +268,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
 
     for (;;) {
+        ctx.current_dt = dt;
         // Stage 1 — FSAL: reuse k_fsal if valid
         if (ctx.fsal_valid) {
             copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));

@@ -39,6 +39,7 @@ int main() {
     const auto api = read(root / "backends/fdm/api/c_api.cpp");
     const auto context = read(root / "backends/fdm/include/context.hpp");
     const auto runner = read(root / "crates/fullmag-runner/src/fdm/gpu/cuda/native.rs");
+    const auto runtime = read(root / "backends/fdm/gpu/cuda/runtime/context.cu");
     const auto reductions = read(root / "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu");
     const auto rk23 = read(root / "backends/fdm/gpu/cuda/integrators/llg_rk23_fp64.cu");
     const auto rk45 = read(root / "backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu");
@@ -69,6 +70,10 @@ int main() {
           "runner reads deferred v2 creation errors before materialization");
     check(runner.find("fullmag_fdm_backend_destroy(handle)") != std::string::npos,
           "runner destroys handles rejected during v2 creation");
+    check(context.find("context_reset_integrator_history") != std::string::npos,
+          "CUDA context defines one history invalidation helper");
+    check(runtime.find("context_reset_integrator_history(ctx)") != std::string::npos,
+          "every successful magnetization upload invalidates derivative history");
 
     check(reductions.find("dt_min_exhausted") != std::string::npos,
           "CUDA adaptive policy returns typed dt_min_exhausted");

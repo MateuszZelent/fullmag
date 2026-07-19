@@ -285,17 +285,16 @@ impl ExchangeLlgProblem {
 
     pub fn external_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
         self.ensure_state_matches_grid(state)?;
-        if self.terms.external_field.is_none() {
+        if !self.has_external_zeeman_source() {
             return Ok(vec![0.0; self.grid.cell_count()]);
         }
-        let field = self.external_field_vectors();
+        let field = self.external_zeeman_field_vectors();
         Ok(self.external_energy_density_from_fields(state.magnetization(), &field))
     }
 
     pub fn anisotropy_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {
         self.ensure_state_matches_grid(state)?;
-        let field = self.anisotropy_field(state.magnetization());
-        Ok(self.anisotropy_energy_density_from_field(state.magnetization(), &field))
+        Ok(self.anisotropy_energy_density_from_vectors(state.magnetization()))
     }
 
     pub fn dmi_energy_density(&self, state: &ExchangeLlgState) -> Result<Vec<f64>> {

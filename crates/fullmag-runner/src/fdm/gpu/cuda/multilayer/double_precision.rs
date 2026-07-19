@@ -64,6 +64,7 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
     )?;
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = crate::relaxation::RelaxationTorqueConfirmation::default();
     let mut cancelled = false;
     let mut paused = false;
     while current_time(&states) < until_seconds {
@@ -143,7 +144,7 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
         let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             latest_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                || relaxation_converged(
+                || torque_confirmation.observe_stats(
                     control,
                     &latest_stats,
                     energy_plateau_range,
@@ -208,7 +209,8 @@ pub(super) fn execute_cuda_assisted_multilayer_double(
         status,
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
-            max_torque_apm: None,
+            max_torque_apm: Some(latest_stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: step_count,
             relaxation_time_s: Some(latest_stats.time),

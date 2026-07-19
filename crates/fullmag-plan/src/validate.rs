@@ -321,6 +321,7 @@ fn region_coupling_is_executable_for_backend(
 }
 
 pub(crate) struct PlannedStudyControls {
+    pub(crate) requested_integrator: Option<fullmag_ir::RequestedIntegratorIR>,
     pub(crate) integrator: Option<IntegratorChoice>,
     pub(crate) fixed_timestep: Option<f64>,
     pub(crate) gyromagnetic_ratio: f64,
@@ -348,15 +349,15 @@ pub(crate) fn planned_study_controls(
 
     // Parse user-specified integrator string → Option<IntegratorChoice>.
     // "auto" resolves to None, which triggers per-study-kind default selection.
-    let user_integrator = if uses_time_integrator {
+    let requested_integrator = if uses_time_integrator {
         match dynamics.expect("validated time-integrating study must define dynamics") {
             fullmag_ir::DynamicsIR::Llg { integrator, .. } => match integrator.as_str() {
-                "heun" => Some(IntegratorChoice::Heun),
-                "rk4" => Some(IntegratorChoice::Rk4),
-                "rk23" => Some(IntegratorChoice::Rk23),
-                "rk45" => Some(IntegratorChoice::Rk45),
-                "abm3" => Some(IntegratorChoice::Abm3),
-                "auto" => None,
+                "heun" => Some(fullmag_ir::RequestedIntegratorIR::Heun),
+                "rk4" => Some(fullmag_ir::RequestedIntegratorIR::Rk4),
+                "rk23" => Some(fullmag_ir::RequestedIntegratorIR::Rk23),
+                "rk45" => Some(fullmag_ir::RequestedIntegratorIR::Rk45),
+                "abm3" => Some(fullmag_ir::RequestedIntegratorIR::Abm3),
+                "auto" => Some(fullmag_ir::RequestedIntegratorIR::Auto),
                 other => {
                     errors.push(format!(
                         "integrator '{}' is not supported; use heun/rk4/rk23/rk45/abm3/auto",
@@ -369,6 +370,18 @@ pub(crate) fn planned_study_controls(
     } else {
         None
     };
+
+    let user_integrator = requested_integrator.and_then(|requested| match requested {
+        fullmag_ir::RequestedIntegratorIR::Auto => None,
+        explicit => Some(match explicit {
+            fullmag_ir::RequestedIntegratorIR::Auto => unreachable!("auto has no concrete integrator"),
+            fullmag_ir::RequestedIntegratorIR::Heun => IntegratorChoice::Heun,
+            fullmag_ir::RequestedIntegratorIR::Rk4 => IntegratorChoice::Rk4,
+            fullmag_ir::RequestedIntegratorIR::Rk23 => IntegratorChoice::Rk23,
+            fullmag_ir::RequestedIntegratorIR::Rk45 => IntegratorChoice::Rk45,
+            fullmag_ir::RequestedIntegratorIR::Abm3 => IntegratorChoice::Abm3,
+        }),
+    });
 
     // Resolve "auto" to the physics-optimal default per study kind.
     // TimeEvolution → RK45 (mumax3's default: Dormand-Prince, 5th-order adaptive).
@@ -481,7 +494,12 @@ pub(crate) fn planned_study_controls(
             if resolved_backend == BackendTarget::Fdm
                 && !matches!(requested_device, Some("cpu" | "cuda" | "gpu"))
             {
-                errors.push("adaptive_timestep on FDM requires explicit runtime_selection.device='cpu' or device='cuda'; auto selection cannot silently change the qualified adaptive lane".to_string());
+                errors.push("adaptive_timestep on FDM requires explicit runtime_selection.device='cpu'; auto selection cannot silently change the qualified adaptive lane".to_string());
+            }
+            if resolved_backend == BackendTarget::Fdm
+                && matches!(requested_device, Some("cuda" | "gpu"))
+            {
+                errors.push("adaptive_timestep on FDM CUDA has no executable timestep capability identity; use runtime_selection.device='cpu' until the CUDA adaptive controller ABI is complete".to_string());
             }
             if adaptive.dt_max.is_none() {
                 errors.push("adaptive_timestep.dt_max is required; planner will not invent a hidden upper bound".to_string());
@@ -498,6 +516,7 @@ pub(crate) fn planned_study_controls(
     }
 
     PlannedStudyControls {
+        requested_integrator,
         integrator,
         fixed_timestep,
         gyromagnetic_ratio,

@@ -586,8 +586,20 @@ impl ProblemIR {
         if self.magnets.is_empty() {
             errors.push("at least one magnet is required".to_string());
         }
-        if self.energy_terms.is_empty() {
-            errors.push("at least one energy term is required".to_string());
+        let has_material_anisotropy = self.materials.iter().any(|material| {
+            material.uniaxial_anisotropy.is_some()
+                || material.uniaxial_anisotropy_k2.is_some()
+                || material.cubic_anisotropy_kc1.is_some()
+                || material.cubic_anisotropy_kc2.is_some()
+                || material.cubic_anisotropy_kc3.is_some()
+                || material.ku_field.is_some()
+                || material.ku2_field.is_some()
+                || material.kc1_field.is_some()
+                || material.kc2_field.is_some()
+                || material.kc3_field.is_some()
+        });
+        if self.energy_terms.is_empty() && !has_material_anisotropy {
+            errors.push("at least one interaction or material anisotropy is required".to_string());
         }
         if matches!(
             &self.study,
@@ -2389,6 +2401,22 @@ fn validate_material_scalar_values(problem: &ProblemIR, errors: &mut Vec<String>
             material.damping,
             errors,
         );
+        if let Some(value) = material.uniaxial_anisotropy {
+            validate_material_parameter_number(
+                &format!("materials[{index}].uniaxial_anisotropy"),
+                MaterialParameterNameIR::Ku1,
+                value,
+                errors,
+            );
+        }
+        if let Some(value) = material.uniaxial_anisotropy_k2 {
+            validate_material_parameter_number(
+                &format!("materials[{index}].uniaxial_anisotropy_k2"),
+                MaterialParameterNameIR::Ku2,
+                value,
+                errors,
+            );
+        }
     }
 }
 

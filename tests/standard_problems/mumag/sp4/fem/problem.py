@@ -10,6 +10,8 @@ import fullmag as fm
 from tests.standard_problems.mumag.sp4.common.contract import (
     CONTRACT,
     DEFAULT_RELAXATION_ALGORITHM,
+    PRODUCTION_RELAXATION_ALGORITHMS,
+    RELAXATION_DT_MAX_S,
     validate_device,
 )
 
@@ -56,11 +58,15 @@ def build_study(request: SP4RunRequest):
     study.engine("fem")
     study.device(request.device, precision="double")
     study.universe(mode="manual", size=airbox.dimensions_m, center=(0.0, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
-    study.universe.mesh(maximum_element_size=airbox.hmax_m)
+    study.universe.mesh(
+        maximum_element_size=airbox.hmax_m,
+        maximum_element_growth_rate=1.7,
+        grading="geometric",
+    )
     body = study.geometry(fm.Box(size=CONTRACT.dimensions_m, name="film"), name="film")
     body.Ms = CONTRACT.ms_a_per_m
     body.Aex = CONTRACT.aex_j_per_m
-    body.alpha = 1.0 if request.phase == "relax" else CONTRACT.alpha
+    body.alpha = CONTRACT.alpha
     body.m = (fm.init.UniformMagnetization(CONTRACT.initial_m) if request.initial_state is None else fm.load_magnetization(request.initial_state, format="json"))
     # NIST/OOMMF resolves the 3 nm thickness with one 3 nm cell.  A forced
     # multi-layer conforming airbox creates pathological sub-nanometre tets;
@@ -69,19 +75,42 @@ def build_study(request: SP4RunRequest):
     study.demag(realization="poisson_robin")
     study.fem_demag_solver(solver="CG", preconditioner="AMG", rtol=1e-12, max_iterations=500)
     study.build_domain_mesh()
-    study.solver(integrator="rk45", gamma=CONTRACT.gamma_mu0_m_per_as, dt_initial=1e-15, dt_min=1e-17, dt_max=1e-12, max_error=1e-7)
     study.tableautosave(CONTRACT.sample_period_s, quantities=["step", "t", "mx", "my", "mz", "e_total", "max_torque_T"])
     if request.phase == "relax":
         algorithm = os.environ.get("FULLMAG_SP4_RELAX_ALGORITHM", DEFAULT_RELAXATION_ALGORITHM)
         maximum_steps = int(os.environ.get("FULLMAG_SP4_RELAX_MAX_STEPS", "50000"))
         torque_tolerance_apm = float(os.environ.get("FULLMAG_SP4_RELAX_TOL_APM", "7.957747154594767"))
         if algorithm == "llg_overdamped":
-            study.relax(algorithm=algorithm, solver="rk45", max_error=1e-7, dt_min=1e-17, dt_max=1e-12, max_steps=maximum_steps, tol=torque_tolerance_apm)
-        elif algorithm in {"projected_gradient_bb", "nonlinear_cg"}:
-            study.relax(algorithm=algorithm, max_steps=maximum_steps, tol=torque_tolerance_apm, energy_tolerance=1e-27)
+            study.stages.add_relax(
+                stage_id="relax",
+                algorithm=algorithm,
+                solver="rk23",
+                dt_initial=1e-15,
+                dt_min=1e-17,
+                dt_max=RELAXATION_DT_MAX_S,
+                max_err=1e-7,
+                relax_alpha=1.0,
+                max_steps=maximum_steps,
+                tol=torque_tolerance_apm,
+            )
+        elif algorithm in PRODUCTION_RELAXATION_ALGORITHMS:
+            study.stages.add_relax(
+                stage_id="relax",
+                algorithm=algorithm,
+                max_steps=maximum_steps,
+                tol=torque_tolerance_apm,
+            )
         else:
             raise ValueError(f"unsupported SP4 relaxation algorithm: {algorithm}")
     else:
+        study.solver(
+            integrator="rk45",
+            gamma=CONTRACT.gamma_mu0_m_per_as,
+            dt_initial=1e-15,
+            dt_min=1e-17,
+            dt_max=2e-13,
+            max_err=1e-7,
+        )
         study.b_ext(*case.field_t)
         study.run(request.duration_s)
     return study, body

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 import hashlib
@@ -35,8 +36,10 @@ class CollectionError(ValueError):
 FIELDNAMES = (
     "attempt_id",
     "collected_at_utc",
+    "phase",
     "scenario",
     "case",
+    "relaxation_algorithm",
     "integrator",
     "timestep_policy",
     "requested_device",
@@ -62,6 +65,8 @@ FIELDNAMES = (
     "dt_max_s",
     "max_error",
     "sample_count",
+    "step_start",
+    "step_stop",
     "time_start_s",
     "time_stop_s",
     "crossing_time_s",
@@ -76,6 +81,15 @@ FIELDNAMES = (
     "final_mx",
     "final_my",
     "final_mz",
+    "relaxation_converged",
+    "relaxation_stop_reason",
+    "relaxation_stop_metric",
+    "relaxation_stop_value",
+    "relaxation_stop_threshold",
+    "relaxation_torque_limit_T",
+    "initial_E_total_J",
+    "energy_drop_J",
+    "max_energy_increase_J",
     "final_E_total_J",
     "final_max_torque_T",
     "wall_time_s",
@@ -87,9 +101,26 @@ FIELDNAMES = (
     "scalars_sha256",
 )
 
-_SCENARIO = re.compile(
+_DYNAMICS_SCENARIO = re.compile(
     r"^(case_[ab])_(heun|rk23|rk4|rk45)_(fixed|adaptive)(?:_[a-z0-9_]+)?$"
 )
+_DIRECT_RELAXATION_SCENARIO = re.compile(
+    r"^relax_(projected_gradient_bb|nonlinear_cg)$"
+)
+_LLG_RELAXATION_SCENARIO = re.compile(
+    r"^relax_llg_(heun|rk23|rk4|rk45)_(fixed_dt_[0-9a-z]+|adaptive)$"
+)
+
+RELAXATION_TORQUE_LIMIT_T = 1e-5
+
+
+@dataclass(frozen=True)
+class ScenarioInfo:
+    phase: str
+    case: str | None
+    relaxation_algorithm: str | None
+    integrator: str | None
+    timestep_policy: str | None
 
 
 def _sha256(path: Path) -> str:
@@ -112,7 +143,11 @@ def _json(path: Path) -> dict[str, Any]:
     return value
 
 
-def _read_scalars(path: Path) -> tuple[list[str], list[dict[str, float]]]:
+def _read_scalars(
+    path: Path,
+    *,
+    scenario: ScenarioInfo,
+) -> list[dict[str, float]]:
     try:
         stream = path.open(newline="", encoding="utf-8")
     except FileNotFoundError as exc:
@@ -120,7 +155,15 @@ def _read_scalars(path: Path) -> tuple[list[str], list[dict[str, float]]]:
     with stream:
         reader = csv.DictReader(stream)
         fieldnames = list(reader.fieldnames or ())
-        required = {"time", "mx", "my", "mz", "E_total", "max_torque_T"}
+        required = {
+            "step",
+            "time",
+            "mx",
+            "my",
+            "mz",
+            "E_total",
+            "max_torque_T",
+        }
         missing = required - set(fieldnames)
         if missing:
             raise CollectionError(f"missing scalar columns: {sorted(missing)}")
@@ -137,10 +180,20 @@ def _read_scalars(path: Path) -> tuple[list[str], list[dict[str, float]]]:
             rows.append(row)
     if len(rows) < 2:
         raise CollectionError("scalar trace must contain at least two samples")
+    steps = [row["step"] for row in rows]
+    if any(right <= left for left, right in zip(steps, steps[1:])):
+        raise CollectionError("scalar step must be strictly increasing")
     times = [row["time"] for row in rows]
-    if any(right <= left for left, right in zip(times, times[1:])):
+    direct_minimizer = scenario.relaxation_algorithm in {
+        "projected_gradient_bb",
+        "nonlinear_cg",
+    }
+    if direct_minimizer:
+        if any(time != 0.0 for time in times):
+            raise CollectionError("direct minimizer must not advance physical time")
+    elif any(right <= left for left, right in zip(times, times[1:])):
         raise CollectionError("scalar time must be strictly increasing")
-    return fieldnames, rows
+    return rows
 
 
 def _nested(value: Any, *keys: str, default: Any = None) -> Any:
@@ -168,11 +221,24 @@ def _cell(value: Any) -> str:
     return str(value)
 
 
-def _scenario_parts(scenario: str) -> tuple[str, str, str]:
-    match = _SCENARIO.fullmatch(scenario)
-    if match is None:
-        raise CollectionError(f"unsupported SP4 scenario name: {scenario}")
-    return match.group(1), match.group(2), match.group(3)
+def _scenario_info(scenario: str) -> ScenarioInfo:
+    match = _DYNAMICS_SCENARIO.fullmatch(scenario)
+    if match is not None:
+        return ScenarioInfo("dynamics", match.group(1), None, match.group(2), match.group(3))
+    match = _DIRECT_RELAXATION_SCENARIO.fullmatch(scenario)
+    if match is not None:
+        return ScenarioInfo("relaxation", None, match.group(1), None, None)
+    match = _LLG_RELAXATION_SCENARIO.fullmatch(scenario)
+    if match is not None:
+        policy = "adaptive" if match.group(2) == "adaptive" else "fixed"
+        return ScenarioInfo(
+            "relaxation",
+            None,
+            "llg_overdamped",
+            match.group(1),
+            policy,
+        )
+    raise CollectionError(f"unsupported SP4 scenario name: {scenario}")
 
 
 @lru_cache(maxsize=2)
@@ -204,11 +270,7 @@ def _reference_metrics(case: str, trace: Trajectory) -> dict[str, Any]:
     }
 
 
-def _timestep_values(
-    metadata: dict[str, Any],
-    name_integrator: str,
-    name_policy: str,
-) -> dict[str, Any]:
+def _timestep_values(metadata: dict[str, Any]) -> dict[str, Any]:
     provenance = metadata.get("execution_provenance", {})
     policy = provenance.get("timestep_policy", {}) if isinstance(provenance, dict) else {}
     resolved = policy.get("resolved", policy) if isinstance(policy, dict) else {}
@@ -221,9 +283,11 @@ def _timestep_values(
         provenance.get("resolved_integrator") if isinstance(provenance, dict) else None,
         provenance.get("integrator") if isinstance(provenance, dict) else None,
         resolved.get("integrator"),
-        name_integrator,
     )
-    kind = _first(resolved.get("kind"), policy.get("kind") if isinstance(policy, dict) else None, name_policy)
+    kind = _first(
+        resolved.get("kind"),
+        policy.get("kind") if isinstance(policy, dict) else None,
+    )
     return {
         "integrator": integrator,
         "timestep_policy": kind,
@@ -240,6 +304,105 @@ def _timestep_values(
             requested.get("atol"),
             resolved.get("max_error"),
         ),
+    }
+
+
+def _empty_timestep_values() -> dict[str, None]:
+    return {
+        "integrator": None,
+        "timestep_policy": None,
+        "fixed_dt_s": None,
+        "dt_initial_s": None,
+        "dt_min_s": None,
+        "dt_max_s": None,
+        "max_error": None,
+    }
+
+
+def _validated_timestep_values(
+    metadata: dict[str, Any],
+    scenario: ScenarioInfo,
+) -> dict[str, Any]:
+    if scenario.relaxation_algorithm in {
+        "projected_gradient_bb",
+        "nonlinear_cg",
+    }:
+        return _empty_timestep_values()
+    values = _timestep_values(metadata)
+    if values["integrator"] != scenario.integrator:
+        raise CollectionError(
+            "resolved integrator does not match the scenario: "
+            f"{values['integrator']} != {scenario.integrator}"
+        )
+    if values["timestep_policy"] != scenario.timestep_policy:
+        raise CollectionError(
+            "resolved timestep policy does not match the scenario: "
+            f"{values['timestep_policy']} != {scenario.timestep_policy}"
+        )
+    return values
+
+
+def _relaxation_qualification(metadata: dict[str, Any]) -> dict[str, Any]:
+    for key in (
+        "fem_cpu_relaxation_qualification",
+        "fem_gpu_relaxation_qualification",
+    ):
+        value = metadata.get(key)
+        if isinstance(value, dict):
+            return value
+    raise CollectionError("relaxation qualification metadata missing")
+
+
+def _relaxation_metrics(
+    metadata: dict[str, Any],
+    rows: list[dict[str, float]],
+    scenario: ScenarioInfo,
+) -> dict[str, Any]:
+    qualification = _relaxation_qualification(metadata)
+    algorithm = qualification.get("relaxation_algorithm")
+    if algorithm != scenario.relaxation_algorithm:
+        raise CollectionError(
+            "relaxation algorithm does not match the scenario: "
+            f"{algorithm} != {scenario.relaxation_algorithm}"
+        )
+    if qualification.get("converged") is not True:
+        raise CollectionError("relaxation did not converge")
+
+    try:
+        final_torque_t = float(qualification["final_torque_t"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CollectionError("relaxation final torque metadata missing") from exc
+    if not math.isfinite(final_torque_t):
+        raise CollectionError("relaxation final torque is non-finite")
+    if final_torque_t > RELAXATION_TORQUE_LIMIT_T:
+        raise CollectionError(
+            "relaxation torque exceeds the SP4 limit: "
+            f"{final_torque_t:.17g} > {RELAXATION_TORQUE_LIMIT_T:.17g} T"
+        )
+
+    energies = [row["E_total"] for row in rows]
+    increases = [right - left for left, right in zip(energies, energies[1:])]
+    max_increase = max([0.0, *increases])
+    energy_scale = max(max(abs(value) for value in energies), 1e-30)
+    energy_budget = 1e-10 * energy_scale
+    if max_increase > energy_budget:
+        raise CollectionError(
+            "relaxation energy increased beyond the numerical budget: "
+            f"{max_increase:.17g} > {energy_budget:.17g} J"
+        )
+
+    return {
+        "relaxation_converged": True,
+        "relaxation_stop_reason": qualification.get("stop_reason"),
+        "relaxation_stop_metric": qualification.get("stop_metric_name"),
+        "relaxation_stop_value": qualification.get("stop_metric_value"),
+        "relaxation_stop_threshold": qualification.get("stop_threshold"),
+        "relaxation_torque_limit_T": RELAXATION_TORQUE_LIMIT_T,
+        "initial_E_total_J": energies[0],
+        "energy_drop_J": energies[0] - energies[-1],
+        "max_energy_increase_J": max_increase,
+        "final_E_total_J": energies[-1],
+        "final_max_torque_T": final_torque_t,
     }
 
 
@@ -318,23 +481,12 @@ def collect_attempt(
 
     if not attempt_id.strip():
         raise CollectionError("attempt ID must not be empty")
-    case, name_integrator, name_policy = _scenario_parts(scenario)
+    scenario_info = _scenario_info(scenario)
     artifacts = _resolve_artifacts(Path(artifacts))
     metadata_path = artifacts / "metadata.json"
     scalars_path = artifacts / "scalars.csv"
     metadata = _json(metadata_path)
-    _, rows = _read_scalars(scalars_path)
-
-    trace = Trajectory(
-        np.asarray([item["time"] for item in rows], dtype=float),
-        np.asarray([[item["mx"], item["my"], item["mz"]] for item in rows], dtype=float),
-        str(scalars_path),
-    )
-    try:
-        crossing = find_first_zero_crossing(trace)
-        reference = _reference_metrics(case, trace)
-    except ValueError as exc:
-        raise CollectionError(str(exc)) from exc
+    rows = _read_scalars(scalars_path, scenario=scenario_info)
 
     requested = metadata.get("requested_execution", {})
     provenance = metadata.get("execution_provenance", {})
@@ -342,7 +494,7 @@ def collect_attempt(
     mesh = metadata.get("mesh", {})
     if not all(isinstance(item, dict) for item in (requested, provenance, demag, mesh)):
         raise CollectionError("metadata execution, demag, or mesh section is malformed")
-    timestep = _timestep_values(metadata, name_integrator, name_policy)
+    timestep = _validated_timestep_values(metadata, scenario_info)
     runtime = _nested(metadata, "problem_meta", "runtime_metadata", default={})
     airbox = _nested(runtime, "domain_frame", "declared_universe", "size", default=(None, None, None))
     per_geometry = _nested(runtime, "mesh_workflow", "per_geometry", default=[])
@@ -351,15 +503,52 @@ def collect_attempt(
         airbox = (None, None, None)
     if not isinstance(magnetic_mesh, dict):
         magnetic_mesh = {}
-    rmse = reference["nist_rmse"]
-    envelope = reference["nist_envelope_rms"]
     final = rows[-1]
+    direct_minimizer = scenario_info.relaxation_algorithm in {
+        "projected_gradient_bb",
+        "nonlinear_cg",
+    }
+
+    phase_metrics: dict[str, Any]
+    if scenario_info.phase == "dynamics":
+        trace = Trajectory(
+            np.asarray([item["time"] for item in rows], dtype=float),
+            np.asarray(
+                [[item["mx"], item["my"], item["mz"]] for item in rows],
+                dtype=float,
+            ),
+            str(scalars_path),
+        )
+        try:
+            crossing = find_first_zero_crossing(trace)
+            reference = _reference_metrics(str(scenario_info.case), trace)
+        except ValueError as exc:
+            raise CollectionError(str(exc)) from exc
+        rmse = reference["nist_rmse"]
+        envelope = reference["nist_envelope_rms"]
+        phase_metrics = {
+            "crossing_time_s": crossing,
+            "nist_crossing_min_s": reference["nist_crossing_min_s"],
+            "nist_crossing_max_s": reference["nist_crossing_max_s"],
+            "nist_rmse_mx": rmse[0],
+            "nist_rmse_my": rmse[1],
+            "nist_rmse_mz": rmse[2],
+            "nist_envelope_rms_mx": envelope[0],
+            "nist_envelope_rms_my": envelope[1],
+            "nist_envelope_rms_mz": envelope[2],
+            "final_E_total_J": final["E_total"],
+            "final_max_torque_T": final["max_torque_T"],
+        }
+    else:
+        phase_metrics = _relaxation_metrics(metadata, rows, scenario_info)
 
     values: dict[str, Any] = {
         "attempt_id": attempt_id,
         "collected_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "phase": scenario_info.phase,
         "scenario": scenario,
-        "case": case,
+        "case": scenario_info.case,
+        "relaxation_algorithm": scenario_info.relaxation_algorithm,
         **timestep,
         "requested_device": requested.get("device"),
         "execution_engine": provenance.get("execution_engine"),
@@ -388,22 +577,14 @@ def collect_attempt(
         ),
         "film_layers": magnetic_mesh.get("through_thickness_elements"),
         "sample_count": len(rows),
-        "time_start_s": rows[0]["time"],
-        "time_stop_s": final["time"],
-        "crossing_time_s": crossing,
-        "nist_crossing_min_s": reference["nist_crossing_min_s"],
-        "nist_crossing_max_s": reference["nist_crossing_max_s"],
-        "nist_rmse_mx": rmse[0],
-        "nist_rmse_my": rmse[1],
-        "nist_rmse_mz": rmse[2],
-        "nist_envelope_rms_mx": envelope[0],
-        "nist_envelope_rms_my": envelope[1],
-        "nist_envelope_rms_mz": envelope[2],
+        "step_start": rows[0].get("step"),
+        "step_stop": final.get("step"),
+        "time_start_s": None if direct_minimizer else rows[0]["time"],
+        "time_stop_s": None if direct_minimizer else final["time"],
         "final_mx": final["mx"],
         "final_my": final["my"],
         "final_mz": final["mz"],
-        "final_E_total_J": final["E_total"],
-        "final_max_torque_T": final["max_torque_T"],
+        **phase_metrics,
         "wall_time_s": _wall_time(metadata, artifacts),
         "status": metadata.get("status", "completed"),
         "failure_category": "",
@@ -432,7 +613,7 @@ def record_failed_attempt(
 
     if not attempt_id.strip():
         raise CollectionError("attempt ID must not be empty")
-    case, integrator, timestep_policy = _scenario_parts(scenario)
+    scenario_info = _scenario_info(scenario)
     if requested_device not in {"cpu", "gpu"}:
         raise CollectionError("requested device must be cpu or gpu")
     if category not in {
@@ -447,10 +628,12 @@ def record_failed_attempt(
     values: dict[str, Any] = {
         "attempt_id": attempt_id,
         "collected_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "phase": scenario_info.phase,
         "scenario": scenario,
-        "case": case,
-        "integrator": integrator,
-        "timestep_policy": timestep_policy,
+        "case": scenario_info.case,
+        "relaxation_algorithm": scenario_info.relaxation_algorithm,
+        "integrator": scenario_info.integrator,
+        "timestep_policy": scenario_info.timestep_policy,
         "requested_device": requested_device,
         "wall_time_s": wall_time_s,
         "status": category,

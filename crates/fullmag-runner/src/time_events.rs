@@ -110,18 +110,21 @@ pub(crate) fn build_resolved_stage_event_schedule(
             }
         }
     }
-    for every_s in outputs.iter().filter_map(|output| match output {
-        OutputIR::Scalar { every_seconds, .. }
-        | OutputIR::ScalarResolvedAuto { every_seconds, .. }
-        | OutputIR::Field { every_seconds, .. }
-        | OutputIR::FieldResolvedAuto { every_seconds, .. }
-        | OutputIR::Snapshot { every_seconds, .. } => Some(*every_seconds),
-        _ => None,
-    }) {
-        if every_s.is_finite() && every_s > 0.0 {
-            let count = ((stage_end_s - stage_start_s) / every_s).floor() as u64;
-            for index in 0..=count {
-                times.push(stage_start_s + index as f64 * every_s);
+    let finite_stage_span = stage_end_s - stage_start_s;
+    if finite_stage_span.is_finite() && finite_stage_span >= 0.0 {
+        for every_s in outputs.iter().filter_map(|output| match output {
+            OutputIR::Scalar { every_seconds, .. }
+            | OutputIR::ScalarResolvedAuto { every_seconds, .. }
+            | OutputIR::Field { every_seconds, .. }
+            | OutputIR::FieldResolvedAuto { every_seconds, .. }
+            | OutputIR::Snapshot { every_seconds, .. } => Some(*every_seconds),
+            _ => None,
+        }) {
+            if every_s.is_finite() && every_s > 0.0 {
+                let count = (finite_stage_span / every_s).floor() as u64;
+                for index in 0..=count {
+                    times.push(stage_start_s + index as f64 * every_s);
+                }
             }
         }
     }
@@ -327,6 +330,26 @@ mod tests {
             false,
         );
         assert!(schedule.is_none());
+    }
+
+    #[test]
+    fn unbounded_llg_relaxation_does_not_materialize_infinite_periodic_outputs() {
+        let outputs = vec![OutputIR::Scalar {
+            name: "mx".into(),
+            every_seconds: 1.0e-14,
+        }];
+
+        let schedule = build_native_fem_stage_event_schedule(
+            &[],
+            0.0,
+            f64::INFINITY,
+            &outputs,
+            crate::schedules::OUTPUT_TIME_TOLERANCE,
+            true,
+        )
+        .expect("LLG relaxation keeps a finite event schedule");
+
+        assert_eq!(schedule.times_s, vec![0.0]);
     }
 
     #[test]

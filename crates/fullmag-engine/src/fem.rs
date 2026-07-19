@@ -3727,6 +3727,7 @@ mod tests {
         problem.terms.cubic_anisotropy = Some(CubicAnisotropyConfig {
             kc1: -1.0e5,
             kc2: 0.0,
+            kc3: 0.0,
             axis1,
             axis2,
         });
@@ -4400,6 +4401,7 @@ mod tests {
                 cubic_anisotropy: Some(CubicAnisotropyConfig {
                     kc1: -1e5,
                     kc2: 0.0,
+                    kc3: 0.0,
                     axis1: [1.0, 0.0, 0.0],
                     axis2: [0.0, 1.0, 0.0],
                 }),

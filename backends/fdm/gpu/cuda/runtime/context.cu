@@ -1349,15 +1349,9 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_fft_workspace(ctx)) return false;
     if (!alloc_demag_kernel(ctx)) return false;
     if (ctx.enable_demag && !ctx.has_demag_tensor_kernel) {
-        if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-            launch_newell_compute_spectra_fp64(ctx);
-        } else {
-            launch_newell_compute_spectra_fp32(ctx);
-        }
-        if (!ctx.last_error.empty()) {
-            return false;
-        }
-        ctx.has_demag_tensor_kernel = true;
+        ctx.last_error =
+            "FDM CUDA demag requires validated Newell tensor spectra; automatic native spectrum construction is unavailable";
+        return false;
     }
 
     // Oersted static field buffer
@@ -2173,9 +2167,11 @@ static bool context_upload_magnetization_impl(Context &ctx, const HostScalar *m_
             hy[i] = is_active ? static_cast<double>(m_xyz[3 * i + 1]) : 0.0;
             hz[i] = is_active ? static_cast<double>(m_xyz[3 * i + 2]) : 0.0;
         }
-        return upload_component(ctx.m.x, hx.data(), "cudaMemcpy(m.x)")
+        const bool uploaded = upload_component(ctx.m.x, hx.data(), "cudaMemcpy(m.x)")
             && upload_component(ctx.m.y, hy.data(), "cudaMemcpy(m.y)")
             && upload_component(ctx.m.z, hz.data(), "cudaMemcpy(m.z)");
+        if (uploaded) context_reset_integrator_history(ctx);
+        return uploaded;
     }
 
     std::vector<float> hx(n), hy(n), hz(n);
@@ -2185,9 +2181,11 @@ static bool context_upload_magnetization_impl(Context &ctx, const HostScalar *m_
         hy[i] = is_active ? static_cast<float>(m_xyz[3 * i + 1]) : 0.0f;
         hz[i] = is_active ? static_cast<float>(m_xyz[3 * i + 2]) : 0.0f;
     }
-    return upload_component(ctx.m.x, hx.data(), "cudaMemcpy(m.x)")
+    const bool uploaded = upload_component(ctx.m.x, hx.data(), "cudaMemcpy(m.x)")
         && upload_component(ctx.m.y, hy.data(), "cudaMemcpy(m.y)")
         && upload_component(ctx.m.z, hz.data(), "cudaMemcpy(m.z)");
+    if (uploaded) context_reset_integrator_history(ctx);
+    return uploaded;
 }
 
 bool context_upload_magnetization_f64(Context &ctx, const double *m_xyz, uint64_t len) {
@@ -2220,12 +2218,14 @@ static bool context_upload_layer_magnetization_impl(
         return false;
     }
 
-    return upload_vector_field_aos_host(
+    const bool uploaded = upload_vector_field_aos_host(
         ctx,
         layer.m,
         m_xyz,
         layer.cell_count,
         "cudaMemcpy(multilayer_layer_m)");
+    if (uploaded) context_reset_integrator_history(ctx);
+    return uploaded;
 }
 
 bool context_upload_layer_magnetization_f64(

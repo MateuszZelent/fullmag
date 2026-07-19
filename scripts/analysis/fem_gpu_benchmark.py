@@ -67,6 +67,10 @@ PRESET_MESHES = {
 DEFAULT_MESHES = ["coarse", "medium", "fine"]
 DEFAULT_SCENARIOS = ["exchange_only", "exchange_demag", "exchange_dmi", "stt_oersted"]
 BOX500_AIRBOX_SCENARIO = "exchange_only_box500_airbox1um"
+RELAXATION_SCENARIO_ALIASES = {
+    "relax_exchange_only": "exchange_only",
+    "relax_exchange_demag": "exchange_demag",
+}
 BOX500_AIRBOX_SCENARIO_ALIASES = {
     BOX500_AIRBOX_SCENARIO: "exchange_only",
     "box500_airbox_exchange_zeeman": "exchange_zeeman",
@@ -1037,7 +1041,17 @@ def apply_box500_airbox_interaction_consistency_preset(args: argparse.Namespace)
 
 
 def canonical_consistency_scenario(scenario: str) -> str:
-    return BOX500_AIRBOX_SCENARIO_ALIASES.get(scenario, scenario)
+    return RELAXATION_SCENARIO_ALIASES.get(
+        scenario,
+        BOX500_AIRBOX_SCENARIO_ALIASES.get(scenario, scenario),
+    )
+
+
+def benchmark_scenario_uses_relaxation(scenario: str) -> bool:
+    return (
+        scenario in BOX500_AIRBOX_SCENARIO_ALIASES
+        or scenario in RELAXATION_SCENARIO_ALIASES
+    )
 
 
 def interaction_contract_for_scenario(scenario: str) -> Mapping[str, object] | None:
@@ -1228,7 +1242,7 @@ def cpu_gpu_case_manifests(
     explicit_relaxation_algorithms = relaxation_algorithms is not None
     effective_algorithms = relaxation_algorithms or ["llg_overdamped"]
     for scenario in scenarios:
-        if scenario not in BOX500_AIRBOX_SCENARIO_ALIASES:
+        if not benchmark_scenario_uses_relaxation(scenario):
             continue
         for relaxation_algorithm in relaxation_algorithms_for_scenario(
             scenario,
@@ -1256,11 +1270,16 @@ def cpu_gpu_case_manifests(
 
 
 def benchmark_mesh_env(args: argparse.Namespace) -> dict[str, str]:
+    env = {
+        key: value
+        for key in ("FULLMAG_BENCH_DOMAIN_HMAX", "FULLMAG_BENCH_AIRBOX_HMAX")
+        if (value := os.environ.get(key))
+    }
     if args.gmsh_threads is not None:
-        return {"FULLMAG_GMSH_THREADS": str(args.gmsh_threads)}
-    if args.require_stable_solver_mesh or args.require_cpu_gpu_consistency:
-        return {"FULLMAG_GMSH_THREADS": "1"}
-    return {}
+        env["FULLMAG_GMSH_THREADS"] = str(args.gmsh_threads)
+    elif args.require_stable_solver_mesh or args.require_cpu_gpu_consistency:
+        env["FULLMAG_GMSH_THREADS"] = "1"
+    return env
 
 
 def env_text(env: Mapping[str, str], key: str) -> str | None:
@@ -1637,7 +1656,7 @@ def input_mesh_summary(mesh_stats: Mapping[str, object]) -> str:
 
 
 def benchmark_scenario_requires_shared_domain(scenario: str) -> bool:
-    canonical = BOX500_AIRBOX_SCENARIO_ALIASES.get(scenario, scenario)
+    canonical = canonical_consistency_scenario(scenario)
     return scenario in BOX500_AIRBOX_SCENARIO_ALIASES or "demag" in canonical
 
 
@@ -2101,7 +2120,13 @@ def run_backend(
             run_kwargs["timeout"] = timeout_s
         try:
             completed = subprocess.run(
-                [str(binary), str(BENCH_SCRIPT), "--headless", "--json"],
+                [
+                    str(binary),
+                    str(BENCH_SCRIPT),
+                    "--headless",
+                    "--json",
+                    "--output-dir", str(run_dir),
+                ],
                 **run_kwargs,
             )
         except subprocess.TimeoutExpired as exc:
@@ -2380,6 +2405,18 @@ def run_backend(
                 "demag_actual_iterations": demag_runtime.get("actual_iterations"),
                 "demag_final_residual_norm": demag_runtime.get("final_residual_norm"),
                 "rejected_attempts": payload.get("rejected_attempts"),
+                "relaxation_energy_rejected_attempts": payload.get(
+                    "relaxation_energy_rejected_attempts"
+                ),
+                "relaxation_controller_tightenings": payload.get(
+                    "relaxation_controller_tightenings"
+                ),
+                "relaxation_controller_at_floor": payload.get(
+                    "relaxation_controller_at_floor"
+                ),
+                "relaxation_torque_confirmation_count": payload.get(
+                    "relaxation_torque_confirmation_count"
+                ),
                 "fsal_reused": payload.get("fsal_reused"),
                 "max_dm_dt": payload.get("max_dm_dt"),
                 "max_h_eff": payload.get("max_h_eff"),
@@ -3267,7 +3304,7 @@ def row_relaxation_algorithm(row: Mapping[str, object]) -> object:
     if value is not None:
         return value
     scenario = row.get("scenario")
-    if isinstance(scenario, str) and scenario in BOX500_AIRBOX_SCENARIO_ALIASES:
+    if isinstance(scenario, str) and benchmark_scenario_uses_relaxation(scenario):
         return "llg_overdamped"
     return None
 
@@ -5272,7 +5309,7 @@ def main() -> None:
         warmup_scenario = scenarios[0]
         warmup_relaxation_algorithms = (
             relaxation_algorithms_for_scenario(warmup_scenario, relaxation_algorithms)
-            if warmup_scenario in BOX500_AIRBOX_SCENARIO_ALIASES
+            if benchmark_scenario_uses_relaxation(warmup_scenario)
             else [None]
         )
         warmup_relaxation_algorithm = (
@@ -5354,7 +5391,7 @@ def main() -> None:
         for scenario in scenarios:
             scenario_relaxation_algorithms: list[str | None] = (
                 relaxation_algorithms_for_scenario(scenario, relaxation_algorithms)
-                if scenario in BOX500_AIRBOX_SCENARIO_ALIASES
+                if benchmark_scenario_uses_relaxation(scenario)
                 else [None]
             )
             for relaxation_algorithm in scenario_relaxation_algorithms:

@@ -15,6 +15,36 @@
 
 namespace fullmag::fem {
 
+RelaxationEnergyAcceptanceDecision relaxation_energy_acceptance_decision(
+    bool previous_energy_valid,
+    double previous_energy_j,
+    double candidate_energy_j)
+{
+    if (!std::isfinite(candidate_energy_j) ||
+        (previous_energy_valid && !std::isfinite(previous_energy_j))) {
+        return {RelaxationEnergyAcceptanceKind::nonfinite, 0.0, 0.0};
+    }
+    if (!previous_energy_valid) {
+        return {};
+    }
+
+    const double scale_j = std::max({
+        std::abs(previous_energy_j),
+        std::abs(candidate_energy_j),
+        RELAX_ENERGY_INCREASE_ABSOLUTE_TOLERANCE_J,
+    });
+    const double budget_j = RELAX_ENERGY_INCREASE_ABSOLUTE_TOLERANCE_J +
+        RELAX_ENERGY_INCREASE_RELATIVE_TOLERANCE * scale_j;
+    const double increase_j = candidate_energy_j - previous_energy_j;
+    return {
+        increase_j > budget_j
+            ? RelaxationEnergyAcceptanceKind::rejected_increase
+            : RelaxationEnergyAcceptanceKind::accepted,
+        increase_j,
+        budget_j,
+    };
+}
+
 namespace {
 
 void reset_relax_energy_window(Context &ctx)
@@ -61,6 +91,72 @@ bool relax_energy_plateau_range(const Context &ctx, double &range_joules)
 
 } // namespace
 
+bool relaxation_energy_plateau_detected(
+    const Context &ctx,
+    double &range_joules,
+    double &threshold_joules)
+{
+    if (!relax_energy_plateau_range(ctx, range_joules)) {
+        return false;
+    }
+    double scale_j = RELAX_ENERGY_INCREASE_ABSOLUTE_TOLERANCE_J;
+    for (uint32_t i = 0; i < ctx.stage_completion.relax_energy_window_count; ++i) {
+        scale_j = std::max(
+            scale_j,
+            std::abs(ctx.stage_completion.relax_energy_window_j[i]));
+    }
+    threshold_joules = ctx.stage_completion.relax_stop.has_energy_tolerance_j != 0
+        ? ctx.stage_completion.relax_stop.energy_tolerance_j
+        : RELAX_ENERGY_INCREASE_ABSOLUTE_TOLERANCE_J +
+            RELAX_ENERGY_INCREASE_RELATIVE_TOLERANCE * scale_j;
+    return std::isfinite(range_joules) &&
+        std::isfinite(threshold_joules) &&
+        range_joules <= threshold_joules;
+}
+
+bool tighten_relaxation_controller(
+    Context &ctx,
+    double active_dt)
+{
+    bool changed = false;
+    if (ctx.adaptive_dt.enabled && ctx.adaptive_dt.rtol == 0.0) {
+        if (!ctx.stage_completion.relax_max_error_floor_valid) {
+            ctx.stage_completion.relax_max_error_floor =
+                std::min(ctx.adaptive_dt.atol, 1.0e-9);
+            ctx.stage_completion.relax_max_error_floor_valid = true;
+        }
+        const double tightened_atol = std::max(
+            ctx.stage_completion.relax_max_error_floor,
+            ctx.adaptive_dt.atol * RELAX_CONTROLLER_TIGHTENING_FACTOR);
+        if (tightened_atol < ctx.adaptive_dt.atol) {
+            ctx.adaptive_dt.atol = tightened_atol;
+            changed = true;
+        }
+    }
+
+    const double dt_floor = ctx.adaptive_dt.dt_min;
+    const double tightened_dt = std::max(
+        dt_floor,
+        active_dt * RELAX_CONTROLLER_TIGHTENING_FACTOR);
+    if (tightened_dt < active_dt) {
+        ctx.base_plan.dt_seconds = tightened_dt;
+        ctx.adaptive_dt.current_dt = tightened_dt;
+        changed = true;
+    }
+
+    if (changed) {
+        ctx.adaptive_dt.prev_error_norm = 1.0;
+        ctx.adaptive_dt.has_prev_error_norm = false;
+        ctx.stepper.workspace.fsal_valid = false;
+#if FULLMAG_HAS_CUDA_RUNTIME
+        ctx.gpu_state.device.rk.fsal_valid = false;
+#endif
+        ctx.stage_completion.relax_controller_tightening_count += 1;
+    }
+    ctx.stage_completion.relax_controller_at_floor = !changed;
+    return changed;
+}
+
 bool validate_relax_stop_config(
     const fullmag_fem_relax_stop &relax_stop,
     std::string &error)
@@ -102,6 +198,12 @@ void initialize_stage_completion_state(
     ctx.stage_completion.relax_pseudotime_s = 0.0;
     ctx.stage_completion.relax_previous_total_energy_j = 0.0;
     ctx.stage_completion.relax_previous_total_energy_valid = false;
+    ctx.stage_completion.relax_torque_confirmation_count = 0;
+    ctx.stage_completion.relax_max_error_floor_valid = false;
+    ctx.stage_completion.relax_max_error_floor = 0.0;
+    ctx.stage_completion.relax_energy_rejected_attempts = 0;
+    ctx.stage_completion.relax_controller_tightening_count = 0;
+    ctx.stage_completion.relax_controller_at_floor = false;
     reset_relax_energy_window(ctx);
 }
 
@@ -141,7 +243,26 @@ void set_stage_completion(
 
 fullmag_fem_stage_completion stage_completion_snapshot(const Context &ctx)
 {
-    return ctx.stage_completion.snapshot;
+    auto snapshot = ctx.stage_completion.snapshot;
+    snapshot.relaxation_controller_policy_version = 1;
+    snapshot.torque_confirmation_samples_required = RELAX_TORQUE_CONFIRMATION_STEPS;
+    snapshot.torque_confirmation_samples_current =
+        ctx.stage_completion.relax_torque_confirmation_count;
+    snapshot.energy_rejected_attempts =
+        ctx.stage_completion.relax_energy_rejected_attempts;
+    snapshot.controller_tightening_count =
+        ctx.stage_completion.relax_controller_tightening_count;
+    snapshot.controller_at_floor =
+        ctx.stage_completion.relax_controller_at_floor ? 1 : 0;
+    snapshot.energy_increase_relative_tolerance =
+        RELAX_ENERGY_INCREASE_RELATIVE_TOLERANCE;
+    snapshot.energy_increase_absolute_tolerance_j =
+        RELAX_ENERGY_INCREASE_ABSOLUTE_TOLERANCE_J;
+    snapshot.controller_tightening_factor = RELAX_CONTROLLER_TIGHTENING_FACTOR;
+    snapshot.max_error_floor = ctx.stage_completion.relax_max_error_floor_valid
+        ? ctx.stage_completion.relax_max_error_floor
+        : 1.0e-9;
+    return snapshot;
 }
 
 bool complete_stage_from_current_stats(
@@ -155,17 +276,8 @@ bool complete_stage_from_current_stats(
         return false;
     }
 
-    if (ctx.stage_completion.relax_stop.has_torque_tolerance_apm != 0 &&
-        ctx.stage_completion.relax_stop.has_energy_tolerance_j == 0 &&
-        stats.max_torque_Apm <= ctx.stage_completion.relax_stop.torque_tolerance_apm) {
-        set_stage_completion(
-            ctx,
-            FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
-            "max_torque_apm",
-            stats.max_torque_Apm,
-            ctx.stage_completion.relax_stop.torque_tolerance_apm);
-        return true;
-    }
+    // A zero-dt snapshot is not a fresh accepted relaxation state and cannot
+    // satisfy the consecutive-torque convergence contract.
     if (ctx.stage_completion.relax_stop.has_max_physical_time_s != 0 &&
         stats.time_seconds >= ctx.stage_completion.relax_stop.max_physical_time_s) {
         set_stage_completion(
@@ -211,27 +323,27 @@ void update_stage_completion_from_stats(
     record_relax_energy_sample(ctx, stats.total_energy_joules);
     ctx.stage_completion.relax_pseudotime_s += std::max(stats.dt_seconds, 0.0);
 
-    const bool torque_ok =
-        ctx.stage_completion.relax_stop.has_torque_tolerance_apm == 0 ||
+    const bool has_torque =
+        ctx.stage_completion.relax_stop.has_torque_tolerance_apm != 0;
+    const bool torque_ok = has_torque &&
+        std::isfinite(stats.max_torque_Apm) &&
         stats.max_torque_Apm <= ctx.stage_completion.relax_stop.torque_tolerance_apm;
-
-    if (ctx.stage_completion.relax_stop.has_energy_tolerance_j != 0) {
-        double energy_plateau_range_j = 0.0;
-        if (relax_energy_plateau_range(ctx, energy_plateau_range_j) &&
-            torque_ok &&
-            energy_plateau_range_j <= ctx.stage_completion.relax_stop.energy_tolerance_j) {
-            set_stage_completion(
-                ctx,
-                FULLMAG_FEM_STAGE_STOP_REASON_ENERGY,
-                "total_energy_plateau_range_J",
-                energy_plateau_range_j,
-                ctx.stage_completion.relax_stop.energy_tolerance_j);
-            return;
-        }
+    if (torque_ok) {
+        ctx.stage_completion.relax_torque_confirmation_count = std::min<uint32_t>(
+            ctx.stage_completion.relax_torque_confirmation_count + 1,
+            RELAX_TORQUE_CONFIRMATION_STEPS);
+    } else {
+        ctx.stage_completion.relax_torque_confirmation_count = 0;
     }
-    if (ctx.stage_completion.relax_stop.has_torque_tolerance_apm != 0 &&
-        ctx.stage_completion.relax_stop.has_energy_tolerance_j == 0 &&
-        stats.max_torque_Apm <= ctx.stage_completion.relax_stop.torque_tolerance_apm) {
+
+    bool energy_ok = ctx.stage_completion.relax_stop.has_energy_tolerance_j == 0;
+    if (!energy_ok) {
+        double energy_plateau_range_j = 0.0;
+        energy_ok = relax_energy_plateau_range(ctx, energy_plateau_range_j) &&
+            energy_plateau_range_j <= ctx.stage_completion.relax_stop.energy_tolerance_j;
+    }
+    if (torque_ok && energy_ok &&
+        ctx.stage_completion.relax_torque_confirmation_count >= RELAX_TORQUE_CONFIRMATION_STEPS) {
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,

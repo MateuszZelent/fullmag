@@ -39,8 +39,8 @@ mod relaxation;
 pub mod runtime_registry;
 mod scalar_metrics;
 mod schedules;
-mod solver_runtime;
 mod solver_profile;
+mod solver_runtime;
 pub mod spin_wave_response;
 pub mod spin_wave_sampling;
 pub mod table_autosave;
@@ -86,6 +86,7 @@ pub(crate) fn resolve_timestep_policy(
                     timestep_s,
                 },
                 execution_identity: resolve_timestep_execution_identity(execution_lane, false)?,
+                relaxation_controller: None,
             })
         }
         (None, Some(adaptive)) => {
@@ -202,6 +203,7 @@ pub(crate) fn resolve_timestep_policy(
                     norm_tolerance: adaptive.norm_tolerance,
                 },
                 execution_identity: resolve_timestep_execution_identity(execution_lane, true)?,
+                relaxation_controller: None,
             })
         }
     }
@@ -1219,12 +1221,49 @@ fn fem_engine_kind(engine: dispatch::FemEngine) -> fem::engine::FemEngineKind {
     }
 }
 
-fn attach_resolved_fallback_to_executed_run(
+pub(crate) fn attach_resolved_fallback_to_executed_run(
     executed: &mut types::ExecutedRun,
     fallback: Option<ResolvedFallback>,
 ) {
     if executed.provenance.resolved_fallback.is_none() {
         executed.provenance.resolved_fallback = fallback;
+    }
+}
+
+/// Copy the canonical planner resolution into the execution artifact contract.
+/// The runner's concrete engine remains authoritative for device and fallback
+/// facts; the plan remains authoritative for what the author requested before
+/// `auto` was resolved.
+pub(crate) fn attach_plan_integrator_resolution(
+    executed: &mut types::ExecutedRun,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) {
+    attach_plan_integrator_resolution_to_provenance(&mut executed.provenance, plan);
+}
+
+pub(crate) fn attach_plan_integrator_resolution_to_provenance(
+    provenance: &mut ExecutionProvenance,
+    plan: &fullmag_ir::ExecutionPlanIR,
+) {
+    let Some(resolution) = plan.provenance.integrator_resolution.as_ref() else {
+        return;
+    };
+    provenance.requested_integrator = resolution
+        .requested_integrator
+        .map(|integrator| integrator.as_str().to_string());
+    provenance.resolved_integrator = resolution
+        .resolved_integrator
+        .map(integrator_choice_name)
+        .map(str::to_string);
+}
+
+pub(crate) fn integrator_choice_name(integrator: fullmag_ir::IntegratorChoice) -> &'static str {
+    match integrator {
+        fullmag_ir::IntegratorChoice::Heun => "heun",
+        fullmag_ir::IntegratorChoice::Rk4 => "rk4",
+        fullmag_ir::IntegratorChoice::Rk23 => "rk23",
+        fullmag_ir::IntegratorChoice::Rk45 => "rk45",
+        fullmag_ir::IntegratorChoice::Abm3 => "abm3",
     }
 }
 
@@ -1468,26 +1507,30 @@ pub fn run_planned_problem(
     let cpu_threads = configured_cpu_threads(problem);
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
                 None,
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::FdmMultilayer(fdm) => {
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm_multilayer(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm_multilayer(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
                 None,
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
             let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
@@ -1539,6 +1582,7 @@ pub fn run_planned_problem(
         }
     };
     let pipeline_summary = pipeline_summary?;
+    attach_plan_integrator_resolution(&mut executed, plan);
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
     executed
         .auxiliary_artifacts
@@ -1735,9 +1779,9 @@ pub fn run_planned_problem_with_callback(
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
@@ -1750,12 +1794,14 @@ pub fn run_planned_problem_with_callback(
                     on_step: &mut on_step,
                 }),
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::FdmMultilayer(fdm) => {
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm_multilayer(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm_multilayer(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
@@ -1764,7 +1810,9 @@ pub fn run_planned_problem_with_callback(
                     &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
             let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
@@ -1833,6 +1881,7 @@ pub fn run_planned_problem_with_callback(
         }
     };
     let pipeline_summary = pipeline_summary?;
+    attach_plan_integrator_resolution(&mut executed, plan);
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
     executed
         .auxiliary_artifacts
@@ -2049,9 +2098,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
@@ -2064,12 +2113,14 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     on_step: &mut on_step,
                 }),
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::FdmMultilayer(fdm) => {
-            let engine = dispatch::resolve_fdm_engine(problem)?;
-            dispatch::execute_fdm_multilayer(
-                engine,
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+            let mut executed = dispatch::execute_fdm_multilayer(
+                resolution.engine,
                 fdm,
                 until_seconds,
                 &plan.output_plan.outputs,
@@ -2078,7 +2129,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     &mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction,
                 )),
                 artifact_writer.clone(),
-            )
+            )?;
+            attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
             let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?;
@@ -2152,6 +2205,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         }
     };
     let pipeline_summary = pipeline_summary?;
+    attach_plan_integrator_resolution(&mut executed, plan);
     spin_wave_response::append_requested_spin_wave_artifacts(problem, plan, &mut executed)?;
     executed
         .auxiliary_artifacts
@@ -2323,7 +2377,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         &mut on_step,
     );
     let pipeline_summary = artifact_pipeline.finish();
-    let executed = match executed_result {
+    let mut executed = match executed_result {
         Ok(executed) => executed,
         Err(error) => {
             if let Err(writer_error) = pipeline_summary {
@@ -2338,6 +2392,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         }
     };
     let pipeline_summary = pipeline_summary?;
+    attach_plan_integrator_resolution(&mut executed, &plan);
 
     if let Err(error) = artifacts::write_artifacts(
         output_dir,
@@ -2450,7 +2505,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         &mut on_step,
     );
     let pipeline_summary = artifact_pipeline.finish();
-    let executed = match executed_result {
+    let mut executed = match executed_result {
         Ok(executed) => executed,
         Err(error) => {
             if let Err(writer_error) = pipeline_summary {
@@ -2465,6 +2520,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         }
     };
     let pipeline_summary = pipeline_summary?;
+    attach_plan_integrator_resolution(&mut executed, &plan);
 
     if let Err(error) = artifacts::write_artifacts(
         output_dir,
@@ -2887,12 +2943,14 @@ pub fn resolve_planned_runtime_capabilities(
     match &plan.backend_plan {
         BackendPlanIR::Fdm(_) => Ok(capabilities_for_fdm_engine(
             dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
+            capabilities::FdmCapabilityProfile::SingleGrid,
         )),
         BackendPlanIR::Fem(fem) => Ok(capabilities_for_fem_engine(
             dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem)?.engine,
         )),
         BackendPlanIR::FdmMultilayer(_) => Ok(capabilities_for_fdm_engine(
             dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
+            capabilities::FdmCapabilityProfile::Multilayer,
         )),
         BackendPlanIR::FemEigen(_) => Ok(capabilities_for_fem_eigen_engine(
             dispatch::resolve_fem_engine_with_trail(problem)?.engine,
@@ -3208,6 +3266,32 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn fdm_auto_integrator_provenance_round_trips_for_cpu_and_cuda_execution_records() {
+        let mut problem = ProblemIR::bootstrap_example();
+        let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut problem.study else {
+            panic!("bootstrap problem must be a time-evolution study");
+        };
+        let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+        *integrator = "auto".to_string();
+        let plan = fullmag_plan::plan(&problem).expect("auto integrator should plan");
+
+        for engine in ["cpu_reference", "cuda_fdm"] {
+            let mut provenance = ExecutionProvenance {
+                execution_engine: engine.to_string(),
+                precision: "double".to_string(),
+                ..Default::default()
+            };
+            attach_plan_integrator_resolution_to_provenance(&mut provenance, &plan);
+            let round_trip: ExecutionProvenance = serde_json::from_str(
+                &serde_json::to_string(&provenance).expect("provenance serializes"),
+            )
+            .expect("provenance deserializes");
+            assert_eq!(round_trip.requested_integrator.as_deref(), Some("auto"));
+            assert_eq!(round_trip.resolved_integrator.as_deref(), Some("rk45"));
+        }
+    }
 
     fn resolved_auto_sampling_problem() -> (ProblemIR, fullmag_ir::ExecutionPlanIR) {
         let mut problem = ProblemIR::bootstrap_example();
@@ -5239,6 +5323,88 @@ mod tests {
         .expect("metadata should parse");
         assert_eq!(metadata["field_snapshots"].as_u64(), Some(4));
         assert_eq!(metadata["scalar_rows"].as_u64(), Some(2));
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn auto_fdm_batch_run_persists_unavailable_cuda_fallback() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
+        unsafe {
+            std::env::remove_var("FULLMAG_FDM_EXECUTION");
+        }
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".to_string(), json!({"device": "auto"}));
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-auto-fdm-fallback-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result = run_problem(&problem, 2e-13, &output_dir)
+            .expect("auto FDM should execute on the CPU when CUDA is unavailable");
+        assert_eq!(result.status, RunStatus::Completed);
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json"))
+                .expect("metadata.json should be readable"),
+        )
+        .expect("metadata should parse");
+        let fallback = &metadata["execution_provenance"]["resolved_fallback"];
+        assert_eq!(fallback["original_engine"], "fdm_cuda");
+        assert_eq!(fallback["fallback_engine"], "fdm_cpu_reference");
+        assert_eq!(fallback["reason"], "fdm_cuda_unavailable");
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn auto_fdm_live_run_persists_unavailable_cuda_fallback() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
+        unsafe {
+            std::env::remove_var("FULLMAG_FDM_EXECUTION");
+        }
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".to_string(), json!({"device": "auto"}));
+        let plan = fullmag_plan::plan(&problem).expect("auto FDM should plan");
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-auto-fdm-live-fallback-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let result =
+            run_planned_problem_with_callback(&problem, &plan, 2e-13, &output_dir, 1, |_| {
+                StepAction::Continue
+            })
+            .expect("live auto FDM should execute on the CPU when CUDA is unavailable");
+        assert_eq!(result.status, RunStatus::Completed);
+
+        let metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("metadata.json"))
+                .expect("metadata.json should be readable"),
+        )
+        .expect("metadata should parse");
+        let fallback = &metadata["execution_provenance"]["resolved_fallback"];
+        assert_eq!(fallback["original_engine"], "fdm_cuda");
+        assert_eq!(fallback["fallback_engine"], "fdm_cpu_reference");
+        assert_eq!(fallback["reason"], "fdm_cuda_unavailable");
 
         fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
     }

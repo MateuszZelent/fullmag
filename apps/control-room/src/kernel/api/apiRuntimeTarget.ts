@@ -131,7 +131,7 @@ function configuredPublicDevProxyBase(
   }
 }
 
-function configuredLocalStandaloneFrontendBase(
+function configuredLocalControlRoomProxyBase(
   location: WindowLocationLike | undefined,
 ): string | null {
   if (!location) {
@@ -143,18 +143,17 @@ function configuredLocalStandaloneFrontendBase(
     if (!localHostnames.has(url.hostname)) {
       return null;
     }
-    if (!url.port || localApiPorts.has(url.port)) {
+    if (!url.port) {
       return null;
     }
 
-    return `${url.protocol}//${url.hostname}:8081`;
+    return normalizeApiBase(url.origin);
   } catch {
     return null;
   }
 }
 
 const localHostnames = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-const localApiPorts = new Set(["8081", "8181"]);
 
 export function resolveControlRoomApiBase(
   source: ControlRoomApiRuntimeSource = defaultRuntimeSource(),
@@ -163,8 +162,8 @@ export function resolveControlRoomApiBase(
     configuredBaseFromWindow(source.windowConfig) ??
     configuredPublicDevProxyBase(source.windowLocation) ??
     configuredBaseFromEnv(source.env) ??
+    configuredLocalControlRoomProxyBase(source.windowLocation) ??
     configuredDevelopmentBase(source.env) ??
-    configuredLocalStandaloneFrontendBase(source.windowLocation) ??
     normalizeApiBase(source.windowLocation?.origin) ??
     DEFAULT_NODE_API_BASE
   );

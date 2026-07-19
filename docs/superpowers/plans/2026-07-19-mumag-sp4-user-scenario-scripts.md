@@ -1,5 +1,10 @@
 # µMAG SP4 User-Scenario Scripts Implementation Plan
 
+> Superseded on 2026-07-19 by
+> `docs/superpowers/plans/2026-07-19-mumag-sp4-methodological-correction.md`.
+> The original coupling of the dynamics RK policy to S-state relaxation is
+> retained below only as historical context and must not be implemented.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the parameter-heavy FEM SP4 execution entrypoint with twelve ordinary, directly runnable Fullmag Python scenarios and read-only CSV/PNG postprocessing of their application artifacts.

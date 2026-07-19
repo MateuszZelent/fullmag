@@ -144,30 +144,31 @@ pub(crate) fn stage_completion_from_ffi(
     }
 
     let reason = match completion.reason {
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE => {
+        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE as i32 => {
             StageStopReason::Torque
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY => {
+        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY as i32 => {
             StageStopReason::Energy
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS => {
+        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS as i32 => {
             StageStopReason::MaxSteps
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME => {
+        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME as i32 => {
             StageStopReason::MaxPseudotime
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME => {
+        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME as i32 => {
             StageStopReason::MaxPhysicalTime
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED => {
+        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED as i32 => {
             StageStopReason::UserCancelled
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR => {
+        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR as i32 => {
             StageStopReason::BackendError
         }
-        ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT => {
+        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT as i32 => {
             StageStopReason::Gradient
         }
+        _ => StageStopReason::BackendError,
     };
 
     let (status, converged, metric) = match reason {
@@ -229,11 +230,12 @@ mod tests {
     fn stage_completion_from_ffi_maps_metric_completion() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY as i32,
             has_metric_name: 1,
             metric_name: metric_name("energy_delta_j"),
             metric_value: 1.0e-21,
             threshold: 1.0e-20,
+            ..Default::default()
         })
         .expect("completion should map when reason is present");
 
@@ -256,11 +258,12 @@ mod tests {
     fn stage_completion_from_ffi_maps_max_steps_as_non_converged() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS as i32,
             has_metric_name: 1,
             metric_name: metric_name("steps"),
             metric_value: 50_000.0,
             threshold: 50_000.0,
+            ..Default::default()
         })
         .expect("max-steps completion should map");
 
@@ -274,11 +277,12 @@ mod tests {
     fn stage_completion_from_ffi_maps_backend_error_as_failed() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR as i32,
             has_metric_name: 0,
             metric_name: [0; 64],
             metric_value: 0.0,
             threshold: 0.0,
+            ..Default::default()
         })
         .expect("backend-error completion should map");
 
@@ -292,11 +296,12 @@ mod tests {
     fn stage_completion_from_ffi_maps_torque_as_converged() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE as i32,
             has_metric_name: 1,
             metric_name: metric_name("max_torque_apm"),
             metric_value: 0.0,
             threshold: 1.0e-4,
+            ..Default::default()
         })
         .expect("torque completion should map");
 
@@ -313,11 +318,12 @@ mod tests {
     fn stage_completion_from_ffi_maps_gradient_completion() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT as i32,
             has_metric_name: 1,
             metric_name: metric_name("tangent_gradient_norm_sq"),
             metric_value: 0.0,
             threshold: 1.0e-30,
+            ..Default::default()
         })
         .expect("gradient completion should map when reason is present");
 
@@ -340,11 +346,12 @@ mod tests {
     fn stage_completion_from_ffi_omits_empty_completion() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 0,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
+            reason: 0,
             has_metric_name: 0,
             metric_name: [0; 64],
             metric_value: 0.0,
             threshold: 0.0,
+            ..Default::default()
         });
 
         assert!(completion.is_none());

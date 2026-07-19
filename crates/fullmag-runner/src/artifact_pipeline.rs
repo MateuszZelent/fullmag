@@ -344,6 +344,13 @@ impl ArtifactRecorder {
         Ok(ArtifactEnqueueMetrics::default())
     }
 
+    /// Replaces runtime provenance after a run has measured counters that are
+    /// unavailable before the first step. Existing queued field snapshots keep
+    /// their immutable capture-time provenance.
+    pub(crate) fn update_provenance(&mut self, provenance: ExecutionProvenance) {
+        self.provenance = provenance;
+    }
+
     #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
     pub(crate) fn is_streaming(&self) -> bool {
         self.pipeline.is_some()

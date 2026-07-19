@@ -5227,6 +5227,7 @@ mod tests {
             engine_id: RuntimeEngineId::FemFrequencyResponseProductionCpu,
             capability_profile_version: "test".to_string(),
             supported_terms: Vec::new(),
+            term_scopes: std::collections::BTreeMap::new(),
             supported_demag_realizations: Vec::new(),
             preview_quantities: Vec::new(),
             snapshot_quantities: Vec::new(),

@@ -472,6 +472,14 @@ pub struct StepStats {
     #[serde(default)]
     pub rejected_attempts: u32,
     #[serde(default)]
+    pub relaxation_energy_rejected_attempts: u64,
+    #[serde(default)]
+    pub relaxation_controller_tightenings: u64,
+    #[serde(default)]
+    pub relaxation_controller_at_floor: bool,
+    #[serde(default)]
+    pub relaxation_torque_confirmation_count: u32,
+    #[serde(default)]
     pub rhs_evals: u32,
     #[serde(default)]
     pub demag_solves: u32,
@@ -610,6 +618,10 @@ impl Default for StepStats {
             max_error: None,
             dt_suggested: None,
             rejected_attempts: 0,
+            relaxation_energy_rejected_attempts: 0,
+            relaxation_controller_tightenings: 0,
+            relaxation_controller_at_floor: false,
+            relaxation_torque_confirmation_count: 0,
             rhs_evals: 0,
             demag_solves: 0,
             fsal_reused: false,
@@ -640,7 +652,7 @@ impl Default for StepStats {
 
 #[cfg(test)]
 mod all_in_gpu_fem_transfer_audit_tests {
-    use super::{ExecutionProvenance, StepStats};
+    use super::{ExecutionProvenance, FdmMultilayerTransferTelemetry, StepStats};
 
     #[test]
     fn step_stats_carry_hot_loop_transfer_audit() {
@@ -933,6 +945,39 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(provenance.hot_loop_exchange_host_sync_count, Some(0));
         assert_eq!(provenance.hot_loop_compute_host_sync_count, Some(0));
         assert_eq!(provenance.hot_loop_control_scalar_host_sync_count, Some(0));
+    }
+
+    #[test]
+    fn execution_provenance_serializes_fdm_multilayer_transfer_telemetry() {
+        let provenance = ExecutionProvenance {
+            fdm_multilayer_transfer_telemetry: Some(FdmMultilayerTransferTelemetry {
+                execution_shape: "cuda_assisted_multilayer".to_string(),
+                data_residency: "host_authoritative_with_cuda_field_roundtrips".to_string(),
+                h2d_transfer_count: 12,
+                d2h_transfer_count: 12,
+                h2d_bytes: 2_304,
+                d2h_bytes: 2_304,
+            }),
+            ..ExecutionProvenance::default()
+        };
+
+        let value = serde_json::to_value(provenance).expect("provenance should serialize");
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["execution_shape"],
+            "cuda_assisted_multilayer"
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["data_residency"],
+            "host_authoritative_with_cuda_field_roundtrips"
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["h2d_transfer_count"],
+            12
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["d2h_bytes"],
+            2_304
+        );
     }
 }
 
@@ -1812,6 +1857,18 @@ pub struct TimestepPolicyProvenance {
     pub requested: RequestedTimestepPolicy,
     pub resolved: ResolvedTimestepPolicy,
     pub execution_identity: TimestepExecutionIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relaxation_controller: Option<RelaxationControllerPolicyProvenance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RelaxationControllerPolicyProvenance {
+    pub policy_id: String,
+    pub torque_confirmation_samples: u32,
+    pub energy_increase_relative_tolerance: f64,
+    pub energy_increase_absolute_tolerance_j: f64,
+    pub tightening_factor: f64,
+    pub max_error_floor: f64,
 }
 
 impl TimestepPolicyProvenance {
@@ -1947,6 +2004,27 @@ pub struct FemPoissonDemagProvenance {
 }
 
 /// Records which engine and device produced a run.
+/// Measured host/device movement for the CUDA-assisted multilayer FDM lane.
+///
+/// The assisted lane deliberately keeps the state and RK orchestration on the
+/// host.  It must therefore never be presented as device-resident merely
+/// because its local exchange and (optionally) multilayer demag calls use CUDA.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FdmMultilayerTransferTelemetry {
+    /// Realization selected for the public multilayer run.
+    pub execution_shape: String,
+    /// Source of truth for the staged state during the hot loop.
+    pub data_residency: String,
+    /// Number of vector transfers from host to CUDA during this run.
+    pub h2d_transfer_count: u64,
+    /// Number of vector transfers from CUDA to host during this run.
+    pub d2h_transfer_count: u64,
+    /// Cumulative payload bytes moved from host to CUDA during this run.
+    pub h2d_bytes: u64,
+    /// Cumulative payload bytes moved from CUDA to host during this run.
+    pub d2h_bytes: u64,
+}
+
 /// Included in artifact metadata for reproducibility.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ExecutionProvenance {
@@ -2013,6 +2091,9 @@ pub struct ExecutionProvenance {
     /// Canonical requested and resolved timestep policy for LLG execution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestep_policy: Option<TimestepPolicyProvenance>,
+    /// Measured host/device transfers for the FDM multilayer realization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fdm_multilayer_transfer_telemetry: Option<FdmMultilayerTransferTelemetry>,
     /// Read-only compatibility for artifacts written before `timestep_policy`.
     #[serde(default, skip_serializing)]
     pub dt_policy: Option<LegacyDtPolicy>,
@@ -2573,6 +2654,7 @@ mod tests {
                 timestep_s: 1e-15,
             },
             execution_identity: fdm_cpu_timestep_identity(),
+            relaxation_controller: None,
         });
         provenance.dt_policy = Some(LegacyDtPolicy::User);
 
@@ -2629,6 +2711,7 @@ mod tests {
                 qualification_id: LlgTimestepQualificationId::ExplicitAdaptiveFdmCpuDouble,
                 ..fdm_cpu_timestep_identity()
             },
+            relaxation_controller: None,
         };
 
         let value = serde_json::to_value(policy).unwrap();

@@ -13,7 +13,7 @@ from fullmag.runtime import helper as runtime_helper
 
 
 SCENARIO_ROOT = Path(__file__).with_name("scenarios")
-POLICIES = {
+DYNAMICS_POLICIES = {
     "heun_fixed": ("heun", "fixed"),
     "rk23_fixed": ("rk23", "fixed"),
     "rk4_fixed": ("rk4", "fixed"),
@@ -21,15 +21,33 @@ POLICIES = {
     "rk23_adaptive": ("rk23", "adaptive"),
     "rk45_adaptive": ("rk45", "adaptive"),
 }
+RELAXATION_POLICIES = {
+    "relax_projected_gradient_bb": ("projected_gradient_bb", None, None, None),
+    "relax_nonlinear_cg": ("nonlinear_cg", None, None, None),
+    "relax_llg_heun_fixed_dt_1e14": ("llg_overdamped", "heun", "fixed", 1e-14),
+    "relax_llg_rk23_fixed_dt_1e14": ("llg_overdamped", "rk23", "fixed", 1e-14),
+    "relax_llg_rk4_fixed_dt_1e14": ("llg_overdamped", "rk4", "fixed", 1e-14),
+    "relax_llg_rk45_fixed_dt_2e13": ("llg_overdamped", "rk45", "fixed", 2e-13),
+    "relax_llg_rk45_fixed_dt_1e13": ("llg_overdamped", "rk45", "fixed", 1e-13),
+    "relax_llg_rk45_fixed_dt_5e14": ("llg_overdamped", "rk45", "fixed", 5e-14),
+    "relax_llg_rk45_fixed_dt_2e14": ("llg_overdamped", "rk45", "fixed", 2e-14),
+    "relax_llg_rk45_fixed_dt_1e14": ("llg_overdamped", "rk45", "fixed", 1e-14),
+    "relax_llg_rk23_adaptive": ("llg_overdamped", "rk23", "adaptive", None),
+    "relax_llg_rk45_adaptive": ("llg_overdamped", "rk45", "adaptive", None),
+}
 FIELDS_T = {
     "case_a": (-24.6e-3, 4.3e-3, 0.0),
     "case_b": (-35.5e-3, -6.3e-3, 0.0),
 }
-SCENARIOS = {
+DYNAMICS_SCENARIOS = {
     f"{case}_{policy}": SCENARIO_ROOT / f"{case}_{policy}.py"
     for case in FIELDS_T
-    for policy in POLICIES
+    for policy in DYNAMICS_POLICIES
 }
+RELAXATION_SCENARIOS = {
+    name: SCENARIO_ROOT / f"{name}.py" for name in RELAXATION_POLICIES
+}
+SCENARIOS = {**DYNAMICS_SCENARIOS, **RELAXATION_SCENARIOS}
 
 
 def _export_run_config(path: Path) -> dict[str, object]:
@@ -65,7 +83,7 @@ def _active_stage_id(stage: dict[str, object]) -> str:
     return stage["ir"]["problem_meta"]["runtime_metadata"]["active_stage_id"]
 
 
-def test_scenario_manifest_has_one_plain_script_per_case_and_rk_policy() -> None:
+def test_scenario_manifest_has_plain_dynamics_and_relaxation_scripts() -> None:
     expected = {f"{scenario}.py" for scenario in SCENARIOS}
     actual = {
         path.name
@@ -112,11 +130,12 @@ def test_scenario_is_direct_user_python_without_hidden_parameter_builder(
         and node.func.value.id == "study"
         and node.func.attr == "solver"
     ]
-    assert len(solver_calls) == 1, f"{scenario} must declare study.solver exactly once"
+    expected_solver_calls = 1 if scenario in DYNAMICS_SCENARIOS else 0
+    assert len(solver_calls) == expected_solver_calls
 
 
-@pytest.mark.parametrize("scenario,path", SCENARIOS.items())
-def test_scenario_exports_relax_autosave_and_reversal_through_public_ir(
+@pytest.mark.parametrize("scenario,path", DYNAMICS_SCENARIOS.items())
+def test_dynamics_scenario_uses_common_mumax_like_relaxation_and_named_run_solver(
     scenario: str,
     path: Path,
 ) -> None:
@@ -135,36 +154,44 @@ def test_scenario_exports_relax_autosave_and_reversal_through_public_ir(
 
     case = "case_a" if scenario.startswith("case_a_") else "case_b"
     policy = scenario.removeprefix(f"{case}_")
-    integrator, timestep_policy = POLICIES[policy]
+    integrator, timestep_policy = DYNAMICS_POLICIES[policy]
 
     relax_ir = stages[0]["ir"]
     relax_study = relax_ir["study"]
     assert relax_study["kind"] == "relaxation"
     assert relax_study["algorithm"] == "llg_overdamped"
-    assert relax_study["dynamics"]["integrator"] == integrator
+    relax_dynamics = relax_study["dynamics"]
+    assert relax_dynamics["integrator"] == "rk23"
+    assert relax_dynamics["fixed_timestep"] is None
+    relax_adaptive = relax_dynamics["adaptive_timestep"]
+    assert relax_adaptive["tolerance_mode"] == "max_error"
+    assert relax_adaptive["atol"] == pytest.approx(1e-7)
+    assert relax_adaptive["dt_initial"] == pytest.approx(1e-15)
+    assert relax_adaptive["dt_min"] == pytest.approx(1e-17)
+    assert relax_adaptive["dt_max"] == pytest.approx(1e-14)
+    assert relax_ir["materials"][0]["damping"] == pytest.approx(1.0)
     assert _zeeman_fields(relax_ir) == []
 
     run_ir = stages[2]["ir"]
     run_study = run_ir["study"]
     assert run_study["kind"] == "time_evolution"
     assert run_study["dynamics"]["integrator"] == integrator
+    assert run_ir["materials"][0]["damping"] == pytest.approx(0.02)
     assert _zeeman_fields(run_ir) == [pytest.approx(FIELDS_T[case])]
     assert stages[2]["default_until_seconds"] == pytest.approx(5e-9)
 
     if timestep_policy == "fixed":
-        assert relax_study["dynamics"]["fixed_timestep"] == pytest.approx(2e-13)
         assert run_study["dynamics"]["fixed_timestep"] == pytest.approx(2e-13)
-        assert "adaptive_timestep" not in relax_study["dynamics"]
         assert "adaptive_timestep" not in run_study["dynamics"]
     else:
-        for dynamics in (relax_study["dynamics"], run_study["dynamics"]):
-            assert dynamics["fixed_timestep"] is None
-            adaptive = dynamics["adaptive_timestep"]
-            assert adaptive["tolerance_mode"] == "max_error"
-            assert adaptive["atol"] == pytest.approx(1e-7)
-            assert adaptive["dt_initial"] == pytest.approx(1e-15)
-            assert adaptive["dt_min"] == pytest.approx(1e-17)
-            assert adaptive["dt_max"] == pytest.approx(2e-13)
+        dynamics = run_study["dynamics"]
+        assert dynamics["fixed_timestep"] is None
+        adaptive = dynamics["adaptive_timestep"]
+        assert adaptive["tolerance_mode"] == "max_error"
+        assert adaptive["atol"] == pytest.approx(1e-7)
+        assert adaptive["dt_initial"] == pytest.approx(1e-15)
+        assert adaptive["dt_min"] == pytest.approx(1e-17)
+        assert adaptive["dt_max"] == pytest.approx(2e-13)
 
     expected_table_columns = [
         "step",
@@ -216,5 +243,48 @@ def test_scenario_exports_relax_autosave_and_reversal_through_public_ir(
     assert mesh_workflow["build_target"] == "domain"
     [mesh] = mesh_workflow["per_geometry"]
     assert mesh["order"] == 1
-    assert mesh["mesh_strategy"] == "thin_film_tetrahedral"
-    assert mesh["through_thickness_elements"] == 3
+    assert mesh["maximum_element_size"] == pytest.approx(3e-9)
+    assert mesh.get("mesh_strategy") != "thin_film_tetrahedral"
+    assert "through_thickness_elements" not in mesh
+
+
+@pytest.mark.parametrize("scenario,path", RELAXATION_SCENARIOS.items())
+def test_relaxation_scenario_exports_only_its_physically_applicable_policy(
+    scenario: str,
+    path: Path,
+) -> None:
+    payload = _export_run_config(path)
+    assert [stage["entrypoint_kind"] for stage in payload["stages"]] == [
+        "flat_relax"
+    ]
+    [stage] = payload["stages"]
+    assert _active_stage_id(stage) == "relax"
+    ir = stage["ir"]
+    relaxation = ir["study"]
+    algorithm, integrator, timestep_policy, dt = RELAXATION_POLICIES[scenario]
+    assert relaxation["kind"] == "relaxation"
+    assert relaxation["algorithm"] == algorithm
+    assert _zeeman_fields(ir) == []
+
+    if algorithm != "llg_overdamped":
+        assert "dynamics" not in relaxation
+    elif timestep_policy == "fixed":
+        dynamics = relaxation["dynamics"]
+        assert dynamics["integrator"] == integrator
+        assert dynamics["fixed_timestep"] == pytest.approx(dt)
+        assert "adaptive_timestep" not in dynamics
+    else:
+        dynamics = relaxation["dynamics"]
+        assert dynamics["integrator"] == integrator
+        assert dynamics["fixed_timestep"] is None
+        adaptive = dynamics["adaptive_timestep"]
+        assert adaptive["tolerance_mode"] == "max_error"
+        assert adaptive["atol"] == pytest.approx(1e-7)
+        assert adaptive["dt_initial"] == pytest.approx(1e-15)
+        assert adaptive["dt_min"] == pytest.approx(1e-17)
+        assert adaptive["dt_max"] == pytest.approx(1e-14)
+
+    assert relaxation["stop"]["torque_tolerance_apm"] == pytest.approx(
+        7.957747154594767
+    )
+    assert relaxation["stop"]["max_steps"] == 50_000

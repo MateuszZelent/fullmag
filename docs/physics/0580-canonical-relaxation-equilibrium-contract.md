@@ -407,8 +407,21 @@ Canonical convergence criteria are:
 
 - torque: `max_torque_Apm <= torque_tolerance_apm`;
 - energy plateau: range `max(E)-min(E)` over the last 50 accepted states is at
-  most `energy_tolerance_j`;
-- when torque and energy are both configured, both must hold;
+  most `energy_tolerance_j`; a plateau is a controller signal and never proves
+  equilibrium by itself;
+- `converged=true` requires a configured, finite torque tolerance and at least
+  three consecutive fresh accepted-state torque samples at or below it;
+- when energy tolerance is configured, its plateau condition must also hold,
+  but it cannot replace the torque condition;
+- a candidate LLG relaxation step whose fresh total energy exceeds the last
+  accepted energy by more than the configured absolute-plus-relative numerical
+  budget is rejected and rolled back before it can affect completion metrics;
+- an energy plateau above the torque threshold tightens adaptive error control
+  or the fixed time step by `sqrt(2)` down to its configured floor; it does not
+  terminate the stage;
+- a complete plateau window above the torque threshold after the controller has
+  reached its floor terminates as `numerical_stagnation`, with
+  `converged=false`;
 - `max_steps` is a terminal budget, not proof of convergence;
 - `max_relaxation_time_s` is valid only for `llg_overdamped`;
 - direct minimizers have no seconds-valued time budget.
@@ -418,11 +431,13 @@ Direct-minimizer line-search step sums are not time and are not exposed as
 `line_search_backtracks`, `rhs_evaluations`, and `accepted_steps` with explicit
 units.
 
-Every terminal stage has exactly one typed stop reason. Equilibrium convergence
-reasons are `torque` or `energy`. `gradient` is converged only when the canonical
-torque/energy criteria also pass; otherwise a degenerate direction is
-`numerical_stagnation`. Budgets, cancellation, unsupported paths, and backend
-failures never set `converged=true`.
+Every terminal stage has exactly one typed stop reason. `torque` is the only
+equilibrium convergence reason. `energy` is retained only as a compatibility
+decode value for historical artifacts and must not be emitted for new runs.
+`gradient` is converged only when the canonical torque criterion also passes;
+otherwise a degenerate direction is `numerical_stagnation`. Budgets,
+cancellation, unsupported paths, and backend failures never set
+`converged=true`.
 
 Completion is emitted from the state that owned the stop decision. It is not
 reconstructed from sparsely sampled output rows.
@@ -453,9 +468,16 @@ For `projected_gradient_bb`, `nonlinear_cg`, and development-only
 `tangent_plane_implicit`, `dynamics` must be `None`; integrator, fixed/adaptive
 step, damping override, and relaxation-time parameters are rejected.
 
-Canonical defaults are `1e-4 A/m` and `50_000` steps everywhere. Validation
-rejects NaN and infinity as well as nonpositive values. An explicit `None`
-survives every facade and disables that criterion; aliases do not refill it.
+The canonical torque default is set from a versioned CPU/GPU/demag calibration
+matrix and must not be changed from a single workload. The resolved numerical
+controller policy is versioned runtime policy, not a physical `RelaxStop`
+surface: three consecutive torque samples, a calibrated absolute-plus-relative
+energy-increase budget, tightening by `1/sqrt(2)`, and an explicit controller
+floor. Requested physical criteria and the resolved controller policy are both
+recorded in provenance. Validation rejects NaN and infinity as well as values
+outside their documented domains. An explicit `None` survives every facade and
+disables an optional diagnostic criterion; the mandatory convergence torque
+criterion cannot be disabled for a run that claims equilibrium.
 
 Migration:
 
@@ -509,6 +531,9 @@ Runtime records:
 - gradient metric, line-search policy, and preconditioner policy only for the
   relevant minimizer;
 - fresh final torque, energy plateau, step count, and typed stop reason;
+- requested and resolved convergence-controller policy, consecutive-torque
+  count, rejected energy-increase trials, tightening count, and controller
+  floor state;
 - `converged` independently from terminal `status`;
 - degraded/development/fallback reason;
 - completion in generic FDM and FEM metadata artifacts.
@@ -639,6 +664,29 @@ run through their repository-owned commands.
 - [x] Canonical physics contract
 
 ## 7. Known limits and deferred work
+
+### 7.1 Default torque calibration status
+
+The general FEM default torque tolerance remains unqualified.  It must not be
+changed from its current compatibility value until
+`calibrate-fem-relaxation-torque-default` completes a fail-closed matrix with
+CPU and GPU, exchange-only and Poisson-demag cases, fixed and adaptive RK, and
+at least two stable solver meshes at three step budgets.
+
+The calibration harness writes raw CSV, a machine-readable summary, and a PNG
+convergence plot under
+`.fullmag/reports/fem-relaxation-torque-calibration`.  It rejects transient
+floors, incomplete CPU/GPU pairs, missing demag coverage, and mesh-dependent
+recommendations instead of emitting a default.
+
+The current managed-runtime attempt is blocked before the first accepted LLG
+step: native FEM remains in stage `build` for more than 360 seconds on a
+1,395-node magnet-only mesh while one worker consumes a full CPU core.  The
+same symptom occurs for a 1,200-node shared-domain mesh.  Separately, fresh SP4
+meshing rejects degenerate thin-film tetrahedra after Delaunay and HXT and then
+fails in the Frontal fallback.  These are initialization/meshing defects, not
+evidence for any torque threshold.  No calibrated default may be published
+from the current runs.
 
 - `DrivenSteadyState` is a separate future physics/API design. This work only
   reserves the boundary and rejects driven terms from `Relaxation`.

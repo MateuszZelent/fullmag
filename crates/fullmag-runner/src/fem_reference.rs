@@ -32,7 +32,8 @@ use crate::preview::{
 };
 use crate::quantities::normalized_quantity_name;
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
+    RelaxationTorqueConfirmation,
 };
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats, average_magnetization_components,
@@ -601,6 +602,7 @@ fn execute_reference_fem_impl(
     }
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
@@ -928,7 +930,7 @@ fn execute_reference_fem_impl(
         let energy_plateau_range = energy_plateau.record(latest_stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             let max_steps_hit = step_count >= control.stop.max_steps.unwrap_or(u64::MAX);
-            let converged = relaxation_converged(
+            let converged = torque_confirmation.observe_stats(
                 control,
                 &latest_stats,
                 energy_plateau_range,
@@ -1012,6 +1014,7 @@ fn execute_reference_fem_impl(
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: Some(current_stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: step_count,
             relaxation_time_s: Some(state.time_seconds),

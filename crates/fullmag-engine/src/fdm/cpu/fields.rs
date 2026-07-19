@@ -35,6 +35,29 @@ fn gilbert_zhang_li_scales(beta: f64, alpha: f64) -> (f64, f64) {
     )
 }
 
+fn anisotropy_energy_density_for_magnetization(
+    magnetization: Vector3,
+    uniaxial: Option<(Vector3, f64, f64)>,
+    cubic: Option<(Vector3, Vector3, Vector3, f64, f64, f64)>,
+) -> f64 {
+    let mut energy_density = 0.0;
+    if let Some((axis, ku1, ku2)) = uniaxial {
+        let projection = dot(magnetization, axis);
+        energy_density -= ku1 * projection * projection + ku2 * projection.powi(4);
+    }
+    if let Some((c1, c2, c3, kc1, kc2, kc3)) = cubic {
+        let m1 = dot(magnetization, c1);
+        let m2 = dot(magnetization, c2);
+        let m3 = dot(magnetization, c3);
+        let m1_sq = m1 * m1;
+        let m2_sq = m2 * m2;
+        let m3_sq = m3 * m3;
+        let sigma = m1_sq * m2_sq + m2_sq * m3_sq + m1_sq * m3_sq;
+        energy_density += kc1 * sigma + kc2 * m1_sq * m2_sq * m3_sq + kc3 * sigma * sigma;
+    }
+    energy_density
+}
+
 impl ExchangeLlgProblem {
     // ===================================================================
     // Observables
@@ -75,6 +98,7 @@ impl ExchangeLlgProblem {
         for (i, h) in effective_field.iter_mut().enumerate() {
             *h = add(add(*h, ani_field[i]), dmi_field[i]);
         }
+        self.oersted_field_add_into(&mut effective_field);
         let rhs = {
             let compute = |i: usize| self.llg_rhs_from_field(magnetization[i], effective_field[i]);
             #[cfg(feature = "parallel")]
@@ -100,13 +124,14 @@ impl ExchangeLlgProblem {
         } else {
             0.0
         };
-        let external_energy_joules = if self.terms.external_field.is_some() {
-            self.external_energy_from_fields(magnetization, &external_field)
+        let external_energy_joules = if self.has_external_zeeman_source() {
+            let external_zeeman_field = self.external_zeeman_field_vectors();
+            self.external_energy_from_fields(magnetization, &external_zeeman_field)
         } else {
             0.0
         };
         let mel_energy_joules = self.magnetoelastic_energy(magnetization);
-        let ani_energy_joules = self.anisotropy_energy(magnetization, &ani_field);
+        let ani_energy_joules = self.anisotropy_energy(magnetization);
         let dmi_energy_joules = self.dmi_energy_from_vectors(magnetization);
         let total_energy_joules = exchange_energy_joules
             + demag_energy_joules
@@ -339,6 +364,18 @@ impl ExchangeLlgProblem {
             .collect()
     }
 
+    pub(crate) fn has_external_zeeman_source(&self) -> bool {
+        self.terms.external_field.is_some()
+            || self.terms.per_node_field.is_some()
+            || self.terms.oersted_cylinder.is_some()
+    }
+
+    pub(crate) fn external_zeeman_field_vectors(&self) -> Vec<Vector3> {
+        let mut field = self.external_field_vectors();
+        self.oersted_field_add_into(&mut field);
+        field
+    }
+
     pub(crate) fn magnetoelastic_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
         match &self.terms.magnetoelastic {
             Some(config) => magnetoelastic::h_mel_field(
@@ -435,13 +472,20 @@ impl ExchangeLlgProblem {
                     let m1 = dot(*m, c1);
                     let m2 = dot(*m, c2);
                     let m3 = dot(*m, c3);
+                    let sigma = m1 * m1 * m2 * m2 + m2 * m2 * m3 * m3 + m1 * m1 * m3 * m3;
                     let pf = 2.0 / (MU0 * ms_safe);
                     let g1 = -pf
-                        * (cub.kc1 * m1 * (m2 * m2 + m3 * m3) + cub.kc2 * m1 * m2 * m2 * m3 * m3);
+                        * (cub.kc1 * m1 * (m2 * m2 + m3 * m3)
+                            + cub.kc2 * m1 * m2 * m2 * m3 * m3
+                            + 2.0 * cub.kc3 * sigma * m1 * (m2 * m2 + m3 * m3));
                     let g2 = -pf
-                        * (cub.kc1 * m2 * (m1 * m1 + m3 * m3) + cub.kc2 * m2 * m1 * m1 * m3 * m3);
+                        * (cub.kc1 * m2 * (m1 * m1 + m3 * m3)
+                            + cub.kc2 * m2 * m1 * m1 * m3 * m3
+                            + 2.0 * cub.kc3 * sigma * m2 * (m1 * m1 + m3 * m3));
                     let g3 = -pf
-                        * (cub.kc1 * m3 * (m1 * m1 + m2 * m2) + cub.kc2 * m3 * m1 * m1 * m2 * m2);
+                        * (cub.kc1 * m3 * (m1 * m1 + m2 * m2)
+                            + cub.kc2 * m3 * m1 * m1 * m2 * m2
+                            + 2.0 * cub.kc3 * sigma * m3 * (m1 * m1 + m2 * m2));
                     h = add(h, add(add(scale(c1, g1), scale(c2, g2)), scale(c3, g3)));
                 }
                 h
@@ -449,15 +493,34 @@ impl ExchangeLlgProblem {
             .collect()
     }
 
-    pub(crate) fn anisotropy_energy(
-        &self,
-        magnetization: &[Vector3],
-        ani_field: &[Vector3],
-    ) -> f64 {
+    pub(crate) fn anisotropy_energy(&self, magnetization: &[Vector3]) -> f64 {
         let cell_volume = self.cell_size.volume();
-        self.anisotropy_energy_density_from_field(magnetization, ani_field)
+        self.anisotropy_energy_density_from_vectors(magnetization)
             .into_iter()
             .map(|density| density * cell_volume)
+            .sum()
+    }
+
+    pub(crate) fn anisotropy_energy_from_soa(&self, magnetization: &VectorFieldSoA) -> f64 {
+        let uni_data = self.terms.uniaxial_anisotropy.as_ref().map(|uni| {
+            let n = norm(uni.axis).max(1e-30);
+            (scale(uni.axis, 1.0 / n), uni.ku1, uni.ku2)
+        });
+        let cub_data = self.terms.cubic_anisotropy.as_ref().map(|cub| {
+            let n1 = norm(cub.axis1).max(1e-30);
+            let n2 = norm(cub.axis2).max(1e-30);
+            let c1 = scale(cub.axis1, 1.0 / n1);
+            let c2 = scale(cub.axis2, 1.0 / n2);
+            (c1, c2, cross(c1, c2), cub.kc1, cub.kc2, cub.kc3)
+        });
+        let cell_volume = self.cell_size.volume();
+
+        (0..magnetization.len())
+            .filter(|&i| self.is_active(i))
+            .map(|i| {
+                let m = [magnetization.x[i], magnetization.y[i], magnetization.z[i]];
+                anisotropy_energy_density_for_magnetization(m, uni_data, cub_data) * cell_volume
+            })
             .sum()
     }
 
@@ -976,7 +1039,7 @@ impl ExchangeLlgProblem {
             let c1 = scale(cub.axis1, 1.0 / n1);
             let c2 = scale(cub.axis2, 1.0 / n2);
             let c3 = cross(c1, c2);
-            (c1, c2, c3, cub.kc1, cub.kc2)
+            (c1, c2, c3, cub.kc1, cub.kc2, cub.kc3)
         });
 
         for i in 0..magnetization.len() {
@@ -995,14 +1058,24 @@ impl ExchangeLlgProblem {
                 h_eff.y[i] += u[1] * coeff;
                 h_eff.z[i] += u[2] * coeff;
             }
-            if let Some((c1, c2, c3, kc1, kc2)) = &cub_data {
+            if let Some((c1, c2, c3, kc1, kc2, kc3)) = &cub_data {
                 let m1 = mx * c1[0] + my * c1[1] + mz * c1[2];
                 let m2 = mx * c2[0] + my * c2[1] + mz * c2[2];
                 let m3 = mx * c3[0] + my * c3[1] + mz * c3[2];
+                let sigma = m1 * m1 * m2 * m2 + m2 * m2 * m3 * m3 + m1 * m1 * m3 * m3;
                 let pf = 2.0 / (MU0 * ms_safe);
-                let g1 = -pf * (kc1 * m1 * (m2 * m2 + m3 * m3) + kc2 * m1 * m2 * m2 * m3 * m3);
-                let g2 = -pf * (kc1 * m2 * (m1 * m1 + m3 * m3) + kc2 * m2 * m1 * m1 * m3 * m3);
-                let g3 = -pf * (kc1 * m3 * (m1 * m1 + m2 * m2) + kc2 * m3 * m1 * m1 * m2 * m2);
+                let g1 = -pf
+                    * (kc1 * m1 * (m2 * m2 + m3 * m3)
+                        + kc2 * m1 * m2 * m2 * m3 * m3
+                        + 2.0 * kc3 * sigma * m1 * (m2 * m2 + m3 * m3));
+                let g2 = -pf
+                    * (kc1 * m2 * (m1 * m1 + m3 * m3)
+                        + kc2 * m2 * m1 * m1 * m3 * m3
+                        + 2.0 * kc3 * sigma * m2 * (m1 * m1 + m3 * m3));
+                let g3 = -pf
+                    * (kc1 * m3 * (m1 * m1 + m2 * m2)
+                        + kc2 * m3 * m1 * m1 * m2 * m2
+                        + 2.0 * kc3 * sigma * m3 * (m1 * m1 + m2 * m2));
                 h_eff.x[i] += c1[0] * g1 + c2[0] * g2 + c3[0] * g3;
                 h_eff.y[i] += c1[1] * g1 + c2[1] * g2 + c3[1] * g3;
                 h_eff.z[i] += c1[2] * g1 + c2[2] * g2 + c3[2] * g3;
@@ -1127,8 +1200,7 @@ impl ExchangeLlgProblem {
 
         let alpha = self.material.damping;
         let ms = self.material.saturation_magnetisation;
-        let gamma_red = self.dynamics.gyromagnetic_ratio;
-        let gamma0 = gamma_red * (1.0 + alpha * alpha);
+        let gamma0 = self.dynamics.gyromagnetic_ratio;
         let v_cell = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
         const KB: f64 = 1.380649e-23;
         const MU0_LOCAL: f64 = 1.2566370614359173e-6;
@@ -1485,7 +1557,7 @@ impl ExchangeLlgProblem {
             let c1 = scale(cub.axis1, 1.0 / n1);
             let c2 = scale(cub.axis2, 1.0 / n2);
             let c3 = cross(c1, c2);
-            (c1, c2, c3, cub.kc1, cub.kc2)
+            (c1, c2, c3, cub.kc1, cub.kc2, cub.kc3)
         });
 
         let compute_aniso = |i: usize, m: &Vector3, h: &mut Vector3| {
@@ -1499,14 +1571,24 @@ impl ExchangeLlgProblem {
                     + 4.0 * ku2 / (MU0 * ms_safe) * m_dot_u * m_dot_u * m_dot_u;
                 *h = add(*h, scale(*u, coeff));
             }
-            if let Some((c1, c2, c3, kc1, kc2)) = &cub_data {
+            if let Some((c1, c2, c3, kc1, kc2, kc3)) = &cub_data {
                 let m1 = dot(*m, *c1);
                 let m2 = dot(*m, *c2);
                 let m3 = dot(*m, *c3);
+                let sigma = m1 * m1 * m2 * m2 + m2 * m2 * m3 * m3 + m1 * m1 * m3 * m3;
                 let pf = 2.0 / (MU0 * ms_safe);
-                let g1 = -pf * (kc1 * m1 * (m2 * m2 + m3 * m3) + kc2 * m1 * m2 * m2 * m3 * m3);
-                let g2 = -pf * (kc1 * m2 * (m1 * m1 + m3 * m3) + kc2 * m2 * m1 * m1 * m3 * m3);
-                let g3 = -pf * (kc1 * m3 * (m1 * m1 + m2 * m2) + kc2 * m3 * m1 * m1 * m2 * m2);
+                let g1 = -pf
+                    * (kc1 * m1 * (m2 * m2 + m3 * m3)
+                        + kc2 * m1 * m2 * m2 * m3 * m3
+                        + 2.0 * kc3 * sigma * m1 * (m2 * m2 + m3 * m3));
+                let g2 = -pf
+                    * (kc1 * m2 * (m1 * m1 + m3 * m3)
+                        + kc2 * m2 * m1 * m1 * m3 * m3
+                        + 2.0 * kc3 * sigma * m2 * (m1 * m1 + m3 * m3));
+                let g3 = -pf
+                    * (kc1 * m3 * (m1 * m1 + m2 * m2)
+                        + kc2 * m3 * m1 * m1 * m2 * m2
+                        + 2.0 * kc3 * sigma * m3 * (m1 * m1 + m2 * m2));
                 *h = add(*h, add(add(scale(*c1, g1), scale(*c2, g2)), scale(*c3, g3)));
             }
         };
@@ -1668,8 +1750,7 @@ impl ExchangeLlgProblem {
 
         let alpha = self.material.damping;
         let ms = self.material.saturation_magnetisation;
-        let gamma_red = self.dynamics.gyromagnetic_ratio;
-        let gamma0 = gamma_red * (1.0 + alpha * alpha);
+        let gamma0 = self.dynamics.gyromagnetic_ratio;
         let v_cell = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
         const KB: f64 = 1.380649e-23;
         #[allow(unused)]
@@ -1766,7 +1847,7 @@ impl ExchangeLlgProblem {
             let c1 = scale(cub.axis1, 1.0 / n1);
             let c2 = scale(cub.axis2, 1.0 / n2);
             let c3 = cross(c1, c2);
-            (c1, c2, c3, cub.kc1, cub.kc2)
+            (c1, c2, c3, cub.kc1, cub.kc2, cub.kc3)
         });
 
         // Thermal noise setup
@@ -1775,8 +1856,7 @@ impl ExchangeLlgProblem {
             && self.thermal_dt > 0.0;
         let thermal_sigma = if has_thermal {
             let alpha = self.material.damping;
-            let gamma_red = self.dynamics.gyromagnetic_ratio;
-            let gamma0 = gamma_red * (1.0 + alpha * alpha);
+            let gamma0 = self.dynamics.gyromagnetic_ratio;
             let v_cell = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
             const KB: f64 = 1.380649e-23;
             const MU0_LOCAL: f64 = 1.2566370614359173e-6;
@@ -1829,14 +1909,24 @@ impl ExchangeLlgProblem {
             }
 
             // Cubic anisotropy
-            if let Some((c1, c2, c3, kc1, kc2)) = &cub_data {
+            if let Some((c1, c2, c3, kc1, kc2, kc3)) = &cub_data {
                 let m1 = dot(*m, *c1);
                 let m2 = dot(*m, *c2);
                 let m3 = dot(*m, *c3);
+                let sigma = m1 * m1 * m2 * m2 + m2 * m2 * m3 * m3 + m1 * m1 * m3 * m3;
                 let pf = 2.0 / (MU0 * ms_safe);
-                let g1 = -pf * (kc1 * m1 * (m2 * m2 + m3 * m3) + kc2 * m1 * m2 * m2 * m3 * m3);
-                let g2 = -pf * (kc1 * m2 * (m1 * m1 + m3 * m3) + kc2 * m2 * m1 * m1 * m3 * m3);
-                let g3 = -pf * (kc1 * m3 * (m1 * m1 + m2 * m2) + kc2 * m3 * m1 * m1 * m2 * m2);
+                let g1 = -pf
+                    * (kc1 * m1 * (m2 * m2 + m3 * m3)
+                        + kc2 * m1 * m2 * m2 * m3 * m3
+                        + 2.0 * kc3 * sigma * m1 * (m2 * m2 + m3 * m3));
+                let g2 = -pf
+                    * (kc1 * m2 * (m1 * m1 + m3 * m3)
+                        + kc2 * m2 * m1 * m1 * m3 * m3
+                        + 2.0 * kc3 * sigma * m2 * (m1 * m1 + m3 * m3));
+                let g3 = -pf
+                    * (kc1 * m3 * (m1 * m1 + m2 * m2)
+                        + kc2 * m3 * m1 * m1 * m2 * m2
+                        + 2.0 * kc3 * sigma * m3 * (m1 * m1 + m2 * m2));
                 h[0] += c1[0] * g1 + c2[0] * g2 + c3[0] * g3;
                 h[1] += c1[1] * g1 + c2[1] * g2 + c3[1] * g3;
                 h[2] += c1[2] * g1 + c2[2] * g2 + c3[2] * g3;
@@ -2284,6 +2374,8 @@ impl ExchangeLlgProblem {
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let d = cfg.thickness.max(1e-30);
         let amp = (cfg.current_density.abs() * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let alpha = self.material.damping;
+        let gamma_bar = self.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
 
         let [sx, sy, sz] = cfg.sigma;
         let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
@@ -2310,10 +2402,16 @@ impl ExchangeLlgProblem {
                 let mmxs_y = m2 * mxs_x - m0 * mxs_z;
                 let mmxs_z = m0 * mxs_y - m1 * mxs_x;
 
+                let raw = [
+                    -xi_dl * mmxs_x + xi_fl * mxs_x,
+                    -xi_dl * mmxs_y + xi_fl * mxs_y,
+                    -xi_dl * mmxs_z + xi_fl * mxs_z,
+                ];
+                let m_cross_raw = cross([m0, m1, m2], raw);
                 [
-                    amp * (-xi_dl * mmxs_x + xi_fl * mxs_x),
-                    amp * (-xi_dl * mmxs_y + xi_fl * mxs_y),
-                    amp * (-xi_dl * mmxs_z + xi_fl * mxs_z),
+                    gamma_bar * amp * (raw[0] + alpha * m_cross_raw[0]),
+                    gamma_bar * amp * (raw[1] + alpha * m_cross_raw[1]),
+                    gamma_bar * amp * (raw[2] + alpha * m_cross_raw[2]),
                 ]
             })
             .collect()
@@ -2655,6 +2753,8 @@ impl ExchangeLlgProblem {
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let d = cfg.thickness.max(1e-30);
         let amp = (cfg.current_density.abs() * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let alpha = self.material.damping;
+        let gamma_bar = self.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
 
         let [sx, sy, sz] = cfg.sigma;
         let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
@@ -2680,9 +2780,15 @@ impl ExchangeLlgProblem {
             let mmxs_y = m2 * mxs_x - m0 * mxs_z;
             let mmxs_z = m0 * mxs_y - m1 * mxs_x;
 
-            o[0] += amp * (-xi_dl * mmxs_x + xi_fl * mxs_x);
-            o[1] += amp * (-xi_dl * mmxs_y + xi_fl * mxs_y);
-            o[2] += amp * (-xi_dl * mmxs_z + xi_fl * mxs_z);
+            let raw = [
+                -xi_dl * mmxs_x + xi_fl * mxs_x,
+                -xi_dl * mmxs_y + xi_fl * mxs_y,
+                -xi_dl * mmxs_z + xi_fl * mxs_z,
+            ];
+            let m_cross_raw = cross([m0, m1, m2], raw);
+            o[0] += gamma_bar * amp * (raw[0] + alpha * m_cross_raw[0]);
+            o[1] += gamma_bar * amp * (raw[1] + alpha * m_cross_raw[1]);
+            o[2] += gamma_bar * amp * (raw[2] + alpha * m_cross_raw[2]);
         };
 
         #[cfg(feature = "parallel")]
@@ -2712,6 +2818,8 @@ impl ExchangeLlgProblem {
         let ms = self.material.saturation_magnetisation.max(1e-30);
         let d = cfg.thickness.max(1e-30);
         let amp = (cfg.current_density.abs() * HBAR) / (2.0 * E_CHARGE * MU0_CONST * ms * d);
+        let alpha = self.material.damping;
+        let gamma_bar = self.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
 
         let [sx, sy, sz] = cfg.sigma;
         let snorm = (sx * sx + sy * sy + sz * sz).sqrt().max(1e-30);
@@ -2738,9 +2846,15 @@ impl ExchangeLlgProblem {
             let mmxs_y = m2 * mxs_x - m0 * mxs_z;
             let mmxs_z = m0 * mxs_y - m1 * mxs_x;
 
-            out.x[flat] += amp * (-xi_dl * mmxs_x + xi_fl * mxs_x);
-            out.y[flat] += amp * (-xi_dl * mmxs_y + xi_fl * mxs_y);
-            out.z[flat] += amp * (-xi_dl * mmxs_z + xi_fl * mxs_z);
+            let raw_x = -xi_dl * mmxs_x + xi_fl * mxs_x;
+            let raw_y = -xi_dl * mmxs_y + xi_fl * mxs_y;
+            let raw_z = -xi_dl * mmxs_z + xi_fl * mxs_z;
+            let m_cross_raw_x = m1 * raw_z - m2 * raw_y;
+            let m_cross_raw_y = m2 * raw_x - m0 * raw_z;
+            let m_cross_raw_z = m0 * raw_y - m1 * raw_x;
+            out.x[flat] += gamma_bar * amp * (raw_x + alpha * m_cross_raw_x);
+            out.y[flat] += gamma_bar * amp * (raw_y + alpha * m_cross_raw_y);
+            out.z[flat] += gamma_bar * amp * (raw_z + alpha * m_cross_raw_z);
         }
     }
 
@@ -2801,11 +2915,12 @@ impl ExchangeLlgProblem {
         };
 
         // ── External ──────────────────────────────────────────────────
-        let external_energy_joules = if self.terms.external_field.is_some() {
+        let external_energy_joules = if self.has_external_zeeman_source() {
             for h in h_scratch[..n].iter_mut() {
                 *h = [0.0, 0.0, 0.0];
             }
             self.external_field_add_into(&mut h_scratch[..n]);
+            self.oersted_field_add_into(&mut h_scratch[..n]);
             let e = self.external_energy_from_fields(magnetization, &h_scratch[..n]);
             for i in 0..n {
                 h_eff[i] = add(h_eff[i], h_scratch[i]);
@@ -2821,17 +2936,9 @@ impl ExchangeLlgProblem {
         self.interfacial_dmi_field_add_into(magnetization, &mut h_eff[..n]);
         self.bulk_dmi_field_add_into(magnetization, &mut h_eff[..n]);
         self.thermal_field_add_into(&mut h_eff[..n]);
-        self.oersted_field_add_into(&mut h_eff[..n]);
 
         let mel_energy_joules = self.magnetoelastic_energy(magnetization);
-        let ani_energy_joules = {
-            // Reuse h_scratch for anisotropy energy (needs ani field separately)
-            for h in h_scratch[..n].iter_mut() {
-                *h = [0.0, 0.0, 0.0];
-            }
-            self.anisotropy_field_add_into(magnetization, &mut h_scratch[..n]);
-            self.anisotropy_energy(magnetization, &h_scratch[..n])
-        };
+        let ani_energy_joules = self.anisotropy_energy(magnetization);
         let dmi_energy_joules = self.dmi_energy_from_vectors(magnetization);
 
         let max_effective_field_amplitude = max_norm(&h_eff[..n]);
@@ -3029,8 +3136,7 @@ impl ExchangeLlgProblem {
 
             let alpha = self.material.damping;
             let ms = self.material.saturation_magnetisation;
-            let gamma_red = self.dynamics.gyromagnetic_ratio;
-            let gamma0 = gamma_red * (1.0 + alpha * alpha);
+            let gamma0 = self.dynamics.gyromagnetic_ratio;
             let v_cell = self.cell_size.dx * self.cell_size.dy * self.cell_size.dz;
             const KB: f64 = 1.380649e-23;
             const MU0: f64 = 1.2566370614359173e-6;
@@ -3099,6 +3205,7 @@ impl ExchangeLlgProblem {
         for (i, h) in h_eff.iter_mut().enumerate() {
             *h = add(add(add(*h, ani_field[i]), idmi_field[i]), bdmi_field[i]);
         }
+        self.oersted_field_add_into(&mut h_eff);
         h_eff
     }
 
@@ -3171,16 +3278,33 @@ impl ExchangeLlgProblem {
             self.demag_field_add_into_soa_fft_backend(magnetization, ws, scratch);
             total += self.half_field_energy_from_soa(magnetization, scratch);
         }
-        if self.terms.external_field.is_some() || self.terms.per_node_field.is_some() {
+        if self.has_external_zeeman_source() {
             scratch.fill_zero();
             self.external_field_add_into_soa(scratch);
+            self.oersted_field_add_into_soa(scratch);
+            total += self.full_field_energy_from_soa(magnetization, scratch);
+        }
+        if self.regional_field_drives.iter().any(|drive| drive.enabled) {
+            scratch.fill_zero();
+            for drive in self
+                .regional_field_drives
+                .iter()
+                .filter(|drive| drive.enabled)
+            {
+                let multiplier = drive.multiplier_at(0.0);
+                for (index, basis) in drive.basis_field.iter().enumerate().take(scratch.len()) {
+                    if self.is_active(index) {
+                        scratch.x[index] += multiplier * basis[0];
+                        scratch.y[index] += multiplier * basis[1];
+                        scratch.z[index] += multiplier * basis[2];
+                    }
+                }
+            }
             total += self.full_field_energy_from_soa(magnetization, scratch);
         }
         total += self.magnetoelastic_energy_soa(magnetization);
         if self.terms.uniaxial_anisotropy.is_some() || self.terms.cubic_anisotropy.is_some() {
-            scratch.fill_zero();
-            self.anisotropy_field_add_into_soa(magnetization, scratch);
-            total += self.half_field_energy_from_soa(magnetization, scratch);
+            total += self.anisotropy_energy_from_soa(magnetization);
         }
         total += self.dmi_energy_from_soa(magnetization);
 
@@ -3202,14 +3326,17 @@ impl ExchangeLlgProblem {
             let h_demag = self.demag_field_from_vectors_ws(magnetization, ws);
             total += self.demag_energy_from_fields(magnetization, &h_demag);
         }
-        if self.terms.external_field.is_some() || self.terms.per_node_field.is_some() {
-            let h_ext = self.external_field_vectors();
+        if self.has_external_zeeman_source() {
+            let h_ext = self.external_zeeman_field_vectors();
             total += self.external_energy_from_fields(magnetization, &h_ext);
+        }
+        if self.regional_field_drives.iter().any(|drive| drive.enabled) {
+            let h_drive = self.regional_drive_field_at_time(0.0);
+            total += self.external_energy_from_fields(magnetization, &h_drive);
         }
         total += self.magnetoelastic_energy(magnetization);
         if self.terms.uniaxial_anisotropy.is_some() || self.terms.cubic_anisotropy.is_some() {
-            let h_ani = self.anisotropy_field(magnetization);
-            total += self.anisotropy_energy(magnetization, &h_ani);
+            total += self.anisotropy_energy(magnetization);
         }
         total += self.dmi_energy_from_vectors(magnetization);
 
@@ -3339,13 +3466,14 @@ impl ExchangeLlgProblem {
         } else {
             0.0
         };
-        let external_energy_joules = if self.terms.external_field.is_some() {
-            self.external_energy_from_fields(magnetization, &external_field)
+        let external_energy_joules = if self.has_external_zeeman_source() {
+            let external_zeeman_field = self.external_zeeman_field_vectors();
+            self.external_energy_from_fields(magnetization, &external_zeeman_field)
         } else {
             0.0
         };
         let mel_energy_joules = self.magnetoelastic_energy(magnetization);
-        let ani_energy_joules = self.anisotropy_energy(magnetization, &ani_field);
+        let ani_energy_joules = self.anisotropy_energy(magnetization);
         let dmi_energy_joules = self.dmi_energy_from_vectors(magnetization);
 
         let eval = RhsEvaluation {
@@ -3536,12 +3664,28 @@ impl ExchangeLlgProblem {
         self.field_dot_energy_density(magnetization, external_field, -1.0)
     }
 
-    pub fn anisotropy_energy_density_from_field(
-        &self,
-        magnetization: &[Vector3],
-        ani_field: &[Vector3],
-    ) -> Vec<f64> {
-        self.field_dot_energy_density(magnetization, ani_field, -0.5)
+    pub fn anisotropy_energy_density_from_vectors(&self, magnetization: &[Vector3]) -> Vec<f64> {
+        let uni_data = self.terms.uniaxial_anisotropy.as_ref().map(|uni| {
+            let n = norm(uni.axis).max(1e-30);
+            (scale(uni.axis, 1.0 / n), uni.ku1, uni.ku2)
+        });
+        let cub_data = self.terms.cubic_anisotropy.as_ref().map(|cub| {
+            let n1 = norm(cub.axis1).max(1e-30);
+            let n2 = norm(cub.axis2).max(1e-30);
+            let c1 = scale(cub.axis1, 1.0 / n1);
+            let c2 = scale(cub.axis2, 1.0 / n2);
+            (c1, c2, cross(c1, c2), cub.kc1, cub.kc2, cub.kc3)
+        });
+
+        magnetization
+            .iter()
+            .enumerate()
+            .map(|(i, &m)| {
+                self.is_active(i)
+                    .then(|| anisotropy_energy_density_for_magnetization(m, uni_data, cub_data))
+                    .unwrap_or(0.0)
+            })
+            .collect()
     }
 
     fn field_dot_energy_density(
@@ -3575,7 +3719,10 @@ impl ExchangeLlgProblem {
 #[cfg(test)]
 mod stt_tests {
     use super::*;
-    use crate::{CellSize, GridShape, LlgConfig, MaterialParameters};
+    use crate::{
+        CellSize, CubicAnisotropyConfig, EffectiveFieldTerms, GridShape, LlgConfig,
+        MaterialParameters, MU0,
+    };
 
     fn check_close(actual: f64, expected: f64, tolerance: f64) {
         assert!(
@@ -3591,6 +3738,98 @@ mod stt_tests {
             MaterialParameters::new(800.0e3, 13.0e-12, damping).unwrap(),
             LlgConfig::default(),
         )
+    }
+
+    #[test]
+    fn kc3_only_cubic_anisotropy_matches_its_analytic_energy_and_field() {
+        let kc3 = 4.2e4;
+        let ms = 800.0e3;
+        let problem = ExchangeLlgProblem::with_terms(
+            GridShape::new(1, 1, 1).unwrap(),
+            CellSize::new(1.0, 1.0, 1.0).unwrap(),
+            MaterialParameters::new(ms, 13.0e-12, 0.02).unwrap(),
+            LlgConfig::default(),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                cubic_anisotropy: Some(CubicAnisotropyConfig {
+                    kc1: 0.0,
+                    kc2: 0.0,
+                    kc3,
+                    axis1: [1.0, 0.0, 0.0],
+                    axis2: [0.0, 1.0, 0.0],
+                }),
+                ..Default::default()
+            },
+        );
+        let component = 3.0_f64.sqrt().recip();
+        let magnetization = [[component, component, component]];
+
+        // sigma = 1/3 for <111>, hence e_Kc3 = Kc3 * sigma^2 = Kc3 / 9.
+        check_close(
+            problem.anisotropy_energy_density_from_vectors(&magnetization)[0],
+            kc3 / 9.0,
+            kc3.abs() * 1e-13,
+        );
+        // H_i = -8 Kc3/(9 sqrt(3) mu0 Ms) for the same cubic basis and state.
+        let expected_field_component = -8.0 * kc3 * component / (9.0 * MU0 * ms);
+        let field = problem.anisotropy_field(&magnetization);
+        for actual in field[0] {
+            check_close(actual, expected_field_component, expected_field_component.abs() * 1e-12);
+        }
+    }
+
+    #[test]
+    fn brown_thermal_amplitude_uses_bare_gamma_mu0_not_gilbert_reduced_gamma() {
+        let mut weak_damping = one_cell_problem(0.2);
+        weak_damping.temperature = 300.0;
+        weak_damping.thermal_dt = 2.5e-13;
+        weak_damping.thermal_seed = 91;
+        let mut strong_damping = one_cell_problem(0.5);
+        strong_damping.temperature = weak_damping.temperature;
+        strong_damping.thermal_dt = weak_damping.thermal_dt;
+        strong_damping.thermal_seed = weak_damping.thermal_seed;
+
+        let mut weak_field = [[0.0; 3]];
+        let mut strong_field = [[0.0; 3]];
+        weak_damping.thermal_field_add_into_step(&mut weak_field, 7);
+        strong_damping.thermal_field_add_into_step(&mut strong_field, 7);
+
+        let measured_ratio = strong_field[0][0] / weak_field[0][0];
+        let expected_ratio = (0.5_f64 / 0.2_f64).sqrt();
+        check_close(measured_ratio, expected_ratio, expected_ratio * 1e-12);
+    }
+
+    #[test]
+    fn sot_macrospin_is_converted_to_rhs_with_gilbert_projection() {
+        let problem = one_cell_problem(0.2);
+        let cfg = SotConfig {
+            current_density: 1.0e12,
+            xi_dl: 0.35,
+            xi_fl: 0.15,
+            sigma: [0.0, 0.0, 1.0],
+            thickness: 1.5e-9,
+        };
+        let magnetization = [[1.0, 0.0, 0.0]];
+        let actual = problem.sot_torque(&magnetization, &cfg)[0];
+
+        const HBAR: f64 = 1.054571817e-34;
+        const E_CHARGE: f64 = 1.60217662e-19;
+        let field_amplitude = cfg.current_density * HBAR
+            / (2.0 * E_CHARGE * MU0 * 800.0e3 * cfg.thickness);
+        let alpha = problem.material.damping;
+        let gamma_bar = problem.dynamics.gyromagnetic_ratio / (1.0 + alpha * alpha);
+        let raw = [0.0, -cfg.xi_fl, cfg.xi_dl];
+        let m_cross_raw = [0.0, -raw[2], raw[1]];
+        let expected = [
+            gamma_bar * field_amplitude * (raw[0] + alpha * m_cross_raw[0]),
+            gamma_bar * field_amplitude * (raw[1] + alpha * m_cross_raw[1]),
+            gamma_bar * field_amplitude * (raw[2] + alpha * m_cross_raw[2]),
+        ];
+
+        for component in 0..3 {
+            check_close(actual[component], expected[component], expected[component].abs() * 1e-12);
+        }
     }
 
     #[test]

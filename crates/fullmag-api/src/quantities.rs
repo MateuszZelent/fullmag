@@ -272,7 +272,10 @@ mod tests {
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),
             },
-            provenance: ProvenancePlanIR { notes: Vec::new() },
+            provenance: ProvenancePlanIR {
+                notes: Vec::new(),
+                integrator_resolution: None,
+            },
         };
 
         assert!(scalar_metric_is_active(Some(&plan), "e_ex"));

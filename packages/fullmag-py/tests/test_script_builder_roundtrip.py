@@ -515,6 +515,28 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             json.dumps(second_scene["field_drives"], sort_keys=True),
         )
 
+    def test_flat_thermal_noise_roundtrip_preserves_temperature_and_seed(self) -> None:
+        script = """
+        import fullmag as fm
+        fm.engine("fdm")
+        film = fm.geometry(fm.Box(40e-9, 20e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        fm.thermal_noise(300.0, seed=123)
+        fm.run(1e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "thermal_source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "thermal_rewritten.py")
+
+        before = loaded.problem.to_ir(include_geometry_assets=False)
+        after = rewritten.problem.to_ir(include_geometry_assets=False)
+        self.assertIn("fm.thermal_noise(temperature=300, seed=123)", rendered)
+        self.assertEqual(after["temperature"], before["temperature"])
+        self.assertEqual(after["energy_terms"], before["energy_terms"])
+
 
 if __name__ == "__main__":
     unittest.main()

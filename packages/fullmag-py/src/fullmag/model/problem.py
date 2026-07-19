@@ -4,7 +4,7 @@ import copy
 import json
 import os
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
 from pathlib import Path
@@ -712,6 +712,10 @@ class RuntimeSelection:
         object.__setattr__(self, "execution_precision", ExecutionPrecision(self.execution_precision))
         if self.gpu_count < 0:
             raise ValueError("gpu_count must be >= 0")
+        if self.gpu_count > 1:
+            raise ValueError(
+                "gpu_count > 1 requests multi-GPU execution, but multi-GPU execution is not implemented"
+            )
         if self.device_index is not None and self.device_index < 0:
             raise ValueError("device_index must be >= 0")
         if self.cpu_threads is not None and self.cpu_threads <= 0:
@@ -861,6 +865,101 @@ EnergyTerm = Exchange | Demag | InterfacialDMI | BulkDMI | Zeeman | Magnetoelast
 CurrentModule = AntennaFieldSource | CurrentTransport
 LegacyOutputSpec = SaveField | SaveScalar | Snapshot
 OutputSpec = LegacyOutputSpec | SaveSpectrum | SaveMode | SaveDispersion
+
+
+def _material_has_anisotropy(material: Material) -> bool:
+    return any(
+        value is not None
+        for value in (
+            material.Ku1,
+            material.Ku2,
+            material.Kc1,
+            material.Kc2,
+            material.Kc3,
+            material.Ku_field,
+            material.Ku2_field,
+            material.Kc1_field,
+            material.Kc2_field,
+            material.Kc3_field,
+        )
+    )
+
+
+def _merged_legacy_material_value(
+    existing: object,
+    requested: object,
+    *,
+    name: str,
+) -> object:
+    if existing is not None and existing != requested:
+        raise ValueError(
+            f"legacy anisotropy energy term conflicts with Material.{name}; "
+            "author anisotropy only on the Material"
+        )
+    return requested
+
+
+def _migrate_legacy_anisotropy_energy_terms(
+    magnets: Sequence[Ferromagnet],
+    energy: Sequence[EnergyTerm],
+) -> tuple[Sequence[Ferromagnet], Sequence[EnergyTerm]]:
+    legacy_terms = [
+        term
+        for term in energy
+        if isinstance(term, (UniaxialAnisotropy, CubicAnisotropy))
+    ]
+    if not legacy_terms:
+        return magnets, energy
+
+    materials_by_name: dict[str, Material] = {}
+    for magnet in magnets:
+        existing = materials_by_name.get(magnet.material.name)
+        if existing is not None and existing != magnet.material:
+            raise ValueError(
+                f"material '{magnet.material.name}' is defined multiple times with different values"
+            )
+        materials_by_name[magnet.material.name] = magnet.material
+    if len(materials_by_name) != 1:
+        raise ValueError(
+            "legacy anisotropy energy terms require a single material target; "
+            "set Ku1/Ku2/anisU or Kc1/Kc2/Kc3/anisC1/anisC2 on each Material instead"
+        )
+
+    material = next(iter(materials_by_name.values()))
+    updates: dict[str, object] = {}
+    for term in legacy_terms:
+        if isinstance(term, UniaxialAnisotropy):
+            updates["Ku1"] = _merged_legacy_material_value(
+                updates.get("Ku1", material.Ku1), term.ku1, name="Ku1"
+            )
+            updates["Ku2"] = _merged_legacy_material_value(
+                updates.get("Ku2", material.Ku2), term.ku2, name="Ku2"
+            )
+            updates["anisU"] = _merged_legacy_material_value(
+                updates.get("anisU", material.anisU), term.axis, name="anisU"
+            )
+        else:
+            updates["Kc1"] = _merged_legacy_material_value(
+                updates.get("Kc1", material.Kc1), term.kc1, name="Kc1"
+            )
+            updates["Kc2"] = _merged_legacy_material_value(
+                updates.get("Kc2", material.Kc2), term.kc2, name="Kc2"
+            )
+            updates["Kc3"] = _merged_legacy_material_value(
+                updates.get("Kc3", material.Kc3), term.kc3, name="Kc3"
+            )
+            updates["anisC1"] = _merged_legacy_material_value(
+                updates.get("anisC1", material.anisC1), term.axis1, name="anisC1"
+            )
+            updates["anisC2"] = _merged_legacy_material_value(
+                updates.get("anisC2", material.anisC2), term.axis2, name="anisC2"
+            )
+
+    migrated_material = replace(material, **updates)
+    return (
+        [replace(magnet, material=migrated_material) for magnet in magnets],
+        [term for term in energy if not isinstance(term, (UniaxialAnisotropy, CubicAnisotropy))],
+    )
 
 
 def _is_spin_torque_module(value: object) -> bool:
@@ -1177,8 +1276,19 @@ class Problem:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
         if not self.magnets:
             raise ValueError("Problem requires at least one magnet")
-        if not self.energy:
-            raise ValueError("Problem requires at least one energy term")
+        if not self.energy and not any(
+            _material_has_anisotropy(magnet.material) for magnet in self.magnets
+        ):
+            raise ValueError(
+                "Problem requires at least one interaction or material anisotropy"
+            )
+
+        migrated_magnets, migrated_energy = _migrate_legacy_anisotropy_energy_terms(
+            self.magnets,
+            self.energy,
+        )
+        object.__setattr__(self, "magnets", migrated_magnets)
+        object.__setattr__(self, "energy", migrated_energy)
 
         normalized_current_modules, normalized_field_drives = (
             _migrate_legacy_prescribed_field_sources(
@@ -1321,6 +1431,16 @@ class Problem:
             for geometry in self._collect_geometries()
         ]
         discretization = self._resolve_discretization(runtime.backend_target)
+        pbc_ir = _pbc_to_ir(self.pbc)
+        if (
+            runtime.backend_target == BackendTarget.FDM
+            and pbc_ir is not None
+            and pbc_ir.get("demag") == "periodic_airbox_k0"
+        ):
+            raise ValueError(
+                "pbc.demag='periodic_airbox_k0' is FEM-only; FDM supports "
+                "'open' and 'truncated_images' demag policies"
+            )
         source_hash = sha256(script_source.encode("utf-8")).hexdigest() if script_source else None
         effective_asset_cache = asset_cache if asset_cache is not None else self.geometry_asset_cache
         runtime_metadata = dict(self.runtime_metadata)
@@ -1455,7 +1575,7 @@ class Problem:
             "mechanical_bcs": [bc.to_ir() for bc in self.mechanical_bcs],
             "mechanical_loads": [ml.to_ir() for ml in self.mechanical_loads],
             # Periodic boundary conditions
-            **({"pbc": pbc_ir} if (pbc_ir := _pbc_to_ir(self.pbc)) is not None else {}),
+            **({"pbc": pbc_ir} if pbc_ir is not None else {}),
         }
 
     def _resolve_discretization(

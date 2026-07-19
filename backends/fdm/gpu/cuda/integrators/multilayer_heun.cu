@@ -187,9 +187,9 @@ __global__ void multilayer_llg_rhs_kernel(
                 (static_cast<double>(my[xp]) - static_cast<double>(my[xm])) * inv_2dx;
             const double dmx_dy =
                 (static_cast<double>(mx[yp]) - static_cast<double>(mx[ym])) * inv_2dy;
-            h0 += dmi_pf * dmi_d_bulk * (dmz_dy - dmy_dz);
-            h1 += dmi_pf * dmi_d_bulk * (dmx_dz - dmz_dx);
-            h2 += dmi_pf * dmi_d_bulk * (dmy_dx - dmx_dy);
+            h0 -= dmi_pf * dmi_d_bulk * (dmz_dy - dmy_dz);
+            h1 -= dmi_pf * dmi_d_bulk * (dmx_dz - dmz_dx);
+            h2 -= dmi_pf * dmi_d_bulk * (dmy_dx - dmx_dy);
         }
     }
     if (enable_exchange) {

@@ -179,8 +179,9 @@ pub(crate) fn resolve_fdm_engine_with_trail(
                 })
             } else {
                 Err(RunError {
-                    message: "FDM CUDA execution was requested, but the CUDA backend is not available"
-                        .to_string(),
+                    message:
+                        "FDM CUDA execution was requested, but the CUDA backend is not available"
+                            .to_string(),
                 })
             }
         }
@@ -193,16 +194,13 @@ pub(crate) fn resolve_fdm_engine_with_trail(
             } else {
                 Ok(EngineResolution {
                     engine: FdmEngine::CpuReference,
-                    fallback: runtime_device(problem)
-                        .filter(|device| matches!(*device, "gpu" | "cuda"))
-                        .map(|_| {
-                            runtime_fallback(
-                                fdm_engine_id(FdmEngine::CudaFdm),
-                                fdm_engine_id(FdmEngine::CpuReference),
-                                "fdm_cuda_unavailable",
-                                "preferred CUDA FDM runtime is unavailable; using CPU reference engine".to_string(),
-                            )
-                        }),
+                    fallback: Some(runtime_fallback(
+                        fdm_engine_id(FdmEngine::CudaFdm),
+                        fdm_engine_id(FdmEngine::CpuReference),
+                        "fdm_cuda_unavailable",
+                        "preferred CUDA FDM runtime is unavailable; using CPU reference engine"
+                            .to_string(),
+                    )),
                 })
             }
         }
@@ -344,5 +342,31 @@ mod tests {
             .expect_err("a script-forced GPU request must not fall back to CPU");
 
         assert!(error.message.contains("CUDA backend is not available"));
+    }
+
+    #[test]
+    fn auto_fdm_gpu_miss_keeps_a_cpu_fallback_trail() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            Value::Object(
+                [("device".to_string(), Value::String("auto".to_string()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        unsafe {
+            std::env::remove_var("FULLMAG_FDM_EXECUTION");
+        }
+
+        let resolution = resolve_fdm_engine_with_trail(&problem)
+            .expect("auto FDM request should select an available engine");
+
+        assert_eq!(resolution.engine, super::FdmEngine::CpuReference);
+        let fallback = resolution
+            .fallback
+            .expect("unavailable CUDA must remain visible for auto FDM");
+        assert_eq!(fallback.reason, "fdm_cuda_unavailable");
     }
 }

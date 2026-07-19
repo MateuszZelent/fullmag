@@ -1,10 +1,10 @@
 use fullmag_ir::{
-    BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, EnergyTermIR,
+    AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR, EnergyTermIR,
     ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR, ExecutionPrecision,
     FdmGridCertificateIR, FdmLayerPlanIR, FdmMaterialIR, FdmMultilayerPlanIR,
     FdmMultilayerSummaryIR, FdmPlanIR, GeometryEntryIR, GridDimensions, InitialMagnetizationIR,
     IntegratorChoice, OutputPlanIR, ProblemIR, ProvenancePlanIR, RegionFrameIR, RegionShapeIR,
-    RelaxationAlgorithmIR, TimeDependenceIR, IR_VERSION,
+    RelaxationAlgorithmIR, SeedPolicy, ThermalSeedConfig, TimeDependenceIR, IR_VERSION,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -441,7 +441,16 @@ pub(crate) fn plan_fdm(
 
     let mut enable_exchange = false;
     let mut enable_demag = false;
+    let mut has_bulk_dmi = false;
     let mut external_field = None;
+    let mut has_thermal_noise = false;
+    let mut thermal_temperature = problem.temperature;
+    let mut thermal_seed_config = problem.temperature.filter(|temperature| *temperature > 0.0).map(|_| {
+        ThermalSeedConfig {
+            policy: SeedPolicy::SystemEntropy,
+            seed: None,
+        }
+    });
     let enable_oersted = problem.energy_terms.iter().any(|term| {
         matches!(
             term,
@@ -469,10 +478,49 @@ pub(crate) fn plan_fdm(
                 external_field = Some([b[0] / MU0, b[1] / MU0, b[2] / MU0]);
             }
             // Terms handled in the post-plan mapping loop below:
-            EnergyTermIR::OerstedCylinder { .. }
-            | EnergyTermIR::OerstedField { .. }
-            | EnergyTermIR::InterfacialDmi { .. }
-            | EnergyTermIR::BulkDmi { .. } => {}
+            EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. } => {}
+            EnergyTermIR::InterfacialDmi {
+                interface_normal, ..
+            } => {
+                if interface_normal.is_some_and(|normal| !fdm_supports_interfacial_dmi_normal(normal)) {
+                    errors.push(
+                        "InterfacialDmi.interface_normal is not executable in the current FDM lane: only the canonical +z interface normal is implemented; use +z or select FEM."
+                            .to_string(),
+                    );
+                }
+            }
+            EnergyTermIR::BulkDmi { .. } => {
+                has_bulk_dmi = true;
+            }
+            EnergyTermIR::ThermalNoise { temperature, seed } => {
+                if has_thermal_noise {
+                    errors.push("ThermalNoise is declared more than once".to_string());
+                }
+                has_thermal_noise = true;
+                if let Some(problem_temperature) = thermal_temperature {
+                    if (problem_temperature - *temperature).abs() > 1.0e-6 {
+                        errors.push(
+                            "ThermalNoise temperature disagrees with Problem temperature"
+                                .to_string(),
+                        );
+                    }
+                }
+                thermal_temperature = Some(*temperature);
+                if *seed == Some(0) {
+                    errors.push(
+                        "ThermalNoise seed must be positive; use system entropy for an unspecified seed"
+                            .to_string(),
+                    );
+                }
+                thermal_seed_config = Some(ThermalSeedConfig {
+                    policy: if seed.is_some() {
+                        SeedPolicy::Fixed
+                    } else {
+                        SeedPolicy::SystemEntropy
+                    },
+                    seed: *seed,
+                });
+            }
             other => {
                 errors.push(format!(
                     "energy term '{:?}' is semantic-only in the current FDM executable path",
@@ -481,10 +529,60 @@ pub(crate) fn plan_fdm(
             }
         }
     }
+    if runtime_requests_cuda(problem) {
+        for term in &problem.energy_terms {
+            let EnergyTermIR::OerstedCylinder {
+                axis,
+                time_dependence,
+                ..
+            } = term
+            else {
+                continue;
+            };
+            if *axis != [0.0, 0.0, 1.0] {
+                errors.push(
+                    "FDM CUDA OerstedCylinder supports only the canonical +z axis until the native arbitrary-axis geometry kernel is qualified"
+                        .to_string(),
+                );
+            }
+            if !matches!(time_dependence, None | Some(TimeDependenceIR::Constant)) {
+                errors.push(
+                    "FDM CUDA time-dependent OerstedCylinder is not executable until every RK stage receives its own source time; use Constant or device='cpu'"
+                        .to_string(),
+                );
+            }
+        }
+    }
     reject_fdm_spatial_material_fields(problem, "FDM", &mut errors);
+    let boundary_correction = problem
+        .backend_policy
+        .discretization_hints
+        .as_ref()
+        .and_then(|hints| hints.fdm.as_ref())
+        .and_then(|fdm| fdm.boundary_correction.as_deref());
+    if problem.backend_policy.execution_precision == ExecutionPrecision::Single
+        && runtime_requests_cuda(problem)
+        && boundary_correction.is_some_and(|value| value != "none")
+    {
+        errors.push(format!(
+            "FDM execution_precision='single' with CUDA and boundary_correction='{correction}' is capability-gated until FP32 sub-cell field/energy parity is qualified; use execution_precision='double' or boundary_correction='none'",
+            correction = boundary_correction.unwrap_or("?"),
+        ));
+    }
     if !(enable_exchange || enable_demag || external_field.is_some()) {
         errors.push(
             "the current executable FDM path requires at least one of Exchange, Demag, or Zeeman"
+                .to_string(),
+        );
+    }
+    let bulk_dmi_is_fully_periodic = problem.pbc.as_ref().is_some_and(|pbc| {
+        pbc.axes
+            .iter()
+            .all(|axis| matches!(axis, AxisBoundary::Periodic))
+    });
+    if has_bulk_dmi && !bulk_dmi_is_fully_periodic {
+        errors.push(
+            "BulkDmi requires a natural exchange+DMI free-surface boundary condition; the current executable FDM lanes do not implement it. Use periodic axes on all three dimensions or remove BulkDmi."
                 .to_string(),
         );
     }
@@ -501,12 +599,6 @@ pub(crate) fn plan_fdm(
                     .to_string(),
             );
         }
-        let boundary_correction = problem
-            .backend_policy
-            .discretization_hints
-            .as_ref()
-            .and_then(|hints| hints.fdm.as_ref())
-            .and_then(|fdm| fdm.boundary_correction.as_deref());
         if pbc.has_any_periodic() && boundary_correction.is_some_and(|value| value != "none") {
             errors.push(format!(
                 "FDM boundary_correction='{correction}' with periodic axes is capability-gated until seam-aware T0/T1 exchange parity is qualified; use boundary_correction='none'",
@@ -601,14 +693,41 @@ pub(crate) fn plan_fdm(
         false,
         false,
         false,
-        problem
-            .energy_terms
-            .iter()
-            .any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
+        has_thermal_noise || thermal_temperature.unwrap_or(0.0) > 0.0,
         has_prescribed_zeeman_mask_source(problem),
         !problem.field_drives.is_empty(),
         &mut errors,
     );
+    if problem.study.sampling().outputs.iter().any(|output| {
+        matches!(
+            output,
+            fullmag_ir::OutputIR::Field { name, .. }
+                | fullmag_ir::OutputIR::FieldAuto { name, .. }
+                | fullmag_ir::OutputIR::FieldResolvedAuto { name, .. }
+                if name == "H_therm"
+        ) || matches!(output, fullmag_ir::OutputIR::Snapshot { field, .. } if field == "H_therm")
+    }) {
+        errors.push(
+            "FDM field output 'H_therm' is not materialized by the current CPU or CUDA observables; request H_eff or remove H_therm"
+                .to_string(),
+        );
+    }
+    if runtime_requests_cuda(problem)
+        && problem.study.sampling().outputs.iter().any(|output| {
+            matches!(
+                output,
+                fullmag_ir::OutputIR::Field { name, .. }
+                    | fullmag_ir::OutputIR::FieldAuto { name, .. }
+                    | fullmag_ir::OutputIR::FieldResolvedAuto { name, .. }
+                    if name == "H_dmi"
+            ) || matches!(output, fullmag_ir::OutputIR::Snapshot { field, .. } if field == "H_dmi")
+        })
+    {
+        errors.push(
+            "FDM CUDA field output 'H_dmi' is not materialized by the native observables; request device='cpu' or remove H_dmi"
+                .to_string(),
+        );
+    }
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double
         && !runtime_requests_cuda(problem)
     {
@@ -781,6 +900,7 @@ pub(crate) fn plan_fdm(
     };
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
+    let requested_integrator = controls.requested_integrator;
     let integrator = controls.integrator;
     if !problem.field_drives.is_empty() && integrator == Some(IntegratorChoice::Abm3) {
         errors.push(
@@ -804,6 +924,14 @@ pub(crate) fn plan_fdm(
     let relaxation = controls.relaxation;
     let adaptive_timestep = controls.adaptive_timestep;
     let field_refresh = controls.field_refresh;
+    if adaptive_timestep.is_some()
+        && (has_thermal_noise || thermal_temperature.unwrap_or(0.0) > 0.0)
+    {
+        errors.push(
+            "adaptive_timestep with Brown thermal noise is not executable until the accepted-step SDE replay contract is qualified; use fixed-step Heun"
+                .to_string(),
+        );
+    }
     if !errors.is_empty() {
         return Err(PlanError { reasons: errors });
     }
@@ -1107,7 +1235,8 @@ pub(crate) fn plan_fdm(
         oersted_time_dep_t_on: 0.0,
         oersted_time_dep_t_off: 0.0,
         oersted_realization: None,
-        temperature: problem.temperature,
+        temperature: thermal_temperature,
+        thermal_seed_config,
         interfacial_dmi: None,
         bulk_dmi: None,
         dind_field: None,
@@ -1204,13 +1333,11 @@ pub(crate) fn plan_fdm(
         && fdm_plan.boundary_correction.as_deref() != Some("none")
     {
         let compute_delta = fdm_plan.boundary_correction.as_deref() == Some("full");
-        // NOTE: Boundary-correction SDF is currently implemented only for:
-        //   • Cylinder  (single disk/pillar)
-        //   • Difference(Cylinder, Cylinder)  (ring / annulus)
-        // For all other geometries the SDF cannot be built and
-        // boundary_geometry remains `None`; the backend will run the
-        // chosen correction level but without per-cell φ/δ data, which
-        // means the correction has no geometric effect.
+        // Boundary-correction SDF is currently implemented only for:
+        //   • Cylinder (single disk/pillar)
+        //   • Difference(Cylinder, Cylinder) (ring / annulus)
+        // A requested T0/T1 correction without this data is physically
+        // meaningless, so the planner must fail rather than downgrade it.
         let local_sdf: Option<Box<dyn Fn(f64, f64, f64) -> f64>> = match &shape {
             GeometryShape::Cylinder { .. } | GeometryShape::Translate { .. } => {
                 finite_cylinder_sdf_for_shape(&shape, [0.0, 0.0, 0.0])
@@ -1244,13 +1371,15 @@ pub(crate) fn plan_fdm(
                 compute_delta,
             ));
         } else {
-            eprintln!(
-                "[fullmag-plan] WARNING: boundary_correction='{}' requested but SDF is not \
-                 available for geometry shape {:?}; boundary_geometry will be None. \
-                 Supported shapes: Cylinder, Difference(Cylinder, Cylinder).",
-                fdm_plan.boundary_correction.as_deref().unwrap_or("?"),
-                shape,
-            );
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "boundary_correction='{}' requires a supported SDF, but geometry shape {:?} \
+                     does not have a supported SDF; supported shapes are Cylinder and \
+                     Difference(Cylinder, Cylinder)",
+                    fdm_plan.boundary_correction.as_deref().unwrap_or("?"),
+                    shape,
+                )],
+            });
         }
     }
 
@@ -1306,6 +1435,12 @@ pub(crate) fn plan_fdm(
                 ),
                 study_note,
             ],
+            integrator_resolution: requested_integrator.map(|requested_integrator| {
+                fullmag_ir::IntegratorResolutionProvenanceIR {
+                    requested_integrator: Some(requested_integrator),
+                    resolved_integrator: integrator,
+                }
+            }),
         },
     })
 }
@@ -1411,6 +1546,53 @@ mod tests {
             "translated owner must be sampled in object coordinates"
         );
     }
+
+    #[test]
+    fn fdm_thermal_noise_lowers_temperature_and_fixed_seed() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.energy_terms.push(fullmag_ir::EnergyTermIR::ThermalNoise {
+            temperature: 300.0,
+            seed: Some(123),
+        });
+
+        let execution = plan_fdm(&problem, fullmag_ir::BackendTarget::Fdm)
+            .expect("fixed-seed FDM thermal noise must lower into the executable plan");
+        let fullmag_ir::BackendPlanIR::Fdm(plan) = execution.backend_plan else {
+            panic!("expected an FDM execution plan");
+        };
+
+        assert_eq!(plan.temperature, Some(300.0));
+        assert_eq!(
+            plan.thermal_seed_config,
+            Some(fullmag_ir::ThermalSeedConfig {
+                policy: fullmag_ir::SeedPolicy::Fixed,
+                seed: Some(123),
+            })
+        );
+    }
+
+    #[test]
+    fn fdm_rejects_h_therm_until_the_field_is_materialized() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.energy_terms.push(fullmag_ir::EnergyTermIR::ThermalNoise {
+            temperature: 300.0,
+            seed: Some(123),
+        });
+        let fullmag_ir::StudyIR::TimeEvolution { sampling, .. } = &mut problem.study else {
+            panic!("bootstrap example must be time evolution");
+        };
+        sampling.outputs.push(fullmag_ir::OutputIR::Field {
+            name: "H_therm".to_string(),
+            every_seconds: 1.0e-12,
+        });
+
+        let error = plan_fdm(&problem, fullmag_ir::BackendTarget::Fdm)
+            .expect_err("unmaterialized H_therm must fail closed");
+        assert!(error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("H_therm") && reason.contains("not materialized")));
+    }
 }
 
 fn reject_fdm_spatial_material_fields(problem: &ProblemIR, lane: &str, errors: &mut Vec<String>) {
@@ -1455,7 +1637,24 @@ fn fdm_spatial_material_field_names(material: &fullmag_ir::MaterialIR) -> Vec<&'
     if material.kc3_field.is_some() {
         fields.push("kc3_field");
     }
+    if material.dind_field.is_some() {
+        fields.push("dind_field");
+    }
+    if material.dbulk_field.is_some() {
+        fields.push("dbulk_field");
+    }
     fields
+}
+
+fn fdm_supports_interfacial_dmi_normal(normal: [f64; 3]) -> bool {
+    let norm_sq = normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2];
+    if !norm_sq.is_finite() || norm_sq <= 1e-30 {
+        return false;
+    }
+    let inv_norm = norm_sq.sqrt().recip();
+    normal[0].abs() * inv_norm <= 1e-12
+        && normal[1].abs() * inv_norm <= 1e-12
+        && (normal[2] * inv_norm - 1.0).abs() <= 1e-12
 }
 
 fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) -> bool {
@@ -1641,9 +1840,18 @@ pub(crate) fn plan_fdm_multilayer(
                 }
                 external_field = Some([b[0] / MU0, b[1] / MU0, b[2] / MU0]);
             }
-            fullmag_ir::EnergyTermIR::InterfacialDmi { d, .. } => {
+            fullmag_ir::EnergyTermIR::InterfacialDmi {
+                d,
+                interface_normal,
+            } => {
                 if interfacial_dmi.is_some() {
                     errors.push("InterfacialDmi is declared more than once".to_string());
+                }
+                if interface_normal.is_some_and(|normal| !fdm_supports_interfacial_dmi_normal(normal)) {
+                    errors.push(
+                        "InterfacialDmi.interface_normal is not executable in the current multilayer FDM lane: only the canonical +z interface normal is implemented; use +z or select FEM."
+                            .to_string(),
+                    );
                 }
                 interfacial_dmi = Some(*d);
             }
@@ -1667,6 +1875,12 @@ pub(crate) fn plan_fdm_multilayer(
                 ));
             }
         }
+    }
+    if bulk_dmi.is_some() {
+        errors.push(
+            "BulkDmi requires a natural exchange+DMI free-surface boundary condition; the current executable multilayer FDM lane does not implement it. Use a qualified fully periodic single-grid FDM plan or remove BulkDmi."
+                .to_string(),
+        );
     }
     if !problem.field_drives.is_empty() {
         errors.push(
@@ -2118,6 +2332,7 @@ pub(crate) fn plan_fdm_multilayer(
     };
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
+    let requested_integrator = controls.requested_integrator;
     let mut integrator = controls.integrator;
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
@@ -2303,6 +2518,12 @@ pub(crate) fn plan_fdm_multilayer(
                 ),
                 study_note,
             ],
+            integrator_resolution: requested_integrator.map(|requested_integrator| {
+                fullmag_ir::IntegratorResolutionProvenanceIR {
+                    requested_integrator: Some(requested_integrator),
+                    resolved_integrator: integrator,
+                }
+            }),
         },
     })
 }

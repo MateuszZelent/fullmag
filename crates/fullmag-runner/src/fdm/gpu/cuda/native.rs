@@ -407,7 +407,10 @@ impl NativeFdmBackend {
                         .unwrap_or(0.0),
                     uniaxial_anisotropy_k2: layer.material.uniaxial_anisotropy_ku2.unwrap_or(0.0),
                     anisotropy_axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
-                    has_cubic_anisotropy: if layer.material.cubic_anisotropy_kc1.is_some() {
+                    has_cubic_anisotropy: if layer.material.cubic_anisotropy_kc1.is_some()
+                        || layer.material.cubic_anisotropy_kc2.is_some()
+                        || layer.material.cubic_anisotropy_kc3.is_some()
+                    {
                         1
                     } else {
                         0
@@ -809,7 +812,10 @@ impl NativeFdmBackend {
             ku1_field: std::ptr::null(),
             ku2_field: std::ptr::null(),
 
-            has_cubic_anisotropy: if plan.material.cubic_anisotropy_kc1.is_some() {
+            has_cubic_anisotropy: if plan.material.cubic_anisotropy_kc1.is_some()
+                || plan.material.cubic_anisotropy_kc2.is_some()
+                || plan.material.cubic_anisotropy_kc3.is_some()
+            {
                 1
             } else {
                 0
@@ -860,6 +866,11 @@ impl NativeFdmBackend {
             mel_strain: plan.mel_uniform_strain.unwrap_or([0.0; 6]),
 
             temperature: plan.temperature.unwrap_or(0.0),
+            thermal_seed: plan
+                .thermal_seed_config
+                .as_ref()
+                .and_then(|config| config.seed)
+                .unwrap_or(0),
 
             demag_kernel_xx_spectrum: demag_kernel_spectra
                 .as_ref()
@@ -1116,7 +1127,8 @@ impl NativeFdmBackend {
             e_ex: stats.exchange_energy_joules,
             e_demag: stats.demag_energy_joules,
             e_ext: stats.external_energy_joules,
-            e_ani: stats.anisotropy_energy_joules,
+            e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules,
+            e_dmi: stats.dmi_energy_joules,
             e_total: stats.total_energy_joules,
             max_h_eff: stats.max_effective_field_amplitude,
             max_h_demag: stats.max_demag_field_amplitude,
@@ -2245,8 +2257,10 @@ mod tests {
 
     fn make_masked_test_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmPlanIR {
         FdmPlanIR {
+            origin_m: [0.0, 0.0, 0.0],
             grid: GridDimensions { cells: [3, 3, 1] },
             cell_size: [5e-9, 5e-9, 10e-9],
+            grid_certificate: None,
             region_mask: vec![0; 9],
             active_mask: Some(vec![true, true, true, true, false, true, true, true, false]),
             initial_magnetization: vec![
@@ -2282,8 +2296,12 @@ mod tests {
             enable_exchange: true,
             enable_demag,
             external_field: Some([1.5e3, -2.0e3, 7.5e2]),
+            field_drives: Vec::new(),
+            regional_field_drive_bases: Vec::new(),
+            time_stage: Default::default(),
             inter_region_exchange: vec![],
             periodicity: None,
+            resolved_periodic_images: None,
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
@@ -2315,6 +2333,7 @@ mod tests {
             oersted_time_dep_t_off: 0.0,
             oersted_realization: None,
             temperature: None,
+            thermal_seed_config: None,
             interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
@@ -2344,10 +2363,12 @@ mod tests {
         }
 
         FdmPlanIR {
+            origin_m: [0.0, 0.0, 0.0],
             grid: GridDimensions {
                 cells: [nx as u32, ny as u32, nz as u32],
             },
             cell_size: [4e-9, 4e-9, 10e-9],
+            grid_certificate: None,
             region_mask: vec![0; nx * ny * nz],
             active_mask: None,
             initial_magnetization,
@@ -2369,8 +2390,12 @@ mod tests {
             enable_exchange: true,
             enable_demag: true,
             external_field: Some([2.0e3, -1.0e3, 5.0e2]),
+            field_drives: Vec::new(),
+            regional_field_drive_bases: Vec::new(),
+            time_stage: Default::default(),
             inter_region_exchange: vec![],
             periodicity: None,
+            resolved_periodic_images: None,
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
@@ -2402,6 +2427,7 @@ mod tests {
             oersted_time_dep_t_off: 0.0,
             oersted_realization: None,
             temperature: None,
+            thermal_seed_config: None,
             interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
@@ -2415,8 +2441,10 @@ mod tests {
 
     fn make_relaxation_precession_test_plan() -> FdmPlanIR {
         FdmPlanIR {
+            origin_m: [0.0, 0.0, 0.0],
             grid: GridDimensions { cells: [1, 1, 1] },
             cell_size: [5e-9, 5e-9, 5e-9],
+            grid_certificate: None,
             region_mask: vec![0],
             active_mask: None,
             initial_magnetization: vec![[1.0, 0.0, 0.0]],
@@ -2446,8 +2474,12 @@ mod tests {
             enable_exchange: false,
             enable_demag: false,
             external_field: Some([0.0, 0.0, 8.0e5]),
+            field_drives: Vec::new(),
+            regional_field_drive_bases: Vec::new(),
+            time_stage: Default::default(),
             inter_region_exchange: vec![],
             periodicity: None,
+            resolved_periodic_images: None,
             boundary_correction: None,
             boundary_phi_floor: None,
             boundary_delta_min: None,
@@ -2479,6 +2511,7 @@ mod tests {
             oersted_time_dep_t_off: 0.0,
             oersted_realization: None,
             temperature: None,
+            thermal_seed_config: None,
             interfacial_dmi: None,
             bulk_dmi: None,
             dind_field: None,
@@ -2677,10 +2710,15 @@ mod tests {
                         axis: plan.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
                     }
                 }),
-                cubic_anisotropy: plan.material.cubic_anisotropy_kc1.map(|kc1| {
-                    CubicAnisotropyConfig {
-                        kc1,
+                cubic_anisotropy: plan
+                    .material
+                    .cubic_anisotropy_kc1
+                    .or(plan.material.cubic_anisotropy_kc2)
+                    .or(plan.material.cubic_anisotropy_kc3)
+                    .map(|_| CubicAnisotropyConfig {
+                        kc1: plan.material.cubic_anisotropy_kc1.unwrap_or(0.0),
                         kc2: plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+                        kc3: plan.material.cubic_anisotropy_kc3.unwrap_or(0.0),
                         axis1: plan
                             .material
                             .cubic_anisotropy_axis1
@@ -2689,8 +2727,7 @@ mod tests {
                             .material
                             .cubic_anisotropy_axis2
                             .unwrap_or([0.0, 1.0, 0.0]),
-                    }
-                }),
+                    }),
                 interfacial_dmi: plan.interfacial_dmi,
                 bulk_dmi: plan.bulk_dmi,
                 zhang_li_stt: None,
@@ -3638,6 +3675,27 @@ mod exact_metric_contract_tests {
         assert!(
             !production_source.contains("approximate_max_torque("),
             "native CUDA stats must never reconstruct equilibrium torque from RHS"
+        );
+    }
+
+    #[test]
+    fn dynamic_native_stats_map_the_same_energy_components_as_snapshot_stats() {
+        let source = include_str!("native.rs");
+        let dynamic_stats = source
+            .split("pub fn step_interruptible")
+            .nth(1)
+            .and_then(|source| source.split("pub fn refresh_multilayer_demag").next())
+            .expect("dynamic native stats implementation");
+
+        assert!(
+            dynamic_stats.contains(
+                "e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules"
+            ),
+            "dynamic native stats must include cubic anisotropy in e_ani"
+        );
+        assert!(
+            dynamic_stats.contains("e_dmi: stats.dmi_energy_joules"),
+            "dynamic native stats must map the native DMI energy"
         );
     }
 }

@@ -335,11 +335,46 @@ pub struct fullmag_fem_relax_stop {
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_stage_completion {
     pub has_reason: i32,
-    pub reason: fullmag_fem_stage_stop_reason,
+    // Raw integer by design: C publishes 0 while has_reason == 0, which is
+    // not a valid fullmag_fem_stage_stop_reason discriminant.
+    pub reason: i32,
     pub has_metric_name: i32,
     pub metric_name: [std::os::raw::c_char; 64],
     pub metric_value: f64,
     pub threshold: f64,
+    pub relaxation_controller_policy_version: u32,
+    pub torque_confirmation_samples_required: u32,
+    pub torque_confirmation_samples_current: u32,
+    pub energy_rejected_attempts: u64,
+    pub controller_tightening_count: u64,
+    pub controller_at_floor: i32,
+    pub energy_increase_relative_tolerance: f64,
+    pub energy_increase_absolute_tolerance_j: f64,
+    pub controller_tightening_factor: f64,
+    pub max_error_floor: f64,
+}
+
+impl Default for fullmag_fem_stage_completion {
+    fn default() -> Self {
+        Self {
+            has_reason: 0,
+            reason: fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE as i32,
+            has_metric_name: 0,
+            metric_name: [0; 64],
+            metric_value: 0.0,
+            threshold: 0.0,
+            relaxation_controller_policy_version: 0,
+            torque_confirmation_samples_required: 0,
+            torque_confirmation_samples_current: 0,
+            energy_rejected_attempts: 0,
+            controller_tightening_count: 0,
+            controller_at_floor: 0,
+            energy_increase_relative_tolerance: 0.0,
+            energy_increase_absolute_tolerance_j: 0.0,
+            controller_tightening_factor: 0.0,
+            max_error_floor: 0.0,
+        }
+    }
 }
 
 #[repr(C)]

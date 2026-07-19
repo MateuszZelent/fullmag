@@ -5222,18 +5222,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let workspace_dir = output_paths.workspace_dir.clone();
     let artifact_dir = output_paths.artifact_dir.clone();
 
-    if output_paths.is_sibling_zarr_bundle && workspace_dir.exists() {
-        bail!(
-            "default result bundle already exists: {}; move or remove it, or pass --output-dir",
-            workspace_dir.display()
-        );
-    }
-
-    fs::create_dir_all(&workspace_dir)
-        .with_context(|| format!("failed to create workspace dir {}", workspace_dir.display()))?;
     if output_paths.is_sibling_zarr_bundle {
-        initialize_script_result_bundle(&output_paths, &script_path, &session_id)?;
+        replace_and_initialize_script_result_bundle(&output_paths, &script_path, &session_id)?;
         eprintln!("- result_bundle: {}", workspace_dir.display());
+    } else {
+        fs::create_dir_all(&workspace_dir).with_context(|| {
+            format!("failed to create workspace dir {}", workspace_dir.display())
+        })?;
     }
     // When 3D preview is disabled, set field_every_n to infinity to skip expensive computations.
     // Keep FEM cadence aligned with interactive control-room expectations:

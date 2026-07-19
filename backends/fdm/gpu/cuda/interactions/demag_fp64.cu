@@ -272,6 +272,7 @@ __global__ void combine_effective_field_fp64_kernel(
     double inv_2dx, double inv_2dy, double inv_2dz,
     double thermal_sigma,
     uint64_t thermal_seed,
+    uint64_t thermal_step,
     // Magnetoelastic (prescribed strain B1/B2)
     int has_magnetoelastic,
     double mel_b1,
@@ -382,7 +383,7 @@ __global__ void combine_effective_field_fp64_kernel(
         }
 
         if (has_bulk_dmi) {
-            // Bulk DMI: H = D * (curl m)
+            // Bulk DMI: H = -2D * curl(m) / (mu0 Ms)
             double dmz_dy = (m_z[yp] - m_z[ym]) * inv_2dy;
             double dmy_dz = (m_y[zp] - m_y[zm]) * inv_2dz;
             double dmx_dz = (m_x[zp] - m_x[zm]) * inv_2dz;
@@ -390,9 +391,9 @@ __global__ void combine_effective_field_fp64_kernel(
             double dmy_dx = (m_y[xp] - m_y[xm]) * inv_2dx;
             double dmx_dy = (m_x[yp] - m_x[ym]) * inv_2dy;
 
-            hx += dmi_pf * D_bulk * (dmz_dy - dmy_dz);
-            hy += dmi_pf * D_bulk * (dmx_dz - dmz_dx);
-            hz += dmi_pf * D_bulk * (dmy_dx - dmx_dy);
+            hx -= dmi_pf * D_bulk * (dmz_dy - dmy_dz);
+            hy -= dmi_pf * D_bulk * (dmx_dz - dmz_dx);
+            hz -= dmi_pf * D_bulk * (dmy_dx - dmx_dy);
         }
     }
 
@@ -422,7 +423,7 @@ __global__ void combine_effective_field_fp64_kernel(
     // --- Thermal noise ---
     if (thermal_sigma > 0.0) {
         curandStatePhilox4_32_10_t state;
-        curand_init(thermal_seed, idx, 0, &state);
+        curand_init(thermal_seed, idx, thermal_step, &state);
         hx += thermal_sigma * curand_normal_double(&state);
         hy += thermal_sigma * curand_normal_double(&state);
         hz += thermal_sigma * curand_normal_double(&state);
@@ -676,8 +677,7 @@ void launch_effective_field_fp64(Context &ctx) {
         double MU0 = 4.0 * M_PI * 1e-7;
         double KB = 1.380649e-23;
         double V = ctx.dx * ctx.dy * ctx.dz;
-        double gamma0 = ctx.gamma * MU0;
-        ctx.thermal_sigma = sqrt(2.0 * ctx.alpha * KB * ctx.temperature / (gamma0 * MU0 * ctx.Ms * V * ctx.current_dt));
+        ctx.thermal_sigma = sqrt(2.0 * ctx.alpha * KB * ctx.temperature / (ctx.gamma * MU0 * ctx.Ms * V * ctx.current_dt));
     } else {
         ctx.thermal_sigma = 0.0;
     }
@@ -729,6 +729,7 @@ void launch_effective_field_fp64(Context &ctx) {
         ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
         ctx.thermal_sigma,
+        ctx.thermal_seed,
         ctx.step_count,
         // Magnetoelastic
         ctx.has_magnetoelastic ? 1 : 0,

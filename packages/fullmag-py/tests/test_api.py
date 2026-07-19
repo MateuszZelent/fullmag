@@ -306,6 +306,115 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(ir["material_parameter_fields"], [])
         self.assertEqual(ir["couplings"], [])
 
+    def test_legacy_anisotropy_energy_terms_migrate_to_the_single_material(self) -> None:
+        base_problem = self._build_problem()
+        material = replace(base_problem.magnets[0].material, Ku1=None, anisU=None)
+        problem = replace(
+            base_problem,
+            magnets=[replace(base_problem.magnets[0], material=material)],
+            energy=[
+                fm.Exchange(),
+                fm.UniaxialAnisotropy(ku1=0.5e6, ku2=0.1e6, axis=(0.0, 1.0, 0.0)),
+                fm.CubicAnisotropy(
+                    kc1=0.2e6,
+                    kc2=0.03e6,
+                    kc3=0.01e6,
+                    axis1=(0.0, 1.0, 0.0),
+                    axis2=(0.0, 0.0, 1.0),
+                ),
+            ],
+        )
+
+        ir = problem.to_ir(include_geometry_assets=False)
+
+        self.assertEqual(ir["energy_terms"], [{"kind": "exchange"}])
+        material = ir["materials"][0]
+        self.assertEqual(material["uniaxial_anisotropy"], 0.5e6)
+        self.assertEqual(material["uniaxial_anisotropy_k2"], 0.1e6)
+        self.assertEqual(material["anisotropy_axis"], [0.0, 1.0, 0.0])
+        self.assertEqual(material["cubic_anisotropy_kc1"], 0.2e6)
+        self.assertEqual(material["cubic_anisotropy_kc2"], 0.03e6)
+        self.assertEqual(material["cubic_anisotropy_kc3"], 0.01e6)
+        self.assertEqual(material["cubic_anisotropy_axis1"], [0.0, 1.0, 0.0])
+        self.assertEqual(material["cubic_anisotropy_axis2"], [0.0, 0.0, 1.0])
+
+    def test_material_only_anisotropy_is_a_valid_problem(self) -> None:
+        problem = replace(self._build_problem(), energy=[])
+
+        ir = problem.to_ir(include_geometry_assets=False)
+
+        self.assertEqual(ir["energy_terms"], [])
+        self.assertEqual(ir["materials"][0]["uniaxial_anisotropy"], 0.5e6)
+
+    def test_material_uses_signed_ku1_for_easy_plane_anisotropy(self) -> None:
+        material = replace(
+            self._build_problem().magnets[0].material,
+            Ku1=-0.5e6,
+            Ku2=-0.1e6,
+        )
+
+        self.assertEqual(material.to_ir()["uniaxial_anisotropy"], -0.5e6)
+        self.assertEqual(material.to_ir()["uniaxial_anisotropy_k2"], -0.1e6)
+
+    def test_legacy_anisotropy_energy_terms_reject_multiple_material_targets(self) -> None:
+        problem = self._build_problem()
+        second_magnet = fm.Ferromagnet(
+            name="second",
+            geometry=fm.Box(size=(100e-9, 20e-9, 5e-9), name="second"),
+            material=fm.Material(name="Co", Ms=1.4e6, A=30e-12, alpha=0.02),
+            m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+        )
+
+        with self.assertRaisesRegex(ValueError, "single material"):
+            replace(
+                problem,
+                magnets=[*problem.magnets, second_magnet],
+                energy=[fm.Exchange(), fm.UniaxialAnisotropy(ku1=0.5e6)],
+            )
+
+    def test_legacy_anisotropy_script_rewrites_to_material_semantics(self) -> None:
+        script = textwrap.dedent(
+            """
+            import fullmag as fm
+
+            DEFAULT_UNTIL = 1e-12
+
+            def build():
+                geometry = fm.Box(size=(20e-9, 10e-9, 5e-9), name="film")
+                material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.02)
+                magnet = fm.Ferromagnet(
+                    name="film",
+                    geometry=geometry,
+                    material=material,
+                    m0=fm.texture.uniform((1.0, 0.0, 0.0)),
+                )
+                return fm.Problem(
+                    name="legacy_anisotropy",
+                    magnets=[magnet],
+                    energy=[fm.Exchange(), fm.UniaxialAnisotropy(ku1=0.5e6, axis=(0.0, 1.0, 0.0))],
+                    study=fm.TimeEvolution(
+                        dynamics=fm.LLG(),
+                        outputs=[fm.SaveField("m", every=1e-12)],
+                    ),
+                )
+            """
+        )
+
+        with TemporaryDirectory() as tmp_dir:
+            source_path = Path(tmp_dir) / "legacy_anisotropy.py"
+            source_path.write_text(script, encoding="utf-8")
+            loaded = load_problem_from_script(source_path, lightweight_assets=True)
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten_path = Path(tmp_dir) / "rewritten.py"
+            rewritten_path.write_text(rendered, encoding="utf-8")
+            reloaded = load_problem_from_script(rewritten_path, lightweight_assets=True)
+
+        self.assertIn("Ku1", rendered)
+        ir = reloaded.problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(ir["materials"][0]["uniaxial_anisotropy"], 0.5e6)
+        self.assertEqual(ir["materials"][0]["anisotropy_axis"], [0.0, 1.0, 0.0])
+        self.assertEqual(ir["energy_terms"], [{"kind": "exchange"}])
+
     def test_flat_api_object_region_lowers_to_ir(self) -> None:
         fm.reset()
         fm.engine("fem")
@@ -1075,6 +1184,18 @@ class ProblemApiTests(unittest.TestCase):
                 "image_counts": [8, 0, 3],
             },
         )
+
+    def test_problem_to_ir_rejects_periodic_airbox_demag_for_fdm(self) -> None:
+        problem = replace(
+            self._build_problem(),
+            pbc=fm.FdmPbc(
+                axes=(True, False, False),
+                demag="periodic_airbox_k0",
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "periodic_airbox_k0.*FEM"):
+            problem.to_ir(requested_backend=fm.BackendTarget.FDM)
 
     def test_flat_pbc_configures_periodic_demag_images(self) -> None:
         fm.reset()
@@ -1966,6 +2087,10 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(runtime["gpu_count"], 1)
         self.assertEqual(runtime["device_index"], 0)
         self.assertEqual(runtime["cpu_threads"], 8)
+
+    def test_runtime_selection_rejects_unimplemented_multi_gpu_request(self) -> None:
+        with self.assertRaisesRegex(ValueError, "multi-GPU execution is not implemented"):
+            fm.backend.cuda(2)
 
     def test_study_execution_mode_serializes_to_ir(self) -> None:
         fm.reset()
@@ -3725,6 +3850,12 @@ class ProblemApiTests(unittest.TestCase):
         self.assertFalse(fdm.demag.explain)
         self.assertEqual(fdm.boundary_phi_floor, 0.1)
         self.assertEqual(fdm.boundary_delta_min, 0.2e-9)
+
+    def test_fdm_demag_rejects_removed_single_grid_fallback_switch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "allow_single_grid_fallback.*removed"):
+            fm.FDMDemag(allow_single_grid_fallback=True)
+
+        self.assertNotIn("allow_single_grid_fallback", fm.FDMDemag().to_ir())
 
     def test_simulation_overrides_backend_mode_and_precision(self) -> None:
         problem = self._build_problem()

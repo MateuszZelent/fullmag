@@ -51,11 +51,10 @@ pub struct FdmGridHintsIR {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct FdmDemagHintsIR {
     pub strategy: String,
     pub mode: String,
-    #[serde(default)]
-    pub allow_single_grid_fallback: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub common_cells: Option<[u32; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

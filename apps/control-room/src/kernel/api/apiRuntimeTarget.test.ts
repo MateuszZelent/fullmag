@@ -91,7 +91,7 @@ describe("control-room API runtime target", () => {
     ).toBe("https://fullmag.amucontainers.orion.zfns.eu.org");
   });
 
-  it("defaults local development to the local control-room API port", () => {
+  it("defaults local development to the same-origin control-room proxy", () => {
     expect(
       resolveControlRoomApiBase({
         env: { NODE_ENV: "development" },
@@ -101,10 +101,10 @@ describe("control-room API runtime target", () => {
           protocol: "http:",
         },
       }),
-    ).toBe("http://localhost:8081");
+    ).toBe("http://localhost:3000");
   });
 
-  it("uses the local API port for standalone localhost frontend origins", () => {
+  it("uses the same-origin proxy for standalone localhost frontends", () => {
     expect(
       resolveControlRoomApiBase({
         env: { NODE_ENV: "production" },
@@ -114,7 +114,7 @@ describe("control-room API runtime target", () => {
           protocol: "http:",
         },
       }),
-    ).toBe("http://localhost:8081");
+    ).toBe("http://localhost:3100");
   });
 
   it("keeps localhost API origins as the API base", () => {
@@ -138,6 +138,15 @@ describe("control-room API runtime target", () => {
         "http://localhost:3000",
       ),
     ).toBe("ws://localhost:8081/v2/sessions/current/events/ws");
+  });
+
+  it("builds realtime websocket URLs through the same-origin proxy", () => {
+    expect(
+      resolveControlRoomWebSocketUrl(
+        "http://localhost:3100",
+        "/v2/sessions/current/events/ws",
+      ),
+    ).toBe("ws://localhost:3100/v2/sessions/current/events/ws");
   });
 
   it("builds realtime websocket URLs from the public dev proxy origin", () => {

@@ -79,7 +79,7 @@ pub struct EffectiveFieldTerms {
     pub magnetoelastic: Option<MagnetoelasticTermConfig>,
     /// Uniaxial magnetocrystalline anisotropy (Ku1 + optionally Ku2).
     pub uniaxial_anisotropy: Option<UniaxialAnisotropyConfig>,
-    /// Cubic magnetocrystalline anisotropy (Kc1 + optionally Kc2).
+    /// Cubic magnetocrystalline anisotropy (Kc1, Kc2, and optionally Kc3).
     pub cubic_anisotropy: Option<CubicAnisotropyConfig>,
     /// Interfacial (Néel) DMI constant D [J/m²]. None = disabled.
     pub interfacial_dmi: Option<f64>,
@@ -113,6 +113,8 @@ pub struct CubicAnisotropyConfig {
     pub kc1: f64,
     /// Second-order cubic constant Kc2 [J/m³].
     pub kc2: f64,
+    /// Third-order cubic constant Kc3 [J/m³].
+    pub kc3: f64,
     /// First crystal axis (unit vector). Third axis = axis1 × axis2.
     pub axis1: Vector3,
     /// Second crystal axis (unit vector).

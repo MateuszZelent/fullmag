@@ -14,7 +14,12 @@ from typing import Any
 import numpy as np
 from scipy.interpolate import LinearNDInterpolator
 
-from ..common.contract import CONTRACT
+from ..common.contract import (
+    CANONICAL_RELAXATION_ALGORITHM,
+    CANONICAL_RELAXATION_DEVICE,
+    CONTRACT,
+    PRODUCTION_RELAXATION_ALGORITHMS,
+)
 from ..common.metrics import (
     find_first_zero_crossing,
     interpolate_crossing_field,
@@ -31,6 +36,12 @@ from ..common.references import (
     parse_ovf2_rectangular,
 )
 from ..common.reporting import write_trajectory_plot, write_vector_map_plot
+from scripts.check_fem_sp4_relaxation import relaxation_is_ready
+
+
+RELAXATION_ENDPOINT_RMS_LIMIT = 0.05
+RELAXATION_ENDPOINT_P99_LIMIT = 0.15
+RELAXATION_MEAN_COMPONENT_LIMIT = 0.02
 
 
 @dataclass(frozen=True)
@@ -247,6 +258,133 @@ def relaxed_state_metrics(path: Path, reference: VectorField, plot_path: Path | 
     }
 
 
+def relaxation_artifact_path(
+    root: Path,
+    *,
+    device: str,
+    mesh: str,
+    airbox: str,
+    algorithm: str,
+) -> Path:
+    return root / "relaxations" / device / mesh / airbox / algorithm / "artifacts"
+
+
+def relaxation_matrix_metrics(
+    root: Path,
+    *,
+    mesh: str,
+    airbox: str,
+    reference: VectorField | None,
+) -> dict[str, Any]:
+    """Validate all production relaxation families before selecting an S-state."""
+
+    entries: dict[str, dict[str, Any]] = {}
+    fields: dict[str, tuple[np.ndarray, np.ndarray, dict[str, Any]]] = {}
+    for device in ("cpu", "gpu"):
+        for algorithm in PRODUCTION_RELAXATION_ALGORITHMS:
+            run_id = f"{device}/{mesh}/{airbox}/{algorithm}"
+            path = relaxation_artifact_path(
+                root,
+                device=device,
+                mesh=mesh,
+                airbox=airbox,
+                algorithm=algorithm,
+            )
+            if not relaxation_is_ready(
+                path,
+                expected_algorithm=algorithm,
+                expected_device=device,
+            ):
+                raise ValidationFailure(f"{run_id}: relaxation readiness failed")
+            nodes, values, info = load_artifact_field(path)
+            metadata = info["metadata"]
+            errors = provenance_errors(metadata, device)
+            if errors:
+                raise ValidationFailure(f"{run_id}: {'; '.join(errors)}")
+            if info["norm_defect"] > 1e-8:
+                raise ValidationFailure(
+                    f"{run_id}: relaxed norm defect exceeds 1e-8"
+                )
+            qualification = metadata.get(
+                f"fem_{device}_relaxation_qualification"
+            )
+            if not isinstance(qualification, dict):
+                raise ValidationFailure(f"{run_id}: qualification metadata missing")
+            entry: dict[str, Any] = {
+                "artifact_dir": str(path),
+                "algorithm": algorithm,
+                "device": device,
+                "topology_fingerprint": metadata.get("mesh", {}).get(
+                    "topology_fingerprint"
+                ),
+                "mean_m": np.mean(values, axis=0).tolist(),
+                "field_norm_defect": info["norm_defect"],
+                "final_torque_T": float(qualification["final_torque_t"]),
+                "metadata_sha256": _sha256(path / "metadata.json"),
+                "scalars_sha256": _sha256(path / "scalars.csv"),
+                "m_final_sha256": _sha256(path / "m_final.json"),
+            }
+            if not entry["topology_fingerprint"]:
+                raise ValidationFailure(f"{run_id}: topology fingerprint missing")
+            if reference is not None:
+                nist = relaxed_state_metrics(path, reference)
+                spatial = nist["spatial"]
+                if (
+                    spatial["correlation"] < 0.90
+                    or max(spatial["component_rmse"]) > 0.15
+                ):
+                    raise ValidationFailure(
+                        f"{run_id}: relaxed S-state differs from NIST OOMMF"
+                    )
+                entry["nist_s_state"] = nist
+            entries[run_id] = entry
+            fields[run_id] = (nodes, values, info)
+
+    canonical_id = (
+        f"{CANONICAL_RELAXATION_DEVICE}/{mesh}/{airbox}/"
+        f"{CANONICAL_RELAXATION_ALGORITHM}"
+    )
+    canonical_nodes, canonical_values, canonical_info = fields[canonical_id]
+    comparisons: dict[str, dict[str, Any]] = {}
+    for run_id, (nodes, values, info) in fields.items():
+        if info["metadata"].get("mesh", {}).get("topology_fingerprint") != (
+            canonical_info["metadata"].get("mesh", {}).get("topology_fingerprint")
+        ):
+            raise ValidationFailure(
+                f"{run_id}: topology differs from canonical relaxation"
+            )
+        if not np.array_equal(nodes, canonical_nodes):
+            raise ValidationFailure(
+                f"{run_id}: magnetic nodes differ from canonical relaxation"
+            )
+        point_error = np.linalg.norm(values - canonical_values, axis=1)
+        mean_delta = np.abs(np.mean(values, axis=0) - np.mean(canonical_values, axis=0))
+        comparison = {
+            "vector_rms": float(np.sqrt(np.mean(point_error * point_error))),
+            "vector_p99": float(np.quantile(point_error, 0.99)),
+            "mean_component_abs_delta": mean_delta.tolist(),
+        }
+        if (
+            comparison["vector_rms"] > RELAXATION_ENDPOINT_RMS_LIMIT
+            or comparison["vector_p99"] > RELAXATION_ENDPOINT_P99_LIMIT
+            or max(comparison["mean_component_abs_delta"])
+            > RELAXATION_MEAN_COMPONENT_LIMIT
+        ):
+            raise ValidationFailure(
+                f"{run_id}: endpoint does not agree with canonical relaxation"
+            )
+        comparisons[run_id] = comparison
+
+    return {
+        "status": "passed",
+        "mesh": mesh,
+        "airbox": airbox,
+        "canonical_run": canonical_id,
+        "entries": entries,
+        "comparisons_to_canonical": comparisons,
+    }
+
+
 def _status(failures: list[Failure]) -> str:
     if not failures:
         return "passed"
@@ -301,6 +439,14 @@ def validate(root: Path, qualifying: bool) -> dict[str, Any]:
                             grid = trace.time_s[trace.time_s <= CONTRACT.minimum_duration_s]
                             envelope = reference_envelope_metrics(trace, references[case], grid_s=grid)
                             crossing = find_first_zero_crossing(trace)
+                            reference_crossings = [
+                                find_first_zero_crossing(item)
+                                for item in references[case]
+                            ]
+                            crossing_interval = {
+                                "minimum_s": min(reference_crossings),
+                                "maximum_s": max(reference_crossings),
+                            }
                             equilibrium = equilibrium_metrics(rows)
                             figure_id = run_id.replace("/", "-")
                             write_trajectory_plot(root / "plots" / f"{figure_id}-trajectory.png", trace, references[case], run_id)
@@ -308,7 +454,26 @@ def validate(root: Path, qualifying: bool) -> dict[str, Any]:
                                 path.parent / "replay-before", path.parent / "replay-after", trace,
                                 zero_maps[case], root / "plots" / f"{figure_id}-zero-map.png",
                             )
-                            metrics[run_id] = {"crossing_s": crossing, "reference": envelope, "equilibrium": equilibrium, "spatial": spatial}
+                            metrics[run_id] = {
+                                "crossing_s": crossing,
+                                "reference_crossing_interval_s": crossing_interval,
+                                "reference": envelope,
+                                "equilibrium": equilibrium,
+                                "spatial": spatial,
+                            }
+                            if not (
+                                crossing_interval["minimum_s"]
+                                <= crossing
+                                <= crossing_interval["maximum_s"]
+                            ):
+                                failures.append(
+                                    Failure(
+                                        "physics_failure",
+                                        "first_mx_zero_crossing",
+                                        run_id,
+                                        "crossing lies outside published NIST results",
+                                    )
+                                )
                             if max(envelope["normalized_rms"]) > 1 or max(envelope["normalized_p99"]) > 3 or max(envelope["endpoint_error"]) > 0.05:
                                 failures.append(Failure("physics_failure", "nist_trajectory", run_id, "trajectory threshold exceeded"))
                             if spatial["correlation"] < 0.85 or max(spatial["component_rmse"]) > 0.20:
@@ -329,12 +494,48 @@ def validate(root: Path, qualifying: bool) -> dict[str, Any]:
             for airbox in (("baseline", "expanded") if mesh == "medium" else ("baseline",)):
                 state = root / "states" / mesh / airbox / "initial_state.json"
                 try:
+                    matrix = relaxation_matrix_metrics(
+                        root,
+                        mesh=mesh,
+                        airbox=airbox,
+                        reference=initial_map,
+                    )
+                    metrics[f"relaxation-matrix/{mesh}/{airbox}"] = matrix
+                    if _json(state.parent / "relaxation_matrix.json") != matrix:
+                        raise ValidationFailure(
+                            "stored relaxation matrix does not match current artifacts"
+                        )
                     state_hashes[(mesh, airbox)] = _sha256(state)
                     recorded = (state.parent / "initial_state.sha256").read_text().split()[0]
                     if recorded != state_hashes[(mesh, airbox)]:
                         raise ValidationFailure("relaxed-state checksum mismatch")
+                    canonical_artifacts = relaxation_artifact_path(
+                        root,
+                        device=CANONICAL_RELAXATION_DEVICE,
+                        mesh=mesh,
+                        airbox=airbox,
+                        algorithm=CANONICAL_RELAXATION_ALGORITHM,
+                    )
+                    selection = _json(state.parent / "canonical_source.json")
+                    expected_source = str(canonical_artifacts.relative_to(root))
+                    canonical_entry = matrix["entries"][matrix["canonical_run"]]
+                    if selection != {
+                        "schema": "fullmag.mumag.sp4.relaxation_selection.v1",
+                        "status": "passed",
+                        "mesh": mesh,
+                        "airbox": airbox,
+                        "device": CANONICAL_RELAXATION_DEVICE,
+                        "algorithm": CANONICAL_RELAXATION_ALGORITHM,
+                        "source_artifact_dir": expected_source,
+                        "source_m_final_sha256": canonical_entry["m_final_sha256"],
+                        "topology_fingerprint": canonical_entry["topology_fingerprint"],
+                        "initial_state_sha256": state_hashes[(mesh, airbox)],
+                    }:
+                        raise ValidationFailure(
+                            "canonical relaxation selection metadata mismatch"
+                        )
                     state_metric = relaxed_state_metrics(
-                        state.parent / "artifacts", initial_map,
+                        canonical_artifacts, initial_map,
                         root / "plots" / f"state-{mesh}-{airbox}.png",
                     )
                     metrics[f"state/{mesh}/{airbox}"] = state_metric

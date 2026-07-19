@@ -48,6 +48,12 @@ __global__ void llg_rhs_fp32_kernel(
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= n) return;
+    if (stt.active_mask && stt.active_mask[idx] == 0) {
+        out_x[idx] = 0.0f;
+        out_y[idx] = 0.0f;
+        out_z[idx] = 0.0f;
+        return;
+    }
 
     float m0 = mx[idx], m1 = my[idx], m2 = mz[idx];
     float h0 = hx[idx], h1 = hy[idx], h2 = hz[idx];
@@ -89,39 +95,39 @@ __global__ void llg_rhs_fp32_kernel(
         float dmx_u = 0.0f, dmy_u = 0.0f, dmz_u = 0.0f;
         
         // x-derivative
-        if (ux > 0.0f && x > 0) {
-            int prev = idx - 1;
+        if (ux > 0.0f && (x > 0 || stt.periodic_x)) {
+            int prev = (x > 0) ? idx - 1 : idx + nx - 1;
             dmx_u += ux * (m0 - mx[prev]) * inv_dx;
             dmy_u += ux * (m1 - my[prev]) * inv_dx;
             dmz_u += ux * (m2 - mz[prev]) * inv_dx;
-        } else if (ux < 0.0f && x < nx - 1) {
-            int next = idx + 1;
+        } else if (ux < 0.0f && (x < nx - 1 || stt.periodic_x)) {
+            int next = (x < nx - 1) ? idx + 1 : idx - nx + 1;
             dmx_u += ux * (mx[next] - m0) * inv_dx;
             dmy_u += ux * (my[next] - m1) * inv_dx;
             dmz_u += ux * (mz[next] - m2) * inv_dx;
         }
 
         // y-derivative
-        if (uy > 0.0f && y > 0) {
-            int prev = idx - nx;
+        if (uy > 0.0f && (y > 0 || stt.periodic_y)) {
+            int prev = (y > 0) ? idx - nx : idx + nx * (ny - 1);
             dmx_u += uy * (m0 - mx[prev]) * inv_dy;
             dmy_u += uy * (m1 - my[prev]) * inv_dy;
             dmz_u += uy * (m2 - mz[prev]) * inv_dy;
-        } else if (uy < 0.0f && y < ny - 1) {
-            int next = idx + nx;
+        } else if (uy < 0.0f && (y < ny - 1 || stt.periodic_y)) {
+            int next = (y < ny - 1) ? idx + nx : idx - nx * (ny - 1);
             dmx_u += uy * (mx[next] - m0) * inv_dy;
             dmy_u += uy * (my[next] - m1) * inv_dy;
             dmz_u += uy * (mz[next] - m2) * inv_dy;
         }
 
         // z-derivative
-        if (uz > 0.0f && z > 0) {
-            int prev = idx - nx * ny;
+        if (uz > 0.0f && (z > 0 || stt.periodic_z)) {
+            int prev = (z > 0) ? idx - nx * ny : idx + nx * ny * (nz - 1);
             dmx_u += uz * (m0 - mx[prev]) * inv_dz;
             dmy_u += uz * (m1 - my[prev]) * inv_dz;
             dmz_u += uz * (m2 - mz[prev]) * inv_dz;
-        } else if (uz < 0.0f && z < nz - 1) {
-            int next = idx + nx * ny;
+        } else if (uz < 0.0f && (z < nz - 1 || stt.periodic_z)) {
+            int next = (z < nz - 1) ? idx + nx * ny : idx - nx * ny * (nz - 1);
             dmx_u += uz * (mx[next] - m0) * inv_dz;
             dmy_u += uz * (my[next] - m1) * inv_dz;
             dmz_u += uz * (mz[next] - m2) * inv_dz;
@@ -198,9 +204,15 @@ __global__ void llg_rhs_fp32_kernel(
         float dl_x = m_dot_s*m0 - sx;
         float dl_y = m_dot_s*m1 - sy;
         float dl_z = m_dot_s*m2 - sz;
-        rhs_x += amp * (-xi_dl*dl_x + xi_fl*fl_x);
-        rhs_y += amp * (-xi_dl*dl_y + xi_fl*fl_y);
-        rhs_z += amp * (-xi_dl*dl_z + xi_fl*fl_z);
+        float raw_x = -xi_dl*dl_x + xi_fl*fl_x;
+        float raw_y = -xi_dl*dl_y + xi_fl*fl_y;
+        float raw_z = -xi_dl*dl_z + xi_fl*fl_z;
+        float m_cross_raw_x = m1 * raw_z - m2 * raw_y;
+        float m_cross_raw_y = m2 * raw_x - m0 * raw_z;
+        float m_cross_raw_z = m0 * raw_y - m1 * raw_x;
+        rhs_x += gamma_bar * amp * (raw_x + alpha * m_cross_raw_x);
+        rhs_y += gamma_bar * amp * (raw_y + alpha * m_cross_raw_y);
+        rhs_z += gamma_bar * amp * (raw_z + alpha * m_cross_raw_z);
     }
 
     out_x[idx] = rhs_x;

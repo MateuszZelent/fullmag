@@ -264,6 +264,8 @@ typedef struct {
     double                     mel_strain[6];
 
     double                     temperature;            /* Temperature in K (0 = no thermal noise) */
+    /* Fixed Brown-noise seed. Zero requests a backend-resolved entropy seed. */
+    uint64_t                   thermal_seed;
 
     /* Zhang-Li Spin-Transfer Torque (CIP) */
     double                     current_density_x;      /* j_x (A/m^2) */

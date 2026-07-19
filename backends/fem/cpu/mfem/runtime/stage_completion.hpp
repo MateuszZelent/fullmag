@@ -19,6 +19,27 @@ struct Context;
  * but this runtime module owns the window-size policy.
  */
 constexpr uint32_t RELAX_ENERGY_PLATEAU_WINDOW_STEPS = 50;
+constexpr uint32_t RELAX_TORQUE_CONFIRMATION_STEPS = 3;
+constexpr double RELAX_ENERGY_INCREASE_RELATIVE_TOLERANCE = 1.0e-10;
+constexpr double RELAX_ENERGY_INCREASE_ABSOLUTE_TOLERANCE_J = 1.0e-30;
+constexpr double RELAX_CONTROLLER_TIGHTENING_FACTOR = 0.70710678118654752440;
+
+enum class RelaxationEnergyAcceptanceKind {
+    accepted,
+    rejected_increase,
+    nonfinite,
+};
+
+struct RelaxationEnergyAcceptanceDecision {
+    RelaxationEnergyAcceptanceKind kind = RelaxationEnergyAcceptanceKind::accepted;
+    double increase_j = 0.0;
+    double budget_j = 0.0;
+};
+
+RelaxationEnergyAcceptanceDecision relaxation_energy_acceptance_decision(
+    bool previous_energy_valid,
+    double previous_energy_j,
+    double candidate_energy_j);
 
 /*
  * Runtime state for native FEM relaxation stage completion.
@@ -33,10 +54,25 @@ struct StageCompletionRuntimeState {
     double relax_pseudotime_s = 0.0;
     double relax_previous_total_energy_j = 0.0;
     bool relax_previous_total_energy_valid = false;
+    uint32_t relax_torque_confirmation_count = 0;
+    bool relax_max_error_floor_valid = false;
+    double relax_max_error_floor = 0.0;
+    uint64_t relax_energy_rejected_attempts = 0;
+    uint64_t relax_controller_tightening_count = 0;
+    bool relax_controller_at_floor = false;
     std::array<double, RELAX_ENERGY_PLATEAU_WINDOW_STEPS> relax_energy_window_j{};
     uint32_t relax_energy_window_count = 0;
     uint32_t relax_energy_window_next = 0;
 };
+
+bool relaxation_energy_plateau_detected(
+    const Context &ctx,
+    double &range_joules,
+    double &threshold_joules);
+
+bool tighten_relaxation_controller(
+    Context &ctx,
+    double active_dt);
 
 /*
  * Validate native FEM relaxation stop configuration.

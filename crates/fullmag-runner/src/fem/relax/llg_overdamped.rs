@@ -26,8 +26,8 @@ use crate::interactive_runtime::{
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "fem-gpu")]
-use crate::relaxation::{relaxation_converged, RelaxationEnergyPlateauWindow};
-use crate::types::ExecutionProvenance;
+use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
+use crate::types::{ExecutionProvenance, RelaxationControllerPolicyProvenance};
 #[cfg(feature = "fem-gpu")]
 use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
@@ -35,6 +35,17 @@ use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepS
 use super::preview::{FemCachedPreviewHandoff, FemLiveMagnetizationHandoff, FemLivePreviewHandoff};
 #[cfg(feature = "fem-gpu")]
 use super::scalars::ensure_fem_object_scalars;
+
+fn convergence_controller_policy() -> RelaxationControllerPolicyProvenance {
+    RelaxationControllerPolicyProvenance {
+        policy_id: "relaxation_convergence_v1".to_string(),
+        torque_confirmation_samples: 3,
+        energy_increase_relative_tolerance: 1.0e-10,
+        energy_increase_absolute_tolerance_j: 1.0e-30,
+        tightening_factor: std::f64::consts::FRAC_1_SQRT_2,
+        max_error_floor: 1.0e-9,
+    }
+}
 
 // ── Algorithm predicate ───────────────────────────────────────────────────────
 
@@ -99,6 +110,9 @@ pub fn fill_provenance(provenance: &mut ExecutionProvenance, plan: &FemPlanIR) {
     if pure_damping {
         provenance.requested_energy_minimizer = Some("llg_overdamped".to_string());
         provenance.resolved_energy_minimizer = Some("llg_overdamped".to_string());
+        if let Some(timestep_policy) = provenance.timestep_policy.as_mut() {
+            timestep_policy.relaxation_controller = Some(convergence_controller_policy());
+        }
     }
 }
 
@@ -173,6 +187,7 @@ pub(crate) fn execute_llg_overdamped(
     let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut cancelled = false;
     let mut paused = false;
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut last_cached_preview_revision = last_preview_revision;
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     let mut live_preview_handoff = FemLivePreviewHandoff::default();
@@ -475,7 +490,7 @@ pub(crate) fn execute_llg_overdamped(
                 true
             } else {
                 let max_steps_hit = latest.step >= control.stop.max_steps.unwrap_or(u64::MAX);
-                let converged = relaxation_converged(
+                let converged = torque_confirmation.observe_stats(
                     control,
                     latest,
                     energy_plateau_range,
@@ -547,6 +562,19 @@ pub(crate) fn execute_llg_overdamped(
 
 #[cfg(test)]
 mod tests {
+    use super::convergence_controller_policy;
+
+    #[test]
+    fn convergence_controller_policy_is_explicit_and_versioned() {
+        let policy = convergence_controller_policy();
+        assert_eq!(policy.policy_id, "relaxation_convergence_v1");
+        assert_eq!(policy.torque_confirmation_samples, 3);
+        assert_eq!(policy.energy_increase_relative_tolerance, 1.0e-10);
+        assert_eq!(policy.energy_increase_absolute_tolerance_j, 1.0e-30);
+        assert_eq!(policy.tightening_factor, std::f64::consts::FRAC_1_SQRT_2);
+        assert_eq!(policy.max_error_floor, 1.0e-9);
+    }
+
     #[test]
     fn llg_overdamped_does_not_spin_forever_on_interrupted_step() {
         let source = include_str!("llg_overdamped.rs");

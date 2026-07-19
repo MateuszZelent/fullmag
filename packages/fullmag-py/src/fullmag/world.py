@@ -55,7 +55,15 @@ from fullmag.model.antenna import (
 )
 from fullmag.model.couplings import CouplingEndpoint, CouplingRegistry
 from fullmag.model.current_transport import CurrentTransport
-from fullmag.model.energy import BulkDMI, Demag, Exchange, InterfacialDMI, TimeDependence, Zeeman
+from fullmag.model.energy import (
+    BulkDMI,
+    Demag,
+    Exchange,
+    InterfacialDMI,
+    ThermalNoise,
+    TimeDependence,
+    Zeeman,
+)
 from fullmag.model.dynamics import (
     ADAPTIVE_INTEGRATORS,
     INTEGRATOR_ALIASES,
@@ -1828,6 +1836,7 @@ class _WorldState:
     _exchange_enabled: bool = True
     _demag_enabled: bool = True
     _demag_realization: str | None = None
+    _thermal_noise: ThermalNoise | None = None
 
     # Magnets (ordered)
     _magnets: list[MagnetHandle] = field(default_factory=list)
@@ -4284,6 +4293,12 @@ class StudyBuilder:
         exchange(enabled=enabled)
         return self
 
+    def thermal_noise(
+        self, temperature: float, *, seed: int | None = None
+    ) -> "StudyBuilder":
+        thermal_noise(temperature, seed=seed)
+        return self
+
     def domain_mesh(
         self,
         source: str | Path,
@@ -4735,6 +4750,18 @@ def demag(
 def exchange(*, enabled: bool = True) -> None:
     """Configure whether exchange contributes to H_eff in the flat API."""
     _state._exchange_enabled = bool(enabled)
+
+
+def thermal_noise(temperature: float, *, seed: int | None = None) -> ThermalNoise:
+    """Configure Brown thermal noise for the flat/study scripting API.
+
+    The returned term is also stored in the script-local world state, so the
+    generated :class:`Problem` retains both temperature and an optional fixed
+    seed through canonical script rewrites.
+    """
+    term = ThermalNoise(temperature=temperature, seed=seed)
+    _state._thermal_noise = term
+    return term
 
 
 # ---------------------------------------------------------------------------
@@ -6814,6 +6841,8 @@ def _build_problem(
             break
     if s._b_ext is not None:
         energy.append(Zeeman(B=s._b_ext))
+    if s._thermal_noise is not None:
+        energy.append(s._thermal_noise)
 
     # Study pipelines start with autosave disabled. Flat scripts retain the
     # historical default unless they explicitly configure or clear outputs.
@@ -6992,6 +7021,7 @@ def _build_problem(
         field_drives=tuple(s._field_drives),
         monitors=tuple(s._planar_monitors),
         couplings=s._couplings.items(),
+        temperature=s._thermal_noise.temperature if s._thermal_noise is not None else None,
         excitation_analysis=s._excitation_analysis,
         geometry_asset_cache=s._geometry_asset_cache,
         pbc=s._pbc,

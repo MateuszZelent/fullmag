@@ -2077,6 +2077,7 @@ pub(crate) fn plan_fem(
     }
 
     let controls = planned_study_controls(problem, resolved_backend, &mut errors);
+    let requested_integrator = controls.requested_integrator;
     let integrator = controls.integrator;
     let fixed_timestep = controls.fixed_timestep;
     let gyromagnetic_ratio = controls.gyromagnetic_ratio;
@@ -2758,6 +2759,12 @@ pub(crate) fn plan_fem(
         },
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
+            integrator_resolution: requested_integrator.map(|requested_integrator| {
+                fullmag_ir::IntegratorResolutionProvenanceIR {
+                    requested_integrator: Some(requested_integrator),
+                    resolved_integrator: integrator,
+                }
+            }),
         },
     })
 }
@@ -3417,6 +3424,7 @@ pub(crate) fn plan_fem_eigen(
         },
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
+            integrator_resolution: None,
         },
     })
 }
@@ -3643,6 +3651,7 @@ pub(crate) fn plan_fem_frequency_response(
         },
         provenance: ProvenancePlanIR {
             notes: provenance_notes,
+            integrator_resolution: None,
         },
     })
 }

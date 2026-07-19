@@ -594,6 +594,13 @@ pub struct FdmPlanIR {
     /// Temperature in Kelvin for Brown thermal field (sLLG). None or 0 = no thermal noise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
+    /// Resolved stochastic seed policy for Brown thermal noise.
+    ///
+    /// A missing value means thermal noise is disabled.  When temperature is
+    /// enabled without an explicit `ThermalNoise` term, the planner records
+    /// `SystemEntropy` here so the requested policy remains observable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_seed_config: Option<ThermalSeedConfig>,
 
     // ── Dzyaloshinskii-Moriya interaction ──
     /// Interfacial DMI constant D [J/m²]. None = disabled.
@@ -1419,9 +1426,60 @@ pub struct OutputPlanIR {
     pub outputs: Vec<OutputIR>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestedIntegratorIR {
+    Auto,
+    Heun,
+    Rk4,
+    Rk23,
+    Rk45,
+    Abm3,
+}
+
+impl RequestedIntegratorIR {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Heun => "heun",
+            Self::Rk4 => "rk4",
+            Self::Rk23 => "rk23",
+            Self::Rk45 => "rk45",
+            Self::Abm3 => "abm3",
+        }
+    }
+}
+
+impl From<IntegratorChoice> for RequestedIntegratorIR {
+    fn from(value: IntegratorChoice) -> Self {
+        match value {
+            IntegratorChoice::Heun => Self::Heun,
+            IntegratorChoice::Rk4 => Self::Rk4,
+            IntegratorChoice::Rk23 => Self::Rk23,
+            IntegratorChoice::Rk45 => Self::Rk45,
+            IntegratorChoice::Abm3 => Self::Abm3,
+        }
+    }
+}
+
+/// Canonical record of the authored time-integrator choice and planner result.
+///
+/// `requested_integrator` retains `auto`; `resolved_integrator` is the concrete
+/// choice consumed by an execution backend. Neither field describes a backend
+/// implementation detail.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IntegratorResolutionProvenanceIR {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_integrator: Option<RequestedIntegratorIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_integrator: Option<IntegratorChoice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ProvenancePlanIR {
     pub notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrator_resolution: Option<IntegratorResolutionProvenanceIR>,
 }
 
 #[cfg(test)]

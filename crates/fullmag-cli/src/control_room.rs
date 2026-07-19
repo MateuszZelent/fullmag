@@ -150,15 +150,34 @@ impl Drop for ControlRoomGuard {
     }
 }
 
+fn control_room_launch_signature(dev_mode: bool, api_base_url: &str) -> String {
+    let mode = if dev_mode { "dev" } else { "static" };
+    format!("{mode}\n{}", api_base_url.trim_end_matches('/'))
+}
+
 #[cfg(test)]
 mod control_room_guard_tests {
-    use super::{api_openapi_response_is_compatible, ControlRoomGuard};
+    use super::{
+        api_openapi_response_is_compatible, control_room_launch_signature, ControlRoomGuard,
+    };
 
     #[test]
     fn reused_frontend_is_not_stopped_on_drop() {
         let guard = ControlRoomGuard::active(3100, None, None);
 
         assert!(!guard.stop_frontend_on_drop);
+    }
+
+    #[test]
+    fn frontend_reuse_signature_tracks_mode_and_api_target() {
+        assert_ne!(
+            control_room_launch_signature(true, "http://localhost:8080"),
+            control_room_launch_signature(true, "http://localhost:8081"),
+        );
+        assert_ne!(
+            control_room_launch_signature(true, "http://localhost:8081"),
+            control_room_launch_signature(false, "http://localhost:8081"),
+        );
     }
 
     #[test]
@@ -309,7 +328,7 @@ pub(crate) fn bootstrap_control_plane(
     }
 
     let web_port = resolve_web_port(requested_port, &url_file)?;
-    let desired_mode = if dev_mode { "dev" } else { "static" };
+    let desired_signature = control_room_launch_signature(dev_mode, &api_base_url());
 
     if external_control_room_available {
         let web_cache_dir = web_dir.join(".next");
@@ -317,7 +336,7 @@ pub(crate) fn bootstrap_control_plane(
 
         if port_is_listening(web_port)
             && (!frontend_is_ready(web_port)
-                || current_mode.as_deref().map(str::trim) != Some(desired_mode))
+                || current_mode.as_deref().map(str::trim) != Some(desired_signature.as_str()))
         {
             terminal_logger().emit(
                 TerminalLogSource::Web,
@@ -396,7 +415,7 @@ pub(crate) fn bootstrap_control_plane(
             frontend_child = Some(child);
 
             let _ = fs::write(&url_file, format!("http://localhost:{}", web_port));
-            let _ = fs::write(&mode_file, desired_mode);
+            let _ = fs::write(&mode_file, &desired_signature);
 
             for _ in 0..300 {
                 if frontend_is_ready_for_bootstrap(web_port) {

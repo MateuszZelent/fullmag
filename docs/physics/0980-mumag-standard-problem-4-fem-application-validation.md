@@ -41,8 +41,10 @@ H_ex = 2 Aex / (mu0 Ms) Laplacian(m),
 B_ext = mu0 H_ext.
 ```
 
-The initial state is obtained by zero-field overdamped-LLG relaxation from
-`normalize(1, 0.1, 0)`. At dynamic time `t = 0`, one constant field is applied:
+The dynamic initial condition is the zero-field equilibrium S-state required
+by NIST. Fullmag approaches that basin from `normalize(1, 0.1, 0)` and
+qualifies the resulting state independently of the relaxation algorithm. At
+dynamic time `t = 0`, one constant field is applied:
 
 ```text
 case A: B_ext = (-24.6,  4.3, 0) mT,
@@ -73,8 +75,12 @@ magnetocrystalline anisotropy, `alpha = 0.02` in dynamics, and
 - Open-boundary magnetostatics is approximated by the selected FEM demag
   strategy and must be qualified through frozen-magnetic-mesh airbox
   convergence.
-- A tetrahedral P1 mesh is used. In-plane refinement and through-thickness
-  layers are independent convergence axes.
+- A tetrahedral P1 mesh is used. The baseline uses the nominal NIST/OOMMF
+  `hmax = 3 nm` without an explicit through-thickness layer count; Gmsh may
+  subdivide the thickness as required by tetrahedral topology. Finer `hmax`
+  levels refine it further. The scripts do not force a multi-layer thin-film
+  preset because it creates degenerate conformal tetrahedra at the airbox
+  interface.
 - NIST reference results form an ensemble. No FDM result is treated as an
   exact pointwise oracle for FEM.
 - A solver result is compared with NIST only after same-FEM temporal, mesh,
@@ -97,7 +103,75 @@ The magnetic film and air domain form one conforming shared-domain mesh.
 Airbox sweeps must reuse an identical frozen magnetic submesh; otherwise an
 observed difference cannot be assigned to the open boundary.
 
-The explicit integrator matrix is:
+Relaxation and physical-time integration are independent qualification axes.
+A dynamics integrator never prepares its own private S-state for a comparison
+run.
+
+#### 3.2.1 Exact MuMax3 reference behavior
+
+The vendored MuMax3 reference is upstream commit
+`f656494b29516bead825b444b1f0b38c6e6c7dbf` (`v3.12-2-gf656494b`). Its
+`Relax()` implementation does not use the solver or fixed step selected for
+the subsequent dynamics. It saves `solvertype`, `MaxErr`, `FixDt`, and
+`Precess`, then forces Bogacki--Shampine RK23, `FixDt = 0`, and
+`Precess = false`; it restores the saved values on return. The thermal field
+is disabled through the internal `relaxing` flag and the relaxation clock is
+reset after every batch of accepted steps.
+
+MuMax3 relaxation has two internal phases. It first evaluates total energy
+every three accepted RK23 steps and continues while energy decreases. It then
+tightens `MaxErr` by `sqrt(2)` and advances in three-step batches while the
+torque norm improves. With the default `RelaxTorqueThreshold <= 0`, this
+continues until `MaxErr <= 1e-9`; with a positive threshold, the maximum
+cellwise torque is also checked. `MinDt`, `MaxDt`, `Headroom`, and the current
+adaptive step remain active because `Relax()` does not replace them. Therefore
+MuMax3's analogue of the Fullmag stability ceiling is `MaxDt`, not `FixDt`.
+
+The no-precession CUDA torque is exactly `-m x (m x B_eff)` and does not use
+the material `alpha`. Fullmag's `llg_overdamped` has the same stationary
+states, but retains the canonical Gilbert damping factor and explicit
+stage-local policy. It is consequently a MuMax-inspired equilibrium
+comparator, not a bitwise reproduction of MuMax3's artificial relaxation
+clock or stop schedule.
+
+MuMax3 `Minimize()` is a separate Exl/LaBonte steepest-descent method. Despite
+the API text calling it conjugate gradient, the implementation alternates the
+two Barzilai--Borwein secant steps and stops when the maximum nodal `|dm|`
+over the last `MinimizerSamples=10` steps is at most
+`MinimizerStop=1e-6`. Fullmag `projected_gradient_bb` is therefore the closer
+algorithm-family cross-check; `nonlinear_cg` remains an independent third
+family. Neither direct minimizer owns RK or seconds-valued `dt`.
+
+This separation is visible in MuMax3's own `standardproblem4_rk56.mx3`:
+`SetSolver(6)` occurs before `Relax()`, but the S-state is still prepared by
+the internally forced RK23 and RK56 is restored only for the reversal run.
+
+The production relaxation matrix is:
+
+| Family | Algorithm | Integrator/time controls | Purpose |
+|---|---|---|---|
+| damping-only LLG | `llg_overdamped` | adaptive RK23, `dt_max=1e-14 s` | MuMax-inspired reference S-state candidate and observed stability ceiling |
+| direct minimizer | `projected_gradient_bb` | none | Exl/BB-family equilibrium cross-check |
+| direct minimizer | `nonlinear_cg` | none | independent equilibrium cross-check |
+| damping-only LLG | `llg_overdamped` | fixed RK45 `dt={2e-13, 1e-13, 5e-14, 2e-14, 1e-14} s` | explicit stability and timestep convergence |
+| damping-only LLG | `llg_overdamped` | Heun/RK23/RK4/RK45 at `dt=1e-14 s` | integrator independence in the stable regime |
+| damping-only LLG | `llg_overdamped` | adaptive RK45, `dt_max=1e-14 s` | adaptive-integrator cross-check |
+
+PG-BB and NCG own neither RK nor seconds-valued `dt`; creating an artificial
+algorithm-by-RK cross-product for them is invalid. `dt=1e-14 s` is a
+conservative reference point discovered by the stability sweep, not a
+universal constant inferred from one run. Qualification retains the whole
+sweep and fails if the finest states have not entered a timestep-independent
+regime.
+
+For the production three-family CPU/GPU matrix, every state must independently
+pass the NIST S-state map gate. Relative to the selected GPU/adaptive-RK23
+state on the identical topology, nodal vector RMS must not exceed `0.05`, the
+99th percentile must not exceed `0.15`, and the absolute difference of every
+mean-magnetization component must not exceed `0.02`. Failure never causes a
+fallback to another relaxation artifact.
+
+The physical-time integrator matrix is:
 
 | Scenario ID | Fullmag integrator | Main order | Step policy |
 |---|---|---:|---|
@@ -108,9 +182,26 @@ The explicit integrator matrix is:
 | `rk23_adaptive` | `rk23` | 3 | embedded adaptive |
 | `rk45_adaptive` | `rk45` | 5 | embedded adaptive |
 
-Each policy is authored as two ordinary scripts, one per NIST field. The
-script applies the same policy to overdamped-LLG S-state preparation and the
-subsequent LLG trajectory, matching the user-visible MuMax-style workflow.
+Each policy is authored as two ordinary scripts, one per NIST field. Every
+script first executes the same MuMax-inspired adaptive-RK23 relaxation policy
+with `dt_max=1e-14 s`, then applies its named policy only to the physical-time
+LLG trajectory. The relaxation-stage RK23 is not the named reversal solver.
+The plain dynamics scripts use `2e-13 s` as the fixed step or adaptive ceiling;
+the separate temporal sweep determines whether that baseline is sufficiently
+resolved.
+The managed qualification additionally loads one content-addressed canonical
+S-state into every dynamics run so that solver comparisons start from
+identical nodal values, not merely independently converged states.
+
+Fixed-step policies are checked at
+`dt={2e-13, 1e-13, 5e-14, 2e-14, 1e-14} s`. Adaptive
+RK23/RK45 are checked at `max_err={1e-5, 1e-6, 1e-7}` with
+`dt_initial=1e-15 s`, `dt_min=1e-17 s`, and `dt_max=2e-13 s`; the cap is
+tightened in an additional run if accepted-step telemetry shows cap-dominated
+error. The finest converged fixed and adaptive configurations are the NIST
+comparison runs. Coarser levels are convergence evidence and are never
+substituted for the finest trajectory when they are unstable or outside
+tolerance.
 
 ### 3.3 Hybrid
 
@@ -143,10 +234,13 @@ The scripts do not read solver, field, mesh, timestep, tolerance, or duration
 from environment variables. CPU or GPU is selected by the ordinary launcher,
 for example `just fullmag build=True fem gpu <script>`.
 
-Each scenario contains exactly one public `study.solver(...)` declaration for
-the reversal dynamics. `study.stages.add_relax(...)` carries only the explicit
-per-stage relaxation policy required by the stage API; solver configuration is
-not split across repeated `study.solver(...)` calls.
+Each dynamics scenario contains exactly one public `study.solver(...)`
+declaration for the reversal dynamics. Its separate
+`study.stages.add_relax(...)` stage explicitly carries the common adaptive
+RK23 relaxation policy, corresponding to MuMax3's internally selected
+relaxation solver. Relaxation-only LLG scenarios contain no physical-time run
+and put their complete RK policy on the relaxation stage. Direct-minimizer
+scenarios contain neither `study.solver(...)` nor any time control.
 
 ### 4.2 ProblemIR representation
 
@@ -160,6 +254,8 @@ mode is strict `double` FEM.
 
 Existing planner rules apply. Fixed stepping is legal for `heun`, `rk23`,
 `rk4`, and `rk45`; adaptive stepping is legal only for `rk23` and `rk45`.
+Production relaxation covers `llg_overdamped`, `projected_gradient_bb`, and
+`nonlinear_cg`. `tangent_plane_implicit` remains outside this strict suite.
 Capability status remains executable but not SP4-validated until the complete
 NIST and convergence matrix passes. No OpenAPI or ProblemIR change is introduced
 by these test scripts. The application launcher does enforce the ordinary
@@ -169,9 +265,10 @@ script-output convention described below.
 
 Launching `/path/x.py` without `--output-dir` creates the sibling Zarr v2 group
 `/path/x.zarr`. The final stage lives under `x.zarr/artifacts/`; preceding and
-interactive stages live under `x.zarr/stages/`. An existing default bundle is
-never silently overwritten. An explicit `--output-dir` retains precedence and
-the legacy session-workspace placement.
+interactive stages live under `x.zarr/stages/`. A repeated ordinary launch
+removes the previous automatic `x.zarr` directory and creates a fresh bundle.
+An explicit `--output-dir` is never removed automatically, retains precedence,
+and keeps the legacy session-workspace placement.
 
 `scalars.csv` under a stage artifact is the authoritative compatibility table
 of accepted states produced by `tableautosave`; rejected solver attempts stay
@@ -184,18 +281,30 @@ Postprocessing is read-only with respect to simulation artifacts. It appends
 one row per completed attempt to
 `.fullmag/reports/standard-problems/mumag/sp4/fem/ledger/results.csv`, never
 silently replaces a prior attempt, and generates PNG plots from the stored
-rows. Every ledger row includes scenario, case, integrator, timestep policy,
-device, git revision, mesh and airbox provenance, status, wall time, trajectory
-metrics, first crossing, final means, energy, torque, and failure category.
+rows. Every ledger row includes phase, relaxation algorithm and its applicable
+integrator/timestep controls, dynamics integrator and timestep policy, device,
+git revision, mesh and airbox provenance, status, wall time, convergence,
+energy-descent diagnostics, trajectory metrics, first crossing, final means,
+energy, torque, and failure category. Inapplicable fields remain empty rather
+than being populated with invented values.
 
 ## 6. Validation strategy
 
 ### 6.1 Analytical and internal checks
 
 - finite values and `|m| = 1` within the declared tolerance;
-- monotone accepted-tail relaxation energy and explicit stop reason;
-- observed temporal orders close to 2, 3, 4, and 5 on fixed-step sweeps;
-- adaptive `rk23` and `rk45` error reduction with tighter `max_err`;
+- non-increasing accepted-state relaxation energy within the documented
+  energy-evaluation budget, plus explicit stop reason;
+- fresh final `max_torque_T <= 1e-5 T` and `converged=true` for every accepted
+  relaxation candidate;
+- agreement of PG-BB, NCG, and stable LLG endpoints in energy, weighted mean
+  magnetization, and projected vector field, preventing selection of a
+  different local basin;
+- relaxation fixed-`dt` convergence and rejection of unstable coarse steps;
+- physical-time fixed-step self-convergence at `dt`, `dt/2`, `dt/4`; observed
+  order is reported but cannot hide spatial or demag error;
+- adaptive `rk23` and `rk45` convergence under tighter `max_err` and the fixed
+  qualified `dt_max` ceiling;
 - identical magnetic-mesh digest during an airbox sweep;
 - strict requested/resolved CPU or GPU provenance with no fallback.
 
@@ -214,11 +323,14 @@ insufficient.
 
 ### 6.4 Regression tests
 
-- exact scenario manifest and plain-Python AST constraints;
-- exported stage sequence, fields, integrator, timestep policy, outputs, and
-  runtime selection for all twelve scripts;
+- exact relaxation and dynamics scenario manifests plus plain-Python AST
+  constraints;
+- direct minimizers reject RK/time controls by construction;
+- exported stage sequence, zero-field relaxation, shared S-state contract,
+  fields, dynamics integrator, timestep policy, outputs, and runtime selection;
 - append-only ledger behavior and deterministic CSV schema;
-- plot generation from synthetic and real application artifacts;
+- separate relaxation-convergence and NIST-dynamics PNG generation from
+  synthetic and real application artifacts;
 - managed CPU/GPU smoke before any physics-validation claim.
 
 ## 7. Completeness checklist
@@ -236,13 +348,16 @@ insufficient.
 
 ## 8. Known limits and deferred work
 
-- The first twelve scripts use one declared baseline mesh and airbox. Temporal,
-  mesh, airbox, and tolerance variants are added as separate concrete scripts
-  as their runs enter the ledger; they are not hidden parameter sweeps.
+- User-facing scripts use one declared baseline mesh and airbox. The managed
+  qualification enumerates the declared temporal, mesh, airbox, device, and
+  relaxation matrices and records every resolved parameter in artifacts and
+  the append-only ledger.
 - Tangent-plane integration is excluded until it is an executable public
   Fullmag path.
-- Direct minimizers remain a separate diagnostic lane and do not replace the
-  explicit-RK qualification requested here.
+- The adaptive-RK23 state used by the plain dynamics scripts becomes a
+  qualifying dynamics source only after it agrees with PG-BB and NCG and
+  passes the official S-state map gate. The selected managed artifact hash is
+  required by every qualifying dynamics run.
 - Production validation remains open until managed CPU/GPU runs and all NIST
   convergence gates pass.
 
@@ -254,5 +369,10 @@ insufficient.
   `https://www.ctcms.nist.gov/~rdm/std4/results.html`
 - OOMMF result archive:
   `https://www.ctcms.nist.gov/~rdm/std4/Donahue.html`
+- MuMax3 `Relax()` at the audited upstream revision:
+  `https://github.com/mumax/3/blob/f656494b29516bead825b444b1f0b38c6e6c7dbf/engine/relax.go`
+- MuMax3 `Minimize()` and SP4 RK56 regression:
+  `https://github.com/mumax/3/blob/f656494b29516bead825b444b1f0b38c6e6c7dbf/engine/minimizer.go`,
+  `https://github.com/mumax/3/blob/f656494b29516bead825b444b1f0b38c6e6c7dbf/test/standardproblem4_rk56.mx3`
 - `docs/physics/0960-canonical-llg-time-domain-solver-and-qualification-contract.md`
 - `docs/physics/0910-table-autosave-observables.md`

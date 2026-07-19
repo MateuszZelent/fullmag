@@ -568,6 +568,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
     let mut steps_stats = Vec::new();
     let mut global_step_count = 0;
     let mut final_status = RunStatus::Completed;
+    let mut final_execution_provenance = crate::types::ExecutionProvenance::default();
     let mut saturation_result: Option<HysteresisSaturationResult> = None;
     let mut stop_after_saturation_probe = false;
     let mut preparation_field_mT =
@@ -634,6 +635,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             on_step,
         )?;
         final_status = solve_res.executed_run.result.status;
+        final_execution_provenance = solve_res.executed_run.provenance.clone();
         append_stage_steps(
             &mut steps_stats,
             &mut global_step_count,
@@ -673,6 +675,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
 
             current_m = point_run.executed_run.result.final_magnetization.clone();
             final_status = point_run.executed_run.result.status;
+            final_execution_provenance = point_run.executed_run.provenance.clone();
             let point_non_converged = point_run
                 .trace
                 .iter()
@@ -860,6 +863,11 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         &settle_trace,
         adaptive_refinement.as_ref(),
         stage_id,
+    )?;
+    write_hysteresis_json_artifact(
+        output_dir,
+        "hysteresis_execution_provenance.json",
+        &final_execution_provenance,
     )?;
 
     let mut angular_family_variant_runs: Vec<(String, HysteresisAngularFamilyVariantRun)> =
@@ -2534,7 +2542,7 @@ fn execute_settle_step_at_field(
                 mutated_fdm.adaptive_timestep = None;
             }
 
-            let engine = dispatch::resolve_fdm_engine(problem)?;
+            let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
             let mut live_on_step = |update: StepUpdate| {
                 let update = annotate_hysteresis_live_update(update, hysteresis_progress);
                 (*on_step)(update)
@@ -2548,7 +2556,16 @@ fn execute_settle_step_at_field(
                 interrupt_requested,
                 on_step: &mut live_on_step,
             };
-            dispatch::execute_fdm(engine, &mutated_fdm, until_seconds, &[], Some(live), None)
+            let mut executed = dispatch::execute_fdm(
+                resolution.engine,
+                &mutated_fdm,
+                until_seconds,
+                &[],
+                Some(live),
+                None,
+            )?;
+            crate::attach_resolved_fallback_to_executed_run(&mut executed, resolution.fallback);
+            Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
             let mut mutated_fem = fem.clone();
@@ -6435,6 +6452,41 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&output_dir);
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn auto_fdm_hysteresis_persists_unavailable_cuda_fallback() {
+        let mut problem = minimal_fdm_hysteresis_problem();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "auto"}),
+        );
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-hysteresis-fdm-fallback-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock drift")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        crate::run_problem_with_callback(&problem, 0.0, &output_dir, 1, |_| StepAction::Continue)
+            .expect("auto FDM hysteresis should execute on CPU when CUDA is unavailable");
+
+        let provenance: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(output_dir.join("hysteresis_execution_provenance.json"))
+                .expect("hysteresis provenance artifact should be readable"),
+        )
+        .expect("hysteresis provenance artifact should parse");
+        let fallback = &provenance["resolved_fallback"];
+        assert_eq!(fallback["original_engine"], "fdm_cuda");
+        assert_eq!(fallback["fallback_engine"], "fdm_cpu_reference");
+        assert_eq!(fallback["reason"], "fdm_cuda_unavailable");
+
+        std::fs::remove_dir_all(&output_dir)
+            .expect("temporary hysteresis artifact directory should be removable");
     }
 
     #[test]

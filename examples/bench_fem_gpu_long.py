@@ -16,6 +16,7 @@ DEFAULT_SHARED_DOMAIN_HMAX = 12e-9
 DEFAULT_AIRBOX_HMAX = 48e-9
 DEFAULT_AIRBOX_SIZE = (360e-9, 180e-9, 90e-9)
 BOX500_AIRBOX_SCENARIO = "exchange_only_box500_airbox1um"
+BOX500_EXCHANGE_SCENARIO = "exchange_only_box500"
 BOX500_AIRBOX_BODY_SIZE = (500e-9, 100e-9, 10e-9)
 BOX500_AIRBOX_SIZE = (1e-6, 1e-6, 1e-6)
 BOX500_DOMAIN_HMAX = 20e-9
@@ -26,6 +27,7 @@ RELAX_TORQUE_TOLERANCE_T = 1e-4
 RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
 FULL_RELAXATION_MAX_STEPS = 50_000
 BOX500_AIRBOX_SCENARIO_ALIASES = {
+    BOX500_EXCHANGE_SCENARIO: "exchange_only",
     BOX500_AIRBOX_SCENARIO: "exchange_only",
     "box500_airbox_exchange_zeeman": "exchange_zeeman",
     "box500_airbox_exchange_demag": "exchange_demag",
@@ -37,6 +39,10 @@ BOX500_AIRBOX_SCENARIO_ALIASES = {
     "box500_airbox_stt_oersted": "stt_oersted",
 }
 BOX500_AIRBOX_SCENARIOS = set(BOX500_AIRBOX_SCENARIO_ALIASES)
+RELAXATION_SCENARIO_ALIASES = {
+    "relax_exchange_only": "exchange_only",
+    "relax_exchange_demag": "exchange_demag",
+}
 DEFAULT_DEMAG_SOLVER = "CG"
 DEFAULT_DEMAG_PRECONDITIONER = "AMG"
 OMITTED_DEMAG_POLICY_PRECONDITIONER = "OMIT"
@@ -72,6 +78,7 @@ SUPPORTED_SCENARIOS = {
     "exchange_dmi",
     "stt_oersted",
     *BOX500_AIRBOX_SCENARIOS,
+    *RELAXATION_SCENARIO_ALIASES,
 }
 
 
@@ -213,7 +220,10 @@ def load_mesh_stats(mesh_path: Path) -> dict[str, object]:
 
 
 def canonical_scenario(scenario: str) -> str:
-    return BOX500_AIRBOX_SCENARIO_ALIASES.get(scenario, scenario)
+    return RELAXATION_SCENARIO_ALIASES.get(
+        scenario,
+        BOX500_AIRBOX_SCENARIO_ALIASES.get(scenario, scenario),
+    )
 
 
 def scenario_is_box500_airbox(scenario: str) -> bool:
@@ -257,12 +267,23 @@ def scenario_terms(scenario: str) -> tuple[list[object], dict[str, object]]:
     raise AssertionError(f"unsupported benchmark scenario: {scenario}")
 
 
+def scenario_initial_magnetization(scenario: str):
+    if scenario_is_box500_airbox(scenario) or scenario in RELAXATION_SCENARIO_ALIASES:
+        body_size = scenario_body_size(scenario)
+        return fm.init.texture.helical(
+            wavevector=(2.0 * math.pi / body_size[0], 0.0, 0.0),
+            e1=(1.0, 0.0, 0.0),
+            e2=(0.0, 1.0, 0.0),
+        )
+    return fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+
+
 def scenario_requires_shared_domain(scenario: str) -> bool:
-    return "demag" in canonical_scenario(scenario) or scenario_is_box500_airbox(scenario)
+    return "demag" in canonical_scenario(scenario) or scenario == BOX500_AIRBOX_SCENARIO
 
 
 def scenario_uses_relaxation(scenario: str) -> bool:
-    return scenario_is_box500_airbox(scenario)
+    return scenario_is_box500_airbox(scenario) or scenario in RELAXATION_SCENARIO_ALIASES
 
 
 def scenario_body_size(scenario: str) -> tuple[float, float, float]:
@@ -337,7 +358,12 @@ def build(
     dynamics = (
         fm.LLG(
             integrator=integrator,
-            adaptive_timestep=fm.AdaptiveTimestep(atol=1e-6, dt_initial=dt),
+            adaptive_timestep=fm.AdaptiveTimestep(
+                atol=1e-6,
+                dt_initial=dt,
+                dt_min=dt * 1e-3,
+                dt_max=dt,
+            ),
         )
         if timestep_policy == "adaptive"
         else fm.LLG(integrator=integrator, fixed_timestep=dt)
@@ -355,7 +381,7 @@ def build(
         name="body",
         geometry=body,
         material=material,
-        m0=fm.init.UniformMagnetization((1.0, 0.0, 0.0)),
+        m0=scenario_initial_magnetization(scenario),
     )
     energy_terms, extra_problem_kwargs = scenario_terms(scenario)
     requires_shared_domain = scenario_requires_shared_domain(scenario)
@@ -422,7 +448,11 @@ def build(
                 maximum_element_size=(
                     scenario_domain_hmax(scenario) if requires_shared_domain else 3e-9
                 ),
-                mesh=None if requires_shared_domain else str(mesh_path),
+                mesh=(
+                    None
+                    if requires_shared_domain or scenario == BOX500_EXCHANGE_SCENARIO
+                    else str(mesh_path)
+                ),
                 demag_solver_policy=env_demag_solver_policy(),
             ),
         ),

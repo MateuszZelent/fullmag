@@ -41,7 +41,27 @@ PLOT_SPECS = {
         "Application wall time",
         "Wall time (s)",
     ),
+    "relaxation_torque_vs_policy.png": PlotSpec(
+        "Relaxed-state torque by policy",
+        "Final maximum torque (T)",
+        "SP4 relaxation limit",
+    ),
+    "relaxation_energy_drop_J.png": PlotSpec(
+        "Relaxation energy decrease by policy",
+        "Initial minus final energy (J)",
+    ),
 }
+
+DYNAMICS_PLOT_NAMES = (
+    "crossing_time_ps.png",
+    "trajectory_error.png",
+    "final_torque_T.png",
+    "wall_time_s.png",
+)
+RELAXATION_PLOT_NAMES = (
+    "relaxation_torque_vs_policy.png",
+    "relaxation_energy_drop_J.png",
+)
 
 _DEVICE_COLORS = {"cpu": "#1e66f5", "gpu": "#8839ef"}
 _COMPONENT_COLORS = {"mx": "#d20f39", "my": "#40a02b", "mz": "#04a5e5"}
@@ -72,6 +92,11 @@ def _load_rows(ledger: Path) -> list[dict[str, str]]:
         rows = [row for row in reader if row.get("status") == "completed"]
     if not rows:
         raise PlotError("ledger contains no completed attempts")
+    invalid_phases = sorted(
+        {row.get("phase", "") for row in rows} - {"dynamics", "relaxation"}
+    )
+    if invalid_phases:
+        raise PlotError(f"completed attempts have invalid phases: {invalid_phases}")
     return sorted(
         rows,
         key=lambda row: (
@@ -169,8 +194,8 @@ def _plot_torque(rows: list[dict[str, str]], path: Path) -> None:
     spec = PLOT_SPECS[path.name]
     figure, axes = _base_axes(pyplot, spec, _labels(rows))
     values = [_number(row, "final_max_torque_T") for row in rows]
-    if any(value <= 0.0 for value in values):
-        raise PlotError("final torque must be positive for logarithmic plotting")
+    if any(value < 0.0 for value in values):
+        raise PlotError("final torque must not be negative")
     axes.scatter(
         range(len(rows)),
         values,
@@ -179,7 +204,7 @@ def _plot_torque(rows: list[dict[str, str]], path: Path) -> None:
         edgecolor="white",
         linewidth=0.8,
     )
-    axes.set_yscale("log")
+    axes.set_yscale("symlog", linthresh=1e-12)
     _save(pyplot, figure, path)
 
 
@@ -190,6 +215,53 @@ def _plot_wall_time(rows: list[dict[str, str]], path: Path) -> None:
     values = [_number(row, "wall_time_s") for row in rows]
     if any(value < 0.0 for value in values):
         raise PlotError("wall time must not be negative")
+    axes.bar(range(len(rows)), values, color=_device_colors(rows), width=0.65)
+    _save(pyplot, figure, path)
+
+
+def _plot_relaxation_torque(rows: list[dict[str, str]], path: Path) -> None:
+    pyplot = _pyplot()
+    spec = PLOT_SPECS[path.name]
+    figure, axes = _base_axes(pyplot, spec, _labels(rows))
+    values = [_number(row, "final_max_torque_T") for row in rows]
+    limits = [_number(row, "relaxation_torque_limit_T") for row in rows]
+    if any(value < 0.0 for value in values):
+        raise PlotError("relaxation torque must not be negative")
+    if any(limit <= 0.0 for limit in limits):
+        raise PlotError("relaxation torque limit must be positive")
+    if not all(
+        math.isclose(limit, limits[0], rel_tol=1e-12) for limit in limits[1:]
+    ):
+        raise PlotError("relaxation attempts use inconsistent torque limits")
+    axes.scatter(
+        range(len(rows)),
+        values,
+        s=62,
+        c=_device_colors(rows),
+        edgecolor="white",
+        linewidth=0.8,
+        zorder=3,
+        label="Fullmag FEM",
+    )
+    axes.axhline(
+        limits[0],
+        color="#df8e1d",
+        linewidth=1.4,
+        linestyle="--",
+        label=spec.reference_label,
+    )
+    axes.set_yscale("symlog", linthresh=1e-12)
+    axes.legend(frameon=False)
+    _save(pyplot, figure, path)
+
+
+def _plot_relaxation_energy_drop(rows: list[dict[str, str]], path: Path) -> None:
+    pyplot = _pyplot()
+    spec = PLOT_SPECS[path.name]
+    figure, axes = _base_axes(pyplot, spec, _labels(rows))
+    values = [_number(row, "energy_drop_J") for row in rows]
+    if any(value < 0.0 for value in values):
+        raise PlotError("completed relaxation energy drop must not be negative")
     axes.bar(range(len(rows)), values, color=_device_colors(rows), width=0.65)
     _save(pyplot, figure, path)
 
@@ -217,10 +289,18 @@ def plot_ledger(ledger: Path, output_dir: Path) -> tuple[Path, ...]:
         "trajectory_error.png": _plot_trajectory,
         "final_torque_T.png": _plot_torque,
         "wall_time_s.png": _plot_wall_time,
+        "relaxation_torque_vs_policy.png": _plot_relaxation_torque,
+        "relaxation_energy_drop_J.png": _plot_relaxation_energy_drop,
     }
-    paths = tuple(output_dir / name for name in PLOT_SPECS)
+    dynamics = [row for row in rows if row["phase"] == "dynamics"]
+    relaxation = [row for row in rows if row["phase"] == "relaxation"]
+    names = (DYNAMICS_PLOT_NAMES if dynamics else ()) + (
+        RELAXATION_PLOT_NAMES if relaxation else ()
+    )
+    paths = tuple(output_dir / name for name in names)
     for path in paths:
-        renderers[path.name](rows, path)
+        phase_rows = dynamics if path.name in DYNAMICS_PLOT_NAMES else relaxation
+        renderers[path.name](phase_rows, path)
     return paths
 
 

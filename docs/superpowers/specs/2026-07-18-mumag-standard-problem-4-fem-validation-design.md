@@ -76,12 +76,18 @@ jawnie geometrię, materiał, mesh, airbox, relaksację, solver, pole, czas,
 i nie pobiera parametrów fizycznych ani numerycznych z environment. Urządzenie
 wybiera zwykły launcher `just fullmag ... fem cpu|gpu <script>`.
 
-Każdy plik ma dokładnie jedno wywołanie `study.solver(...)` dla dynamiki.
-Parametry relaksacji pozostają jawne w `study.stages.add_relax(...)`, ponieważ
-są kontraktem konkretnego etapu, a nie drugim globalnym ustawieniem solvera.
+Każdy plik dynamiki ma dokładnie jedno wywołanie `study.solver(...)`, dotyczące
+wyłącznie fizycznego czasu po załączeniu pola. Poprzedni projekt, w którym ten
+sam RK i ten sam krok przygotowywały stan S, jest wycofany: mieszał błąd
+relaksacji z błędem solvera dynamiki. Dynamika używa wspólnej relaksacji
+`llg_overdamped` z adaptacyjnym RK23 i `dt_max=1e-14 s`. Osobne skrypty
+relaksacyjne kwalifikują ten wariant, PG-BB, NCG oraz diagnostyczne warianty
+RK/`dt`.
 Uruchomienie `x.py` bez `--output-dir` zapisuje jeden sąsiedni bundle Zarr
 `x.zarr`, z końcowym etapem pod `artifacts/` i wcześniejszymi etapami pod
-`stages/`. Istniejący bundle nie jest nadpisywany niejawnie.
+`stages/`. Ponowne zwykłe uruchomienie usuwa poprzedni automatyczny `x.zarr`
+i tworzy świeży bundle. Jawny `--output-dir` nigdy nie jest automatycznie
+usuwany.
 
 Skrypty wybierają strict FEM, `double`, P1, MFEM/hypre oraz model
 demagnetyzacji `poisson_robin`. Strict GPU musi używać realizacji
@@ -91,22 +97,69 @@ kwalifikację. Każda zmiana realizacji pozostaje widoczna w proweniencji.
 `common/metrics.py` i `common/validation.py` nie uruchamiają solvera. Czytają
 artefakty i porównują dowolną realizację z tym samym kontraktem NIST.
 
+#### 2.2.1 Co faktycznie robi MuMax3
+
+Audyt dotyczy upstreamowego MuMax3
+`f656494b29516bead825b444b1f0b38c6e6c7dbf` (`v3.12-2-gf656494b`).
+`Relax()` zapisuje solver dynamiki, `MaxErr`, `FixDt` i flagę precesji, po czym
+wymusza Bogacki--Shampine RK23, `FixDt=0`, wyłącza precesję i szum termiczny.
+Po zakończeniu przywraca wszystkie zapisane ustawienia. `MinDt`, `MaxDt` oraz
+`Headroom` nadal ograniczają adaptację kroku. Czas fizyczny nie postępuje.
+
+Najpierw energia jest sprawdzana co trzy zaakceptowane kroki, dopóki maleje.
+Następnie MuMax3 zmniejsza `MaxErr` przez `sqrt(2)` i wykonuje trzy-krokowe
+pakiety, dopóki maleje suma kwadratów momentu. Domyślnie kończy po dojściu
+`MaxErr` do `1e-9`; dodatni `RelaxTorqueThreshold` dodaje bramkę maksymalnego
+momentu. Kernel bez precesji używa `-m x (m x B_eff)` bez parametru `alpha`.
+
+Dlatego `FixDt=1e-14 s` nie jest sposobem konfiguracji MuMaxowego `Relax()`;
+odpowiednikiem sufitu stabilności jest `MaxDt=1e-14 s`. W Fullmag zapisujemy
+to jawnie jako adaptacyjne RK23 z `dt_max=1e-14 s`. Nie deklarujemy zgodności
+bitowej: Fullmag zachowuje kanoniczny czynnik tłumienia Gilberta i własne jawne
+kryteria zakończenia.
+
+`Minimize()` jest w kodzie metodą najstromszego spadku Exla/LaBonte'a z
+naprzemiennymi krokami BB1/BB2, mimo że opis API nazywa ją conjugate gradient.
+Zatrzymuje się po dziesięciu kolejnych próbkach z maksymalnym `|dm| <= 1e-6`.
+Fullmag PG-BB jest bliższym porównaniem rodziny algorytmicznej niż NCG, ale
+FEM-owa metryka energetyczna, transport styczny i line search pozostają
+realizacją Fullmag.
+
+Test MuMax3 `standardproblem4_rk56.mx3` potwierdza rozdzielenie: `SetSolver(6)`
+jest wywołany przed `Relax()`, lecz stan S nadal liczy wewnętrzny RK23; RK56
+wraca dopiero dla dynamiki po załączeniu pola.
+
 ### 2.3 Macierz jawnych skryptów użytkownika
 
-Pierwsza macierz zawiera sześć polityk jawnych RK dla obu pól NIST:
+Macierz dynamiki zawiera sześć polityk jawnych RK dla obu pól NIST:
 
 - `heun_fixed`, `rk23_fixed`, `rk4_fixed`, `rk45_fixed`;
 - `rk23_adaptive`, `rk45_adaptive`.
 
-Daje to dwanaście samodzielnych plików. Nie powstaje jeden generator z
-kilkudziesięcioma flagami. Kolejne wartości `dt`, tolerancji, mesha albo
-airboxa są dodawane jako następne konkretnie nazwane skrypty, dzięki czemu
-każdy wpis w rejestrze wyników wskazuje dokładny, czytelny plik wejściowy.
+Daje to dwanaście samodzielnych plików. Każdy z nich przygotowuje stan S przez
+identyczny adaptacyjny RK23 z `dt_max=1e-14 s` i używa nazwanego RK dopiero w
+etapie odwrócenia. Bazowy fixed-step dynamiki używa `dt=2e-13 s`, a adaptive
+używa `dt_initial=1e-15 s`, `dt_min=1e-17 s`, `dt_max=2e-13 s` i
+`max_err=1e-7`. Wartość `1e-14 s` zaobserwowana jako konieczna dla relaksacji
+nie jest automatycznie przenoszona na fizyczny czas SP4.
 
-Każdy skrypt wykonuje użytkowy przebieg `zero-field relax -> apply field ->
-tableautosave/autosave -> run`. W ten sposób test obejmuje Python DSL,
-ProblemIR, planner, runner, natywny backend i publikację artefaktów, a nie tylko
-wywołanie wewnętrznej funkcji solvera.
+Druga macierz zawiera samodzielne skrypty relaksacji:
+
+- `relax_projected_gradient_bb.py` i `relax_nonlinear_cg.py`;
+- RK45 fixed dla `dt=2e-13, 1e-13, 5e-14, 2e-14, 1e-14 s`;
+- Heun, RK23 i RK4 fixed przy wspólnym `dt=1e-14 s` (RK45 z poprzedniej
+  grupy domyka porównanie);
+- RK23 i RK45 adaptive z `dt_max=1e-14 s`.
+
+PG-BB i NCG nie dostają fikcyjnych solverów ani kroków czasu. Nie powstaje
+jeden generator z kilkudziesięcioma flagami. Każdy wpis w rejestrze wyników
+wskazuje dokładny, czytelny plik wejściowy.
+
+Każdy skrypt dynamiki wykonuje użytkowy przebieg `zero-field adaptive-RK23
+relax -> apply field -> tableautosave/autosave -> run`. Skrypt relaksacyjny
+kończy się po własnym etapie `relax`. W ten sposób oba rodzaje testu obejmują
+Python DSL, ProblemIR, planner, runner, natywny backend i publikację artefaktów,
+a nie tylko wywołanie wewnętrznej funkcji solvera.
 
 ## 3. Kanoniczny problem fizyczny
 
@@ -123,10 +176,21 @@ wywołanie wewnętrznej funkcji solvera.
 
 ### 3.2 Stan początkowy
 
-Stan dynamiki jest równowagowym stanem S przy zerowym polu. Fullmag tworzy go
-deterministycznie przez relaksację z `normalize(1, 0.1, 0)` i zapisuje jako
-osobny artefakt. Oba przypadki dynamiczne muszą używać dokładnie tego samego
-zapisanego stanu, potwierdzonego identyfikatorem treści w raporcie.
+Stan dynamiki jest równowagowym stanem S przy zerowym polu. NIST dopuszcza
+każdą procedurę, która dostarcza ten equilibrium S-state; metoda relaksacji nie
+jest częścią właściwej dynamiki SP4. Fullmag uruchamia MuMax-inspired
+`llg_overdamped`/RK23, PG-BB oraz NCG z `normalize(1, 0.1, 0)`. Stan RK23 użyty
+przez zwykłe skrypty może stać się kanonicznym stanem dynamiki dopiero po
+zgodności wyników wszystkich trzech rodzin i przejściu mapy S-state NIST. Oba
+przypadki i wszystkie solvery dynamiczne w kwalifikacji zarządzanej używają
+dokładnie tego samego zapisanego stanu, potwierdzonego identyfikatorem treści
+w raporcie.
+
+Macierz produkcyjna uruchamia trzy rodziny na CPU i GPU. Każdy stan osobno
+przechodzi mapę S-state NIST. Względem kanonicznego GPU/RK23 na identycznej
+topologii dopuszczalne są: nodal vector RMS `<=0.05`, percentyl 99
+`<=0.15` oraz bezwzględna różnica każdej składowej średniej `<=0.02`.
+Niezgodność nie uruchamia zastępczego wyboru innego artefaktu.
 
 Relaksacja jest osobną fazą kwalifikacji. Musi potwierdzić:
 
@@ -293,7 +357,11 @@ Kwalifikacja obejmuje trzy poziomy mesha P1. Dokładne wartości `hmax` są
 zapisane w kontrakcie wykonawczym jako `3.0 nm`, `2.0 nm` i `1.5 nm` dla
 obszaru magnetycznego. Każdy mesh musi rzeczywiście rozdzielić grubość próbki;
 raport odrzuca poziom, jeżeli metadane mesha nie potwierdzają elementów przez
-całe `3 nm`.
+całe `3 nm`. Poziom `3.0 nm` używa nominalnej rozdzielczości NIST/OOMMF bez
+jawnej liczby warstw; rzeczywisty podział grubości wynika z topologii tetraedrów
+Gmsh. Drobniejsze poziomy wynikają z `hmax`, ale żaden poziom nie wymusza
+presetu `thin_film` z trzema warstwami, który we wspólnej domenie z airboxem
+generuje zdegenerowane tetraedry.
 
 Pomiędzy dwoma najdrobniejszymi poziomami:
 

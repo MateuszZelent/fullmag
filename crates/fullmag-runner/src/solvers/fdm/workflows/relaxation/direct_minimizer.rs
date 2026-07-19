@@ -5,7 +5,7 @@ use fullmag_engine::{
 };
 use fullmag_ir::RelaxationControlIR;
 
-use crate::relaxation::{relaxation_stop_criteria_satisfied, RelaxationEnergyPlateauWindow};
+use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
 use crate::solvers::fdm::workflows::relaxation::vector_math::{
     compute_max_torque, compute_max_torque_soa, copy_scaled_soa_into, global_dot, global_dot_soa,
     project_tangent, project_tangent_soa_into, scaled_retraction_soa_into,
@@ -176,6 +176,7 @@ fn execute_projected_gradient_bb_soa(
     let mut steps: u64 = 0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
 
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque_soa(&m, &h_eff);
@@ -266,20 +267,13 @@ fn execute_projected_gradient_bb_soa(
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque_soa(&m, &h_eff);
-        if relaxation_stop_criteria_satisfied(control, energy_plateau_range, max_torque) {
+        if torque_confirmation.observe(control, energy_plateau_range, max_torque) {
             converged = true;
             break;
         }
     }
 
     let final_torque = compute_max_torque_soa(&m, &h_eff);
-    if control
-        .stop
-        .torque_tolerance_apm
-        .is_some_and(|threshold| final_torque <= threshold)
-    {
-        converged = true;
-    }
 
     RelaxationResult {
         final_magnetization: m.gather_to_aos(),
@@ -314,6 +308,7 @@ pub(crate) fn execute_projected_gradient_bb_aos(
     let mut steps: u64 = 0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
 
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque(&m, &h_eff);
@@ -407,20 +402,13 @@ pub(crate) fn execute_projected_gradient_bb_aos(
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque(&m, &h_eff);
-        if relaxation_stop_criteria_satisfied(control, energy_plateau_range, max_torque) {
+        if torque_confirmation.observe(control, energy_plateau_range, max_torque) {
             converged = true;
             break;
         }
     }
 
     let final_torque = compute_max_torque(&m, &h_eff);
-    if control
-        .stop
-        .torque_tolerance_apm
-        .is_some_and(|threshold| final_torque <= threshold)
-    {
-        converged = true;
-    }
 
     RelaxationResult {
         final_magnetization: m,
@@ -476,6 +464,7 @@ fn execute_nonlinear_cg_soa(
     let mut steps: u64 = 0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
 
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque_soa(&m, &h_eff);
@@ -560,20 +549,13 @@ fn execute_nonlinear_cg_soa(
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque_soa(&m, &h_eff);
-        if relaxation_stop_criteria_satisfied(control, energy_plateau_range, max_torque) {
+        if torque_confirmation.observe(control, energy_plateau_range, max_torque) {
             converged = true;
             break;
         }
     }
 
     let final_torque = compute_max_torque_soa(&m, &h_eff);
-    if control
-        .stop
-        .torque_tolerance_apm
-        .is_some_and(|threshold| final_torque <= threshold)
-    {
-        converged = true;
-    }
 
     RelaxationResult {
         final_magnetization: m.gather_to_aos(),
@@ -607,6 +589,7 @@ pub(crate) fn execute_nonlinear_cg_aos(
     let mut steps: u64 = 0;
     let mut converged = false;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
 
     while steps < control.stop.max_steps.unwrap_or(u64::MAX) {
         let max_torque = compute_max_torque(&m, &h_eff);
@@ -698,20 +681,13 @@ pub(crate) fn execute_nonlinear_cg_aos(
 
         let energy_plateau_range = energy_plateau.record(energy);
         let max_torque = compute_max_torque(&m, &h_eff);
-        if relaxation_stop_criteria_satisfied(control, energy_plateau_range, max_torque) {
+        if torque_confirmation.observe(control, energy_plateau_range, max_torque) {
             converged = true;
             break;
         }
     }
 
     let final_torque = compute_max_torque(&m, &h_eff);
-    if control
-        .stop
-        .torque_tolerance_apm
-        .is_some_and(|threshold| final_torque <= threshold)
-    {
-        converged = true;
-    }
 
     RelaxationResult {
         final_magnetization: m,

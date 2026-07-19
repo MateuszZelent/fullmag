@@ -54,9 +54,6 @@ class FDMDemag:
             ``"three_d"`` for full 3-D stacks.
         common_cells: Explicit 3-D common convolution grid size.
         common_cells_xy: Explicit 2-D common grid (for ``two_d_stack``).
-        allow_single_grid_fallback: If ``True`` the planner may silently
-            fall back to ``single_grid`` when multilayer is ineligible.
-            Default ``False`` — an error is raised instead.
         explain: Print a human-readable plan summary before running.
 
     Example::
@@ -72,10 +69,17 @@ class FDMDemag:
     mode: Literal["auto", "two_d_stack", "three_d"] = "auto"
     common_cells: tuple[int, int, int] | None = None
     common_cells_xy: tuple[int, int] | None = None
-    allow_single_grid_fallback: bool = False
+    # Compatibility-only input. It is never lowered because silent fallback
+    # is not a public execution contract.
+    allow_single_grid_fallback: bool | None = field(default=None, repr=False)
     explain: bool = True
 
     def __post_init__(self) -> None:
+        if self.allow_single_grid_fallback is not None:
+            raise ValueError(
+                "allow_single_grid_fallback has been removed; choose "
+                "strategy='single_grid' or 'multilayer_convolution' explicitly"
+            )
         if self.strategy not in _DEMAG_STRATEGIES:
             raise ValueError(
                 f"strategy must be one of {_DEMAG_STRATEGIES!r}, "
@@ -102,7 +106,6 @@ class FDMDemag:
         ir: dict[str, object] = {
             "strategy": self.strategy,
             "mode": self.mode,
-            "allow_single_grid_fallback": self.allow_single_grid_fallback,
         }
         if self.common_cells is not None:
             ir["common_cells"] = list(self.common_cells)

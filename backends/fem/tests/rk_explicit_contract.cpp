@@ -911,6 +911,33 @@ void cpu_rk_success_commits_state_and_completion_once() {
         ctx.stage_completion.relax_energy_window_count == completion_samples_before + 1u,
         "successful RK telemetry publishes one completion sample");
 }
+
+void cpu_relaxation_energy_rejection_rolls_back_until_stagnation() {
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
+    ctx.stage_completion.relax_stop.has_torque_tolerance_apm = 1;
+    ctx.stage_completion.relax_stop.torque_tolerance_apm = 1.0e-30;
+    ctx.stage_completion.relax_previous_total_energy_valid = true;
+    ctx.stage_completion.relax_previous_total_energy_j = -1.0e30;
+    ctx.adaptive_dt.max_reject = 2;
+    ctx.adaptive_dt.dt_min = 1.0e-16;
+    const auto before = capture_published_rk_state(ctx);
+
+    fullmag_fem_step_stats stats{};
+    std::string error;
+    check(
+        fullmag::fem::run_backend_step(ctx, 0.125, stats, error) == FULLMAG_FEM_OK,
+        error.c_str());
+    check(ctx.state.step_count == before.state.step_count, "energy rejection keeps step index");
+    check_near(ctx.state.current_time, before.state.current_time, 0.0, "energy rejection keeps time");
+    check_vector_near(ctx.state.m_xyz, before.state.m_xyz, 0.0, "energy rejection restores magnetization");
+    check(ctx.stage_completion.relax_energy_window_count == 0, "rejected energy never enters plateau window");
+    check(ctx.stage_completion.relax_energy_rejected_attempts == 3, "energy retries are counted");
+    check(stats.rejected_attempts == 3, "energy retries reach public step stats");
+    check(ctx.stage_completion.snapshot.has_reason == 1, "exhausted energy retries stop explicitly");
+    check(
+        ctx.stage_completion.snapshot.reason == FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT,
+        "exhausted energy retries are numerical stagnation");
+}
 #endif
 
 void gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal() {
@@ -1000,6 +1027,7 @@ int main() {
     cpu_rk_guard_failures_preserve_committed_state();
     cpu_rk_failure_injection_rolls_back_complete_published_state();
     cpu_rk_success_commits_state_and_completion_once();
+    cpu_relaxation_energy_rejection_rolls_back_until_stagnation();
 #endif
     return 0;
 }

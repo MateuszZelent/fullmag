@@ -1877,7 +1877,7 @@ impl NativeFemBackend {
             .enable_demag
             .then(|| resolved_native_fem_demag_solver_policy(plan));
 
-        Ok(Self {
+        let backend = Self {
             handle,
             magnetic_node_mask: mesh_quantity_active_mask("m", &plan.mesh)
                 .unwrap_or_else(|| vec![true; plan.mesh.nodes.len()]),
@@ -1909,7 +1909,8 @@ impl NativeFemBackend {
                 .as_ref()
                 .filter(|adaptive| adaptive.rtol == 0.0)
                 .map(|adaptive| adaptive.atol),
-        })
+        };
+        Ok(backend)
     }
 
     fn apply_demag_solver_policy_to_step_stats(&self, stats: &mut StepStats) {
@@ -2143,6 +2144,7 @@ impl NativeFemBackend {
         }
 
         let solver_attempts = self.solver_attempts()?;
+        let controller_diagnostics = self.stage_completion_snapshot_ffi()?;
 
         let relaxation_subphase_wall_time_ns = relaxation_driver_subphase_wall_time_ns(&stats);
         let torque_apm = validate_native_step_stats(&stats)?;
@@ -2196,6 +2198,11 @@ impl NativeFemBackend {
                 .map(|max_error| stats.error_estimate * max_error),
             max_error: self.adaptive_max_error,
             rejected_attempts: stats.rejected_attempts,
+            relaxation_energy_rejected_attempts: controller_diagnostics.energy_rejected_attempts,
+            relaxation_controller_tightenings: controller_diagnostics.controller_tightening_count,
+            relaxation_controller_at_floor: controller_diagnostics.controller_at_floor != 0,
+            relaxation_torque_confirmation_count: controller_diagnostics
+                .torque_confirmation_samples_current,
             dt_suggested: if stats.dt_suggested > 0.0 {
                 Some(stats.dt_suggested)
             } else {
@@ -3018,20 +3025,38 @@ impl NativeFemBackend {
         Ok(DeviceInfo::from_ffi(info))
     }
 
-    pub fn stage_completion(&self) -> Result<Option<StageCompletionIR>, RunError> {
+    fn stage_completion_snapshot_ffi(
+        &self,
+    ) -> Result<ffi::fullmag_fem_stage_completion, RunError> {
         let mut completion = ffi::fullmag_fem_stage_completion {
             has_reason: 0,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE as i32,
             has_metric_name: 0,
             metric_name: [0; 64],
             metric_value: 0.0,
             threshold: 0.0,
+            relaxation_controller_policy_version: 0,
+            torque_confirmation_samples_required: 0,
+            torque_confirmation_samples_current: 0,
+            energy_rejected_attempts: 0,
+            controller_tightening_count: 0,
+            controller_at_floor: 0,
+            energy_increase_relative_tolerance: 0.0,
+            energy_increase_absolute_tolerance_j: 0.0,
+            controller_tightening_factor: 0.0,
+            max_error_floor: 0.0,
         };
         let rc = unsafe { ffi::fullmag_fem_backend_stage_completion(self.handle, &mut completion) };
         if rc != ffi::FULLMAG_FEM_OK {
             return Err(self.last_error_or("FEM GPU stage_completion failed"));
         }
-        Ok(stage_completion_from_ffi(completion))
+        Ok(completion)
+    }
+
+    pub fn stage_completion(&self) -> Result<Option<StageCompletionIR>, RunError> {
+        Ok(stage_completion_from_ffi(
+            self.stage_completion_snapshot_ffi()?,
+        ))
     }
 
     fn last_error_or(&self, fallback: &str) -> RunError {
@@ -3039,7 +3064,12 @@ impl NativeFemBackend {
         let msg = if err.is_null() {
             fallback.to_string()
         } else {
-            unsafe { CStr::from_ptr(err) }.to_string_lossy().to_string()
+            let message = unsafe { CStr::from_ptr(err) }.to_string_lossy().to_string();
+            if message.trim().is_empty() {
+                fallback.to_string()
+            } else {
+                message
+            }
         };
         RunError { message: msg }
     }

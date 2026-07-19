@@ -17,8 +17,8 @@ use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::flatten_vectors;
 #[cfg(feature = "cuda")]
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, relaxation_converged, relaxation_stop_criteria_satisfied,
-    RelaxationEnergyPlateauWindow,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
+    RelaxationTorqueConfirmation,
 };
 #[cfg(feature = "cuda")]
 use crate::relaxation_direct_minimizer::{
@@ -118,6 +118,7 @@ pub(crate) fn execute_cuda_fdm(
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
     let mut current_stats = backend.snapshot_step_stats(plan.grid.cells)?;
@@ -176,9 +177,6 @@ pub(crate) fn execute_cuda_fdm(
             }
 
             let max_torque = max_torque_from_field(&state.magnetization, &state.h_eff);
-            if relaxation_stop_criteria_satisfied(control, None, max_torque) {
-                break;
-            }
             let g_norm_sq = direct_minimizer_gradient_norm_sq(&state.gradient);
             if direct_minimizer_gradient_degenerate(g_norm_sq) {
                 break;
@@ -292,7 +290,7 @@ pub(crate) fn execute_cuda_fdm(
             current_stats = accepted_stats;
 
             let energy_plateau_range = energy_plateau.record(state.energy_j);
-            if relaxation_stop_criteria_satisfied(control, energy_plateau_range, torque_apm) {
+            if torque_confirmation.observe(control, energy_plateau_range, torque_apm) {
                 break;
             }
         }
@@ -437,7 +435,7 @@ pub(crate) fn execute_cuda_fdm(
             let energy_plateau_range = energy_plateau.record(stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &stats,
                         energy_plateau_range,
@@ -475,6 +473,7 @@ pub(crate) fn execute_cuda_fdm(
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: latest_stats.as_ref().map(|stats| stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: latest_stats.as_ref().map_or(0, |stats| stats.step),
             relaxation_time_s: latest_stats.as_ref().map(|stats| stats.time),

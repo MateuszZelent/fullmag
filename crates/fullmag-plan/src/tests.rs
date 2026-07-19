@@ -1334,6 +1334,18 @@ fn bootstrap_example_plans_successfully() {
 }
 
 #[test]
+fn fdm_plan_preserves_signed_uniaxial_easy_plane_anisotropy() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.materials[0].uniaxial_anisotropy = Some(-0.5e6);
+
+    let plan = plan(&ir).expect("signed Ku1 material must remain plannable");
+    let BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    assert_eq!(fdm.material.uniaxial_anisotropy_ku1, Some(-0.5e6));
+}
+
+#[test]
 fn fdm_planner_rejects_spatial_material_fields_until_realization_exists() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.materials[0].ku_field = Some(vec![5.0e4; 8]);
@@ -5553,7 +5565,6 @@ fn multilayer_single_precision_is_rejected_without_cuda_device_request() {
             demag: Some(fullmag_ir::FdmDemagHintsIR {
                 strategy: "multilayer_convolution".to_string(),
                 mode: "two_d_stack".to_string(),
-                allow_single_grid_fallback: false,
                 common_cells: None,
                 common_cells_xy: None,
             }),
@@ -5640,7 +5651,6 @@ fn multilayer_single_precision_is_accepted_when_cuda_device_requested() {
             demag: Some(fullmag_ir::FdmDemagHintsIR {
                 strategy: "multilayer_convolution".to_string(),
                 mode: "two_d_stack".to_string(),
-                allow_single_grid_fallback: false,
                 common_cells: None,
                 common_cells_xy: None,
             }),
@@ -5727,7 +5737,6 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
             demag: Some(fullmag_ir::FdmDemagHintsIR {
                 strategy: "multilayer_convolution".to_string(),
                 mode: "two_d_stack".to_string(),
-                allow_single_grid_fallback: false,
                 common_cells: None,
                 common_cells_xy: None,
             }),
@@ -5749,7 +5758,6 @@ fn stacked_two_body_multilayer_problem_with_dmi() -> ProblemIR {
             d: 1.5e-3,
             interface_normal: None,
         },
-        fullmag_ir::EnergyTermIR::BulkDmi { d: 2.5e-3 },
         fullmag_ir::EnergyTermIR::Demag {
             realization: fullmag_ir::RequestedFemDemagIR::Auto,
         },
@@ -5919,7 +5927,7 @@ fn set_adaptive_rk45(problem: &mut ProblemIR, mode: fullmag_ir::AdaptiveToleranc
 }
 
 #[test]
-fn adaptive_fdm_requires_explicit_cpu_or_cuda_and_rejects_auto_routes() {
+fn adaptive_fdm_requires_explicit_cpu_and_rejects_auto_or_cuda_routes() {
     for device in [None, Some("auto")] {
         let mut ir = ProblemIR::bootstrap_example();
         set_adaptive_rk45(&mut ir, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
@@ -5930,12 +5938,10 @@ fn adaptive_fdm_requires_explicit_cpu_or_cuda_and_rejects_auto_routes() {
             );
         }
         let err = plan(&ir).expect_err("automatic adaptive FDM route must fail");
-        assert!(
-            err.reasons
-                .iter()
-                .any(|reason| reason.contains("requires explicit")
-                    && reason.contains("device='cuda'"))
-        );
+        assert!(err
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("requires explicit") && reason.contains("device='cpu'")));
     }
     let mut cpu = ProblemIR::bootstrap_example();
     set_adaptive_rk45(&mut cpu, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
@@ -5951,13 +5957,32 @@ fn adaptive_fdm_requires_explicit_cpu_or_cuda_and_rejects_auto_routes() {
             "runtime_selection".into(),
             serde_json::json!({"device": device}),
         );
-        plan(&cuda).unwrap_or_else(|err| {
-            panic!(
-                "explicit {device} adaptive FDM should be legal: {:?}",
-                err.reasons
-            )
-        });
+        let err = plan(&cuda)
+            .expect_err("adaptive FDM CUDA must fail before a runtime timestep identity exists");
+        assert!(err.reasons.iter().any(|reason| {
+            reason.contains("adaptive_timestep")
+                && reason.contains("CUDA")
+                && reason.contains("no executable timestep capability identity")
+        }));
     }
+}
+
+#[test]
+fn adaptive_fdm_rejects_brown_thermal_noise_until_sde_replay_is_qualified() {
+    let mut ir = ProblemIR::bootstrap_example();
+    set_adaptive_rk45(&mut ir, fullmag_ir::AdaptiveToleranceModeIR::Advanced);
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({"device": "cpu"}),
+    );
+    ir.temperature = Some(300.0);
+
+    let err = plan(&ir).expect_err("adaptive Brown dynamics must fail closed");
+    assert!(err.reasons.iter().any(|reason| {
+        reason.contains("adaptive_timestep")
+            && reason.contains("Brown thermal noise")
+            && reason.contains("fixed-step Heun")
+    }));
 }
 
 #[test]
@@ -6161,10 +6186,9 @@ fn multilayer_planner_rejects_field_drives_until_plan_owns_them() {
     let error = plan(&ir).expect_err("multilayer FDM must not drop an authored field drive");
 
     assert!(
-        error
-            .reasons
-            .iter()
-            .any(|reason| reason.contains("RegionalFieldDrive") && reason.contains("multilayer FDM")),
+        error.reasons.iter().any(
+            |reason| reason.contains("RegionalFieldDrive") && reason.contains("multilayer FDM")
+        ),
         "unexpected planner errors: {:?}",
         error.reasons
     );
@@ -6217,7 +6241,7 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
                 "multilayer_convolution"
             );
             assert_eq!(multilayer.interfacial_dmi, Some(1.5e-3));
-            assert_eq!(multilayer.bulk_dmi, Some(2.5e-3));
+            assert_eq!(multilayer.bulk_dmi, None);
         }
         other => panic!("expected FDM multilayer plan, got {other:?}"),
     }
@@ -9486,6 +9510,42 @@ fn fdm_boundary_params_passthrough_phi_floor_and_delta_min() {
 }
 
 #[test]
+fn fdm_boundary_correction_rejects_geometry_without_supported_sdf() {
+    for tier in ["volume", "full"] {
+        let mut ir = ProblemIR::bootstrap_example();
+        ir.geometry.entries = vec![GeometryEntryIR::Box {
+            name: "box".to_string(),
+            size: [100e-9, 50e-9, 10e-9],
+        }];
+        ir.regions[0].geometry = "box".to_string();
+        ir.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+            fdm: Some(fullmag_ir::FdmHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+                default_cell: None,
+                per_magnet: None,
+                demag: None,
+                boundary_correction: Some(tier.to_string()),
+                boundary_phi_floor: None,
+                boundary_delta_min: None,
+            }),
+            fem: None,
+            hybrid: None,
+        });
+
+        let error = plan(&ir).expect_err("unsupported boundary SDF must fail closed");
+        assert!(
+            error
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("boundary_correction")
+                    && reason.contains("does not have a supported SDF")),
+            "tier={tier}, reasons={:?}",
+            error.reasons
+        );
+    }
+}
+
+#[test]
 fn fdm_translated_difference_keeps_boundary_sdf_realization() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.geometry.entries = vec![GeometryEntryIR::Difference {
@@ -9798,6 +9858,43 @@ fn fdm_cuda_fp32_periodic_exchange_is_capability_gated_until_parity() {
 }
 
 #[test]
+fn fdm_cuda_fp32_subcell_boundary_is_capability_gated_until_field_energy_parity() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.geometry.entries = vec![GeometryEntryIR::Cylinder {
+        name: "disk".to_string(),
+        radius: 50e-9,
+        height: 6e-9,
+        axis: [0.0, 0.0, 1.0],
+    }];
+    ir.regions[0].geometry = "disk".to_string();
+    ir.backend_policy.execution_precision = ExecutionPrecision::Single;
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    ir.backend_policy.discretization_hints = Some(DiscretizationHintsIR {
+        fdm: Some(fullmag_ir::FdmHintsIR {
+            cell: [2e-9, 2e-9, 2e-9],
+            default_cell: None,
+            per_magnet: None,
+            demag: None,
+            boundary_correction: Some("full".to_string()),
+            boundary_phi_floor: None,
+            boundary_delta_min: None,
+        }),
+        fem: None,
+        hybrid: None,
+    });
+
+    let error = plan(&ir).expect_err("unqualified CUDA FP32 T0/T1 must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("execution_precision='single'")
+            && reason.contains("boundary_correction='full'")
+            && reason.contains("FP32 sub-cell field/energy parity")
+    }));
+}
+
+#[test]
 fn fdm_multilayer_periodic_axes_fail_closed_until_kernel_parity() {
     let mut ir = stacked_two_body_multilayer_problem();
     ir.pbc = Some(FdmPeriodicityIR {
@@ -9972,8 +10069,8 @@ fn fdm_cuda_pbc_dmi_plans() {
     ir.pbc = Some(FdmPeriodicityIR {
         axes: [
             AxisBoundary::Periodic,
-            AxisBoundary::Open,
-            AxisBoundary::Open,
+            AxisBoundary::Periodic,
+            AxisBoundary::Periodic,
         ],
         demag: FdmDemagPeriodicityIR::Open,
         image_counts: None,
@@ -9984,6 +10081,57 @@ fn fdm_cuda_pbc_dmi_plans() {
         BackendPlanIR::Fdm(fdm) => assert_eq!(fdm.periodicity, ir.pbc),
         _ => panic!("expected FDM plan"),
     }
+}
+
+#[test]
+fn fdm_bulk_dmi_rejects_open_boundaries_until_natural_boundary_is_qualified() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms.push(EnergyTermIR::BulkDmi { d: 1.0e-3 });
+
+    let error = plan(&ir).expect_err("open-boundary BulkDmi must not plan without its natural boundary condition");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("BulkDmi")
+                && reason.contains("natural exchange+DMI free-surface boundary condition")
+        }),
+        "unexpected planner errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn fdm_interfacial_dmi_rejects_non_z_interface_normal_instead_of_ignoring_it() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.energy_terms.push(EnergyTermIR::InterfacialDmi {
+        d: 1.0e-3,
+        interface_normal: Some([1.0, 0.0, 0.0]),
+    });
+
+    let error = plan(&ir).expect_err("FDM must not silently discard an unsupported iDMI normal");
+    assert!(
+        error.reasons.iter().any(|reason| {
+            reason.contains("InterfacialDmi.interface_normal")
+                && reason.contains("+z interface normal")
+        }),
+        "unexpected planner errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
+fn fdm_rejects_spatial_dmi_material_fields_before_the_native_abi() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.materials[0].dind_field = Some(vec![1.0e-3; 8]);
+
+    let error = plan(&ir).expect_err("FDM must reject material DMI fields it cannot materialize");
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("dind_field") && reason.contains("not executable")),
+        "unexpected planner errors: {:?}",
+        error.reasons
+    );
 }
 
 #[test]

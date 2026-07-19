@@ -14,7 +14,7 @@ study.engine("fem")
 study.device("auto", precision="double")
 study.mode("strict")
 study.interactive(True)
-study.wait_for_solve(True)
+
 
 # NIST film and the baseline open-boundary FEM air domain.
 study.universe(
@@ -37,12 +37,9 @@ film.Ms = 8.0e5
 film.Aex = 1.3e-11
 film.alpha = 0.02
 film.m = fm.init.UniformMagnetization((1.0, 0.1, 0.0))
-film.mesh.thin_film(
-    maximum_element_size=3e-9,
-    minimum_element_size=1e-9,
-    layers=3,
-    order=1,
-)
+# Use the nominal 3 nm NIST/OOMMF resolution without forcing explicit
+# sub-nanometre layers that degenerate the conformal airbox tetrahedra.
+film.mesh(maximum_element_size=3e-9, order=1)
 
 study.demag(realization="poisson_robin")
 study.fem_demag_solver(
@@ -78,7 +75,10 @@ study.stages.add_relax(
     stage_id="relax",
     algorithm="llg_overdamped",
     solver="rk23",
-    dt=2e-13,
+    dt_initial=1e-15,
+    dt_min=1e-17,
+    dt_max=1e-14,
+    max_err=1e-7,
     relax_alpha=1.0,
     max_steps=50_000,
     tol=7.957747154594767,

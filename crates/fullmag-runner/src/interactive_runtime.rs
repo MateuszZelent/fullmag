@@ -25,7 +25,8 @@ use crate::quantities::{
     active_fdm_preview_quantities, active_fem_preview_quantities, normalized_quantity_name,
 };
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, relaxation_converged, RelaxationEnergyPlateauWindow,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
+    RelaxationTorqueConfirmation,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -299,6 +300,28 @@ mod tests {
     }
 
     #[test]
+    fn interactive_fdm_runtime_attaches_fallback_to_provenance() {
+        let fallback = crate::ResolvedFallback {
+            occurred: true,
+            original_engine: "fdm_cuda".to_string(),
+            fallback_engine: "fdm_cpu_reference".to_string(),
+            reason: "fdm_cuda_unavailable".to_string(),
+            message: "CUDA unavailable in test".to_string(),
+        };
+        let runtime = InteractiveFdmPreviewRuntime::from_fdm_plan(
+            &make_soa_fdm_plan(),
+            FdmEngine::CpuReference,
+            Some(fallback.clone()),
+        )
+        .expect("CPU interactive runtime should build");
+
+        assert_eq!(
+            runtime.execution_provenance().resolved_fallback,
+            Some(fallback)
+        );
+    }
+
+    #[test]
     fn display_refresh_due_honors_selection_revision_and_every_n() {
         let mut display_state = DisplaySelectionState::default();
         display_state.revision = 7;
@@ -332,7 +355,7 @@ mod tests {
     fn cpu_interactive_runtime_keeps_supported_fdm_segment_on_persistent_soa_state() {
         let plan = make_soa_fdm_plan();
         let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference)
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference, None)
                 .expect("CPU interactive runtime should build");
         let cpu = match &mut runtime.inner {
             InteractiveFdmPreviewRuntimeInner::Cpu(cpu) => cpu,
@@ -381,7 +404,7 @@ mod tests {
     fn cpu_interactive_snapshot_preview_m_uses_direct_state_without_reobserving_state() {
         let plan = make_soa_fdm_plan();
         let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference)
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference, None)
                 .expect("CPU interactive runtime should build");
 
         reset_observe_state_calls();
@@ -407,7 +430,7 @@ mod tests {
     ) {
         let plan = make_soa_fdm_plan();
         let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference)
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference, None)
                 .expect("CPU interactive runtime should build");
 
         reset_observe_state_calls();
@@ -445,7 +468,7 @@ mod tests {
     fn cpu_interactive_snapshot_step_stats_uses_last_step_report_without_reobserving_state() {
         let plan = make_soa_fdm_plan();
         let mut runtime =
-            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference)
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference, None)
                 .expect("CPU interactive runtime should build");
         let display_selection = || {
             let mut state = DisplaySelectionState::default();
@@ -557,19 +580,23 @@ impl InteractiveFdmPreviewRuntime {
                         .to_string(),
             });
         };
-        let engine = dispatch::resolve_fdm_engine(problem)?;
-        Self::from_fdm_plan(fdm, engine)
+        let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+        Self::from_fdm_plan(fdm, resolution.engine, resolution.fallback)
     }
 
     pub(crate) fn create_from_plan(
         problem: &ProblemIR,
         plan: &FdmPlanIR,
     ) -> Result<Self, RunError> {
-        let engine = dispatch::resolve_fdm_engine(problem)?;
-        Self::from_fdm_plan(plan, engine)
+        let resolution = dispatch::resolve_fdm_engine_with_trail(problem)?;
+        Self::from_fdm_plan(plan, resolution.engine, resolution.fallback)
     }
 
-    fn from_fdm_plan(plan: &FdmPlanIR, engine: FdmEngine) -> Result<Self, RunError> {
+    fn from_fdm_plan(
+        plan: &FdmPlanIR,
+        engine: FdmEngine,
+        fallback: Option<ResolvedFallback>,
+    ) -> Result<Self, RunError> {
         let inner = match engine {
             FdmEngine::CpuReference => {
                 let (problem, state) = cpu_reference::build_snapshot_problem_and_state(plan)?;
@@ -580,7 +607,8 @@ impl InteractiveFdmPreviewRuntime {
                 };
                 let fft_workspace = problem.create_workspace();
                 let integrator_buffers = problem.create_integrator_buffers();
-                let provenance = cpu_execution_provenance(plan)?;
+                let mut provenance = cpu_execution_provenance(plan)?;
+                attach_resolved_fallback_to_provenance(&mut provenance, fallback);
                 InteractiveFdmPreviewRuntimeInner::Cpu(CpuInteractiveFdmPreviewRuntime {
                     problem,
                     state,
@@ -599,11 +627,13 @@ impl InteractiveFdmPreviewRuntime {
                 {
                     let backend = NativeFdmBackend::create(plan)?;
                     let device_info = backend.device_info()?;
+                    let mut provenance = cuda_execution_provenance(plan, &device_info)?;
+                    attach_resolved_fallback_to_provenance(&mut provenance, fallback);
                     InteractiveFdmPreviewRuntimeInner::Cuda(CudaInteractiveFdmPreviewRuntime {
                         backend,
                         original_grid: plan.grid.cells,
                         plan_signature: normalize_plan_signature(plan),
-                        provenance: cuda_execution_provenance(plan, &device_info)?,
+                        provenance,
                         total_steps: 0,
                         total_time: 0.0,
                     })
@@ -1159,6 +1189,7 @@ impl CpuInteractiveFdmPreviewRuntime {
         )?
         .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -1360,7 +1391,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -1386,6 +1417,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: Some(current_local_stats.max_torque_Apm),
+                torque_confirmed: torque_confirmation.confirmed(),
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),
@@ -1520,6 +1552,7 @@ impl CpuInteractiveFdmPreviewRuntime {
         )?
         .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested: None, // CPU FDM checks interrupt via on_step StepAction
@@ -1713,7 +1746,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -1753,6 +1786,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: Some(current_local_stats.max_torque_Apm),
+                torque_confirmed: torque_confirmation.confirmed(),
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),
@@ -1917,6 +1951,7 @@ impl CudaInteractiveFdmPreviewRuntime {
         )?
         .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut backend_completion: Option<fullmag_ir::StageCompletionIR> = None;
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
@@ -2114,7 +2149,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                     true
                 } else {
                     local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                        || relaxation_converged(
+                        || torque_confirmation.observe_stats(
                             control,
                             &total_stats,
                             energy_plateau_range,
@@ -2153,6 +2188,7 @@ impl CudaInteractiveFdmPreviewRuntime {
                 plan.relaxation.as_ref(),
                 crate::relaxation::RelaxationCompletionMetrics {
                     max_torque_apm: Some(current_local_stats.max_torque_Apm),
+                    torque_confirmed: torque_confirmation.confirmed(),
                     accepted_energy_plateau_range_j: energy_plateau.range(),
                     steps: current_local_stats.step,
                     relaxation_time_s: Some(current_local_stats.time),
@@ -2237,6 +2273,7 @@ impl CudaInteractiveFdmPreviewRuntime {
         )?
         .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -2437,7 +2474,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -2476,6 +2513,7 @@ impl CudaInteractiveFdmPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: Some(current_local_stats.max_torque_Apm),
+                torque_confirmed: torque_confirmation.confirmed(),
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),
@@ -2625,6 +2663,7 @@ impl CpuInteractiveFemPreviewRuntime {
         )?
         .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -2841,7 +2880,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -2867,6 +2906,7 @@ impl CpuInteractiveFemPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: None,
+                torque_confirmed: false,
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),
@@ -2966,6 +3006,7 @@ impl CpuInteractiveFemPreviewRuntime {
         )?
         .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -3179,7 +3220,7 @@ impl CpuInteractiveFemPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -3221,6 +3262,7 @@ impl CpuInteractiveFemPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: Some(current_local_stats.max_torque_Apm),
+                torque_confirmed: torque_confirmation.confirmed(),
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),
@@ -3365,6 +3407,7 @@ impl GpuInteractiveFemPreviewRuntime {
         )?
         .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -3534,7 +3577,7 @@ impl GpuInteractiveFemPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -3560,6 +3603,7 @@ impl GpuInteractiveFemPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: Some(current_local_stats.max_torque_Apm),
+                torque_confirmed: torque_confirmation.confirmed(),
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),
@@ -3645,6 +3689,7 @@ impl GpuInteractiveFemPreviewRuntime {
         )?
         .initial_dt();
         let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
         let mut checkpoint = crate::interactive::CheckpointContext {
             display_selection,
             interrupt_requested,
@@ -3784,7 +3829,7 @@ impl GpuInteractiveFemPreviewRuntime {
             let energy_plateau_range = energy_plateau.record(total_stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 local_stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &total_stats,
                         energy_plateau_range,
@@ -3823,6 +3868,7 @@ impl GpuInteractiveFemPreviewRuntime {
             plan.relaxation.as_ref(),
             crate::relaxation::RelaxationCompletionMetrics {
                 max_torque_apm: None,
+                torque_confirmed: false,
                 accepted_energy_plateau_range_j: energy_plateau.range(),
                 steps: current_local_stats.step,
                 relaxation_time_s: Some(current_local_stats.time),
@@ -4382,13 +4428,14 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,
-        resolved_integrator: None,
+        resolved_integrator: plan.integrator.map(crate::integrator_choice_name).map(str::to_string),
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
         timestep_policy,
+        fdm_multilayer_transfer_telemetry: None,
         dt_policy: None,
         llg_mode: None,
         mfem_device: None,
@@ -4472,14 +4519,15 @@ fn cuda_execution_provenance(
         resolved_fallback: None,
         ignored_terms: Vec::new(),
         random_seed: None,
-        requested_integrator: plan.integrator.map(|integrator| format!("{integrator:?}")),
-        resolved_integrator: plan.integrator.map(|integrator| format!("{integrator:?}")),
+        requested_integrator: None,
+        resolved_integrator: plan.integrator.map(crate::integrator_choice_name).map(str::to_string),
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
         requested_demag_realization: None,
         resolved_demag_realization: None,
         timestep_policy,
+        fdm_multilayer_transfer_telemetry: None,
         dt_policy: None,
         llg_mode: Some(
             if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {
@@ -4580,6 +4628,7 @@ fn fem_gpu_execution_provenance(
         resolved_demag_realization: resolved_demag_realization
             .map(|realization| realization.provenance_name().to_string()),
         timestep_policy,
+        fdm_multilayer_transfer_telemetry: None,
         dt_policy: None,
         llg_mode: Some(
             if llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()) {

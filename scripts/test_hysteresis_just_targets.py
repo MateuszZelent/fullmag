@@ -20,8 +20,10 @@ def test_waveguide_headless_smoke_targets_do_not_require_static_ui() -> None:
 def test_managed_fem_staleness_check_prunes_generated_fullmag_dirs() -> None:
     justfile = (ROOT / "justfile").read_text(encoding="utf-8")
 
-    assert "-path '*/.fullmag'" in justfile
-    assert "-path '*/__pycache__'" in justfile
+    assert r'-path \"*/.fullmag\"' in justfile
+    assert r'-path \"*/__pycache__\"' in justfile
+    assert "-path '*/.fullmag'" not in justfile
+    assert "-path '*/__pycache__'" not in justfile
     assert "-prune -o -type f" in justfile
     assert '! -path "*/.fullmag/*"' not in justfile
 

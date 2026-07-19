@@ -1,10 +1,16 @@
 from pathlib import Path
+import contextlib
+import io
 import json
 
 from tests.standard_problems.mumag.sp4.common.references import load_reference_manifest
 from tests.standard_problems.mumag.sp4.common.contract import (
+    CANONICAL_RELAXATION_ALGORITHM,
+    CANONICAL_RELAXATION_DEVICE,
     CONTRACT,
     DEFAULT_RELAXATION_ALGORITHM,
+    PRODUCTION_RELAXATION_ALGORITHMS,
+    RELAXATION_DT_MAX_S,
     validate_device,
 )
 from tests.standard_problems.mumag.sp4.common.metrics import (
@@ -26,9 +32,11 @@ from tests.standard_problems.mumag.sp4.fem.verify import (
 )
 import numpy as np
 import pytest
+from fullmag.runtime import helper as runtime_helper
 
 
 REFERENCE_ROOT = Path(__file__).parents[1] / "references"
+MANAGED_PROBLEM = Path(__file__).with_name("problem.py")
 
 
 EXPECTED_DIGESTS = {
@@ -73,6 +81,95 @@ def test_contract_has_exact_nist_si_values_and_cpu_gpu_lanes():
 
 def test_qualification_defaults_to_monotone_overdamped_llg_relaxation():
     assert DEFAULT_RELAXATION_ALGORITHM == "llg_overdamped"
+    assert CANONICAL_RELAXATION_ALGORITHM == "llg_overdamped"
+    assert CANONICAL_RELAXATION_DEVICE == "gpu"
+    assert PRODUCTION_RELAXATION_ALGORITHMS == (
+        "llg_overdamped",
+        "projected_gradient_bb",
+        "nonlinear_cg",
+    )
+    assert RELAXATION_DT_MAX_S == 1e-14
+
+
+def _managed_problem_ir(monkeypatch, *, phase: str, algorithm: str, state=None):
+    monkeypatch.setenv("FULLMAG_SP4_PHASE", phase)
+    monkeypatch.setenv("FULLMAG_SP4_RELAX_ALGORITHM", algorithm)
+    monkeypatch.setenv("FULLMAG_SP4_DEVICE", "cpu")
+    monkeypatch.setenv("FULLMAG_SP4_MESH", "coarse")
+    monkeypatch.setenv("FULLMAG_SP4_AIRBOX", "baseline")
+    if state is None:
+        monkeypatch.delenv("FULLMAG_SP4_INITIAL_STATE", raising=False)
+    else:
+        monkeypatch.setenv("FULLMAG_SP4_INITIAL_STATE", str(state))
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        status = runtime_helper.main(
+            [
+                "export-run-config",
+                "--script",
+                str(MANAGED_PROBLEM),
+                "--backend",
+                "fem",
+                "--mode",
+                "strict",
+                "--precision",
+                "double",
+                "--skip-geometry-assets",
+            ]
+        )
+    assert status == 0
+    payload = json.loads(stdout.getvalue())
+    return payload["stages"][0]["ir"]
+
+
+@pytest.mark.parametrize("algorithm", PRODUCTION_RELAXATION_ALGORITHMS)
+def test_managed_relaxation_owns_only_applicable_numerical_policy(
+    monkeypatch,
+    algorithm,
+):
+    ir = _managed_problem_ir(
+        monkeypatch,
+        phase="relax",
+        algorithm=algorithm,
+    )
+    relaxation = ir["study"]
+    assert relaxation["algorithm"] == algorithm
+    assert not any(term["kind"] == "zeeman" for term in ir["energy_terms"])
+    if algorithm == "llg_overdamped":
+        dynamics = relaxation["dynamics"]
+        assert dynamics["integrator"] == "rk23"
+        assert dynamics["fixed_timestep"] is None
+        adaptive = dynamics["adaptive_timestep"]
+        assert adaptive["dt_initial"] == pytest.approx(1e-15)
+        assert adaptive["dt_min"] == pytest.approx(1e-17)
+        assert adaptive["dt_max"] == pytest.approx(1e-14)
+        assert adaptive["atol"] == pytest.approx(1e-7)
+        assert ir["materials"][0]["damping"] == pytest.approx(1.0)
+    else:
+        assert "dynamics" not in relaxation
+
+
+def test_managed_dynamics_restores_physical_alpha_and_separate_timestep(
+    monkeypatch,
+    tmp_path,
+):
+    state = tmp_path / "initial_state.json"
+    state.write_text(
+        json.dumps({"kind": "magnetization_state", "values": [[1.0, 0.0, 0.0]]})
+    )
+    ir = _managed_problem_ir(
+        monkeypatch,
+        phase="dynamic",
+        algorithm=CANONICAL_RELAXATION_ALGORITHM,
+        state=state,
+    )
+    dynamics = ir["study"]["dynamics"]
+    assert dynamics["integrator"] == "rk45"
+    assert dynamics["adaptive_timestep"]["dt_max"] == pytest.approx(2e-13)
+    assert ir["materials"][0]["damping"] == pytest.approx(CONTRACT.alpha)
+    universe = ir["problem_meta"]["runtime_metadata"]["study_universe"]
+    assert universe["airbox_growth_rate"] == pytest.approx(1.7)
+    assert universe["airbox_grading"] == "geometric"
 
 
 def test_real_reference_parsers_and_crossings():

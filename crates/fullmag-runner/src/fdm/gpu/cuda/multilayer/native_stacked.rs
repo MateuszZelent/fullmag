@@ -281,6 +281,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
     )?;
 
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = crate::relaxation::RelaxationTorqueConfirmation::default();
     let mut latest_stats: Option<StepStats> = None;
     let mut cancelled = false;
     let mut paused = false;
@@ -379,7 +380,7 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
         let energy_plateau_range = energy_plateau.record(stats.e_total);
         let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
             stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                || relaxation_converged(
+                || torque_confirmation.observe_stats(
                     control,
                     &stats,
                     energy_plateau_range,
@@ -433,7 +434,8 @@ pub(super) fn execute_native_stacked_cuda_multilayer(
         status,
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
-            max_torque_apm: None,
+            max_torque_apm: Some(stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: stats.step,
             relaxation_time_s: Some(stats.time),

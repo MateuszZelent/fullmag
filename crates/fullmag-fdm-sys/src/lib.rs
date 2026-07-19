@@ -280,6 +280,7 @@ pub struct fullmag_fdm_plan_desc {
     pub mel_strain: [f64; 6],
 
     pub temperature: f64,
+    pub thermal_seed: u64,
 
     pub current_density_x: f64,
     pub current_density_y: f64,

@@ -481,6 +481,11 @@ def render_loaded_problem_as_script(
         lines.append("")
         lines.extend(demag_lines)
 
+    thermal_lines = _render_thermal_noise(base_problem, surface=surface)
+    if thermal_lines:
+        lines.append("")
+        lines.extend(thermal_lines)
+
     mesh_lines = _render_mesh_workflow(
         base_problem,
         magnet_vars,
@@ -957,7 +962,6 @@ def _render_runtime(
                 demag_kwargs = [
                     f"strategy={_py_repr(fdm.demag.strategy)}",
                     f"mode={_py_repr(fdm.demag.mode)}",
-                    f"allow_single_grid_fallback={fdm.demag.allow_single_grid_fallback!r}",
                     f"explain={fdm.demag.explain!r}",
                 ]
                 if fdm.demag.common_cells is not None:
@@ -5652,6 +5656,19 @@ def _render_demag(
         "# Outer boundary / demag",
         f"{_surface_call(surface, 'demag')}({', '.join(kwargs)})",
     ]
+
+
+def _render_thermal_noise(problem: Problem, *, surface: str) -> list[str]:
+    thermal_terms = [term for term in problem.energy if isinstance(term, ThermalNoise)]
+    if not thermal_terms:
+        return []
+    if len(thermal_terms) != 1:
+        raise ValueError("canonical flat-script rewrite requires at most one ThermalNoise term")
+    term = thermal_terms[0]
+    args = [f"temperature={_py_number(term.temperature)}"]
+    if term.seed is not None:
+        args.append(f"seed={term.seed}")
+    return ["# Brown thermal noise", f"{_surface_call(surface, 'thermal_noise')}({', '.join(args)})"]
 
 
 def _resolve_universe(

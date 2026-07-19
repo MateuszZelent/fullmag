@@ -94,6 +94,33 @@ add_test(NAME fdm_region_owned_abi_contract COMMAND region_owned_abi_contract)
 add_executable(periodic_exchange_fp32_contract tests/periodic_exchange_fp32_contract.cpp)
 add_test(NAME fdm_periodic_exchange_fp32_contract COMMAND periodic_exchange_fp32_contract)
 
+add_executable(fp32_subcell_contract tests/fp32_subcell_contract.cpp)
+add_test(NAME fdm_fp32_subcell_contract COMMAND fp32_subcell_contract)
+
+add_executable(demag_missing_spectra_contract tests/demag_missing_spectra_contract.cpp)
+add_test(NAME fdm_demag_missing_spectra_contract COMMAND demag_missing_spectra_contract)
+
+add_executable(bulk_dmi_sign_contract tests/bulk_dmi_sign_contract.cpp)
+add_test(NAME fdm_bulk_dmi_sign_contract COMMAND bulk_dmi_sign_contract)
+
+add_executable(inactive_torque_mask_contract tests/inactive_torque_mask_contract.cpp)
+add_test(NAME fdm_inactive_torque_mask_contract COMMAND inactive_torque_mask_contract)
+
+add_executable(thermal_brown_contract tests/thermal_brown_contract.cpp)
+add_test(NAME fdm_thermal_brown_contract COMMAND thermal_brown_contract)
+
+add_executable(sot_rhs_contract tests/sot_rhs_contract.cpp)
+add_test(NAME fdm_sot_rhs_contract COMMAND sot_rhs_contract)
+
+add_executable(stt_pbc_contract tests/stt_pbc_contract.cpp)
+add_test(NAME fdm_stt_pbc_contract COMMAND stt_pbc_contract)
+
+add_executable(oersted_energy_contract tests/oersted_energy_contract.cpp)
+add_test(NAME fdm_oersted_energy_contract COMMAND oersted_energy_contract)
+
+add_executable(partial_cell_energy_contract tests/partial_cell_energy_contract.cpp)
+add_test(NAME fdm_partial_cell_energy_contract COMMAND partial_cell_energy_contract)
+
 add_executable(fdm_llg_time_policy_contract tests/llg_time_policy_contract.cpp)
 target_include_directories(fdm_llg_time_policy_contract PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(fdm_llg_time_policy_contract PRIVATE fullmag_fdm)

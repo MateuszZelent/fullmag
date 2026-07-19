@@ -91,6 +91,39 @@ pub(crate) fn initialize_script_result_bundle(
     Ok(())
 }
 
+pub(crate) fn replace_and_initialize_script_result_bundle(
+    paths: &ScriptOutputPaths,
+    script_path: &Path,
+    session_id: &str,
+) -> Result<()> {
+    if !paths.is_sibling_zarr_bundle {
+        bail!("refusing to replace a non-default result directory");
+    }
+
+    if paths.workspace_dir.exists() {
+        let metadata = fs::symlink_metadata(&paths.workspace_dir).with_context(|| {
+            format!(
+                "failed to inspect existing default result bundle {}",
+                paths.workspace_dir.display()
+            )
+        })?;
+        if !metadata.file_type().is_dir() {
+            bail!(
+                "default result bundle path is not a directory: {}",
+                paths.workspace_dir.display()
+            );
+        }
+        fs::remove_dir_all(&paths.workspace_dir).with_context(|| {
+            format!(
+                "failed to replace existing default result bundle {}",
+                paths.workspace_dir.display()
+            )
+        })?;
+    }
+
+    initialize_script_result_bundle(paths, script_path, session_id)
+}
+
 pub(crate) fn emit_initial_state_warnings(
     live_workspace: Option<&LocalLiveWorkspace>,
     backend_plan: &BackendPlanIR,
@@ -238,6 +271,70 @@ mod output_path_tests {
         assert_eq!(attrs["script_path"], "/work/case_a.py");
 
         fs::remove_dir_all(root).expect("owned temporary bundle should be removable");
+    }
+
+    #[test]
+    fn default_sibling_bundle_replaces_the_previous_attempt() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must follow Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-script-result-replace-{}-{nonce}",
+            std::process::id()
+        ));
+        let paths = ScriptOutputPaths {
+            workspace_dir: root.join("case_a.zarr"),
+            artifact_dir: root.join("case_a.zarr/artifacts"),
+            is_sibling_zarr_bundle: true,
+        };
+        fs::create_dir_all(&paths.workspace_dir).expect("old result bundle should be creatable");
+        let stale = paths.workspace_dir.join("stale-attempt.txt");
+        fs::write(&stale, b"old attempt").expect("old result marker should be writable");
+
+        replace_and_initialize_script_result_bundle(
+            &paths,
+            Path::new("/work/case_a.py"),
+            "session-456",
+        )
+        .expect("default result bundle should be replaceable");
+
+        assert!(!stale.exists());
+        assert!(paths.workspace_dir.join(".zgroup").is_file());
+        assert!(paths.artifact_dir.join(".zgroup").is_file());
+        assert!(paths.workspace_dir.join("stages/.zgroup").is_file());
+
+        fs::remove_dir_all(root).expect("owned temporary bundle should be removable");
+    }
+
+    #[test]
+    fn default_sibling_bundle_does_not_replace_a_file() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must follow Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-script-result-file-collision-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("temporary root should be creatable");
+        let paths = ScriptOutputPaths {
+            workspace_dir: root.join("case_a.zarr"),
+            artifact_dir: root.join("case_a.zarr/artifacts"),
+            is_sibling_zarr_bundle: true,
+        };
+        fs::write(&paths.workspace_dir, b"keep me").expect("collision file should be writable");
+
+        let error = replace_and_initialize_script_result_bundle(
+            &paths,
+            Path::new("/work/case_a.py"),
+            "session-456",
+        )
+        .expect_err("a non-directory collision must fail closed");
+
+        assert!(error.to_string().contains("is not a directory"));
+        assert_eq!(fs::read(&paths.workspace_dir).unwrap(), b"keep me");
+        fs::remove_dir_all(root).expect("owned temporary root should be removable");
     }
 }
 

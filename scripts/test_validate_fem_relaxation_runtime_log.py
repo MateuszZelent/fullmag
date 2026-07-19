@@ -7,6 +7,7 @@ import os
 import importlib.util
 import subprocess
 import tempfile
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -18,10 +19,20 @@ FEM_RELAXATION_NOTE = (
     REPO_ROOT / "docs" / "physics" / "0510-fem-relaxation-algorithms-mfem-gpu.md"
 )
 BENCHMARK = REPO_ROOT / "scripts" / "analysis" / "fem_gpu_benchmark.py"
+BENCHMARK_CASE = REPO_ROOT / "examples" / "bench_fem_gpu_long.py"
 
 
 def load_benchmark_module():
     spec = importlib.util.spec_from_file_location("fem_gpu_benchmark", BENCHMARK)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_benchmark_case_module():
+    spec = importlib.util.spec_from_file_location("bench_fem_gpu_long", BENCHMARK_CASE)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -1423,6 +1434,58 @@ def test_generated_domain_mesh_env_reuses_persistent_cache(
     assert first == second
     assert Path(first["FULLMAG_BENCH_DOMAIN_MESH"]).is_file()
     assert len(calls) == 1
+
+
+def test_benchmark_mesh_env_forwards_requested_generated_mesh_sizes(monkeypatch) -> None:
+    benchmark = load_benchmark_module()
+    monkeypatch.setenv("FULLMAG_BENCH_DOMAIN_HMAX", "20e-9")
+    monkeypatch.setenv("FULLMAG_BENCH_AIRBOX_HMAX", "100e-9")
+
+    env = benchmark.benchmark_mesh_env(
+        SimpleNamespace(
+            gmsh_threads=None,
+            require_stable_solver_mesh=True,
+            require_cpu_gpu_consistency=True,
+        )
+    )
+
+    assert env["FULLMAG_BENCH_DOMAIN_HMAX"] == "20e-9"
+    assert env["FULLMAG_BENCH_AIRBOX_HMAX"] == "100e-9"
+    assert env["FULLMAG_GMSH_THREADS"] == "1"
+
+
+def test_benchmark_backend_runs_use_isolated_output_directory() -> None:
+    source = BENCHMARK.read_text(encoding="utf-8")
+
+    assert '"--output-dir", str(run_dir)' in source
+
+
+def test_box500_relaxation_uses_mesh_independent_nonuniform_initial_state() -> None:
+    benchmark = load_benchmark_case_module()
+
+    initial = benchmark.scenario_initial_magnetization(
+        benchmark.BOX500_AIRBOX_SCENARIO
+    ).to_ir()
+
+    assert initial["kind"] == "preset_texture"
+    assert initial["preset_kind"] == "helical"
+    assert initial["preset_params"]["wavevector"][0] > 0.0
+
+
+def test_box500_exchange_calibration_omits_airbox_but_demag_keeps_it() -> None:
+    benchmark = load_benchmark_case_module()
+
+    assert not benchmark.scenario_requires_shared_domain(
+        benchmark.BOX500_EXCHANGE_SCENARIO
+    )
+    assert benchmark.scenario_requires_shared_domain("box500_airbox_exchange_demag")
+
+
+def test_adaptive_benchmark_declares_executable_timestep_bounds() -> None:
+    source = BENCHMARK_CASE.read_text(encoding="utf-8")
+
+    assert "dt_min=dt * 1e-3" in source
+    assert "dt_max=dt" in source
 
 
 def test_performance_regression_case_key_normalizes_csv_values() -> None:

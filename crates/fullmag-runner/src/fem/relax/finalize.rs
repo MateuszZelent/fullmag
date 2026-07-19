@@ -198,6 +198,7 @@ pub(crate) fn finalize_native_fem_relaxation(
             plan.relaxation.as_ref(),
             RelaxationCompletionMetrics {
                 max_torque_apm: None,
+                torque_confirmed: false,
                 accepted_energy_plateau_range_j: None,
                 steps: final_stats.step,
                 relaxation_time_s: Some(final_stats.time),

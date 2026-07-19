@@ -167,6 +167,7 @@ void launch_rk23_step_fp32(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     copy_field_d2d_fp32(ctx.tmp, ctx.m, ctx.cell_count, context_compute_stream(ctx));
 
     for (;;) {
+        ctx.current_dt = dt;
         dt_f = static_cast<float>(dt);
 
         if (ctx.fsal_valid) {

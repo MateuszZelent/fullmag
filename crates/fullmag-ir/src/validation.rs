@@ -1533,6 +1533,15 @@ pub(crate) fn validate_runtime_selection(problem: &crate::ProblemIR, errors: &mu
             ));
         }
     }
+    if let Some(count) = selection
+        .get("gpu_count")
+        .and_then(|value| value.as_u64())
+        .filter(|count| *count > 1)
+    {
+        errors.push(format!(
+            "runtime_metadata.runtime_selection.gpu_count={count} requests multi-GPU execution, but multi-GPU execution is not implemented"
+        ));
+    }
     if selection
         .get("explicit_selection")
         .is_some_and(|value| !value.is_boolean())

@@ -245,15 +245,27 @@ fn provenance_with_runtime_threading(
 fn thermal_execution_provenance(
     plan: &fullmag_ir::ExecutionPlanIR,
     steps: &[StepStats],
+    provenance: &crate::types::ExecutionProvenance,
 ) -> Option<serde_json::Value> {
-    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
-        return None;
+    let (seed, is_fdm) = match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => (fem.thermal_seed_config.as_ref()?, false),
+        BackendPlanIR::Fdm(fdm) => (fdm.thermal_seed_config.as_ref()?, true),
+        _ => return None,
     };
-    let seed = fem.thermal_seed_config.as_ref()?;
+    let resolved_seed = if is_fdm {
+        provenance.random_seed.or(seed.seed)
+    } else {
+        seed.seed
+    };
+    let resolved_policy = if is_fdm && resolved_seed.is_some() {
+        fullmag_ir::SeedPolicy::Fixed
+    } else {
+        seed.policy
+    };
     Some(serde_json::json!({
         "requested_seed_policy": seed.policy,
-        "resolved_seed_policy": seed.policy,
-        "resolved_seed": seed.seed,
+        "resolved_seed_policy": resolved_policy,
+        "resolved_seed": resolved_seed,
         "accepted_interval_index": steps.len(),
     }))
 }
@@ -1033,7 +1045,11 @@ pub(crate) fn write_artifacts(
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
     let mut execution_provenance_json =
         serde_json::to_value(&execution_provenance).expect("ExecutionProvenance must serialize");
-    if let Some(thermal) = thermal_execution_provenance(plan, &executed.result.steps) {
+    if let Some(thermal) = thermal_execution_provenance(
+        plan,
+        &executed.result.steps,
+        &execution_provenance,
+    ) {
         execution_provenance_json
             .as_object_mut()
             .expect("ExecutionProvenance must serialize to an object")
@@ -3283,7 +3299,10 @@ mod tests {
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),
             },
-            provenance: ProvenancePlanIR { notes: Vec::new() },
+            provenance: ProvenancePlanIR {
+                notes: Vec::new(),
+                integrator_resolution: None,
+            },
         }
     }
 
@@ -3593,7 +3612,10 @@ mod tests {
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),
             },
-            provenance: ProvenancePlanIR { notes: Vec::new() },
+            provenance: ProvenancePlanIR {
+                notes: Vec::new(),
+                integrator_resolution: None,
+            },
         }
     }
 
@@ -3821,7 +3843,10 @@ mod tests {
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),
             },
-            provenance: ProvenancePlanIR { notes: Vec::new() },
+            provenance: ProvenancePlanIR {
+                notes: Vec::new(),
+                integrator_resolution: None,
+            },
         }
     }
 
@@ -5248,6 +5273,7 @@ mod tests {
             requested_demag_realization: None,
             resolved_demag_realization: None,
             timestep_policy: None,
+            fdm_multilayer_transfer_telemetry: None,
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,
@@ -6117,6 +6143,7 @@ mod tests {
             requested_demag_realization: None,
             resolved_demag_realization: None,
             timestep_policy: None,
+            fdm_multilayer_transfer_telemetry: None,
             dt_policy: None,
             llg_mode: None,
             mfem_device: None,

@@ -71,6 +71,82 @@ single symmetric face/link weighting rule; a link is counted exactly once.
 The same `phi`, face weights, and boundary geometry instance must drive the
 field, energy, scalar reductions, and derivative tests.
 
+For a local density (Zeeman, prescribed Oersted, uniaxial anisotropy, or
+cubic anisotropy), `phi_i V_i` multiplies the scalar energy, while the same
+factor cancels from the discrete variational field
+`H_i=-(mu0 Ms phi_i V_i)^{-1} dE/dm_i`; therefore the local RHS field is not
+artificially scaled by `phi_i`. Nonlocal operators must instead realize the
+same weighted variational discretization in both their stencil and scalar
+energy. Until that exists, T0/T1 rejects DMI rather than publishing a scalar
+energy whose derivative disagrees with the stepping field.
+
+For a self field such as demagnetization, the discrete field-dot energy uses
+`-1/2 mu0 Ms m . H_self`. For an applied Zeeman field, including a native
+stacked multilayer external field, it uses `-mu0 Ms m . H_ext` with no half
+factor. These reductions must remain separate in total and per-object
+observables.
+
+The static Oersted field of a cylindrical conductor is also an applied field
+for this purpose.  For the exact cellwise field `H_Oe,i [A/m]` added to the
+LLG RHS, its contribution is
+
+\[
+E_\mathrm{Oe}=-\mu_0 M_s V_\mathrm{cell}
+\sum_{i\in\mathrm{active}} m_i\mathbin{\cdot}H_{\mathrm{Oe},i}.
+\]
+
+It is reported in the existing external/Zeeman scalar, and therefore included
+once in total energy; it is not a self-field and must never receive a
+one-half factor.  The CPU AoS and SoA energy helpers, full step observables,
+and finite-difference derivative tests must use the same cellwise field as
+the effective-field RHS.  Time-dependent Oersted stage evaluation and CUDA
+geometry parity remain separate requirements and do not justify reporting a
+zero static Oersted energy.
+
+The native CUDA FP64 and FP32 reductions use that same expression with the
+uniform external field plus `oersted_field_scale(t) H_oe_static`. A managed
+native source contract prevents either precision lane from dropping the
+Oersted summand; numerical device parity still requires a GPU qualification
+case and is not inferred from that contract.
+
+For native single-grid CUDA, dynamic `StepStats` and an explicit snapshot
+publish the same scalar decomposition: exchange, demagnetization, external
+(including Oersted where present), uniaxial plus cubic anisotropy, bulk or
+interfacial DMI, and their sum. The runner maps cubic energy into `e_ani` and
+DMI into `e_dmi` in both paths; zero is only a physical zero, never a stand-in
+for an omitted observable. A device identity test is required before this
+contract can be called qualified.
+
+For uniaxial magnetocrystalline anisotropy, with `p = m . u` for a unit
+material axis `u`, Fullmag uses
+
+\[
+e_\mathrm{uni}=-K_{u1}p^2-K_{u2}p^4,
+\qquad
+H_\mathrm{uni}=-\frac{1}{\mu_0M_s}\frac{\partial e_\mathrm{uni}}{\partial m}.
+\]
+
+`Ku1` and `Ku2` are signed, finite material parameters in `J/m³`. Positive
+`Ku1` makes `u` an easy axis; negative `Ku1` makes it the normal of an easy
+plane. The material property is the only public representation; a legacy
+standalone uniaxial term is migrated to that property under the documented
+single-material rule.
+
+For cubic magnetocrystalline anisotropy in the orthonormal crystal frame
+`(c1, c2, c3 = c1 x c2)`, Fullmag uses
+
+\[
+\sigma=m_1^2m_2^2+m_2^2m_3^2+m_3^2m_1^2,
+\qquad
+e_\mathrm{cub}=K_{c1}\sigma+K_{c2}m_1^2m_2^2m_3^2+K_{c3}\sigma^2,
+\]
+
+with `Kc1`, `Kc2`, and `Kc3` in `J/m³` and
+`H_cub = -(mu0 Ms)^-1 d e_cub / d m` in `A/m`. The CPU reference, CUDA
+single-grid, and CUDA multilayer paths must use this same energy and its
+derivative; field-dot-energy shortcuts are invalid for these non-quadratic
+terms.
+
 Bulk DMI is
 
 \[
@@ -139,13 +215,35 @@ Requested execution fields are typed enums: discretization, device,
 precision, execution mode, and UI mode. A requested GPU is fail-closed when
 unavailable. `auto` may resolve to CPU only with a retained fallback trail in
 run, stage, interactive, hysteresis, API, and script provenance. Unknown
-values and invalid GPU indices are rejected at the public boundary.
+values and invalid GPU indices are rejected at the public boundary. Current
+execution is single-device only: `gpu_count` may be `0` or `1`; a request
+above one fails during Python and ProblemIR validation with an explicit
+multi-GPU-unimplemented diagnostic rather than being silently ignored.
+
+FDM demagnetization has no `allow_single_grid_fallback` switch. The author
+must request `strategy="single_grid"`, `"multilayer_convolution"`, or
+`"auto"`; an ineligible `auto` resolution fails with its planner reason until
+it has an explicit, provenance-bearing resolution contract. Legacy uses of
+the removed switch fail with a migration error rather than silently changing
+the selected realization.
+
+Adaptive FDM is currently qualified only for the explicit CPU double lane.
+An adaptive request for `device="cuda"` or `"gpu"` is rejected by the
+planner before native materialization because no matching executable timestep
+identity exists. This is a legality restriction, not a runtime fallback.
 
 Host availability, intrinsic engine support, and active-session plan legality
 are separate resources using shared identifiers and reason codes. The active
 session legality resource is the only UI gating owner; platform capabilities
-remain host inventory. Multilayer profiles reject unsupported features before
-lowering, including field drives until a lossless plan representation exists.
+remain host inventory. The runtime `supported_terms` catalog is selected from
+the planned FDM profile rather than from dormant source ownership: single-grid
+may advertise its executable thermal, STT, SOT, and Oersted scope, with the
+machine-readable `term_scopes` map carrying restrictions such as CUDA's
+constant `+z` cylinder and static precomputed-field support. The public
+multilayer profile omits thermal, torque, Oersted, bulk DMI, magnetoelastic,
+and CUDA boundary correction because its planner rejects them. Multilayer
+profiles reject unsupported features before lowering, including field drives
+until a lossless plan representation exists.
 
 ## 4. IR, API, and workspace impact
 
@@ -167,14 +265,35 @@ global relaxation, and field drives. A UI transaction must export and parse
 to an equivalent `ProblemIR` before its authoring surface can be considered
 supported.
 
+### 4.1 Time-integrator intent and resolution provenance
+
+`integrator="auto"` is authored physical/execution intent, not an omitted
+value. `ExecutionPlanIR.provenance.integrator_resolution` therefore stores a
+typed `requested_integrator` (`auto`, `heun`, `rk4`, `rk23`, `rk45`, or
+`abm3`) separately from the concrete `resolved_integrator`. The existing
+`TimestepPolicyProvenance` remains the typed record of the selected timestep
+policy and execution identity; this plan-level pair is its input provenance,
+not a replacement. At artifact finalization the compatibility
+`ExecutionProvenance.requested_integrator` and `resolved_integrator` fields
+are populated using lower-case public spelling. Device implementation,
+fallback, and hardware facts remain runtime provenance and must not be folded
+into the integrator intent.
+
 ## 5. Backend interpretation
 
 CPU reference is the FP64 oracle. CUDA FP64 is qualified only by parity with
 the oracle for a named lane; CUDA FP32 has separately declared tolerances and
 never inherits FP64 status. Multilayer native-stacked and CUDA-assisted are
 distinct realizations with their own capability rows, residency telemetry, and
-validation gates. FEM semantics are unchanged by this note; it shares the
-public physical vocabulary but is not evidence for FDM execution.
+validation gates. The assisted realization must publish
+`fdm_multilayer_transfer_telemetry` in execution provenance with
+`execution_shape="cuda_assisted_multilayer"`,
+`data_residency="host_authoritative_with_cuda_field_roundtrips"`, and exact
+vector H2D/D2H counts and payload bytes measured at each FFI transfer. Those
+values describe the complete executed run, including staged RHS and native
+multilayer-demag transfers; they are not a prediction from the requested
+integrator or timestep. FEM semantics are unchanged by this note; it shares
+the public physical vocabulary but is not evidence for FDM execution.
 
 ## 6. Validation strategy
 

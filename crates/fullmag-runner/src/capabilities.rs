@@ -1,6 +1,7 @@
 use crate::dispatch::{FdmEngine, FemEngine};
 use crate::quantities::QuantityId;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +36,11 @@ pub struct BackendCapabilities {
     pub engine_id: RuntimeEngineId,
     pub capability_profile_version: String,
     pub supported_terms: Vec<String>,
+    /// Executable restrictions for terms advertised by this resolved plan
+    /// profile. The semantic term name remains stable in `supported_terms`;
+    /// clients must use this map for command gating and explanatory text.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub term_scopes: BTreeMap<String, String>,
     pub supported_demag_realizations: Vec<String>,
     pub preview_quantities: Vec<String>,
     pub snapshot_quantities: Vec<String>,
@@ -53,11 +59,86 @@ pub struct BackendCapabilities {
 // frequency-domain or two-way magnetoelastic solver.
 const DEFERRED_STUDY_CAPABILITY: bool = false;
 
+/// The FDM plan family whose public execution scope is being reported.
+///
+/// This is intentionally separate from the selected engine: the public
+/// multilayer plan rejects several interactions that the single-grid engine
+/// can execute. `supported_terms` is an executable-plan catalog, not a source
+/// inventory of dormant kernels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FdmCapabilityProfile {
+    SingleGrid,
+    Multilayer,
+}
+
 fn quantity_names(ids: &[QuantityId]) -> Vec<String> {
     ids.iter().map(|id| id.as_str().to_string()).collect()
 }
 
-pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilities {
+fn fdm_supported_terms(profile: FdmCapabilityProfile, cuda: bool) -> Vec<String> {
+    let terms = match profile {
+        FdmCapabilityProfile::SingleGrid => vec![
+            "exchange",
+            "demag_tensor_fft_newell",
+            "zeeman",
+            "thermal",
+            "uniaxial_anisotropy",
+            "cubic_anisotropy",
+            "interfacial_dmi",
+            "bulk_dmi",
+            "stt",
+            "sot",
+            "oersted",
+        ],
+        FdmCapabilityProfile::Multilayer => vec![
+            "exchange",
+            "demag_tensor_fft_newell",
+            "zeeman",
+            "uniaxial_anisotropy",
+            "cubic_anisotropy",
+            "interfacial_dmi",
+        ],
+    };
+    let mut terms = terms.into_iter().map(str::to_string).collect::<Vec<_>>();
+    if cuda && profile == FdmCapabilityProfile::SingleGrid {
+        terms.push("boundary_correction".to_string());
+    }
+    terms
+}
+
+fn fdm_term_scopes(profile: FdmCapabilityProfile, cuda: bool) -> BTreeMap<String, String> {
+    if profile == FdmCapabilityProfile::Multilayer {
+        return BTreeMap::new();
+    }
+
+    let mut scopes = BTreeMap::from([
+        (
+            "thermal".to_string(),
+            "single_grid; fixed_timestep; adaptive=unsupported; H_therm=unmaterialized"
+                .to_string(),
+        ),
+        (
+            "sot".to_string(),
+            "single_grid; uniform_module; conservative_energy=none".to_string(),
+        ),
+    ]);
+    scopes.insert(
+        "oersted".to_string(),
+        if cuda {
+            "single_grid; cylinder_axis=+z/time_dependence=constant; field=precomputed_static"
+                .to_string()
+        } else {
+            "single_grid; cylinder_any_axis; time_dependence=constant|sinusoidal|pulse; field=current_solution"
+                .to_string()
+        },
+    );
+    scopes
+}
+
+pub(crate) fn capabilities_for_fdm_engine(
+    engine: FdmEngine,
+    profile: FdmCapabilityProfile,
+) -> BackendCapabilities {
     match engine {
         FdmEngine::CpuReference => BackendCapabilities {
             supports_frequency_response: DEFERRED_STUDY_CAPABILITY,
@@ -66,21 +147,9 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
             supports_frequency_domain_elastodynamics: DEFERRED_STUDY_CAPABILITY,
             supports_coupled_eigenmodes: DEFERRED_STUDY_CAPABILITY,
             engine_id: RuntimeEngineId::FdmCpuReference,
-            capability_profile_version: "2026-04-04".to_string(),
-            supported_terms: vec![
-                "exchange".to_string(),
-                "demag_tensor_fft_newell".to_string(),
-                "zeeman".to_string(),
-                "thermal".to_string(),
-                "uniaxial_anisotropy".to_string(),
-                "cubic_anisotropy".to_string(),
-                "interfacial_dmi".to_string(),
-                "bulk_dmi".to_string(),
-                "stt".to_string(),
-                "sot".to_string(),
-                "magnetoelastic".to_string(),
-                "oersted".to_string(),
-            ],
+            capability_profile_version: "2026-07-19".to_string(),
+            supported_terms: fdm_supported_terms(profile, false),
+            term_scopes: fdm_term_scopes(profile, false),
             supported_demag_realizations: vec!["tensor_fft_newell".to_string()],
             // H_ani and H_dmi are exposed as derived CPU observables when the
             // plan enables the corresponding local anisotropy or DMI terms.
@@ -132,22 +201,9 @@ pub(crate) fn capabilities_for_fdm_engine(engine: FdmEngine) -> BackendCapabilit
             supports_frequency_domain_elastodynamics: DEFERRED_STUDY_CAPABILITY,
             supports_coupled_eigenmodes: DEFERRED_STUDY_CAPABILITY,
             engine_id: RuntimeEngineId::FdmCuda,
-            capability_profile_version: "2026-04-04".to_string(),
-            supported_terms: vec![
-                "exchange".to_string(),
-                "demag_tensor_fft_newell".to_string(),
-                "zeeman".to_string(),
-                "thermal".to_string(),
-                "uniaxial_anisotropy".to_string(),
-                "cubic_anisotropy".to_string(),
-                "interfacial_dmi".to_string(),
-                "bulk_dmi".to_string(),
-                "stt".to_string(),
-                "sot".to_string(),
-                "magnetoelastic".to_string(),
-                "oersted".to_string(),
-                "boundary_correction".to_string(),
-            ],
+            capability_profile_version: "2026-07-19".to_string(),
+            supported_terms: fdm_supported_terms(profile, true),
+            term_scopes: fdm_term_scopes(profile, true),
             supported_demag_realizations: vec!["tensor_fft_newell".to_string()],
             preview_quantities: quantity_names(&[
                 QuantityId::M,
@@ -202,6 +258,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "thermal".to_string(),
                 "oersted".to_string(),
             ],
+            term_scopes: BTreeMap::new(),
             supported_demag_realizations: vec![
                 "poisson_robin".to_string(),
                 "poisson_dirichlet".to_string(),
@@ -256,6 +313,7 @@ pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilit
                 "thermal".to_string(),
                 "oersted".to_string(),
             ],
+            term_scopes: BTreeMap::new(),
             supported_demag_realizations: vec![
                 "poisson_robin".to_string(),
                 "poisson_dirichlet".to_string(),
@@ -356,8 +414,11 @@ mod tests {
     #[test]
     fn frequency_response_and_two_way_magnetoelasticity_are_explicitly_deferred() {
         let capabilities = [
-            capabilities_for_fdm_engine(FdmEngine::CpuReference),
-            capabilities_for_fdm_engine(FdmEngine::CudaFdm),
+            capabilities_for_fdm_engine(
+                FdmEngine::CpuReference,
+                FdmCapabilityProfile::SingleGrid,
+            ),
+            capabilities_for_fdm_engine(FdmEngine::CudaFdm, FdmCapabilityProfile::SingleGrid),
             capabilities_for_fem_engine(FemEngine::CpuNative),
             capabilities_for_fem_engine(FemEngine::NativeGpu),
             capabilities_for_fem_eigen_engine(FemEngine::CpuNative),
@@ -392,5 +453,66 @@ mod tests {
                 capability.engine_id.as_str()
             );
         }
+    }
+
+    #[test]
+    fn multilayer_fdm_catalog_excludes_terms_the_planner_rejects() {
+        for engine in [FdmEngine::CpuReference, FdmEngine::CudaFdm] {
+            let capabilities = capabilities_for_fdm_engine(engine, FdmCapabilityProfile::Multilayer);
+            for term in [
+                "thermal",
+                "stt",
+                "sot",
+                "oersted",
+                "bulk_dmi",
+                "magnetoelastic",
+            ] {
+                assert!(
+                    !capabilities.supported_terms.iter().any(|candidate| candidate == term),
+                    "{} must not advertise '{term}' for a public multilayer FDM plan",
+                    capabilities.engine_id.as_str(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn single_grid_fdm_catalog_advertises_only_current_public_fdm_terms() {
+        for engine in [FdmEngine::CpuReference, FdmEngine::CudaFdm] {
+            let capabilities =
+                capabilities_for_fdm_engine(engine, FdmCapabilityProfile::SingleGrid);
+            for term in ["thermal", "stt", "sot", "oersted"] {
+                assert!(
+                    capabilities.supported_terms.iter().any(|candidate| candidate == term),
+                    "{} must advertise its executable single-grid '{term}' path",
+                    capabilities.engine_id.as_str(),
+                );
+            }
+            assert!(
+                !capabilities
+                    .supported_terms
+                    .iter()
+                    .any(|candidate| candidate == "magnetoelastic"),
+                "{} must not advertise the semantic-only FDM magnetoelastic path",
+                capabilities.engine_id.as_str(),
+            );
+        }
+    }
+
+    #[test]
+    fn single_grid_cuda_oersted_scope_is_not_advertised_as_general_geometry() {
+        let capabilities =
+            capabilities_for_fdm_engine(FdmEngine::CudaFdm, FdmCapabilityProfile::SingleGrid);
+
+        assert_eq!(
+            capabilities.term_scopes.get("oersted").map(String::as_str),
+            Some(
+                "single_grid; cylinder_axis=+z/time_dependence=constant; field=precomputed_static"
+            ),
+        );
+        assert_eq!(
+            capabilities.term_scopes.get("thermal").map(String::as_str),
+            Some("single_grid; fixed_timestep; adaptive=unsupported; H_therm=unmaterialized"),
+        );
     }
 }

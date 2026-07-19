@@ -34,7 +34,10 @@ mod origin_tests {
             output_plan: OutputPlanIR {
                 outputs: Vec::new(),
             },
-            provenance: ProvenancePlanIR { notes: Vec::new() },
+            provenance: ProvenancePlanIR {
+                notes: Vec::new(),
+                integrator_resolution: None,
+            },
         };
 
         let layout = current_artifact_layout(&ProblemIR::bootstrap_example(), &plan);

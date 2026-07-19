@@ -4,7 +4,15 @@ from dataclasses import dataclass
 import math
 
 
-DEFAULT_RELAXATION_ALGORITHM = "llg_overdamped"
+PRODUCTION_RELAXATION_ALGORITHMS = (
+    "llg_overdamped",
+    "projected_gradient_bb",
+    "nonlinear_cg",
+)
+CANONICAL_RELAXATION_ALGORITHM = "llg_overdamped"
+CANONICAL_RELAXATION_DEVICE = "gpu"
+DEFAULT_RELAXATION_ALGORITHM = CANONICAL_RELAXATION_ALGORITHM
+RELAXATION_DT_MAX_S = 1e-14
 
 
 @dataclass(frozen=True)

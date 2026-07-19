@@ -4,6 +4,7 @@ set -euo pipefail
 root="${FULLMAG_SP4_REPORT_ROOT:-.fullmag/reports/standard-problems/mumag/sp4/fem}"
 root="$(realpath -m "$root")"
 devices="${FULLMAG_SP4_DEVICES:-cpu gpu}"
+relaxation_algorithms="${FULLMAG_SP4_RELAX_ALGORITHMS:-llg_overdamped projected_gradient_bb nonlinear_cg}"
 meshes="${FULLMAG_SP4_MESH_LEVELS:-coarse medium fine}"
 cases="${FULLMAG_SP4_CASES:-case-a case-b}"
 airboxes="${FULLMAG_SP4_AIRBOXES:-baseline expanded}"
@@ -31,22 +32,45 @@ for mesh in $meshes; do
     if [ "$airbox" = expanded ] && [ "$mesh" != medium ]; then continue; fi
     state_root="$root/states/$mesh/$airbox"
     mkdir -p "$state_root"
-    state_ready=0
-    if [ "$resume" = 1 ] && [ -s "$state_root/initial_state.json" ] && \
-       python3 scripts/check_fem_sp4_relaxation.py "$state_root/artifacts"; then
-      state_ready=1
-    fi
-    if [ "$state_ready" != 1 ]; then
-      FULLMAG_SP4_DEVICE=gpu FULLMAG_SP4_PHASE=relax FULLMAG_SP4_CASE=case-a \
-        FULLMAG_SP4_MESH="$mesh" FULLMAG_SP4_AIRBOX="$airbox" \
-        just fem-sp4-run gpu "$state_root/artifacts"
-      if [ "$qualifying" = 1 ] && \
-         ! python3 scripts/check_fem_sp4_relaxation.py "$state_root/artifacts"; then
-        echo "fresh SP4 relaxation did not satisfy the qualification gate: $mesh/$airbox" >&2
-        exit 1
-      fi
+    for device in $devices; do
+      for algorithm in $relaxation_algorithms; do
+        relaxation_root="$root/relaxations/$device/$mesh/$airbox/$algorithm/artifacts"
+        relaxation_ready=0
+        if [ "$resume" = 1 ]; then
+          if [ "$qualifying" = 1 ]; then
+            if python3 scripts/check_fem_sp4_relaxation.py "$relaxation_root" \
+                 --expected-algorithm "$algorithm" --expected-device "$device"; then
+              relaxation_ready=1
+            fi
+          elif [ -s "$relaxation_root/metadata.json" ] && \
+               [ -s "$relaxation_root/scalars.csv" ] && \
+               [ -s "$relaxation_root/m_final.json" ]; then
+            relaxation_ready=1
+          fi
+        fi
+        if [ "$relaxation_ready" != 1 ]; then
+          FULLMAG_SP4_DEVICE="$device" FULLMAG_SP4_PHASE=relax \
+            FULLMAG_SP4_RELAX_ALGORITHM="$algorithm" FULLMAG_SP4_CASE=case-a \
+            FULLMAG_SP4_MESH="$mesh" FULLMAG_SP4_AIRBOX="$airbox" \
+            just fem-sp4-run "$device" "$relaxation_root"
+        fi
+        if [ "$qualifying" = 1 ] && \
+           ! python3 scripts/check_fem_sp4_relaxation.py "$relaxation_root" \
+             --expected-algorithm "$algorithm" --expected-device "$device"; then
+          echo "fresh SP4 relaxation did not satisfy the qualification gate: $device/$mesh/$airbox/$algorithm" >&2
+          exit 1
+        fi
+      done
+    done
+
+    if [ "$qualifying" = 1 ]; then
+      PYTHONPATH=packages/fullmag-py/src:. python3 \
+        scripts/select_fem_sp4_relaxation_state.py "$root" \
+        --mesh "$mesh" --airbox "$airbox"
+    else
+      canonical_artifacts="$root/relaxations/gpu/$mesh/$airbox/llg_overdamped/artifacts"
       python3 scripts/write_fem_magnetic_initial_state_from_shared_domain.py \
-        "$state_root/artifacts" "$state_root/initial_state.json"
+        "$canonical_artifacts" "$state_root/initial_state.json"
       sha256sum "$state_root/initial_state.json" > "$state_root/initial_state.sha256"
     fi
 

@@ -41,6 +41,16 @@ docker compose --profile fem-gpu run --rm -T \
   fem-gpu bash -lc '
 set -euo pipefail
 runtime_root="${FULLMAG_RUNTIME_EXPORT_STAGING:?missing managed FEM runtime staging directory}"
+restore_staging_owner() {
+  local status="$?"
+  trap - EXIT
+  if [ -e "${runtime_root}" ]; then
+    chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" "${runtime_root}" 2>/dev/null || true
+    chmod -R u+rwX,go+rX,go-w "${runtime_root}" 2>/dev/null || true
+  fi
+  exit "${status}"
+}
+trap restore_staging_owner EXIT
 echo "[export_fem_gpu_runtime] preparing runtime bundle directories"
 mkdir -p ${runtime_root}/bin ${runtime_root}/lib ${runtime_root}/include
 source scripts/lib/runtime_bundle_copy.sh

@@ -13,6 +13,7 @@
 #include <new>
 #include <optional>
 #include <algorithm>
+#include <random>
 
 using namespace fullmag::fdm;
 
@@ -277,6 +278,18 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 
     auto *ctx = new (std::nothrow) Context();
     if (!ctx) return nullptr;
+    if (plan->precision == FULLMAG_FDM_PRECISION_SINGLE
+        && plan->boundary_correction != FULLMAG_FDM_BOUNDARY_NONE)
+    {
+        ctx->last_error =
+            "FDM FP32 sub-cell boundary correction is unavailable until field/energy parity is qualified; use double precision or boundary_correction=none";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
+    if (plan->enable_demag != 0 && plan->demag_kernel_spectrum_len == 0) {
+        ctx->last_error =
+            "FDM CUDA demag requires validated Newell tensor spectra; automatic native spectrum construction is unavailable";
+        return reinterpret_cast<fullmag_fdm_backend *>(ctx);
+    }
     if (!select_cuda_device_if_requested(*ctx)) {
         return reinterpret_cast<fullmag_fdm_backend *>(ctx);
     }
@@ -352,6 +365,13 @@ fullmag_fdm_backend *fullmag_fdm_backend_create(
 
     // Thermal noise
     ctx->temperature = plan->temperature;
+    ctx->thermal_seed = plan->thermal_seed;
+    if (ctx->temperature > 0.0 && ctx->thermal_seed == 0) {
+        std::random_device entropy;
+        ctx->thermal_seed =
+            (static_cast<uint64_t>(entropy()) << 32) ^ static_cast<uint64_t>(entropy());
+        if (ctx->thermal_seed == 0) ctx->thermal_seed = 1;
+    }
 
     // Shared spin-torque inputs
     double px = plan->stt_p_x;
@@ -906,13 +926,14 @@ int fullmag_fdm_backend_step(
 #if FULLMAG_HAS_CUDA
     if (!handle || !out_stats) return FULLMAG_FDM_ERR_INVALID;
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (dt_seconds <= 0.0) {
+        ctx->last_error = "FDM step requires dt_seconds > 0";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    ctx->current_dt = dt_seconds;
     ctx->step_interrupted = false;
     fullmag_fdm_reset_hot_loop_audit(*ctx);
     if (ctx->has_multilayer_plan_v2) {
-        if (dt_seconds <= 0.0) {
-            ctx->last_error = "v2 multilayer step requires dt_seconds > 0";
-            return FULLMAG_FDM_ERR_INVALID;
-        }
         if (ctx->integrator != FULLMAG_FDM_INTEGRATOR_HEUN &&
             ctx->integrator != FULLMAG_FDM_INTEGRATOR_RK4 &&
             ctx->integrator != FULLMAG_FDM_INTEGRATOR_RK23)

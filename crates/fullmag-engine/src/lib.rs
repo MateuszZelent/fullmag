@@ -102,6 +102,52 @@ mod tests {
     }
 
     #[test]
+    fn regional_drive_energy_matches_the_static_effective_field() {
+        let grid = GridShape::new(1, 1, 1).expect("valid grid");
+        let mut problem = ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(2.0, 1.0, 0.1).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                ..Default::default()
+            },
+        );
+        problem.regional_field_drives.push(RegionalFieldDriveTerm {
+            basis_field: vec![[0.0, 3.0, 0.0]],
+            waveform: fullmag_ir::TimeDependenceIR::Constant,
+            time_offset_s: 0.0,
+            enabled: true,
+        });
+
+        let magnetization = vec![[0.0, 1.0, 0.0]];
+        let mut workspace = problem.create_workspace();
+        let energy = problem.total_energy_from_vectors_ws(&magnetization, &mut workspace);
+
+        assert!(
+            (energy + 6.0 * MU0).abs() < 1e-18,
+            "regional drive energy must be -mu0 Ms V m dot H, got {energy}"
+        );
+
+        let epsilon = 1e-6_f64;
+        let plus = vec![[epsilon.cos(), epsilon.sin(), 0.0]];
+        let minus = vec![[epsilon.cos(), -epsilon.sin(), 0.0]];
+        let mut finite_difference_workspace = problem.create_workspace();
+        let energy_plus =
+            problem.total_energy_from_vectors_ws(&plus, &mut finite_difference_workspace);
+        let energy_minus =
+            problem.total_energy_from_vectors_ws(&minus, &mut finite_difference_workspace);
+        let derivative = (energy_plus - energy_minus) / (2.0 * epsilon);
+
+        assert!(
+            (derivative + 6.0 * MU0).abs() < 1e-15,
+            "regional drive energy derivative must match the effective field, got {derivative}"
+        );
+    }
+
+    #[test]
     fn spatial_material_fields_exchange_energy_field_taylor_consistency() {
         let grid = GridShape::new(4, 3, 1).unwrap();
         let cs = CellSize::new(5.0e-9, 5.0e-9, 5.0e-9).unwrap();
@@ -423,6 +469,37 @@ mod tests {
         );
     }
 
+    fn assert_step_report_dynamics_close(actual: StepReport, expected: StepReport, tolerance: f64) {
+        assert!(!actual.step_rejected);
+        assert_eq!(actual.step_rejected, expected.step_rejected);
+        assert!(
+            (actual.time_seconds - expected.time_seconds).abs() <= tolerance,
+            "time differs: actual={actual:?}, expected={expected:?}"
+        );
+        assert!(
+            (actual.dt_used - expected.dt_used).abs() <= tolerance,
+            "dt differs: actual={actual:?}, expected={expected:?}"
+        );
+        assert!(
+            (actual.max_effective_field_amplitude - expected.max_effective_field_amplitude).abs()
+                <= tolerance,
+            "max field differs: actual={actual:?}, expected={expected:?}"
+        );
+        assert!(
+            (actual.max_demag_field_amplitude - expected.max_demag_field_amplitude).abs()
+                <= tolerance,
+            "max demag field differs: actual={actual:?}, expected={expected:?}"
+        );
+        assert!(
+            (actual.max_rhs_amplitude - expected.max_rhs_amplitude).abs() <= tolerance,
+            "max rhs differs: actual={actual:?}, expected={expected:?}"
+        );
+        assert!(
+            (actual.max_torque_Apm - expected.max_torque_Apm).abs() <= tolerance,
+            "max torque differs: actual={actual:?}, expected={expected:?}"
+        );
+    }
+
     #[test]
     fn soa_energy_and_tangent_gradient_match_aos_helpers() {
         let grid = GridShape::new(3, 1, 1).expect("valid grid");
@@ -489,6 +566,7 @@ mod tests {
                 cubic_anisotropy: Some(CubicAnisotropyConfig {
                     kc1: 0.05 * MU0,
                     kc2: -0.01 * MU0,
+                    kc3: 0.0,
                     axis1: [2.0, 0.0, 0.0],
                     axis2: [0.0, 3.0, 0.0],
                 }),
@@ -649,6 +727,7 @@ mod tests {
                 cubic_anisotropy: Some(CubicAnisotropyConfig {
                     kc1: 0.05 * MU0,
                     kc2: -0.01 * MU0,
+                    kc3: 0.0,
                     axis1: [1.0, 0.0, 0.0],
                     axis2: [0.0, 1.0, 0.0],
                 }),
@@ -671,14 +750,55 @@ mod tests {
                 EvaluationRequest::Full,
             )
             .expect("step should succeed");
-        let ani_field = problem.anisotropy_field(state.magnetization());
-        let expected_energy = problem.anisotropy_energy(state.magnetization(), &ani_field);
+        let expected_energy = problem.anisotropy_energy(state.magnetization());
 
         assert!(expected_energy.abs() > 0.0);
         assert!(
             (report.anisotropy_energy_joules - expected_energy).abs() <= 1e-12,
             "StepReport anisotropy energy differs from direct energy: {} vs {expected_energy}",
             report.anisotropy_energy_joules
+        );
+    }
+
+    #[test]
+    fn cubic_kc3_field_and_energy_follow_the_canonical_derivative() {
+        let inv_sqrt3 = 1.0 / 3.0_f64.sqrt();
+        let kc3 = 0.75 * MU0;
+        let problem = ExchangeLlgProblem::with_terms(
+            GridShape::new(1, 1, 1).expect("valid grid"),
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(1.0, 1.0, 0.2).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                cubic_anisotropy: Some(CubicAnisotropyConfig {
+                    kc1: 0.0,
+                    kc2: 0.0,
+                    kc3,
+                    axis1: [1.0, 0.0, 0.0],
+                    axis2: [0.0, 1.0, 0.0],
+                }),
+                ..Default::default()
+            },
+        );
+        let magnetization = vec![[inv_sqrt3, inv_sqrt3, inv_sqrt3]];
+        let field = problem.anisotropy_field(&magnetization);
+        let sigma = 1.0 / 3.0;
+        let expected_field = -4.0 * kc3 * sigma * inv_sqrt3 * (2.0 / 3.0) / MU0;
+        for component in field[0] {
+            assert!(
+                (component - expected_field).abs() <= 1e-12,
+                "Kc3 field component {component} differs from {expected_field}"
+            );
+        }
+
+        let mut workspace = problem.create_workspace();
+        let energy = problem.total_energy_from_vectors_ws(&magnetization, &mut workspace);
+        let expected_energy = kc3 * sigma * sigma;
+        assert!(
+            (energy - expected_energy).abs() <= 1e-18,
+            "Kc3 energy {energy} differs from {expected_energy}"
         );
     }
 
@@ -1732,6 +1852,7 @@ mod tests {
                 cubic_anisotropy: Some(CubicAnisotropyConfig {
                     kc1: 0.05 * MU0,
                     kc2: -0.01 * MU0,
+                    kc3: 0.0,
                     axis1: [2.0, 0.0, 0.0],
                     axis2: [0.0, 3.0, 0.0],
                 }),
@@ -1782,6 +1903,7 @@ mod tests {
                 cubic_anisotropy: Some(CubicAnisotropyConfig {
                     kc1: 0.05 * MU0,
                     kc2: -0.01 * MU0,
+                    kc3: 0.0,
                     axis1: [1.0, 0.0, 0.0],
                     axis2: [0.0, 1.0, 0.0],
                 }),
@@ -2006,6 +2128,7 @@ mod tests {
                 cubic_anisotropy: Some(CubicAnisotropyConfig {
                     kc1: 0.05 * MU0,
                     kc2: -0.01 * MU0,
+                    kc3: 0.0,
                     axis1: [2.0, 0.0, 0.0],
                     axis2: [0.0, 3.0, 0.0],
                 }),
@@ -2342,6 +2465,101 @@ mod tests {
     }
 
     #[test]
+    fn oersted_cylinder_energy_matches_rhs_field_across_scalar_paths() {
+        let grid = GridShape::new(2, 1, 1).expect("valid grid");
+        let problem = ExchangeLlgProblem::with_terms(
+            grid,
+            CellSize::new(1.0, 1.0, 1.0).expect("valid cell size"),
+            MaterialParameters::new(2.0, 0.5 * MU0, 0.2).expect("valid material"),
+            LlgConfig::new(1.0, TimeIntegrator::Heun).expect("valid llg config"),
+            EffectiveFieldTerms {
+                exchange: false,
+                demag: false,
+                oersted_cylinder: Some(OerstedCylinderConfig {
+                    current: 2.0,
+                    radius: 1.0,
+                    center: [0.0, 0.0, 0.0],
+                    axis: [0.0, 0.0, 1.0],
+                    time_dep_kind: 0,
+                    time_dep_freq: 0.0,
+                    time_dep_phase: 0.0,
+                    time_dep_offset: 0.0,
+                    time_dep_t_on: 0.0,
+                    time_dep_t_off: 0.0,
+                }),
+                magnetoelastic: None,
+                ..Default::default()
+            },
+        );
+        let theta = std::f64::consts::FRAC_PI_4;
+        let magnetization = vec![[theta.cos(), theta.sin(), 0.0]; grid.cell_count()];
+
+        let mut field_workspace = problem.create_workspace();
+        let mut effective_field = vec![[0.0, 0.0, 0.0]; grid.cell_count()];
+        problem.effective_field_into_ws(&magnetization, &mut field_workspace, &mut effective_field);
+        let expected_energy = -MU0
+            * problem.material.saturation_magnetisation
+            * problem.cell_size.volume()
+            * magnetization
+                .iter()
+                .zip(&effective_field)
+                .map(|(m, h)| dot(*m, *h))
+                .sum::<f64>();
+
+        let mut report_workspace = problem.create_workspace();
+        let mut buffers = problem.create_integrator_buffers();
+        let report = problem.compute_step_observables(
+            &magnetization,
+            &mut report_workspace,
+            &mut buffers.h_eff,
+            &mut buffers.h_scratch,
+            &mut buffers.rhs,
+            EvaluationRequest::Full,
+        );
+        let mut aos_workspace = problem.create_workspace();
+        let aos_energy = problem.total_energy_from_vectors_ws(&magnetization, &mut aos_workspace);
+        let soa_magnetization = VectorFieldSoA::from_aos(&magnetization);
+        let mut soa_workspace = problem.create_workspace();
+        let mut soa_scratch = VectorFieldSoA::zeros(grid.cell_count());
+        let soa_energy = problem.total_energy_from_soa_ws(
+            &soa_magnetization,
+            &mut soa_workspace,
+            &mut soa_scratch,
+        );
+
+        for (label, actual) in [
+            ("StepReport external", report.external_energy_joules),
+            ("StepReport total", report.total_energy_joules),
+            ("AoS total", aos_energy),
+            ("SoA total", soa_energy),
+        ] {
+            assert!(
+                (actual - expected_energy).abs() <= 1e-18,
+                "{label} Oersted energy differs: {actual} vs {expected_energy}"
+            );
+        }
+
+        let epsilon = 1e-6_f64;
+        let plus = vec![[(theta + epsilon).cos(), (theta + epsilon).sin(), 0.0]; grid.cell_count()];
+        let minus = vec![[(theta - epsilon).cos(), (theta - epsilon).sin(), 0.0]; grid.cell_count()];
+        let mut derivative_workspace = problem.create_workspace();
+        let derivative = (problem.total_energy_from_vectors_ws(&plus, &mut derivative_workspace)
+            - problem.total_energy_from_vectors_ws(&minus, &mut derivative_workspace))
+            / (2.0 * epsilon);
+        let expected_derivative = -MU0
+            * problem.material.saturation_magnetisation
+            * problem.cell_size.volume()
+            * effective_field
+                .iter()
+                .map(|h| -theta.sin() * h[0] + theta.cos() * h[1])
+                .sum::<f64>();
+        assert!(
+            (derivative - expected_derivative).abs() <= 1e-15,
+            "Oersted energy derivative differs: {derivative} vs {expected_derivative}"
+        );
+    }
+
+    #[test]
     fn oersted_full_step_observables_match_minimal_field_metrics() {
         let grid = GridShape::new(3, 3, 1).expect("valid grid");
         let problem = ExchangeLlgProblem::with_terms(
@@ -2402,7 +2620,14 @@ mod tests {
             .expect("AoS minimal step should succeed");
 
         assert!(aos_minimal_report.max_effective_field_amplitude > 0.0);
-        assert_step_report_close(aos_full_report, aos_minimal_report, 1e-12);
+        assert!(aos_full_report.external_energy_joules.abs() > 0.0);
+        assert_eq!(
+            aos_full_report.total_energy_joules,
+            aos_full_report.external_energy_joules
+        );
+        assert_eq!(aos_minimal_report.external_energy_joules, 0.0);
+        assert_eq!(aos_minimal_report.total_energy_joules, 0.0);
+        assert_step_report_dynamics_close(aos_full_report, aos_minimal_report, 1e-12);
 
         let mut soa_full_state = problem
             .new_state(magnetization.clone())
@@ -2434,7 +2659,8 @@ mod tests {
             )
             .expect("SoA minimal step should succeed");
 
-        assert_step_report_close(soa_full_report, soa_minimal_report, 1e-12);
+        assert_step_report_close(soa_full_report, aos_full_report, 1e-12);
+        assert_step_report_close(soa_minimal_report, aos_minimal_report, 1e-12);
     }
 
     #[test]

@@ -177,6 +177,7 @@ struct Context {
     double temperature = 0.0;  // Kelvin
     double thermal_sigma = 0.0;  // Precomputed noise amplitude (A/m)
     double current_dt = 1e-13;   // Current timestep for thermal sigma computation
+    uint64_t thermal_seed = 0;   // Resolved counter-based Brown-noise seed
 
     // Zhang-Li STT (CIP)
     bool has_zhang_li_stt = false;
@@ -406,6 +407,7 @@ struct AsyncPreviewSnapshot {
 /// Plain-old-data copy of STT-related fields from Context.
 /// Passed by value to CUDA kernels so they don't need host-side Context access.
 struct SttParams {
+    const uint8_t *active_mask = nullptr;
     int     has_zhang_li_stt    = 0;
     double  current_density_x   = 0.0;
     double  current_density_y   = 0.0;
@@ -415,6 +417,7 @@ struct SttParams {
     double  stt_degree          = 0.0;
     int     nx = 1, ny = 1, nz = 1;
     double  dx = 1.0, dy = 1.0, dz = 1.0;
+    int     periodic_x = 0, periodic_y = 0, periodic_z = 0;
 
     int     has_slonczewski_stt = 0;
     double  stt_p_x             = 0.0;
@@ -458,6 +461,7 @@ inline double oersted_field_scale(const Context &ctx) {
 /// Build an SttParams from a Context.
 inline SttParams stt_params_from_ctx(const Context &ctx) {
     SttParams p;
+    p.active_mask = ctx.active_mask;
     p.has_zhang_li_stt  = ctx.has_zhang_li_stt  ? 1 : 0;
     p.current_density_x = ctx.current_density_x;
     p.current_density_y = ctx.current_density_y;
@@ -469,6 +473,9 @@ inline SttParams stt_params_from_ctx(const Context &ctx) {
     p.ny = static_cast<int>(ctx.ny);
     p.nz = static_cast<int>(ctx.nz);
     p.dx = ctx.dx; p.dy = ctx.dy; p.dz = ctx.dz;
+    p.periodic_x = ctx.periodic_x ? 1 : 0;
+    p.periodic_y = ctx.periodic_y ? 1 : 0;
+    p.periodic_z = ctx.periodic_z ? 1 : 0;
     p.has_slonczewski_stt = ctx.has_slonczewski_stt ? 1 : 0;
     p.stt_p_x             = ctx.stt_p_x;
     p.stt_p_y             = ctx.stt_p_y;
@@ -477,6 +484,13 @@ inline SttParams stt_params_from_ctx(const Context &ctx) {
     p.stt_epsilon_prime   = ctx.stt_epsilon_prime;
     p.stt_cpp_pf          = ctx.stt_cpp_pf;
     return p;
+}
+
+/// State replacement invalidates every multistep/FSAL derivative cache.
+inline void context_reset_integrator_history(Context &ctx) {
+    ctx.fsal_valid = false;
+    ctx.abm_startup = 0;
+    ctx.abm_last_dt = 0.0;
 }
 
 inline bool fullmag_fdm_should_fill_step_stats_for_step(const Context &ctx, uint64_t step) {
@@ -548,7 +562,7 @@ struct SotParams {
     double sx      = 0.0;  // σ̂_x (normalised)
     double sy      = 0.0;  // σ̂_y
     double sz      = 1.0;  // σ̂_z
-    double amp     = 0.0;  // ℏ|Je|/(2e μ₀ Ms t_F)  [rad/s]
+    double amp     = 0.0;  // ℏ|Je|/(2e μ₀ Ms t_F)  [A/m]
 };
 
 /// Build a SotParams from a Context.

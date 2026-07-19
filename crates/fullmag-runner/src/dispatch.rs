@@ -49,14 +49,10 @@ use crate::relaxation::direct_minimizer::direct_minimizer_control;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
-use crate::relaxation::relaxation_converged;
+use crate::relaxation::RelaxationTorqueConfirmation;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::RelaxationEnergyPlateauWindow;
 use crate::runtime_registry::RuntimeRegistry;
-pub(crate) use crate::solver_runtime::engine::{EngineResolution, FdmEngine};
-pub(crate) use crate::solver_runtime::selection::{
-    resolve_fdm_engine, resolve_fdm_engine_with_trail,
-};
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
 #[cfg(feature = "cuda")]
@@ -70,6 +66,10 @@ use crate::schedules::{
 };
 #[cfg(all(feature = "fem-gpu", not(feature = "cuda")))]
 use crate::schedules::{collect_field_schedules, OutputSchedule};
+pub(crate) use crate::solver_runtime::engine::{EngineResolution, FdmEngine};
+pub(crate) use crate::solver_runtime::selection::{
+    resolve_fdm_engine, resolve_fdm_engine_with_trail,
+};
 #[cfg(feature = "fem-gpu")]
 use crate::types::FemPoissonDemagProvenance;
 use crate::types::{
@@ -266,9 +266,6 @@ fn has_prescribed_zeeman_mask_antenna(problem: &ProblemIR) -> bool {
 
 fn unsupported_cpu_fdm_terms(plan: &FdmPlanIR, outputs: &[OutputIR]) -> Vec<&'static str> {
     let mut unsupported = Vec::new();
-    if plan.has_oersted_cylinder {
-        unsupported.push("oersted");
-    }
     if plan.boundary_geometry.is_some() || plan.boundary_correction.is_some() {
         unsupported.push("boundary_correction");
     }
@@ -645,10 +642,11 @@ fn validate_runtime_initial_magnetization(plan: &FemPlanIR) -> Result<(), RunErr
 fn resolve_fdm_engine_with_registry(
     problem: &ProblemIR,
     registry: &RuntimeRegistry,
-    explicit_selection: bool,
+    _explicit_selection: bool,
 ) -> Result<DispatchEngineResolution, RunError> {
     apply_runtime_gpu_index(problem, "fdm");
     let requested_device = requested_registry_device_for_fdm(problem);
+    let forced_device = requested_device != "auto";
     let requested_precision = runtime_precision(problem).to_string();
     let resolved = resolve_registry_runtime_for_backend(
         registry,
@@ -673,7 +671,7 @@ fn resolve_fdm_engine_with_registry(
     let mut resolved_device = resolved.device;
 
     if engine == FdmEngine::CudaFdm && has_prescribed_zeeman_mask_antenna(problem) {
-        if explicit_selection {
+        if forced_device {
             return Err(RunError {
                 message: "FDM CUDA execution was requested, but CUDA FDM currently does not support prescribed_zeeman_mask antenna sources (fallback_reason=antenna_zeeman_mask_force_cpu)".to_string(),
             });
@@ -4715,6 +4713,7 @@ fn execute_cuda_fdm(
     let mut latest_stats: Option<StepStats> = None;
     let mut current_time = 0.0;
     let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut last_preview_revision: Option<u64> = None;
     let mut cancelled = false;
     let mut numerical_stagnation = false;
@@ -4903,7 +4902,7 @@ fn execute_cuda_fdm(
             let energy_plateau_range = energy_plateau.record(stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
-                    || relaxation_converged(
+                    || torque_confirmation.observe_stats(
                         control,
                         &stats,
                         energy_plateau_range,
@@ -4944,6 +4943,7 @@ fn execute_cuda_fdm(
         plan.relaxation.as_ref(),
         crate::relaxation::RelaxationCompletionMetrics {
             max_torque_apm: completion_max_torque_apm,
+            torque_confirmed: torque_confirmation.confirmed(),
             accepted_energy_plateau_range_j: energy_plateau.range(),
             steps: completion_steps,
             relaxation_time_s: completion_time_s,
@@ -5815,6 +5815,14 @@ mod tests {
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn cpu_fdm_capability_accepts_oersted_cylinder() {
+        let mut plan = fullmag_ir::FdmPlanIR::default();
+        plan.has_oersted_cylinder = true;
+
+        assert!(unsupported_cpu_fdm_terms(&plan, &[]).is_empty());
     }
 
     #[cfg(feature = "fem-gpu")]

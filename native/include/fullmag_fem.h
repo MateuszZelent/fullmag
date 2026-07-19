@@ -319,6 +319,16 @@ typedef struct {
     char metric_name[64];
     double metric_value;
     double threshold;
+    uint32_t relaxation_controller_policy_version;
+    uint32_t torque_confirmation_samples_required;
+    uint32_t torque_confirmation_samples_current;
+    uint64_t energy_rejected_attempts;
+    uint64_t controller_tightening_count;
+    int controller_at_floor;
+    double energy_increase_relative_tolerance;
+    double energy_increase_absolute_tolerance_j;
+    double controller_tightening_factor;
+    double max_error_floor;
 } fullmag_fem_stage_completion;
 
 typedef struct {

@@ -611,6 +611,32 @@ fn bootstrap_example_validates() {
 }
 
 #[test]
+fn fdm_demag_hints_reject_removed_single_grid_fallback_switch() {
+    let legacy = serde_json::json!({
+        "strategy": "auto",
+        "mode": "auto",
+        "allow_single_grid_fallback": true,
+    });
+
+    let error = serde_json::from_value::<FdmDemagHintsIR>(legacy)
+        .expect_err("removed FDM demag fallback must not deserialize as a no-op");
+    assert!(error.to_string().contains("allow_single_grid_fallback"));
+}
+
+#[test]
+fn material_only_anisotropy_round_trips_and_validates() {
+    let mut problem = ProblemIR::bootstrap_example();
+    problem.energy_terms.clear();
+    problem.materials[0].uniaxial_anisotropy = Some(0.5e6);
+    problem.materials[0].anisotropy_axis = Some([0.0, 0.0, 1.0]);
+
+    let encoded = serde_json::to_value(&problem).expect("serialize material anisotropy");
+    let decoded: ProblemIR =
+        serde_json::from_value(encoded).expect("deserialize material anisotropy");
+    assert!(decoded.validate().is_ok());
+}
+
+#[test]
 fn regional_field_drive_exact_wire_round_trips() {
     let mut value = serde_json::to_value(ProblemIR::bootstrap_example()).unwrap();
     value["field_drives"] = serde_json::json!([{
@@ -2395,6 +2421,22 @@ fn base_material_invalid_scalars_are_rejected() {
 }
 
 #[test]
+fn material_uniaxial_anisotropy_accepts_signed_constants_and_rejects_nan() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.materials[0].uniaxial_anisotropy = Some(-0.5e6);
+    ir.materials[0].uniaxial_anisotropy_k2 = Some(-0.1e6);
+    assert!(ir.validate().is_ok());
+
+    ir.materials[0].uniaxial_anisotropy = Some(f64::NAN);
+    let errors = ir
+        .validate()
+        .expect_err("non-finite uniaxial anisotropy must fail validation");
+    assert!(errors.iter().any(|error| {
+        error.contains("materials[0].uniaxial_anisotropy") && error.contains("value must be finite")
+    }));
+}
+
+#[test]
 fn equal_priority_region_material_assignments_are_rejected() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.object_regions.push(ObjectRegionIR {
@@ -3058,6 +3100,26 @@ fn runtime_selection_accepts_null_optional_integer_fields() {
 }
 
 #[test]
+fn runtime_selection_rejects_unimplemented_multi_gpu_requests() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".into(),
+        serde_json::json!({
+            "device": "cuda",
+            "gpu_count": 2,
+            "execution_precision": "double"
+        }),
+    );
+
+    let errors = ir
+        .validate()
+        .expect_err("multi-GPU must fail until an execution realization exists");
+    assert!(errors.iter().any(|error| {
+        error.contains("gpu_count=2") && error.contains("multi-GPU execution is not implemented")
+    }));
+}
+
+#[test]
 fn random_seeded_initial_magnetization_must_be_positive() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::RandomSeeded { seed: 0 });
@@ -3313,6 +3375,7 @@ fn execution_plan_ir_serializes() {
         },
         provenance: ProvenancePlanIR {
             notes: vec!["planner stub".to_string()],
+            integrator_resolution: None,
         },
     };
 

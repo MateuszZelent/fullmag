@@ -206,6 +206,18 @@ def test_export_script_restores_runtime_bundle_to_host_owner() -> None:
     assert 'stat -c "%u:%g" .fullmag/runtimes/fem-gpu-host' not in script
 
 
+def test_export_script_restores_staging_owner_when_container_build_fails() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+    trap_index = script.find("trap restore_staging_owner EXIT")
+    build_index = script.find("cargo +nightly build")
+
+    assert "restore_staging_owner() {" in script
+    assert 'chown -R "${FULLMAG_HOST_UID}:${FULLMAG_HOST_GID}" "${runtime_root}"' in script
+    assert trap_index != -1
+    assert build_index != -1
+    assert trap_index < build_index
+
+
 def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     lock_index = script.find('RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.lock"')
