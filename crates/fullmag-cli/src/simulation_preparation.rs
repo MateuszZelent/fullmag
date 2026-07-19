@@ -3,7 +3,85 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::time::Instant;
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::Arc;
+
 pub const MAX_PREPARATION_LOG_ENTRIES: usize = 200;
+
+#[derive(Debug, Clone, Copy)]
+enum ActiveStageMonotonicStart {
+    System(Instant),
+    #[cfg(test)]
+    Manual(u64),
+}
+
+#[derive(Debug, Clone)]
+enum PreparationMonotonicClock {
+    System,
+    #[cfg(test)]
+    Manual(ManualMonotonicClock),
+}
+
+impl Default for PreparationMonotonicClock {
+    fn default() -> Self {
+        Self::System
+    }
+}
+
+impl PreparationMonotonicClock {
+    fn start(&self) -> ActiveStageMonotonicStart {
+        match self {
+            Self::System => ActiveStageMonotonicStart::System(Instant::now()),
+            #[cfg(test)]
+            Self::Manual(clock) => ActiveStageMonotonicStart::Manual(clock.now_ms()),
+        }
+    }
+
+    #[cfg(not(test))]
+    fn elapsed_ms(&self, start: ActiveStageMonotonicStart) -> u64 {
+        let ActiveStageMonotonicStart::System(started_at) = start;
+        started_at.elapsed().as_millis().min(u64::MAX as u128) as u64
+    }
+
+    #[cfg(test)]
+    fn elapsed_ms(&self, start: ActiveStageMonotonicStart) -> u64 {
+        match (self, start) {
+            (Self::System, ActiveStageMonotonicStart::System(started_at)) => {
+                started_at.elapsed().as_millis().min(u64::MAX as u128) as u64
+            }
+            #[cfg(test)]
+            (Self::Manual(clock), ActiveStageMonotonicStart::Manual(started_at_ms)) => {
+                clock.now_ms().saturating_sub(started_at_ms)
+            }
+            _ => unreachable!("monotonic clock and start source must match"),
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone)]
+struct ManualMonotonicClock {
+    now_ms: Arc<AtomicU64>,
+}
+
+#[cfg(test)]
+impl ManualMonotonicClock {
+    fn new(now_ms: u64) -> Self {
+        Self {
+            now_ms: Arc::new(AtomicU64::new(now_ms)),
+        }
+    }
+
+    fn now_ms(&self) -> u64 {
+        self.now_ms.load(Ordering::Relaxed)
+    }
+
+    fn advance_ms(&self, elapsed_ms: u64) {
+        self.now_ms.fetch_add(elapsed_ms, Ordering::Relaxed);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -200,11 +278,25 @@ pub struct SimulationPreparationState {
     pub log_tail: VecDeque<PreparationLogEntry>,
     pub failure: Option<PreparationFailure>,
     #[serde(skip)]
-    active_stage_started_at: Option<Instant>,
+    active_stage_started_at: Option<ActiveStageMonotonicStart>,
+    #[serde(skip)]
+    monotonic_clock: PreparationMonotonicClock,
 }
 
 impl SimulationPreparationState {
     pub fn new(preparation_id: impl Into<String>, started_at_unix_ms: u64) -> Self {
+        Self::new_with_clock(
+            preparation_id,
+            started_at_unix_ms,
+            PreparationMonotonicClock::System,
+        )
+    }
+
+    fn new_with_clock(
+        preparation_id: impl Into<String>,
+        started_at_unix_ms: u64,
+        monotonic_clock: PreparationMonotonicClock,
+    ) -> Self {
         Self {
             preparation_id: preparation_id.into(),
             revision: 0,
@@ -229,7 +321,21 @@ impl SimulationPreparationState {
             log_tail: VecDeque::new(),
             failure: None,
             active_stage_started_at: None,
+            monotonic_clock,
         }
+    }
+
+    #[cfg(test)]
+    fn new_with_monotonic_clock(
+        preparation_id: impl Into<String>,
+        started_at_unix_ms: u64,
+        clock: ManualMonotonicClock,
+    ) -> Self {
+        Self::new_with_clock(
+            preparation_id,
+            started_at_unix_ms,
+            PreparationMonotonicClock::Manual(clock),
+        )
     }
 
     pub fn begin_stage(
@@ -267,7 +373,7 @@ impl SimulationPreparationState {
                 stage.detail = detail;
                 self.status = PreparationStatus::Running;
                 self.active_stage_id = Some(stage_id);
-                self.active_stage_started_at = Some(Instant::now());
+                self.active_stage_started_at = Some(self.monotonic_clock.start());
             }
             PreparationStageStatus::Active => {
                 stage.detail = detail;
@@ -300,7 +406,7 @@ impl SimulationPreparationState {
         self.ensure_timestamp_not_before_start(stage_id, timestamp_unix_ms)?;
 
         let before = self.semantic_snapshot();
-        let duration_ms = self.stage_duration_ms(stage_id, timestamp_unix_ms);
+        let duration_ms = self.stage_duration_ms();
         let stage = self.stage_mut(stage_id);
         stage.progress_percent = Some(progress_percent);
         stage.progress_label = Some(progress_label.into());
@@ -319,7 +425,7 @@ impl SimulationPreparationState {
         self.ensure_timestamp_not_before_start(stage_id, timestamp_unix_ms)?;
 
         let before = self.semantic_snapshot();
-        let duration_ms = self.stage_duration_ms(stage_id, timestamp_unix_ms);
+        let duration_ms = self.stage_duration_ms();
         let stage = self.stage_mut(stage_id);
         stage.status = PreparationStageStatus::Completed;
         stage.completed_at_unix_ms = Some(timestamp_unix_ms);
@@ -392,7 +498,7 @@ impl SimulationPreparationState {
         self.ensure_timestamp_not_before_start(stage_id, timestamp_unix_ms)?;
 
         let before = self.semantic_snapshot();
-        let duration_ms = self.stage_duration_ms(stage_id, timestamp_unix_ms);
+        let duration_ms = self.stage_duration_ms();
         let stage = self.stage_mut(stage_id);
         stage.status = PreparationStageStatus::Failed;
         stage.completed_at_unix_ms = Some(timestamp_unix_ms);
@@ -536,17 +642,10 @@ impl SimulationPreparationState {
         Ok(())
     }
 
-    fn stage_duration_ms(&self, stage_id: PreparationStageId, timestamp_unix_ms: u64) -> u64 {
-        let timestamp_duration_ms = timestamp_unix_ms.saturating_sub(
-            self.stage(stage_id)
-                .started_at_unix_ms
-                .unwrap_or(timestamp_unix_ms),
-        );
-        let monotonic_duration_ms = self
-            .active_stage_started_at
-            .map(|started_at| started_at.elapsed().as_millis().min(u64::MAX as u128) as u64)
-            .unwrap_or(0);
-        timestamp_duration_ms.max(monotonic_duration_ms)
+    fn stage_duration_ms(&self) -> u64 {
+        self.active_stage_started_at
+            .map(|started_at| self.monotonic_clock.elapsed_ms(started_at))
+            .unwrap_or(0)
     }
 
     fn skip_pending_before(&mut self, stage_id: PreparationStageId) {
@@ -577,7 +676,9 @@ mod tests {
 
     #[test]
     fn preparation_transitions_keep_order_and_bound_log_tail() {
-        let mut state = SimulationPreparationState::new("prep-1", 1_000);
+        let clock = ManualMonotonicClock::new(0);
+        let mut state =
+            SimulationPreparationState::new_with_monotonic_clock("prep-1", 1_000, clock.clone());
         state
             .begin_stage(
                 PreparationStageId::RuntimeStartup,
@@ -585,19 +686,20 @@ mod tests {
                 "Starting runtime",
             )
             .unwrap();
+        clock.advance_ms(180);
         state
-            .complete_stage(PreparationStageId::RuntimeStartup, 1_180, "Runtime ready")
+            .complete_stage(PreparationStageId::RuntimeStartup, 9_180, "Runtime ready")
             .unwrap();
         state
             .begin_stage(
                 PreparationStageId::ScriptMaterialization,
-                1_180,
+                9_180,
                 "Materializing script",
             )
             .unwrap();
         for index in 0..205 {
             state.push_log(
-                1_180 + index,
+                9_180 + index,
                 PreparationLogLevel::Info,
                 PreparationStageId::ScriptMaterialization,
                 format!("entry {index}"),
@@ -646,7 +748,9 @@ mod tests {
 
     #[test]
     fn preparation_skips_inapplicable_stages_and_keeps_identical_updates_idempotent() {
-        let mut state = SimulationPreparationState::new("prep-1", 1_000);
+        let clock = ManualMonotonicClock::new(0);
+        let mut state =
+            SimulationPreparationState::new_with_monotonic_clock("prep-1", 1_000, clock.clone());
         state
             .begin_stage(PreparationStageId::Planning, 1_100, "Planning")
             .unwrap();
@@ -654,6 +758,7 @@ mod tests {
             .iter()
             .all(|stage| stage.status == PreparationStageStatus::Skipped));
 
+        clock.advance_ms(100);
         state
             .update_progress(PreparationStageId::Planning, 42, "4/10 inputs", 1_200)
             .unwrap();
