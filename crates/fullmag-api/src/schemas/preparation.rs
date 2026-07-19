@@ -108,7 +108,7 @@ pub struct SimulationPreparationResource {
     pub completed_at_unix_ms: Option<u64>,
     pub requested_execution: PreparationExecutionSummary,
     pub resolved_execution: Option<PreparationExecutionSummary>,
-    #[schema(max_items = 9)]
+    #[schema(min_items = 9, max_items = 9)]
     pub stages: Vec<PreparationProgressStage>,
     #[schema(max_items = 200)]
     pub log_tail: Vec<PreparationLogEntryResource>,

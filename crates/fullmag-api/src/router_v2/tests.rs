@@ -813,12 +813,32 @@ fn simulation_preparation_fixture(status: &str) -> SimulationPreparationSnapshot
 }
 
 async fn test_app_state_with_simulation_preparation(status: &str) -> Arc<AppState> {
+    test_app_state_with_simulation_preparation_snapshot(simulation_preparation_fixture(status))
+        .await
+}
+
+async fn test_app_state_with_simulation_preparation_snapshot(
+    preparation: SimulationPreparationSnapshot,
+) -> Arc<AppState> {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.simulation_preparation = Some(simulation_preparation_fixture(status));
-        snapshot.simulation_preparation_revision = 7;
+        snapshot.simulation_preparation_revision = preparation.revision;
+        snapshot.simulation_preparation = Some(preparation);
     }
     state
+}
+
+fn overlong_preparation_value(prefix: &str, max_chars: usize) -> String {
+    format!("{prefix}{}", "x".repeat(max_chars + 32))
+}
+
+fn assert_bounded_preparation_value(actual: &serde_json::Value, source: &str, max_chars: usize) {
+    let expected = source.chars().take(max_chars).collect::<String>();
+    assert_eq!(actual.as_str(), Some(expected.as_str()));
+    assert_eq!(
+        actual.as_str().map(|value| value.chars().count()),
+        Some(max_chars)
+    );
 }
 
 async fn set_running_stage_execution(state: &Arc<AppState>, state_version: u64) {
@@ -15315,6 +15335,165 @@ async fn simulation_preparation_returns_404_when_unavailable() {
 }
 
 #[tokio::test]
+async fn simulation_preparation_rejects_noncanonical_stage_sequences() {
+    let canonical = simulation_preparation_fixture("running");
+    let mut empty = canonical.clone();
+    empty.stages.clear();
+    let mut partial = canonical.clone();
+    partial.stages.pop();
+    let mut duplicated = canonical.clone();
+    duplicated.stages[8] = duplicated.stages[7].clone();
+    let mut reordered = canonical;
+    reordered.stages.swap(4, 5);
+
+    for (case, preparation) in [
+        ("empty", empty),
+        ("partial", partial),
+        ("duplicated", duplicated),
+        ("reordered", reordered),
+    ] {
+        let state = test_app_state_with_simulation_preparation_snapshot(preparation).await;
+        let response = build_v2_router()
+            .with_state(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/v2/sessions/current/simulation/preparation")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{case} stage sequence must fail closed"
+        );
+    }
+}
+
+#[tokio::test]
+async fn simulation_preparation_projection_enforces_all_runtime_bounds() {
+    let mut preparation = simulation_preparation_fixture("failed");
+    let preparation_id = overlong_preparation_value("preparation-id:", 128);
+    let stage_label = overlong_preparation_value("stage-label:", 128);
+    let stage_detail = overlong_preparation_value("stage-detail:", 1024);
+    let progress_label = overlong_preparation_value("progress-label:", 256);
+    let error_code = overlong_preparation_value("error-code:", 128);
+    let failure_summary = overlong_preparation_value("failure-summary:", 1024);
+    let correlation_id = overlong_preparation_value("correlation-id:", 256);
+    preparation.preparation_id = preparation_id.clone();
+    preparation.stages[5].label = stage_label.clone();
+    preparation.stages[5].detail = stage_detail.clone();
+    preparation.stages[5].progress_label = Some(progress_label.clone());
+    let failure = preparation
+        .failure
+        .as_mut()
+        .expect("failed fixture failure");
+    failure.error_code = error_code.clone();
+    failure.summary = failure_summary.clone();
+    failure.diagnostics_correlation_id = Some(correlation_id.clone());
+    preparation.log_tail = (0..206)
+        .map(|index| SimulationPreparationLogEntrySnapshot {
+            timestamp_unix_ms: 1_700_000_100_000 + index,
+            level: "info".to_string(),
+            stage_id: "meshing".to_string(),
+            message: overlong_preparation_value(&format!("entry-{index:03}:"), 2048),
+        })
+        .collect();
+
+    let state = test_app_state_with_simulation_preparation_snapshot(preparation).await;
+    let requested_backend = overlong_preparation_value("requested-backend:", 128);
+    let requested_device = overlong_preparation_value("requested-device:", 128);
+    let requested_precision = overlong_preparation_value("requested-precision:", 128);
+    let requested_mode = overlong_preparation_value("requested-mode:", 128);
+    let resolved_backend = overlong_preparation_value("resolved-backend:", 128);
+    let resolved_device = overlong_preparation_value("resolved-device:", 128);
+    let resolved_precision = overlong_preparation_value("resolved-precision:", 128);
+    let resolved_mode = overlong_preparation_value("resolved-mode:", 128);
+    let resolved_runtime_family = overlong_preparation_value("runtime-family:", 128);
+    let resolved_engine_id = overlong_preparation_value("engine-id:", 128);
+    let resolved_worker = overlong_preparation_value("worker:", 128);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.session.requested_backend = requested_backend.clone();
+        snapshot.session.requested_device = requested_device.clone();
+        snapshot.session.requested_precision = requested_precision.clone();
+        snapshot.session.requested_mode = requested_mode.clone();
+        snapshot.session.resolved_backend = Some(resolved_backend.clone());
+        snapshot.session.resolved_device = Some(resolved_device.clone());
+        snapshot.session.resolved_precision = Some(resolved_precision.clone());
+        snapshot.session.resolved_mode = Some(resolved_mode.clone());
+        snapshot.session.resolved_runtime_family = Some(resolved_runtime_family.clone());
+        snapshot.session.resolved_engine_id = Some(resolved_engine_id.clone());
+        snapshot.session.resolved_worker = Some(resolved_worker.clone());
+    }
+
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+
+    assert_bounded_preparation_value(&body["preparation_id"], &preparation_id, 128);
+    assert_bounded_preparation_value(&body["stages"][5]["label"], &stage_label, 128);
+    assert_bounded_preparation_value(&body["stages"][5]["detail"], &stage_detail, 1024);
+    assert_bounded_preparation_value(&body["stages"][5]["progress_label"], &progress_label, 256);
+    assert_bounded_preparation_value(&body["failure"]["error_code"], &error_code, 128);
+    assert_bounded_preparation_value(&body["failure"]["summary"], &failure_summary, 1024);
+    assert_bounded_preparation_value(
+        &body["failure"]["diagnostics_correlation_id"],
+        &correlation_id,
+        256,
+    );
+
+    let log_tail = body["log_tail"].as_array().expect("bounded log tail");
+    assert_eq!(log_tail.len(), 200);
+    assert_eq!(
+        log_tail.first().unwrap()["timestamp_unix_ms"],
+        1_700_000_100_006u64
+    );
+    assert_eq!(
+        log_tail.last().unwrap()["timestamp_unix_ms"],
+        1_700_000_100_205u64
+    );
+    let first_log_source = overlong_preparation_value("entry-006:", 2048);
+    let last_log_source = overlong_preparation_value("entry-205:", 2048);
+    assert_bounded_preparation_value(
+        &log_tail.first().unwrap()["message"],
+        &first_log_source,
+        2048,
+    );
+    assert_bounded_preparation_value(&log_tail.last().unwrap()["message"], &last_log_source, 2048);
+
+    for (field, source) in [
+        ("backend", &requested_backend),
+        ("device", &requested_device),
+        ("precision", &requested_precision),
+        ("mode", &requested_mode),
+    ] {
+        assert_bounded_preparation_value(&body["requested_execution"][field], source, 128);
+    }
+    for (field, source) in [
+        ("backend", &resolved_backend),
+        ("device", &resolved_device),
+        ("precision", &resolved_precision),
+        ("mode", &resolved_mode),
+        ("runtime_family", &resolved_runtime_family),
+        ("engine_id", &resolved_engine_id),
+        ("worker", &resolved_worker),
+    ] {
+        assert_bounded_preparation_value(&body["resolved_execution"][field], source, 128);
+    }
+}
+
+#[tokio::test]
 async fn simulation_preparation_status_exposes_only_revision_pointer() {
     let state = test_app_state_with_simulation_preparation("running").await;
     let app = build_v2_router().with_state(state);
@@ -15353,6 +15532,10 @@ fn simulation_preparation_openapi_registers_route_and_bounded_schemas() {
     assert_eq!(
         schemas["PreparationProgressStage"]["properties"]["progress_percent"]["maximum"],
         100
+    );
+    assert_eq!(
+        schemas["SimulationPreparationResource"]["properties"]["stages"]["minItems"],
+        9
     );
     assert_eq!(
         schemas["SimulationPreparationResource"]["properties"]["log_tail"]["maxItems"],

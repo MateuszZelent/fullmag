@@ -84,9 +84,26 @@ pub async fn get_simulation_preparation(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("simulation preparation unavailable"))?;
 
-    if preparation.stages.len() > 9 {
+    const CANONICAL_STAGE_IDS: [&str; 9] = [
+        "runtime_startup",
+        "script_materialization",
+        "validation",
+        "planning",
+        "domain_preparation",
+        "meshing",
+        "mesh_postprocessing",
+        "solver_initialization",
+        "ready",
+    ];
+    if preparation.stages.len() != CANONICAL_STAGE_IDS.len()
+        || !preparation
+            .stages
+            .iter()
+            .map(|stage| stage.id.as_str())
+            .eq(CANONICAL_STAGE_IDS)
+    {
         return Err(ApiError::internal(
-            "simulation preparation contains more than nine canonical stages",
+            "simulation preparation stages do not match the canonical nine-stage order",
         ));
     }
 
