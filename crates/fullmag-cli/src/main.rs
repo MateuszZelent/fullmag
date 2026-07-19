@@ -18,6 +18,7 @@ mod live_workspace;
 mod orchestrator;
 mod python_bridge;
 mod runtime_supervisor;
+mod simulation_preparation;
 mod step_utils;
 mod terminal_logs;
 mod types;
