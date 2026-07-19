@@ -28,7 +28,8 @@
   border-color: color-mix(in srgb, var(--fm-stale) 55%, var(--fm-border-default));
 }
 
-.fm-simulation-startup[data-state="failed"] .fm-simulation-startup__panel {
+.fm-simulation-startup[data-state="failed"] .fm-simulation-startup__panel,
+.fm-simulation-startup[data-state="resource-error"] .fm-simulation-startup__panel {
   border-color: color-mix(in srgb, var(--fm-danger) 58%, var(--fm-border-default));
 }
 
@@ -410,6 +411,22 @@
   gap: var(--fm-space-2);
 }
 
+.fm-simulation-startup__diagnostics-dock {
+  position: fixed;
+  inset-inline: var(--fm-space-6);
+  bottom: var(--fm-space-6);
+  z-index: var(--fm-z-dialog-content);
+  height: min(360px, calc(100vh - (2 * var(--fm-space-6))));
+  min-height: 240px;
+  overflow: hidden;
+  border-radius: var(--fm-radius-lg);
+  box-shadow: var(--fm-shadow-panel);
+}
+
+.fm-simulation-startup__diagnostics-dock[hidden] {
+  display: none;
+}
+
 @keyframes fm-simulation-startup-progress-indeterminate {
   0% {
     transform: translateX(-115%);
@@ -470,6 +487,13 @@
 
   .fm-simulation-startup__actions {
     flex-wrap: wrap;
+  }
+
+  .fm-simulation-startup__diagnostics-dock {
+    inset-inline: var(--fm-space-3);
+    bottom: var(--fm-space-3);
+    height: min(50vh, calc(100vh - (2 * var(--fm-space-3))));
+    min-height: 220px;
   }
 }
 

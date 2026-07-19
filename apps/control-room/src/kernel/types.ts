@@ -10,6 +10,7 @@ import type { KernelEventMap } from "./events/eventTypes";
 import type { LayoutController } from "./layout/LayoutController";
 import type { ModuleRegistry } from "./module/ModuleRegistry";
 import type { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
+import type { RealtimeConnectionController } from "./realtime/RealtimeConnectionController";
 import type { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
 import type { SelectionController } from "./selection/SelectionController";
 import type { DiagnosticRecorderController } from "./performance/diagnostic-recorder/DiagnosticRecorderController";
@@ -68,6 +69,7 @@ export interface KernelApi {
   readonly diagnosticRecorder: DiagnosticRecorderController;
   readonly modules: ModuleRegistry;
   readonly realtime: RealtimeInvalidationBridge;
+  readonly realtimeConnection: RealtimeConnectionController;
   readonly resources: ResourceInvalidationController;
   readonly selection: SelectionController;
   readonly visualization: ObjectVisualizationController;

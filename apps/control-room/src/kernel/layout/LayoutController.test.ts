@@ -16,9 +16,30 @@ describe("LayoutController", () => {
     const { controller } = setup();
     const state = controller.get();
     expect(state.activeModuleTab).toBe("home");
+    expect(state.activeBottomPanelTab).toBe("telemetry");
     expect(state.activeViewportMainModuleId).toBe("viewport-3d");
     expect(state.panelVisible).toEqual({ left: true, right: true, bottom: true });
     expect(state.focusedSlot).toBeNull();
+  });
+
+  it("opens a requested bottom tab in one durable layout transaction", () => {
+    const { bus, controller } = setup();
+    const layoutListener = vi.fn();
+    const focusListener = vi.fn();
+    bus.on("workspace:layout-changed", layoutListener);
+    bus.on("workspace:focus-changed", focusListener);
+    controller.setPanelVisible("bottom", false);
+    layoutListener.mockClear();
+
+    controller.openBottomPanel("diagnostics");
+
+    expect(controller.get()).toMatchObject({
+      activeBottomPanelTab: "diagnostics",
+      focusedSlot: "panel-bottom",
+      panelVisible: { bottom: true },
+    });
+    expect(layoutListener).toHaveBeenCalledTimes(1);
+    expect(focusListener).toHaveBeenCalledTimes(1);
   });
 
   it("setActiveTab() changes tab and emits layout-changed", () => {

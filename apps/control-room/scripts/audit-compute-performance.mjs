@@ -1646,7 +1646,7 @@ function checkFdmCuboidSceneModelReuse() {
 function checkFooterTelemetryIsOptIn() {
   const source = readFileSync(footerModulePath, "utf8");
   requireTokens(source, "Footer telemetry opt-in", [
-    'useState<FooterTabId>("telemetry")',
+    "useLayoutSelector((layout) => layout.activeBottomPanelTab)",
     'activeTab === "telemetry" ?',
     '<FooterTelemetry bus={kernel.bus} />',
   ]);

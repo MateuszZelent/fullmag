@@ -4,6 +4,7 @@ import type {
   LiveStatusResource,
   SimulationPreparationResource,
 } from "../api/apiTypes";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import type { ResourceResult } from "../resources/resourceTypes";
 
 import { resolveSimulationPreparationViewModel } from "./simulationPreparationModel";
@@ -25,15 +26,31 @@ function resource<TData>(
 
 function statusResource(
   status: ResourceResult<LiveStatusResource>["status"] = "ready",
+  patch: {
+    preparationRevision?: number;
+    solverState?: string;
+  } = {},
 ): ResourceResult<LiveStatusResource> {
   return resource(
     {
-      resources: { simulation_preparation_revision: 7 },
+      resources: {
+        simulation_preparation_revision: patch.preparationRevision ?? 7,
+      },
       session: { name: "permalloy-relaxation" },
-      solver: { state: "bootstrapping" },
+      solver: { state: patch.solverState ?? "bootstrapping" },
     } as LiveStatusResource,
     status,
   );
+}
+
+function preparationError(error: Error): ResourceResult<SimulationPreparationResource> {
+  return {
+    data: null,
+    error,
+    refetch,
+    revision: null,
+    status: "error",
+  };
 }
 
 function preparationFixture(
@@ -128,6 +145,81 @@ describe("resolveSimulationPreparationViewModel", () => {
     expect(model.progress).toEqual({ kind: "indeterminate" });
     expect(model).not.toHaveProperty("eta");
     expect(model).not.toHaveProperty("percent");
+  });
+
+  it("releases a ready restored session when revision zero has no preparation snapshot", () => {
+    const model = resolveSimulationPreparationViewModel(
+      preparationError(new ControlRoomApiError("preparation not found", 404)),
+      statusResource("ready", {
+        preparationRevision: 0,
+        solverState: "awaiting_command",
+      }),
+      1_000,
+    );
+
+    expect(model).toMatchObject({
+      isTerminal: false,
+      isVisible: false,
+      kind: "hidden",
+    });
+  });
+
+  it("keeps genuine revision-zero runtime startup visible", () => {
+    const model = resolveSimulationPreparationViewModel(
+      preparationError(new ControlRoomApiError("preparation not found", 404)),
+      statusResource("ready", {
+        preparationRevision: 0,
+        solverState: "bootstrapping",
+      }),
+      1_000,
+    );
+
+    expect(model).toMatchObject({
+      detail: "Starting the runtime workspace.",
+      isVisible: true,
+      kind: "connecting",
+    });
+  });
+
+  it.each([
+    {
+      detail: "Authorization is required to read simulation preparation status.",
+      error: new ControlRoomApiError("request rejected with bearer token abc", 401),
+    },
+    {
+      detail:
+        "The Control Room API contract is incompatible. Restart or update the local runtime.",
+      error: new ControlRoomApiError(
+        "API contract version mismatch: expected 1.0.0, got 0.9.0",
+        0,
+      ),
+    },
+    {
+      detail:
+        "The local runtime could not provide simulation preparation status. Open diagnostics or retry.",
+      error: new ControlRoomApiError("internal path /private/model.py failed", 500),
+    },
+  ])("keeps an initial non-transient preparation error bounded and visible", ({
+    detail,
+    error,
+  }) => {
+    const model = resolveSimulationPreparationViewModel(
+      preparationError(error),
+      statusResource("ready", {
+        preparationRevision: 1,
+        solverState: "awaiting_command",
+      }),
+      1_000,
+    );
+
+    expect(model).toMatchObject({
+      detail,
+      isTerminal: true,
+      isVisible: true,
+      kind: "resource-error",
+      title: "Preparation status unavailable",
+    });
+    expect(JSON.stringify(model)).not.toContain(error.message);
   });
 
   it("uses numeric progress only for a measurable active stage", () => {

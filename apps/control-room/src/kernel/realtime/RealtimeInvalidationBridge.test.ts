@@ -74,8 +74,8 @@ describe("RealtimeInvalidationBridge", () => {
     const bridge = new RealtimeInvalidationBridge(resources);
     const change = {
       recommended_fetch: SIMULATION_PREPARATION_PATH,
-      resource: "stages",
-      resource_id: "simulation/preparation",
+      resource: "simulation",
+      resource_id: "preparation",
       revision: 8,
     } as const;
 

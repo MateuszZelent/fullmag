@@ -21,7 +21,6 @@ const narrowScreenshot = resolve(
 );
 const preparationPath = "/v2/sessions/current/simulation/preparation";
 const eventsPath = "/v2/sessions/current/events/ws";
-const expectedPreparationRequestUrl = new URL(preparationPath, workspaceUrl).href;
 const stageDefinitions = [
   ["runtime_startup", "Runtime startup"],
   ["script_materialization", "Script materialization"],
@@ -184,6 +183,36 @@ function preparationFixture(kind) {
     };
   }
 
+  if (kind === "meshing-recovered") {
+    return {
+      ...common,
+      active_stage_id: "meshing",
+      completed_at_unix_ms: null,
+      failure: null,
+      log_tail: [
+        {
+          level: "info",
+          message: "Status-pointer refresh recovered current mesh progress",
+          stage_id: "meshing",
+          timestamp_unix_ms: baseTime + 19_500,
+        },
+      ],
+      revision: 3,
+      stages: stageDefinitions.map(([id], index) =>
+        stageFixture(id, index < 5 ? "completed" : index === 5 ? "active" : "pending", {
+          detail:
+            id === "meshing"
+              ? "Recovered through authoritative HTTP status-pointer refresh"
+              : undefined,
+          durationMs: id === "meshing" ? 17_000 : index < 5 ? 500 + index * 100 : null,
+          progressLabel: id === "meshing" ? "200000 / 226318 elements" : null,
+          progressPercent: id === "meshing" ? 78 : null,
+        }),
+      ),
+      status: "running",
+    };
+  }
+
   if (kind === "failed") {
     return {
       ...common,
@@ -323,7 +352,6 @@ const consoleErrors = [];
 const failedResponses = [];
 const networkFailures = [];
 const pageErrors = [];
-let abortNextPreparationRequest = false;
 let currentPreparation = preparationFixture("planning");
 let holdPreparation = true;
 let lastServedPreparationId = null;
@@ -331,7 +359,9 @@ let pendingPreparationRoute = null;
 let preparationRequestCount = 0;
 let preparationRevision = 1;
 let socketRoute = null;
+let socketConnectionCount = 0;
 let sequence = 1;
+const realtimeServerEvents = [];
 const retiredPreparationIds = new Set();
 const terminalSnapshotsByPreparationId = new Map();
 
@@ -406,6 +436,7 @@ await page.routeWebSocket(`**${eventsPath}*`, (route) => {
     route.protocols().includes("fullmag.live.v1"),
     "Realtime connection omitted fullmag.live.v1.",
   );
+  socketConnectionCount += 1;
   socketRoute = route;
 });
 
@@ -417,11 +448,6 @@ await page.route("**/v2/**", async (route) => {
   }
   if (pathname === preparationPath) {
     preparationRequestCount += 1;
-    if (abortNextPreparationRequest) {
-      abortNextPreparationRequest = false;
-      await route.abort("connectionfailed");
-      return;
-    }
     if (holdPreparation) {
       pendingPreparationRoute = route;
       return;
@@ -463,25 +489,35 @@ await page.route("**/v2/**", async (route) => {
   );
 });
 
-function sendPreparationInvalidation(revision) {
+function sendRealtimeServerEvent(event) {
   assert(socketRoute, "Realtime socket is not connected.");
-  socketRoute.send(
-    JSON.stringify({
-      contract_version: "1.0.0",
-      payload: {
-        changes: [
-          {
-            recommended_fetch: preparationPath,
-            resource: "stages",
-            resource_id: "simulation/preparation",
-            revision,
-          },
-        ],
-      },
-      seq: ++sequence,
-      type: "resource.batch_changed",
-    }),
-  );
+  realtimeServerEvents.push(event);
+  socketRoute.send(JSON.stringify(event));
+}
+
+function sendPreparationInvalidation(revision) {
+  sendRealtimeServerEvent({
+    contract_version: "1.0.0",
+    payload: {
+      changes: [
+        {
+          recommended_fetch: preparationPath,
+          resource: "simulation",
+          resource_id: "preparation",
+          revision,
+        },
+      ],
+    },
+    seq: ++sequence,
+    type: "resource.batch_changed",
+  });
+}
+
+function preparationRealtimeChanges() {
+  return realtimeServerEvents.flatMap((event) => {
+    if (event.type !== "resource.batch_changed") return [];
+    return Array.isArray(event.payload?.changes) ? event.payload.changes : [];
+  });
 }
 
 async function assertViewportBlocked(state) {
@@ -514,13 +550,13 @@ try {
     await page.waitForTimeout(10);
   }
   assert(socketRoute, "Realtime socket did not connect before the smoke timeout.");
-  socketRoute.send(
-    JSON.stringify({
-      payload: { communication_policy: { status_refresh_ms: 50 } },
-      seq: sequence,
-      type: "hello",
-    }),
-  );
+  sendRealtimeServerEvent({
+    payload: {
+      communication_policy: { status_refresh_ms: 50, ws_reconnect_ms: 10_000 },
+    },
+    seq: sequence,
+    type: "hello",
+  });
 
   assert(pendingPreparationRoute, "Initial preparation request was not held.");
   holdPreparation = false;
@@ -662,18 +698,12 @@ try {
   await page.screenshot({ path: narrowScreenshot });
   await page.setViewportSize({ height: 900, width: 1_440 });
 
-  preparationRevision = 3;
-  abortNextPreparationRequest = true;
-  const failedPreparationRequest = page.waitForEvent(
-    "requestfailed",
-    (request) => request.url() === expectedPreparationRequestUrl,
-  );
-  sendPreparationInvalidation(3);
-  const disruptedRequest = await failedPreparationRequest;
-  assert(
-    disruptedRequest.failure()?.errorText === "net::ERR_CONNECTION_FAILED",
-    `Injected preparation failure reason drifted: ${disruptedRequest.failure()?.errorText}`,
-  );
+  const disconnectedSocket = socketRoute;
+  socketRoute = null;
+  await disconnectedSocket.close({
+    code: 1012,
+    reason: "simulation preparation smoke reconnect",
+  });
   await page.getByText("Reconnecting…", { exact: true }).waitFor();
   await page.getByText("Displayed progress may be out of date.", { exact: true }).waitFor();
   await page.getByText("142580 / 226318 elements", { exact: true }).waitFor();
@@ -682,6 +712,34 @@ try {
     "Transport failure did not retain the revision-2 meshing snapshot.",
   );
   await assertViewportBlocked("stale");
+
+  const preparationRequestsBeforePointerRecovery = preparationRequestCount;
+  currentPreparation = preparationFixture("meshing-recovered");
+  preparationRevision = 3;
+  await page.getByText("200000 / 226318 elements", { exact: true }).waitFor();
+  assert(
+    preparationRequestCount > preparationRequestsBeforePointerRecovery,
+    "Status pointer advance did not trigger a preparation HTTP refresh.",
+  );
+  assert(
+    socketConnectionCount === 1,
+    "WebSocket reconnected before status-pointer HTTP recovery completed.",
+  );
+  assert(
+    (await progress.getAttribute("aria-valuenow")) === "78",
+    "Status-pointer HTTP recovery did not publish revision-3 progress.",
+  );
+  await page.getByText("Reconnecting…", { exact: true }).waitFor();
+  await page.getByText("Displayed progress may be out of date.", { exact: true }).waitFor();
+  await assertViewportBlocked("status-pointer-recovered-stale");
+
+  const reconnectDeadline = Date.now() + timeoutMs;
+  while (socketConnectionCount < 2 && Date.now() < reconnectDeadline) {
+    await page.waitForTimeout(10);
+  }
+  assert(socketConnectionCount === 2, "Realtime client did not reconnect after socket close.");
+  await page.getByText("Reconnecting…", { exact: true }).waitFor({ state: "detached" });
+  await page.getByText("200000 / 226318 elements", { exact: true }).waitFor();
 
   const readyResourceResponses = Promise.all([
     page.waitForResponse(
@@ -707,7 +765,8 @@ try {
   sendPreparationInvalidation(5);
   await page.getByRole("heading", { name: "Simulation preparation failed" }).waitFor();
   await page.getByRole("button", { name: "Copy diagnostics" }).waitFor();
-  await page.getByRole("button", { name: "Open full diagnostics" }).waitFor();
+  const openDiagnostics = page.getByRole("button", { name: "Open full diagnostics" });
+  await openDiagnostics.waitFor();
   assert(
     (await page.locator(".fm-simulation-startup__detail").textContent()) ===
       "GPU runtime initialization failed.",
@@ -720,20 +779,46 @@ try {
     "Failure progress semantics drifted.",
   );
   await assertViewportBlocked("failed");
+  await openDiagnostics.click();
+  await page
+    .locator(".fm-simulation-startup__diagnostics-dock")
+    .waitFor({ state: "visible" });
   assert(
-    JSON.stringify(networkFailures) ===
-      JSON.stringify([
-        {
-          reason: "net::ERR_CONNECTION_FAILED",
-          url: expectedPreparationRequestUrl,
-        },
-      ]),
+    (await page.locator('[data-slot-id="panel-bottom"]').count()) === 1,
+    "Mounted diagnostics consumer was not visible after the failure action.",
+  );
+  await page.getByRole("heading", { name: "Simulation preparation failed" }).waitFor();
+
+  const preparationChanges = preparationRealtimeChanges();
+  assert(
+    JSON.stringify(preparationChanges.map((change) => change.revision)) ===
+      JSON.stringify([2, 4, 5]),
+    `Unexpected preparation revisions traveled on WebSocket: ${JSON.stringify(preparationChanges)}`,
+  );
+  assert(
+    preparationChanges.every(
+      (change) =>
+        JSON.stringify(Object.keys(change).sort()) ===
+          JSON.stringify(["recommended_fetch", "resource", "resource_id", "revision"]),
+    ),
+    `WebSocket carried preparation resource content: ${JSON.stringify(preparationChanges)}`,
+  );
+  assert(
+    preparationChanges.every(
+      (change) =>
+        change.resource === "simulation" &&
+        change.resource_id === "preparation" &&
+        change.recommended_fetch === preparationPath,
+    ),
+    `Preparation WebSocket resource identity drifted: ${JSON.stringify(preparationChanges)}`,
+  );
+  assert(
+    networkFailures.length === 0,
     `Unexpected network failures: ${JSON.stringify(networkFailures)}`,
   );
   assert(
-    JSON.stringify(consoleErrors) ===
-      JSON.stringify(["Failed to load resource: net::ERR_CONNECTION_FAILED"]),
-    `Unexpected console errors: ${JSON.stringify(consoleErrors)}`,
+    consoleErrors.length === 0,
+    `Unexpected console errors: ${JSON.stringify(consoleErrors)}; failed responses: ${JSON.stringify(failedResponses)}`,
   );
   assert(
     pageErrors.length === 0,
@@ -751,14 +836,18 @@ try {
           "connecting",
           "planning-indeterminate",
           "meshing-63",
-          "reconnecting-stale",
+          "websocket-close-reconnecting-stale",
+          "status-pointer-http-recovery",
+          "websocket-reconnect-clears-stale",
+          "websocket-revision-only-content",
           "ready-release",
           "failed-new-preparation",
+          "mounted-diagnostics-consumer",
           "representative-geometry",
           "narrow-geometry",
           "reduced-motion",
           "exact-stage-log-time-text",
-          "expected-network-failure-only",
+          "network-failures-none",
           "page-errors-none",
           "http-errors-none",
         ],

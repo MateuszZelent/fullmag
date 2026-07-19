@@ -4,6 +4,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import type { LiveStatusResource } from "../api/apiTypes";
+import { EventBus } from "../events/EventBus";
+import type { KernelEventMap } from "../events/eventTypes";
+import { ModuleRegistry } from "../module/ModuleRegistry";
 import type { ResourceResult } from "../resources/resourceTypes";
 import { KernelContext } from "../KernelContext";
 import type { KernelApi } from "../types";
@@ -19,6 +22,7 @@ import {
   resolveSimulationPreparationViewModel,
   serializeSimulationPreparationDiagnostics,
 } from "./simulationPreparationModel";
+import { LayoutController } from "./LayoutController";
 
 const source = readFileSync(
   new URL("./SimulationStartupOverlay.tsx", import.meta.url),
@@ -26,6 +30,15 @@ const source = readFileSync(
 );
 
 const refetch = vi.fn();
+
+function startupGateKernel(): KernelApi {
+  const bus = new EventBus<KernelEventMap>();
+  return {
+    bus,
+    layout: new LayoutController(bus),
+    modules: new ModuleRegistry(),
+  } as KernelApi;
+}
 
 function preparationResource(
   patch: Partial<import("../api/apiTypes").SimulationPreparationResource> = {},
@@ -243,17 +256,19 @@ describe("SimulationStartupOverlay", () => {
 
   it("does not mount workspace slots while startup overlay is visible", () => {
     const html = renderToStaticMarkup(
-      <WorkspaceStartupGateView
-        state={resolveSimulationStartupOverlayState({
-          data: null,
-          error: new Error("no active local live workspace"),
-          refetch,
-          revision: null,
-          status: "error",
-        })}
-      >
-        <div data-slot-id="viewport-main">Viewport module</div>
-      </WorkspaceStartupGateView>,
+      <KernelContext.Provider value={startupGateKernel()}>
+        <WorkspaceStartupGateView
+          state={resolveSimulationStartupOverlayState({
+            data: null,
+            error: new Error("no active local live workspace"),
+            refetch,
+            revision: null,
+            status: "error",
+          })}
+        >
+          <div data-slot-id="viewport-main">Viewport module</div>
+        </WorkspaceStartupGateView>
+      </KernelContext.Provider>,
     );
 
     expect(html).toContain("Preparing simulation");
@@ -365,10 +380,7 @@ describe("SimulationStartupOverlay", () => {
       statusResource({ solver: { state: "failed" } }),
       20_000,
     );
-    const kernel = {
-      bus: { emit: vi.fn() },
-      layout: { setFocusedSlot: vi.fn(), setPanelVisible: vi.fn() },
-    } as unknown as KernelApi;
+    const kernel = startupGateKernel();
     const html = renderToStaticMarkup(
       <KernelContext.Provider value={kernel}>
         <WorkspaceStartupGateView state={state}>
@@ -410,16 +422,14 @@ describe("SimulationStartupOverlay", () => {
 
   it("opens the existing kernel diagnostics destination", () => {
     const emit = vi.fn();
-    const setFocusedSlot = vi.fn();
-    const setPanelVisible = vi.fn();
+    const openBottomPanel = vi.fn();
 
     openSimulationPreparationDiagnostics({
       bus: { emit },
-      layout: { setFocusedSlot, setPanelVisible },
+      layout: { openBottomPanel },
     });
 
-    expect(setPanelVisible).toHaveBeenCalledWith("bottom", true);
-    expect(setFocusedSlot).toHaveBeenCalledWith("panel-bottom");
+    expect(openBottomPanel).toHaveBeenCalledWith("diagnostics");
     expect(emit).toHaveBeenCalledWith("footer:tab-requested", {
       reason: "simulation-preparation",
       tab: "diagnostics",

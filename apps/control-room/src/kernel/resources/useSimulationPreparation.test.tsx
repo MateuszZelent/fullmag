@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SIMULATION_PREPARATION_PATH } from "../api/apiPaths";
 import type { SimulationPreparationResource } from "../api/apiTypes";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { KernelContext } from "../KernelContext";
@@ -114,6 +115,48 @@ async function waitFor(
 }
 
 describe("useSimulationPreparation", () => {
+  it.each([
+    new ControlRoomApiError("authorization token secret-token rejected", 401),
+    new ControlRoomApiError(
+      "API contract version mismatch: expected 1.0.0, got 0.9.0",
+      0,
+    ),
+    new ControlRoomApiError("internal path /private/model.py failed", 500),
+  ])("keeps an initial non-transient facade failure visible", async (failure) => {
+    const load = vi.fn(() => Promise.reject(failure));
+    const { kernel, resources } = makeKernel(load);
+    const observations: PreparationResult[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+    resources.invalidate(SIMULATION_PREPARATION_PATH, 1);
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <Probe observations={observations} />
+        </KernelContext.Provider>,
+      );
+    });
+    let latest: ReturnType<typeof resultSnapshot> | null = null;
+    try {
+      await waitFor(
+        () => observations.some((observation) => observation.status === "error"),
+        "initial preparation failure was normalized away",
+      );
+      latest = resultSnapshot(observations.at(-1)!);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+
+    expect(latest).toEqual({
+      data: null,
+      error: failure,
+      revision: 1,
+      status: "error",
+    });
+  });
+
   it("retains stale revision 7 while 8 loads, adopts 8, and keeps it when refresh fails", async () => {
     updateRealtimeCommunicationPolicy({ status_refresh_ms: 1 });
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);

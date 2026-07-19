@@ -330,6 +330,7 @@ export function installSimulationPreparationTestDom({
     Event: TestEvent,
     HTMLElement: TestElement,
     HTMLIFrameElement: TestHtmlIFrameElement,
+    location: { search: "" },
     MutationObserver: TestMutationObserver,
     Node: TestNode,
     ResizeObserver: TestResizeObserver,

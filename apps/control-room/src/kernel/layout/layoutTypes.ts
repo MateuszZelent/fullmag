@@ -19,6 +19,13 @@ export type RibbonTabId =
 
 export type PanelPosition = "left" | "right" | "bottom";
 
+export type BottomPanelTabId =
+  | "diagnostics"
+  | "engine"
+  | "logs"
+  | "mesh"
+  | "telemetry";
+
 export interface LayoutState {
   /** Currently active ribbon tab */
   activeModuleTab: RibbonTabId;
@@ -28,12 +35,15 @@ export interface LayoutState {
   lastSpatialViewportMainModuleId?: "field-map" | "viewport-3d";
   /** Panel visibility */
   panelVisible: Record<PanelPosition, boolean>;
+  /** Selected tab in the shared bottom diagnostics surface. */
+  activeBottomPanelTab: BottomPanelTabId;
   /** Which slot currently has keyboard/interaction focus */
   focusedSlot: SlotId | null;
 }
 
 export const DEFAULT_LAYOUT: LayoutState = {
   activeModuleTab: "home",
+  activeBottomPanelTab: "telemetry",
   activeViewportMainModuleId: "viewport-3d",
   lastSpatialViewportMainModuleId: "viewport-3d",
   panelVisible: { left: true, right: true, bottom: true },

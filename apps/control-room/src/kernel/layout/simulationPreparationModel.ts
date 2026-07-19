@@ -48,7 +48,14 @@ export interface SimulationPreparationViewModel {
   readonly failure: SimulationPreparationFailureView | null;
   readonly isTerminal: boolean;
   readonly isVisible: boolean;
-  readonly kind: "connecting" | "failed" | "hidden" | "ready" | "running" | "stale";
+  readonly kind:
+    | "connecting"
+    | "failed"
+    | "hidden"
+    | "ready"
+    | "resource-error"
+    | "running"
+    | "stale";
   readonly liveSummary: string;
   readonly logEntries: readonly SimulationPreparationLogEntryView[];
   readonly preparation: SimulationPreparationResource | null;
@@ -161,21 +168,29 @@ function resolveMissingPreparationModel(
   const solverState = sessionStatus.data?.solver.state?.toLowerCase() ?? "";
   const isMaterializing = MATERIALIZING_STATUSES.has(solverState);
   const isBootstrapping = BOOTSTRAPPING_STATUSES.has(solverState);
-  const hasPreparationRevision =
-    typeof sessionStatus.data?.resources.simulation_preparation_revision ===
-    "number";
+  const preparationRevision =
+    sessionStatus.data?.resources.simulation_preparation_revision;
+  const hasPublishedPreparationRevision =
+    typeof preparationRevision === "number" && preparationRevision > 0;
+  const preparationError = resolvePreparationResourceError(
+    preparation,
+    hasPublishedPreparationRevision,
+  );
+  if (preparationError) {
+    return preparationError;
+  }
   const hasNonTransientSessionError =
     sessionStatus.status === "error" &&
     !isTransientStartupError(sessionStatus.error);
   const isConnecting =
     !hasNonTransientSessionError &&
-    (preparation.status === "idle" ||
-      preparation.status === "loading" ||
-      sessionStatus.status === "idle" ||
+    (sessionStatus.status === "idle" ||
       sessionStatus.status === "loading" ||
       isBootstrapping ||
       isMaterializing ||
-      hasPreparationRevision ||
+      hasPublishedPreparationRevision ||
+      ((preparation.status === "idle" || preparation.status === "loading") &&
+        sessionStatus.data === null) ||
       (sessionStatus.status === "error" &&
         isTransientStartupError(sessionStatus.error)));
   const title = isMaterializing ? "Compiling simulation" : "Preparing simulation";
@@ -208,6 +223,59 @@ function resolveMissingPreparationModel(
     title,
     totalElapsedLabel: null,
   };
+}
+
+function resolvePreparationResourceError(
+  preparation: ResourceResult<SimulationPreparationResource>,
+  hasPublishedPreparationRevision: boolean,
+): SimulationPreparationViewModel | null {
+  if (preparation.status !== "error" || !preparation.error) {
+    return null;
+  }
+
+  const status = errorStatus(preparation.error);
+  if (
+    isTransientStartupError(preparation.error) ||
+    (status === 404 && !hasPublishedPreparationRevision)
+  ) {
+    return null;
+  }
+
+  const message = preparation.error.message.toLowerCase();
+  const detail =
+    status === 401 || status === 403
+      ? "Authorization is required to read simulation preparation status."
+      : message.includes("contract version mismatch")
+        ? "The Control Room API contract is incompatible. Restart or update the local runtime."
+        : "The local runtime could not provide simulation preparation status. Open diagnostics or retry.";
+
+  return {
+    activeStage: null,
+    detail,
+    eyebrow: "Simulation preparation",
+    failure: null,
+    isTerminal: true,
+    isVisible: true,
+    kind: "resource-error",
+    liveSummary: `Preparation status unavailable. ${detail}`,
+    logEntries: [],
+    preparation: null,
+    progress: { kind: "terminal" },
+    progressLabel: null,
+    reconnectingMessage: null,
+    reconnectingTitle: null,
+    requestedExecutionLabel: null,
+    resolvedExecutionLabel: null,
+    stages: [],
+    title: "Preparation status unavailable",
+    totalElapsedLabel: null,
+  };
+}
+
+function errorStatus(error: Error): number | null {
+  if (!("status" in error)) return null;
+  const status = (error as Error & { status: unknown }).status;
+  return typeof status === "number" ? status : null;
 }
 
 function resolveStageView(

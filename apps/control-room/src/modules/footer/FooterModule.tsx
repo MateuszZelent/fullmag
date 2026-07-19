@@ -22,6 +22,7 @@ import {
 import type { RequestDiagnosticEntry } from "@/kernel/api/RequestDiagnosticsController";
 import type { CommandDiagnosticEntry } from "@/kernel/commands/CommandDiagnosticsController";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
+import { useLayoutSelector } from "@/kernel/layout/useLayout";
 import type { ModuleProps } from "@/kernel/types";
 import { Button } from "@/shared/ui/Button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/Tabs";
@@ -39,8 +40,6 @@ import { DiagnosticRecorderFooterPanel } from "./DiagnosticRecorderFooterPanel";
 import { MeshJobsPanel } from "./MeshJobsPanel";
 import { TransportLogTable } from "./TransportLogTable";
 
-type FooterTabId = "diagnostics" | "engine" | "logs" | "mesh" | "telemetry";
-
 const EMPTY_DIAGNOSTIC_ENTRIES: RequestDiagnosticEntry[] = [];
 
 interface FooterDiagnosticsSnapshot {
@@ -57,18 +56,22 @@ export default function FooterModule(props: ModuleProps) {
 }
 
 function FooterModuleContent({ kernel }: ModuleProps) {
-  const [activeTab, setActiveTab] = useState<FooterTabId>("telemetry");
+  const activeTab = useLayoutSelector((layout) => layout.activeBottomPanelTab);
 
   useEffect(() => {
     return kernel.bus.on("footer:tab-requested", ({ tab }) => {
-      setActiveTab(tab);
+      kernel.layout.setBottomPanelTab(tab);
     });
-  }, [kernel.bus]);
+  }, [kernel.bus, kernel.layout]);
 
   return (
     <Tabs
       value={activeTab}
-      onValueChange={(value) => setActiveTab(value as FooterTabId)}
+      onValueChange={(value) =>
+        kernel.layout.setBottomPanelTab(
+          value as typeof activeTab,
+        )
+      }
       className="fm-footer"
     >
       <div className="fm-footer__bar">

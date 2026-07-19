@@ -14,17 +14,20 @@ import {
 import type { LiveStatusResource } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
 import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
+import { useRealtimeConnection } from "../realtime/useRealtimeConnection";
 import type { ResourceResult } from "../resources/resourceTypes";
 import { useSessionStatusSelector } from "../resources/useSessionStatus";
 import { useSimulationPreparation } from "../resources/useSimulationPreparation";
 import type { KernelApi } from "../types";
 import { SimulationPreparationLog } from "./SimulationPreparationLog";
+import { SlotHost } from "./SlotHost";
 import {
   resolveSimulationPreparationViewModel,
   serializeSimulationPreparationDiagnostics,
   type SimulationPreparationStageView,
   type SimulationPreparationViewModel,
 } from "./simulationPreparationModel";
+import { useLayoutSelector } from "./useLayout";
 
 export type SimulationStartupOverlayState = SimulationPreparationViewModel;
 
@@ -206,7 +209,7 @@ export function SimulationStartupOverlayView({
           <p>
             The workspace opens after solver initialization completes.
           </p>
-          {state.failure && state.preparation ? (
+          {(state.failure && state.preparation) || state.kind === "resource-error" ? (
             <SimulationPreparationFailureActions
               snapshot={state.preparation}
             />
@@ -299,6 +302,9 @@ function stageStatusGlyph(
 function resolveProgressValueText(
   state: SimulationStartupOverlayState,
 ): string {
+  if (state.kind === "resource-error") {
+    return "Simulation preparation status unavailable";
+  }
   if (state.progress.kind === "terminal") {
     return "Simulation preparation failed";
   }
@@ -319,14 +325,13 @@ type SimulationPreparationDiagnosticsNavigation = {
       payload: { reason?: string; tab: "diagnostics" },
     ) => void;
   };
-  readonly layout: Pick<KernelApi["layout"], "setFocusedSlot" | "setPanelVisible">;
+  readonly layout: Pick<KernelApi["layout"], "openBottomPanel">;
 };
 
 export function openSimulationPreparationDiagnostics(
   kernel: SimulationPreparationDiagnosticsNavigation,
 ): void {
-  kernel.layout.setPanelVisible("bottom", true);
-  kernel.layout.setFocusedSlot("panel-bottom");
+  kernel.layout.openBottomPanel("diagnostics");
   kernel.bus.emit("footer:tab-requested", {
     reason: "simulation-preparation",
     tab: "diagnostics",
@@ -336,7 +341,7 @@ export function openSimulationPreparationDiagnostics(
 function SimulationPreparationFailureActions({
   snapshot,
 }: {
-  snapshot: NonNullable<SimulationStartupOverlayState["preparation"]>;
+  snapshot: SimulationStartupOverlayState["preparation"];
 }) {
   const kernel = useKernel();
   const [copyState, setCopyState] = useState<"copied" | "failed" | "idle">(
@@ -344,6 +349,8 @@ function SimulationPreparationFailureActions({
   );
 
   const copyDiagnostics = async () => {
+    if (!snapshot) return;
+
     try {
       await navigator.clipboard.writeText(
         serializeSimulationPreparationDiagnostics(snapshot),
@@ -356,13 +363,15 @@ function SimulationPreparationFailureActions({
 
   return (
     <div className="fm-simulation-startup__actions">
-      <Button onClick={copyDiagnostics} size="sm" type="button">
-        {copyState === "copied"
-          ? "Diagnostics copied"
-          : copyState === "failed"
-            ? "Copy failed"
-            : "Copy diagnostics"}
-      </Button>
+      {snapshot ? (
+        <Button onClick={copyDiagnostics} size="sm" type="button">
+          {copyState === "copied"
+            ? "Diagnostics copied"
+            : copyState === "failed"
+              ? "Copy failed"
+              : "Copy diagnostics"}
+        </Button>
+      ) : null}
       <Button
         onClick={() => openSimulationPreparationDiagnostics(kernel)}
         size="sm"
@@ -417,10 +426,18 @@ export function useSimulationStartupOverlayVisibility(): boolean {
     selectSimulationStartupOverlayResourceState,
     { isEqual: simulationStartupOverlayResourceStateEquals },
   );
-  const preparation = useSimulationPreparation();
+  const preparation = useSimulationPreparation({
+    requiredRevision:
+      startupResource.status.data?.resources
+        .simulation_preparation_revision ?? null,
+  });
+  const realtimeConnection = useRealtimeConnection();
   const allowMissingSessionSmoke = useAllowMissingSessionSmoke();
   const state = resolveSimulationPreparationViewModel(
-    preparation,
+    preparationDuringRealtimeDisruption(
+      preparation,
+      realtimeConnection.disrupted,
+    ),
     startupResource.status,
     null,
   );
@@ -432,10 +449,18 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
     selectSimulationStartupOverlayResourceState,
     { isEqual: simulationStartupOverlayResourceStateEquals },
   );
-  const preparation = useSimulationPreparation();
+  const preparation = useSimulationPreparation({
+    requiredRevision:
+      startupResource.status.data?.resources
+        .simulation_preparation_revision ?? null,
+  });
+  const realtimeConnection = useRealtimeConnection();
   const allowMissingSessionSmoke = useAllowMissingSessionSmoke();
   const untimedState = resolveSimulationPreparationViewModel(
-    preparation,
+    preparationDuringRealtimeDisruption(
+      preparation,
+      realtimeConnection.disrupted,
+    ),
     startupResource.status,
     null,
   );
@@ -461,7 +486,10 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
   }, [shouldTick]);
 
   const state = resolveSimulationPreparationViewModel(
-    preparation,
+    preparationDuringRealtimeDisruption(
+      preparation,
+      realtimeConnection.disrupted,
+    ),
     startupResource.status,
     displayNow,
   );
@@ -489,6 +517,17 @@ export function useSimulationStartupOverlayState(): SimulationStartupOverlayStat
   return visibleState;
 }
 
+function preparationDuringRealtimeDisruption(
+  preparation: ReturnType<typeof useSimulationPreparation>,
+  disrupted: boolean,
+): ReturnType<typeof useSimulationPreparation> {
+  if (!disrupted || !preparation.data || preparation.status !== "ready") {
+    return preparation;
+  }
+
+  return { ...preparation, status: "stale" };
+}
+
 export function WorkspaceStartupGateView({
   children,
   state,
@@ -497,7 +536,12 @@ export function WorkspaceStartupGateView({
   state: SimulationStartupOverlayState;
 }) {
   if (state.isVisible) {
-    return <SimulationStartupOverlayView state={state} />;
+    return (
+      <>
+        <SimulationStartupOverlayView state={state} />
+        <SimulationStartupDiagnosticsDock />
+      </>
+    );
   }
 
   return (
@@ -505,6 +549,25 @@ export function WorkspaceStartupGateView({
       {children}
       <SimulationStartupOverlayView state={state} />
     </>
+  );
+}
+
+function SimulationStartupDiagnosticsDock() {
+  const isVisible = useLayoutSelector(
+    (layout) =>
+      layout.panelVisible.bottom &&
+      layout.focusedSlot === "panel-bottom" &&
+      layout.activeBottomPanelTab === "diagnostics",
+  );
+
+  return (
+    <aside
+      aria-hidden={!isVisible}
+      className="fm-simulation-startup__diagnostics-dock"
+      hidden={!isVisible}
+    >
+      {isVisible ? <SlotHost slotId="panel-bottom" /> : null}
+    </aside>
   );
 }
 

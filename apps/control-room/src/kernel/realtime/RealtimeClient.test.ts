@@ -126,6 +126,45 @@ describe("RealtimeClient", () => {
     expect(reconnectCallbacks).toHaveLength(1);
   });
 
+  it("reports actual socket disconnect and reconnect lifecycle", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const sockets: FakeWebSocket[] = [];
+    const reconnectCallbacks: Array<() => void> = [];
+    const statuses: KernelEventMap["session:status-changed"]["status"][] = [];
+    const client = new RealtimeClient({
+      bridge: new RealtimeInvalidationBridge(resources),
+      createSocket: () => {
+        const socket = new FakeWebSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      onStatusChange: (status) => statuses.push(status),
+      scheduleReconnect: (callback) => {
+        reconnectCallbacks.push(callback);
+        return () => {};
+      },
+      url: `ws://127.0.0.1:8765${SESSION_EVENTS_WS_PATH}`,
+    });
+
+    client.connect();
+    sockets[0].emit("open", "");
+    sockets[0].emit("close", "");
+    reconnectCallbacks[0]();
+    sockets[1].emit("open", "");
+
+    expect(statuses).toEqual([
+      "connecting",
+      "connected",
+      "disconnected",
+      "connecting",
+      "connected",
+    ]);
+
+    client.close();
+    expect(statuses.at(-1)).toBe("idle");
+  });
+
   it("reconnects with the last processed sequence cursor", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
