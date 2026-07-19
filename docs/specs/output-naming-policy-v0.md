@@ -146,3 +146,20 @@ Container-role clarification:
   data.
 - FEM outputs may provide OVF-compatible sampled field exports, but the canonical FEM artifact model
   must also preserve coordinates, connectivity, and FE metadata outside the OVF abstraction.
+
+### 7.1 Ordinary script result bundle
+
+For an ordinary launch with no explicit `--output-dir`, `/path/x.py` writes the
+sibling `/path/x.zarr` Zarr v2 group. The bundle has the stable roles:
+
+- `artifacts/`: final stage artifacts;
+- `stages/`: preceding and interactive stage artifacts;
+- `artifacts/fields/<observable>.zarr`: native time-sampled field arrays;
+- `scalars.csv`, `tables/*.csv`, JSON metadata, and manifests: transitional
+  compatibility members retained inside the versioned result bundle.
+
+The root `.zattrs` declares `fullmag.script_results.v1` and records script and
+session identity. Fullmag fails closed if the default sibling bundle already
+exists; it never silently mixes two attempts. An explicit `--output-dir`
+overrides the sibling-bundle convention and preserves its caller-selected
+artifact/session layout.

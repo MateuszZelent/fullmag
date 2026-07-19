@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -18,6 +19,77 @@ use crate::types::{
     StageTransitionMetadata, StageTransitionReason, StateTransferOperatorKind,
     StudyPipelineDocument, StudyPipelineNode,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ScriptOutputPaths {
+    pub(crate) workspace_dir: PathBuf,
+    pub(crate) artifact_dir: PathBuf,
+    pub(crate) is_sibling_zarr_bundle: bool,
+}
+
+pub(crate) fn resolve_script_output_paths(
+    script_path: &Path,
+    explicit_output_dir: Option<&Path>,
+    session_root: &Path,
+    session_id: &str,
+) -> ScriptOutputPaths {
+    if let Some(artifact_dir) = explicit_output_dir {
+        return ScriptOutputPaths {
+            workspace_dir: session_root.join(session_id),
+            artifact_dir: artifact_dir.to_path_buf(),
+            is_sibling_zarr_bundle: false,
+        };
+    }
+
+    let workspace_dir = script_path.with_extension("zarr");
+    ScriptOutputPaths {
+        artifact_dir: workspace_dir.join("artifacts"),
+        workspace_dir,
+        is_sibling_zarr_bundle: true,
+    }
+}
+
+pub(crate) fn initialize_zarr_group(path: &Path, attributes: serde_json::Value) -> Result<()> {
+    fs::create_dir_all(path)
+        .with_context(|| format!("failed to create Zarr group {}", path.display()))?;
+    fs::write(
+        path.join(".zgroup"),
+        serde_json::to_vec_pretty(&serde_json::json!({"zarr_format": 2}))?,
+    )
+    .with_context(|| format!("failed to write Zarr group metadata in {}", path.display()))?;
+    fs::write(
+        path.join(".zattrs"),
+        serde_json::to_vec_pretty(&attributes)?,
+    )
+    .with_context(|| format!("failed to write Zarr attributes in {}", path.display()))?;
+    Ok(())
+}
+
+pub(crate) fn initialize_script_result_bundle(
+    paths: &ScriptOutputPaths,
+    script_path: &Path,
+    session_id: &str,
+) -> Result<()> {
+    initialize_zarr_group(
+        &paths.workspace_dir,
+        serde_json::json!({
+            "fullmag_schema": "fullmag.script_results.v1",
+            "script_path": script_path,
+            "session_id": session_id,
+            "artifacts_group": "artifacts",
+            "stages_group": "stages",
+        }),
+    )?;
+    initialize_zarr_group(
+        &paths.artifact_dir,
+        serde_json::json!({"fullmag_role": "final_stage_artifacts"}),
+    )?;
+    initialize_zarr_group(
+        &paths.workspace_dir.join("stages"),
+        serde_json::json!({"fullmag_role": "stage_artifacts"}),
+    )?;
+    Ok(())
+}
 
 pub(crate) fn emit_initial_state_warnings(
     live_workspace: Option<&LocalLiveWorkspace>,
@@ -75,6 +147,98 @@ pub(crate) fn stage_artifact_dir(
     workspace_dir
         .join("stages")
         .join(format!("stage_{stage_index:02}_{entrypoint_kind}"))
+}
+
+#[cfg(test)]
+mod output_path_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn default_script_output_is_one_sibling_zarr_bundle() {
+        let paths = resolve_script_output_paths(
+            Path::new("/work/scenarios/case_a_rk4_fixed.py"),
+            None,
+            Path::new("/work/.fullmag/local-live/history"),
+            "session-123",
+        );
+
+        assert_eq!(
+            paths.workspace_dir,
+            PathBuf::from("/work/scenarios/case_a_rk4_fixed.zarr")
+        );
+        assert_eq!(
+            paths.artifact_dir,
+            PathBuf::from("/work/scenarios/case_a_rk4_fixed.zarr/artifacts")
+        );
+        assert_eq!(
+            stage_artifact_dir(
+                &paths.workspace_dir,
+                &paths.artifact_dir,
+                0,
+                3,
+                "flat_relax",
+            ),
+            PathBuf::from("/work/scenarios/case_a_rk4_fixed.zarr/stages/stage_00_flat_relax")
+        );
+    }
+
+    #[test]
+    fn explicit_output_dir_preserves_existing_session_workspace_contract() {
+        let paths = resolve_script_output_paths(
+            Path::new("/work/scenarios/case_a_rk4_fixed.py"),
+            Some(Path::new("/reports/sp4/artifacts")),
+            Path::new("/work/.fullmag/local-live/history"),
+            "session-123",
+        );
+
+        assert_eq!(
+            paths.workspace_dir,
+            PathBuf::from("/work/.fullmag/local-live/history/session-123")
+        );
+        assert_eq!(paths.artifact_dir, PathBuf::from("/reports/sp4/artifacts"));
+    }
+
+    #[test]
+    fn sibling_result_bundle_is_a_zarr_group_with_artifact_and_stage_groups() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock must follow Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-script-result-bundle-{}-{nonce}",
+            std::process::id()
+        ));
+        let paths = ScriptOutputPaths {
+            workspace_dir: root.join("case_a.zarr"),
+            artifact_dir: root.join("case_a.zarr/artifacts"),
+            is_sibling_zarr_bundle: true,
+        };
+
+        initialize_script_result_bundle(&paths, Path::new("/work/case_a.py"), "session-123")
+            .expect("bundle metadata should be writable");
+
+        for group in [
+            paths.workspace_dir.clone(),
+            paths.artifact_dir.clone(),
+            paths.workspace_dir.join("stages"),
+        ] {
+            let zgroup: serde_json::Value = serde_json::from_slice(
+                &fs::read(group.join(".zgroup")).expect("Zarr group metadata should exist"),
+            )
+            .expect("Zarr group metadata should be JSON");
+            assert_eq!(zgroup["zarr_format"], 2);
+            assert!(group.join(".zattrs").is_file());
+        }
+        let attrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(paths.workspace_dir.join(".zattrs")).expect("bundle attributes should exist"),
+        )
+        .expect("bundle attributes should be JSON");
+        assert_eq!(attrs["fullmag_schema"], "fullmag.script_results.v1");
+        assert_eq!(attrs["script_path"], "/work/case_a.py");
+
+        fs::remove_dir_all(root).expect("owned temporary bundle should be removable");
+    }
 }
 
 pub(crate) fn flatten_magnetization(values: &[[f64; 3]]) -> Vec<f64> {

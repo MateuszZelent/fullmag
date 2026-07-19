@@ -27,3 +27,24 @@ def test_smoke_is_explicitly_nonqualifying():
     assert "verify-fem-standard-problem-4-smoke:" in justfile
     assert "FULLMAG_SP4_QUALIFYING=0" in justfile
     assert "FULLMAG_SP4_RELAX_MAX_STEPS=1" in justfile
+
+
+def test_plain_user_scenario_target_keeps_physics_in_script_and_processes_bundle():
+    justfile = (ROOT / "justfile").read_text()
+    wrapper = (ROOT / "scripts/run_fem_sp4_scenario.sh").read_text()
+    assert "fem-sp4-scenario device script attempt_id" in justfile
+    assert "scripts/run_fem_sp4_scenario.sh" in justfile
+    assert 'just fullmag "build=$build" fem "$device" headless "$script"' in wrapper
+    assert 'bundle="${script%.py}.zarr"' in wrapper
+    assert "tests.standard_problems.mumag.sp4.fem.collect_results" in wrapper
+    assert "tests.standard_problems.mumag.sp4.fem.plot_results" in wrapper
+    assert "run_receipt.json" in wrapper
+    assert "record" not in wrapper or "--failure-category execution_failure" in wrapper
+    for hidden_physics_control in (
+        "FULLMAG_SP4_CASE",
+        "FULLMAG_SP4_MESH",
+        "FULLMAG_SP4_AIRBOX",
+        "FULLMAG_SP4_DURATION_S",
+        "FULLMAG_SP4_PHASE",
+    ):
+        assert hidden_physics_control not in wrapper

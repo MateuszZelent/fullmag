@@ -19,3 +19,16 @@ just verify-fem-standard-problem-4
 
 Wynik może otrzymać status `passed` wyłącznie po przejściu wszystkich bramek
 NIST, zbieżności, proweniencji i parytetu.
+
+Pojedynczy scenariusz użytkownika można uruchomić tak:
+
+```text
+just fullmag build=True fem gpu tests/standard_problems/mumag/sp4/fem/scenarios/case_a_rk4_fixed.py
+```
+
+Bez `--output-dir` powstaje obok skryptu jeden bundle
+`case_a_rk4_fixed.zarr/`. Końcowa dynamika jest w `artifacts/`, relaksacja i
+etapy konfiguracyjne w `stages/`, tabela zaakceptowanych kroków w odpowiednim
+`scalars.csv`/`tables/`, a seria pola w `fields/m.zarr`. Fullmag nie nadpisuje
+istniejącego bundle'a; przed ponownym uruchomieniem należy go przenieść albo
+wybrać jawny `--output-dir`.

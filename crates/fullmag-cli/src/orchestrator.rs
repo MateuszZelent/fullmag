@@ -5213,14 +5213,28 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
     let session_id = format!("session-{}-{}", started_at_unix_ms, std::process::id());
     let run_id = format!("run-{}", session_id);
-    let workspace_dir = args.session_root.join(&session_id);
-    let artifact_dir = args
-        .output_dir
-        .clone()
-        .unwrap_or_else(|| workspace_dir.join("artifacts"));
+    let output_paths = resolve_script_output_paths(
+        &script_path,
+        args.output_dir.as_deref(),
+        &args.session_root,
+        &session_id,
+    );
+    let workspace_dir = output_paths.workspace_dir.clone();
+    let artifact_dir = output_paths.artifact_dir.clone();
+
+    if output_paths.is_sibling_zarr_bundle && workspace_dir.exists() {
+        bail!(
+            "default result bundle already exists: {}; move or remove it, or pass --output-dir",
+            workspace_dir.display()
+        );
+    }
 
     fs::create_dir_all(&workspace_dir)
         .with_context(|| format!("failed to create workspace dir {}", workspace_dir.display()))?;
+    if output_paths.is_sibling_zarr_bundle {
+        initialize_script_result_bundle(&output_paths, &script_path, &session_id)?;
+        eprintln!("- result_bundle: {}", workspace_dir.display());
+    }
     // When 3D preview is disabled, set field_every_n to infinity to skip expensive computations.
     // Keep FEM cadence aligned with interactive control-room expectations:
     // too-large step intervals make 3D magnetization look "stuck" even while
@@ -6684,6 +6698,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 current_stage_artifact_dir.display()
             )
         })?;
+        if output_paths.is_sibling_zarr_bundle {
+            initialize_zarr_group(
+                &current_stage_artifact_dir,
+                serde_json::json!({
+                    "fullmag_role": "stage_artifacts",
+                    "stage_index": stage_index,
+                    "entrypoint_kind": stage.entrypoint_kind,
+                }),
+            )?;
+            initialize_zarr_group(
+                &current_stage_artifact_dir.join("fields"),
+                serde_json::json!({"fullmag_role": "sampled_fields"}),
+            )?;
+        }
         write_sampling_resolution_stage_record(
             &current_stage_artifact_dir,
             stage
@@ -8025,6 +8053,20 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     current_stage_artifact_dir.display()
                 )
             })?;
+            if output_paths.is_sibling_zarr_bundle {
+                initialize_zarr_group(
+                    &current_stage_artifact_dir,
+                    serde_json::json!({
+                        "fullmag_role": "interactive_stage_artifacts",
+                        "stage_index": interactive_stage_index,
+                        "entrypoint_kind": stage.entrypoint_kind,
+                    }),
+                )?;
+                initialize_zarr_group(
+                    &current_stage_artifact_dir.join("fields"),
+                    serde_json::json!({"fullmag_role": "sampled_fields"}),
+                )?;
+            }
             write_sampling_resolution_stage_record(
                 &current_stage_artifact_dir,
                 stage

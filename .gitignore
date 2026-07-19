@@ -70,6 +70,7 @@ Thumbs.db
 
 # === Data & artifacts ===
 artifacts/
+*.zarr/
 # data/
 tmp/
 coverage/

@@ -3546,6 +3546,9 @@ fem-sp4-run fem_execution output_dir:
     FULLMAG_PYTHON="{{repo_python}}" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION="$mode" FULLMAG_RELAX_DEVICE="$mode" FULLMAG_CPU_THREADS=auto \
     '{{gpu_runtime_bin}}' tests/standard_problems/mumag/sp4/fem/problem.py --backend fem --headless --json --output-dir "{{output_dir}}"
 
+fem-sp4-scenario device script attempt_id build="false" ledger=".fullmag/reports/standard-problems/mumag/sp4/fem/ledger/results.csv":
+    bash scripts/run_fem_sp4_scenario.sh "{{device}}" "{{script}}" "{{attempt_id}}" "{{build}}" "{{ledger}}"
+
 verify-fem-standard-problem-4:
     just verify-fem-time-domain-native-contract
     just ensure-managed-fem-runtime

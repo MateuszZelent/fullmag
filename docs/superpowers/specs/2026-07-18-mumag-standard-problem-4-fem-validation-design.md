@@ -38,10 +38,24 @@ tests/standard_problems/
         metrics.py
         validation.py
       fem/
-        problem.py
-        run.py
+        scenarios/
+          case_a_heun_fixed.py
+          case_b_heun_fixed.py
+          case_a_rk23_fixed.py
+          case_b_rk23_fixed.py
+          case_a_rk4_fixed.py
+          case_b_rk4_fixed.py
+          case_a_rk45_fixed.py
+          case_b_rk45_fixed.py
+          case_a_rk23_adaptive.py
+          case_b_rk23_adaptive.py
+          case_a_rk45_adaptive.py
+          case_b_rk45_adaptive.py
+        collect_results.py
+        plot_results.py
         verify.py
         test_contract.py
+        test_scenarios.py
 ```
 
 Nazwa `tests/standard_problems` jest kanoniczna. Nie powstanie równoległy
@@ -55,14 +69,44 @@ danych referencyjnych.
 materiał, pola, parametry LLG, wymagane wielkości i schemat artefaktów. Nie
 zawiera ustawień konkretnego backendu.
 
-`fem/problem.py` materializuje kontrakt jako publiczny skrypt Fullmag i jawnie
-wybiera FEM CPU albo FEM GPU, `double`, P1, MFEM/hypre oraz model
+Każdy plik pod `fem/scenarios/` materializuje jeden kompletny przypadek jako
+zwykły publiczny skrypt Fullmag, taki jak pliki pod `examples/`. Skrypt zawiera
+jawnie geometrię, materiał, mesh, airbox, relaksację, solver, pole, czas,
+`tableautosave`, autosave pola i `run`. Nie importuje prywatnego buildera testu
+i nie pobiera parametrów fizycznych ani numerycznych z environment. Urządzenie
+wybiera zwykły launcher `just fullmag ... fem cpu|gpu <script>`.
+
+Każdy plik ma dokładnie jedno wywołanie `study.solver(...)` dla dynamiki.
+Parametry relaksacji pozostają jawne w `study.stages.add_relax(...)`, ponieważ
+są kontraktem konkretnego etapu, a nie drugim globalnym ustawieniem solvera.
+Uruchomienie `x.py` bez `--output-dir` zapisuje jeden sąsiedni bundle Zarr
+`x.zarr`, z końcowym etapem pod `artifacts/` i wcześniejszymi etapami pod
+`stages/`. Istniejący bundle nie jest nadpisywany niejawnie.
+
+Skrypty wybierają strict FEM, `double`, P1, MFEM/hypre oraz model
 demagnetyzacji `poisson_robin`. Strict GPU musi używać realizacji
 `device_hypre_poisson`; `hybrid_cpu_poisson` i każdy fallback unieważniają
 kwalifikację. Każda zmiana realizacji pozostaje widoczna w proweniencji.
 
 `common/metrics.py` i `common/validation.py` nie uruchamiają solvera. Czytają
 artefakty i porównują dowolną realizację z tym samym kontraktem NIST.
+
+### 2.3 Macierz jawnych skryptów użytkownika
+
+Pierwsza macierz zawiera sześć polityk jawnych RK dla obu pól NIST:
+
+- `heun_fixed`, `rk23_fixed`, `rk4_fixed`, `rk45_fixed`;
+- `rk23_adaptive`, `rk45_adaptive`.
+
+Daje to dwanaście samodzielnych plików. Nie powstaje jeden generator z
+kilkudziesięcioma flagami. Kolejne wartości `dt`, tolerancji, mesha albo
+airboxa są dodawane jako następne konkretnie nazwane skrypty, dzięki czemu
+każdy wpis w rejestrze wyników wskazuje dokładny, czytelny plik wejściowy.
+
+Każdy skrypt wykonuje użytkowy przebieg `zero-field relax -> apply field ->
+tableautosave/autosave -> run`. W ten sposób test obejmuje Python DSL,
+ProblemIR, planner, runner, natywny backend i publikację artefaktów, a nie tylko
+wywołanie wewnętrznej funkcji solvera.
 
 ## 3. Kanoniczny problem fizyczny
 
@@ -156,8 +200,15 @@ Wymagane wyniki:
 - requested/resolved backend, device, precision, integrator, demag realization
   i brak fallbacku;
 - `metrics.json`, `validation.json`, wykresy porównawcze i `report.md`;
+- append-only `ledger/results.csv` z jednym wierszem na każdą próbę oraz
+  `ledger/comparisons.csv` dla porównań par uruchomień;
+- wykresy zbieżności PNG tworzone wyłącznie z zapisanych artefaktów i ledgeru;
 - deterministyczny kod zakończenia procesu: zero tylko przy przejściu pełnej
   bramki.
+
+`scalars.csv` generowany przez aplikacyjne `study.tableautosave(...)` jest
+źródłem przebiegów czasowych. Postprocessor nie rekonstruuje trajektorii z
+logów konsoli ani z niezważonej średniej węzłowej.
 
 Średnie FEM muszą pochodzić z natywnego, ważonego przez `Ms` i lumped volume
 pomiaru publikowanego w `StepStats`/`scalars.csv`. Prosta średnia wartości
@@ -279,7 +330,8 @@ syntetycznych fixture'ach.
 
 ### 8.2 Managed runtime smoke
 
-Krótki, grubszy przypadek dowodzi, że publiczny skrypt przechodzi przez
+Krótki, grubszy przypadek uruchamia jeden z dokładnie tych samych publicznych
+skryptów scenariusza i dowodzi, że przechodzi on przez
 ProblemIR, planner, runner i produkcyjny natywny FEM CPU/GPU, zapisując
 wymagane artefakty. Smoke nie może promować statusu `physics_validated`.
 
