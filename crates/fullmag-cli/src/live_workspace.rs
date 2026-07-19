@@ -1126,6 +1126,72 @@ mod tests {
     }
 
     #[test]
+    fn direct_domain_to_postprocessing_records_one_meshing_skip_log() {
+        let workspace = workspace_in_preparation_stage(PreparationStageId::DomainPreparation);
+
+        apply_python_progress_event(
+            &workspace,
+            structured_event(
+                "mesh_build_phase",
+                serde_json::json!({"phase": "postprocessing"}),
+            ),
+        );
+
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("preparation state");
+        let meshing = preparation
+            .stages
+            .iter()
+            .find(|stage| stage.id == PreparationStageId::Meshing)
+            .expect("meshing stage");
+        assert_eq!(meshing.status, PreparationStageStatus::Skipped);
+        let skip_entries = preparation
+            .log_tail
+            .iter()
+            .filter(|entry| entry.stage_id == PreparationStageId::Meshing)
+            .collect::<Vec<_>>();
+        assert_eq!(skip_entries.len(), 1);
+        assert_eq!(
+            skip_entries[0].message,
+            "No standalone meshing phase was required"
+        );
+    }
+
+    #[test]
+    fn invalid_mesh_percent_is_dropped_instead_of_clamped() {
+        let workspace = workspace_in_preparation_stage(PreparationStageId::DomainPreparation);
+
+        apply_python_progress_event(
+            &workspace,
+            structured_event(
+                "mesh_build_phase",
+                serde_json::json!({
+                    "phase": "meshing",
+                    "progress_percent": 500,
+                }),
+            ),
+        );
+
+        let snapshot = workspace.snapshot();
+        let preparation = snapshot.simulation_preparation.expect("preparation state");
+        let meshing = preparation
+            .stages
+            .iter()
+            .find(|stage| stage.id == PreparationStageId::Meshing)
+            .expect("meshing stage");
+        assert_eq!(meshing.progress_percent, None);
+        let detailed_meshing = snapshot
+            .mesh_workspace
+            .as_ref()
+            .and_then(|resource| resource["mesh_pipeline_status"].as_array())
+            .and_then(|stages| stages.iter().find(|stage| stage["id"] == "meshing"))
+            .expect("detailed meshing status");
+        assert!(detailed_meshing.get("progress_percent").is_none());
+    }
+
+    #[test]
     fn snapshot_publishes_preparation_in_session_frame() {
         let state = workspace_state_with_preparation(7);
         let payload = state.snapshot();
@@ -1887,7 +1953,8 @@ fn mesh_progress_percent_from_payload(payload: &serde_json::Value) -> Option<u8>
         .get("progress_percent")
         .or_else(|| payload.get("percent"))
         .and_then(|value| value.as_u64())
-        .and_then(|value| u8::try_from(value.min(100)).ok())
+        .filter(|value| *value <= 100)
+        .and_then(|value| u8::try_from(value).ok())
 }
 
 fn mesh_progress_label_from_payload(payload: &serde_json::Value) -> Option<String> {
@@ -1997,10 +2064,15 @@ fn begin_mesh_preparation_stage(
                 "Shared-domain inputs prepared",
             )?;
             if stage_id == PreparationStageId::MeshPostprocessing {
-                preparation.skip_stage(
+                const SKIP_DETAIL: &str = "No standalone meshing phase was required";
+                preparation.skip_stage(PreparationStageId::Meshing, SKIP_DETAIL)?;
+                preparation_log_once(
+                    preparation,
+                    timestamp_unix_ms,
+                    PreparationLogLevel::Info,
                     PreparationStageId::Meshing,
-                    "No standalone meshing phase was required",
-                )?;
+                    SKIP_DETAIL,
+                );
             }
         }
         (Some(PreparationStageId::Meshing), PreparationStageId::MeshPostprocessing) => {

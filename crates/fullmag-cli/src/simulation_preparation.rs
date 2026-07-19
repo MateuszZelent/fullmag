@@ -437,6 +437,56 @@ impl SimulationPreparationState {
         Ok(())
     }
 
+    pub fn project_completed_stage(
+        &mut self,
+        stage_id: PreparationStageId,
+        detail: impl Into<String>,
+    ) -> Result<(), PreparationTransitionError> {
+        self.ensure_not_terminal()?;
+        if stage_id == PreparationStageId::Ready {
+            return Err(PreparationTransitionError::InvalidTerminalTransition {
+                stage_id,
+                status: self.stage(stage_id).status,
+            });
+        }
+        self.ensure_forward(stage_id)?;
+        if let Some(active_stage_id) = self.active_stage_id {
+            if active_stage_id != stage_id {
+                return Err(PreparationTransitionError::StageIsNotActive {
+                    stage_id,
+                    active_stage_id: Some(active_stage_id),
+                });
+            }
+        }
+
+        let before = self.semantic_snapshot();
+        self.skip_pending_before(stage_id);
+        let stage = self.stage_mut(stage_id);
+        match stage.status {
+            PreparationStageStatus::Pending | PreparationStageStatus::Active => {
+                stage.status = PreparationStageStatus::Completed;
+                stage.completed_at_unix_ms = None;
+                stage.duration_ms = None;
+                stage.detail = detail.into();
+                stage.progress_percent = None;
+                stage.progress_label = None;
+                self.status = PreparationStatus::Running;
+                if self.active_stage_id == Some(stage_id) {
+                    self.active_stage_id = None;
+                    self.active_stage_started_at = None;
+                }
+            }
+            status => {
+                return Err(PreparationTransitionError::InvalidTerminalTransition {
+                    stage_id,
+                    status,
+                });
+            }
+        }
+        self.bump_revision_if_semantic_change(before);
+        Ok(())
+    }
+
     pub fn skip_stage(
         &mut self,
         stage_id: PreparationStageId,
@@ -792,5 +842,62 @@ mod tests {
             state.failure.as_ref().unwrap().stage_id,
             PreparationStageId::Meshing
         );
+    }
+
+    #[test]
+    fn projected_completion_preserves_order_with_unknown_timing() {
+        let clock = ManualMonotonicClock::new(0);
+        let mut state =
+            SimulationPreparationState::new_with_monotonic_clock("prep-projected", 1_000, clock);
+        state
+            .begin_stage(
+                PreparationStageId::DomainPreparation,
+                1_100,
+                "Preparing domain",
+            )
+            .unwrap();
+
+        state
+            .project_completed_stage(
+                PreparationStageId::DomainPreparation,
+                "Domain completed during deferred materialization; timing unavailable",
+            )
+            .unwrap();
+        state
+            .project_completed_stage(
+                PreparationStageId::Meshing,
+                "Mesh completed during deferred materialization; timing unavailable",
+            )
+            .unwrap();
+        state
+            .project_completed_stage(
+                PreparationStageId::MeshPostprocessing,
+                "Mesh postprocessing completed during deferred materialization; timing unavailable",
+            )
+            .unwrap();
+
+        for stage_id in [
+            PreparationStageId::DomainPreparation,
+            PreparationStageId::Meshing,
+            PreparationStageId::MeshPostprocessing,
+        ] {
+            let stage = state
+                .stages
+                .iter()
+                .find(|stage| stage.id == stage_id)
+                .unwrap();
+            assert_eq!(stage.status, PreparationStageStatus::Completed);
+            assert_eq!(stage.completed_at_unix_ms, None);
+            assert_eq!(stage.duration_ms, None);
+            assert!(stage.detail.contains("timing unavailable"));
+        }
+        assert_eq!(state.active_stage_id, None);
+        state
+            .begin_stage(
+                PreparationStageId::SolverInitialization,
+                1_200,
+                "Initializing solver",
+            )
+            .expect("projected completion must preserve monotonic forward progress");
     }
 }
