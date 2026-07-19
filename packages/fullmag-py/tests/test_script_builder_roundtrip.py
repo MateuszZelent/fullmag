@@ -205,6 +205,38 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
             ["k0-sinc"],
         )
 
+    def test_remove_field_drive_roundtrip_preserves_drive_and_action_ids(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("remove-drive-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_field_drive(fm.RegionalFieldDrive(
+            id="antenna", name="Antenna", target=fm.FieldTarget.global_domain(),
+            amplitude_B_T=1e-3, direction=(0, 1, 0),
+            spatial_profile=fm.UniformFieldProfile(), waveform=fm.Constant(),
+        ), stage_id="add-antenna")
+        study.stages.add_run(stage_id="driven", until=1e-12)
+        study.stages.remove_field_drive("antenna", stage_id="remove-antenna")
+        study.stages.add_run(stage_id="free", until=1e-12)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn(
+            'study.stages.remove_field_drive("antenna", stage_id="remove-antenna")',
+            rendered,
+        )
+        self.assertEqual(rewritten.stages[2].action["drive_id"], "antenna")
+        self.assertEqual(rewritten.stages[2].stage_id, "remove-antenna")
+        self.assertEqual([drive.id for drive in rewritten.stages[1].problem.field_drives], ["antenna"])
+        self.assertEqual(rewritten.stages[3].problem.field_drives, ())
+
     def test_independent_autosave_and_fft_stages_roundtrip_before_simple_run(self) -> None:
         script = """
         import fullmag as fm

@@ -697,6 +697,7 @@ fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> Stage
             Some(StateTransferOperatorKind::IdentityCopy),
         ),
         ResolvedScriptStageAction::AddFieldDrive { .. }
+        | ResolvedScriptStageAction::RemoveFieldDrive { .. }
         | ResolvedScriptStageAction::TableAutosave { .. }
         | ResolvedScriptStageAction::Autosave { .. }
         | ResolvedScriptStageAction::FftResponse { .. } => {
@@ -822,6 +823,13 @@ fn resolve_explicit_stage_action(
             (
                 "study_pipeline_add_field_drive",
                 ResolvedScriptStageAction::AddFieldDrive { drive },
+            )
+        }
+        ScriptExecutionStageAction::RemoveFieldDrive { drive_id } => {
+            remove_field_drive(&mut ir, &drive_id)?;
+            (
+                "study_pipeline_remove_field_drive",
+                ResolvedScriptStageAction::RemoveFieldDrive { drive_id },
             )
         }
         ScriptExecutionStageAction::TableAutosave {
@@ -1040,6 +1048,9 @@ fn materialize_pipeline_primitive(
         "export" => materialize_pipeline_export(current_ir, payload).map(Some),
         "change_device" => materialize_pipeline_change_device(current_ir, payload).map(Some),
         "add_field_drive" => materialize_pipeline_add_field_drive(current_ir, payload).map(Some),
+        "remove_field_drive" => {
+            materialize_pipeline_remove_field_drive(current_ir, payload).map(Some)
+        }
         "table_autosave" => materialize_pipeline_table_autosave(current_ir, payload).map(Some),
         "autosave" => materialize_pipeline_autosave(current_ir, payload).map(Some),
         "fft_response" => materialize_pipeline_fft_response(current_ir, payload).map(Some),
@@ -1069,6 +1080,26 @@ fn materialize_pipeline_add_field_drive(
         current_ir.clone(),
         entrypoint_kind,
         ResolvedScriptStageAction::AddFieldDrive { drive },
+    ))
+}
+
+fn materialize_pipeline_remove_field_drive(
+    current_ir: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<ResolvedScriptStage> {
+    let drive_id = payload
+        .get("drive_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .context("study pipeline remove_field_drive requires string payload.drive_id")?;
+    remove_field_drive(current_ir, &drive_id)?;
+    let entrypoint_kind = payload_string(payload, "entrypoint_kind")
+        .unwrap_or_else(|| "study_pipeline_remove_field_drive".to_string());
+    current_ir.problem_meta.entrypoint_kind = entrypoint_kind.clone();
+    Ok(ResolvedScriptStage::synthetic(
+        current_ir.clone(),
+        entrypoint_kind,
+        ResolvedScriptStageAction::RemoveFieldDrive { drive_id },
     ))
 }
 
@@ -1234,6 +1265,24 @@ fn ensure_field_drive_can_be_added(ir: &ProblemIR, drive: &RegionalFieldDriveIR)
             drive.name
         );
     }
+    Ok(())
+}
+
+fn remove_field_drive(ir: &mut ProblemIR, drive_id: &str) -> Result<()> {
+    if drive_id.trim().is_empty() {
+        bail!("study pipeline remove_field_drive drive_id must be non-empty");
+    }
+    let Some(index) = ir
+        .field_drives
+        .iter()
+        .position(|drive| drive.id == drive_id)
+    else {
+        bail!(
+            "study pipeline field drive id '{}' does not exist",
+            drive_id
+        );
+    };
+    ir.field_drives.remove(index);
     Ok(())
 }
 
@@ -3855,6 +3904,23 @@ mod tests {
         .expect("primitive pipeline node")
     }
 
+    fn sample_regional_field_drive(id: &str) -> RegionalFieldDriveIR {
+        serde_json::from_value(json!({
+            "id": id,
+            "name": id,
+            "kind": "regional",
+            "enabled": true,
+            "target": {"kind": "global"},
+            "amplitude_B_T": 0.001,
+            "direction": [0.0, 1.0, 0.0],
+            "spatial_profile": {"kind": "uniform"},
+            "waveform": {"kind": "constant", "amplitude": 1.0},
+            "time_origin": "stage_local",
+            "activation": {"kind": "all_time_evolution"}
+        }))
+        .expect("regional field drive")
+    }
+
     fn minimal_frequency_response_plan() -> fullmag_ir::FemFrequencyResponsePlanIR {
         fullmag_ir::FemFrequencyResponsePlanIR {
             mesh_build_report: None,
@@ -5263,6 +5329,201 @@ mod tests {
     }
 
     #[test]
+    fn materialize_script_stages_removes_only_selected_field_drive() {
+        let drive = |id: &str, direction: [f64; 3]| {
+            json!({
+                "kind": "add_field_drive",
+                "drive": {
+                    "id": id,
+                    "name": id,
+                    "kind": "regional",
+                    "enabled": true,
+                    "target": {"kind": "global"},
+                    "amplitude_B_T": 0.001,
+                    "direction": direction,
+                    "spatial_profile": {"kind": "uniform"},
+                    "waveform": {"kind": "constant", "amplitude": 1.0},
+                    "time_origin": "stage_local",
+                    "activation": {"kind": "all_time_evolution"}
+                }
+            })
+        };
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1.0e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node(
+                        "add-first",
+                        "add_field_drive",
+                        drive("first", [0.0, 1.0, 0.0]),
+                    ),
+                    primitive_node(
+                        "add-second",
+                        "add_field_drive",
+                        drive("second", [0.0, 0.0, 1.0]),
+                    ),
+                    primitive_node(
+                        "remove-first",
+                        "remove_field_drive",
+                        json!({
+                            "kind": "remove_field_drive",
+                            "entrypoint_kind": "flat_remove_field_drive",
+                            "drive_id": "first"
+                        }),
+                    ),
+                    primitive_node(
+                        "run-second-only",
+                        "run",
+                        json!({"entrypoint_kind": "flat_run", "until_seconds": 1.0e-12}),
+                    ),
+                    primitive_node(
+                        "readd-first",
+                        "add_field_drive",
+                        drive("first", [1.0, 0.0, 0.0]),
+                    ),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("remove pipeline should materialize");
+        assert_eq!(stages.len(), 5);
+        assert_eq!(
+            stages[2]
+                .ir
+                .field_drives
+                .iter()
+                .map(|drive| drive.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["second"]
+        );
+        assert!(matches!(
+            stages[2].action.as_ref(),
+            Some(ResolvedScriptStageAction::RemoveFieldDrive { drive_id }) if drive_id == "first"
+        ));
+        assert_eq!(
+            stages[2]
+                .incoming_transition
+                .as_ref()
+                .map(|transition| transition.kind),
+            Some(StageTransitionKind::ContinueInPlace)
+        );
+        assert_eq!(
+            stages[3]
+                .ir
+                .field_drives
+                .iter()
+                .map(|drive| drive.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["second"]
+        );
+        assert_eq!(
+            stages[4]
+                .ir
+                .field_drives
+                .iter()
+                .map(|drive| drive.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["second", "first"]
+        );
+    }
+
+    #[test]
+    fn materialize_script_stages_rejects_unknown_or_repeated_field_drive_removal() {
+        for drive_id in ["missing", ""] {
+            let config = ScriptExecutionConfig {
+                ir: sample_problem_ir(),
+                shared_geometry_assets: None,
+                default_until_seconds: Some(1.0e-12),
+                study_pipeline: Some(StudyPipelineDocument {
+                    version: "study_pipeline.v1".to_string(),
+                    nodes: vec![primitive_node(
+                        "remove",
+                        "remove_field_drive",
+                        json!({"kind": "remove_field_drive", "drive_id": drive_id}),
+                    )],
+                }),
+                stages: vec![],
+            };
+            let error = materialize_script_stages(config).expect_err("unknown removal must fail");
+            let diagnostic = format!("{error:#}");
+            assert!(
+                diagnostic.contains(if drive_id.is_empty() {
+                    "must be non-empty"
+                } else {
+                    "does not exist"
+                }),
+                "unexpected diagnostic: {diagnostic}"
+            );
+        }
+
+        let drive = sample_regional_field_drive("pulse");
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1.0e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node(
+                        "add",
+                        "add_field_drive",
+                        json!({"kind": "add_field_drive", "drive": drive}),
+                    ),
+                    primitive_node(
+                        "remove-once",
+                        "remove_field_drive",
+                        json!({"kind": "remove_field_drive", "drive_id": "pulse"}),
+                    ),
+                    primitive_node(
+                        "remove-twice",
+                        "remove_field_drive",
+                        json!({"kind": "remove_field_drive", "drive_id": "pulse"}),
+                    ),
+                ],
+            }),
+            stages: vec![],
+        };
+        let error = materialize_script_stages(config).expect_err("repeated removal must fail");
+        assert!(
+            format!("{error:#}").contains("field drive id 'pulse' does not exist"),
+            "unexpected diagnostic: {error:#}"
+        );
+    }
+
+    #[test]
+    fn materialize_explicit_remove_field_drive_action_updates_following_state() {
+        let mut ir = sample_problem_ir();
+        ir.field_drives.push(sample_regional_field_drive("pulse"));
+        let config = ScriptExecutionConfig {
+            ir: ir.clone(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1.0e-12),
+            study_pipeline: None,
+            stages: vec![ScriptExecutionStage {
+                ir,
+                default_until_seconds: None,
+                entrypoint_kind: "flat_remove_field_drive".to_string(),
+                action: Some(ScriptExecutionStageAction::RemoveFieldDrive {
+                    drive_id: "pulse".to_string(),
+                }),
+            }],
+        };
+
+        let stages =
+            materialize_script_stages(config).expect("explicit removal should materialize");
+        assert_eq!(stages.len(), 1);
+        assert!(stages[0].ir.field_drives.is_empty());
+        assert!(matches!(
+            stages[0].action.as_ref(),
+            Some(ResolvedScriptStageAction::RemoveFieldDrive { drive_id }) if drive_id == "pulse"
+        ));
+    }
+
+    #[test]
     fn materialize_script_stages_applies_visible_autosave_and_fft_actions_in_order() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
@@ -5500,6 +5761,67 @@ mod tests {
             run_5.study.sampling().outputs.as_slice(),
             [fullmag_ir::OutputIR::FieldResolvedAuto { .. }]
         ));
+    }
+
+    #[test]
+    fn materialize_pipeline_auto_sampling_fails_after_sinc_drive_removal() {
+        let config = ScriptExecutionConfig {
+            ir: sample_problem_ir(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(1.0e-9),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    primitive_node(
+                        "add-sinc",
+                        "add_field_drive",
+                        json!({
+                            "kind": "add_field_drive",
+                            "drive": {
+                                "id": "sinc", "name": "sinc", "kind": "regional",
+                                "enabled": true, "target": {"kind": "global"},
+                                "amplitude_B_T": 0.001, "direction": [0.0, 1.0, 0.0],
+                                "spatial_profile": {"kind": "uniform"},
+                                "waveform": {"kind": "sinc_pulse", "cutoff_hz": 5e9, "t0": 5e-11},
+                                "time_origin": "stage_local",
+                                "activation": {"kind": "all_time_evolution"}
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "table-auto",
+                        "table_autosave",
+                        json!({
+                            "kind": "table_autosave", "enabled": true,
+                            "table_autosave": {
+                                "kind": "table_autosave", "table_id": "default",
+                                "sample_period_policy": {
+                                    "kind": "auto_sinc_cutoff", "nyquist_guard_factor": 1.3
+                                },
+                                "quantities": ["t", "my"]
+                            }
+                        }),
+                    ),
+                    primitive_node(
+                        "remove-sinc",
+                        "remove_field_drive",
+                        json!({"kind": "remove_field_drive", "drive_id": "sinc"}),
+                    ),
+                    primitive_node("run-after-removal", "run", json!({"until_seconds": 1e-9})),
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let error = materialize_script_stages(config)
+            .expect_err("automatic sampling without an active sinc drive must fail");
+        let diagnostic = format!("{error:#}");
+        assert!(
+            diagnostic.contains(
+                "automatic sampling for Run stage 'run-after-removal' requires at least one enabled active sinc drive"
+            ),
+            "unexpected diagnostic: {diagnostic}"
+        );
     }
 
     #[test]

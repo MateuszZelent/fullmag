@@ -5037,6 +5037,22 @@ fn execute_synthetic_stage(
                 message: format!("Added regional field drive {}", drive.id),
             })
         }
+        ResolvedScriptStageAction::RemoveFieldDrive { drive_id } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "remove_field_drive",
+                    "drive_id": drive_id,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!("Removed regional field drive {}", drive_id),
+            })
+        }
         ResolvedScriptStageAction::TableAutosave {
             enabled,
             table_autosave,
@@ -10835,6 +10851,7 @@ mod tests {
             validation_profile: ValidationProfileIR {
                 execution_mode: ExecutionMode::Strict,
             },
+            planar_monitors: Vec::new(),
             field_drives: Vec::new(),
             current_modules: Vec::new(),
             spin_torque_modules: Vec::new(),
@@ -11732,6 +11749,31 @@ mod tests {
         assert!(exported_path.is_file());
         assert_eq!(export_outcome.magnetization, current);
         assert!(export_stage_dir.join("synthetic_stage.json").is_file());
+
+        let remove_stage_dir = artifact_dir.join("stage_remove_drive");
+        let remove_outcome = execute_synthetic_stage(
+            &ResolvedScriptStageAction::RemoveFieldDrive {
+                drive_id: "antenna".to_string(),
+            },
+            &artifact_dir,
+            &remove_stage_dir,
+            &backend_plan,
+            Some(current.as_slice()),
+        )
+        .expect("remove_field_drive should succeed");
+        assert_eq!(remove_outcome.magnetization, current);
+        assert_eq!(
+            remove_outcome.message,
+            "Removed regional field drive antenna"
+        );
+        let removal: serde_json::Value = serde_json::from_slice(
+            &fs::read(remove_stage_dir.join("synthetic_stage.json"))
+                .expect("removal stage record should exist"),
+        )
+        .expect("removal stage record should be JSON");
+        assert_eq!(removal["kind"], "remove_field_drive");
+        assert_eq!(removal["drive_id"], "antenna");
+        assert_eq!(removal["vector_count"], 1);
 
         let _ = fs::remove_dir_all(&artifact_dir);
     }

@@ -334,6 +334,9 @@ pub(crate) enum ScriptExecutionStageAction {
     AddFieldDrive {
         drive: RegionalFieldDriveIR,
     },
+    RemoveFieldDrive {
+        drive_id: String,
+    },
     TableAutosave {
         #[serde(default = "default_true")]
         enabled: bool,
@@ -421,6 +424,9 @@ pub(crate) enum ResolvedScriptStageAction {
     },
     AddFieldDrive {
         drive: RegionalFieldDriveIR,
+    },
+    RemoveFieldDrive {
+        drive_id: String,
     },
     TableAutosave {
         enabled: bool,

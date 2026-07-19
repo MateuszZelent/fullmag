@@ -3185,6 +3185,40 @@ class StudyStagesBuilder:
             _state._wait_for_solve = True
         return self
 
+    def remove_field_drive(
+        self,
+        drive_id: str,
+        *,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Remove one persistent regional field drive from subsequent stages."""
+        if not isinstance(drive_id, str):
+            raise TypeError("remove_field_drive() drive_id must be a string")
+        if not drive_id.strip():
+            raise ValueError("remove_field_drive() drive_id must be non-empty")
+        matching = [
+            index
+            for index, drive in enumerate(_state._field_drives)
+            if drive.id == drive_id
+        ]
+        if not matching:
+            raise ValueError(f"field drive id '{drive_id}' does not exist")
+        resolved_id = self._allocate_stage_id("remove-field-drive", stage_id)
+        problem_before_action = _build_problem()
+        del _state._field_drives[matching[0]]
+        _state._declared_stages.append(
+            CapturedStage(
+                problem=problem_before_action,
+                entrypoint_kind="flat_remove_field_drive",
+                default_until_seconds=None,
+                action={"kind": "remove_field_drive", "drive_id": drive_id},
+                stage_id=resolved_id,
+            )
+        )
+        if _state._interactive:
+            _state._wait_for_solve = True
+        return self
+
     def tableautosave(
         self,
         t_sampling: SamplingPeriod | None = None,

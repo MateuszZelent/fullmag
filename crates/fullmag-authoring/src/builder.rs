@@ -330,6 +330,7 @@ pub enum StudyPrimitiveStageKind {
     Hysteresis,
     ChangeDevice,
     AddFieldDrive,
+    RemoveFieldDrive,
     TableAutosave,
     Autosave,
     FftResponse,
@@ -349,6 +350,7 @@ impl StudyPrimitiveStageKind {
         Self::Hysteresis,
         Self::ChangeDevice,
         Self::AddFieldDrive,
+        Self::RemoveFieldDrive,
         Self::TableAutosave,
         Self::Autosave,
         Self::FftResponse,
@@ -973,6 +975,38 @@ mod tests {
             node.payload
                 .get("drive")
                 .and_then(|value| value.get("id"))
+                .and_then(|value| value.as_str()),
+            Some("k0-sinc")
+        );
+    }
+
+    #[test]
+    fn study_pipeline_accepts_remove_field_drive_primitive_stage() {
+        let document: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": [{
+                "id": "remove-k0-antenna",
+                "label": "Remove antenna",
+                "enabled": true,
+                "source": "script_imported",
+                "node_kind": "primitive",
+                "stage_kind": "remove_field_drive",
+                "payload": {
+                    "kind": "remove_field_drive",
+                    "entrypoint_kind": "flat_remove_field_drive",
+                    "drive_id": "k0-sinc"
+                }
+            }]
+        }))
+        .expect("remove_field_drive primitive stage should deserialize");
+
+        let StudyPipelineNode::Primitive(node) = &document.nodes[0] else {
+            panic!("expected primitive remove_field_drive stage");
+        };
+        assert_eq!(node.stage_kind, StudyPrimitiveStageKind::RemoveFieldDrive);
+        assert_eq!(
+            node.payload
+                .get("drive_id")
                 .and_then(|value| value.as_str()),
             Some("k0-sinc")
         );

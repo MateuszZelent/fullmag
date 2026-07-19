@@ -194,6 +194,97 @@ study.stages.add_field_drive(
 """
             )
 
+    def test_remove_field_drive_is_ordered_and_allows_readding_same_id(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+def drive(drive_id, name, direction):
+    return fm.RegionalFieldDrive(
+        id=drive_id,
+        name=name,
+        target=fm.FieldTarget.global_domain(),
+        amplitude_B_T=1e-3,
+        direction=direction,
+        spatial_profile=fm.UniformFieldProfile(),
+        waveform=fm.Constant(),
+    )
+
+study.stages.add_field_drive(drive("first", "First", (0, 1, 0)), stage_id="add-first")
+study.stages.add_field_drive(drive("second", "Second", (0, 0, 1)), stage_id="add-second")
+study.stages.add_run(stage_id="both-active", until=1e-12)
+study.stages.remove_field_drive("first", stage_id="remove-first")
+study.stages.add_run(stage_id="second-only", until=1e-12)
+study.stages.add_field_drive(drive("first", "Replacement", (1, 0, 0)), stage_id="readd-first")
+study.stages.add_run(stage_id="replacement-active", until=1e-12)
+"""
+        )
+
+        self.assertEqual(
+            [stage.action["kind"] if stage.action else stage.problem.study.to_ir()["kind"] for stage in loaded.stages],
+            [
+                "add_field_drive", "add_field_drive", "time_evolution",
+                "remove_field_drive", "time_evolution", "add_field_drive", "time_evolution",
+            ],
+        )
+        remove = loaded.stages[3]
+        self.assertEqual(remove.entrypoint_kind, "flat_remove_field_drive")
+        self.assertEqual(remove.action, {"kind": "remove_field_drive", "drive_id": "first"})
+        self.assertEqual([drive.id for drive in remove.problem.field_drives], ["first", "second"])
+        self.assertEqual([drive.id for drive in loaded.stages[4].problem.field_drives], ["second"])
+        self.assertEqual(
+            [drive.name for drive in loaded.stages[6].problem.field_drives],
+            ["Second", "Replacement"],
+        )
+        node = loaded.study_pipeline_document()["nodes"][3]
+        self.assertEqual(node["stage_kind"], "remove_field_drive")
+        self.assertEqual(node["payload"]["drive_id"], "first")
+
+    def test_remove_field_drive_rejects_empty_unknown_and_repeated_ids(self) -> None:
+        for script, message in (
+            ('study.stages.remove_field_drive("")', "drive_id must be non-empty"),
+            ('study.stages.remove_field_drive("missing")', "field drive id 'missing' does not exist"),
+        ):
+            with self.subTest(script=script), self.assertRaisesRegex(ValueError, message):
+                _load(_PREAMBLE + script)
+
+        with self.assertRaisesRegex(ValueError, "field drive id 'pulse' does not exist"):
+            _load(
+                _PREAMBLE
+                + """
+study.stages.add_field_drive(fm.RegionalFieldDrive(
+    id="pulse", name="Pulse", target=fm.FieldTarget.global_domain(),
+    amplitude_B_T=1e-3, direction=(0, 1, 0),
+    spatial_profile=fm.UniformFieldProfile(), waveform=fm.Constant(),
+))
+study.stages.remove_field_drive("pulse")
+study.stages.remove_field_drive("pulse")
+"""
+            )
+
+    def test_remove_field_drive_stage_id_conflict_preserves_active_drive(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_field_drive(fm.RegionalFieldDrive(
+    id="pulse", name="Pulse", target=fm.FieldTarget.global_domain(),
+    amplitude_B_T=1e-3, direction=(0, 1, 0),
+    spatial_profile=fm.UniformFieldProfile(), waveform=fm.Constant(),
+), stage_id="occupied")
+try:
+    study.stages.remove_field_drive("pulse", stage_id="occupied")
+except ValueError as error:
+    assert "duplicate stage_id" in str(error)
+else:
+    raise AssertionError("duplicate stage_id must fail")
+study.stages.add_run(stage_id="after-conflict", until=1e-12)
+"""
+        )
+
+        self.assertEqual(
+            [drive.id for drive in loaded.stages[-1].problem.field_drives],
+            ["pulse"],
+        )
+
     def test_autosave_and_fft_are_ordered_configuration_stages_not_run_arguments(self) -> None:
         loaded = _load(
             _PREAMBLE
