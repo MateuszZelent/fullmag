@@ -111,7 +111,7 @@ function stage(
 }
 
 describe("resolveSimulationPreparationViewModel", () => {
-  it("keeps connection bootstrap indeterminate without inventing stages or an ETA", () => {
+  it("keeps initial connection indeterminate without inventing stages or an ETA", () => {
     const model = resolveSimulationPreparationViewModel(
       resource<SimulationPreparationResource>(null, "loading"),
       resource<LiveStatusResource>(null, "loading"),

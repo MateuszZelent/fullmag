@@ -228,6 +228,7 @@
 
 .fm-simulation-startup__stages {
   display: grid;
+  grid-auto-rows: max-content;
   align-content: start;
   margin: 0;
   overflow-y: auto;
