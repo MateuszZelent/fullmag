@@ -49,6 +49,7 @@ pub enum RealtimeResourceName {
     MeshBuilds,
     Commands,
     Stages,
+    Simulation,
     SceneDocument,
     PlanarMonitors,
     PlanarFields,

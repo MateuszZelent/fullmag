@@ -382,9 +382,9 @@ fn current_live_realtime_changes(
     }
     if realtime_state.revisions.simulation_preparation_revision > 0 {
         changes.push(RealtimeResourceChange {
-            resource: RealtimeResourceName::Stages,
+            resource: RealtimeResourceName::Simulation,
             revision: realtime_state.revisions.simulation_preparation_revision,
-            resource_id: Some("simulation/preparation".to_string()),
+            resource_id: Some("preparation".to_string()),
             quantity_ids: Vec::new(),
             broad: false,
             domain_generation_id: None,
@@ -536,11 +536,10 @@ fn current_live_realtime_change_revision_changed(
         RealtimeResourceName::Commands => {
             current_live_commands_effective_revision(previous) != change.revision
         }
-        RealtimeResourceName::Stages => match change.resource_id.as_deref() {
-            Some("simulation/preparation") => {
-                previous.simulation_preparation_revision != change.revision
-            }
-            _ => previous.stages_revision != change.revision,
+        RealtimeResourceName::Stages => previous.stages_revision != change.revision,
+        RealtimeResourceName::Simulation => match change.resource_id.as_deref() {
+            Some("preparation") => previous.simulation_preparation_revision != change.revision,
+            _ => true,
         },
         RealtimeResourceName::SceneDocument => previous.scene_revision != Some(change.revision),
         RealtimeResourceName::PlanarMonitors => previous.scene_revision != Some(change.revision),
@@ -1023,7 +1022,9 @@ fn current_live_realtime_event_coalesce_window_ms(event: &LiveRealtimeServerEven
         if payload.changes.iter().any(|change| {
             matches!(
                 change.resource,
-                RealtimeResourceName::Commands | RealtimeResourceName::Stages
+                RealtimeResourceName::Commands
+                    | RealtimeResourceName::Stages
+                    | RealtimeResourceName::Simulation
             )
         }) {
             return None;
@@ -1353,7 +1354,9 @@ enum RealtimeQosLane {
 fn realtime_qos_lane(change: &RealtimeResourceChange) -> RealtimeQosLane {
     if matches!(
         change.resource,
-        RealtimeResourceName::Commands | RealtimeResourceName::Stages
+        RealtimeResourceName::Commands
+            | RealtimeResourceName::Stages
+            | RealtimeResourceName::Simulation
     ) {
         return RealtimeQosLane::Immediate;
     }

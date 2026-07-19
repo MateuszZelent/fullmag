@@ -15571,15 +15571,18 @@ async fn simulation_preparation_invalidation_is_revision_only() {
         &realtime_state,
         Some(&realtime_state.revisions),
     );
-    assert!(unchanged
-        .iter()
-        .all(|change| change.resource_id.as_deref() != Some("simulation/preparation")));
+    assert!(unchanged.iter().all(|change| {
+        !matches!(change.resource, RealtimeResourceName::Simulation)
+            || change.resource_id.as_deref() != Some("preparation")
+    }));
     let mut previous_revisions = realtime_state.revisions.clone();
     previous_revisions.simulation_preparation_revision = 6;
     let changed =
         crate::current_live_realtime_changes_since(&realtime_state, Some(&previous_revisions));
     assert!(changed.iter().any(|change| {
-        change.resource_id.as_deref() == Some("simulation/preparation") && change.revision == 7
+        matches!(change.resource, RealtimeResourceName::Simulation)
+            && change.resource_id.as_deref() == Some("preparation")
+            && change.revision == 7
     }));
     let mut events = state.current_live_realtime_events.subscribe();
 
@@ -15596,13 +15599,13 @@ async fn simulation_preparation_invalidation_is_revision_only() {
     let change = body["payload"]["changes"]
         .as_array()
         .and_then(|changes| {
-            changes
-                .iter()
-                .find(|change| change["resource_id"] == "simulation/preparation")
+            changes.iter().find(|change| {
+                change["resource"] == "simulation" && change["resource_id"] == "preparation"
+            })
         })
         .expect("simulation preparation invalidation");
     assert_eq!(change["revision"], 7);
-    assert_eq!(change["resource"], "stages");
+    assert_eq!(change["resource"], "simulation");
     assert_eq!(
         change["recommended_fetch"],
         "/v2/sessions/current/simulation/preparation"
@@ -19687,6 +19690,7 @@ async fn asyncapi_document_matches_realtime_rust_schema_names() {
         RealtimeResourceName::MeshBuilds,
         RealtimeResourceName::Commands,
         RealtimeResourceName::Stages,
+        RealtimeResourceName::Simulation,
         RealtimeResourceName::SceneDocument,
         RealtimeResourceName::VisualizationState,
         RealtimeResourceName::VisualizationClientAcks,

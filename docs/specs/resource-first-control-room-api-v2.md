@@ -72,8 +72,9 @@ contract has stricter ownership rules than the HTTP routes:
 
 - `resource.batch_changed` may only announce resources whose underlying payload
   freshness actually changed.
-- Simulation preparation changes use resource id `simulation/preparation` and
-  carry only the preparation revision plus the canonical HTTP fetch hint. The
+- Simulation preparation changes use resource family `simulation` with
+  `resource_id = "preparation"` and carry only the preparation revision plus
+  the canonical HTTP fetch hint. The
   websocket never carries the preparation stage list, execution summaries,
   bounded log tail, or failure body.
 - UI-plane revisions and data-plane revisions must stay independent even when
@@ -157,7 +158,8 @@ content. Detailed mesh state remains owned by `meshing/builds/current`, and
 full engine logs remain owned by `diagnostics/engine-log`.
 
 Preparation snapshot updates emit the existing `resource.batch_changed`
-envelope with `resource_id = "simulation/preparation"`, the new revision, and
+envelope with `resource = "simulation"`, `resource_id = "preparation"`, the
+new revision, and the canonical
 `recommended_fetch = "/v2/sessions/current/simulation/preparation"`. HTTP v2
 remains authoritative; the event is cache invalidation only.
 

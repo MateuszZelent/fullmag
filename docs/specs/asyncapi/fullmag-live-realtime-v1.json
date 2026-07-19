@@ -165,6 +165,7 @@
               "mesh_builds",
               "commands",
               "stages",
+              "simulation",
               "scene_document",
               "visualization_state",
               "visualization_client_acks"
