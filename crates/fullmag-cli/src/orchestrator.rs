@@ -20,7 +20,7 @@ use crate::interactive_runtime_host::{CurrentLiveDisplaySelectionHandle, Interac
 use crate::live_workspace::*;
 use crate::python_bridge::*;
 use crate::simulation_preparation::{
-    PreparationLogLevel, PreparationStageId, SimulationPreparationState,
+    PreparationLogLevel, PreparationStageId, PreparationStatus, SimulationPreparationState,
 };
 use crate::step_utils::*;
 use crate::types::*;
@@ -170,6 +170,70 @@ fn run_active_preparation_operation<T>(
         Err(error) => {
             fail_active_preparation_stage(workspace, error_code, safe_failure_summary)?;
             Err(error)
+        }
+    }
+}
+
+fn own_preparation_boundary_failure<T>(
+    workspace: &LocalLiveWorkspace,
+    error_code: &str,
+    safe_failure_summary: &str,
+    result: Result<T>,
+) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            if let Err(record_error) = fail_owned_preparation_stage(
+                workspace,
+                PreparationStageId::ScriptMaterialization,
+                error_code,
+                safe_failure_summary,
+            ) {
+                eprintln!(
+                    "[fullmag-cli] WARNING: could not record safe preparation boundary failure: {}",
+                    record_error
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
+fn wait_for_failed_preparation_close(
+    workspace: &LocalLiveWorkspace,
+    mut next_command: impl FnMut() -> Option<SessionCommand>,
+) {
+    let is_terminal_failure = workspace
+        .snapshot()
+        .simulation_preparation
+        .as_ref()
+        .is_some_and(|preparation| preparation.status == PreparationStatus::Failed);
+    if !is_terminal_failure {
+        return;
+    }
+
+    eprintln!(
+        "[fullmag] simulation preparation failed; Control Room remains available until explicit close"
+    );
+    workspace.push_log(
+        "system",
+        "Simulation preparation failed — Control Room remains available until Close",
+    );
+    loop {
+        let Some(command) = next_command() else {
+            continue;
+        };
+        let is_close = command.kind == "close"
+            || matches!(
+                crate::command_bridge::classify_command(&command),
+                Some(fullmag_runner::LiveControlCommand::Close)
+            );
+        if is_close {
+            workspace.push_log(
+                "system",
+                "Close acknowledged — shutting down the failed workspace",
+            );
+            return;
         }
     }
 }
@@ -6004,64 +6068,81 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let phase1_backend = args.backend;
     let phase1_mode = args.mode;
     let phase1_precision = args.precision;
-    let phase1_handle = std::thread::Builder::new()
-        .name("fullmag-materialize-phase1".to_string())
-        .spawn(move || -> Result<ScriptExecutionConfig> {
-            use clap::ValueEnum;
-            let mut helper_args = vec![
-                "-m".to_string(),
-                "fullmag.runtime.helper".to_string(),
-                "export-run-config".to_string(),
-                "--script".to_string(),
-                phase1_script_path.display().to_string(),
-                "--skip-geometry-assets".to_string(),
-            ];
-            if let Some(backend) = phase1_backend {
-                helper_args.push("--backend".to_string());
-                helper_args.push(backend.to_possible_value().unwrap().get_name().to_string());
-            }
-            if let Some(mode) = phase1_mode {
-                helper_args.push("--mode".to_string());
-                helper_args.push(mode.to_possible_value().unwrap().get_name().to_string());
-            }
-            if let Some(precision) = phase1_precision {
-                helper_args.push("--precision".to_string());
-                helper_args.push(
-                    precision
-                        .to_possible_value()
-                        .unwrap()
-                        .get_name()
-                        .to_string(),
-                );
-            }
-            let output = run_python_helper_with_progress(&helper_args, None)
-                .context("phase-1 python helper failed")?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                bail!("phase-1 python helper exited non-zero: {}", stderr.trim());
-            }
-            let stdout =
-                String::from_utf8(output.stdout).context("phase-1 output not valid UTF-8")?;
-            let json_str = crate::python_bridge::extract_json_from_stdout(&stdout)?;
-            serde_json::from_str(json_str)
-                .context("failed to deserialize phase-1 script execution config")
-        })
-        .context("failed to spawn phase-1 materialization thread")?;
+    let phase1_handle = own_preparation_boundary_failure(
+        &live_workspace,
+        "script_materialization_thread_start_failed",
+        "Python script materialization could not start",
+        std::thread::Builder::new()
+            .name("fullmag-materialize-phase1".to_string())
+            .spawn(move || -> Result<ScriptExecutionConfig> {
+                use clap::ValueEnum;
+                let mut helper_args = vec![
+                    "-m".to_string(),
+                    "fullmag.runtime.helper".to_string(),
+                    "export-run-config".to_string(),
+                    "--script".to_string(),
+                    phase1_script_path.display().to_string(),
+                    "--skip-geometry-assets".to_string(),
+                ];
+                if let Some(backend) = phase1_backend {
+                    helper_args.push("--backend".to_string());
+                    helper_args.push(backend.to_possible_value().unwrap().get_name().to_string());
+                }
+                if let Some(mode) = phase1_mode {
+                    helper_args.push("--mode".to_string());
+                    helper_args.push(mode.to_possible_value().unwrap().get_name().to_string());
+                }
+                if let Some(precision) = phase1_precision {
+                    helper_args.push("--precision".to_string());
+                    helper_args.push(
+                        precision
+                            .to_possible_value()
+                            .unwrap()
+                            .get_name()
+                            .to_string(),
+                    );
+                }
+                let output = run_python_helper_with_progress(&helper_args, None)
+                    .context("phase-1 python helper failed")?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    bail!("phase-1 python helper exited non-zero: {}", stderr.trim());
+                }
+                let stdout =
+                    String::from_utf8(output.stdout).context("phase-1 output not valid UTF-8")?;
+                let json_str = crate::python_bridge::extract_json_from_stdout(&stdout)?;
+                serde_json::from_str(json_str)
+                    .context("failed to deserialize phase-1 script execution config")
+            })
+            .context("failed to spawn phase-1 materialization thread"),
+    )?;
 
     eprintln!("fullmag materializing script");
 
     if !args.headless {
-        let (web_port, child, frontend_child) =
-            spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace)
-                .with_context(|| {
+        let (web_port, child, frontend_child) = own_preparation_boundary_failure(
+            &live_workspace,
+            "control_room_bootstrap_failed",
+            "Control Room bootstrap failed",
+            spawn_control_room(&session_id, args.dev, args.web_port, &live_workspace).with_context(
+                || {
                     format!(
                         "failed to bootstrap control room for workspace {}",
                         session_id
                     )
-                })?;
+                },
+            ),
+        )?;
         eprintln!("fullmag control room bootstrap verified");
         live_workspace.push_log("system", "Control room bootstrap verified");
         _control_room_guard = ControlRoomGuard::active(web_port, child, frontend_child);
+        let failed_workspace = live_workspace.clone();
+        let failure_control = display_selection_handle.clone();
+        _control_room_guard.retain_terminal_failure_until_close(move || {
+            wait_for_failed_preparation_close(&failed_workspace, || {
+                failure_control.wait_next_command_coalesced(Duration::from_millis(250))
+            });
+        });
     }
 
     // Join Phase 1 and push early metadata to the already-loaded frontend.
@@ -10006,25 +10087,27 @@ mod tests {
         classify_wait_for_solve_command, cumulative_rhs_evals, default_domain_region_markers,
         deferred_mesh_failure_stage, discard_active_paused_stage_execution,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
-        fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
-        fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
-        format_stage_heartbeat_message, format_stage_progress_line, has_heavy_live_payload,
+        fail_owned_preparation_stage, fem_gpu_memory_preflight_message,
+        fem_interactive_dense_ram_estimate, fem_live_mesh_payload_and_initial_magnetization,
+        fem_mesh_payload_from_backend_plan, format_stage_heartbeat_message,
+        format_stage_progress_line, has_heavy_live_payload,
         initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
         initial_step_update, interactive_session_should_stay_alive,
         live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
         live_step_ingest_preview_len, mark_ui_shell_preparation_ready,
         mesh_build_pipeline_status_json, mesh_source_scene_revision,
-        plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
-        project_script_export_failure, resolve_adaptive_convergence_metric,
-        resolved_shared_domain_object_region_markers, run_owned_preparation_stage,
-        run_script_preparation_preflight, run_solver_initialization,
+        own_preparation_boundary_failure, plan_materialized_stage_snapshot,
+        prepare_remesh_stage_transaction, project_script_export_failure,
+        resolve_adaptive_convergence_metric, resolved_shared_domain_object_region_markers,
+        run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
-        validate_periodic_remesh_candidate, wait_for_solve_prompt, wait_for_solve_should_block,
-        wait_for_solve_supported, write_sampling_resolution_stage_record, ActiveSequenceState,
-        LiveProgressCadence, LoadedInitialMagnetizationState, RuntimeCommandPrecondition,
-        SceneProblemPatch, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
+        validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
+        wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
+        write_sampling_resolution_stage_record, ActiveSequenceState, LiveProgressCadence,
+        LoadedInitialMagnetizationState, RuntimeCommandPrecondition, SceneProblemPatch,
+        WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
         LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::{CurrentLivePublisher, LocalLiveWorkspace};
@@ -10627,6 +10710,95 @@ mod tests {
             "Simulation planning failed",
             raw_error,
         );
+    }
+
+    #[test]
+    fn phase_one_thread_creation_failure_is_owned_before_propagation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "phase-one thread failure leaked /private/model.py";
+        let error = own_preparation_boundary_failure::<()>(
+            &workspace,
+            "script_materialization_thread_start_failed",
+            "Python script materialization could not start",
+            Err(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("thread creation failure must propagate");
+
+        assert_eq!(error.to_string(), raw_error);
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::ScriptMaterialization,
+            "script_materialization_thread_start_failed",
+            "Python script materialization could not start",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn control_room_bootstrap_failure_is_owned_before_propagation() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "control-room bootstrap leaked token secret-token";
+        let error = own_preparation_boundary_failure::<()>(
+            &workspace,
+            "control_room_bootstrap_failed",
+            "Control Room bootstrap failed",
+            Err(anyhow::anyhow!(raw_error)),
+        )
+        .expect_err("control-room bootstrap failure must propagate");
+
+        assert_eq!(error.to_string(), raw_error);
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::ScriptMaterialization,
+            "control_room_bootstrap_failed",
+            "Control Room bootstrap failed",
+            raw_error,
+        );
+    }
+
+    #[test]
+    fn terminal_preparation_failure_waits_for_explicit_close_and_remains_served() {
+        let workspace = preparation_workspace(PreparationStageId::Validation);
+        fail_owned_preparation_stage(
+            &workspace,
+            PreparationStageId::Validation,
+            "validation_failed",
+            "Simulation validation failed",
+        )
+        .expect("test preparation should fail");
+        let mut commands = vec!["run", "close"].into_iter();
+        let mut received = Vec::new();
+
+        wait_for_failed_preparation_close(&workspace, || {
+            let kind = commands.next()?;
+            received.push(kind);
+            serde_json::from_value(serde_json::json!({
+                "command_id": format!("cmd-{kind}"),
+                "kind": kind,
+                "created_at_unix_ms": 0,
+            }))
+            .ok()
+        });
+
+        assert_eq!(received, vec!["run", "close"]);
+        let preparation = workspace
+            .snapshot()
+            .simulation_preparation
+            .expect("terminal preparation must remain served until close");
+        assert_eq!(preparation.status, PreparationStatus::Failed);
+        assert_eq!(
+            preparation.failure.expect("failure provenance").error_code,
+            "validation_failed"
+        );
+    }
+
+    #[test]
+    fn successful_preparation_does_not_enter_failure_close_wait() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+
+        wait_for_failed_preparation_close(&workspace, || {
+            panic!("nonfailed preparation must not wait for a close command")
+        });
     }
 
     #[test]
