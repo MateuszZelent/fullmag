@@ -386,13 +386,95 @@ time integrator: its step is an energy-search scale, it omits the full
 precessional LLG operator, and it advances no physical clock. It must not be
 advertised as a stiff time-domain solver.
 
-A future stiff lane solves for a tangent velocity `v` with `v dot m = 0` and
-units `1/s`, using an implicit treatment of the stiff exchange contribution
-and a documented treatment of local and nonlocal interactions. A candidate
-scheme must define its discrete weak form, linear/nonlinear tolerances,
-preconditioner, energy behavior, temporal order, output interpolation,
-transaction semantics, and CPU/GPU realizations before capability promotion.
-It is a separate integrator family, not a fallback hidden behind RK45.
+The selected first production scheme is the normalized first-order
+theta-tangent-plane method with `theta = 1`. It is selected explicitly as
+`integrator="tangent_plane"` and uses a fixed physical `fix_dt`. Adaptive
+control and switching from an explicit method are not part of this lane.
+
+Let `V_h` be the vector P1 magnetic finite-element space and
+
+\[
+K_h(m_h^n)=\{\phi_h\in V_h:\phi_h(z)\cdot m_h^n(z)=0
+\text{ at every active magnetic node }z\}.
+\]
+
+The step first evaluates every non-exchange field and every direct torque at
+the accepted state `(m_h^n,t_n)`. It then finds a tangent velocity
+`v_h^n in K_h(m_h^n)`, with SI unit `1/s`, such that for every
+`phi_h in K_h(m_h^n)`:
+
+\[
+\begin{aligned}
+&\int_{\Omega_m}\mu_0 M_s
+  \left[\alpha v_h^n+m_h^n\times v_h^n\right]\cdot\phi_h\,dV\\
+&\quad+2\gamma_0\theta\Delta t
+  \int_{\Omega_m} A\,\nabla v_h^n:\nabla\phi_h\,dV\\
+&=-2\gamma_0\int_{\Omega_m}A\,\nabla m_h^n:\nabla\phi_h\,dV
+ +\gamma_0\int_{\Omega_m}\mu_0 M_s
+  H_{\mathrm{other}}(m_h^n,t_n)\cdot\phi_h\,dV\\
+&\quad+\int_{\Omega_m}\mu_0 M_s
+  \left[\alpha\tau_{\mathrm{nc}}^n
+  +m_h^n\times\tau_{\mathrm{nc}}^n\right]\cdot\phi_h\,dV .
+\end{aligned}
+\]
+
+Here `H_other = H_eff - H_ex`; it includes enabled demagnetization, Zeeman,
+anisotropy, DMI, Oersted, magnetoelastic, thermal, and regional-drive fields.
+All of those terms are explicit in this first-order lane. A direct torque is
+already expressed as a contribution to `dm/dt`, which is why its Gilbert-form
+right-hand side is `alpha*tau_nc + m cross tau_nc`. No field or torque may be
+counted in both terms. Elementwise `A`, nodal/elementwise `Ms`, and nodal
+`alpha` use the same material quadrature policy as the production FEM field
+operators. Nonmagnetic airbox degrees of freedom are excluded from `V_h` and
+the tangent solve.
+
+After the linear solve, active nodal values are retracted once:
+
+\[
+m_h^{n+1}(z)=
+\frac{m_h^n(z)+\Delta t\,v_h^n(z)}
+{\left|m_h^n(z)+\Delta t\,v_h^n(z)\right|}.
+\]
+
+The method is first-order in physical time. With `theta=1`, exchange is
+implicit and the qualified lane has no explicit `dt proportional to h^2`
+exchange-stability restriction. Explicit local/nonlocal interactions can
+still impose accuracy or stability restrictions; this is not an
+unconditionally stable solver for every enabled model. There is no dense
+output. The runtime shortens a step to land exactly on an output event or
+rejects an incompatible fixed clock; it never interpolates this method as if
+it were RK45.
+
+The tangent system is nonsymmetric because of the gyrotropic
+`m cross v` block. The CPU realization therefore uses MFEM/Hypre GMRES with
+an exchange-plus-damping symmetric proxy preconditioner. The frozen production
+defaults are relative residual `1e-10`, absolute residual `0`, maximum `500`
+iterations, and restart dimension `50`. The achieved finite true residual,
+iteration count, requested limits, and convergence flag are checked after
+every solve. Reaching the iteration limit, a nonfinite residual, or a residual
+above the requested bound fails the attempted step. These values are typed
+resolved configuration and provenance; changing them requires a new
+qualification identity. A future public expert override must be added as a
+typed object, not an unvalidated JSON escape hatch.
+
+One attempted step is a transaction. The old magnetization, time, fields,
+demagnetization cache and potential, direct-torque state, solver diagnostics,
+and output counters remain live until the tangent solve, retraction, endpoint
+field refresh, norm/finite checks, energy evaluation, and statistics all
+succeed. Any failure restores all pre-attempt state. Autonomous energy is a
+qualification diagnostic: exchange-only theta=1 must dissipate within the
+linear-solve/roundoff budget, while explicit non-exchange terms are required
+to converge under `dt`, `dt/2`, and `dt/4`; an energy increase is never hidden
+by normalization.
+
+The CPU owner is
+`backends/fem/cpu/mfem/integrators/tangent_plane/`. Backend-neutral immutable
+scheme configuration and diagnostics live under `backends/fem/core/`. The GPU
+owner is `backends/fem/gpu/cuda/integrators/tangent_plane/` and implements the
+same frozen weak form with device-resident state; it may not call the CPU
+implementation or fall back to it. The relaxation function
+`run_tangent_plane_implicit_step()` remains an energy minimizer and is never
+called by either physical-time realization.
 
 ### 3.10 Hybrid interpretation
 
@@ -411,6 +493,13 @@ Both module-level `solver(...)` and `StudyBuilder.solver(...)` expose:
 - `dt_initial`, `dt_min`, `dt_max`, `max_err`;
 - `gamma` or `g` under the existing mutual-exclusion convention;
 - advanced `adaptive_timestep` where already supported.
+
+`integrator="tangent_plane"` accepts `fix_dt` and rejects every adaptive knob.
+It is FEM-only. The initial production capability is strict FP64 CPU, followed
+by a separately qualified strict FP64 GPU realization. FDM, FP32, hybrid,
+multilayer configurations that cannot assemble the documented material weak
+form, and unsupported direct-torque combinations fail during validation or
+planning before native materialization.
 
 Canonical script export emits `fix_dt` for fixed mode and the four adaptive
 names for maximum-error mode. It never reconstructs adaptive intent as a
@@ -431,6 +520,13 @@ fixed `dt`. Import/export and UI/scene round-trips preserve omitted
 Deserialization of an explicit `dt_initial == dt_min` preserves that explicit
 value. Missing or `null` remains omitted. Legacy payload migration is
 deterministic and cannot infer intent from floating-point equality.
+
+The integrator vocabulary adds the explicit `tangent_plane` family without
+reusing `RelaxationAlgorithmIR::TangentPlaneImplicit`. Its fixed timestep and
+gyromagnetic convention remain in `DynamicsIR`; requested/resolved stiff
+scheme, `theta`, field splitting, linear-solver policy, temporal order, and
+qualification identity are typed planner/runtime provenance. Unknown scheme
+versions or a request that would drop any of these semantics fail closed.
 
 ### 4.3 Planner and capability matrix
 
@@ -486,6 +582,14 @@ Required run artifacts are:
 - `qualification.json` for analytic expectations, measured errors/orders,
   parity budgets, and pass/fail.
 
+For `tangent_plane`, step telemetry additionally records `theta`, linear
+solver kind, preconditioner kind, requested relative/absolute residual,
+achieved true residual, iteration count, convergence, tangent-constraint
+leakage, maximum retraction norm defect, and autonomous energy change. The
+Control Room exposes these as read-only solver diagnostics through the
+existing resource-first diagnostics path; no component invents a second
+solver policy or estimates convergence from wall-clock progress.
+
 Artifact creation alone writes `qualification.json` with status
 `not_evaluated`. Only the dedicated scientific qualification gate may replace
 that state with pass/fail evidence.
@@ -517,6 +621,14 @@ documented dense-output contract.
    accepted as a growing numerical mode.
 4. Autonomous relax-to-run: verify state handoff, fresh fields, run-clock
    semantics, and energy descent within the computed error budget.
+5. Tangent-plane macrospin: verify nonzero precession, Gilbert damping envelope,
+   first-order convergence, and distinction from the relaxation minimizer.
+6. Tangent-plane periodic exchange eigenmode: verify first-order common-time
+   convergence, decay, and absence of the explicit `dt proportional to h^2`
+   stability failure across the checked mesh/timestep matrix.
+7. Tangent-plane failure injection: prove linear-solve nonconvergence,
+   endpoint-refresh failure, and final-statistics failure restore the complete
+   pre-attempt state.
 
 ### 5.3 Cross-backend checks
 
