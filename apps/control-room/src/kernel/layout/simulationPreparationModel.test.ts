@@ -1,0 +1,249 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type {
+  LiveStatusResource,
+  SimulationPreparationResource,
+} from "../api/apiTypes";
+import type { ResourceResult } from "../resources/resourceTypes";
+
+import { resolveSimulationPreparationViewModel } from "./simulationPreparationModel";
+
+const refetch = vi.fn();
+
+function resource<TData>(
+  data: TData | null,
+  status: ResourceResult<TData>["status"] = "ready",
+): ResourceResult<TData> {
+  return {
+    data,
+    error: null,
+    refetch,
+    revision: data ? 7 : null,
+    status,
+  };
+}
+
+function statusResource(
+  status: ResourceResult<LiveStatusResource>["status"] = "ready",
+): ResourceResult<LiveStatusResource> {
+  return resource(
+    {
+      resources: { simulation_preparation_revision: 7 },
+      session: { name: "permalloy-relaxation" },
+      solver: { state: "bootstrapping" },
+    } as LiveStatusResource,
+    status,
+  );
+}
+
+function preparationFixture(
+  patch: Partial<SimulationPreparationResource> = {},
+): SimulationPreparationResource {
+  const activeStageId = patch.active_stage_id ?? "meshing";
+  return {
+    active_stage_id: activeStageId,
+    completed_at_unix_ms: null,
+    failure: null,
+    log_tail: [
+      {
+        level: "info",
+        message: "Optimizing element quality",
+        stage_id: "meshing",
+        timestamp_unix_ms: 18_500,
+      },
+    ],
+    preparation_id: "prep-7",
+    requested_execution: {
+      backend: "fem",
+      device: "auto",
+      engine_id: null,
+      mode: "strict",
+      precision: "double",
+      runtime_family: null,
+      worker: null,
+    },
+    resolved_execution: {
+      backend: "fem",
+      device: "gpu",
+      engine_id: "mfem",
+      mode: "strict",
+      precision: "double",
+      runtime_family: "local",
+      worker: null,
+    },
+    revision: 7,
+    stages: [
+      stage("runtime_startup", "Runtime startup", "completed", 180),
+      stage("script_materialization", "Script materialization", "completed", 220),
+      stage("validation", "Validation", "completed", 100),
+      stage("planning", "Planning", "completed", 200),
+      stage("domain_preparation", "Domain preparation", "completed", 1_800),
+      stage("meshing", "Meshing", "active", 16_200, 63),
+      stage("mesh_postprocessing", "Mesh post-processing", "pending"),
+      stage("solver_initialization", "Solver initialization", "pending"),
+      stage("ready", "Ready", "pending"),
+    ],
+    started_at_unix_ms: 0,
+    status: "running",
+    ...patch,
+  };
+}
+
+function stage(
+  id: SimulationPreparationResource["stages"][number]["id"],
+  label: string,
+  status: SimulationPreparationResource["stages"][number]["status"],
+  durationMs: number | null = null,
+  progressPercent: number | null = null,
+): SimulationPreparationResource["stages"][number] {
+  return {
+    completed_at_unix_ms: status === "completed" ? durationMs : null,
+    detail: status === "active" ? "Optimizing element quality" : "",
+    duration_ms: durationMs,
+    id,
+    label,
+    progress_label:
+      progressPercent === null ? null : "142580 / 226318 elements",
+    progress_percent: progressPercent,
+    started_at_unix_ms: status === "active" ? 2_500 : null,
+    status,
+  };
+}
+
+describe("resolveSimulationPreparationViewModel", () => {
+  it("keeps connection bootstrap indeterminate without inventing stages or an ETA", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource<SimulationPreparationResource>(null, "loading"),
+      resource<LiveStatusResource>(null, "loading"),
+      1_000,
+    );
+
+    expect(model).toMatchObject({
+      isVisible: true,
+      kind: "connecting",
+      progress: { kind: "indeterminate" },
+      title: "Preparing simulation",
+    });
+    expect(model.stages).toEqual([]);
+    expect(model.progress).toEqual({ kind: "indeterminate" });
+    expect(model).not.toHaveProperty("eta");
+    expect(model).not.toHaveProperty("percent");
+  });
+
+  it("uses numeric progress only for a measurable active stage", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource(preparationFixture()),
+      statusResource(),
+      18_700,
+    );
+
+    expect(model.progress).toEqual({ kind: "determinate", value: 63 });
+    expect(model.activeStage?.elapsedLabel).toBe("16.2s");
+    expect(model.stages).toHaveLength(9);
+  });
+
+  it("does not fabricate percent for an indeterminate planning stage", () => {
+    const planning = stage("planning", "Planning", "active", 2_100);
+    const model = resolveSimulationPreparationViewModel(
+      resource(
+        preparationFixture({
+          active_stage_id: "planning",
+          stages: [
+            stage("runtime_startup", "Runtime startup", "completed", 180),
+            stage("script_materialization", "Script materialization", "completed", 220),
+            stage("validation", "Validation", "completed", 100),
+            planning,
+          ],
+        }),
+      ),
+      statusResource(),
+      4_600,
+    );
+
+    expect(model.progress).toEqual({ kind: "indeterminate" });
+    expect(model.activeStage?.elapsedLabel).toBe("2.1s");
+  });
+
+  it("preserves skipped stages as explicit textual state", () => {
+    const skipped = stage(
+      "mesh_postprocessing",
+      "Mesh post-processing",
+      "skipped",
+    );
+    const model = resolveSimulationPreparationViewModel(
+      resource(preparationFixture({ stages: [skipped] })),
+      statusResource(),
+      18_700,
+    );
+
+    expect(model.stages[0]).toMatchObject({
+      elapsedLabel: "Skipped",
+      stateLabel: "Skipped",
+    });
+  });
+
+  it("retains the last snapshot and marks stale transport as reconnecting", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource(preparationFixture(), "stale"),
+      statusResource("stale"),
+      19_700,
+    );
+
+    expect(model).toMatchObject({
+      isVisible: true,
+      kind: "stale",
+      reconnectingMessage: "Displayed progress may be out of date.",
+      reconnectingTitle: "Reconnecting…",
+    });
+    expect(model.activeStage?.label).toBe("Meshing");
+  });
+
+  it("resolves ready as terminal and releases the startup gate", () => {
+    const model = resolveSimulationPreparationViewModel(
+      resource(
+        preparationFixture({
+          active_stage_id: null,
+          completed_at_unix_ms: 20_000,
+          status: "ready",
+        }),
+      ),
+      statusResource(),
+      20_000,
+    );
+
+    expect(model).toMatchObject({ isTerminal: true, isVisible: false, kind: "ready" });
+  });
+
+  it("keeps a failed stage and safe failure summary visible", () => {
+    const failedStage = stage("meshing", "Meshing", "failed", 16_900);
+    const model = resolveSimulationPreparationViewModel(
+      resource(
+        preparationFixture({
+          active_stage_id: null,
+          failure: {
+            diagnostics_correlation_id: "diag-42",
+            error_code: "mesh_generation_failed",
+            stage_id: "meshing",
+            summary: "Mesh generation did not converge.",
+          },
+          stages: [failedStage],
+          status: "failed",
+        }),
+      ),
+      statusResource(),
+      20_000,
+    );
+
+    expect(model).toMatchObject({
+      failure: {
+        correlationId: "diag-42",
+        errorCode: "mesh_generation_failed",
+        summary: "Mesh generation did not converge.",
+      },
+      isTerminal: true,
+      isVisible: true,
+      kind: "failed",
+    });
+    expect(model.stages[0]?.stateLabel).toBe("Failed");
+  });
+});
