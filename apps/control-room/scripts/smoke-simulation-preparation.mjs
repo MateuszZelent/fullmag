@@ -21,6 +21,7 @@ const narrowScreenshot = resolve(
 );
 const preparationPath = "/v2/sessions/current/simulation/preparation";
 const eventsPath = "/v2/sessions/current/events/ws";
+const expectedPreparationRequestUrl = new URL(preparationPath, workspaceUrl).href;
 const stageDefinitions = [
   ["runtime_startup", "Runtime startup"],
   ["script_materialization", "Script materialization"],
@@ -93,7 +94,10 @@ function stageFixture(
 
 function preparationFixture(kind) {
   const common = {
-    preparation_id: "simulation-preparation-smoke",
+    preparation_id:
+      kind === "failed"
+        ? "simulation-preparation-smoke-failure"
+        : "simulation-preparation-smoke-success",
     requested_execution: {
       backend: "fem",
       device: "gpu",
@@ -183,7 +187,7 @@ function preparationFixture(kind) {
   if (kind === "failed") {
     return {
       ...common,
-      active_stage_id: "solver_initialization",
+      active_stage_id: null,
       completed_at_unix_ms: baseTime + 22_000,
       failure: {
         diagnostics_correlation_id: "prep-smoke-3",
@@ -199,7 +203,7 @@ function preparationFixture(kind) {
           timestamp_unix_ms: baseTime + 22_000,
         },
       ],
-      revision: 3,
+      revision: 5,
       stages: stageDefinitions.map(([id], index) =>
         stageFixture(id, index < 7 ? "completed" : index === 7 ? "failed" : "pending", {
           detail:
@@ -315,15 +319,61 @@ if (!playwright?.chromium) {
 await mkdir(evidenceDir, { recursive: true });
 const browser = await playwright.chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { height: 900, width: 1_440 } });
-const browserErrors = [];
+const consoleErrors = [];
 const failedResponses = [];
+const networkFailures = [];
+const pageErrors = [];
+let abortNextPreparationRequest = false;
 let currentPreparation = preparationFixture("planning");
 let holdPreparation = true;
+let lastServedPreparationId = null;
 let pendingPreparationRoute = null;
 let preparationRequestCount = 0;
 let preparationRevision = 1;
 let socketRoute = null;
 let sequence = 1;
+const retiredPreparationIds = new Set();
+const terminalSnapshotsByPreparationId = new Map();
+
+function assertLegalPreparationSnapshot(snapshot) {
+  if (snapshot.status === "failed" || snapshot.status === "ready") {
+    assert(
+      snapshot.active_stage_id === null,
+      `Terminal preparation ${snapshot.preparation_id} retained an active stage.`,
+    );
+  }
+
+  if (
+    lastServedPreparationId !== null &&
+    lastServedPreparationId !== snapshot.preparation_id
+  ) {
+    retiredPreparationIds.add(lastServedPreparationId);
+  }
+  assert(
+    !retiredPreparationIds.has(snapshot.preparation_id),
+    `Preparation ${snapshot.preparation_id} resumed after another lifecycle started.`,
+  );
+
+  const terminalSnapshot = terminalSnapshotsByPreparationId.get(
+    snapshot.preparation_id,
+  );
+  assert(
+    terminalSnapshot === undefined || terminalSnapshot === JSON.stringify(snapshot),
+    `Terminal preparation ${snapshot.preparation_id} changed state.`,
+  );
+  if (snapshot.status === "failed" || snapshot.status === "ready") {
+    terminalSnapshotsByPreparationId.set(
+      snapshot.preparation_id,
+      JSON.stringify(snapshot),
+    );
+  }
+  lastServedPreparationId = snapshot.preparation_id;
+}
+
+async function fulfillPreparation(route) {
+  assertLegalPreparationSnapshot(currentPreparation);
+  await fulfillJson(route, currentPreparation);
+}
 
 await page.addInitScript(() => {
   window.__FULLMAG_CONFIG__ = {
@@ -334,10 +384,16 @@ await page.addInitScript(() => {
 });
 
 page.on("console", (message) => {
-  if (message.type() === "error") browserErrors.push(message.text());
+  if (message.type() === "error") consoleErrors.push(message.text());
 });
 page.on("pageerror", (error) => {
-  browserErrors.push(error.stack ?? error.message);
+  pageErrors.push(error.stack ?? error.message);
+});
+page.on("requestfailed", (request) => {
+  networkFailures.push({
+    reason: request.failure()?.errorText ?? "unknown",
+    url: request.url(),
+  });
 });
 page.on("response", (response) => {
   if (response.status() >= 400) {
@@ -361,11 +417,16 @@ await page.route("**/v2/**", async (route) => {
   }
   if (pathname === preparationPath) {
     preparationRequestCount += 1;
+    if (abortNextPreparationRequest) {
+      abortNextPreparationRequest = false;
+      await route.abort("connectionfailed");
+      return;
+    }
     if (holdPreparation) {
       pendingPreparationRoute = route;
       return;
     }
-    await fulfillJson(route, currentPreparation);
+    await fulfillPreparation(route);
     return;
   }
   if (pathname === "/v2/sessions/current/model/geometry/validation") {
@@ -463,7 +524,7 @@ try {
 
   assert(pendingPreparationRoute, "Initial preparation request was not held.");
   holdPreparation = false;
-  await fulfillJson(pendingPreparationRoute, currentPreparation);
+  await fulfillPreparation(pendingPreparationRoute);
   pendingPreparationRoute = null;
   await page.getByRole("heading", { name: "Planning execution" }).waitFor();
   const progress = page.getByRole("progressbar", {
@@ -601,17 +662,49 @@ try {
   await page.screenshot({ path: narrowScreenshot });
   await page.setViewportSize({ height: 900, width: 1_440 });
 
-  currentPreparation = preparationFixture("failed");
   preparationRevision = 3;
-  holdPreparation = true;
+  abortNextPreparationRequest = true;
+  const failedPreparationRequest = page.waitForEvent(
+    "requestfailed",
+    (request) => request.url() === expectedPreparationRequestUrl,
+  );
   sendPreparationInvalidation(3);
+  const disruptedRequest = await failedPreparationRequest;
+  assert(
+    disruptedRequest.failure()?.errorText === "net::ERR_CONNECTION_FAILED",
+    `Injected preparation failure reason drifted: ${disruptedRequest.failure()?.errorText}`,
+  );
   await page.getByText("Reconnecting…", { exact: true }).waitFor();
   await page.getByText("Displayed progress may be out of date.", { exact: true }).waitFor();
+  await page.getByText("142580 / 226318 elements", { exact: true }).waitFor();
+  assert(
+    (await progress.getAttribute("aria-valuenow")) === "63",
+    "Transport failure did not retain the revision-2 meshing snapshot.",
+  );
   await assertViewportBlocked("stale");
-  assert(pendingPreparationRoute, "Stale preparation request was not held.");
-  holdPreparation = false;
-  await fulfillJson(pendingPreparationRoute, currentPreparation);
-  pendingPreparationRoute = null;
+
+  const readyResourceResponses = Promise.all([
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+          "/v2/sessions/current/model/geometry/validation" && response.ok(),
+    ),
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+          "/v2/sessions/current/simulation/solver/status" && response.ok(),
+    ),
+  ]);
+  currentPreparation = preparationFixture("ready");
+  preparationRevision = 4;
+  sendPreparationInvalidation(4);
+  await page.locator(".fm-simulation-startup").waitFor({ state: "detached" });
+  await page.locator('[data-slot-id="viewport-main"]').waitFor({ state: "attached" });
+  await readyResourceResponses;
+
+  currentPreparation = preparationFixture("failed");
+  preparationRevision = 5;
+  sendPreparationInvalidation(5);
   await page.getByRole("heading", { name: "Simulation preparation failed" }).waitFor();
   await page.getByRole("button", { name: "Copy diagnostics" }).waitFor();
   await page.getByRole("button", { name: "Open full diagnostics" }).waitFor();
@@ -627,15 +720,28 @@ try {
     "Failure progress semantics drifted.",
   );
   await assertViewportBlocked("failed");
-
-  currentPreparation = preparationFixture("ready");
-  preparationRevision = 4;
-  sendPreparationInvalidation(4);
-  await page.locator(".fm-simulation-startup").waitFor({ state: "detached" });
-  await page.locator('[data-slot-id="viewport-main"]').waitFor({ state: "attached" });
   assert(
-    browserErrors.length === 0 && failedResponses.length === 0,
-    `Browser emitted errors:\n${browserErrors.join("\n")}\nFailed responses:\n${failedResponses.join("\n")}`,
+    JSON.stringify(networkFailures) ===
+      JSON.stringify([
+        {
+          reason: "net::ERR_CONNECTION_FAILED",
+          url: expectedPreparationRequestUrl,
+        },
+      ]),
+    `Unexpected network failures: ${JSON.stringify(networkFailures)}`,
+  );
+  assert(
+    JSON.stringify(consoleErrors) ===
+      JSON.stringify(["Failed to load resource: net::ERR_CONNECTION_FAILED"]),
+    `Unexpected console errors: ${JSON.stringify(consoleErrors)}`,
+  );
+  assert(
+    pageErrors.length === 0,
+    `Page errors: ${pageErrors.join("\n")}`,
+  );
+  assert(
+    failedResponses.length === 0,
+    `Failed HTTP responses: ${failedResponses.join("\n")}`,
   );
 
   console.log(
@@ -646,13 +752,15 @@ try {
           "planning-indeterminate",
           "meshing-63",
           "reconnecting-stale",
-          "failed-terminal",
           "ready-release",
+          "failed-new-preparation",
           "representative-geometry",
           "narrow-geometry",
           "reduced-motion",
           "exact-stage-log-time-text",
-          "browser-errors-none",
+          "expected-network-failure-only",
+          "page-errors-none",
+          "http-errors-none",
         ],
         preparationRequests: preparationRequestCount,
         screenshots: [representativeScreenshot, narrowScreenshot],
