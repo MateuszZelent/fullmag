@@ -2292,10 +2292,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "message": "Preparing shared-domain mesh inputs",
             }
         )
+        latest_mesh_phase = "preparing_domain"
         emit_progress_event(
             {
                 "kind": "mesh_build_phase",
-                "phase": "preparing_domain",
+                "phase": latest_mesh_phase,
                 "message": "Preparing shared-domain inputs and mesh size fields",
             }
         )
@@ -2314,6 +2315,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
 
         result: SharedDomainMeshResult | None = None
         build_mode = "component_aware"
+        latest_mesh_phase = "meshing"
         try:
             if single_geometry_occ_direct:
                 build_mode = "single_geometry_occ"
@@ -2527,10 +2529,11 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             airbox=airbox,
                             options=mesh_options,
                         )
+            latest_mesh_phase = "postprocessing"
             emit_progress_event(
                 {
                     "kind": "mesh_build_phase",
-                    "phase": "postprocessing",
+                    "phase": latest_mesh_phase,
                     "message": "Classifying the shared-domain mesh and finalizing region markers",
                 }
             )
@@ -2538,6 +2541,7 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
             emit_progress_event(
                 {
                     "kind": "mesh_build_failed",
+                    "phase": latest_mesh_phase,
                     "shared_domain_build_mode": build_mode,
                     "effective_airbox_target": effective_airbox_target,
                     "effective_per_object_targets": effective_per_object_targets,

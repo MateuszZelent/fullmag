@@ -29,6 +29,15 @@ use crate::types::*;
 
 const FEM_FREQUENCY_RESPONSE_PROGRESS_KEY: &str = "fem_frequency_response_progress";
 const FREQUENCY_RESPONSE_TERMINAL_BAR_WIDTH: usize = 16;
+const DEFERRED_MESH_FAILURE_SUMMARY: &str = "Shared-domain mesh build failed";
+const SCRIPT_MESH_FAILURE_DETAIL: &str =
+    "Script materialization reached mesh generation before failure; timing unavailable";
+const INCOMPLETE_MATERIALIZED_IR_SKIP_DETAIL: &str =
+    "Skipped because a complete materialized IR was unavailable after mesh generation failure";
+const DEFERRED_DOMAIN_COMPLETION_DETAIL: &str =
+    "Domain completed during deferred materialization; timing unavailable";
+const DEFERRED_MESH_COMPLETION_DETAIL: &str =
+    "Mesh completed during deferred materialization; timing unavailable";
 
 fn preparation_unix_time_millis() -> Result<u64> {
     u64::try_from(unix_time_millis()?).context("preparation timestamp exceeds u64")
@@ -421,11 +430,104 @@ fn deferred_mesh_failure_stage(
     }
 }
 
+fn project_deferred_mesh_failure(
+    preparation: &mut SimulationPreparationState,
+    failure_stage_id: PreparationStageId,
+    timestamp_unix_ms: u64,
+) -> std::result::Result<(), crate::simulation_preparation::PreparationTransitionError> {
+    if !matches!(
+        preparation.active_stage_id,
+        None | Some(PreparationStageId::DomainPreparation)
+    ) {
+        return Err(
+            crate::simulation_preparation::PreparationTransitionError::StageIsNotActive {
+                stage_id: failure_stage_id,
+                active_stage_id: preparation.active_stage_id,
+            },
+        );
+    }
+    if failure_stage_id != PreparationStageId::DomainPreparation {
+        project_completed_preparation_stage(
+            preparation,
+            PreparationStageId::DomainPreparation,
+            timestamp_unix_ms,
+            DEFERRED_DOMAIN_COMPLETION_DETAIL,
+        )?;
+    }
+    if failure_stage_id == PreparationStageId::MeshPostprocessing {
+        project_completed_preparation_stage(
+            preparation,
+            PreparationStageId::Meshing,
+            timestamp_unix_ms,
+            DEFERRED_MESH_COMPLETION_DETAIL,
+        )?;
+    }
+    preparation.project_failed_stage(
+        failure_stage_id,
+        "mesh_build_failed",
+        DEFERRED_MESH_FAILURE_SUMMARY,
+    )?;
+    push_preparation_log_once(
+        preparation,
+        timestamp_unix_ms,
+        PreparationLogLevel::Error,
+        failure_stage_id,
+        DEFERRED_MESH_FAILURE_SUMMARY,
+    );
+    Ok(())
+}
+
+fn project_script_export_failure(
+    workspace: &LocalLiveWorkspace,
+    early_preflight_completed: bool,
+    error: anyhow::Error,
+) -> Result<anyhow::Error> {
+    let snapshot = workspace.snapshot();
+    let deferred_failure_stage = deferred_mesh_failure_stage(snapshot.mesh_workspace.as_ref());
+    let is_phase1_fallback = !early_preflight_completed
+        && snapshot
+            .simulation_preparation
+            .as_ref()
+            .is_some_and(|preparation| {
+                preparation.active_stage_id == Some(PreparationStageId::ScriptMaterialization)
+            });
+    if let (true, Some(failure_stage_id)) = (is_phase1_fallback, deferred_failure_stage) {
+        let timestamp_unix_ms = preparation_unix_time_millis()?;
+        transition_preparation(workspace, |preparation| {
+            project_completed_preparation_stage(
+                preparation,
+                PreparationStageId::ScriptMaterialization,
+                timestamp_unix_ms,
+                SCRIPT_MESH_FAILURE_DETAIL,
+            )?;
+            skip_preparation_stage(
+                preparation,
+                PreparationStageId::Validation,
+                timestamp_unix_ms,
+                INCOMPLETE_MATERIALIZED_IR_SKIP_DETAIL,
+            )?;
+            skip_preparation_stage(
+                preparation,
+                PreparationStageId::Planning,
+                timestamp_unix_ms,
+                INCOMPLETE_MATERIALIZED_IR_SKIP_DETAIL,
+            )?;
+            project_deferred_mesh_failure(preparation, failure_stage_id, timestamp_unix_ms)
+        })?;
+    } else {
+        fail_active_preparation_stage(
+            workspace,
+            "materialization_failed",
+            "Simulation materialization failed",
+        )?;
+    }
+    Ok(error)
+}
+
 fn finish_mesh_preparation(
     workspace: &LocalLiveWorkspace,
     detailed_mesh_workspace: Option<&serde_json::Value>,
 ) -> Result<()> {
-    const DEFERRED_FAILURE_SUMMARY: &str = "Shared-domain mesh build failed";
     let deferred_failure_stage = deferred_mesh_failure_stage(detailed_mesh_workspace);
     if deferred_failure_stage.is_some()
         && workspace
@@ -434,7 +536,7 @@ fn finish_mesh_preparation(
             .as_ref()
             .is_some_and(|preparation| preparation.failure.is_some())
     {
-        return Err(anyhow!(DEFERRED_FAILURE_SUMMARY));
+        return Err(anyhow!(DEFERRED_MESH_FAILURE_SUMMARY));
     }
     let mesh_was_materialized = detailed_mesh_workspace
         .and_then(|resource| resource.get("last_build_summary"))
@@ -442,51 +544,7 @@ fn finish_mesh_preparation(
     let timestamp_unix_ms = preparation_unix_time_millis()?;
     transition_preparation(workspace, |preparation| {
         if let Some(failure_stage_id) = deferred_failure_stage {
-            if preparation.active_stage_id != Some(PreparationStageId::DomainPreparation) {
-                return Err(
-                    crate::simulation_preparation::PreparationTransitionError::StageIsNotActive {
-                        stage_id: failure_stage_id,
-                        active_stage_id: preparation.active_stage_id,
-                    },
-                );
-            }
-            if failure_stage_id != PreparationStageId::DomainPreparation {
-                project_completed_preparation_stage(
-                    preparation,
-                    PreparationStageId::DomainPreparation,
-                    timestamp_unix_ms,
-                    "Domain completed during deferred materialization; timing unavailable",
-                )?;
-            }
-            if failure_stage_id == PreparationStageId::MeshPostprocessing {
-                project_completed_preparation_stage(
-                    preparation,
-                    PreparationStageId::Meshing,
-                    timestamp_unix_ms,
-                    "Mesh completed during deferred materialization; timing unavailable",
-                )?;
-            }
-            if preparation.active_stage_id != Some(failure_stage_id) {
-                begin_preparation_stage(
-                    preparation,
-                    failure_stage_id,
-                    timestamp_unix_ms,
-                    DEFERRED_FAILURE_SUMMARY,
-                )?;
-            }
-            preparation.fail_stage(
-                failure_stage_id,
-                timestamp_unix_ms,
-                "mesh_build_failed",
-                DEFERRED_FAILURE_SUMMARY,
-            )?;
-            push_preparation_log_once(
-                preparation,
-                timestamp_unix_ms,
-                PreparationLogLevel::Error,
-                failure_stage_id,
-                DEFERRED_FAILURE_SUMMARY,
-            );
+            project_deferred_mesh_failure(preparation, failure_stage_id, timestamp_unix_ms)?;
             return Ok(());
         }
         match preparation.active_stage_id {
@@ -496,13 +554,13 @@ fn finish_mesh_preparation(
                         preparation,
                         PreparationStageId::DomainPreparation,
                         timestamp_unix_ms,
-                        "Domain completed during deferred materialization; timing unavailable",
+                        DEFERRED_DOMAIN_COMPLETION_DETAIL,
                     )?;
                     project_completed_preparation_stage(
                         preparation,
                         PreparationStageId::Meshing,
                         timestamp_unix_ms,
-                        "Mesh completed during deferred materialization; timing unavailable",
+                        DEFERRED_MESH_COMPLETION_DETAIL,
                     )?;
                     project_completed_preparation_stage(
                         preparation,
@@ -566,7 +624,7 @@ fn finish_mesh_preparation(
         Ok(())
     })?;
     if deferred_failure_stage.is_some() {
-        Err(anyhow!(DEFERRED_FAILURE_SUMMARY))
+        Err(anyhow!(DEFERRED_MESH_FAILURE_SUMMARY))
     } else {
         Ok(())
     }
@@ -6124,11 +6182,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     ) {
         Ok(config) => config,
         Err(error) => {
-            fail_active_preparation_stage(
-                &live_workspace,
-                "materialization_failed",
-                "Simulation materialization failed",
-            )?;
+            let error =
+                project_script_export_failure(&live_workspace, early_preflight_completed, error)?;
             let failed_at_unix_ms = unix_time_millis()?;
             let failed_snapshot = live_workspace.snapshot();
             let failed_runtime = requested_runtime_selection(
@@ -9949,14 +10004,14 @@ mod tests {
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fem_gpu_memory_preflight_message, fem_interactive_dense_ram_estimate,
         fem_live_mesh_payload_and_initial_magnetization, fem_mesh_payload_from_backend_plan,
-        finish_mesh_preparation, format_stage_heartbeat_message, format_stage_progress_line,
-        has_heavy_live_payload, initial_live_state_manifest_from_backend_plan,
-        initial_magnetization_state_override, initial_step_update,
-        interactive_session_should_stay_alive, live_step_ingest_cached_m_preview_len,
-        live_step_ingest_legacy_mag_len, live_step_ingest_preview_len,
-        mark_ui_shell_preparation_ready, mesh_build_pipeline_status_json,
-        mesh_source_scene_revision, plan_materialized_stage_snapshot,
-        prepare_remesh_stage_transaction, resolve_adaptive_convergence_metric,
+        format_stage_heartbeat_message, format_stage_progress_line, has_heavy_live_payload,
+        initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
+        initial_step_update, interactive_session_should_stay_alive,
+        live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
+        live_step_ingest_preview_len, mark_ui_shell_preparation_ready,
+        mesh_build_pipeline_status_json, mesh_source_scene_revision,
+        plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
+        project_script_export_failure, resolve_adaptive_convergence_metric,
         resolved_shared_domain_object_region_markers, run_owned_preparation_stage,
         run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
@@ -10571,7 +10626,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_mesh_failure_is_deferred_until_preflight_then_owned_by_payload_stage() {
+    fn fallback_helper_error_boundary_projects_terminal_mesh_failure_in_order() {
         let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
         let raw_error = "mesher stderr leaked /private/model/mesh.msh";
 
@@ -10580,8 +10635,8 @@ mod tests {
             PythonProgressEvent::Structured {
                 kind: "mesh_build_failed".to_string(),
                 payload: serde_json::json!({
-                    "phase": "meshing",
-                    "message": "mesh failed at /private/model/mesh.msh",
+                    "phase": "postprocessing",
+                    "message": "Shared-domain mesh build failed",
                     "error": raw_error,
                 }),
             },
@@ -10602,19 +10657,13 @@ mod tests {
             Some(&serde_json::json!(raw_error))
         );
 
-        run_script_preparation_preflight(&workspace, || Ok(()), || Ok(()))
-            .expect("fallback preflight should complete first");
-        let detailed_mesh = workspace
-            .snapshot()
-            .mesh_workspace
-            .expect("deferred detailed mesh state");
-        let error = finish_mesh_preparation(&workspace, Some(&detailed_mesh))
-            .expect_err("deferred mesh failure should propagate after preflight");
+        let error = project_script_export_failure(&workspace, false, anyhow::anyhow!(raw_error))
+            .expect("fallback projection should preserve the original helper error");
 
-        assert_eq!(error.to_string(), "Shared-domain mesh build failed");
+        assert_eq!(error.to_string(), raw_error);
         assert_owned_preparation_failure(
             &workspace,
-            PreparationStageId::Meshing,
+            PreparationStageId::MeshPostprocessing,
             "mesh_build_failed",
             "Shared-domain mesh build failed",
             raw_error,
@@ -10623,25 +10672,79 @@ mod tests {
             .snapshot()
             .simulation_preparation
             .expect("preparation state");
-        for stage_id in [PreparationStageId::Validation, PreparationStageId::Planning] {
-            assert_eq!(
-                preparation
-                    .stages
-                    .iter()
-                    .find(|stage| stage.id == stage_id)
-                    .expect("preflight stage")
-                    .status,
-                PreparationStageStatus::Completed
-            );
-        }
-        let projected_domain = preparation
+        let script_materialization = preparation
             .stages
             .iter()
-            .find(|stage| stage.id == PreparationStageId::DomainPreparation)
-            .expect("projected domain stage");
-        assert_eq!(projected_domain.status, PreparationStageStatus::Completed);
-        assert_eq!(projected_domain.duration_ms, None);
-        assert!(projected_domain.detail.contains("timing unavailable"));
+            .find(|stage| stage.id == PreparationStageId::ScriptMaterialization)
+            .expect("script materialization stage");
+        assert_eq!(
+            script_materialization.status,
+            PreparationStageStatus::Completed
+        );
+        assert_eq!(script_materialization.duration_ms, None);
+        assert_eq!(
+            script_materialization.detail,
+            "Script materialization reached mesh generation before failure; timing unavailable"
+        );
+        for stage_id in [PreparationStageId::Validation, PreparationStageId::Planning] {
+            let stage = preparation
+                .stages
+                .iter()
+                .find(|stage| stage.id == stage_id)
+                .expect("skipped incomplete-IR stage");
+            assert_eq!(
+                stage.status,
+                PreparationStageStatus::Skipped,
+                "a complete materialized IR was unavailable"
+            );
+            assert_eq!(
+                stage.detail,
+                "Skipped because a complete materialized IR was unavailable after mesh generation failure"
+            );
+        }
+        for stage_id in [
+            PreparationStageId::DomainPreparation,
+            PreparationStageId::Meshing,
+        ] {
+            let stage = preparation
+                .stages
+                .iter()
+                .find(|stage| stage.id == stage_id)
+                .expect("projected mesh predecessor");
+            assert_eq!(stage.status, PreparationStageStatus::Completed);
+            assert_eq!(stage.duration_ms, None);
+            assert!(stage.detail.contains("timing unavailable"));
+        }
+        let failed_postprocessing = preparation
+            .stages
+            .iter()
+            .find(|stage| stage.id == PreparationStageId::MeshPostprocessing)
+            .expect("projected failure owner");
+        assert_eq!(failed_postprocessing.status, PreparationStageStatus::Failed);
+        assert_eq!(failed_postprocessing.completed_at_unix_ms, None);
+        assert_eq!(failed_postprocessing.duration_ms, None);
+        assert!(preparation
+            .log_tail
+            .iter()
+            .all(|entry| !entry.message.contains(raw_error)));
+    }
+
+    #[test]
+    fn helper_error_without_authoritative_mesh_failure_remains_script_owned() {
+        let workspace = preparation_workspace(PreparationStageId::ScriptMaterialization);
+        let raw_error = "python helper exited before mesh generation";
+
+        let error = project_script_export_failure(&workspace, false, anyhow::anyhow!(raw_error))
+            .expect("generic materialization failure should preserve the original error");
+
+        assert_eq!(error.to_string(), raw_error);
+        assert_owned_preparation_failure(
+            &workspace,
+            PreparationStageId::ScriptMaterialization,
+            "materialization_failed",
+            "Simulation materialization failed",
+            raw_error,
+        );
     }
 
     #[test]

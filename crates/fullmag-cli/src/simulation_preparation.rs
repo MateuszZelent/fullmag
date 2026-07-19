@@ -487,6 +487,64 @@ impl SimulationPreparationState {
         Ok(())
     }
 
+    pub fn project_failed_stage(
+        &mut self,
+        stage_id: PreparationStageId,
+        error_code: impl Into<String>,
+        summary: impl Into<String>,
+    ) -> Result<(), PreparationTransitionError> {
+        self.ensure_not_terminal()?;
+        if stage_id == PreparationStageId::Ready {
+            return Err(PreparationTransitionError::InvalidTerminalTransition {
+                stage_id,
+                status: self.stage(stage_id).status,
+            });
+        }
+        self.ensure_forward(stage_id)?;
+        if let Some(active_stage_id) = self.active_stage_id {
+            if active_stage_id != stage_id {
+                return Err(PreparationTransitionError::StageIsNotActive {
+                    stage_id,
+                    active_stage_id: Some(active_stage_id),
+                });
+            }
+        }
+
+        let error_code = error_code.into();
+        let summary = summary.into();
+        let before = self.semantic_snapshot();
+        self.skip_pending_before(stage_id);
+        let stage = self.stage_mut(stage_id);
+        match stage.status {
+            PreparationStageStatus::Pending | PreparationStageStatus::Active => {
+                stage.status = PreparationStageStatus::Failed;
+                stage.completed_at_unix_ms = None;
+                stage.duration_ms = None;
+                stage.detail = summary.clone();
+                stage.progress_percent = None;
+                stage.progress_label = None;
+                self.failure = Some(PreparationFailure {
+                    error_code,
+                    summary,
+                    stage_id,
+                    diagnostics_correlation_id: None,
+                });
+                self.status = PreparationStatus::Failed;
+                self.active_stage_id = None;
+                self.active_stage_started_at = None;
+                self.completed_at_unix_ms = None;
+            }
+            status => {
+                return Err(PreparationTransitionError::InvalidTerminalTransition {
+                    stage_id,
+                    status,
+                });
+            }
+        }
+        self.bump_revision_if_semantic_change(before);
+        Ok(())
+    }
+
     pub fn skip_stage(
         &mut self,
         stage_id: PreparationStageId,
@@ -899,5 +957,42 @@ mod tests {
                 "Initializing solver",
             )
             .expect("projected completion must preserve monotonic forward progress");
+    }
+
+    #[test]
+    fn projected_failure_keeps_unknown_timing_and_exact_owner() {
+        let clock = ManualMonotonicClock::new(0);
+        let mut state = SimulationPreparationState::new_with_monotonic_clock(
+            "prep-projected-failure",
+            1_000,
+            clock.clone(),
+        );
+        state
+            .begin_stage(PreparationStageId::Meshing, 1_100, "Meshing")
+            .unwrap();
+        clock.advance_ms(250);
+
+        state
+            .project_failed_stage(
+                PreparationStageId::Meshing,
+                "mesh_build_failed",
+                "Shared-domain mesh build failed",
+            )
+            .unwrap();
+
+        let meshing = state
+            .stages
+            .iter()
+            .find(|stage| stage.id == PreparationStageId::Meshing)
+            .unwrap();
+        assert_eq!(meshing.status, PreparationStageStatus::Failed);
+        assert_eq!(meshing.completed_at_unix_ms, None);
+        assert_eq!(meshing.duration_ms, None);
+        assert_eq!(state.status, PreparationStatus::Failed);
+        assert_eq!(state.completed_at_unix_ms, None);
+        assert_eq!(
+            state.failure.as_ref().map(|failure| failure.stage_id),
+            Some(PreparationStageId::Meshing)
+        );
     }
 }
