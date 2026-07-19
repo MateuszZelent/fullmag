@@ -17923,6 +17923,20 @@
               "null"
             ]
           },
+          "dt_suggested_seconds": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "error_estimate": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "integrator": {
             "type": [
               "string",
@@ -17943,6 +17957,13 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "max_error": {
+            "format": "double",
+            "type": [
+              "number",
               "null"
             ]
           },
@@ -17981,6 +18002,14 @@
             "format": "double",
             "type": [
               "number",
+              "null"
+            ]
+          },
+          "rejected_attempts": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
               "null"
             ]
           },

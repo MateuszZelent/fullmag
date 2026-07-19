@@ -33,11 +33,15 @@ __global__ void adaptive_error_norm_blocks_kernel(
     bool has_norm_tolerance, double norm_tolerance,
     bool has_max_spin_rotation, double max_spin_rotation,
     double *__restrict__ block_max_scaled_error,
+    double *__restrict__ block_max_norm_defect,
+    double *__restrict__ block_max_spin_rotation,
     int stages,
     int N)
 {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     double local_max = 0.0;
+    double local_norm_defect = 0.0;
+    double local_spin_rotation = 0.0;
     if (i < N && (magnetic_node_mask == nullptr || magnetic_node_mask[i] != 0u)) {
         const double c0 = stages > 0 ? b_hi0 - b_lo0 : 0.0;
         const double c1 = stages > 1 ? b_hi1 - b_lo1 : 0.0;
@@ -97,25 +101,32 @@ __global__ void adaptive_error_norm_blocks_kernel(
             local_max = CUDART_INF;
         } else {
             local_max = error_norm / scale;
+            local_norm_defect = fabs(high_order_state_norm - 1.0);
+            const double normalized_dot = fmin(1.0, fmax(-1.0,
+                ((old_mx[i] * new_mx[i] + old_my[i] * new_my[i] +
+                  old_mz[i] * new_mz[i]) / old_state_norm) /
+                high_order_state_norm));
+            local_spin_rotation = acos(normalized_dot);
             if (has_norm_tolerance) {
-                const double norm_defect = fabs(high_order_state_norm - 1.0);
-                local_max = fmax(local_max, norm_defect / norm_tolerance);
+                local_max = fmax(local_max, local_norm_defect / norm_tolerance);
             }
             if (has_max_spin_rotation) {
-                const double normalized_dot = fmin(1.0, fmax(-1.0,
-                    ((old_mx[i] * new_mx[i] + old_my[i] * new_my[i] +
-                      old_mz[i] * new_mz[i]) / old_state_norm) /
-                    high_order_state_norm));
-                local_max = fmax(local_max, acos(normalized_dot) / max_spin_rotation);
+                local_max = fmax(local_max, local_spin_rotation / max_spin_rotation);
             }
         }
     }
 
     typedef cub::BlockReduce<double, 256> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
-    const double block_max = BlockReduce(temp_storage).Reduce(local_max, cub::Max());
+    __shared__ typename BlockReduce::TempStorage error_storage;
+    __shared__ typename BlockReduce::TempStorage norm_storage;
+    __shared__ typename BlockReduce::TempStorage rotation_storage;
+    const double block_max = BlockReduce(error_storage).Reduce(local_max, cub::Max());
+    const double block_norm_defect = BlockReduce(norm_storage).Reduce(local_norm_defect, cub::Max());
+    const double block_spin_rotation = BlockReduce(rotation_storage).Reduce(local_spin_rotation, cub::Max());
     if (threadIdx.x == 0) {
         block_max_scaled_error[blockIdx.x] = block_max;
+        block_max_norm_defect[blockIdx.x] = block_norm_defect;
+        block_max_spin_rotation[blockIdx.x] = block_spin_rotation;
     }
 }
 
@@ -138,6 +149,8 @@ void fullmag_cuda_adaptive_error_norm_blocks(
     bool has_norm_tolerance, double norm_tolerance,
     bool has_max_spin_rotation, double max_spin_rotation,
     double *block_max_scaled_error,
+    double *block_max_norm_defect,
+    double *block_max_spin_rotation,
     int stages,
     int N,
     cudaStream_t stream)
@@ -160,6 +173,8 @@ void fullmag_cuda_adaptive_error_norm_blocks(
         has_norm_tolerance, norm_tolerance,
         has_max_spin_rotation, max_spin_rotation,
         block_max_scaled_error,
+        block_max_norm_defect,
+        block_max_spin_rotation,
         stages,
         N);
 }

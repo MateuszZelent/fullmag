@@ -30,6 +30,9 @@ bool gpu_rk_device_resident_step(
     gpu_rk_reset_phase_timing_events(ctx);
     GpuRkStepPreflight preflight{};
     if (!gpu_rk_prepare_step_preflight(ctx, tableau, dt_seconds, preflight, reason)) {
+        if (reason.empty()) {
+            reason = "GPU RK step preflight failed without a diagnostic";
+        }
         return false;
     }
 
@@ -49,6 +52,9 @@ bool gpu_rk_device_resident_step(
             dt_seconds,
             accepted_attempt,
             reason)) {
+        if (reason.empty()) {
+            reason = "GPU RK accepted-attempt loop failed without a diagnostic";
+        }
         return false;
     }
 
@@ -66,6 +72,9 @@ bool gpu_rk_device_resident_step(
             accepted_attempt.fsal_reused,
             stats,
             reason)) {
+        if (reason.empty()) {
+            reason = "GPU RK accepted-step finalization failed without a diagnostic";
+        }
         return false;
     }
     return true;

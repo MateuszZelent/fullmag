@@ -1259,7 +1259,7 @@ quantity metadata must expose sampling location.
 - [x] FEM GPU implementation
 - [x] OpenAPI/resource implementation for regional drive and Gamma response
 - [x] Explicit `AddFieldDrive` pipeline action and stage-local outputs
-- [ ] Explicit `RemoveFieldDrive` pipeline action and round-trip
+- [x] Explicit `RemoveFieldDrive` pipeline action and round-trip
 - [ ] Dedicated stage inspectors and complete planned/actual FFT UI
 - [ ] End-to-end browser/runtime qualification for the explicit pipeline
 

@@ -139,6 +139,11 @@ bool normalize_active_magnetization_aos(
                 magnetization_node_context(ctx, node, nodes, x, y, z);
             return false;
         }
+        const double unit_roundoff_budget =
+            8.0 * std::numeric_limits<double>::epsilon();
+        if (std::abs(norm - 1.0) <= unit_roundoff_budget) {
+            continue;
+        }
         const double inv = 1.0 / norm;
         m_xyz[base + 0u] = x * inv;
         m_xyz[base + 1u] = y * inv;

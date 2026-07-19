@@ -2603,6 +2603,8 @@ int fullmag_fem_backend_begin_stage(
     ctx.stepper.workspace.fsal_valid = false;
     ctx.adaptive_dt.prev_error_norm = 1.0;
     ctx.adaptive_dt.has_prev_error_norm = false;
+    ctx.poisson_demag.fresh_initial_guess_required =
+        ctx.demag.enabled && ctx.gpu_state.device.lifecycle.allocated;
     std::fill(ctx.zeeman.h_drive_xyz.begin(), ctx.zeeman.h_drive_xyz.end(), 0.0);
     std::fill(ctx.effective_field.h_xyz.begin(), ctx.effective_field.h_xyz.end(), 0.0);
     handle->last_error.clear();
@@ -3105,6 +3107,59 @@ int fullmag_fem_backend_snapshot_stats(
     fullmag_fem_set_handle_error(handle, kUnavailableMessage);
     return FULLMAG_FEM_ERR_UNAVAILABLE;
 #endif
+}
+
+int fullmag_fem_backend_solver_attempt_count_v1(
+    fullmag_fem_backend *handle,
+    uint64_t *out_count)
+{
+    if (handle == nullptr || out_count == nullptr) {
+        fullmag_fem_set_handle_error(handle, "solver attempt count requires non-null handle and output");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_count = static_cast<uint64_t>(handle->context.stepper.attempt_trace.records.size());
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_backend_copy_solver_attempts_v1(
+    fullmag_fem_backend *handle,
+    fullmag_fem_solver_attempt_record_v1 *out_records,
+    uint64_t capacity,
+    uint64_t *out_count)
+{
+    if (handle == nullptr || out_count == nullptr || (capacity > 0u && out_records == nullptr)) {
+        fullmag_fem_set_handle_error(handle, "solver attempt copy requires valid handle, output count, and capacity buffer");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const auto &records = handle->context.stepper.attempt_trace.records;
+    *out_count = static_cast<uint64_t>(records.size());
+    if (capacity < records.size()) {
+        fullmag_fem_set_handle_error(handle, "solver attempt copy capacity is smaller than the current trace");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    for (size_t index = 0; index < records.size(); ++index) {
+        const auto &source = records[index];
+        auto &target = out_records[index];
+        target = {};
+        target.abi_version = FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V1_ABI_VERSION;
+        target.struct_size = sizeof(target);
+        target.attempt = source.attempt;
+        target.target_step = source.target_step;
+        target.time_seconds = source.time_seconds;
+        target.dt_attempt_seconds = source.dt_attempt_seconds;
+        target.eta = source.eta;
+        target.max_norm_defect = source.max_norm_defect;
+        target.max_spin_rotation = source.max_spin_rotation;
+        target.decision = static_cast<uint32_t>(source.decision);
+        target.reason = source.reason;
+        target.dt_next_seconds = source.dt_next_seconds;
+        target.demag_solve_count = source.demag_solve_count;
+        target.demag_linear_iterations = source.demag_linear_iterations;
+        target.demag_linear_residual = source.demag_linear_residual;
+        target.rhs_evaluations = source.rhs_evaluations;
+        target.estimator_order = source.estimator_order;
+    }
+    return FULLMAG_FEM_OK;
 }
 
 int fullmag_fem_backend_stage_completion(

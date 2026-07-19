@@ -179,7 +179,7 @@ button.fm-study-stage-card:focus-visible {
   align-items: center;
   height: var(--fm-space-5);
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   font-family: var(--fm-font-ui);
@@ -214,7 +214,7 @@ button.fm-study-stage-card:focus-visible {
   height: var(--fm-space-4);
   padding: 0 5px;
   border: 1px solid var(--fm-border-subtle);
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   font-family: var(--fm-font-ui);
   font-size: var(--fm-font-size-2xs);
   font-weight: 500;

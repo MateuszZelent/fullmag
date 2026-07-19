@@ -155,6 +155,30 @@ CPU thread selection remains a runtime selection concern:
 - Logs and UI must not pretend that live thread-pool changes apply to an already
   running solve
 
+### 5.1 Fail-closed linear-solve publication
+
+Every production FEM demagnetization realization (non-periodic Poisson,
+periodic reduced Poisson, strict CUDA Poisson, and Fredkin--Koehler FEM/BEM)
+must treat the linear solve as an attempted result until convergence has been
+validated. A candidate scalar potential may be published, cached, lifted,
+recovered into `H_demag`, used in `H_eff`/energy, or exposed as an observable
+only when all of the following hold:
+
+- the concrete solver reports convergence rather than only termination,
+- the reported residual is finite and non-negative,
+- the reported residual satisfies the configured relative tolerance, or the
+  solver explicitly reports convergence through the configured positive
+  absolute tolerance,
+- the iteration count is non-negative and does not exceed `max_iterations`.
+
+Exhausting `max_iterations` without a solver convergence report is not
+convergence. On failure, the runtime must
+invalidate any warm-start/current marker for the attempted candidate and
+return a typed diagnostic containing the demag solver realization, linear
+solver kind, iteration count, residual, relative/absolute tolerance, and
+maximum iterations. Last-attempt iteration/residual telemetry remains
+available for diagnosis, but the failed field is never current solver state.
+
 ## 6. Validation strategy
 
 ### 6.1 Analytical checks

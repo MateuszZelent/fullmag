@@ -334,6 +334,9 @@ pub(crate) enum ScriptExecutionStageAction {
     AddFieldDrive {
         drive: RegionalFieldDriveIR,
     },
+    RemoveFieldDrive {
+        drive_id: String,
+    },
     TableAutosave {
         #[serde(default = "default_true")]
         enabled: bool,
@@ -421,6 +424,9 @@ pub(crate) enum ResolvedScriptStageAction {
     },
     AddFieldDrive {
         drive: RegionalFieldDriveIR,
+    },
+    RemoveFieldDrive {
+        drive_id: String,
     },
     TableAutosave {
         enabled: bool,
@@ -744,6 +750,14 @@ pub(crate) struct CurrentLiveScalarRow {
     pub step: u64,
     pub time: f64,
     pub solver_dt: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_estimate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_error: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dt_suggested: Option<f64>,
+    #[serde(default)]
+    pub rejected_attempts: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pseudo_time_s: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

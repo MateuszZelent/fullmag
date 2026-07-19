@@ -160,7 +160,7 @@
 .fm-sampling-plan__status {
   flex: 0 0 auto;
   border: 1px solid var(--fm-border-default);
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   color: var(--fm-text-secondary);
   font-size: var(--fm-font-size-xs);
   font-weight: 600;

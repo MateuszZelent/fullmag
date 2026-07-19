@@ -318,6 +318,13 @@ export function buildFooterTelemetryModel(
     scalarSampleNumber(liveRow, "dt") ??
     solverStatus?.dt_seconds ??
     status?.solver?.dt;
+  const errorEstimate =
+    scalarSampleNumber(liveRow, "error_estimate") ?? solverStatus?.error_estimate ?? null;
+  const maxError = scalarSampleNumber(liveRow, "max_error") ?? solverStatus?.max_error ?? null;
+  const dtSuggested =
+    scalarSampleNumber(liveRow, "dt_suggested") ?? solverStatus?.dt_suggested_seconds ?? null;
+  const rejectedAttempts =
+    scalarSampleNumber(liveRow, "rejected_attempts") ?? solverStatus?.rejected_attempts ?? 0;
   const converged = solverStatus?.converged ?? status?.solver?.converged;
   const scalarEnergy = {
     anisotropy: scalarSampleNumber(liveRow, "e_ani"),
@@ -428,6 +435,28 @@ export function buildFooterTelemetryModel(
         unit: "s",
         value: formatScientific(dt, "0.000000e+0"),
       },
+      ...(!usesPseudoTime && (errorEstimate !== null || maxError !== null)
+        ? [
+            {
+              detail: "Latest embedded vector error",
+              icon: <Gauge size={13} aria-hidden="true" />,
+              id: "solver-error",
+              label: "Error",
+              subdetail: `${formatInteger(rejectedAttempts)} rejected; next dt ${formatScientific(dtSuggested, "0.000000e+0")} s`,
+              value: formatScientific(errorEstimate, "0.000000e+0"),
+            },
+            {
+              detail: "Adaptive acceptance threshold",
+              icon: <Gauge size={13} aria-hidden="true" />,
+              id: "solver-max-error",
+              label: "MaxError",
+              subdetail: errorEstimate !== null && maxError !== null
+                ? errorEstimate <= maxError ? "Within tolerance" : "Above tolerance"
+                : "Tolerance status unavailable",
+              value: formatScientific(maxError, "0.000000e+0"),
+            },
+          ]
+        : []),
       {
         detail: "Peak Load",
         icon: <Gauge size={13} aria-hidden="true" />,

@@ -1,19 +1,19 @@
 .fm-dialog__overlay {
   position: fixed;
   inset: 0;
-  z-index: 90;
+  z-index: var(--fm-z-dialog);
   background: color-mix(in srgb, var(--fm-bg-app) 76%, transparent);
-  animation: fm-overlay-in 100ms ease-out;
+  animation: fm-overlay-in var(--fm-duration-normal) ease-out;
 }
 
 .fm-dialog {
   position: fixed;
   top: 50%;
   left: 50%;
-  z-index: 100;
+  z-index: var(--fm-z-dialog-content);
   display: flex;
   flex-direction: column;
-  width: min(560px, calc(100vw - 32px));
+  width: min(560px, calc(100vw - var(--fm-space-8)));
   max-height: min(680px, calc(100vh - 96px));
   gap: var(--fm-space-4);
   overflow: hidden;
@@ -23,7 +23,7 @@
   box-shadow: var(--fm-shadow-panel);
   color: var(--fm-text-primary);
   transform: translate(-50%, -50%);
-  animation: fm-dialog-in 150ms ease-out;
+  animation: fm-dialog-in var(--fm-duration-moderate) ease-out;
 }
 
 .fm-dialog__header {

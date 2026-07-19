@@ -183,7 +183,7 @@ mod control_room_guard_tests {
             "\"/v2/sessions/current/data/mesh-region-memberships\":{},",
             "\"/v2/sessions/current/simulation/objects/{object_id}/metrics\":{}",
             "},\"x-fullmag-study-primitive-stage-kinds\":",
-            "[\"add_field_drive\",\"table_autosave\",\"autosave\",\"fft_response\"]}",
+            "[\"add_field_drive\",\"remove_field_drive\",\"table_autosave\",\"autosave\",\"fft_response\"]}",
         );
         assert!(api_openapi_response_is_compatible(current));
     }
@@ -763,8 +763,9 @@ fn api_openapi_is_compatible(port: u16) -> bool {
 }
 
 fn api_openapi_response_is_compatible(response: &str) -> bool {
-    const REQUIRED_STAGE_KINDS: [&str; 4] = [
+    const REQUIRED_STAGE_KINDS: [&str; 5] = [
         "add_field_drive",
+        "remove_field_drive",
         "table_autosave",
         "autosave",
         "fft_response",

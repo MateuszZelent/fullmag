@@ -13,6 +13,8 @@
 #include "context.hpp"
 #include "cpu/mfem/integrators/rk_explicit.hpp"
 #include "cpu/mfem/integrators/rk_explicit_step.hpp"
+#include "cpu/mfem/integrators/rk_step_failure_injection.hpp"
+#include "cpu/mfem/integrators/rk_step_transaction.hpp"
 #include "cpu/mfem/relaxation/relaxation_step.hpp"
 #include "cpu/mfem/runtime/snapshot.hpp"
 #include "cpu/mfem/runtime/stage_completion.hpp"
@@ -22,6 +24,8 @@
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #include <cstddef>
+#include <exception>
+#include <new>
 
 namespace fullmag::fem {
 
@@ -41,11 +45,31 @@ int run_backend_step(
 {
 #if FULLMAG_HAS_MFEM_STACK
     error.clear();
+    RkStepTransaction transaction(ctx);
+    if (!transaction.begin(error)) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            nullptr,
+            0.0,
+            0.0);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    auto rollback = [&]() {
+        const std::string original_error = error;
+        std::string rollback_error;
+        if (!transaction.rollback(rollback_error)) {
+            error = original_error + "; RK transaction rollback failed: " + rollback_error;
+        } else {
+            error = original_error;
+        }
+    };
     bool ok = false;
     ctx.interrupt.step_interrupted = false;
     ctx.transfer_audit.audit.reset_step_violation();
     const auto &tab = tableau_for_integrator(ctx.base_plan.integrator);
     if (!gpu_rk_prepare_phase_timing_events(ctx, tab, error)) {
+        rollback();
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
@@ -54,24 +78,32 @@ int run_backend_step(
             0.0);
         return FULLMAG_FEM_ERR_INTERNAL;
     }
-    {
+    try {
         TransferAuditScope hot_loop(
             ctx.transfer_audit.audit,
             TransferAuditScopeKind::HotLoop);
         ok = context_step_explicit_rk_mfem(
             ctx, tab, dt_seconds, out_stats, error);
+    } catch (const std::bad_alloc &) {
+        error = "RK step candidate/cache allocation failed";
+        ok = false;
+    } catch (const std::exception &exception) {
+        error = std::string("RK step failed with an internal exception: ") + exception.what();
+        ok = false;
     }
     if (ctx.transfer_audit.audit.hot_loop_violation) {
+        error = ctx.transfer_audit.audit.hot_loop_violation_message;
+        rollback();
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
             nullptr,
             0.0,
             0.0);
-        error = ctx.transfer_audit.audit.hot_loop_violation_message;
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (!ok) {
+        rollback();
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
@@ -81,6 +113,20 @@ int run_backend_step(
         return FULLMAG_FEM_ERR_UNAVAILABLE;
     }
     if (!gpu_rk_finalize_step_stats(ctx, out_stats, error)) {
+        rollback();
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
+            nullptr,
+            0.0,
+            0.0);
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    if (rk_step_inject_failure(
+            ctx,
+            RkStepFailurePoint::DuringFinalStatistics,
+            error)) {
+        rollback();
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR,
@@ -90,6 +136,7 @@ int run_backend_step(
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     if (ctx.interrupt.step_interrupted) {
+        rollback();
         if (!context_snapshot_stats_mfem(ctx, out_stats, error)) {
             set_stage_completion(
                 ctx,
@@ -108,6 +155,7 @@ int run_backend_step(
         out_stats.dt_seconds = 0.0;
         return FULLMAG_FEM_ERR_INTERRUPTED;
     }
+    transaction.commit();
     return FULLMAG_FEM_OK;
 #else
     (void)ctx;

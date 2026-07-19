@@ -146,6 +146,25 @@ void active_magnetization_normalization_respects_mask() {
     }
 }
 
+void active_magnetization_normalization_is_idempotent_at_fp64_roundoff() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 1;
+    ctx.mesh.magnetic_node_mask = {1u};
+    std::vector<double> m = {
+        0.9998162380980484,
+        0.019170028388013908,
+        6.86072797124435e-06,
+    };
+    const auto before = m;
+    std::string error;
+    check(
+        fullmag::fem::normalize_active_magnetization_aos(ctx, m, error),
+        error.c_str());
+    check(
+        m == before,
+        "already-unit FP64 continuation state must remain bitwise unchanged");
+}
+
 void periodic_projection_copies_representative_vectors() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 4;
@@ -180,6 +199,7 @@ int main() {
     aos_helpers_are_owned_by_runtime_module();
     aos_pack_unpack_and_existing_resize_contract();
     active_magnetization_normalization_respects_mask();
+    active_magnetization_normalization_is_idempotent_at_fp64_roundoff();
     periodic_projection_copies_representative_vectors();
     return 0;
 }

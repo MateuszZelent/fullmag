@@ -530,6 +530,30 @@ pub struct fullmag_fem_step_stats {
     pub cpu_thread_cap_reason: i32,
 }
 
+pub const FULLMAG_FEM_SOLVER_ATTEMPT_RECORD_V1_ABI_VERSION: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct fullmag_fem_solver_attempt_record_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub attempt: u64,
+    pub target_step: u64,
+    pub time_seconds: f64,
+    pub dt_attempt_seconds: f64,
+    pub eta: f64,
+    pub max_norm_defect: f64,
+    pub max_spin_rotation: f64,
+    pub decision: u32,
+    pub reason: u32,
+    pub dt_next_seconds: f64,
+    pub demag_solve_count: u32,
+    pub demag_linear_iterations: u32,
+    pub demag_linear_residual: f64,
+    pub rhs_evaluations: u32,
+    pub estimator_order: i32,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct fullmag_fem_device_info {
@@ -1388,6 +1412,18 @@ extern "C" {
     pub fn fullmag_fem_backend_snapshot_stats(
         handle: *mut fullmag_fem_backend,
         out_stats: *mut fullmag_fem_step_stats,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_solver_attempt_count_v1(
+        handle: *mut fullmag_fem_backend,
+        out_count: *mut u64,
+    ) -> i32;
+
+    pub fn fullmag_fem_backend_copy_solver_attempts_v1(
+        handle: *mut fullmag_fem_backend,
+        out_records: *mut fullmag_fem_solver_attempt_record_v1,
+        capacity: u64,
+        out_count: *mut u64,
     ) -> i32;
 
     pub fn fullmag_fem_backend_stage_completion(

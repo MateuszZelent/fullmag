@@ -13,8 +13,10 @@
 #include "gpu/cuda/integrators/rk/rk_adaptive_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_error_norm_runtime.hpp"
 #include "gpu/cuda/integrators/rk/rk_stage_schedule.hpp"
+#include "cpu/mfem/integrators/rk_step_transaction.hpp"
 
 #include <cstdio>
+#include <memory>
 #include <string>
 
 namespace fullmag::fem {
@@ -54,9 +56,16 @@ bool gpu_rk_run_accepted_attempt_loop(
     uint32_t rejected_attempts = 0;
     uint32_t total_stage_rhs_evaluations = 0;
     bool fsal_reused = false;
+    ctx.stepper.attempt_trace.records.clear();
 
     for (;;) {
         ctx.adaptive_dt.current_dt = active_dt;
+        const uint32_t demag_solves_before_attempt = ctx.poisson_demag.solves_current_step;
+        const uint32_t rhs_before_attempt = total_stage_rhs_evaluations;
+        std::unique_ptr<RkAttemptCacheSnapshot> attempt_cache;
+        if (adaptive) {
+            attempt_cache = std::make_unique<RkAttemptCacheSnapshot>(ctx);
+        }
         GpuRkStageAttemptResult stage_attempt{};
         if (!gpu_rk_run_stage_attempt(
                 ctx,
@@ -115,6 +124,32 @@ bool gpu_rk_run_accepted_attempt_loop(
             error_estimate = adaptive_decision.error_norm;
             const auto adaptive_result = adaptive_decision.adaptive_result;
             suggested_dt = adaptive_result.dt_next;
+            if (ctx.stepper.attempt_trace.records.size() >= RkAttemptTraceState::max_records) {
+                reason = "adaptive GPU RK attempt trace capacity exceeded";
+                return false;
+            }
+            ctx.stepper.attempt_trace.records.push_back({
+                static_cast<uint64_t>(ctx.stepper.attempt_trace.records.size()),
+                ctx.state.step_count + 1u,
+                ctx.state.current_time,
+                active_dt,
+                error_estimate,
+                adaptive_decision.max_norm_defect,
+                adaptive_decision.max_spin_rotation,
+                adaptive_result.kind == adaptive::AdaptiveDecisionKind::accepted
+                    ? RkAttemptDecision::Accepted
+                    : adaptive_result.kind == adaptive::AdaptiveDecisionKind::retry
+                        ? RkAttemptDecision::Retry
+                        : RkAttemptDecision::Failed,
+                static_cast<uint32_t>(adaptive_result.reason) + 1u,
+                adaptive_result.dt_next,
+                ctx.poisson_demag.solves_current_step - demag_solves_before_attempt,
+                static_cast<uint32_t>(ctx.poisson_demag.last_iterations > 0
+                    ? ctx.poisson_demag.last_iterations : 0),
+                ctx.poisson_demag.last_residual,
+                total_stage_rhs_evaluations - rhs_before_attempt,
+                tableau.order_est,
+            });
             if (adaptive_result.kind == adaptive::AdaptiveDecisionKind::failed) {
                 if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
                     return false;
@@ -127,6 +162,11 @@ bool gpu_rk_run_accepted_attempt_loop(
                 if (!gpu_rk_restore_adaptive_reject_magnetization_device(gpu, stream, reason)) {
                     return false;
                 }
+                attempt_cache->restore_preserving_attempt_counters();
+                if (!rk_restore_active_step_device_checkpoint(ctx, reason)) {
+                    return false;
+                }
+                gpu.rk.fsal_valid = false;
                 active_dt = adaptive_result.dt_next;
                 ctx.base_plan.dt_seconds = active_dt;
                 ctx.adaptive_dt.current_dt = active_dt;
@@ -147,6 +187,24 @@ bool gpu_rk_run_accepted_attempt_loop(
         } else {
             error_estimate = 0.0;
             suggested_dt = active_dt;
+            ctx.stepper.attempt_trace.records.push_back({
+                0u,
+                ctx.state.step_count + 1u,
+                ctx.state.current_time,
+                active_dt,
+                0.0,
+                0.0,
+                0.0,
+                RkAttemptDecision::Accepted,
+                1u,
+                active_dt,
+                ctx.poisson_demag.solves_current_step - demag_solves_before_attempt,
+                static_cast<uint32_t>(ctx.poisson_demag.last_iterations > 0
+                    ? ctx.poisson_demag.last_iterations : 0),
+                ctx.poisson_demag.last_residual,
+                total_stage_rhs_evaluations - rhs_before_attempt,
+                tableau.order_est,
+            });
         }
         break;
     }

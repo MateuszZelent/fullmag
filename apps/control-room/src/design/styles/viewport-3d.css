@@ -16,7 +16,7 @@
 
 .fm-viewport-3d__hud {
   position: absolute;
-  z-index: 1;
+  z-index: var(--fm-z-base);
   top: var(--fm-space-2);
   left: var(--fm-space-2);
   display: flex;
@@ -77,7 +77,7 @@
   height: 1rem;
   flex: 0 0 1rem;
   place-items: center;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   background:
     conic-gradient(
       var(--fm-accent) var(--fm-refresh-progress, 0deg),
@@ -89,7 +89,7 @@
 .fm-viewport-3d__refresh-countdown-core {
   width: 0.42rem;
   height: 0.42rem;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   background: var(--fm-bg-viewport);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--fm-bg-chrome) 80%, transparent);
 }

@@ -1,5 +1,5 @@
 .fm-communication-policy {
-  width: min(720px, calc(100vw - 32px));
+  width: min(720px, calc(100vw - var(--fm-space-8)));
 }
 
 .fm-communication-policy__section {

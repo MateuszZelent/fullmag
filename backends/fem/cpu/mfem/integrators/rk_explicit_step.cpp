@@ -15,6 +15,8 @@
 #include "cpu/mfem/integrators/adaptive_dt.hpp"
 #include "cpu/mfem/integrators/llg_rhs.hpp"
 #include "cpu/mfem/integrators/rk_explicit.hpp"
+#include "cpu/mfem/integrators/rk_step_failure_injection.hpp"
+#include "cpu/mfem/integrators/rk_step_transaction.hpp"
 #include "cpu/mfem/integrators/rk_stage_rhs.hpp"
 #include "cpu/mfem/runtime/aos_field.hpp"
 #include "cpu/mfem/runtime/interrupt.hpp"
@@ -23,7 +25,9 @@
 #include "fem_common.hpp"
 #include "gpu/cuda/integrators/rk/rk.hpp"
 
+#include <algorithm>
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <utility>
 
@@ -101,6 +105,7 @@ bool context_step_explicit_rk_mfem(
     }
 
     ctx.adaptive_dt.current_dt = dt_seconds;
+    ctx.stepper.attempt_trace.records.clear();
 
     const size_t dof_len = ctx.state.m_xyz.size();
     stepper_workspace_allocate(ctx.stepper.workspace, dof_len, tab.stages);
@@ -118,6 +123,12 @@ bool context_step_explicit_rk_mfem(
 
     for (;;) {
         ctx.adaptive_dt.current_dt = dt;
+        const uint32_t demag_solves_before_attempt = ctx.poisson_demag.solves_current_step;
+        const uint32_t rhs_before_attempt = total_rhs;
+        std::unique_ptr<RkAttemptCacheSnapshot> attempt_cache;
+        if (adaptive) {
+            attempt_cache = std::make_unique<RkAttemptCacheSnapshot>(ctx);
+        }
         ws.m_backup = ctx.state.m_xyz;
         fsal_used = false;
         final_stage_cache_valid = false;
@@ -204,9 +215,9 @@ bool context_step_explicit_rk_mfem(
             for (int s = 0; s < tab.stages; ++s) {
                 accum += tab.b_hi[s] * ws.k[s][i];
             }
-            ctx.state.m_xyz[i] = ws.m_backup[i] + dt * accum;
+            ws.m_candidate[i] = ws.m_backup[i] + dt * accum;
         }
-        project_static_periodic_aos(ctx, ctx.state.m_xyz);
+        project_static_periodic_aos(ctx, ws.m_candidate);
 
         AdaptiveAttemptGuardMetrics guard_metrics{};
         double acceptance_metric = 0.0;
@@ -221,7 +232,7 @@ bool context_step_explicit_rk_mfem(
             double err_norm = compute_adaptive_error_norm(
                 ws.err,
                 ws.m_backup,
-                ctx.state.m_xyz,
+                ws.m_candidate,
                 ctx.mesh.magnetic_node_mask,
                 ctx.adaptive_dt.atol,
                 ctx.adaptive_dt.rtol);
@@ -229,7 +240,7 @@ bool context_step_explicit_rk_mfem(
                     ctx.adaptive_dt,
                     err_norm,
                     ws.m_backup,
-                    ctx.state.m_xyz,
+                    ws.m_candidate,
                     ctx.mesh.magnetic_node_mask,
                     acceptance_metric,
                     guard_metrics,
@@ -240,6 +251,33 @@ bool context_step_explicit_rk_mfem(
                 return false;
             }
             auto result = adaptive_pi_step(ctx, dt, acceptance_metric, tab.order_est);
+            if (ctx.stepper.attempt_trace.records.size() >= RkAttemptTraceState::max_records) {
+                ctx.state.m_xyz = ws.m_backup;
+                ws.fsal_valid = false;
+                error = "adaptive RK attempt trace capacity exceeded";
+                return false;
+            }
+            ctx.stepper.attempt_trace.records.push_back({
+                static_cast<uint64_t>(ctx.stepper.attempt_trace.records.size()),
+                ctx.state.step_count + 1u,
+                ctx.state.current_time,
+                dt,
+                acceptance_metric,
+                guard_metrics.max_norm_defect,
+                guard_metrics.max_spin_rotation,
+                result.kind == adaptive::AdaptiveDecisionKind::accepted
+                    ? RkAttemptDecision::Accepted
+                    : result.kind == adaptive::AdaptiveDecisionKind::retry
+                        ? RkAttemptDecision::Retry
+                        : RkAttemptDecision::Failed,
+                static_cast<uint32_t>(result.reason) + 1u,
+                result.dt_next,
+                ctx.poisson_demag.solves_current_step - demag_solves_before_attempt,
+                static_cast<uint32_t>(std::max(0, ctx.poisson_demag.last_iterations)),
+                ctx.poisson_demag.last_residual,
+                total_rhs - rhs_before_attempt,
+                tab.order_est,
+            });
             if (result.kind == adaptive::AdaptiveDecisionKind::failed) {
                 ctx.state.m_xyz = ws.m_backup;
                 ws.fsal_valid = false;
@@ -249,6 +287,7 @@ bool context_step_explicit_rk_mfem(
             }
             if (result.kind == adaptive::AdaptiveDecisionKind::retry) {
                 ctx.state.m_xyz = ws.m_backup;
+                attempt_cache->restore_preserving_attempt_counters();
                 dt = result.dt_next;
                 ctx.base_plan.dt_seconds = dt;
                 ctx.adaptive_dt.current_dt = dt;
@@ -273,7 +312,7 @@ bool context_step_explicit_rk_mfem(
                     ctx.adaptive_dt,
                     0.0,
                     ws.m_backup,
-                    ctx.state.m_xyz,
+                    ws.m_candidate,
                     ctx.mesh.magnetic_node_mask,
                     acceptance_metric,
                     guard_metrics,
@@ -285,19 +324,41 @@ bool context_step_explicit_rk_mfem(
             }
             stats.error_estimate = 0.0;
             stats.dt_suggested = dt;
+            ctx.stepper.attempt_trace.records.push_back({
+                0u,
+                ctx.state.step_count + 1u,
+                ctx.state.current_time,
+                dt,
+                acceptance_metric,
+                guard_metrics.max_norm_defect,
+                guard_metrics.max_spin_rotation,
+                RkAttemptDecision::Accepted,
+                1u,
+                dt,
+                ctx.poisson_demag.solves_current_step - demag_solves_before_attempt,
+                static_cast<uint32_t>(std::max(0, ctx.poisson_demag.last_iterations)),
+                ctx.poisson_demag.last_residual,
+                total_rhs - rhs_before_attempt,
+                tab.order_est,
+            });
         }
 
-        if (!normalize_active_magnetization_aos(ctx, ctx.state.m_xyz, error)) {
-            ctx.state.m_xyz = ws.m_backup;
+        if (!normalize_active_magnetization_aos(ctx, ws.m_candidate, error)) {
             ws.fsal_valid = false;
             error = "explicit RK high-order candidate normalization failed: " + error;
             return false;
         }
-        project_static_periodic_aos(ctx, ctx.state.m_xyz);
+        project_static_periodic_aos(ctx, ws.m_candidate);
         if (poll_interrupt(ctx)) {
-            ctx.state.m_xyz = ws.m_backup;
             ws.fsal_valid = false;
             return true;
+        }
+        if (rk_step_inject_failure(
+                ctx,
+                RkStepFailurePoint::AfterCandidateMagnetization,
+                error)) {
+            ws.fsal_valid = false;
+            return false;
         }
 
         if (tab.fsal && fsal_reuse_allowed) {
@@ -317,7 +378,7 @@ bool context_step_explicit_rk_mfem(
     } else {
         if (!compute_effective_fields_for_magnetization(
                 ctx,
-                ctx.state.m_xyz,
+                ws.m_candidate,
                 ctx.state.current_time + dt,
                 ws.h_ex_tmp,
                 ws.h_demag_tmp,
@@ -334,10 +395,25 @@ bool context_step_explicit_rk_mfem(
             }
             return false;
         }
+        if (rk_step_inject_failure(
+                ctx,
+                RkStepFailurePoint::DuringFinalFieldRefresh,
+                error)) {
+            ws.fsal_valid = false;
+            return false;
+        }
         std::swap(ctx.exchange.h_xyz, ws.h_ex_tmp);
         std::swap(ctx.demag.h_xyz, ws.h_demag_tmp);
         std::swap(ctx.effective_field.h_xyz, ws.h_eff_tmp);
     }
+    if (final_stage_cache_valid && rk_step_inject_failure(
+            ctx,
+            RkStepFailurePoint::DuringFinalFieldRefresh,
+            error)) {
+        ws.fsal_valid = false;
+        return false;
+    }
+    ctx.state.m_xyz.swap(ws.m_candidate);
     ctx.state.current_time += dt;
     ctx.state.step_count += 1;
     ctx.exchange.mfem.ready = true;

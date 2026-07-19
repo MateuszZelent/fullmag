@@ -275,9 +275,9 @@ pub use types::{
     FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy, LivePreviewField,
     LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
     LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
-    RunError, RunResult, RunStatus, RuntimeEngineInfo, StepAction, StepStats, StepUpdate,
-    TimestepBackend, TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
-    TimestepValidationState,
+    RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StepAction, StepStats,
+    StepUpdate, TimestepBackend, TimestepDevice, TimestepExecutionIdentity,
+    TimestepPolicyProvenance, TimestepValidationState,
 };
 
 use crate::capabilities::{

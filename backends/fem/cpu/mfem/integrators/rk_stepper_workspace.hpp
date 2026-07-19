@@ -4,6 +4,7 @@
 #include "cpu/mfem/interactions/stt.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace fullmag::fem {
@@ -27,12 +28,54 @@ struct StepperWorkspace {
     std::vector<double> m_backup;                  // backup of m before stage loop
     std::vector<double> k[MAX_RK_STAGES];          // stage derivatives k_i
     std::vector<double> m_stage;                   // temp: m at stage evaluation point
+    std::vector<double> m_candidate;               // private high-order candidate
     std::vector<double> h_ex_tmp;                  // temp exchange field
     std::vector<double> h_demag_tmp;               // temp demag field
     std::vector<double> h_eff_tmp;                 // temp effective field
     SttWorkspace stt;                              // temp direct-torque scratch
     std::vector<double> err;                       // error = h*(b_hi - b_lo) . K
     bool fsal_valid = false;                       // true when k[0] holds valid FSAL RHS
+};
+
+enum class RkStepFailurePoint : uint32_t {
+    None = 0,
+    AfterCandidateMagnetization = 1,
+    DuringFinalFieldRefresh = 2,
+    DuringFinalStatistics = 3,
+};
+
+struct RkStepFailureInjectionState {
+    RkStepFailurePoint next = RkStepFailurePoint::None;
+    uint64_t injected_count = 0;
+};
+
+enum class RkAttemptDecision : uint32_t {
+    Accepted = 1,
+    Retry = 2,
+    Failed = 3,
+};
+
+struct RkAttemptRecord {
+    uint64_t attempt = 0;
+    uint64_t target_step = 0;
+    double time_seconds = 0.0;
+    double dt_attempt_seconds = 0.0;
+    double eta = 0.0;
+    double max_norm_defect = 0.0;
+    double max_spin_rotation = 0.0;
+    RkAttemptDecision decision = RkAttemptDecision::Accepted;
+    uint32_t reason = 0;
+    double dt_next_seconds = 0.0;
+    uint32_t demag_solve_count = 0;
+    uint32_t demag_linear_iterations = 0;
+    double demag_linear_residual = 0.0;
+    uint32_t rhs_evaluations = 0;
+    int32_t estimator_order = 0;
+};
+
+struct RkAttemptTraceState {
+    static constexpr std::size_t max_records = 64;
+    std::vector<RkAttemptRecord> records;
 };
 
 /*
@@ -44,6 +87,8 @@ struct StepperWorkspace {
  */
 struct RkStepperRuntimeState {
     StepperWorkspace workspace{};
+    RkStepFailureInjectionState failure_injection{};
+    RkAttemptTraceState attempt_trace{};
 };
 
 } // namespace fullmag::fem

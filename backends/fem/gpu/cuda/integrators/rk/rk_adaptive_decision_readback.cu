@@ -21,18 +21,21 @@ bool gpu_rk_read_adaptive_error_norm_decision_host(
     std::string &reason)
 {
     decision = {};
-    double error_norm = 0.0;
-    if (!gpu_rk_read_control_scalar_result(
+    double metrics[3]{};
+    if (!gpu_rk_read_control_scalar_results(
             ctx,
             stream,
-            "cudaMemcpyAsync GPU RK adaptive decision control scalar device->host",
-            error_norm,
+            "cudaMemcpyAsync GPU RK adaptive decision control scalars device->host",
+            metrics,
+            3,
             reason)) {
         return false;
     }
 
-    decision.error_norm = error_norm;
-    decision.adaptive_result = gpu_rk_adaptive_pi_step(ctx, dt_attempt, error_norm, order_est);
+    decision.error_norm = metrics[0];
+    decision.max_norm_defect = metrics[1];
+    decision.max_spin_rotation = metrics[2];
+    decision.adaptive_result = gpu_rk_adaptive_pi_step(ctx, dt_attempt, metrics[0], order_est);
     return true;
 }
 

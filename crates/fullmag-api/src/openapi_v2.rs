@@ -741,6 +741,7 @@ mod tests {
                 "hysteresis",
                 "change_device",
                 "add_field_drive",
+                "remove_field_drive",
                 "table_autosave",
                 "autosave",
                 "fft_response",

@@ -6,7 +6,7 @@
   box-shadow: var(--fm-shadow-panel);
   color: var(--fm-text-primary);
   padding: var(--fm-space-1);
-  z-index: 120;
+  z-index: var(--fm-z-overlay);
 }
 
 .fm-context-menu-item {

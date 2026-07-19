@@ -303,6 +303,27 @@ pub enum StepAction {
     Pause,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SolverAttemptRecord {
+    pub attempt: u64,
+    pub target_step: u64,
+    pub time: f64,
+    pub dt_attempt: f64,
+    pub eta: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_norm_defect: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_spin_rotation: Option<f64>,
+    pub decision: String,
+    pub reason: String,
+    pub dt_next: f64,
+    pub demag_solves: u32,
+    pub demag_iterations: u32,
+    pub demag_residual: f64,
+    pub rhs_evals: u32,
+    pub estimator_order: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(non_snake_case)]
 pub struct StepStats {
@@ -445,6 +466,8 @@ pub struct StepStats {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_estimate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_error: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dt_suggested: Option<f64>,
     #[serde(default)]
     pub rejected_attempts: u32,
@@ -454,6 +477,8 @@ pub struct StepStats {
     pub demag_solves: u32,
     #[serde(default)]
     pub fsal_reused: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub solver_attempts: Vec<SolverAttemptRecord>,
     /// Number of PCG iterations in the last Poisson demag solve.
     #[serde(default)]
     pub poisson_iterations: u32,
@@ -582,11 +607,13 @@ impl Default for StepStats {
             finalization_field_copy_wall_time_ns: 0,
             finalization_field_copy_bytes: 0,
             error_estimate: None,
+            max_error: None,
             dt_suggested: None,
             rejected_attempts: 0,
             rhs_evals: 0,
             demag_solves: 0,
             fsal_reused: false,
+            solver_attempts: Vec::new(),
             poisson_iterations: 0,
             poisson_final_residual: 0.0,
             demag_refreshed: false,
@@ -943,6 +970,7 @@ impl StepStats {
             finalization_field_copy_wall_time_ns: self.finalization_field_copy_wall_time_ns,
             finalization_field_copy_bytes: self.finalization_field_copy_bytes,
             error_estimate: self.error_estimate,
+            max_error: self.max_error,
             dt_suggested: self.dt_suggested,
             rejected_attempts: self.rejected_attempts,
             rhs_evals: self.rhs_evals,

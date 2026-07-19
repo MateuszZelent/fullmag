@@ -835,6 +835,10 @@ fn sample_scalar_row(step: u64, time: f64, e_total: f64) -> ScalarRow {
         step,
         time,
         solver_dt: 1e-12,
+        error_estimate: None,
+        max_error: None,
+        dt_suggested: None,
+        rejected_attempts: 0,
         pseudo_time_s: None,
         active_runtime_s: None,
         mx: 0.1 * step as f64,
@@ -949,6 +953,10 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 step: 41,
                 time: 2.4e-9,
                 solver_dt: 1.0e-13,
+                error_estimate: Some(2.5e-7),
+                max_error: Some(1.0e-6),
+                dt_suggested: Some(1.2e-13),
+                rejected_attempts: 1,
                 pseudo_time_s: None,
                 active_runtime_s: Some(0.041),
                 mx: 0.0,
@@ -970,6 +978,10 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 step: 42,
                 time: 2.5e-9,
                 solver_dt: 1.0e-13,
+                error_estimate: Some(2.0e-7),
+                max_error: Some(1.0e-6),
+                dt_suggested: Some(1.3e-13),
+                rejected_attempts: 0,
                 pseudo_time_s: None,
                 active_runtime_s: Some(0.042),
                 mx: 0.0,
@@ -17207,6 +17219,10 @@ async fn solver_status_endpoint_returns_detailed_read_model() {
     assert_eq!(json["runtime_state"], "running");
     assert_eq!(json["integrator"], "rk45");
     assert_eq!(json["step_index"], 42);
+    assert_eq!(json["error_estimate"], 2.0e-7);
+    assert_eq!(json["max_error"], 1.0e-6);
+    assert_eq!(json["dt_suggested_seconds"], 1.3e-13);
+    assert_eq!(json["rejected_attempts"], 0);
     assert_eq!(json["last_step_updated_at_unix_ms"], 1_700_000_000_123u64);
     let expected_torque_t = 13.0 * 4.0 * std::f64::consts::PI * 1.0e-7;
     assert_eq!(json["max_torque_T"], expected_torque_t);

@@ -1086,6 +1086,14 @@ pub(crate) fn write_artifacts(
         write_scalars_csv(&output_dir.join("scalars.csv"), &executed.result.steps)?;
     }
     write_table_autosave_artifacts(output_dir, problem, &executed.result.steps)?;
+    if let Some(timestep_policy) = execution_provenance.timestep_policy.as_ref() {
+        write_solver_diagnostics_artifacts(
+            output_dir,
+            plan,
+            Some(timestep_policy),
+            &executed.result.steps,
+        )?;
+    }
 
     write_field_file(
         &output_dir.join("m_initial.json"),
@@ -1174,6 +1182,125 @@ pub(crate) fn write_artifacts(
         &execution_provenance,
     )?;
 
+    Ok(())
+}
+
+fn write_solver_diagnostics_artifacts(
+    output_dir: &Path,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    timestep_policy: Option<&crate::types::TimestepPolicyProvenance>,
+    steps: &[StepStats],
+) -> std::io::Result<()> {
+    let policy = match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => serde_json::json!({
+            "backend": "fem",
+            "integrator": fem.integrator,
+            "fixed_timestep": fem.fixed_timestep,
+            "adaptive_timestep": fem.adaptive_timestep,
+            "gyromagnetic_ratio": fem.gyromagnetic_ratio,
+        }),
+        BackendPlanIR::Fdm(fdm) => serde_json::json!({
+            "backend": "fdm",
+            "integrator": fdm.integrator,
+            "fixed_timestep": fdm.fixed_timestep,
+            "adaptive_timestep": fdm.adaptive_timestep,
+            "gyromagnetic_ratio": fdm.gyromagnetic_ratio,
+        }),
+        _ => serde_json::json!({"backend": "not_time_domain"}),
+    };
+    let (requested_policy, resolved_policy, execution_identity) = timestep_policy.map_or_else(
+        || (policy.clone(), policy, serde_json::Value::Null),
+        |provenance| {
+            (
+                serde_json::to_value(&provenance.requested).unwrap(),
+                serde_json::to_value(&provenance.resolved).unwrap(),
+                serde_json::to_value(&provenance.execution_identity).unwrap(),
+            )
+        },
+    );
+    fs::write(
+        output_dir.join("solver_config.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": "LLG-TD-SOLVER-CONFIG-V1",
+            "requested_policy": requested_policy,
+            "resolved_policy": resolved_policy,
+            "execution_identity": execution_identity,
+        }))
+        .unwrap(),
+    )?;
+
+    let mut attempts = fs::File::create(output_dir.join("solver_attempts.csv"))?;
+    writeln!(attempts, "attempt,target_step,t_s,dt_attempt_s,eta,max_norm_defect,max_spin_rotation_rad,decision,reason,dt_next_s,demag_solves,demag_iterations,demag_residual,rhs_evals,estimator_order")?;
+    for step in steps {
+        for record in &step.solver_attempts {
+            writeln!(
+                attempts,
+                "{},{},{:.17e},{:.17e},{:.17e},{},{},{},{},{:.17e},{},{},{:.17e},{},{}",
+                record.attempt,
+                record.target_step,
+                record.time,
+                record.dt_attempt,
+                record.eta,
+                record
+                    .max_norm_defect
+                    .map(|value| format!("{value:.17e}"))
+                    .unwrap_or_default(),
+                record
+                    .max_spin_rotation
+                    .map(|value| format!("{value:.17e}"))
+                    .unwrap_or_default(),
+                record.decision,
+                record.reason,
+                record.dt_next,
+                record.demag_solves,
+                record.demag_iterations,
+                record.demag_residual,
+                record.rhs_evals,
+                record.estimator_order,
+            )?;
+        }
+    }
+
+    let mut accepted = fs::File::create(output_dir.join("solver_steps.csv"))?;
+    writeln!(accepted, "step,t_s,dt_s,error_estimate,max_error,dt_suggested_s,rejected_attempts,rhs_evals,demag_solves,demag_iterations,demag_residual,e_exchange_j,e_demag_j,e_zeeman_j,e_drive_j,e_anisotropy_j,e_dmi_j,e_total_j,max_rhs_per_s,max_torque_apm")?;
+    for step in steps {
+        writeln!(
+            accepted,
+            "{},{:.17e},{:.17e},{},{},{},{},{},{},{},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e},{:.17e}",
+            step.step,
+            step.time,
+            step.dt,
+            step.error_estimate.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.max_error.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.dt_suggested.map(|value| format!("{value:.17e}")).unwrap_or_default(),
+            step.rejected_attempts,
+            step.rhs_evals,
+            step.demag_solves,
+            step.poisson_iterations,
+            step.poisson_final_residual,
+            step.e_ex,
+            step.e_demag,
+            step.e_ext,
+            step.e_drive,
+            step.e_ani,
+            step.e_dmi,
+            step.e_total,
+            step.max_rhs_norm_per_s.max(step.max_dm_dt),
+            step.max_torque_Apm,
+        )?;
+    }
+
+    fs::write(
+        output_dir.join("qualification.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": "LLG-TD-QUALIFICATION-V1",
+            "status": "not_evaluated",
+            "reason": "Scientific qualification is produced by the dedicated qualification gate; artifact creation alone is not evidence of validation.",
+            "accepted_steps": steps.len(),
+            "attempt_records": steps.iter().map(|step| step.solver_attempts.len()).sum::<usize>(),
+            "checks": [],
+        })).unwrap(),
+    )?;
     Ok(())
 }
 
@@ -3047,6 +3174,7 @@ mod tests {
     use super::*;
     use crate::types::{
         ExecutedRun, ExecutionProvenance, FieldSnapshot, ResolvedFallback, RunResult, RunStatus,
+        SolverAttemptRecord,
     };
     use fullmag_ir::{
         BackendPlanIR, CommonPlanMeta, ExchangeBoundaryCondition, ExecutionMode, ExecutionPlanIR,
@@ -3740,6 +3868,104 @@ mod tests {
             ];
         }
         plan
+    }
+
+    #[test]
+    fn solver_diagnostics_keep_attempts_separate_from_accepted_steps() {
+        let root = std::env::temp_dir().join(format!(
+            "fullmag-solver-diagnostics-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let replay_root = root.with_extension("replay");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&replay_root).unwrap();
+        let mut step = StepStats {
+            step: 1,
+            time: 2.0e-15,
+            dt: 1.0e-15,
+            error_estimate: Some(0.25),
+            max_error: Some(1.0e-6),
+            dt_suggested: Some(2.0e-15),
+            rejected_attempts: 1,
+            ..StepStats::default()
+        };
+        let rejected_attempt = SolverAttemptRecord {
+            attempt: 0,
+            target_step: 1,
+            time: 0.0,
+            dt_attempt: 4.0e-15,
+            eta: 4.0,
+            max_norm_defect: Some(2.0e-8),
+            max_spin_rotation: Some(0.02),
+            decision: "retry".to_string(),
+            reason: "error_above_tolerance".to_string(),
+            dt_next: 1.0e-15,
+            demag_solves: 7,
+            demag_iterations: 11,
+            demag_residual: 1.0e-9,
+            rhs_evals: 7,
+            estimator_order: 4,
+        };
+        step.solver_attempts = vec![
+            rejected_attempt.clone(),
+            SolverAttemptRecord {
+                attempt: 1,
+                dt_attempt: 1.0e-15,
+                eta: 0.25,
+                decision: "accepted".to_string(),
+                reason: "within_tolerance".to_string(),
+                dt_next: 2.0e-15,
+                ..rejected_attempt
+            },
+        ];
+        let steps = vec![step];
+        write_solver_diagnostics_artifacts(&root, &test_fem_execution_plan(), None, &steps)
+            .unwrap();
+        write_solver_diagnostics_artifacts(&replay_root, &test_fem_execution_plan(), None, &steps)
+            .unwrap();
+        let attempts = fs::read_to_string(root.join("solver_attempts.csv")).unwrap();
+        let accepted = fs::read_to_string(root.join("solver_steps.csv")).unwrap();
+        assert_eq!(
+            attempts.lines().count(),
+            3,
+            "header plus one row per attempted step"
+        );
+        assert_eq!(
+            accepted.lines().count(),
+            2,
+            "header plus one accepted-step row"
+        );
+        assert!(attempts.contains("error_above_tolerance"));
+        let max_error: f64 = accepted
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split(',')
+            .nth(4)
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((max_error - 1.0e-6).abs() < 1.0e-20);
+        let qualification: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("qualification.json")).unwrap()).unwrap();
+        assert_eq!(qualification["status"], "not_evaluated");
+        for artifact in [
+            "solver_config.json",
+            "solver_attempts.csv",
+            "solver_steps.csv",
+            "qualification.json",
+        ] {
+            assert_eq!(
+                fs::read(root.join(artifact)).unwrap(),
+                fs::read(replay_root.join(artifact)).unwrap(),
+                "solver diagnostics must replay byte-for-byte deterministically: {artifact}",
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(replay_root).unwrap();
     }
 
     #[test]

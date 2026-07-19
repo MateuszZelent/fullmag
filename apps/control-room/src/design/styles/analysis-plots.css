@@ -116,7 +116,7 @@
 
 .fm-analysis-plots__legend-item {
   display: grid;
-  grid-template-columns: 8px minmax(24px, auto) auto minmax(48px, auto);
+  grid-template-columns: var(--fm-space-2) minmax(var(--fm-space-6), auto) auto minmax(48px, auto);
   align-items: center;
   gap: var(--fm-space-1);
   min-width: 0;
@@ -256,7 +256,7 @@
 
 .fm-analysis-plots__range {
   position: relative;
-  z-index: 1;
+  z-index: var(--fm-z-base);
   border-top: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-surface);
 }
@@ -319,7 +319,7 @@
 
 .fm-analysis-plots__column-header {
   display: grid;
-  grid-template-columns: 24px 24px minmax(0, 1fr) 56px;
+  grid-template-columns: var(--fm-space-6) var(--fm-space-6) minmax(0, 1fr) 56px;
   gap: var(--fm-space-2);
   align-items: center;
   padding: var(--fm-space-2) var(--fm-space-3);
@@ -335,7 +335,7 @@
 
 .fm-analysis-plots__column-row {
   display: grid;
-  grid-template-columns: 24px 24px minmax(0, 1fr) 56px;
+  grid-template-columns: var(--fm-space-6) var(--fm-space-6) minmax(0, 1fr) 56px;
   gap: var(--fm-space-2);
   align-items: center;
   min-height: var(--fm-control-height-regular);

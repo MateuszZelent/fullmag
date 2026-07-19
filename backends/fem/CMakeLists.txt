@@ -23,6 +23,7 @@ set(FEM_PUBLIC_HEADERS
 set(FEM_SOURCES
     core/fem_field_buffers.cpp
     core/fem_context_builder.cpp
+    core/demag_linear_solve_validation.cpp
     core/fem_element_quadrature_material.cpp
     core/fem_material_fields.cpp
     core/fem_material_runtime.cpp
@@ -119,6 +120,8 @@ set(FEM_SOURCES
     cpu/mfem/integrators/llg_rhs.cpp
     cpu/mfem/integrators/rk_explicit.cpp
     cpu/mfem/integrators/rk_explicit_step.cpp
+    cpu/mfem/integrators/rk_step_failure_injection.cpp
+    cpu/mfem/integrators/rk_step_transaction.cpp
     cpu/mfem/integrators/rk_stage_rhs.cpp
     cpu/mfem/integrators/rk4.cpp
     cpu/mfem/integrators/rk23.cpp
@@ -260,6 +263,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/integrators/rk/rk_stage_predictor_kernels.cu
             gpu/cuda/integrators/rk/rk_stage_schedule.cu
             gpu/cuda/integrators/rk/rk_step_preflight.cu
+            gpu/cuda/integrators/rk/rk_step_transaction_device.cu
             gpu/cuda/integrators/rk/rk_step_stats.cu
             gpu/cuda/integrators/rk/rk_thermal_field.cu
             gpu/cuda/integrators/rk/rk_total_energy_reduction.cu
@@ -400,6 +404,21 @@ add_executable(fem_cuda_demag_timing_contract tests/cuda_demag_timing_contract.c
 add_test(NAME fem_cuda_demag_timing_contract COMMAND fem_cuda_demag_timing_contract)
 
 add_executable(fem_cuda_periodic_demag_contract tests/cuda_periodic_demag_contract.cpp)
+target_link_libraries(fem_cuda_periodic_demag_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_cuda_periodic_demag_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_cuda_periodic_demag_contract PRIVATE mfem)
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        target_link_libraries(fem_cuda_periodic_demag_contract PRIVATE CUDA::cudart)
+    endif()
+endif()
+target_include_directories(fem_cuda_periodic_demag_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 add_test(NAME fem_cuda_periodic_demag_contract COMMAND fem_cuda_periodic_demag_contract)
 
 add_executable(fem_cuda_periodic_exchange_contract tests/cuda_periodic_exchange_contract.cpp)
@@ -643,6 +662,16 @@ target_include_directories(fem_rk_explicit_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 add_test(NAME fem_rk_explicit_contract COMMAND fem_rk_explicit_contract)
+
+add_executable(
+    fem_llg_time_domain_qualification
+    tests/llg_time_domain_qualification.cpp
+)
+target_link_libraries(fem_llg_time_domain_qualification PRIVATE fullmag_fem)
+target_include_directories(fem_llg_time_domain_qualification PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
 
 add_executable(fem_heun_step_contract tests/heun_step_contract.cpp)
 target_link_libraries(fem_heun_step_contract PRIVATE fullmag_fem)
@@ -888,6 +917,16 @@ add_test(NAME fem_demag_poisson_contract COMMAND fem_demag_poisson_contract)
 
 add_executable(fem_demag_fem_bem_contract tests/demag_fem_bem_contract.cpp)
 target_link_libraries(fem_demag_fem_bem_contract PRIVATE fullmag_fem)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_demag_fem_bem_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_demag_fem_bem_contract PRIVATE mfem)
+    endif()
+    if(FULLMAG_ENABLE_CUDA)
+        target_link_libraries(fem_demag_fem_bem_contract PRIVATE CUDA::cudart)
+    endif()
+endif()
 target_include_directories(fem_demag_fem_bem_contract PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include

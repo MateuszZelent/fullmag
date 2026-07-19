@@ -1,6 +1,6 @@
 .fm-diagnostic-recorder.fm-dialog {
-  width: min(1120px, calc(100vw - 32px));
-  max-height: min(820px, calc(100vh - 32px));
+  width: min(1120px, calc(100vw - var(--fm-space-8)));
+  max-height: min(820px, calc(100vh - var(--fm-space-8)));
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -116,7 +116,7 @@
   grid-template-columns: minmax(178px, 0.9fr) 110px 82px minmax(220px, 1.4fr) 92px;
   gap: var(--fm-space-2);
   align-items: center;
-  min-width: 720px;
+  min-width: var(--fm-dialog-recorder-min-width);
   min-height: var(--fm-ribbon-tabs-height);
   padding: var(--fm-space-1) var(--fm-space-3);
   border-top: 1px solid var(--fm-border-subtle);
@@ -131,7 +131,7 @@
 .fm-diagnostic-recorder__row--header {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--fm-z-base);
   color: var(--fm-text-muted);
   background: var(--fm-bg-elevated);
   font-size: var(--fm-font-size-xs);

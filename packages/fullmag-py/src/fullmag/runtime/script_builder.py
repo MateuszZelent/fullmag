@@ -602,6 +602,7 @@ def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
         "export",
         "change_device",
         "add_field_drive",
+        "remove_field_drive",
         "table_autosave",
         "autosave",
         "fft_response",
@@ -682,6 +683,15 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 "kind": "add_field_drive",
                 "entrypoint_kind": stage.entrypoint_kind,
                 "drive": drive_payload,
+            }
+        if action_kind == "remove_field_drive":
+            drive_id = _text_value(action.get("drive_id"))
+            if not drive_id:
+                raise TypeError("remove_field_drive action requires drive_id")
+            return {
+                "kind": "remove_field_drive",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "drive_id": drive_id,
             }
         if action_kind == "table_autosave":
             return {
@@ -3422,6 +3432,17 @@ def _render_stages(
                     call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
                 lines.append(f"study.stages.add_field_drive({', '.join(call_parts)})")
                 continue
+            if action_kind == "remove_field_drive":
+                if not is_study_surface:
+                    raise ValueError("remove_field_drive action requires the study API surface")
+                drive_id = _text_value(stage.action.get("drive_id"))
+                if not drive_id:
+                    raise ValueError("remove_field_drive action requires drive_id")
+                call_parts = [_py_repr(drive_id)]
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(f"study.stages.remove_field_drive({', '.join(call_parts)})")
+                continue
             if action_kind == "table_autosave":
                 if not is_study_surface:
                     raise ValueError("table_autosave action requires the study API surface")
@@ -4092,6 +4113,7 @@ def _stage_override_for(
             "export",
             "change_device",
             "add_field_drive",
+            "remove_field_drive",
             "table_autosave",
             "autosave",
             "fft_response",

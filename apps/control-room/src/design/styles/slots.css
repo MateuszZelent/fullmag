@@ -90,7 +90,7 @@
 
 .fm-viewport-tabs__root {
   display: grid;
-  grid-template-rows: 34px minmax(0, 1fr);
+  grid-template-rows: var(--fm-ribbon-tabs-height) minmax(0, 1fr);
   min-height: 0;
 }
 

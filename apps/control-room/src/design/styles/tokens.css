@@ -14,6 +14,7 @@
   --fm-space-5: 20px;
   --fm-space-6: 24px;
   --fm-space-7: 28px;
+  --fm-space-8: 32px;
 
   /* Geometry */
   --fm-menu-height: 38px;
@@ -46,6 +47,37 @@
   --fm-thread-progress-width: 54px;
   --fm-tree-indent: 15px;
   --fm-tree-guide-offset: 7px;
+
+  /* Icon / glyph column widths */
+  --fm-icon-sm: 18px;   /* drag handle, tree chevron — between space-4 and space-5 */
+
+  /* Breakpoints (documentation — @media cannot use var(), but these establish the scale) */
+  --fm-bp-sm: 720px;     /* narrow dialogs, mobile fallback */
+  --fm-bp-md: 760px;     /* tablet / narrow window */
+  --fm-bp-lg: 960px;     /* wide panels */
+  --fm-bp-xl: 1180px;    /* full-layout threshold */
+  --fm-bp-2xl: 1400px;   /* ultrawide ribbon */
+  --fm-bp-inspector: 390px; /* inspector @container narrow breakpoint */
+
+  /* Dialog / panel spatial constraints */
+  --fm-dialog-mesh-build-width: 680px;
+  --fm-dialog-mesh-build-width-compact: 480px;
+  --fm-dialog-mesh-build-section-max-height: 168px;
+  --fm-dialog-data-preview-thumb-max-height: 92px;
+  --fm-dialog-recorder-min-width: 720px;
+  --fm-ribbon-dropdown-min-width: 240px;
+  --fm-dropdown-min-width: 224px;
+  --fm-panel-command-audit-min-width: 760px;
+  --fm-panel-transport-log-min-width: 860px;
+  --fm-inspector-freq-domain-max-height: 190px;
+  --fm-inspector-mesh-type-icon-min-width: 96px;
+  --fm-inspector-topo-charge-min-width: 82px;
+  --fm-panel-section-min-width: 120px;
+
+  /* Footer diagnostics grid column widths */
+  --fm-footer-diag-label-col-width: 82px;
+  --fm-footer-diag-value-col-width: 72px;
+  --fm-footer-freq-indicator-col-width: 46px;
 
   /* Typography */
   --fm-font-ui: "Inter", "Aptos", sans-serif;
@@ -98,6 +130,30 @@
   --fm-focus-ring: 0 0 0 2px var(--fm-bg-app), 0 0 0 4px var(--fm-accent);
   --fm-transition-fast: 120ms ease-out;
   --fm-transition-normal: 180ms ease-out;
+
+  /* Z-index scale — stacking layer contract */
+  --fm-z-base: 1;           /* local stacking context */
+  --fm-z-panel: 50;         /* floating panel above content */
+  --fm-z-dialog-backdrop: 80;   /* dialog scrim */
+  --fm-z-dialog: 90;        /* dialog shell */
+  --fm-z-dialog-content: 100;   /* dialog foreground / dropdown */
+  --fm-z-overlay: 120;      /* context-menu, notifications, draggable overlays */
+  --fm-z-overlay-raised: 130;   /* overlay above overlay */
+  --fm-z-portal: 140;       /* Radix portal backdrop */
+  --fm-z-portal-top: 141;   /* Radix portal content (tooltip, popover) */
+  --fm-z-floating: 150;     /* floating elements above portals */
+  --fm-z-toast: 200;        /* toast / notification — always on top */
+
+  /* Duration scale — micro-animation timing */
+  --fm-duration-instant: var(--fm-duration-instant);   /* hover state, very fast toggle */
+  --fm-duration-fast: var(--fm-duration-fast);      /* snappy micro-interaction */
+  --fm-duration-normal: var(--fm-duration-normal);   /* standard small motion */
+  --fm-duration-moderate: var(--fm-duration-moderate); /* standard reveal / expand */
+  --fm-duration-slow: var(--fm-duration-slow);     /* entrance animation */
+  --fm-duration-loading: var(--fm-duration-loading);  /* progress / loading state */
+
+  /* Pill border-radius — replaces magic 999px */
+  --fm-radius-pill: 9999px;
 }
 
 /* ── Spacing utilities ── */

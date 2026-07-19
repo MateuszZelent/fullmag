@@ -20,7 +20,7 @@
   min-height: var(--fm-inspector-tab-height);
   transition-property: background-color, color;
   transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  transition-duration: 150ms;
+  transition-duration: var(--fm-duration-moderate);
 }
 
 .fm-accordion-trigger:focus-visible {
@@ -41,7 +41,7 @@
   width: var(--fm-space-4);
   flex-shrink: 0;
   transition-property: transform;
-  transition-duration: 200ms;
+  transition-duration: var(--fm-duration-slow);
   color: var(--fm-text-muted);
 }
 

@@ -300,6 +300,21 @@ Any rejection or error restores the complete pre-attempt state. Failure after
 candidate construction, during final field refresh, or during statistics
 collection cannot leak a partial commit.
 
+The native explicit FEM realization implements this boundary with a
+solver-local transaction that spans backend dispatch through final statistics.
+The CPU high-order magnetization is constructed in a private candidate buffer;
+the live magnetization is exchanged only after the endpoint field refresh has
+succeeded.  The transaction snapshots published interaction fields and
+energies, demagnetization field/cache and potential warm-start state, FSAL
+state, adaptive-controller state, stage-completion state, transfer/timing
+counters, and accepted time/index.  The CUDA realization additionally keeps
+persistent device-to-device rollback storage for magnetization, dynamic field
+components, FSAL `k0`, and Poisson solution buffers, so rollback does not depend
+on an unbounded device-to-host round trip.  Device residency metadata is
+committed or restored with those buffers.  Deterministic internal failpoints at
+post-candidate, endpoint-refresh, and final-statistics boundaries are reserved
+for native atomicity contracts and are disabled by default.
+
 ### 3.6 Demagnetization convergence
 
 Every iterative demagnetization realization must report solver kind,
@@ -371,13 +386,95 @@ time integrator: its step is an energy-search scale, it omits the full
 precessional LLG operator, and it advances no physical clock. It must not be
 advertised as a stiff time-domain solver.
 
-A future stiff lane solves for a tangent velocity `v` with `v dot m = 0` and
-units `1/s`, using an implicit treatment of the stiff exchange contribution
-and a documented treatment of local and nonlocal interactions. A candidate
-scheme must define its discrete weak form, linear/nonlinear tolerances,
-preconditioner, energy behavior, temporal order, output interpolation,
-transaction semantics, and CPU/GPU realizations before capability promotion.
-It is a separate integrator family, not a fallback hidden behind RK45.
+The selected first production scheme is the normalized first-order
+theta-tangent-plane method with `theta = 1`. It is selected explicitly as
+`integrator="tangent_plane"` and uses a fixed physical `fix_dt`. Adaptive
+control and switching from an explicit method are not part of this lane.
+
+Let `V_h` be the vector P1 magnetic finite-element space and
+
+\[
+K_h(m_h^n)=\{\phi_h\in V_h:\phi_h(z)\cdot m_h^n(z)=0
+\text{ at every active magnetic node }z\}.
+\]
+
+The step first evaluates every non-exchange field and every direct torque at
+the accepted state `(m_h^n,t_n)`. It then finds a tangent velocity
+`v_h^n in K_h(m_h^n)`, with SI unit `1/s`, such that for every
+`phi_h in K_h(m_h^n)`:
+
+\[
+\begin{aligned}
+&\int_{\Omega_m}\mu_0 M_s
+  \left[\alpha v_h^n+m_h^n\times v_h^n\right]\cdot\phi_h\,dV\\
+&\quad+2\gamma_0\theta\Delta t
+  \int_{\Omega_m} A\,\nabla v_h^n:\nabla\phi_h\,dV\\
+&=-2\gamma_0\int_{\Omega_m}A\,\nabla m_h^n:\nabla\phi_h\,dV
+ +\gamma_0\int_{\Omega_m}\mu_0 M_s
+  H_{\mathrm{other}}(m_h^n,t_n)\cdot\phi_h\,dV\\
+&\quad+\int_{\Omega_m}\mu_0 M_s
+  \left[\alpha\tau_{\mathrm{nc}}^n
+  +m_h^n\times\tau_{\mathrm{nc}}^n\right]\cdot\phi_h\,dV .
+\end{aligned}
+\]
+
+Here `H_other = H_eff - H_ex`; it includes enabled demagnetization, Zeeman,
+anisotropy, DMI, Oersted, magnetoelastic, thermal, and regional-drive fields.
+All of those terms are explicit in this first-order lane. A direct torque is
+already expressed as a contribution to `dm/dt`, which is why its Gilbert-form
+right-hand side is `alpha*tau_nc + m cross tau_nc`. No field or torque may be
+counted in both terms. Elementwise `A`, nodal/elementwise `Ms`, and nodal
+`alpha` use the same material quadrature policy as the production FEM field
+operators. Nonmagnetic airbox degrees of freedom are excluded from `V_h` and
+the tangent solve.
+
+After the linear solve, active nodal values are retracted once:
+
+\[
+m_h^{n+1}(z)=
+\frac{m_h^n(z)+\Delta t\,v_h^n(z)}
+{\left|m_h^n(z)+\Delta t\,v_h^n(z)\right|}.
+\]
+
+The method is first-order in physical time. With `theta=1`, exchange is
+implicit and the qualified lane has no explicit `dt proportional to h^2`
+exchange-stability restriction. Explicit local/nonlocal interactions can
+still impose accuracy or stability restrictions; this is not an
+unconditionally stable solver for every enabled model. There is no dense
+output. The runtime shortens a step to land exactly on an output event or
+rejects an incompatible fixed clock; it never interpolates this method as if
+it were RK45.
+
+The tangent system is nonsymmetric because of the gyrotropic
+`m cross v` block. The CPU realization therefore uses MFEM/Hypre GMRES with
+an exchange-plus-damping symmetric proxy preconditioner. The frozen production
+defaults are relative residual `1e-10`, absolute residual `0`, maximum `500`
+iterations, and restart dimension `50`. The achieved finite true residual,
+iteration count, requested limits, and convergence flag are checked after
+every solve. Reaching the iteration limit, a nonfinite residual, or a residual
+above the requested bound fails the attempted step. These values are typed
+resolved configuration and provenance; changing them requires a new
+qualification identity. A future public expert override must be added as a
+typed object, not an unvalidated JSON escape hatch.
+
+One attempted step is a transaction. The old magnetization, time, fields,
+demagnetization cache and potential, direct-torque state, solver diagnostics,
+and output counters remain live until the tangent solve, retraction, endpoint
+field refresh, norm/finite checks, energy evaluation, and statistics all
+succeed. Any failure restores all pre-attempt state. Autonomous energy is a
+qualification diagnostic: exchange-only theta=1 must dissipate within the
+linear-solve/roundoff budget, while explicit non-exchange terms are required
+to converge under `dt`, `dt/2`, and `dt/4`; an energy increase is never hidden
+by normalization.
+
+The CPU owner is
+`backends/fem/cpu/mfem/integrators/tangent_plane/`. Backend-neutral immutable
+scheme configuration and diagnostics live under `backends/fem/core/`. The GPU
+owner is `backends/fem/gpu/cuda/integrators/tangent_plane/` and implements the
+same frozen weak form with device-resident state; it may not call the CPU
+implementation or fall back to it. The relaxation function
+`run_tangent_plane_implicit_step()` remains an energy minimizer and is never
+called by either physical-time realization.
 
 ### 3.10 Hybrid interpretation
 
@@ -396,6 +493,13 @@ Both module-level `solver(...)` and `StudyBuilder.solver(...)` expose:
 - `dt_initial`, `dt_min`, `dt_max`, `max_err`;
 - `gamma` or `g` under the existing mutual-exclusion convention;
 - advanced `adaptive_timestep` where already supported.
+
+`integrator="tangent_plane"` accepts `fix_dt` and rejects every adaptive knob.
+It is FEM-only. The initial production capability is strict FP64 CPU, followed
+by a separately qualified strict FP64 GPU realization. FDM, FP32, hybrid,
+multilayer configurations that cannot assemble the documented material weak
+form, and unsupported direct-torque combinations fail during validation or
+planning before native materialization.
 
 Canonical script export emits `fix_dt` for fixed mode and the four adaptive
 names for maximum-error mode. It never reconstructs adaptive intent as a
@@ -416,6 +520,13 @@ fixed `dt`. Import/export and UI/scene round-trips preserve omitted
 Deserialization of an explicit `dt_initial == dt_min` preserves that explicit
 value. Missing or `null` remains omitted. Legacy payload migration is
 deterministic and cannot infer intent from floating-point equality.
+
+The integrator vocabulary adds the explicit `tangent_plane` family without
+reusing `RelaxationAlgorithmIR::TangentPlaneImplicit`. Its fixed timestep and
+gyromagnetic convention remain in `DynamicsIR`; requested/resolved stiff
+scheme, `theta`, field splitting, linear-solver policy, temporal order, and
+qualification identity are typed planner/runtime provenance. Unknown scheme
+versions or a request that would drop any of these semantics fail closed.
 
 ### 4.3 Planner and capability matrix
 
@@ -447,6 +558,20 @@ attempt, t, dt_attempt, eta, norm_defect, max_rotation,
 decision, reason, dt_next, demag_iterations, demag_residual
 ```
 
+Native FEM publishes the latest step trace through the versioned
+`fullmag_fem_backend_solver_attempt_count_v1` and
+`fullmag_fem_backend_copy_solver_attempts_v1` ABI symbols. The trace capacity
+is 64 records, which is greater than the canonical 50-rejection budget plus
+the accepted attempt. Capacity exhaustion fails the step; records are never
+silently truncated. A failed outer step transaction restores the previously
+published trace together with solver state.
+
+For maximum-error mode, accepted-step telemetry converts `eta` back to the
+absolute embedded vector error `eta * max_err`, so live `Error` and `MaxError`
+have identical semantics. For advanced `atol + rtol` mode the scalar `eta`
+remains the authoritative acceptance metric and no misleading absolute
+`MaxError` comparison is published.
+
 Required run artifacts are:
 
 - `solver_config.json` for requested/resolved configuration and runtime
@@ -456,6 +581,18 @@ Required run artifacts are:
   counts, and accepted `dt`;
 - `qualification.json` for analytic expectations, measured errors/orders,
   parity budgets, and pass/fail.
+
+For `tangent_plane`, step telemetry additionally records `theta`, linear
+solver kind, preconditioner kind, requested relative/absolute residual,
+achieved true residual, iteration count, convergence, tangent-constraint
+leakage, maximum retraction norm defect, and autonomous energy change. The
+Control Room exposes these as read-only solver diagnostics through the
+existing resource-first diagnostics path; no component invents a second
+solver policy or estimates convergence from wall-clock progress.
+
+Artifact creation alone writes `qualification.json` with status
+`not_evaluated`. Only the dedicated scientific qualification gate may replace
+that state with pass/fail evidence.
 
 Attempt trace is not a coalesced table-autosave observable. Output samples do
 not redefine internal steps and may be interpolated only under an explicitly
@@ -484,6 +621,14 @@ documented dense-output contract.
    accepted as a growing numerical mode.
 4. Autonomous relax-to-run: verify state handoff, fresh fields, run-clock
    semantics, and energy descent within the computed error budget.
+5. Tangent-plane macrospin: verify nonzero precession, Gilbert damping envelope,
+   first-order convergence, and distinction from the relaxation minimizer.
+6. Tangent-plane periodic exchange eigenmode: verify first-order common-time
+   convergence, decay, and absence of the explicit `dt proportional to h^2`
+   stability failure across the checked mesh/timestep matrix.
+7. Tangent-plane failure injection: prove linear-solve nonconvergence,
+   endpoint-refresh failure, and final-statistics failure restore the complete
+   pre-attempt state.
 
 ### 5.3 Cross-backend checks
 
@@ -502,12 +647,75 @@ deterministic mesh asset and preserve periodic `x/y`, open `z`,
 certificate from the audited case. Geometry/mesh reduction requires an
 explicit checked-in definition; it must not be invented by a test harness.
 
+The approved reduced fixture is
+`examples/assets/fem_periodic_antidot_llg_qualification.mesh.json`, with
+SHA-256
+`087b87f922c17b1200d7adc4011721f34e7998b1939907677a06e0df6ab35540`.
+Its checked-in problem manifest records the complete reduction rule. The
+shared-domain mesh has 1781 nodes, 8530 tetrahedra, 1769 magnetic tetrahedra,
+6761 air tetrahedra, 623 magnetic nodes, and 384 certified periodic node
+pairs. The physical cell is `80 nm x 80 nm x 8 nm`, the central hole radius is
+`10 nm`, and the full periodic-airbox extent is `80 nm x 80 nm x 72 nm`.
+Region marker 0 is air, marker 1 is the magnetic body, and marker 2 is the
+conformal magnetic refinement region. Changing any count, marker, extent,
+periodic certificate, or asset hash creates a different fixture and requires
+review rather than silently updating the validator.
+
+The production relax-to-run gate uses `alpha=10`, `g=2.115`, an external
+field of `10 mT` along `+x`, strict projected-gradient BB relaxation to
+`max_torque <= 500 A/m`, and RK45 with explicit `dt_initial=1e-15 s`,
+`dt_min=1e-16 s`, `dt_max=1e-14 s`, and `max_err=1e-6`. The run advances one
+common physical interval of `1e-15 s`. CPU and GPU must each prove a bitwise
+exact persisted `relax.m_final -> run.m_initial` transfer; normalization may
+not perturb an already-unit FP64 continuation state. The GPU lane must execute
+CUDA RK kernels and device Hypre Poisson with fallback forbidden.
+
 ### 5.5 Managed gates
 
 The canonical native FEM gate must build and run the adaptive controller and
 LLG RHS contracts in addition to the existing explicit-RK targets. Separate
 managed recipes qualify exact relax-to-run energy descent and, later, the CPU
 and GPU stiff lanes. Host-only builds are diagnostics, not production proof.
+
+The explicit-FEM qualification recipe writes a machine-readable
+`qualification.json`; a zero exit status without that validated artifact is
+not qualification. The first lane is FEM CPU FP64 and uses the production C
+ABI, RK stepper, field assembly, energy evaluation, and state transfer:
+
+- a uniform P1 tetrahedron in a constant `+z` field, initially
+  `m=(0.6,0,0.8)`, is integrated with RK45 for
+  `alpha={0.1,1,10}` and compared with the exact Gilbert macrospin solution
+  `m_z=tanh(atanh(m_z0)+lambda*t)`,
+  `phi=phi0+omega*t`, where
+  `omega=gamma_mu0*H/(1+alpha^2)` and `lambda=alpha*omega`;
+- a non-constant transverse eigenvector of the production P1 exchange
+  operator is measured from the operator itself, then its small-amplitude
+  frequency, decay, and RK45 temporal order are checked at common physical
+  times for `dt`, `dt/2`, and `dt/4`;
+- the fastest measured exchange mode is launched with an intentionally large
+  adaptive first proposal; acceptance is forbidden while its amplitude grows
+  relative to the analytically decaying envelope;
+- direct minimization followed by RK45 on the same backend handle proves exact
+  state ownership, zero physical run clock before the first RK attempt, fresh
+  endpoint fields, converged demag where enabled, and autonomous energy descent
+  within the recorded numerical budget.
+
+The GPU FP64 lane must consume the same checked-in inputs and analytic
+expectations, compare at common physical times, and prove strict device
+execution without fallback. It may have device-specific numerical budgets but
+must not replace the CPU oracle or silently reduce the fixture. FP32 remains a
+separate unqualified capability.
+
+The managed production evidence is generated by
+`verify-fem-llg-time-domain-qualification-production` for the analytic
+fixtures and `verify-fem-llg-periodic-antidot-qualification-production` for
+the production mesh/runtime path. The latter independently validates CPU and
+GPU artifacts and then compares the post-relax LLG increment at the common
+physical time. It publishes the sign and magnitude of each lane's energy
+change, demag residual, controller eta, PBC seam diagnostics, and
+`m`/`H_demag`/`demag_phi` snapshots. Independently relaxed CPU/GPU endpoints
+are not asserted bitwise equal; parity applies to the subsequent common-time
+increment, while each relaxation must independently hold a strict certificate.
 
 ## 6. Completeness checklist
 
@@ -518,15 +726,15 @@ and GPU stiff lanes. Host-only builds are diagnostics, not production proof.
 - [ ] FDM CPU
 - [ ] FDM CUDA FP64
 - [ ] FDM CUDA FP32 qualification
-- [ ] FEM CPU explicit
-- [ ] FEM GPU explicit FP64
+- [x] FEM CPU explicit
+- [x] FEM GPU explicit FP64
 - [ ] FEM GPU explicit FP32 qualification
 - [ ] stiff FEM CPU time-domain integrator
 - [ ] stiff FEM GPU time-domain integrator
 - [ ] hybrid backend
 - [ ] OpenAPI and Control Room
-- [ ] solver attempt/step artifacts
-- [ ] analytical and cross-backend qualification
+- [x] solver attempt/step artifacts
+- [x] explicit FEM analytical and CPU/GPU FP64 qualification
 - [x] canonical documentation contract
 
 ## 7. Known limits and deferred work
@@ -540,8 +748,8 @@ and GPU stiff lanes. Host-only builds are diagnostics, not production proof.
   geometry guards are corrected.
 - Exact dense output is method-specific and remains unavailable unless
   implemented and qualified.
-- The deterministic reduced periodic-antidot mesh asset must be approved
-  before that fixture can become a production gate.
+- The approved reduced periodic-antidot fixture qualifies the explicit FEM
+  FP64 path only; it does not qualify FP32 or the stiff tangent-plane lanes.
 
 ## 8. References
 

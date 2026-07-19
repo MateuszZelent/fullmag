@@ -6,6 +6,8 @@
 #include "cpu/mfem/integrators/llg_rhs.hpp"
 #include "cpu/mfem/integrators/rk_explicit.hpp"
 #include "cpu/mfem/integrators/rk_explicit_step.hpp"
+#include "cpu/mfem/integrators/rk_stepper_workspace.hpp"
+#include "cpu/mfem/runtime/backend_step.hpp"
 #include "cpu/mfem/runtime/state_io.hpp"
 
 #include <cmath>
@@ -619,6 +621,12 @@ void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
     ctx.adaptive_dt.dt_shrink_min = 0.2;
     ctx.adaptive_dt.max_reject = 30;
     ctx.adaptive_dt.prev_error_norm = 1.0;
+    ctx.demag.cached_xyz = {31.0, 32.0, 33.0};
+    ctx.demag.cached_visual_xyz = {34.0, 35.0, 36.0};
+    ctx.demag.cache_valid = true;
+    ctx.demag.last_refresh_time = 0.0125;
+    const auto demag_cache_before = ctx.demag.cached_xyz;
+    const auto demag_visual_cache_before = ctx.demag.cached_visual_xyz;
     const double proposed_dt = 0.8;
     ctx.base_plan.dt_seconds = proposed_dt;
 
@@ -630,6 +638,23 @@ void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
             ctx, tableau, proposed_dt, stats, error),
         error.c_str());
     check(stats.rejected_attempts > 0u, "adaptive CPU RK fixture must reject its first attempt");
+    check(
+        ctx.stepper.attempt_trace.records.size() ==
+            static_cast<size_t>(stats.rejected_attempts + 1u),
+        "adaptive CPU RK must publish exactly one trace record per attempted step");
+    for (size_t attempt = 0; attempt < ctx.stepper.attempt_trace.records.size(); ++attempt) {
+        const auto &record = ctx.stepper.attempt_trace.records[attempt];
+        check(record.attempt == attempt, "adaptive CPU RK trace attempt indices must be contiguous");
+        check(record.target_step == step_before + 1u, "all retry records must target one accepted step");
+        check(record.time_seconds == time_before, "retry records must retain the pre-step time");
+        check(record.dt_attempt_seconds > 0.0, "attempt trace dt must be positive");
+        check(record.estimator_order == tableau.order_est, "attempt trace must publish estimator order");
+        check(
+            record.decision == (attempt + 1u == ctx.stepper.attempt_trace.records.size()
+                ? fullmag::fem::RkAttemptDecision::Accepted
+                : fullmag::fem::RkAttemptDecision::Retry),
+            "adaptive CPU RK trace must end in one accepted decision after its retries");
+    }
     check(
         stats.fsal_reused == 0u,
         "accepted retry must not report FSAL reused by the rejected attempt");
@@ -651,6 +676,21 @@ void rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal() {
         expected_m,
         2e-12,
         "accepted retry must start from the pre-attempt magnetization");
+    check_vector_near(
+        ctx.demag.cached_xyz,
+        demag_cache_before,
+        0.0,
+        "rejected retry must not publish a demag field cache");
+    check_vector_near(
+        ctx.demag.cached_visual_xyz,
+        demag_visual_cache_before,
+        0.0,
+        "rejected retry must not publish a visual demag cache");
+    check_near(
+        ctx.demag.last_refresh_time,
+        0.0125,
+        0.0,
+        "rejected retry must preserve the accepted demag cache timestamp");
 }
 
 void cpu_rk_guard_failures_preserve_committed_state() {
@@ -730,6 +770,147 @@ void cpu_rk_guard_failures_preserve_committed_state() {
         "nonfinite high-order RK candidate must fail closed");
     assert_unchanged(ctx, m_before, time_before, step_before, "high-order rollback");
 }
+
+struct PublishedRkStateSnapshot {
+    fullmag::fem::FemBasePlanRuntimeState base_plan;
+    fullmag::fem::AdaptiveDtRuntimeState adaptive_dt;
+    fullmag::fem::FemStateRuntimeState state;
+    fullmag::fem::ExchangeRuntimeState exchange;
+    fullmag::fem::DemagRuntimeState demag;
+    fullmag::fem::EffectiveFieldRuntimeState effective_field;
+    fullmag::fem::AnisotropyRuntimeState anisotropy;
+    fullmag::fem::DmiRuntimeState dmi;
+    fullmag::fem::ZeemanRuntimeState zeeman;
+    fullmag::fem::OerstedRuntimeState oersted;
+    fullmag::fem::ThermalBrownRuntimeState thermal;
+    bool fsal_valid = false;
+    std::vector<double> fsal_k0;
+    uint64_t demag_solves_current_step = 0;
+    uint64_t transfer_host_to_device = 0;
+    uint64_t transfer_device_to_host = 0;
+};
+
+PublishedRkStateSnapshot capture_published_rk_state(
+    const fullmag::fem::Context &ctx)
+{
+    return {
+        ctx.base_plan,
+        ctx.adaptive_dt,
+        ctx.state,
+        ctx.exchange,
+        ctx.demag,
+        ctx.effective_field,
+        ctx.anisotropy,
+        ctx.dmi,
+        ctx.zeeman,
+        ctx.oersted,
+        ctx.thermal_brown,
+        ctx.stepper.workspace.fsal_valid,
+        ctx.stepper.workspace.k[0],
+        ctx.poisson_demag.solves_current_step,
+        ctx.transfer_audit.audit.counters.h2d_bytes,
+        ctx.transfer_audit.audit.counters.d2h_bytes,
+    };
+}
+
+void assert_published_rk_state_equal(
+    const fullmag::fem::Context &ctx,
+    const PublishedRkStateSnapshot &before,
+    const char *label)
+{
+    check_vector_near(ctx.state.m_xyz, before.state.m_xyz, 0.0, label);
+    check(ctx.state.step_count == before.state.step_count, label);
+    check_near(ctx.state.current_time, before.state.current_time, 0.0, label);
+    check_near(ctx.base_plan.dt_seconds, before.base_plan.dt_seconds, 0.0, label);
+    check_near(ctx.adaptive_dt.current_dt, before.adaptive_dt.current_dt, 0.0, label);
+    check_near(ctx.adaptive_dt.prev_error_norm, before.adaptive_dt.prev_error_norm, 0.0, label);
+    check(ctx.adaptive_dt.has_prev_error_norm == before.adaptive_dt.has_prev_error_norm, label);
+    check(ctx.adaptive_dt.rejected_steps == before.adaptive_dt.rejected_steps, label);
+    check_vector_near(ctx.exchange.h_xyz, before.exchange.h_xyz, 0.0, label);
+    check(ctx.exchange.mfem.ready == before.exchange.mfem.ready, label);
+    check_vector_near(ctx.demag.h_xyz, before.demag.h_xyz, 0.0, label);
+    check_vector_near(ctx.demag.h_visual_xyz, before.demag.h_visual_xyz, 0.0, label);
+    check_vector_near(ctx.demag.cached_xyz, before.demag.cached_xyz, 0.0, label);
+    check_vector_near(ctx.demag.cached_visual_xyz, before.demag.cached_visual_xyz, 0.0, label);
+    check(ctx.demag.cache_valid == before.demag.cache_valid, label);
+    check(ctx.demag.call_count == before.demag.call_count, label);
+    check_near(ctx.demag.last_refresh_time, before.demag.last_refresh_time, 0.0, label);
+    check_vector_near(ctx.effective_field.h_xyz, before.effective_field.h_xyz, 0.0, label);
+    check_vector_near(ctx.effective_field.h_visual_xyz, before.effective_field.h_visual_xyz, 0.0, label);
+    check_vector_near(ctx.anisotropy.h_uniaxial_xyz, before.anisotropy.h_uniaxial_xyz, 0.0, label);
+    check_vector_near(ctx.dmi.h_interfacial_xyz, before.dmi.h_interfacial_xyz, 0.0, label);
+    check_vector_near(ctx.zeeman.h_drive_xyz, before.zeeman.h_drive_xyz, 0.0, label);
+    check_near(ctx.zeeman.last_evaluation_time_s, before.zeeman.last_evaluation_time_s, 0.0, label);
+    check_vector_near(ctx.oersted.h_xyz, before.oersted.h_xyz, 0.0, label);
+    check_vector_near(ctx.thermal_brown.h_xyz, before.thermal.h_xyz, 0.0, label);
+    check(ctx.stepper.workspace.fsal_valid == before.fsal_valid, label);
+    check_vector_near(ctx.stepper.workspace.k[0], before.fsal_k0, 0.0, label);
+    check(ctx.poisson_demag.solves_current_step == before.demag_solves_current_step, label);
+    check(
+        ctx.transfer_audit.audit.counters.h2d_bytes ==
+            before.transfer_host_to_device,
+        label);
+    check(
+        ctx.transfer_audit.audit.counters.d2h_bytes ==
+            before.transfer_device_to_host,
+        label);
+}
+
+void cpu_rk_failure_injection_rolls_back_complete_published_state() {
+    for (const auto failpoint : {
+             fullmag::fem::RkStepFailurePoint::AfterCandidateMagnetization,
+             fullmag::fem::RkStepFailurePoint::DuringFinalFieldRefresh,
+             fullmag::fem::RkStepFailurePoint::DuringFinalStatistics,
+         }) {
+        auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
+        fullmag::fem::stepper_workspace_allocate(ctx.stepper.workspace, 3u, 7);
+        ctx.stepper.workspace.fsal_valid = true;
+        ctx.stepper.workspace.k[0] = {1.0, 2.0, 3.0};
+        ctx.base_plan.dt_seconds = 0.125;
+        ctx.adaptive_dt.current_dt = 0.125;
+        ctx.adaptive_dt.prev_error_norm = 0.75;
+        ctx.adaptive_dt.has_prev_error_norm = true;
+        ctx.demag.cached_xyz = {4.0, 5.0, 6.0};
+        ctx.demag.cached_visual_xyz = {7.0, 8.0, 9.0};
+        ctx.demag.cache_valid = true;
+        ctx.demag.call_count = 11;
+        ctx.effective_field.h_visual_xyz = {10.0, 11.0, 12.0};
+        ctx.poisson_demag.solves_current_step = 13;
+        ctx.transfer_audit.audit.counters.h2d_bytes = 17;
+        ctx.transfer_audit.audit.counters.d2h_bytes = 19;
+        const auto before = capture_published_rk_state(ctx);
+        ctx.stepper.failure_injection.next = failpoint;
+
+        fullmag_fem_step_stats stats{};
+        std::string error;
+        const int status = fullmag::fem::run_backend_step(ctx, 0.125, stats, error);
+        check(status != FULLMAG_FEM_OK, "injected RK failure must fail the backend step");
+        check(!error.empty(), "injected RK failure must publish a reason");
+        check(ctx.stepper.failure_injection.injected_count == 1u,
+              "configured RK failpoint must execute exactly once");
+        assert_published_rk_state_equal(ctx, before, "complete RK transaction rollback");
+    }
+}
+
+void cpu_rk_success_commits_state_and_completion_once() {
+    auto ctx = make_oersted_only_rk_context(FULLMAG_FEM_INTEGRATOR_RK45_DP54);
+    ctx.stage_completion.relax_stop.has_max_steps = 1;
+    ctx.stage_completion.relax_stop.max_steps = 100;
+    const uint64_t step_before = ctx.state.step_count;
+    const double time_before = ctx.state.current_time;
+    const uint32_t completion_samples_before = ctx.stage_completion.relax_energy_window_count;
+    fullmag_fem_step_stats stats{};
+    std::string error;
+    check(
+        fullmag::fem::run_backend_step(ctx, 0.125, stats, error) == FULLMAG_FEM_OK,
+        error.c_str());
+    check(ctx.state.step_count == step_before + 1u, "successful RK step commits one index");
+    check_near(ctx.state.current_time, time_before + 0.125, 0.0, "successful RK time commit");
+    check(stats.step == ctx.state.step_count, "successful RK stats match committed step");
+    check(
+        ctx.stage_completion.relax_energy_window_count == completion_samples_before + 1u,
+        "successful RK telemetry publishes one completion sample");
+}
 #endif
 
 void gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal() {
@@ -742,6 +923,9 @@ void gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal() {
     const std::string attempt_loop = read_text_file(root / "rk_attempt_loop.cu");
     const std::string adaptive = read_text_file(root / "rk_adaptive_runtime.cu");
     const std::string final_refresh = read_text_file(root / "rk_final_refresh.cu");
+    const std::string stage_schedule = read_text_file(root / "rk_stage_schedule.cu");
+    const std::string backend_step = read_text_file(
+        fem_source_root() / "cpu" / "mfem" / "runtime" / "backend_step.cpp");
 
     check(setup.find("ctx.state.current_time,") != std::string::npos,
           "GPU RK stage 0 must use t_n");
@@ -781,6 +965,20 @@ void gpu_rk_call_path_uses_each_tableau_time_and_invalidates_rejected_fsal() {
                 std::string::npos &&
             adaptive.find("gpu.rk.fsal_valid = false") != std::string::npos,
         "GPU adaptive rejection must restore m and invalidate FSAL before retry");
+    check(
+        stage_schedule.find("RkStepFailurePoint::AfterCandidateMagnetization") !=
+            std::string::npos,
+        "GPU RK production path must expose the post-candidate atomicity failpoint");
+    check(
+        final_refresh.find("RkStepFailurePoint::DuringFinalFieldRefresh") !=
+            std::string::npos,
+        "GPU RK production path must expose the final-refresh atomicity failpoint");
+    check(
+        backend_step.find("RkStepFailurePoint::DuringFinalStatistics") !=
+                std::string::npos &&
+            backend_step.find("RkStepTransaction transaction(ctx)") !=
+                std::string::npos,
+        "backend step must keep the transaction open through final statistics");
 }
 
 } // namespace
@@ -800,6 +998,8 @@ int main() {
     deterministic_oersted_fsal_requires_an_identical_next_source_state();
     rejected_cpu_retry_rolls_back_and_reports_only_accepted_attempt_fsal();
     cpu_rk_guard_failures_preserve_committed_state();
+    cpu_rk_failure_injection_rolls_back_complete_published_state();
+    cpu_rk_success_commits_state_and_completion_once();
 #endif
     return 0;
 }

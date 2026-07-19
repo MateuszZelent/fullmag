@@ -51,11 +51,11 @@ bool gpu_reduction_workspace_allocate(
         return false;
     }
     if (reduce_blocks >
-        (std::numeric_limits<uint64_t>::max() / sizeof(double)) - FEM_GPU_SCALAR_RESULT_SLOTS) {
+        ((std::numeric_limits<uint64_t>::max() / sizeof(double)) - FEM_GPU_SCALAR_RESULT_SLOTS) / 3u) {
         error = "FemGpuState reduction workspace byte count is too large";
         return false;
     }
-    if (!gpu_device_allocate_double(reductions.scalar_workspace, reduce_blocks, device_bytes, error) ||
+    if (!gpu_device_allocate_double(reductions.scalar_workspace, 3u * reduce_blocks, device_bytes, error) ||
         !gpu_device_allocate_double(reductions.scalar_result, FEM_GPU_SCALAR_RESULT_SLOTS, device_bytes, error)) {
         return false;
     }
@@ -99,7 +99,7 @@ bool gpu_reduction_workspace_allocate(
 
     reductions.temp_storage_bytes = static_cast<uint64_t>(reduce_temp_storage_bytes);
     reduction_workspace_bytes =
-        (reduce_blocks + FEM_GPU_SCALAR_RESULT_SLOTS) * sizeof(double) +
+        (3u * reduce_blocks + FEM_GPU_SCALAR_RESULT_SLOTS) * sizeof(double) +
         reductions.temp_storage_bytes;
     return true;
 #else

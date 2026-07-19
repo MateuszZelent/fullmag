@@ -1,6 +1,6 @@
 .fm-thread-manager.fm-dialog {
-  width: min(960px, calc(100vw - 32px));
-  max-height: min(760px, calc(100vh - 32px));
+  width: min(960px, calc(100vw - var(--fm-space-8)));
+  max-height: min(760px, calc(100vh - var(--fm-space-8)));
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -129,7 +129,7 @@
 .fm-thread-manager__row [data-lane] {
   width: max-content;
   padding: 2px 6px;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   border: 1px solid var(--fm-border-subtle);
   color: var(--fm-text-muted);
   background: var(--fm-bg-app);
@@ -157,7 +157,7 @@
   height: var(--fm-space-1);
   margin-right: var(--fm-space-2);
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   background: var(--fm-bg-app);
   vertical-align: middle;
 }
@@ -206,7 +206,7 @@
 .fm-thread-manager__worker strong {
   width: max-content;
   padding: 2px 6px;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   color: var(--fm-text-muted);
   background: var(--fm-bg-app);
   font-size: var(--fm-font-size-xs);

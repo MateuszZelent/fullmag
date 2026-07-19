@@ -29,6 +29,10 @@ const twMerge = extendTailwindMerge({
           ],
         },
       ],
+      "leading": [
+        // --leading-fm-* @theme tokens → line-height utilities
+        { "leading-fm": ["control", "tight"] },
+      ],
     },
   },
 });

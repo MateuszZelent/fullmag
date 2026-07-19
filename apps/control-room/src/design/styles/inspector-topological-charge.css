@@ -119,7 +119,7 @@
 }
 
 .fm-topological-charge-controls .fm-tabs-trigger {
-  min-width: 82px;
+  min-width: var(--fm-inspector-topo-charge-min-width);
   font-size: var(--fm-font-size-xs);
 }
 

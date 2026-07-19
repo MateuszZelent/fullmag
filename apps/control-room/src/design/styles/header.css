@@ -84,7 +84,7 @@
   transition:
     background-color var(--fm-transition-fast),
     color var(--fm-transition-fast),
-    transform 80ms ease-out;
+    transform var(--fm-duration-fast) ease-out;
   white-space: nowrap;
 }
 
@@ -96,7 +96,7 @@
 /* Apple: respond on pointer-down */
 .fm-header__nav-item:active {
   transform: scale(0.97);
-  transition-duration: 60ms;
+  transition-duration: var(--fm-duration-instant);
 }
 
 .fm-header__nav-item[data-active="true"] {
@@ -191,7 +191,7 @@
   transition:
     background-color var(--fm-transition-fast),
     color var(--fm-transition-fast),
-    transform 80ms ease-out;
+    transform var(--fm-duration-fast) ease-out;
 }
 
 .fm-header__action-btn:hover {
@@ -202,7 +202,7 @@
 /* Apple: pointer-down press */
 .fm-header__action-btn:active {
   transform: scale(0.92);
-  transition-duration: 60ms;
+  transition-duration: var(--fm-duration-instant);
 }
 
 .fm-header__separator {
@@ -280,7 +280,7 @@
   width: var(--fm-control-height-compact);
   min-width: var(--fm-control-height-compact);
   height: var(--fm-control-height-compact);
-  transition: transform 80ms ease-out, background-color var(--fm-transition-fast);
+  transition: transform var(--fm-duration-fast) ease-out, background-color var(--fm-transition-fast);
 }
 
 .fm-header__run-btn:active {

@@ -79,6 +79,7 @@ struct GpuDemagPoissonWorkspace {
     std::unique_ptr<mfem::HypreSolver> solver;
     std::unique_ptr<mfem::HypreParVector> b_par;
     std::unique_ptr<mfem::HypreParVector> x_par;
+    std::unique_ptr<mfem::Vector> residual;
 #endif
     uint64_t device_bytes = 0;
     bool ready = false;

@@ -1,5 +1,5 @@
 .fm-mesh-build-confirm-dialog {
-  width: min(760px, calc(100vw - 32px));
+  width: min(760px, calc(100vw - var(--fm-space-8)));
   max-height: min(760px, calc(100vh - 64px));
 }
 
@@ -47,7 +47,7 @@
     minmax(88px, 0.8fr);
   gap: var(--fm-space-2);
   align-items: center;
-  min-width: 680px;
+  min-width: var(--fm-dialog-mesh-build-width);
   padding: var(--fm-space-2) var(--fm-space-3);
   border-top: 1px solid var(--fm-border-subtle);
   color: var(--fm-text-secondary);
@@ -87,7 +87,7 @@
     minmax(88px, 1fr)
     minmax(88px, 1fr)
     minmax(80px, 0.8fr);
-  min-width: 480px;
+  min-width: var(--fm-dialog-mesh-build-width-compact);
 }
 
 .fm-mesh-build-confirm__banner {
@@ -172,7 +172,7 @@
 .fm-dialog__mesh-progress span,
 .fm-dialog__mesh-progress strong {
   position: relative;
-  z-index: 1;
+  z-index: var(--fm-z-base);
 }
 
 .fm-dialog__mesh-progress strong {
@@ -278,7 +278,7 @@
 .fm-dialog__mesh-log-list {
   display: grid;
   gap: var(--fm-space-1);
-  max-height: 168px;
+  max-height: var(--fm-dialog-mesh-build-section-max-height);
   overflow: auto;
 }
 

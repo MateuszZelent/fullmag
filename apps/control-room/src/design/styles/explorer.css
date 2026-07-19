@@ -127,7 +127,7 @@
 
   position: relative;
   display: grid;
-  grid-template-columns: 16px 18px minmax(0, 1fr) auto auto;
+  grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto auto;
   min-height: var(--fm-control-height-compact);
   align-items: center;
   gap: var(--fm-space-1);
@@ -352,7 +352,7 @@
   align-items: center;
   height: var(--fm-space-5);
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   font-family: var(--fm-font-ui);
   font-size: var(--fm-font-size-2xs);
   font-weight: 500;
@@ -384,7 +384,7 @@
   align-items: center;
   height: var(--fm-space-5);
   padding: 0 6px;
-  border-radius: 999px;
+  border-radius: var(--fm-radius-pill);
   border: 1px solid color-mix(in srgb, var(--fm-accent) 54%, var(--fm-border-subtle));
   background: color-mix(in srgb, var(--fm-accent) 14%, transparent);
   color: var(--fm-accent);
@@ -472,7 +472,7 @@
     background-color var(--fm-transition-fast),
     border-color var(--fm-transition-fast),
     color var(--fm-transition-fast),
-    transform 80ms ease-out;
+    transform var(--fm-duration-fast) ease-out;
 }
 
 .fm-explorer-toolbar__action:hover {
@@ -484,7 +484,7 @@
 /* Apple: press feedback */
 .fm-explorer-toolbar__action:active {
   transform: scale(0.96);
-  transition-duration: 60ms;
+  transition-duration: var(--fm-duration-instant);
 }
 
 .fm-explorer-toolbar__action:focus-visible {

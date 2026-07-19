@@ -2,7 +2,7 @@
   position: fixed;
   right: var(--fm-space-4);
   bottom: calc(var(--fm-space-4) + 28px);
-  z-index: 120;
+  z-index: var(--fm-z-overlay);
   display: grid;
   gap: var(--fm-space-2);
   width: min(360px, calc(100vw - (var(--fm-space-4) * 2)));

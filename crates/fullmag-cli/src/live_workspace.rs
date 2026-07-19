@@ -1050,6 +1050,10 @@ mod tests {
             step,
             time: step as f64,
             solver_dt: 1.0,
+            error_estimate: None,
+            max_error: None,
+            dt_suggested: None,
+            rejected_attempts: 0,
             pseudo_time_s: None,
             active_runtime_s: None,
             mx: 0.0,
@@ -1450,6 +1454,10 @@ fn scalar_row_from_stats_with_active_runtime(
         step: stats.step,
         time: stats.time,
         solver_dt: stats.dt,
+        error_estimate: stats.error_estimate,
+        max_error: stats.max_error,
+        dt_suggested: stats.dt_suggested,
+        rejected_attempts: stats.rejected_attempts,
         pseudo_time_s: stats.pseudo_time_s,
         active_runtime_s: active_runtime_s
             .is_finite()
