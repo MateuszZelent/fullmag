@@ -6141,6 +6141,36 @@ fn multilayer_planner_rejects_oersted_until_rhs_coverage_exists() {
 }
 
 #[test]
+fn multilayer_planner_rejects_field_drives_until_plan_owns_them() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "multilayer-drive".to_string(),
+        name: "Multilayer drive".to_string(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1.0e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Constant,
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
+    });
+
+    let error = plan(&ir).expect_err("multilayer FDM must not drop an authored field drive");
+
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("RegionalFieldDrive") && reason.contains("multilayer FDM")),
+        "unexpected planner errors: {:?}",
+        error.reasons
+    );
+}
+
+#[test]
 fn stacked_two_body_problem_lowers_to_multilayer_plan() {
     let mut ir = stacked_two_body_multilayer_problem_with_dmi();
     ir.problem_meta.runtime_metadata.insert(

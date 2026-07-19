@@ -126,6 +126,18 @@ pub(crate) fn runtime_fdm_policy(problem: &ProblemIR) -> &'static str {
     }
 }
 
+fn has_prescribed_zeeman_mask_antenna(problem: &ProblemIR) -> bool {
+    problem.current_modules.iter().any(|module| {
+        matches!(
+            module,
+            fullmag_ir::CurrentModuleIR::AntennaFieldSource {
+                model: fullmag_ir::AntennaFieldSourceModelIR::PrescribedZeemanMask,
+                ..
+            }
+        )
+    })
+}
+
 pub(crate) fn runtime_fem_policy(problem: &ProblemIR) -> &'static str {
     match runtime_device(problem) {
         Some("cpu") => "cpu",
@@ -140,7 +152,7 @@ pub(crate) fn resolve_fdm_engine_with_trail(
 ) -> Result<EngineResolution<FdmEngine>, RunError> {
     apply_runtime_gpu_index(problem, "fdm");
     let ir_policy = runtime_fdm_policy(problem);
-    let (policy, env_override) = match std::env::var("FULLMAG_FDM_EXECUTION") {
+    let policy = match std::env::var("FULLMAG_FDM_EXECUTION") {
         Ok(env_val) => {
             if env_val != ir_policy {
                 let message = format!(
@@ -149,9 +161,9 @@ pub(crate) fn resolve_fdm_engine_with_trail(
                 );
                 runtime_warn_once(&message);
             }
-            (env_val, true)
+            env_val
         }
-        Err(_) => (ir_policy.to_string(), false),
+        Err(_) => ir_policy.to_string(),
     };
 
     let resolution = match policy.as_str() {
@@ -165,22 +177,10 @@ pub(crate) fn resolve_fdm_engine_with_trail(
                     engine: FdmEngine::CudaFdm,
                     fallback: None,
                 })
-            } else if env_override {
-                Err(RunError {
-                    message: "FULLMAG_FDM_EXECUTION=cuda but CUDA backend is not available"
-                        .to_string(),
-                })
             } else {
-                let message = "script requested CUDA FDM execution, but the CUDA backend is not available — falling back to CPU".to_string();
-                runtime_warn_once(&message);
-                Ok(EngineResolution {
-                    engine: FdmEngine::CpuReference,
-                    fallback: Some(runtime_fallback(
-                        fdm_engine_id(FdmEngine::CudaFdm),
-                        fdm_engine_id(FdmEngine::CpuReference),
-                        "fdm_cuda_unavailable",
-                        message,
-                    )),
+                Err(RunError {
+                    message: "FDM CUDA execution was requested, but the CUDA backend is not available"
+                        .to_string(),
                 })
             }
         }
@@ -207,6 +207,25 @@ pub(crate) fn resolve_fdm_engine_with_trail(
             }
         }
     }?;
+
+    if resolution.engine == FdmEngine::CudaFdm && has_prescribed_zeeman_mask_antenna(problem) {
+        if policy == "cuda" {
+            return Err(RunError {
+                message: "FDM CUDA execution was requested, but CUDA FDM currently does not support prescribed_zeeman_mask antenna sources (fallback_reason=antenna_zeeman_mask_force_cpu)".to_string(),
+            });
+        }
+        let message = "FDM engine falling back to CPU reference — CUDA FDM currently does not support prescribed_zeeman_mask antenna sources (fallback_reason=antenna_zeeman_mask_force_cpu)".to_string();
+        runtime_warn_once(&message);
+        return Ok(EngineResolution {
+            engine: FdmEngine::CpuReference,
+            fallback: Some(runtime_fallback(
+                fdm_engine_id(FdmEngine::CudaFdm),
+                fdm_engine_id(FdmEngine::CpuReference),
+                "antenna_zeeman_mask_force_cpu",
+                message,
+            )),
+        });
+    }
 
     Ok(resolution)
 }
@@ -293,5 +312,37 @@ pub(crate) fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
     }
     if std::env::var_os("FULLMAG_CUDA_DEVICE_INDEX").is_none() {
         std::env::set_var("FULLMAG_CUDA_DEVICE_INDEX", index.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_fdm_engine_with_trail;
+    use fullmag_ir::ProblemIR;
+    use serde_json::Value;
+    use std::sync::{LazyLock, Mutex};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    #[test]
+    fn script_forced_gpu_fails_closed_when_cuda_is_unavailable() {
+        let _guard = ENV_LOCK.lock().expect("lock FDM execution environment");
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            Value::Object(
+                [("device".to_string(), Value::String("gpu".to_string()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        );
+        unsafe {
+            std::env::remove_var("FULLMAG_FDM_EXECUTION");
+        }
+
+        let error = resolve_fdm_engine_with_trail(&problem)
+            .expect_err("a script-forced GPU request must not fall back to CPU");
+
+        assert!(error.message.contains("CUDA backend is not available"));
     }
 }
