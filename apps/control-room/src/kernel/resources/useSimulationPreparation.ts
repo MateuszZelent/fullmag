@@ -8,13 +8,6 @@ import { useKernel } from "../KernelContext";
 import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 
 import { useResource } from "./useResource";
-import type { ResourceResult } from "./resourceTypes";
-
-export function resolveSimulationPreparationResult(
-  result: ResourceResult<SimulationPreparationResource>,
-): ResourceResult<SimulationPreparationResource> {
-  return result.status === "stale" ? { ...result, status: "loading" } : result;
-}
 
 export function useSimulationPreparation({ enabled = true } = {}) {
   const { api } = useKernel();
@@ -24,13 +17,11 @@ export function useSimulationPreparation({ enabled = true } = {}) {
     [api],
   );
 
-  return resolveSimulationPreparationResult(
-    useResource<SimulationPreparationResource>({
-      enabled,
-      load,
-      minRefetchIntervalMs: statusRefreshIntervalMs(),
-      resolveRevision: (data) => data.revision,
-      resourceKey: SIMULATION_PREPARATION_PATH,
-    }),
-  );
+  return useResource<SimulationPreparationResource>({
+    enabled,
+    load,
+    minRefetchIntervalMs: statusRefreshIntervalMs(),
+    resolveRevision: (data) => data.revision,
+    resourceKey: SIMULATION_PREPARATION_PATH,
+  });
 }
