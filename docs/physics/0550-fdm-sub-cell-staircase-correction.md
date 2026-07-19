@@ -46,8 +46,10 @@ progressing from cheapest to most accurate:
 | **T1: Boundary-corrected** | ECB/García stencil modification using intersection distance $\delta$ | Donahue–McMichael $H_{\text{rough}} + H_{\text{corr}}$ sparse correction | Precomputation of $\delta$ per face + sparse tensor |
 | **T2: AMR-enhanced** | T1 + adaptive refinement in boundary strip | T1 + refined FFT or local direct sum at boundary | Runtime multi-level overhead |
 
-The target implementation is **T1** (boundary-corrected), with T0 as a fast fallback and T2 as
-future extension.
+The target implementation is **T1** (boundary-corrected), with T0 available
+only as an explicit, typed request and T2 as future extension. A request for
+T0/T1 must never silently degrade because boundary geometry is unavailable:
+strict execution rejects the request and records the reason in provenance.
 
 ## 2. Physical model
 

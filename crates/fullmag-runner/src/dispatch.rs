@@ -26,7 +26,6 @@ use crate::fdm::cpu::multilayer_reference;
 use crate::fdm::cpu::reference as cpu_reference;
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::multilayer as multilayer_cuda;
-use crate::fdm::gpu::cuda::native as native_fdm;
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 #[cfg(feature = "fem-gpu")]
@@ -54,6 +53,10 @@ use crate::relaxation::relaxation_converged;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::RelaxationEnergyPlateauWindow;
 use crate::runtime_registry::RuntimeRegistry;
+pub(crate) use crate::solver_runtime::engine::{EngineResolution, FdmEngine};
+pub(crate) use crate::solver_runtime::selection::{
+    resolve_fdm_engine, resolve_fdm_engine_with_trail,
+};
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
 #[cfg(feature = "cuda")]
@@ -80,15 +83,6 @@ use crate::types::{FieldSnapshot, RunResult, RunStatus};
 #[cfg(feature = "fem-gpu")]
 use fullmag_engine::fem::FemBackendId;
 
-/// Which execution engine to use for FDM.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FdmEngine {
-    /// CPU reference engine (fullmag-engine).
-    CpuReference,
-    /// Native CUDA FDM backend.
-    CudaFdm,
-}
-
 /// Which public FEM runtime lane to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FemEngine {
@@ -96,12 +90,6 @@ pub(crate) enum FemEngine {
     CpuNative,
     /// Native GPU FEM backend (MFEM stack on CUDA device).
     NativeGpu,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct EngineResolution<E> {
-    pub engine: E,
-    pub fallback: Option<ResolvedFallback>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -652,104 +640,6 @@ fn validate_runtime_initial_magnetization(plan: &FemPlanIR) -> Result<(), RunErr
         }
     }
     Ok(())
-}
-
-/// Resolve which FDM engine to use based on environment and availability.
-pub(crate) fn resolve_fdm_engine_with_trail(
-    problem: &ProblemIR,
-) -> Result<EngineResolution<FdmEngine>, RunError> {
-    apply_runtime_gpu_index(problem, "fdm");
-    let ir_policy = runtime_fdm_policy(problem);
-    let (policy, env_override) = match std::env::var("FULLMAG_FDM_EXECUTION") {
-        Ok(env_val) => {
-            if env_val != ir_policy {
-                let message = format!(
-                    "FULLMAG_FDM_EXECUTION={} overrides script runtime_selection.device={}",
-                    env_val, ir_policy
-                );
-                runtime_warn_once(&message);
-            }
-            (env_val, true)
-        }
-        Err(_) => (ir_policy.to_string(), false),
-    };
-
-    let mut resolution = match policy.as_str() {
-        "cpu" => Ok(EngineResolution {
-            engine: FdmEngine::CpuReference,
-            fallback: None,
-        }),
-        "cuda" => {
-            if native_fdm::is_cuda_available() {
-                Ok(EngineResolution {
-                    engine: FdmEngine::CudaFdm,
-                    fallback: None,
-                })
-            } else if env_override {
-                Err(RunError {
-                    message: "FULLMAG_FDM_EXECUTION=cuda but CUDA backend is not available"
-                        .to_string(),
-                })
-            } else {
-                let message = "script requested CUDA FDM execution, but the CUDA backend is not available — falling back to CPU".to_string();
-                runtime_warn_once(&message);
-                Ok(EngineResolution {
-                    engine: FdmEngine::CpuReference,
-                    fallback: Some(runtime_fallback(
-                        fdm_engine_id(FdmEngine::CudaFdm),
-                        fdm_engine_id(FdmEngine::CpuReference),
-                        "fdm_cuda_unavailable",
-                        message,
-                    )),
-                })
-            }
-        }
-        "auto" | _ => {
-            if native_fdm::is_cuda_available() {
-                Ok(EngineResolution {
-                    engine: FdmEngine::CudaFdm,
-                    fallback: None,
-                })
-            } else {
-                Ok(EngineResolution {
-                    engine: FdmEngine::CpuReference,
-                    fallback: runtime_device(problem)
-                        .filter(|device| matches!(*device, "gpu" | "cuda"))
-                        .map(|_| {
-                            runtime_fallback(
-                                fdm_engine_id(FdmEngine::CudaFdm),
-                                fdm_engine_id(FdmEngine::CpuReference),
-                                "fdm_cuda_unavailable",
-                                "preferred CUDA FDM runtime is unavailable; using CPU reference engine".to_string(),
-                            )
-                        }),
-                })
-            }
-        }
-    }?;
-
-    if resolution.engine == FdmEngine::CudaFdm && has_prescribed_zeeman_mask_antenna(problem) {
-        if env_override || matches!(policy.as_str(), "cuda") {
-            return Err(RunError {
-                message: "FDM CUDA execution was requested, but CUDA FDM currently does not support prescribed_zeeman_mask antenna sources (fallback_reason=antenna_zeeman_mask_force_cpu)".to_string(),
-            });
-        }
-        let message = "FDM engine falling back to CPU reference — CUDA FDM currently does not support prescribed_zeeman_mask antenna sources (fallback_reason=antenna_zeeman_mask_force_cpu)".to_string();
-        runtime_warn_once(&message);
-        resolution.engine = FdmEngine::CpuReference;
-        resolution.fallback = Some(runtime_fallback(
-            fdm_engine_id(FdmEngine::CudaFdm),
-            fdm_engine_id(FdmEngine::CpuReference),
-            "antenna_zeeman_mask_force_cpu",
-            message,
-        ));
-    }
-
-    Ok(resolution)
-}
-
-pub(crate) fn resolve_fdm_engine(problem: &ProblemIR) -> Result<FdmEngine, RunError> {
-    resolve_fdm_engine_with_trail(problem).map(|resolution| resolution.engine)
 }
 
 fn resolve_fdm_engine_with_registry(
@@ -1975,14 +1865,6 @@ fn runtime_device_index(problem: &ProblemIR) -> Option<u32> {
         .and_then(|selection| selection.get("device_index"))
         .and_then(Value::as_u64)
         .map(|index| index as u32)
-}
-
-fn runtime_fdm_policy(problem: &ProblemIR) -> &'static str {
-    match runtime_device(problem) {
-        Some("cpu") => "cpu",
-        Some("cuda") | Some("gpu") => "cuda",
-        _ => "auto",
-    }
 }
 
 fn runtime_fem_policy(problem: &ProblemIR) -> &'static str {

@@ -39,6 +39,7 @@ mod relaxation;
 pub mod runtime_registry;
 mod scalar_metrics;
 mod schedules;
+mod solver_runtime;
 mod solver_profile;
 pub mod spin_wave_response;
 pub mod spin_wave_sampling;

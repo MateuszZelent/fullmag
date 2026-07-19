@@ -1668,6 +1668,12 @@ pub(crate) fn plan_fdm_multilayer(
             }
         }
     }
+    if !problem.field_drives.is_empty() {
+        errors.push(
+            "RegionalFieldDrive is not executable in the current public multilayer FDM path because FdmMultilayerPlanIR does not retain field drives; remove the drive or use a qualified single-grid FDM plan"
+                .to_string(),
+        );
+    }
     if let Some(pbc) = problem.pbc.as_ref() {
         if let Err(reason) = pbc.resolve_demag_boundary(enable_demag) {
             errors.push(reason);

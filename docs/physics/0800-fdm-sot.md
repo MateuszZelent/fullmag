@@ -1,8 +1,9 @@
 # 0800 — Spin-Orbit Torque (SOT) — FDM CPU
 
-**Status:** ✅ Implemented (FDM CPU Rust)  
-**Backends:** FDM CPU Rust | FDM CUDA: deferred | FEM: deferred  
-**Date:** 2026-04-04
+**Status:** remediation contract approved; no FDM SOT lane is validated
+**Backends:** FDM CPU/CUDA single-grid are implementation targets; FEM and
+multilayer are unsupported
+**Date:** 2026-07-19
 
 ---
 
@@ -49,15 +50,23 @@ $\hat{\sigma} = \hat{z} \times \hat{J}/|\hat{J}| = \hat{y}$ (convention: right-h
 
 ### 2.3 Torque direction in implementation
 
-In the LL (direct) form added to dm/dt (same convention as `slonczewski_stt_torque`):
+The public amplitudes first define equivalent fields `H_DL` and `H_FL [A/m]`.
+The solver then converts them once, using the canonical
+`gamma0 = mu0 |gamma| [m/(A s)]`, into a direct non-conservative torque
+`tau_sot [1/s]` in the centralized LLG RHS. No `A/m` amplitude may be added
+directly to `dm/dt`.
+
+For the direct LL-form contribution:
 
 $$\frac{d\mathbf{m}}{dt}\bigg|_{SOT} = \text{amp}\left[-\xi_{DL}\,\mathbf{m}\times(\mathbf{m}\times\hat{\sigma}) + \xi_{FL}\,\mathbf{m}\times\hat{\sigma}\right]$$
 
 where:
 $$\text{amp} = \frac{\hbar\,|J_e|}{2\,e\,\mu_0\,M_s\,t_F}$$
 
-This is consistent with the Slonczewski STT convention used throughout the codebase (amplitude in
-A/m units, added directly to dm/dt).
+`amp` is an effective-field amplitude in `A/m`. The exported RHS contribution
+is `gamma0 * amp` times the stated vector combination, with the documented
+Gilbert-form projection applied centrally. `tau_sot` is not conservative and
+therefore has no `e_sot` or `E_sot` observable.
 
 ---
 
@@ -73,9 +82,9 @@ A/m units, added directly to dm/dt).
 
 ## 4. FDM discretisation
 
-Applied as a per-cell, cell-local torque (no spatial derivative). The cross products are
-computed from the cell magnetisation at the current time step, contributing to the explicit
-Euler or Heun stage of the Runge–Kutta step.
+Applied as a per-cell, cell-local direct torque (no spatial derivative). The
+central stage-time context evaluates it at every RK stage. Inactive cells must
+receive exactly zero torque and remain zero after normalization.
 
 ---
 
@@ -100,14 +109,15 @@ SOT is active when `sot_current_density.is_some() && sot_sigma.is_some() && sot_
 - **Direction**: with **m** = **x̂**, σ̂ = **ŷ**, DL torque = **m×(σ̂×m)** = **x̂×ŷ** = **ẑ** ✓
 - **Direction**: the FL torque = **m×σ̂** = **x̂×ŷ** = **ẑ** ✓
 - **Zero field, DL only**: magnetisation should precess and/or switch depending on α.
-- **Amplitude scaling**: verify torque ∝ |Je|, ∝ ξ_DL, ∝ 1/t_F.
+- **Amplitude scaling**: verify `tau_sot` ∝ `gamma0 |Je|`, ∝ `xi_DL`, and
+  ∝ `1/t_F` with an independent macrospin oracle.
 - **No SOT = 0**: with zero current, dm/dt|_SOT = 0 exactly.
 
 ---
 
 ## 7. Deferred work
 
-- CUDA GPU FDM kernel for SOT (same `combine_effective_field_*` pattern)
+- CUDA FP64/FP32 parity and managed device qualification
 - FEM support
 - Self-consistent spin-diffusion transport
 - Per-cell efficiency tensors (anisotropic ξ_DL, ξ_FL)
