@@ -4,7 +4,8 @@
 - Physical contract: `docs/physics/0970-fdm-remediation-physical-contract.md`
 - Status vocabulary: `open` means no remediation has begun; `in progress`
   means a scoped change and its narrow evidence exist, but the stated gate is
-  not complete; no row may be marked closed only because source code exists.
+  not complete; `closed` requires the stated acceptance evidence. No row may
+  be marked closed only because source code exists.
 
 Every finding below has one implementation owner stage and one gate. A gate
 must fail before its fix where a regression test is practical, then pass after
@@ -23,7 +24,7 @@ success.
 | FDM-CPU-001 | 9 | CPU batch uses thermal, spatial material, and resolved PBC plan data. | batch/snapshot materialization identity test | open |
 | FDM-THERM-002 | 9 | CUDA consumes per-attempt dt, canonical gamma0, and seeded RNG counter. | replay and Brown-variance CPU/CUDA gate | open |
 | FDM-ML-001 | 11/14 | Native-stacked Zeeman energy has no self-energy half factor. | two-layer analytic Zeeman energy test | open |
-| FDM-ML-DRIVE-001 | 4/14 | Multilayer field drives are lossless or fail closed. | planner rejection test until plan owns drives | open |
+| FDM-ML-DRIVE-001 | 4/14 | Multilayer field drives are lossless or fail closed. | planner rejection test until plan owns drives | closed |
 | FDM-ENERGY-001 | 11/13 | Regional drive participates in the canonical conservative energy used by minimizers. | regional-drive finite-difference gradient test | open |
 | PYIR-001 | 3 | Material-only anisotropy round-trips without unsupported energy tags. | Python JSON to Rust IR and script round-trip test | open |
 | UI-OVERRIDE-001 | 17 | One versioned override schema is emitted and consumed by Rust/Python/rendering. | cross-adapter schema equivalence test | open |
