@@ -25,6 +25,7 @@ const SESSION_STATUS_REVISION_RESOURCE_KEYS: Array<
   "region_membership_revision",
   "region_topology_revision",
   "scene_revision",
+  "simulation_preparation_revision",
   "solver_profile_revision",
   "stages_revision",
   "visualization_state_revision",

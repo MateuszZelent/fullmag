@@ -305,6 +305,8 @@ export type SolverEnergyCurrentResource =
   components["schemas"]["SolverEnergyCurrentResource"];
 export type SolverEnergyHistoryResource =
   components["schemas"]["SolverEnergyHistoryResource"];
+export type SimulationPreparationResource =
+  components["schemas"]["SimulationPreparationResource"];
 export type SolverStatusResource = components["schemas"]["SolverStatusResource"];
 export type StageExecutionResource =
   components["schemas"]["StageExecutionResource"];

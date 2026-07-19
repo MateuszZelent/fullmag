@@ -675,6 +675,10 @@ export const WORKSPACE_TREE_ACTIVE_NODE_PATH = openApiV2Path(
   "/v2/sessions/current/workspace/tree/active-node",
 );
 
+export const SIMULATION_PREPARATION_PATH = openApiV2Path(
+  "/v2/sessions/current/simulation/preparation",
+);
+
 export const SIMULATION_COMMANDS_PATH = openApiV2Path(
   "/v2/sessions/current/simulation/commands",
 );

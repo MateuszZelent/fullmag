@@ -137,6 +137,7 @@ import {
   SIMULATION_COMMAND_DETAIL_PATH,
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
+  SIMULATION_PREPARATION_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_RUN_PATH,
   SIMULATION_SOLVER_ENERGIES_CURRENT_PATH,
@@ -323,6 +324,7 @@ import type {
   SolverEnergyCurrentResource,
   SolverEnergyHistoryResource,
   SolverProfileResource,
+  SimulationPreparationResource,
   SolverStatusResource,
   StageExecutionResource,
   StructuredCommandRequest,
@@ -1950,6 +1952,11 @@ export class ControlRoomApi {
     currentRun: (options?: RequestOptions) =>
       this.requestJson<CurrentRunResource>(
         SIMULATION_RUN_CURRENT_PATH,
+        options,
+      ),
+    preparation: (options?: RequestOptions) =>
+      this.requestJson<SimulationPreparationResource>(
+        SIMULATION_PREPARATION_PATH,
         options,
       ),
     objects: {

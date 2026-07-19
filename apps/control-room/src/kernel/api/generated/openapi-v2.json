@@ -13374,6 +13374,220 @@
         ],
         "type": "object"
       },
+      "PreparationExecutionSummary": {
+        "properties": {
+          "backend": {
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "device": {
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "engine_id": {
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "precision": {
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtime_family": {
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worker": {
+            "maxLength": 128,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "PreparationFailureResource": {
+        "properties": {
+          "diagnostics_correlation_id": {
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_code": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "stage_id": {
+            "$ref": "#/components/schemas/PreparationStageId"
+          },
+          "summary": {
+            "maxLength": 1024,
+            "type": "string"
+          }
+        },
+        "required": [
+          "error_code",
+          "summary",
+          "stage_id"
+        ],
+        "type": "object"
+      },
+      "PreparationLogEntryResource": {
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/PreparationLogLevel"
+          },
+          "message": {
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "stage_id": {
+            "$ref": "#/components/schemas/PreparationStageId"
+          },
+          "timestamp_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "timestamp_unix_ms",
+          "level",
+          "stage_id",
+          "message"
+        ],
+        "type": "object"
+      },
+      "PreparationLogLevel": {
+        "enum": [
+          "info",
+          "warning",
+          "error"
+        ],
+        "type": "string"
+      },
+      "PreparationProgressStage": {
+        "properties": {
+          "completed_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "detail": {
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "duration_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/PreparationStageId"
+          },
+          "label": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "progress_label": {
+            "maxLength": 256,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress_percent": {
+            "format": "int32",
+            "maximum": 100,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "started_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/PreparationStageStatus"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "detail",
+          "status"
+        ],
+        "type": "object"
+      },
+      "PreparationStageId": {
+        "enum": [
+          "runtime_startup",
+          "script_materialization",
+          "validation",
+          "planning",
+          "domain_preparation",
+          "meshing",
+          "mesh_postprocessing",
+          "solver_initialization",
+          "ready"
+        ],
+        "type": "string"
+      },
+      "PreparationStageStatus": {
+        "enum": [
+          "pending",
+          "active",
+          "completed",
+          "failed",
+          "skipped"
+        ],
+        "type": "string"
+      },
+      "PreparationStatus": {
+        "enum": [
+          "connecting",
+          "running",
+          "ready",
+          "failed"
+        ],
+        "type": "string"
+      },
       "PrimitiveGeometryCapability": {
         "properties": {
           "boolean": {
@@ -14559,6 +14773,11 @@
               "null"
             ]
           },
+          "simulation_preparation_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "slice_revision": {
             "format": "int64",
             "minimum": 0,
@@ -14609,6 +14828,7 @@
           "mesh_build_revision",
           "commands_revision",
           "stages_revision",
+          "simulation_preparation_revision",
           "visualization_state_revision",
           "region_topology_revision",
           "region_membership_revision",
@@ -16772,6 +16992,93 @@
           "name",
           "created_at",
           "workspace_root"
+        ],
+        "type": "object"
+      },
+      "SimulationPreparationResource": {
+        "properties": {
+          "active_stage_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreparationStageId"
+              }
+            ]
+          },
+          "completed_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreparationFailureResource"
+              }
+            ]
+          },
+          "log_tail": {
+            "items": {
+              "$ref": "#/components/schemas/PreparationLogEntryResource"
+            },
+            "maxItems": 200,
+            "type": "array"
+          },
+          "preparation_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "requested_execution": {
+            "$ref": "#/components/schemas/PreparationExecutionSummary"
+          },
+          "resolved_execution": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreparationExecutionSummary"
+              }
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/PreparationProgressStage"
+            },
+            "maxItems": 9,
+            "minItems": 9,
+            "type": "array"
+          },
+          "started_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PreparationStatus"
+          }
+        },
+        "required": [
+          "preparation_id",
+          "revision",
+          "status",
+          "started_at_unix_ms",
+          "requested_execution",
+          "stages",
+          "log_tail"
         ],
         "type": "object"
       },
@@ -31685,6 +31992,36 @@
         ]
       }
     },
+    "/v2/sessions/current/simulation/preparation": {
+      "get": {
+        "operationId": "simulation_get_sessions_current_simulation_preparation",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulationPreparationResource"
+                }
+              }
+            },
+            "description": "Current simulation preparation resource"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Simulation preparation is not available"
+          }
+        },
+        "tags": [
+          "simulation"
+        ]
+      }
+    },
     "/v2/sessions/current/simulation/runs/current": {
       "get": {
         "operationId": "simulation_get_sessions_current_simulation_runs_current",
@@ -32675,6 +33012,7 @@
     "hysteresis",
     "change_device",
     "add_field_drive",
+    "remove_field_drive",
     "table_autosave",
     "autosave",
     "fft_response",
