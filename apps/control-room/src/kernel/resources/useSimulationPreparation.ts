@@ -9,6 +9,10 @@ import { statusRefreshIntervalMs } from "../realtime/communicationPolicy";
 
 import { useResource } from "./useResource";
 
+function resolvePreparationRevision(data: SimulationPreparationResource) {
+  return data.revision;
+}
+
 export function useSimulationPreparation({ enabled = true } = {}) {
   const { api } = useKernel();
   const load = useCallback(
@@ -21,7 +25,7 @@ export function useSimulationPreparation({ enabled = true } = {}) {
     enabled,
     load,
     minRefetchIntervalMs: statusRefreshIntervalMs(),
-    resolveRevision: (data) => data.revision,
+    resolveRevision: resolvePreparationRevision,
     resourceKey: SIMULATION_PREPARATION_PATH,
   });
 }

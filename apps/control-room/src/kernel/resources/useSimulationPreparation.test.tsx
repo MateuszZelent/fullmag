@@ -24,6 +24,7 @@ type PreparationResult = ResourceResult<SimulationPreparationResource>;
 
 afterEach(() => {
   updateRealtimeCommunicationPolicy({});
+  vi.restoreAllMocks();
 });
 
 function deferred<TData>(): Deferred<TData> {
@@ -74,6 +75,7 @@ function makeKernel(
       }),
       resources,
     } as React.ComponentProps<typeof KernelContext.Provider>["value"],
+    bus,
     resources,
   };
 }
@@ -114,6 +116,7 @@ async function waitFor(
 describe("useSimulationPreparation", () => {
   it("retains stale revision 7 while 8 loads, adopts 8, and keeps it when refresh fails", async () => {
     updateRealtimeCommunicationPolicy({ status_refresh_ms: 1 });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const revision7 = deferred<SimulationPreparationResource>();
     const revision8 = deferred<SimulationPreparationResource>();
     const revision9 = deferred<SimulationPreparationResource>();
@@ -122,7 +125,7 @@ describe("useSimulationPreparation", () => {
       .mockImplementationOnce(() => revision7.promise)
       .mockImplementationOnce(() => revision8.promise)
       .mockImplementation(() => revision9.promise);
-    const { kernel, resources } = makeKernel(load);
+    const { bus, kernel, resources } = makeKernel(load);
     const observations: PreparationResult[] = [];
     const dom = installTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as Element);
@@ -153,6 +156,7 @@ describe("useSimulationPreparation", () => {
       status: "ready",
     });
 
+    now.mockReturnValue(2_000);
     await act(async () => {
       resources.invalidate(SIMULATION_PREPARATION_PATH, 8);
     });
@@ -170,6 +174,11 @@ describe("useSimulationPreparation", () => {
     });
 
     const failure = new Error("preparation unavailable");
+    now.mockReturnValue(3_000);
+    const failures: KernelEventMap["resource:load-failed"][] = [];
+    const unsubscribeFailure = bus.on("resource:load-failed", (event) => {
+      failures.push(event);
+    });
     await act(async () => {
       resources.invalidate(SIMULATION_PREPARATION_PATH, 9);
     });
@@ -182,6 +191,7 @@ describe("useSimulationPreparation", () => {
     });
     const failedRevision9 = resultSnapshot(observations.at(-1)!);
 
+    unsubscribeFailure();
     await act(async () => root.unmount());
     dom.restore();
     expect(staleRevision8).toMatchObject({
@@ -200,6 +210,17 @@ describe("useSimulationPreparation", () => {
       revision: 9,
       status: "stale",
     });
+    expect(failures).toEqual([
+      {
+        cause: "preparation unavailable",
+        errorName: "Error",
+        resourceKey: SIMULATION_PREPARATION_PATH,
+        revision: 9,
+        situation: "Loading runtime resource through the v2 resource hook",
+        source: "resource-hook",
+        status: null,
+      },
+    ]);
   });
 
   it("keeps disabled hooks idle without issuing a request", async () => {
