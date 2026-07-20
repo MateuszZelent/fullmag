@@ -12,6 +12,7 @@ pub mod logs;
 pub mod mesh;
 pub mod planar_fields;
 pub mod planar_monitors;
+pub mod preparation;
 pub mod quantities;
 pub mod realtime;
 pub mod relaxation;

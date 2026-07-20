@@ -11,6 +11,7 @@ import { KernelContext } from "../KernelContext";
 import { LayoutController } from "../layout/LayoutController";
 import { ModuleRegistry } from "../module/ModuleRegistry";
 import { DiagnosticRecorderController } from "../performance/diagnostic-recorder/DiagnosticRecorderController";
+import { RealtimeConnectionController } from "../realtime/RealtimeConnectionController";
 import { RealtimeInvalidationBridge } from "../realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { SelectionController } from "../selection/SelectionController";
@@ -44,6 +45,7 @@ function makeKernel(): KernelApi {
     layout: new LayoutController(bus),
     modules: new ModuleRegistry(),
     realtime: new RealtimeInvalidationBridge(resources),
+    realtimeConnection: new RealtimeConnectionController(),
     resources,
     selection: new SelectionController(bus),
     visualization: new ObjectVisualizationController(),

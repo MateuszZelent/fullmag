@@ -49,6 +49,7 @@ import { startBrowserActivityDiagnostics } from "./performance/browserActivityDi
 import { startPerformanceMeasureDiagnostics } from "./performance/performanceMeasureDiagnostics";
 import { installPerformanceMeasureGuard } from "./performance/performanceMeasureGuard";
 import { RealtimeClient } from "./realtime/RealtimeClient";
+import { RealtimeConnectionController } from "./realtime/RealtimeConnectionController";
 import { RealtimeInvalidationBridge } from "./realtime/RealtimeInvalidationBridge";
 import { useSimulationStartupOverlayVisibility } from "./layout/SimulationStartupOverlay";
 import { ResourceInvalidationController } from "./resources/ResourceInvalidationController";
@@ -127,6 +128,7 @@ function createKernel(): KernelApi {
       visualizationSync.shouldSuppressInvalidation(resourceKey, revision) ||
       cameraRegistry.shouldSuppressInvalidation(resourceKey, revision),
   });
+  const realtimeConnection = new RealtimeConnectionController();
 
   for (const cmd of SHELL_COMMANDS) {
     commands.register(cmd);
@@ -172,6 +174,7 @@ function createKernel(): KernelApi {
     layout,
     modules,
     realtime,
+    realtimeConnection,
     resources,
     selection,
     visualization,
@@ -269,6 +272,10 @@ function RealtimeConnector({ kernel }: { kernel: KernelApi }) {
     const client = new RealtimeClient({
       bridge: kernel.realtime,
       diagnostics: kernel.diagnostics,
+      onStatusChange: (status) => {
+        kernel.realtimeConnection.update(status);
+        kernel.bus.emit("session:status-changed", { status });
+      },
       url,
     });
     client.connect();

@@ -95,10 +95,55 @@ pub(crate) fn init_api_port_explicit(port: u16) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("API port already resolved"))
 }
 
+trait GuardedProcess {
+    fn terminate(&mut self);
+}
+
+struct ChildProcess(std::process::Child);
+
+impl GuardedProcess for ChildProcess {
+    fn terminate(&mut self) {
+        terminate_child_process(&mut self.0);
+    }
+}
+
+struct BootstrapProcessGuard<P: GuardedProcess> {
+    process: Option<P>,
+}
+
+impl<P: GuardedProcess> BootstrapProcessGuard<P> {
+    fn new(process: P) -> Self {
+        Self {
+            process: Some(process),
+        }
+    }
+
+    fn process_mut(&mut self) -> &mut P {
+        self.process
+            .as_mut()
+            .expect("bootstrap process guard must own a process")
+    }
+
+    fn release(mut self) -> P {
+        self.process
+            .take()
+            .expect("bootstrap process guard must own a process")
+    }
+}
+
+impl<P: GuardedProcess> Drop for BootstrapProcessGuard<P> {
+    fn drop(&mut self) {
+        if let Some(mut process) = self.process.take() {
+            process.terminate();
+        }
+    }
+}
+
 pub(crate) struct ControlRoomGuard {
     web_port: Option<u16>,
-    api_child: Option<std::process::Child>,
-    frontend_child: Option<std::process::Child>,
+    api_child: Option<Box<dyn GuardedProcess>>,
+    frontend_child: Option<Box<dyn GuardedProcess>>,
+    terminal_failure_lifetime: Option<Box<dyn FnOnce()>>,
     stop_frontend_on_drop: bool,
 }
 
@@ -108,6 +153,7 @@ impl ControlRoomGuard {
             web_port: None,
             api_child: None,
             frontend_child: None,
+            terminal_failure_lifetime: None,
             stop_frontend_on_drop: false,
         }
     }
@@ -120,21 +166,48 @@ impl ControlRoomGuard {
         let stop_frontend_on_drop = frontend_child.is_some();
         Self {
             web_port: Some(web_port),
+            api_child: api_child
+                .map(|child| Box::new(ChildProcess(child)) as Box<dyn GuardedProcess>),
+            frontend_child: frontend_child
+                .map(|child| Box::new(ChildProcess(child)) as Box<dyn GuardedProcess>),
+            terminal_failure_lifetime: None,
+            stop_frontend_on_drop,
+        }
+    }
+
+    pub fn retain_terminal_failure_until_close(&mut self, wait_for_close: impl FnOnce() + 'static) {
+        if self.api_child.is_none() && self.frontend_child.is_none() {
+            return;
+        }
+        self.terminal_failure_lifetime = Some(Box::new(wait_for_close));
+    }
+
+    #[cfg(test)]
+    fn active_for_test(
+        api_child: Option<Box<dyn GuardedProcess>>,
+        frontend_child: Option<Box<dyn GuardedProcess>>,
+    ) -> Self {
+        Self {
+            web_port: None,
             api_child,
             frontend_child,
-            stop_frontend_on_drop,
+            terminal_failure_lifetime: None,
+            stop_frontend_on_drop: false,
         }
     }
 }
 
 impl Drop for ControlRoomGuard {
     fn drop(&mut self) {
+        if let Some(wait_for_close) = self.terminal_failure_lifetime.take() {
+            wait_for_close();
+        }
         let stop_frontend_on_drop = self.stop_frontend_on_drop;
         if let Some(mut child) = self.frontend_child.take() {
-            terminate_child_process(&mut child);
+            child.terminate();
         }
         if let Some(mut child) = self.api_child.take() {
-            terminate_child_process(&mut child);
+            child.terminate();
         }
         if !stop_frontend_on_drop {
             return;
@@ -157,9 +230,23 @@ fn control_room_launch_signature(dev_mode: bool, api_base_url: &str) -> String {
 
 #[cfg(test)]
 mod control_room_guard_tests {
+    use std::sync::{Arc, Mutex};
+
     use super::{
-        api_openapi_response_is_compatible, control_room_launch_signature, ControlRoomGuard,
+        api_openapi_response_is_compatible, control_room_launch_signature, BootstrapProcessGuard,
+        ControlRoomGuard, GuardedProcess,
     };
+
+    struct RecordingProcess {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        label: &'static str,
+    }
+
+    impl GuardedProcess for RecordingProcess {
+        fn terminate(&mut self) {
+            self.events.lock().unwrap().push(self.label);
+        }
+    }
 
     #[test]
     fn reused_frontend_is_not_stopped_on_drop() {
@@ -178,6 +265,71 @@ mod control_room_guard_tests {
             control_room_launch_signature(true, "http://localhost:8081"),
             control_room_launch_signature(false, "http://localhost:8081"),
         );
+    }
+
+    #[test]
+    fn terminal_failure_lifetime_precedes_owned_process_termination() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut guard = ControlRoomGuard::active_for_test(
+            Some(Box::new(RecordingProcess {
+                events: Arc::clone(&events),
+                label: "api-terminated",
+            })),
+            Some(Box::new(RecordingProcess {
+                events: Arc::clone(&events),
+                label: "frontend-terminated",
+            })),
+        );
+        let failure_events = Arc::clone(&events);
+        guard.retain_terminal_failure_until_close(move || {
+            failure_events.lock().unwrap().push("explicit-close");
+        });
+
+        drop(guard);
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["explicit-close", "frontend-terminated", "api-terminated"]
+        );
+    }
+
+    #[test]
+    fn ordinary_owned_process_cleanup_does_not_wait_for_failure_close() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let guard = ControlRoomGuard::active_for_test(
+            Some(Box::new(RecordingProcess {
+                events: Arc::clone(&events),
+                label: "api-terminated",
+            })),
+            None,
+        );
+
+        drop(guard);
+
+        assert_eq!(*events.lock().unwrap(), vec!["api-terminated"]);
+    }
+
+    #[test]
+    fn bootstrap_process_guard_terminates_unreleased_processes_only() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let guard = BootstrapProcessGuard::new(RecordingProcess {
+            events: Arc::clone(&events),
+            label: "bootstrap-terminated",
+        });
+
+        drop(guard);
+        assert_eq!(*events.lock().unwrap(), vec!["bootstrap-terminated"]);
+
+        events.lock().unwrap().clear();
+        let guard = BootstrapProcessGuard::new(RecordingProcess {
+            events: Arc::clone(&events),
+            label: "released-process",
+        });
+        let mut released = guard.release();
+
+        assert!(events.lock().unwrap().is_empty());
+        released.terminate();
+        assert_eq!(*events.lock().unwrap(), vec!["released-process"]);
     }
 
     #[test]
@@ -310,15 +462,19 @@ pub(crate) fn bootstrap_control_plane(
         }
 
         let self_exe = std::env::current_exe().unwrap_or_default();
-        let mut api_child = spawn_fullmag_api(
+        let mut api_child = BootstrapProcessGuard::new(ChildProcess(spawn_fullmag_api(
             &root,
             &self_exe,
             api_log,
             api_err,
             external_control_room_available,
             stream_api_logs_to_terminal,
+        )?));
+        wait_for_api_ready(
+            api_port(),
+            &mut api_child.process_mut().0,
+            Duration::from_secs(60),
         )?;
-        wait_for_api_ready(api_port(), &mut api_child, Duration::from_secs(60))?;
         Some(api_child)
     };
 
@@ -406,11 +562,17 @@ pub(crate) fn bootstrap_control_plane(
                     .env("FULLMAG_STATIC_WEB_ROOT", &static_web_root);
             }
 
-            let mut child = command
-                .spawn()
-                .context("failed to spawn control room server")?;
+            let mut child = BootstrapProcessGuard::new(ChildProcess(
+                command
+                    .spawn()
+                    .context("failed to spawn control room server")?,
+            ));
             if let Some(log_file) = terminal_log_file {
-                terminal_logger().attach_child(&mut child, TerminalLogSource::Web, log_file)?;
+                terminal_logger().attach_child(
+                    &mut child.process_mut().0,
+                    TerminalLogSource::Web,
+                    log_file,
+                )?;
             }
             frontend_child = Some(child);
 
@@ -437,8 +599,8 @@ pub(crate) fn bootstrap_control_plane(
             api_port: api_port(),
             web_url: format!("http://localhost:{web_port}/"),
             web_port,
-            api_child,
-            frontend_child,
+            api_child: api_child.map(|child| child.release().0),
+            frontend_child: frontend_child.map(|child| child.release().0),
         });
     }
 
@@ -454,7 +616,7 @@ pub(crate) fn bootstrap_control_plane(
             api_port: api_port(),
             web_url: format!("http://{LOCALHOST_HTTP_HOST}:{}/", api_port()),
             web_port,
-            api_child,
+            api_child: api_child.map(|child| child.release().0),
             frontend_child: None,
         });
     }
@@ -845,6 +1007,7 @@ pub(crate) fn sync_current_live_snapshot(
             metadata: payload.metadata.as_ref(),
             mesh_workspace: payload.mesh_workspace.as_ref(),
             stage_execution: payload.stage_execution.as_ref(),
+            simulation_preparation: payload.simulation_preparation.as_ref(),
             run: payload.run.as_ref(),
             live_state: payload.live_state.as_ref(),
             latest_scalar_row: payload.latest_scalar_row.as_ref(),
@@ -875,6 +1038,7 @@ fn sync_current_live_session_frame(
             metadata: payload.metadata.as_ref(),
             mesh_workspace: payload.mesh_workspace.as_ref(),
             stage_execution: payload.stage_execution.as_ref(),
+            simulation_preparation: payload.simulation_preparation.as_ref(),
             run: payload.run.as_ref(),
         })
         .send()
@@ -940,17 +1104,21 @@ fn sync_current_live_field_frame(
     Ok(())
 }
 
-pub(crate) fn sync_current_live_delta(
-    session_id: &str,
-    payload: &CurrentLiveSnapshotPayload,
-) -> Result<()> {
-    if payload.session.is_some()
+fn payload_routes_to_current_live_session_frame(payload: &CurrentLiveSnapshotPayload) -> bool {
+    payload.session.is_some()
         || payload.session_status.is_some()
         || payload.metadata.is_some()
         || payload.mesh_workspace.is_some()
         || payload.stage_execution.is_some()
+        || payload.simulation_preparation.is_some()
         || payload.run.is_some()
-    {
+}
+
+pub(crate) fn sync_current_live_delta(
+    session_id: &str,
+    payload: &CurrentLiveSnapshotPayload,
+) -> Result<()> {
+    if payload_routes_to_current_live_session_frame(payload) {
         sync_current_live_session_frame(session_id, payload)?;
     }
 
@@ -974,6 +1142,26 @@ pub(crate) fn sync_current_live_delta(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod live_delta_routing_tests {
+    use super::payload_routes_to_current_live_session_frame;
+    use crate::simulation_preparation::SimulationPreparationState;
+    use crate::types::CurrentLiveSnapshotPayload;
+
+    #[test]
+    fn preparation_only_delta_routes_to_session_frame() {
+        let payload = CurrentLiveSnapshotPayload {
+            simulation_preparation: Some(SimulationPreparationState::new(
+                "prep-routing",
+                1_700_000_000_000,
+            )),
+            ..CurrentLiveSnapshotPayload::default()
+        };
+
+        assert!(payload_routes_to_current_live_session_frame(&payload));
+    }
 }
 
 /// Send a full `VisualizationStatePatch` JSON body to the visualization state endpoint before

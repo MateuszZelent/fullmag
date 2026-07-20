@@ -2772,6 +2772,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/simulation/preparation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["simulation_get_sessions_current_simulation_preparation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/simulation/runs/current": {
         parameters: {
             query?: never;
@@ -6461,6 +6477,51 @@ export interface components {
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             view_scope: components["schemas"]["PlanarViewScopeState"];
         };
+        PreparationExecutionSummary: {
+            backend?: string | null;
+            device?: string | null;
+            engine_id?: string | null;
+            mode?: string | null;
+            precision?: string | null;
+            runtime_family?: string | null;
+            worker?: string | null;
+        };
+        PreparationFailureResource: {
+            diagnostics_correlation_id?: string | null;
+            error_code: string;
+            stage_id: components["schemas"]["PreparationStageId"];
+            summary: string;
+        };
+        PreparationLogEntryResource: {
+            level: components["schemas"]["PreparationLogLevel"];
+            message: string;
+            stage_id: components["schemas"]["PreparationStageId"];
+            /** Format: int64 */
+            timestamp_unix_ms: number;
+        };
+        /** @enum {string} */
+        PreparationLogLevel: "info" | "warning" | "error";
+        PreparationProgressStage: {
+            /** Format: int64 */
+            completed_at_unix_ms?: number | null;
+            detail: string;
+            /** Format: int64 */
+            duration_ms?: number | null;
+            id: components["schemas"]["PreparationStageId"];
+            label: string;
+            progress_label?: string | null;
+            /** Format: int32 */
+            progress_percent?: number | null;
+            /** Format: int64 */
+            started_at_unix_ms?: number | null;
+            status: components["schemas"]["PreparationStageStatus"];
+        };
+        /** @enum {string} */
+        PreparationStageId: "runtime_startup" | "script_materialization" | "validation" | "planning" | "domain_preparation" | "meshing" | "mesh_postprocessing" | "solver_initialization" | "ready";
+        /** @enum {string} */
+        PreparationStageStatus: "pending" | "active" | "completed" | "failed" | "skipped";
+        /** @enum {string} */
+        PreparationStatus: "connecting" | "running" | "ready" | "failed";
         PrimitiveGeometryCapability: {
             boolean: boolean;
             category: string;
@@ -6758,6 +6819,8 @@ export interface components {
             scalars_revision: number;
             /** Format: int64 */
             scene_revision?: number | null;
+            /** Format: int64 */
+            simulation_preparation_revision: number;
             /** Format: int64 */
             slice_revision: number;
             /** Format: int64 */
@@ -7296,6 +7359,22 @@ export interface components {
             name: string;
             session_id: string;
             workspace_root: string;
+        };
+        SimulationPreparationResource: {
+            active_stage_id?: null | components["schemas"]["PreparationStageId"];
+            /** Format: int64 */
+            completed_at_unix_ms?: number | null;
+            failure?: null | components["schemas"]["PreparationFailureResource"];
+            log_tail: components["schemas"]["PreparationLogEntryResource"][];
+            preparation_id: string;
+            requested_execution: components["schemas"]["PreparationExecutionSummary"];
+            resolved_execution?: null | components["schemas"]["PreparationExecutionSummary"];
+            /** Format: int64 */
+            revision: number;
+            stages: components["schemas"]["PreparationProgressStage"][];
+            /** Format: int64 */
+            started_at_unix_ms: number;
+            status: components["schemas"]["PreparationStatus"];
         };
         /** @enum {string} */
         SliceAirboxRenderMode: "surface" | "wireframe" | "surface+edges" | "points";
@@ -15705,6 +15784,35 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    simulation_get_sessions_current_simulation_preparation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current simulation preparation resource */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimulationPreparationResource"];
+                };
+            };
+            /** @description Simulation preparation is not available */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };

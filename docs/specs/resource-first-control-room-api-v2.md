@@ -1,7 +1,7 @@
 # Resource-first Control Room API v2
 
 - Status: canonical control-room API contract
-- Last updated: 2026-05-31
+- Last updated: 2026-07-19
 - Compatibility reference: `docs/specs/control-room-api-endpoint-reference-v1.md`
 - Runtime model: `docs/specs/session-run-api-v1.md`
 - Governing ADR: `docs/adr/0011-resource-first-api.md`
@@ -72,6 +72,11 @@ contract has stricter ownership rules than the HTTP routes:
 
 - `resource.batch_changed` may only announce resources whose underlying payload
   freshness actually changed.
+- Simulation preparation changes use resource family `simulation` with
+  `resource_id = "preparation"` and carry only the preparation revision plus
+  the canonical HTTP fetch hint. The
+  websocket never carries the preparation stage list, execution summaries,
+  bounded log tail, or failure body.
 - UI-plane revisions and data-plane revisions must stay independent even when
   they share one websocket envelope.
 - `visualization/display`, `visualization/state`, and `workspace/*` are
@@ -119,6 +124,7 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `model/objects/*` | object create/patch/delete mutation routes; current object state is read back through `model/scene` |
 | `model/geometry/*` | geometry capability, validation, realization, and diagnostic projections derived from the current scene |
 | `simulation/runs/current` and `simulation/runs/{run_id}` | run metadata, requested/resolved execution, artifact location, run-level totals |
+| `simulation/preparation` | bounded startup preparation aggregate: canonical stage order/status, current progress, stage timing, requested/resolved execution summaries, safe log tail, and safe failure correlation |
 | `simulation/stages/execution` | full stage tree and stage state |
 | `simulation/solver/status` | live solver state: runtime state, algorithm, step, algorithm-appropriate `dt`, exact torque, separate RHS norm, convergence, stop reason/metric/unit, warnings |
 | `simulation/solver/energies/*` | current and historical energy samples |
@@ -135,6 +141,27 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `meshing/meshes/shared-domain/manifest` | mesh identity, mesh provenance, object segments, mesh parts, and tree/selection metadata |
 | `meshing/meshes/*/quality`, `meshing/meshes/*/quality/per-element`, `meshing/meshes/*/report`, and `meshing/meshes/*/size-field` | detailed shared-domain, object-scoped, and airbox-scoped quality summaries, binary per-element quality data, reports, and realized size-field diagnostics |
 | `visualization/client-acks` | latest client-side acknowledgement per browser viewport for observed visualization-state revisions |
+
+### Simulation preparation contract
+
+`GET /v2/sessions/current/simulation/preparation` returns the current
+`SimulationPreparationResource`, or `404` while no preparation snapshot is
+available. The aggregate exposes the canonical nine preparation stage ids,
+explicit aggregate/stage/log enums, optional backend-reported progress in the
+inclusive range `0..100`, monotonic-derived stage durations, requested and
+resolved execution summaries, at most 200 bounded safe log entries, and an
+optional safe failure with a diagnostics correlation id.
+
+`GET /v2/sessions/current/status` exposes only
+`resources.simulation_preparation_revision`; it does not copy preparation
+content. Detailed mesh state remains owned by `meshing/builds/current`, and
+full engine logs remain owned by `diagnostics/engine-log`.
+
+Preparation snapshot updates emit the existing `resource.batch_changed`
+envelope with `resource = "simulation"`, `resource_id = "preparation"`, the
+new revision, and the canonical
+`recommended_fetch = "/v2/sessions/current/simulation/preparation"`. HTTP v2
+remains authoritative; the event is cache invalidation only.
 
 ### Relaxation solver contract
 

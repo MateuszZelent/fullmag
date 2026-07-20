@@ -2292,29 +2292,62 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                 "message": "Preparing shared-domain mesh inputs",
             }
         )
-        emit_progress_event(
-            {
-                "kind": "mesh_build_phase",
-                "phase": "preparing_domain",
-                "message": "Preparing shared-domain inputs and mesh size fields",
-            }
-        )
-        if mesh_options.size_fields:
-            emit_progress(
-                f"Shared-domain local sizing active ({len(mesh_options.size_fields)} size fields)"
-            )
-
-        effective_hmax = float(hints.hmax)
-        if airbox is not None and airbox.maximum_element_size is not None and float(airbox.maximum_element_size) > effective_hmax:
-            effective_hmax = float(airbox.maximum_element_size)
-        for field in mesh_options.size_fields:
-            vin = field.get("params", {}).get("VIn") if isinstance(field.get("params"), dict) else None
-            if isinstance(vin, (int, float)) and float(vin) > effective_hmax:
-                effective_hmax = float(vin)
-
         result: SharedDomainMeshResult | None = None
         build_mode = "component_aware"
+
+        def _emit_mesh_build_failed(exc: Exception) -> None:
+            emit_progress_event(
+                {
+                    "kind": "mesh_build_failed",
+                    "phase": latest_mesh_phase,
+                    "shared_domain_build_mode": build_mode,
+                    "effective_airbox_target": effective_airbox_target,
+                    "effective_per_object_targets": effective_per_object_targets,
+                    "used_size_field_kinds": used_size_field_kinds,
+                    "fallbacks_triggered": fallbacks_triggered,
+                    "rejected_element_types": [
+                        dict(element)
+                        for element in getattr(exc, "rejected_element_types", [])
+                    ],
+                    "operation_statuses": [
+                        status.to_dict()
+                        for status in _build_mesh_operation_statuses(
+                            geometries,
+                            mesh_options,
+                            airbox=airbox,
+                            build_mode=build_mode,
+                            fallbacks_triggered=fallbacks_triggered,
+                            mesh_workflow=mesh_workflow,
+                        )
+                    ],
+                    "error": str(exc),
+                    "message": "Shared-domain mesh build failed",
+                }
+            )
+
+        latest_mesh_phase = "preparing_domain"
         try:
+            emit_progress_event(
+                {
+                    "kind": "mesh_build_phase",
+                    "phase": latest_mesh_phase,
+                    "message": "Preparing shared-domain inputs and mesh size fields",
+                }
+            )
+            if mesh_options.size_fields:
+                emit_progress(
+                    f"Shared-domain local sizing active ({len(mesh_options.size_fields)} size fields)"
+                )
+
+            effective_hmax = float(hints.hmax)
+            if airbox is not None and airbox.maximum_element_size is not None and float(airbox.maximum_element_size) > effective_hmax:
+                effective_hmax = float(airbox.maximum_element_size)
+            for field in mesh_options.size_fields:
+                vin = field.get("params", {}).get("VIn") if isinstance(field.get("params"), dict) else None
+                if isinstance(vin, (int, float)) and float(vin) > effective_hmax:
+                    effective_hmax = float(vin)
+
+            latest_mesh_phase = "meshing"
             if single_geometry_occ_direct:
                 build_mode = "single_geometry_occ"
                 emit_progress_event(
@@ -2527,190 +2560,169 @@ def _realize_fem_domain_mesh_asset_from_components_impl(
                             airbox=airbox,
                             options=mesh_options,
                         )
-            emit_progress_event(
-                {
-                    "kind": "mesh_build_phase",
-                    "phase": "postprocessing",
-                    "message": "Classifying the shared-domain mesh and finalizing region markers",
-                }
-            )
         except Exception as exc:
-            emit_progress_event(
-                {
-                    "kind": "mesh_build_failed",
-                    "shared_domain_build_mode": build_mode,
-                    "effective_airbox_target": effective_airbox_target,
-                    "effective_per_object_targets": effective_per_object_targets,
-                    "used_size_field_kinds": used_size_field_kinds,
-                    "fallbacks_triggered": fallbacks_triggered,
-                    "rejected_element_types": [
-                        dict(element)
-                        for element in getattr(exc, "rejected_element_types", [])
-                    ],
-                    "operation_statuses": [
-                        status.to_dict()
-                        for status in _build_mesh_operation_statuses(
-                            geometries,
-                            mesh_options,
-                            airbox=airbox,
-                            build_mode=build_mode,
-                            fallbacks_triggered=fallbacks_triggered,
-                            mesh_workflow=mesh_workflow,
-                        )
-                    ],
-                    "error": str(exc),
-                    "message": "Shared-domain mesh build failed",
-                }
-            )
+            _emit_mesh_build_failed(exc)
             raise
 
-    if build_mode != "conformal_occ":
-        mesh = _drop_degenerate_tetrahedra(
-            mesh,
-            context=f"{build_mode} shared-domain mesh",
-            fallbacks_triggered=fallbacks_triggered,
+    latest_mesh_phase = "postprocessing"
+    try:
+        emit_progress_event(
+            {
+                "kind": "mesh_build_phase",
+                "phase": latest_mesh_phase,
+                "message": "Classifying the shared-domain mesh and finalizing region markers",
+            }
         )
+        if build_mode != "conformal_occ":
+            mesh = _drop_degenerate_tetrahedra(
+                mesh,
+                context=f"{build_mode} shared-domain mesh",
+                fallbacks_triggered=fallbacks_triggered,
+            )
 
-    # Classify elements back to geometries
-    source_markers = np.asarray(mesh.element_markers, dtype=np.int32)
-    assigned_markers = np.zeros(mesh.n_elements, dtype=np.int32)
-    region_markers: list[dict[str, object]] = []
-    object_region_markers: list[dict[str, object]] = []
-    if result is not None:
-        for used_marker, geometry in enumerate(geometries, start=1):
-            source_marker = result.component_marker_tags.get(geometry.geometry_name)
-            if source_marker is None:
-                raise ValueError(
-                    f"component-aware shared FEM domain mesh is missing a marker for geometry "
-                    f"'{geometry.geometry_name}'"
-                )
-            assigned_markers[source_markers == source_marker] = used_marker
-            region_markers.append(
-                {"geometry_name": geometry.geometry_name, "marker": used_marker}
-            )
-        next_marker = len(geometries) + 1
-        for region in conformal_object_regions:
-            region_id = str(region.get("region_id", "")).strip()
-            source_marker = result.object_region_marker_tags.get(region_id)
-            if source_marker is None:
-                raise ValueError(
-                    f"conformal shared FEM domain mesh is missing marker for "
-                    f"object region '{region_id}'"
-                )
-            assigned_markers[source_markers == source_marker] = next_marker
-            object_region_markers.append(
-                {"geometry_name": region_id, "marker": next_marker}
-            )
-            next_marker += 1
-    else:
-        marker_mapping = _match_geometry_bounds_to_source_markers(geometries, mesh)
-        if marker_mapping is not None:
+        # Classify elements back to geometries
+        source_markers = np.asarray(mesh.element_markers, dtype=np.int32)
+        assigned_markers = np.zeros(mesh.n_elements, dtype=np.int32)
+        region_markers: list[dict[str, object]] = []
+        object_region_markers: list[dict[str, object]] = []
+        if result is not None:
             for used_marker, geometry in enumerate(geometries, start=1):
-                source_marker = marker_mapping.get(geometry.geometry_name)
+                source_marker = result.component_marker_tags.get(geometry.geometry_name)
                 if source_marker is None:
                     raise ValueError(
-                        f"shared FEM domain mesh classification could not map geometry "
-                        f"'{geometry.geometry_name}' to a source marker"
+                        f"component-aware shared FEM domain mesh is missing a marker for geometry "
+                        f"'{geometry.geometry_name}'"
                     )
                 assigned_markers[source_markers == source_marker] = used_marker
                 region_markers.append(
                     {"geometry_name": geometry.geometry_name, "marker": used_marker}
                 )
-        else:
-            element_centroids = mesh.nodes[mesh.elements].mean(axis=1)
-            used_marker = 1
-            for geometry in geometries:
-                inside = _contains_points_in_geometry(geometry, element_centroids)
-                overlap = inside & (assigned_markers != 0)
-                if np.any(overlap):
+            next_marker = len(geometries) + 1
+            for region in conformal_object_regions:
+                region_id = str(region.get("region_id", "")).strip()
+                source_marker = result.object_region_marker_tags.get(region_id)
+                if source_marker is None:
                     raise ValueError(
-                        f"shared FEM domain mesh classification overlapped for '{geometry.geometry_name}'"
+                        f"conformal shared FEM domain mesh is missing marker for "
+                        f"object region '{region_id}'"
                     )
-                assigned_markers[inside] = used_marker
-                region_markers.append(
-                    {"geometry_name": geometry.geometry_name, "marker": used_marker}
+                assigned_markers[source_markers == source_marker] = next_marker
+                object_region_markers.append(
+                    {"geometry_name": region_id, "marker": next_marker}
                 )
-                used_marker += 1
+                next_marker += 1
+        else:
+            marker_mapping = _match_geometry_bounds_to_source_markers(geometries, mesh)
+            if marker_mapping is not None:
+                for used_marker, geometry in enumerate(geometries, start=1):
+                    source_marker = marker_mapping.get(geometry.geometry_name)
+                    if source_marker is None:
+                        raise ValueError(
+                            f"shared FEM domain mesh classification could not map geometry "
+                            f"'{geometry.geometry_name}' to a source marker"
+                        )
+                    assigned_markers[source_markers == source_marker] = used_marker
+                    region_markers.append(
+                        {"geometry_name": geometry.geometry_name, "marker": used_marker}
+                    )
+            else:
+                element_centroids = mesh.nodes[mesh.elements].mean(axis=1)
+                used_marker = 1
+                for geometry in geometries:
+                    inside = _contains_points_in_geometry(geometry, element_centroids)
+                    overlap = inside & (assigned_markers != 0)
+                    if np.any(overlap):
+                        raise ValueError(
+                            f"shared FEM domain mesh classification overlapped for '{geometry.geometry_name}'"
+                        )
+                    assigned_markers[inside] = used_marker
+                    region_markers.append(
+                        {"geometry_name": geometry.geometry_name, "marker": used_marker}
+                    )
+                    used_marker += 1
 
-    if result is None and np.any(assigned_markers == 0):
-        magnetic_source_mask = source_markers == 1
-        if np.any(magnetic_source_mask & (assigned_markers == 0)):
-            raise ValueError(
-                "shared FEM domain mesh contains magnetic elements that could not be mapped "
-                "back to any geometry"
-            )
+        if result is None and np.any(assigned_markers == 0):
+            magnetic_source_mask = source_markers == 1
+            if np.any(magnetic_source_mask & (assigned_markers == 0)):
+                raise ValueError(
+                    "shared FEM domain mesh contains magnetic elements that could not be mapped "
+                    "back to any geometry"
+                )
 
-    classified_mesh = MeshData(
-        nodes=mesh.nodes,
-        elements=mesh.elements,
-        element_markers=assigned_markers,
-        boundary_faces=mesh.boundary_faces,
-        boundary_markers=mesh.boundary_markers,
-        periodic_boundary_pairs=mesh.periodic_boundary_pairs,
-        periodic_node_pairs=mesh.periodic_node_pairs,
-        quality=mesh.quality,
-        per_domain_quality=build_per_domain_quality_from_mesh_arrays(
-            mesh.nodes,
-            mesh.elements,
-            assigned_markers,
-            mesh.quality,
-        ) or mesh.per_domain_quality,
-    )
-    requested_airbox_hmax, requested_hmax_by_geometry = _resolve_requested_partition_hmaxs(
-        geometries, hints, airbox=airbox, mesh_workflow=mesh_workflow,
-        per_object_recipes=per_object_recipes,
-    )
-    _emit_shared_domain_mesh_summary(
-        classified_mesh, region_markers,
-        requested_airbox_hmax=requested_airbox_hmax,
-        requested_hmax_by_geometry=requested_hmax_by_geometry,
-    )
-    magnetic_submesh_signatures = _magnetic_submesh_signatures(
-        classified_mesh,
-        region_markers,
-    )
-    report = _build_shared_domain_build_report(
-        geometries,
-        hints,
-        airbox=airbox,
-        mesh_workflow=mesh_workflow,
-        per_object_recipes=per_object_recipes,
-        size_fields=list(mesh_options.size_fields),
-        region_markers=region_markers,
-        build_mode=build_mode,
-        fallbacks_triggered=fallbacks_triggered,
-        mesh_options=mesh_options,
-        selector_resolution=result.selector_resolution if result is not None else [],
-        boundary_layer_result=result.boundary_layer_result if result is not None else None,
-        orphan_entities=result.orphan_entities if result is not None else [],
-        magnetic_submesh_signatures=magnetic_submesh_signatures,
-    )
-    if object_regions is not None:
-        report = _dc_replace(
-            report,
-            object_region_markers=object_region_markers,
-            authored_regions_count=max(
-                report.authored_regions_count,
-                len(object_regions),
-            ),
-            realized_regions_count=max(
-                report.realized_regions_count,
-                len(object_region_markers),
-            ),
+        classified_mesh = MeshData(
+            nodes=mesh.nodes,
+            elements=mesh.elements,
+            element_markers=assigned_markers,
+            boundary_faces=mesh.boundary_faces,
+            boundary_markers=mesh.boundary_markers,
+            periodic_boundary_pairs=mesh.periodic_boundary_pairs,
+            periodic_node_pairs=mesh.periodic_node_pairs,
+            quality=mesh.quality,
+            per_domain_quality=build_per_domain_quality_from_mesh_arrays(
+                mesh.nodes,
+                mesh.elements,
+                assigned_markers,
+                mesh.quality,
+            ) or mesh.per_domain_quality,
         )
-    emit_progress_event(
-        {
-            "kind": "mesh_build_summary",
-            "shared_domain_build_mode": report.build_mode,
-            "n_nodes": classified_mesh.n_nodes,
-            "n_elements": classified_mesh.n_elements,
-            "n_boundary_faces": classified_mesh.n_boundary_faces,
-            "mesh_statistics": classified_mesh.to_ir("shared_domain").get("mesh_statistics"),
-            **{k: v for k, v in report.to_dict().items() if k != "build_mode"},
-            "message": "Shared-domain mesh build finished",
-        }
-    )
-    return classified_mesh, region_markers, report
+        requested_airbox_hmax, requested_hmax_by_geometry = _resolve_requested_partition_hmaxs(
+            geometries, hints, airbox=airbox, mesh_workflow=mesh_workflow,
+            per_object_recipes=per_object_recipes,
+        )
+        _emit_shared_domain_mesh_summary(
+            classified_mesh, region_markers,
+            requested_airbox_hmax=requested_airbox_hmax,
+            requested_hmax_by_geometry=requested_hmax_by_geometry,
+        )
+        magnetic_submesh_signatures = _magnetic_submesh_signatures(
+            classified_mesh,
+            region_markers,
+        )
+        report = _build_shared_domain_build_report(
+            geometries,
+            hints,
+            airbox=airbox,
+            mesh_workflow=mesh_workflow,
+            per_object_recipes=per_object_recipes,
+            size_fields=list(mesh_options.size_fields),
+            region_markers=region_markers,
+            build_mode=build_mode,
+            fallbacks_triggered=fallbacks_triggered,
+            mesh_options=mesh_options,
+            selector_resolution=result.selector_resolution if result is not None else [],
+            boundary_layer_result=result.boundary_layer_result if result is not None else None,
+            orphan_entities=result.orphan_entities if result is not None else [],
+            magnetic_submesh_signatures=magnetic_submesh_signatures,
+        )
+        if object_regions is not None:
+            report = _dc_replace(
+                report,
+                object_region_markers=object_region_markers,
+                authored_regions_count=max(
+                    report.authored_regions_count,
+                    len(object_regions),
+                ),
+                realized_regions_count=max(
+                    report.realized_regions_count,
+                    len(object_region_markers),
+                ),
+            )
+        emit_progress_event(
+            {
+                "kind": "mesh_build_summary",
+                "shared_domain_build_mode": report.build_mode,
+                "n_nodes": classified_mesh.n_nodes,
+                "n_elements": classified_mesh.n_elements,
+                "n_boundary_faces": classified_mesh.n_boundary_faces,
+                "mesh_statistics": classified_mesh.to_ir("shared_domain").get("mesh_statistics"),
+                **{k: v for k, v in report.to_dict().items() if k != "build_mode"},
+                "message": "Shared-domain mesh build finished",
+            }
+        )
+        return classified_mesh, region_markers, report
+    except Exception as exc:
+        _emit_mesh_build_failed(exc)
+        raise
 
 
 def realize_fem_domain_mesh_asset_from_components(

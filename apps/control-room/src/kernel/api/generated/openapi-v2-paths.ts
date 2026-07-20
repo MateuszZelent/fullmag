@@ -173,6 +173,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/simulation/commands",
   "/v2/sessions/current/simulation/commands/{command_id}",
   "/v2/sessions/current/simulation/objects/{object_id}/metrics",
+  "/v2/sessions/current/simulation/preparation",
   "/v2/sessions/current/simulation/runs/current",
   "/v2/sessions/current/simulation/runs/{run_id}",
   "/v2/sessions/current/simulation/solver/energies/current",

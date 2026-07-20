@@ -144,7 +144,9 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("selectFooterTelemetryStatus");
     expect(auditScript).toContain("footerTelemetryStatusEquals");
     expect(auditScript).toContain("(sessionStatus) => sessionStatus.data");
-    expect(auditScript).toContain('useState<FooterTabId>("telemetry")');
+    expect(auditScript).toContain(
+      "useLayoutSelector((layout) => layout.activeBottomPanelTab)",
+    );
     expect(auditScript).toContain("checkViewportSmokeComputeMetrics");
     expect(auditScript).toContain("checkComputePerformanceSmokeScript");
     expect(auditScript).toContain("checkComputePerformanceMicrobenchCoverage");

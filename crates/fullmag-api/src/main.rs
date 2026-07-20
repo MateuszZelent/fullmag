@@ -155,6 +155,7 @@ pub(crate) async fn current_live_realtime_state_from_snapshot(
             mesh_build_revision: snapshot.mesh_build_revision,
             commands_revision,
             stages_revision: snapshot.stage_execution_revision,
+            simulation_preparation_revision: snapshot.simulation_preparation_revision,
             scene_revision: snapshot.scene_document.as_ref().map(|scene| scene.revision),
         },
     }
@@ -379,6 +380,17 @@ fn current_live_realtime_changes(
             recommended_fetch: Some("/v2/sessions/current/simulation/stages/execution".to_string()),
         });
     }
+    if realtime_state.revisions.simulation_preparation_revision > 0 {
+        changes.push(RealtimeResourceChange {
+            resource: RealtimeResourceName::Simulation,
+            revision: realtime_state.revisions.simulation_preparation_revision,
+            resource_id: Some("preparation".to_string()),
+            quantity_ids: Vec::new(),
+            broad: false,
+            domain_generation_id: None,
+            recommended_fetch: Some("/v2/sessions/current/simulation/preparation".to_string()),
+        });
+    }
     if let Some(scene_revision) = realtime_state.revisions.scene_revision {
         changes.push(RealtimeResourceChange {
             resource: RealtimeResourceName::SceneDocument,
@@ -525,6 +537,10 @@ fn current_live_realtime_change_revision_changed(
             current_live_commands_effective_revision(previous) != change.revision
         }
         RealtimeResourceName::Stages => previous.stages_revision != change.revision,
+        RealtimeResourceName::Simulation => match change.resource_id.as_deref() {
+            Some("preparation") => previous.simulation_preparation_revision != change.revision,
+            _ => true,
+        },
         RealtimeResourceName::SceneDocument => previous.scene_revision != Some(change.revision),
         RealtimeResourceName::PlanarMonitors => previous.scene_revision != Some(change.revision),
         RealtimeResourceName::PlanarFields => match change.resource_id.as_deref() {
@@ -566,6 +582,7 @@ mod realtime_change_tests {
             mesh_build_revision: 25,
             commands_revision: 26,
             stages_revision: 27,
+            simulation_preparation_revision: 30,
             scene_revision: Some(28),
             visualization_state_revision: 29,
         }
@@ -1005,7 +1022,9 @@ fn current_live_realtime_event_coalesce_window_ms(event: &LiveRealtimeServerEven
         if payload.changes.iter().any(|change| {
             matches!(
                 change.resource,
-                RealtimeResourceName::Commands | RealtimeResourceName::Stages
+                RealtimeResourceName::Commands
+                    | RealtimeResourceName::Stages
+                    | RealtimeResourceName::Simulation
             )
         }) {
             return None;
@@ -1335,7 +1354,9 @@ enum RealtimeQosLane {
 fn realtime_qos_lane(change: &RealtimeResourceChange) -> RealtimeQosLane {
     if matches!(
         change.resource,
-        RealtimeResourceName::Commands | RealtimeResourceName::Stages
+        RealtimeResourceName::Commands
+            | RealtimeResourceName::Stages
+            | RealtimeResourceName::Simulation
     ) {
         return RealtimeQosLane::Immediate;
     }
@@ -2171,6 +2192,7 @@ where
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
+                simulation_preparation: None,
                 run: None,
                 live_state: None,
                 latest_scalar_row: None,

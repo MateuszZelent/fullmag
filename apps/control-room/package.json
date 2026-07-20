@@ -37,6 +37,7 @@
     "smoke:viewport-2d": "node scripts/smoke-viewport-2d.mjs",
     "smoke:viewport-3d-mixed-targets": "node scripts/smoke-viewport-3d-mixed-targets.mjs",
     "smoke:realtime-communication-budget": "node scripts/smoke-realtime-communication-budget.mjs",
+    "smoke:simulation-preparation": "node scripts/smoke-simulation-preparation.mjs",
     "verify:mesh-build-new-object": "node scripts/verify-mesh-build-new-object.mjs",
     "test": "vitest run",
     "typecheck": "node scripts/typecheck-control-room.mjs",

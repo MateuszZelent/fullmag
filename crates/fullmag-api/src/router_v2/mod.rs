@@ -369,6 +369,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::simulation::get_current_run),
         )
         .route(
+            "/v2/sessions/current/simulation/preparation",
+            get(handlers::simulation::get_simulation_preparation),
+        )
+        .route(
             "/v2/sessions/current/simulation/runs/:run_id",
             get(handlers::simulation::get_run_by_id),
         )

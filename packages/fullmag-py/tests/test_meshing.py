@@ -6708,6 +6708,69 @@ class MeshScaffoldTests(unittest.TestCase):
         )
         self.assertIn("1 tetrahedra, 4 nodes", output)
 
+    def test_mesh_build_failed_event_reports_latest_explicit_phase(self) -> None:
+        geometry = fm.Box(size=(1.0, 1.0, 1.0), name="magnet")
+
+        with patch(
+            "fullmag.meshing.asset_pipeline.emit_progress_event"
+        ) as emit_event, patch(
+            "fullmag.meshing.asset_pipeline.generate_mesh",
+            side_effect=RuntimeError("native mesher failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "native mesher failed"):
+                realize_fem_domain_mesh_asset(
+                    [geometry],
+                    fm.FEM(order=1, hmax=0.1),
+                    study_universe={
+                        "mode": "manual",
+                        "size": [4.0, 4.0, 4.0],
+                        "center": [0.0, 0.0, 0.0],
+                    },
+                    mesh_workflow={"single_geometry_occ_direct": True},
+                )
+
+        events = [call.args[0] for call in emit_event.call_args_list]
+        failed_event = next(event for event in events if event["kind"] == "mesh_build_failed")
+        self.assertEqual(failed_event["phase"], "meshing")
+        emitted_phases = [
+            event["phase"] for event in events if event["kind"] == "mesh_build_phase"
+        ]
+        self.assertEqual(emitted_phases[-1], failed_event["phase"])
+
+    def test_mesh_build_failed_event_reports_postprocessing_failure_once(self) -> None:
+        geometry = fm.Box(size=(1.0, 1.0, 1.0), name="magnet")
+        failure = RuntimeError("postprocessing failed")
+
+        with patch(
+            "fullmag.meshing.asset_pipeline.emit_progress_event"
+        ) as emit_event, patch(
+            "fullmag.meshing.asset_pipeline.generate_mesh",
+            return_value=object(),
+        ), patch(
+            "fullmag.meshing.asset_pipeline._drop_degenerate_tetrahedra",
+            side_effect=failure,
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                realize_fem_domain_mesh_asset(
+                    [geometry],
+                    fm.FEM(order=1, hmax=0.1),
+                    study_universe={
+                        "mode": "manual",
+                        "size": [4.0, 4.0, 4.0],
+                        "center": [0.0, 0.0, 0.0],
+                    },
+                    mesh_workflow={"single_geometry_occ_direct": True},
+                )
+
+        self.assertIs(raised.exception, failure)
+        failed_events = [
+            call.args[0]
+            for call in emit_event.call_args_list
+            if call.args[0]["kind"] == "mesh_build_failed"
+        ]
+        self.assertEqual(len(failed_events), 1)
+        self.assertEqual(failed_events[0]["phase"], "postprocessing")
+
     def test_element_metric_summary_reports_thirty_characteristic_size_bins(self) -> None:
         scales = np.asarray([1.0, 1.5, 2.0, 3.0, 5.0, 8.0], dtype=np.float64)
         nodes: list[list[float]] = []

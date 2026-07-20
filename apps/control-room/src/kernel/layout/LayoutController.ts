@@ -4,6 +4,7 @@ import type { ModuleId, SlotId } from "../types";
 
 import {
   DEFAULT_LAYOUT,
+  type BottomPanelTabId,
   type LayoutState,
   type PanelPosition,
   type RibbonTabId,
@@ -28,6 +29,8 @@ export class LayoutController {
 
   replace(nextState: LayoutState): void {
     const next: LayoutState = {
+      activeBottomPanelTab:
+        nextState.activeBottomPanelTab ?? DEFAULT_LAYOUT.activeBottomPanelTab,
       activeModuleTab: nextState.activeModuleTab,
       activeViewportMainModuleId: nextState.activeViewportMainModuleId,
       lastSpatialViewportMainModuleId:
@@ -39,6 +42,7 @@ export class LayoutController {
       panelVisible: { ...nextState.panelVisible },
     };
     const layoutChanged =
+      this.state.activeBottomPanelTab !== next.activeBottomPanelTab ||
       this.state.activeModuleTab !== next.activeModuleTab ||
       this.state.activeViewportMainModuleId !== next.activeViewportMainModuleId ||
       this.state.lastSpatialViewportMainModuleId !==
@@ -58,6 +62,31 @@ export class LayoutController {
     if (this.state.activeModuleTab === tabId) return;
     this.state = { ...this.state, activeModuleTab: tabId };
     this.notify("workspace:layout-changed");
+  }
+
+  setBottomPanelTab(tabId: BottomPanelTabId): void {
+    if (this.state.activeBottomPanelTab === tabId) return;
+    this.state = { ...this.state, activeBottomPanelTab: tabId };
+    this.notify("workspace:layout-changed");
+  }
+
+  openBottomPanel(tabId: BottomPanelTabId): void {
+    const layoutChanged =
+      !this.state.panelVisible.bottom ||
+      this.state.activeBottomPanelTab !== tabId;
+    const focusChanged = this.state.focusedSlot !== "panel-bottom";
+    if (!layoutChanged && !focusChanged) return;
+
+    this.state = {
+      ...this.state,
+      activeBottomPanelTab: tabId,
+      focusedSlot: "panel-bottom",
+      panelVisible: this.state.panelVisible.bottom
+        ? this.state.panelVisible
+        : { ...this.state.panelVisible, bottom: true },
+    };
+    if (layoutChanged) this.notify("workspace:layout-changed");
+    if (focusChanged) this.notify("workspace:focus-changed");
   }
 
   setActiveViewportMainModule(moduleId: ModuleId): void {

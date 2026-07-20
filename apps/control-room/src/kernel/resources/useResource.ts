@@ -518,6 +518,15 @@ function visibleResourceState<TData>({
   if (resourceSettledForRevision(state, resourceKey, externalRevision)) {
     return state;
   }
+  if (
+    !manualRefreshPending &&
+    state.status === "error" &&
+    state.data === null &&
+    state.settledResourceKey === resourceKey &&
+    state.settledExternalRevision === externalRevision
+  ) {
+    return state;
+  }
   if (pauseLoad && !manualRefreshPending) {
     if (state.status === "error") {
       return state;

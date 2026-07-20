@@ -13,7 +13,9 @@ import type {
   BinaryResourceResult,
   FieldVectorResponseMetadata,
   LiveStatusResource,
+  SimulationPreparationResource,
 } from "./apiTypes";
+import { SIMULATION_PREPARATION_PATH } from "./apiPaths";
 import type { DecodedFieldVector } from "./codecs";
 import { RequestDiagnosticsController } from "./RequestDiagnosticsController";
 
@@ -238,6 +240,7 @@ const resourceRevisions: LiveStatusResource["resources"] = {
   region_topology_revision: 0,
   scalars_revision: 0,
   scene_revision: null,
+  simulation_preparation_revision: 0,
   slice_revision: 0,
   solver_profile_revision: 0,
   stages_revision: 0,
@@ -610,6 +613,54 @@ function parseRequestBody(body: BodyInit | null | undefined): unknown {
 }
 
 describe("ControlRoomApi", () => {
+  it("loads preparation through the simulation facade", async () => {
+    let observedInit: RequestInit | undefined;
+    let observedUrl = "";
+    const preparation = {
+      active_stage_id: "planning",
+      completed_at_unix_ms: null,
+      failure: null,
+      log_tail: [],
+      preparation_id: "prep-1",
+      requested_execution: {
+        backend: "fdm",
+        device: "gpu",
+        engine_id: null,
+        mode: "strict",
+        precision: "double",
+        runtime_family: null,
+        worker: null,
+      },
+      resolved_execution: null,
+      revision: 7,
+      stages: [],
+      started_at_unix_ms: 1_000,
+      status: "running",
+    } satisfies SimulationPreparationResource;
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      observedUrl = String(url);
+      observedInit = init;
+      return jsonResponse(preparation);
+    });
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+      requestIdFactory: () => "req-preparation",
+    });
+    const controller = new AbortController();
+
+    await expect(
+      api.simulation.preparation({ signal: controller.signal }),
+    ).resolves.toMatchObject({ revision: 7 });
+
+    expect(observedUrl).toBe(
+      `http://127.0.0.1:8765${SIMULATION_PREPARATION_PATH}`,
+    );
+    expect(observedInit?.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(observedInit?.signal?.aborted).toBe(true);
+  });
+
   it("loads current session status through the v2 resource path", async () => {
     let observedInit: RequestInit | undefined;
     let observedUrl = "";

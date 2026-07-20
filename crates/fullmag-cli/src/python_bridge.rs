@@ -8,9 +8,142 @@ use std::collections::HashMap;
 
 use crate::args::ScriptCli;
 use crate::control_room::repo_root;
+use crate::simulation_preparation::PreparationStageId;
 use crate::types::{
     LoadedMagnetizationState, PythonProgressCallback, PythonProgressEvent, ScriptExecutionConfig,
 };
+
+const MAX_PREPARATION_PROGRESS_LABEL_CHARS: usize = 120;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PythonMeshPreparationUpdate {
+    StageProgress {
+        stage_id: PreparationStageId,
+        detail: String,
+        progress_percent: Option<u8>,
+        progress_label: Option<String>,
+    },
+    Completed {
+        detail: String,
+    },
+    Failed {
+        stage_id: PreparationStageId,
+        summary: String,
+    },
+}
+
+impl PythonMeshPreparationUpdate {
+    #[cfg(test)]
+    pub(crate) fn stage_id(&self) -> PreparationStageId {
+        match self {
+            Self::StageProgress { stage_id, .. } | Self::Failed { stage_id, .. } => *stage_id,
+            Self::Completed { .. } => PreparationStageId::MeshPostprocessing,
+        }
+    }
+}
+
+pub(crate) fn python_mesh_preparation_update(
+    kind: &str,
+    payload: &serde_json::Value,
+) -> Option<PythonMeshPreparationUpdate> {
+    let progress_percent = payload
+        .get("progress_percent")
+        .or_else(|| payload.get("percent"))
+        .and_then(serde_json::Value::as_u64)
+        .filter(|value| *value <= 100)
+        .and_then(|value| u8::try_from(value).ok());
+    let progress_label = payload
+        .get("progress_label")
+        .or_else(|| payload.get("label"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(sanitize_preparation_progress_label);
+
+    let stage_progress = |stage_id, fallback_detail: &str| {
+        Some(PythonMeshPreparationUpdate::StageProgress {
+            stage_id,
+            detail: fallback_detail.to_string(),
+            progress_percent,
+            progress_label: progress_label.clone(),
+        })
+    };
+
+    match kind {
+        "mesh_build_started" => stage_progress(
+            PreparationStageId::DomainPreparation,
+            "Preparing shared-domain inputs",
+        ),
+        "mesh_build_phase" => match payload
+            .get("phase")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("queued")
+        {
+            "queued" | "materializing" | "preparing_domain" => stage_progress(
+                PreparationStageId::DomainPreparation,
+                "Preparing the shared domain",
+            ),
+            "meshing" => stage_progress(PreparationStageId::Meshing, "Meshing the shared domain"),
+            "postprocessing" => stage_progress(
+                PreparationStageId::MeshPostprocessing,
+                "Postprocessing the shared-domain mesh",
+            ),
+            _ => None,
+        },
+        "mesh_build_summary" => Some(PythonMeshPreparationUpdate::Completed {
+            detail: "Shared-domain mesh preparation complete".to_string(),
+        }),
+        "mesh_build_failed" => {
+            let stage_id = match payload.get("phase").and_then(serde_json::Value::as_str) {
+                Some("meshing") => PreparationStageId::Meshing,
+                Some("postprocessing") => PreparationStageId::MeshPostprocessing,
+                _ => PreparationStageId::DomainPreparation,
+            };
+            Some(PythonMeshPreparationUpdate::Failed {
+                stage_id,
+                summary: "Shared-domain mesh build failed".to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn sanitize_preparation_progress_label(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || preparation_text_looks_path_like(trimmed) {
+        return None;
+    }
+
+    let mut sanitized = String::new();
+    let mut previous_was_space = false;
+    let mut character_count = 0;
+    for character in trimmed.chars() {
+        if character_count >= MAX_PREPARATION_PROGRESS_LABEL_CHARS {
+            break;
+        }
+        if character.is_control() || character.is_whitespace() {
+            if !previous_was_space && !sanitized.is_empty() {
+                sanitized.push(' ');
+                character_count += 1;
+                previous_was_space = true;
+            }
+        } else {
+            sanitized.push(character);
+            character_count += 1;
+            previous_was_space = false;
+        }
+    }
+    let bounded = sanitized.trim().to_string();
+    (!bounded.is_empty()).then_some(bounded)
+}
+
+fn preparation_text_looks_path_like(value: &str) -> bool {
+    value.starts_with(['/', '~'])
+        || value.contains('\\')
+        || value.contains("../")
+        || value.contains(":/")
+        || value
+            .split_whitespace()
+            .any(|token| token != "/" && (token.starts_with('/') || token.contains('/')))
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct RemeshPerDomainQuality {
@@ -1065,6 +1198,7 @@ pub(crate) fn invoke_adaptive_remesh_full(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::simulation_preparation::PreparationStageId;
 
     #[test]
     fn syntax_check_python_args_do_not_import_fullmag_runtime_helper() {
@@ -1175,6 +1309,146 @@ mod tests {
         assert_eq!(
             map_remesh_progress_message("some unrelated python log"),
             None
+        );
+    }
+
+    #[test]
+    fn structured_mesh_phases_map_to_canonical_preparation_updates() {
+        assert_eq!(
+            python_mesh_preparation_update(
+                "mesh_build_phase",
+                &serde_json::json!({
+                    "phase": "preparing_domain",
+                    "message": "Preparing shared-domain inputs",
+                }),
+            )
+            .map(|update| update.stage_id()),
+            Some(PreparationStageId::DomainPreparation)
+        );
+        assert_eq!(
+            python_mesh_preparation_update(
+                "mesh_build_phase",
+                &serde_json::json!({
+                    "phase": "meshing",
+                    "progress_percent": 63,
+                    "progress_label": "142580 / 226318 elements",
+                }),
+            ),
+            Some(PythonMeshPreparationUpdate::StageProgress {
+                stage_id: PreparationStageId::Meshing,
+                detail: "Meshing the shared domain".to_string(),
+                progress_percent: Some(63),
+                progress_label: Some("142580 / 226318 elements".to_string()),
+            })
+        );
+        assert_eq!(
+            python_mesh_preparation_update(
+                "mesh_build_phase",
+                &serde_json::json!({"phase": "postprocessing"}),
+            )
+            .map(|update| update.stage_id()),
+            Some(PreparationStageId::MeshPostprocessing)
+        );
+        assert_eq!(
+            python_mesh_preparation_update(
+                "mesh_build_summary",
+                &serde_json::json!({"message": "Shared-domain mesh build finished"}),
+            ),
+            Some(PythonMeshPreparationUpdate::Completed {
+                detail: "Shared-domain mesh preparation complete".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn structured_mesh_failure_does_not_project_raw_error_text() {
+        assert_eq!(
+            python_mesh_preparation_update(
+                "mesh_build_failed",
+                &serde_json::json!({
+                    "phase": "meshing",
+                    "message": "Shared-domain mesh build failed",
+                    "error": "raw mesher stderr with /private/model/path",
+                }),
+            ),
+            Some(PythonMeshPreparationUpdate::Failed {
+                stage_id: PreparationStageId::Meshing,
+                summary: "Shared-domain mesh build failed".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn structured_mesh_preparation_drops_out_of_range_percentages() {
+        for invalid_percent in [101, 500] {
+            let update = python_mesh_preparation_update(
+                "mesh_build_phase",
+                &serde_json::json!({
+                    "phase": "meshing",
+                    "progress_percent": invalid_percent,
+                }),
+            )
+            .expect("known mesh phase");
+            let PythonMeshPreparationUpdate::StageProgress {
+                progress_percent, ..
+            } = update
+            else {
+                panic!("meshing phase should map to progress")
+            };
+            assert_eq!(progress_percent, None);
+        }
+    }
+
+    #[test]
+    fn structured_mesh_preparation_sanitizes_and_bounds_payload_text() {
+        let path_like = python_mesh_preparation_update(
+            "mesh_build_phase",
+            &serde_json::json!({
+                "phase": "meshing",
+                "message": "reading /private/model/mesh.msh",
+                "progress_percent": 7,
+                "progress_label": "/private/model/mesh.msh",
+            }),
+        )
+        .expect("known mesh phase");
+        assert_eq!(
+            path_like,
+            PythonMeshPreparationUpdate::StageProgress {
+                stage_id: PreparationStageId::Meshing,
+                detail: "Meshing the shared domain".to_string(),
+                progress_percent: Some(7),
+                progress_label: None,
+            }
+        );
+
+        let oversized_label = "element".repeat(100);
+        let bounded = python_mesh_preparation_update(
+            "mesh_build_phase",
+            &serde_json::json!({
+                "phase": "meshing",
+                "progress_label": oversized_label,
+            }),
+        )
+        .expect("known mesh phase");
+        let PythonMeshPreparationUpdate::StageProgress {
+            progress_label: Some(progress_label),
+            ..
+        } = bounded
+        else {
+            panic!("safe oversized labels should be bounded")
+        };
+        assert!(progress_label.chars().count() <= MAX_PREPARATION_PROGRESS_LABEL_CHARS);
+
+        assert_eq!(
+            python_mesh_preparation_update(
+                "mesh_build_summary",
+                &serde_json::json!({
+                    "message": "mesh written to /private/model/mesh.msh",
+                }),
+            ),
+            Some(PythonMeshPreparationUpdate::Completed {
+                detail: "Shared-domain mesh preparation complete".to_string(),
+            })
         );
     }
 

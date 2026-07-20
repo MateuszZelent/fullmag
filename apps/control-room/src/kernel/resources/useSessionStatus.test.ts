@@ -23,6 +23,7 @@ const resources: LiveStatusResource["resources"] = {
   region_topology_revision: 0,
   scalars_revision: 0,
   scene_revision: null,
+  simulation_preparation_revision: 0,
   slice_revision: 0,
   solver_profile_revision: 0,
   stages_revision: 0,
@@ -67,6 +68,17 @@ describe("resolveSessionStatusRevision", () => {
     } as LiveStatusResource;
 
     expect(resolveSessionStatusRevision(status)).toBe(13);
+  });
+
+  it("tracks simulation preparation revisions", () => {
+    const status = {
+      resources: {
+        ...resources,
+        simulation_preparation_revision: 14,
+      },
+    } as LiveStatusResource;
+
+    expect(resolveSessionStatusRevision(status)).toBe(14);
   });
 
   it("tracks independent region realization revisions", () => {

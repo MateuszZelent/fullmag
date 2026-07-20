@@ -588,6 +588,8 @@ pub(crate) struct SessionStateResponse {
     pub mesh_workspace: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_execution: Option<StageExecutionState>,
+    #[serde(skip_serializing)]
+    pub simulation_preparation: Option<SimulationPreparationSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_document: Option<SceneDocument>,
     pub scalar_rows: Vec<ScalarRow>,
@@ -630,9 +632,54 @@ pub(crate) struct SessionStateResponse {
     /// Revision for simulation stage execution state.
     #[serde(skip)]
     pub stage_execution_revision: u64,
+    /// Revision for the internal simulation preparation snapshot.
+    #[serde(skip)]
+    pub simulation_preparation_revision: u64,
     /// Independent region-realization product revisions; scene revision is not a substitute.
     #[serde(skip)]
     pub region_realization_revisions: fullmag_authoring::RegionRealizationRevisions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SimulationPreparationSnapshot {
+    pub preparation_id: String,
+    pub revision: u64,
+    pub status: String,
+    pub active_stage_id: Option<String>,
+    pub started_at_unix_ms: u64,
+    pub completed_at_unix_ms: Option<u64>,
+    pub stages: Vec<SimulationPreparationStageSnapshot>,
+    pub log_tail: Vec<SimulationPreparationLogEntrySnapshot>,
+    pub failure: Option<SimulationPreparationFailureSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SimulationPreparationStageSnapshot {
+    pub id: String,
+    pub label: String,
+    pub detail: String,
+    pub status: String,
+    pub started_at_unix_ms: Option<u64>,
+    pub completed_at_unix_ms: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub progress_percent: Option<u8>,
+    pub progress_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SimulationPreparationLogEntrySnapshot {
+    pub timestamp_unix_ms: u64,
+    pub level: String,
+    pub stage_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SimulationPreparationFailureSnapshot {
+    pub error_code: String,
+    pub summary: String,
+    pub stage_id: String,
+    pub diagnostics_correlation_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -906,6 +953,8 @@ pub(crate) struct CurrentLiveSnapshotRequest {
     #[serde(default)]
     pub stage_execution: Option<StageExecutionState>,
     #[serde(default)]
+    pub simulation_preparation: Option<SimulationPreparationSnapshot>,
+    #[serde(default)]
     pub run: Option<RunManifest>,
     #[serde(default)]
     pub live_state: Option<LiveState>,
@@ -942,6 +991,8 @@ pub(crate) struct CurrentLiveSessionFrameRequest {
     pub mesh_workspace: Option<Value>,
     #[serde(default)]
     pub stage_execution: Option<StageExecutionState>,
+    #[serde(default)]
+    pub simulation_preparation: Option<SimulationPreparationSnapshot>,
     #[serde(default)]
     pub run: Option<RunManifest>,
 }
@@ -1452,6 +1503,7 @@ mod tests {
             metadata: None,
             mesh_workspace: None,
             stage_execution: None,
+            simulation_preparation: None,
             scene_document: Some(scene_document),
             scalar_rows: Vec::new(),
             engine_log: Vec::new(),
@@ -1473,6 +1525,7 @@ mod tests {
             field_samples_revision: 0,
             field_quantity_revisions: BTreeMap::new(),
             stage_execution_revision: 0,
+            simulation_preparation_revision: 0,
             region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
         };
 

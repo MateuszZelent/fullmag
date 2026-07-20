@@ -1659,6 +1659,7 @@ describe("study runtime command contributions", () => {
       profile: "resume",
       ui_state: {
         kernel_layout: {
+          activeBottomPanelTab: "telemetry",
           activeModuleTab: "home",
           activeViewportMainModuleId: "viewport-3d",
           focusedSlot: null,

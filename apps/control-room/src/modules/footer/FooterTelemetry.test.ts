@@ -84,6 +84,7 @@ const status: LiveStatusResource = {
     region_topology_revision: 0,
     scalars_revision: 22,
     scene_revision: 2,
+    simulation_preparation_revision: 0,
     slice_revision: 0,
     solver_profile_revision: 0,
     stages_revision: 0,

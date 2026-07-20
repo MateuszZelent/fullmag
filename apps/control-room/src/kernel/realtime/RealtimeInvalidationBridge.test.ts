@@ -45,6 +45,7 @@ import {
   MODEL_REGIONS_PATH,
   MODEL_SCENE_PATH,
   SIMULATION_COMMANDS_PATH,
+  SIMULATION_PREPARATION_PATH,
   SIMULATION_RUN_CURRENT_PATH,
   SIMULATION_SOLVER_STATUS_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
@@ -67,6 +68,33 @@ function dependentRevision(resourceKey: string, revision: string | number): stri
 }
 
 describe("RealtimeInvalidationBridge", () => {
+  it("invalidates preparation from the exact backend revision-only change", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+    const change = {
+      recommended_fetch: SIMULATION_PREPARATION_PATH,
+      resource: "simulation",
+      resource_id: "preparation",
+      revision: 8,
+    } as const;
+
+    expect(Object.keys(change).sort()).toEqual([
+      "recommended_fetch",
+      "resource",
+      "resource_id",
+      "revision",
+    ]);
+
+    const handled = bridge.handleEvent({
+      payload: { changes: [change] },
+      type: "resource.batch_changed",
+    });
+
+    expect(handled).toBe(true);
+    expect(resources.getRevision(SIMULATION_PREPARATION_PATH)).toBe(8);
+  });
+
   it("maps backend resource batch events to resource invalidation", () => {
     const bus = new EventBus<KernelEventMap>();
     const resources = new ResourceInvalidationController(bus);
