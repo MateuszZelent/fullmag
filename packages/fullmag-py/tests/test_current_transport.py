@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import textwrap
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -30,6 +31,16 @@ def _base_problem(**kwargs) -> fm.Problem:
 
 
 class CurrentTransportTests(unittest.TestCase):
+    def test_legacy_spin_torque_normalization_survives_problem_replace(self) -> None:
+        torque = fm.ZhangLiSTT(current_density=(8.0e12, 0.0, 0.0))
+        problem = _base_problem(spin_torque=torque)
+
+        replaced = replace(problem, study=problem.study)
+
+        self.assertIsNone(replaced.spin_torque)
+        self.assertEqual(replaced.spin_torques, (torque,))
+        self.assertEqual(replaced.to_ir()["spin_torque_modules"][0]["kind"], "zhang_li")  # type: ignore[index]
+
     def test_prescribed_density_serializes_to_ir(self) -> None:
         transport = fm.CurrentTransport(
             name="drive",

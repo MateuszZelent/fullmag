@@ -48,6 +48,8 @@ int main()
     const std::filesystem::path root = fem_source_root();
     const std::string gpu_stage =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
+    const std::string hypre_stream_interop =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_stream_interop.cpp");
     const std::string gpu_rk_stats_publication =
         read_text_file(root / "gpu" / "cuda" / "integrators" / "rk" / "rk_step_stats_publication.cpp");
     const std::string gpu_rk_stats =
@@ -78,20 +80,35 @@ int main()
             gpu_stage.find("cudaDeviceSynchronize") == std::string::npos,
         "strict GPU demag phase timing must not add hot-loop synchronization");
     check(
-        gpu_stage.find("cudaEventRecord(workspace->compute_ready_event, stream)") !=
-                std::string::npos &&
-            gpu_stage.find("cudaStreamWaitEvent(nullptr, workspace->compute_ready_event, 0)") !=
-                std::string::npos &&
-            gpu_stage.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") !=
-                std::string::npos &&
-            gpu_stage.find("cudaEventRecord(workspace->hypre_done_event, nullptr)") !=
-                std::string::npos &&
-            gpu_stage.find("cudaStreamWaitEvent(stream, workspace->hypre_done_event, 0)") !=
-                std::string::npos,
-        "strict GPU demag Hypre boundary must remain an explicit event bridge between compute and MFEM/Hypre streams");
+        gpu_stage.find("hypre_wait_for_fullmag(") <
+                gpu_stage.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
+            gpu_stage.find("fullmag_wait_for_hypre(") >
+                gpu_stage.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)"),
+        "strict GPU demag stage must delegate producer/consumer ordering to the exact Hypre stream adapter");
     check(
-        gpu_stage.find("cudaStreamSynchronize") == std::string::npos,
-        "strict GPU demag stage must not use host-blocking stream synchronization");
+        hypre_stream_interop.find("#include <mfem/config/_config.hpp>") <
+            hypre_stream_interop.find("defined(MFEM_USE_MPI)"),
+        "strict GPU demag stream adapter must load MFEM feature macros before testing MFEM_USE_MPI");
+    check(
+        hypre_stream_interop.find("HYPRE_RELEASE_NUMBER == 30100") !=
+                std::string::npos &&
+            hypre_stream_interop.find("MFEM_VERSION != 40900") !=
+                std::string::npos &&
+            hypre_stream_interop.find("cudaEventRecord(interop.fullmag_ready, fullmag_stream)") !=
+                std::string::npos &&
+            hypre_stream_interop.find("cudaStreamWaitEvent(interop.hypre_stream, interop.fullmag_ready, 0)") !=
+                std::string::npos &&
+            hypre_stream_interop.find("cudaEventRecord(interop.hypre_done, interop.hypre_stream)") !=
+                std::string::npos &&
+            hypre_stream_interop.find("cudaStreamWaitEvent(fullmag_stream, interop.hypre_done, 0)") !=
+                std::string::npos,
+        "strict GPU demag stream adapter must be version-pinned and order the exact Hypre stream with CUDA events");
+    check(
+        gpu_stage.find("cudaStreamSynchronize(hypre_stream)") == std::string::npos &&
+            gpu_stage.find("cudaDeviceSynchronize") == std::string::npos &&
+            hypre_stream_interop.find("cudaStreamSynchronize") == std::string::npos &&
+            hypre_stream_interop.find("cudaDeviceSynchronize") == std::string::npos,
+        "strict GPU demag solve and stream adapter must not use host-blocking HYPRE or device-wide synchronization");
     check(
         gpu_runtime.find("demag_assemble_events") != std::string::npos &&
             gpu_runtime.find("demag_recover_events") != std::string::npos &&
@@ -108,9 +125,11 @@ int main()
             gpu_rk_stats.find("ctx.poisson_demag.step_energy_wall_time_ns") != std::string::npos,
         "GPU RK timing collection must publish demag subphase timings to Poisson runtime state");
     check(
-        gpu_rk_demag_energy.find("#include \"gpu/cuda/demag_poisson/stage_compute.hpp\"") !=
-            std::string::npos,
-        "strict GPU RK demag final energy reductions must include the demag stage compute declarations");
+        gpu_rk_demag_energy.find("#include \"gpu/cuda/demag_poisson/demag_kernels.hpp\"") !=
+                std::string::npos &&
+            gpu_rk_demag_energy.find("#include \"gpu/cuda/demag_poisson/stage_compute.hpp\"") ==
+                std::string::npos,
+        "strict GPU RK demag energy reductions must depend on demag kernels without coupling to stage orchestration");
     check(
         gpu_rk_stats_publication.find("demag_timings.assemble_wall_time_ns = ctx.poisson_demag.step_assemble_wall_time_ns") !=
                 std::string::npos &&

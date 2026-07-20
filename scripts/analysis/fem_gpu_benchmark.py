@@ -691,6 +691,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Fail if multi-step demag rows do not report reused linear-solver setup",
     )
     parser.add_argument(
+        "--require-ncg-accepted-endpoint-reuse",
+        action="store_true",
+        help="Fail unless steady FEM GPU NCG rows require exactly one demag solve per accepted step",
+    )
+    parser.add_argument(
+        "--require-demag-single-setup",
+        action="store_true",
+        help="Fail unless multi-step FEM GPU demag rows report zero in-step setup and one compatible reused setup",
+    )
+    parser.add_argument(
+        "--require-zero-strict-gpu-global-sync",
+        action="store_true",
+        help="Fail unless strict FEM GPU rows report zero audited compute-path host synchronizations",
+    )
+    parser.add_argument(
         "--require-fem-cpu-no-pbc-adaptive-ready",
         action="store_true",
         help="Fail unless results prove FEM CPU no-PBC exchange+demag+anisotropy adaptive readiness with demag timing telemetry",
@@ -3028,11 +3043,18 @@ def gpu_control_readback_budget_failures(
                     "missing total_rhs_evals"
                 )
                 continue
-            additional_attempt_budget = max(
-                0,
-                total_rhs_evals - 2 * max(0, executed_steps),
-            )
-            if algorithm == "projected_gradient_bb":
+            if algorithm == "nonlinear_cg":
+                nominal_evaluations = max(0, executed_steps) + (
+                    1 if executed_steps > 0 else 0
+                )
+                additional_attempt_budget = 3 * max(
+                    0, total_rhs_evals - nominal_evaluations
+                )
+            else:
+                additional_attempt_budget = max(
+                    0,
+                    total_rhs_evals - 2 * max(0, executed_steps),
+                )
                 additional_attempt_budget *= 3
         allowed = (
             algorithm_base
@@ -4645,6 +4667,94 @@ def demag_setup_reuse_failures(results: list[dict[str, object]]) -> list[str]:
     return failures
 
 
+def gpu_ncg_accepted_endpoint_reuse_failures(
+    results: list[dict[str, object]],
+) -> list[str]:
+    failures: list[str] = []
+    for row in results:
+        if (
+            row.get("backend") != "fem_gpu"
+            or row.get("relaxation_algorithm") != "nonlinear_cg"
+            or not row_requires_demag_convergence(row)
+        ):
+            continue
+        case = repeated_case_key(row)
+        if row.get("status") != "ok":
+            failures.append(
+                f"case={case} did not complete before NCG accepted-endpoint reuse check"
+                f"{runtime_error_suffix(row)}"
+            )
+            continue
+        if (as_int(row.get("executed_steps")) or 0) <= 1:
+            continue
+        rhs_evals = as_int(row.get("rhs_evals"))
+        if rhs_evals is None:
+            failures.append(f"case={case} is missing rhs_evals")
+            continue
+        if rhs_evals != 1:
+            continue
+        demag_solves = as_int(row.get("demag_solves"))
+        if demag_solves is None:
+            failures.append(f"case={case} is missing demag_solves")
+        elif demag_solves != 1:
+            failures.append(
+                f"case={case} steady accepted step requires demag_solves=1; got {demag_solves}"
+            )
+    return failures
+
+
+def gpu_demag_single_setup_failures(
+    results: list[dict[str, object]],
+) -> list[str]:
+    failures: list[str] = []
+    for row in results:
+        if row.get("backend") != "fem_gpu" or not row_requires_demag_convergence(row):
+            continue
+        case = repeated_case_key(row)
+        if row.get("status") != "ok":
+            failures.append(
+                f"case={case} did not complete before GPU demag single-setup check"
+                f"{runtime_error_suffix(row)}"
+            )
+            continue
+        if (as_int(row.get("executed_steps")) or 0) <= 1:
+            continue
+        setup_ms = as_float(row.get("demag_solver_setup_wall_time_ms"))
+        if setup_ms is None:
+            failures.append(
+                f"case={case} is missing demag_solver_setup_wall_time_ms"
+            )
+        elif setup_ms != 0.0:
+            failures.append(
+                f"case={case} repeated demag setup inside measured steps: {setup_ms:.6g} ms"
+            )
+        if row.get("demag_solver_setup_reused") is not True:
+            failures.append(
+                f"case={case} persistent demag setup was not truthfully reported as reused"
+            )
+    return failures
+
+
+def gpu_zero_global_sync_failures(
+    results: list[dict[str, object]],
+) -> list[str]:
+    failures: list[str] = []
+    for row in results:
+        if row.get("backend") != "fem_gpu" or row.get("status") != "ok":
+            continue
+        case = repeated_case_key(row)
+        sync_count = as_int(row.get("hot_loop_compute_host_sync_count"))
+        if sync_count is None:
+            failures.append(
+                f"case={case} is missing hot_loop_compute_host_sync_count"
+            )
+        elif sync_count != 0:
+            failures.append(
+                f"case={case} strict GPU path requires hot_loop_compute_host_sync_count=0; got {sync_count}"
+            )
+    return failures
+
+
 def runtime_error_suffix(row: Mapping[str, object]) -> str:
     error_kind = row.get("error_kind")
     return f"; error_kind={error_kind}" if error_kind else ""
@@ -5559,6 +5669,21 @@ def main() -> None:
         if failures:
             gate_failures.extend(failures)
             gate_exit_code = gate_exit_code or 14
+    if args.require_ncg_accepted_endpoint_reuse:
+        failures = gpu_ncg_accepted_endpoint_reuse_failures(results)
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 15
+    if args.require_demag_single_setup:
+        failures = gpu_demag_single_setup_failures(results)
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 16
+    if args.require_zero_strict_gpu_global_sync:
+        failures = gpu_zero_global_sync_failures(results)
+        if failures:
+            gate_failures.extend(failures)
+            gate_exit_code = gate_exit_code or 17
     if args.require_fem_cpu_no_pbc_adaptive_ready:
         failures = fem_cpu_no_pbc_adaptive_readiness_failures(
             results,

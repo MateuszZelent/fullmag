@@ -101,6 +101,10 @@ bool context_snapshot_stats_mfem(
     PhaseTimings timings;
     stats = {};
     ctx.poisson_demag.solves_current_step = 0;
+    ctx.poisson_demag.setup_count_current_step = 0;
+    ctx.poisson_demag.fresh_zero_guess_count_current_step = 0;
+    ctx.poisson_demag.event_wait_count_current_step = 0;
+    ctx.poisson_demag.global_sync_count_current_step = 0;
     ctx.poisson_demag.step_assemble_wall_time_ns = 0;
     ctx.poisson_demag.step_solver_apply_wall_time_ns = 0;
     ctx.poisson_demag.step_recover_wall_time_ns = 0;

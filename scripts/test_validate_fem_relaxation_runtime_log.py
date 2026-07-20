@@ -20,6 +20,7 @@ FEM_RELAXATION_NOTE = (
 )
 BENCHMARK = REPO_ROOT / "scripts" / "analysis" / "fem_gpu_benchmark.py"
 BENCHMARK_CASE = REPO_ROOT / "examples" / "bench_fem_gpu_long.py"
+ZHANG_LI_VALIDATOR = REPO_ROOT / "scripts" / "validate_fem_zhang_li_skew_tetra_runtime.py"
 
 
 def load_benchmark_module():
@@ -683,6 +684,22 @@ def test_rejects_gpu_relaxation_without_magnetization_norm_defect() -> None:
     assert "norm_defect" in result.stderr
 
 
+def test_zhang_li_gate_preserves_each_run_in_a_distinct_explicit_bundle() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    validator = ZHANG_LI_VALIDATOR.read_text(encoding="utf-8")
+    zhang_li_recipe = just_recipe_source(
+        justfile,
+        "verify-fem-zhang-li-skew-tetra-runtime",
+    )
+
+    assert 'fem-managed-headless fem_execution script output_dir="":' in justfile
+    assert '--output-dir "$output_dir"' in justfile
+    assert '--workspace-root "$output_dir/workspace-history"' in justfile
+    assert zhang_li_recipe.count("mktemp -d") == 10
+    assert zhang_li_recipe.count("just fem-managed-headless") == 10
+    assert "zip(dt_runs, (32, 64, 128), strict=True)" in validator
+
+
 def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> None:
     verify_source = VERIFY_RUNTIME.read_text(encoding="utf-8")
     justfile = JUSTFILE.read_text(encoding="utf-8")
@@ -867,7 +884,7 @@ def test_runtime_gate_and_physics_note_promote_cpu_tpi_without_gpu_claim() -> No
         in physics_note
     )
     assert (
-        "- [ ] Broader interaction-matrix CPU/GPU benchmark pass for current LLG/PG-BB/NCG production lanes"
+        "- [x] Broader interaction-matrix CPU/GPU benchmark pass for current LLG/PG-BB/NCG production lanes"
         in physics_note
     )
 
@@ -1086,6 +1103,66 @@ def test_demag_setup_reuse_gate_requires_telemetry_for_multi_step_demag() -> Non
 
     assert len(failures) == 1
     assert "missing demag_solver_setup_reused" in failures[0]
+
+
+def test_gpu_ncg_endpoint_reuse_gate_requires_one_steady_demag_solve() -> None:
+    benchmark = load_benchmark_module()
+    good = {
+        "backend": "fem_gpu",
+        "scenario": "box500_airbox_exchange_demag",
+        "relaxation_algorithm": "nonlinear_cg",
+        "status": "ok",
+        "executed_steps": 32,
+        "rhs_evals": 1,
+        "demag_solves": 1,
+    }
+
+    assert benchmark.gpu_ncg_accepted_endpoint_reuse_failures([good]) == []
+    failures = benchmark.gpu_ncg_accepted_endpoint_reuse_failures(
+        [{**good, "demag_solves": 2}]
+    )
+    assert len(failures) == 1
+    assert "steady accepted step requires demag_solves=1" in failures[0]
+    assert benchmark.gpu_ncg_accepted_endpoint_reuse_failures(
+        [{**good, "rhs_evals": 2, "demag_solves": 2}]
+    ) == []
+
+
+def test_gpu_demag_single_setup_gate_requires_zero_step_setup_and_derived_reuse() -> None:
+    benchmark = load_benchmark_module()
+    good = {
+        "backend": "fem_gpu",
+        "scenario": "box500_airbox_exchange_demag",
+        "status": "ok",
+        "executed_steps": 32,
+        "demag_solver_setup_wall_time_ms": 0.0,
+        "demag_solver_setup_reused": True,
+    }
+
+    assert benchmark.gpu_demag_single_setup_failures([good]) == []
+    assert benchmark.gpu_demag_single_setup_failures(
+        [{**good, "demag_solver_setup_wall_time_ms": 0.25}]
+    )
+    assert benchmark.gpu_demag_single_setup_failures(
+        [{**good, "demag_solver_setup_reused": False}]
+    )
+
+
+def test_gpu_zero_global_sync_gate_uses_strict_compute_sync_audit() -> None:
+    benchmark = load_benchmark_module()
+    good = {
+        "backend": "fem_gpu",
+        "scenario": "box500_airbox_exchange_demag",
+        "status": "ok",
+        "hot_loop_compute_host_sync_count": 0,
+    }
+
+    assert benchmark.gpu_zero_global_sync_failures([good]) == []
+    failures = benchmark.gpu_zero_global_sync_failures(
+        [{**good, "hot_loop_compute_host_sync_count": 1}]
+    )
+    assert len(failures) == 1
+    assert "requires hot_loop_compute_host_sync_count=0" in failures[0]
 
 
 def test_demag_policy_selection_key_separates_relaxation_algorithms() -> None:
@@ -1461,6 +1538,39 @@ def test_generated_domain_mesh_env_reuses_persistent_cache(
     assert first == second
     assert Path(first["FULLMAG_BENCH_DOMAIN_MESH"]).is_file()
     assert len(calls) == 1
+
+
+def test_generated_domain_mesh_env_materializes_box500_airbox_alias(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    benchmark = load_benchmark_module()
+
+    def fake_export_generated_domain_mesh(**kwargs):
+        output_path = kwargs["output_path"]
+        output_path.write_text('{"mesh": true}\n', encoding="utf-8")
+        return output_path
+
+    monkeypatch.setattr(
+        benchmark,
+        "export_generated_domain_mesh",
+        fake_export_generated_domain_mesh,
+    )
+    result = benchmark.generated_domain_mesh_env(
+        cache={},
+        cache_dir=tmp_path,
+        mesh_path=Path("mesh.json"),
+        scenario="box500_airbox_exchange_zeeman",
+        integrator="heun",
+        steps=2,
+        dt=1e-13,
+        timestep_policy="fixed",
+        thread_spec=benchmark.ThreadCountSpec(label="auto", env_value="auto"),
+        extra_env={},
+        timeout_s=10.0,
+    )
+
+    assert Path(result["FULLMAG_BENCH_DOMAIN_MESH"]).is_file()
 
 
 def test_benchmark_mesh_env_forwards_requested_generated_mesh_sizes(monkeypatch) -> None:
@@ -1881,12 +1991,12 @@ def test_gpu_ncg_control_readback_budget_covers_conditional_direction_read() -> 
         "scenario": "box500_airbox_exchange_demag_anis_uniaxial",
         "relaxation_algorithm": "nonlinear_cg",
         "executed_steps": 32,
-        "total_rhs_evals": 385,
-        "rejected_attempts": 321,
-        "hot_loop_control_scalar_host_sync_count": 423,
+        "total_rhs_evals": 63,
+        "rejected_attempts": 0,
+        "hot_loop_control_scalar_host_sync_count": 189,
     }
     common = {
-        "base": 2,
+        "base": 3,
         "per_step": 4,
         "llg_per_step": 0,
         "pgbb_per_step": 3,
@@ -1897,10 +2007,7 @@ def test_gpu_ncg_control_readback_budget_covers_conditional_direction_read() -> 
         [row], ncg_per_step=4, **common
     ) == []
     assert benchmark.gpu_control_readback_budget_failures(
-        [row], ncg_per_step=3, **common
-    )
-    assert benchmark.gpu_control_readback_budget_failures(
-        [{**row, "hot_loop_control_scalar_host_sync_count": 452}],
+        [{**row, "hot_loop_control_scalar_host_sync_count": 222}],
         ncg_per_step=4,
         **common,
     )
@@ -1916,7 +2023,7 @@ def test_gpu_pgbb_control_readback_budget_matches_direct_difference_sync_structu
         "executed_steps": 1,
         "total_rhs_evals": 2,
         "rejected_attempts": 0,
-        "hot_loop_control_scalar_host_sync_count": 8,
+        "hot_loop_control_scalar_host_sync_count": 11,
     }
     common = {
         "base": 0,
@@ -1926,16 +2033,16 @@ def test_gpu_pgbb_control_readback_budget_matches_direct_difference_sync_structu
         "per_rejected_attempt": 2,
     }
 
-    assert benchmark.DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP == 8
+    assert benchmark.DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP == 11
     assert benchmark.gpu_control_readback_budget_failures(
-        [row], pgbb_per_step=8, **common
+        [row], pgbb_per_step=11, **common
     ) == []
     assert benchmark.gpu_control_readback_budget_failures(
-        [row], pgbb_per_step=7, **common
+        [row], pgbb_per_step=10, **common
     )
     assert benchmark.gpu_control_readback_budget_failures(
-        [{**row, "hot_loop_control_scalar_host_sync_count": 9}],
-        pgbb_per_step=8,
+        [{**row, "hot_loop_control_scalar_host_sync_count": 12}],
+        pgbb_per_step=11,
         **common,
     )
 
@@ -1958,12 +2065,12 @@ def test_direct_minimizer_benchmark_uses_qualified_demag_tolerance() -> None:
     ) == 1.0e-8
 
 
-def test_fem_pgbb_demag_is_excluded_from_production_manifest() -> None:
+def test_fem_pgbb_demag_is_included_in_current_production_manifest() -> None:
     benchmark = load_benchmark_module()
     algorithms = ["llg_overdamped", "projected_gradient_bb", "nonlinear_cg"]
     assert benchmark.relaxation_algorithms_for_scenario(
         "box500_airbox_exchange_demag", algorithms
-    ) == ["llg_overdamped", "nonlinear_cg"]
+    ) == algorithms
     assert benchmark.relaxation_algorithms_for_scenario(
         "box500_airbox_exchange_zeeman", algorithms
     ) == algorithms

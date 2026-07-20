@@ -508,6 +508,8 @@ pub struct SolverProfileState {
     samples: VecDeque<SolverProfileStepSample>,
     artifact_refs: Vec<String>,
     last_sampled_instant: Option<Instant>,
+    profiled_wall_time_since_sample_ns: u64,
+    pending_step_total: Option<(u64, u64)>,
 }
 
 impl Default for SolverProfileState {
@@ -524,6 +526,8 @@ impl SolverProfileState {
             samples: VecDeque::new(),
             artifact_refs: Vec::new(),
             last_sampled_instant: None,
+            profiled_wall_time_since_sample_ns: 0,
+            pending_step_total: None,
         }
     }
 
@@ -538,6 +542,8 @@ impl SolverProfileState {
         }
         self.config = config;
         self.last_sampled_instant = None;
+        self.profiled_wall_time_since_sample_ns = 0;
+        self.pending_step_total = None;
         self.trim_samples();
         self.revision = self.revision.wrapping_add(1);
     }
@@ -546,6 +552,7 @@ impl SolverProfileState {
         if !self.config.enabled {
             return None;
         }
+        self.account_step_total(stats);
         if self.config.sample_interval_wall_ms > 0 {
             let now = Instant::now();
             let threshold = std::time::Duration::from_millis(self.config.sample_interval_wall_ms);
@@ -566,7 +573,31 @@ impl SolverProfileState {
         if !self.config.enabled {
             return None;
         }
+        self.account_step_total(stats);
         Some(self.push_step_sample(stats))
+    }
+
+    fn account_step_total(&mut self, stats: &StepStats) {
+        if self.samples.is_empty()
+            || (self.pending_step_total.is_none()
+                && self.samples.back().map(|sample| sample.step) == Some(stats.step))
+        {
+            return;
+        }
+        if let Some((step, previous_total_ns)) = self.pending_step_total {
+            if step == stats.step {
+                self.profiled_wall_time_since_sample_ns = self
+                    .profiled_wall_time_since_sample_ns
+                    .saturating_sub(previous_total_ns)
+                    .saturating_add(stats.wall_time_ns);
+                self.pending_step_total = Some((stats.step, stats.wall_time_ns));
+                return;
+            }
+        }
+        self.profiled_wall_time_since_sample_ns = self
+            .profiled_wall_time_since_sample_ns
+            .saturating_add(stats.wall_time_ns);
+        self.pending_step_total = Some((stats.step, stats.wall_time_ns));
     }
 
     fn push_step_sample(&mut self, stats: &StepStats) -> SolverProfileStepSample {
@@ -579,8 +610,10 @@ impl SolverProfileState {
         });
         sample.unprofiled_gap_wall_time_ns = sample
             .delta_wall_time_ns
-            .map(|delta| delta.saturating_sub(sample.total_ns));
+            .map(|delta| delta.saturating_sub(self.profiled_wall_time_since_sample_ns));
         self.samples.push_back(sample.clone());
+        self.profiled_wall_time_since_sample_ns = 0;
+        self.pending_step_total = None;
         self.trim_samples();
         self.revision = self.revision.wrapping_add(1);
         sample

@@ -29,6 +29,45 @@ body.m = fm.texture.uniform(1, 0, 0)
 
 
 class StudyStageIdTests(unittest.TestCase):
+    def test_build_entrypoint_run_pipeline_contains_only_run_owned_controls(self) -> None:
+        loaded = _load(
+            """
+import fullmag as fm
+
+DEFAULT_UNTIL = 4e-12
+
+def build():
+    body = fm.Box(10e-9, 10e-9, 5e-9, name="film")
+    material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
+    magnet = fm.Ferromagnet(
+        name="film",
+        geometry=body,
+        material=material,
+        m0=fm.texture.uniform(1, 0, 0),
+    )
+    return fm.Problem(
+        name="build-run-pipeline",
+        magnets=[magnet],
+        energy=[fm.Exchange()],
+        study=fm.TimeEvolution(
+            dynamics=fm.LLG(integrator="rk4", fixed_timestep=1e-15),
+            outputs=[fm.SaveScalar("E_total", every=1e-12)],
+        ),
+    )
+"""
+        )
+
+        pipeline = loaded.study_pipeline_document()
+        self.assertIsNotNone(pipeline)
+        self.assertEqual(
+            pipeline["nodes"][0]["payload"],
+            {
+                "kind": "run",
+                "entrypoint_kind": "build",
+                "until_seconds": "4e-12",
+            },
+        )
+
     def test_run_relax_and_minimize_preserve_explicit_stage_ids(self) -> None:
         loaded = _load(
             _PREAMBLE

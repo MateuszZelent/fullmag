@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
+
 #if FULLMAG_HAS_CUDA_RUNTIME
 #include <cuda_runtime.h>
 #endif
@@ -69,8 +71,7 @@ struct GpuDemagPoissonWorkspace {
     std::vector<uint32_t> ess_tdofs;
 #if FULLMAG_HAS_CUDA_RUNTIME
     uint32_t *d_ess_tdofs = nullptr;
-    cudaEvent_t compute_ready_event = nullptr;
-    cudaEvent_t hypre_done_event = nullptr;
+    HypreStreamInterop stream_interop{};
 #endif
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     HYPRE_BigInt row_starts[2] = {0, 0};
@@ -82,6 +83,10 @@ struct GpuDemagPoissonWorkspace {
     std::unique_ptr<mfem::Vector> residual;
 #endif
     uint64_t device_bytes = 0;
+    uint64_t solver_setup_count = 0;
+    uint64_t fresh_zero_guess_count = 0;
+    uint64_t warm_start_count = 0;
+    bool solver_setup_complete = false;
     bool ready = false;
 };
 

@@ -14,6 +14,7 @@
 #include "core/demag_linear_solve_validation.hpp"
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
+#include "fem_common.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -23,6 +24,7 @@
 #include <HYPRE_utilities.h>
 #endif
 
+#include <algorithm>
 #include <climits>
 #include <cmath>
 #include <cstdlib>
@@ -228,14 +230,6 @@ bool initialize_demag_poisson_hypre_device_solver(
         A_bc);
     workspace.A_par->HypreRead();
 
-    if (!configure_demag_poisson_hypre_preconditioner(ctx, workspace, error)) {
-        return false;
-    }
-
-    if (!configure_demag_poisson_hypre_solver(ctx, workspace, error)) {
-        return false;
-    }
-
     workspace.b_par = std::make_unique<mfem::HypreParVector>(
         fullmag_serial_comm(),
         glob_size,
@@ -250,6 +244,17 @@ bool initialize_demag_poisson_hypre_device_solver(
         true);
     workspace.residual = std::make_unique<mfem::Vector>(static_cast<int>(glob_size));
     workspace.residual->UseDevice(true);
+    if (!configure_demag_poisson_hypre_preconditioner(ctx, workspace, error) ||
+        !configure_demag_poisson_hypre_solver(ctx, workspace, error)) {
+        return false;
+    }
+    const auto setup_start = FemSteadyClock::now();
+    workspace.solver->Setup(*workspace.b_par, *workspace.x_par);
+    ctx.poisson_demag.last_setup_wall_time_ns = elapsed_ns(setup_start);
+    workspace.solver_setup_count += 1;
+    ctx.poisson_demag.setup_count = workspace.solver_setup_count;
+    ctx.poisson_demag.setup_count_current_step += 1;
+    workspace.solver_setup_complete = true;
     return true;
 #else
     (void)ctx;
@@ -259,25 +264,29 @@ bool initialize_demag_poisson_hypre_device_solver(
 #endif
 }
 
-bool reset_demag_poisson_hypre_device_solver_for_fresh_rhs(
-    Context &ctx,
+bool prepare_demag_poisson_hypre_device_solver_apply(
+    const Context &ctx,
     GpuDemagPoissonWorkspace &workspace,
+    bool fresh_zero,
     std::string &error)
 {
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
-    if (workspace.A_par == nullptr) {
-        error = "GPU Poisson demag fresh-RHS reset requires an initialized operator";
+    if (workspace.A_par == nullptr || workspace.solver == nullptr ||
+        workspace.preconditioner == nullptr || !workspace.solver_setup_complete) {
+        error = "GPU Poisson demag apply requires a completed persistent Hypre setup";
         return false;
     }
-    workspace.solver.reset();
-    workspace.preconditioner.reset();
-    if (!configure_demag_poisson_hypre_preconditioner(ctx, workspace, error)) {
-        return false;
+    if (fresh_zero) {
+        workspace.fresh_zero_guess_count += 1;
+    } else {
+        workspace.warm_start_count += 1;
     }
-    return configure_demag_poisson_hypre_solver(ctx, workspace, error);
+    return set_demag_poisson_hypre_solver_iterative_mode(
+        ctx, workspace, !fresh_zero, error);
 #else
     (void)ctx;
     (void)workspace;
+    (void)fresh_zero;
     error = "strict FEM GPU demag requires MFEM MPI and hypre device solver support";
     return false;
 #endif
@@ -297,6 +306,9 @@ bool set_demag_poisson_hypre_solver_iterative_mode(
     switch (ctx.demag.solver.solver) {
     case FULLMAG_FEM_LINEAR_SOLVER_CG: {
         auto *solver = static_cast<mfem::HyprePCG *>(workspace.solver.get());
+        solver->SetTol(ctx.demag.solver.relative_tolerance);
+        solver->SetAbsTol(std::max(0.0, ctx.demag.solver.absolute_tolerance));
+        solver->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
         if (iterative_mode) {
             solver->iterative_mode = true;
         } else {
@@ -306,6 +318,9 @@ bool set_demag_poisson_hypre_solver_iterative_mode(
     }
     case FULLMAG_FEM_LINEAR_SOLVER_GMRES: {
         auto *solver = static_cast<mfem::HypreGMRES *>(workspace.solver.get());
+        solver->SetTol(ctx.demag.solver.relative_tolerance);
+        solver->SetAbsTol(std::max(0.0, ctx.demag.solver.absolute_tolerance));
+        solver->SetMaxIter(static_cast<int>(ctx.demag.solver.max_iterations));
         if (iterative_mode) {
             solver->iterative_mode = true;
         } else {

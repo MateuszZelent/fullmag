@@ -1305,6 +1305,7 @@ class Problem:
             self.spin_torque,
             self.spin_torques,
         )
+        object.__setattr__(self, "spin_torque", None)
         object.__setattr__(self, "spin_torques", normalized_spin_torques)
 
         if self.temperature is not None and self.temperature < 0.0:

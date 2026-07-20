@@ -588,6 +588,12 @@ def _export_stage_draft_with_identity(stage: LoadedStage) -> dict[str, object]:
 def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, object]:
     draft = _export_stage_draft_with_identity(stage)
     stage_kind = _infer_pipeline_stage_kind(draft)
+    if stage_kind == "run":
+        draft = {
+            key: draft[key]
+            for key in ("kind", "entrypoint_kind", "stage_id", "until_seconds")
+            if key in draft
+        }
     return {
         "id": stage.stage_id or f"stage_{index + 1}_{stage_kind}",
         "label": _study_pipeline_stage_label(draft, stage_kind=stage_kind, index=index),

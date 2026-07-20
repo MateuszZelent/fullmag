@@ -1513,6 +1513,8 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
     const std::string stage_compute =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
+    const std::string hypre_stream_interop =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_stream_interop.cpp");
     const std::string runtime_snapshot =
         read_text_file(root / "cpu" / "mfem" / "runtime" / "snapshot.cpp");
 
@@ -1556,11 +1558,11 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
                 std::string::npos &&
             hypre_solver_header.find("bool initialize_demag_poisson_hypre_device_solver(") !=
                 std::string::npos &&
-            hypre_solver_header.find("bool reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") !=
+            hypre_solver_header.find("bool prepare_demag_poisson_hypre_device_solver_apply(") !=
                 std::string::npos &&
             hypre_solver_header.find("bool set_demag_poisson_hypre_solver_iterative_mode(") !=
                 std::string::npos,
-        "GPU CUDA Poisson demag Hypre solver header must declare solver setup, fresh-RHS solver reset, and per-solve initial-guess policy");
+        "GPU CUDA Poisson demag Hypre solver header must declare persistent solver setup and per-solve initial-guess policy");
     check(
         stage_compute_header.find("GPU CUDA Poisson demag stage compute header") !=
                 std::string::npos &&
@@ -1688,12 +1690,16 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
                 std::string::npos &&
             hypre_solver.find("bool set_demag_poisson_hypre_solver_iterative_mode(") !=
                 std::string::npos &&
-            hypre_solver.find("bool reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") !=
+            hypre_solver.find("bool prepare_demag_poisson_hypre_device_solver_apply(") !=
+                std::string::npos &&
+            hypre_solver.find("workspace.solver->Setup(*workspace.b_par, *workspace.x_par);") !=
+                std::string::npos &&
+            hypre_solver.find("workspace.solver_setup_complete = true;") !=
                 std::string::npos &&
             hypre_solver.find("SetZeroInitialIterate()") !=
                 std::string::npos &&
             hypre_solver.find("HypreBoomerAMG") != std::string::npos,
-        "GPU CUDA Poisson demag Hypre solver module must own solver policy setup, fresh-RHS solver reset, MFEM zero-initial initial-guess policy, and iteration stats");
+        "GPU CUDA Poisson demag Hypre solver module must own persistent setup, MFEM initial-guess policy, and iteration stats");
     check(
         hypre_solver.find("HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE)") !=
                 std::string::npos &&
@@ -1768,33 +1774,29 @@ void gpu_demag_poisson_is_owned_by_cuda_demag_poisson_module() {
                 std::string::npos &&
             stage_compute.find("workspace->x_par->HypreWrite();") !=
                 std::string::npos &&
-            stage_compute.find("cudaMemset(\n                gpu.demag_poisson.poisson_solution") <
-                stage_compute.find("cudaEventRecord(workspace->compute_ready_event, stream)") &&
+            stage_compute.find("cudaMemsetAsync(\n                gpu.demag_poisson.poisson_solution") <
+                stage_compute.find("hypre_wait_for_fullmag(") &&
             stage_compute.find("workspace->x_par->HypreWrite();") <
                 stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
-            stage_compute.find("reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") !=
+            stage_compute.find("prepare_demag_poisson_hypre_device_solver_apply(") !=
                 std::string::npos &&
-            stage_compute.find("reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") <
-                stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
-            stage_compute.find("reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") <
-                stage_compute.find("set_demag_poisson_hypre_solver_iterative_mode(") &&
-            stage_compute.find("set_demag_poisson_hypre_solver_iterative_mode(") <
+            stage_compute.find("prepare_demag_poisson_hypre_device_solver_apply(") <
                 stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
             stage_compute.find("*workspace->x_par = 0.0") ==
                 std::string::npos &&
-            stage_compute.find("set_demag_poisson_hypre_solver_iterative_mode(") !=
-                std::string::npos &&
-            stage_compute.find("!reset_initial_solution") != std::string::npos,
-        "GPU CUDA Poisson demag fresh solves must publish externally written device buffers with HypreWrite and disable nonzero initial guesses before Mult");
+            stage_compute.find("reset_demag_poisson_hypre_device_solver_for_fresh_rhs(") ==
+                std::string::npos,
+        "GPU CUDA Poisson demag solves must publish external device buffers, select the initial-guess policy, and reuse persistent Hypre setup before Mult");
     check(
-        stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") !=
-                std::string::npos &&
-            stage_compute.find("cudaDeviceSynchronize()") != std::string::npos &&
-            stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") <
-                stage_compute.find("cudaDeviceSynchronize()") &&
-            stage_compute.find("cudaDeviceSynchronize()") <
-                stage_compute.find("fullmag_cuda_zero_indexed_values(\n        gpu.demag_poisson.poisson_solution"),
-        "GPU CUDA Poisson demag must synchronize after Hypre Mult before reading solution in recovery");
+        stage_compute.find("hypre_wait_for_fullmag(") <
+                stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
+            stage_compute.find("fullmag_wait_for_hypre(") >
+                stage_compute.find("workspace->solver->Mult(*workspace->b_par, *workspace->x_par)") &&
+            stage_compute.find("cudaStreamSynchronize(hypre_stream)") == std::string::npos &&
+            stage_compute.find("cudaDeviceSynchronize()") == std::string::npos &&
+            hypre_stream_interop.find("cudaStreamSynchronize") == std::string::npos &&
+            hypre_stream_interop.find("cudaDeviceSynchronize") == std::string::npos,
+        "GPU CUDA Poisson demag must use exact event dependencies around Hypre Mult without host-blocking synchronization");
     check(
         read_text_file(root / "gpu" / "cuda" / "relaxation" / "pgbb_kernels.cu")
                 .find("periodic_representative_root") != std::string::npos,

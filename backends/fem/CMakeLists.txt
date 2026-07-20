@@ -34,6 +34,7 @@ set(FEM_SOURCES
     gpu/cuda/exchange/exchange_upload.cpp
     gpu/cuda/fields/field_buffer_memory.cpp
     gpu/cuda/fields/field_buffer_upload.cpp
+    gpu/cuda/demag_poisson/hypre_stream_interop.cpp
     gpu/cuda/integrators/rk/rk_fsal_policy.cpp
     gpu/cuda/integrators/rk/rk_plan.cpp
     gpu/cuda/integrators/rk/rk_snapshot.cpp
@@ -45,6 +46,7 @@ set(FEM_SOURCES
     gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp
     gpu/cuda/mesh/mesh_geometry_upload.cpp
     gpu/cuda/reductions/reduction_workspace_memory.cpp
+    gpu/cuda/relaxation/direct_energy_increment.cpp
     gpu/cuda/relaxation/nonlinear_cg.cpp
     gpu/cuda/relaxation/pgbb.cpp
     gpu/cuda/relaxation/relaxation_memory.cpp

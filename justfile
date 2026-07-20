@@ -332,26 +332,26 @@ verify-fem-zhang-li-skew-tetra-runtime:
     just verify-fem-time-domain-native-contract
     just rebuild-fem-runtime
     just ensure-managed-fem-runtime
-    mkdir -p .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1
-    set -o pipefail; just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    mkdir -p .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/cpu.XXXXXX)"; set -o pipefail; just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/cpu.log
-    set -o pipefail; just fem-managed-headless gpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/gpu.XXXXXX)"; set -o pipefail; just fem-managed-headless gpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/gpu.log
-    set -o pipefail; FULLMAG_ZHANG_LI_CURRENT_SIGN=-1 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/cpu_reversed.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_CURRENT_SIGN=-1 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/cpu_reversed.log
-    set -o pipefail; FULLMAG_ZHANG_LI_CURRENT_SIGN=0 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/cpu_zero_current.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_CURRENT_SIGN=0 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/cpu_zero_current.log
-    set -o pipefail; FULLMAG_ZHANG_LI_STEPS=32 FULLMAG_ZHANG_LI_DT_S=8.881784197001252e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/dt_0.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_STEPS=32 FULLMAG_ZHANG_LI_DT_S=8.881784197001252e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/dt_0.log
-    set -o pipefail; FULLMAG_ZHANG_LI_STEPS=64 FULLMAG_ZHANG_LI_DT_S=4.440892098500626e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/dt_1.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_STEPS=64 FULLMAG_ZHANG_LI_DT_S=4.440892098500626e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/dt_1.log
-    set -o pipefail; FULLMAG_ZHANG_LI_STEPS=128 FULLMAG_ZHANG_LI_DT_S=2.220446049250313e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/dt_2.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_STEPS=128 FULLMAG_ZHANG_LI_DT_S=2.220446049250313e-16 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/dt_2.log
-    set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=0 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/mesh_0.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=0 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/mesh_0.log
-    set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=1 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/mesh_1.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=1 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/mesh_1.log
-    set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=2 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py \
+    output_dir="$(mktemp -d .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/runs/mesh_2.XXXXXX)"; set -o pipefail; FULLMAG_ZHANG_LI_REFINEMENT=2 just fem-managed-headless cpu examples/fem_zhang_li_skew_tetra_runtime.py "$output_dir" \
       | tee .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/mesh_2.log
     python3 scripts/validate_fem_zhang_li_skew_tetra_runtime.py \
       --cpu .fullmag/audits/2026-07-09-backend-llg/remediation/artifacts/fem_td_zhang_li_skew_tet_affine_v1/cpu.log \
@@ -519,8 +519,11 @@ verify-fem-frequency-domain-gpu:
 
 verify-fem-demag-poisson-contract:
     just ensure-managed-fem-runtime
+    just verify-fem-demag-poisson-contract-focused
+
+verify-fem-demag-poisson-contract-focused:
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_demag_poisson_contract fem_demag_fem_bem_contract fem_cuda_periodic_demag_contract fem_cuda_periodic_exchange_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_demag_poisson_contract && native/build/backends/fem/fem_demag_fem_bem_contract && native/build/backends/fem/fem_cuda_periodic_demag_contract && native/build/backends/fem/fem_cuda_periodic_exchange_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_demag_poisson_contract fem_demag_fem_bem_contract fem_cuda_demag_timing_contract fem_cuda_periodic_demag_contract fem_cuda_periodic_exchange_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_demag_poisson_contract && native/build/backends/fem/fem_demag_fem_bem_contract && native/build/backends/fem/fem_cuda_demag_timing_contract && native/build/backends/fem/fem_cuda_periodic_demag_contract && native/build/backends/fem/fem_cuda_periodic_exchange_contract'
 
 verify-fem-frequency-domain-runtime-suite:
     just verify-fem-frequency-domain-runtime
@@ -2429,6 +2432,9 @@ verify-fem-relaxation-production-benchmark:
         --demag-amg-max-levels "$FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS" \
         --demag-convergence-max-iterations "$FULLMAG_BENCH_DEMAG_CONVERGENCE_MAX_ITERATIONS" \
         --require-demag-setup-reused \
+        --require-ncg-accepted-endpoint-reuse \
+        --require-demag-single-setup \
+        --require-zero-strict-gpu-global-sync \
         --steps "$FULLMAG_BENCH_STEPS" \
         --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
         --cpu-gpu-energy-rtol "$FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL" \
@@ -2577,6 +2583,9 @@ verify-fem-gpu-demag-performance-benchmark:
         --demag-amg-max-levels "$FULLMAG_BENCH_DEMAG_AMG_MAX_LEVELS" \
         --demag-convergence-max-iterations "$FULLMAG_BENCH_DEMAG_CONVERGENCE_MAX_ITERATIONS" \
         --require-demag-setup-reused \
+        --require-ncg-accepted-endpoint-reuse \
+        --require-demag-single-setup \
+        --require-zero-strict-gpu-global-sync \
         --steps "$FULLMAG_BENCH_STEPS" \
         --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
         --cpu-gpu-energy-rtol "$FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL" \
@@ -3582,17 +3591,18 @@ fem-gpu-headless script:
       ./target/debug/fullmag {{script}} --backend fem --headless --json \
     '
 
-fem-managed-headless fem_execution script:
+fem-managed-headless fem_execution script output_dir="":
     just ensure-python
     just ensure-managed-fem-runtime
-    mode="{{fem_execution}}"; \
+    mode="{{fem_execution}}"; output_dir="{{output_dir}}"; output_args=(); \
     case "$mode" in 0|cpu|CPU) mode="cpu" ;; gpu|GPU) mode="gpu" ;; *) echo "unsupported FEM execution mode: $mode (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+    if [ -n "$output_dir" ]; then output_args=(--output-dir "$output_dir" --workspace-root "$output_dir/workspace-history"); fi; \
     FULLMAG_PYTHON="{{repo_python}}" \
     FULLMAG_FDM_EXECUTION=cpu \
     FULLMAG_FEM_EXECUTION="$mode" \
     FULLMAG_RELAX_DEVICE="$mode" \
     FULLMAG_CPU_THREADS=auto \
-    '{{gpu_runtime_bin}}' {{script}} --backend fem --headless --json
+    '{{gpu_runtime_bin}}' {{script}} --backend fem --headless --json "${output_args[@]}"
 
 fem-sp4-run fem_execution output_dir:
     just ensure-python

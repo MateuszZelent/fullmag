@@ -279,7 +279,9 @@ def scenario_initial_magnetization(scenario: str):
 
 
 def scenario_requires_shared_domain(scenario: str) -> bool:
-    return "demag" in canonical_scenario(scenario) or scenario == BOX500_AIRBOX_SCENARIO
+    return (
+        scenario_is_box500_airbox(scenario) and scenario != BOX500_EXCHANGE_SCENARIO
+    ) or "demag" in canonical_scenario(scenario)
 
 
 def scenario_uses_relaxation(scenario: str) -> bool:

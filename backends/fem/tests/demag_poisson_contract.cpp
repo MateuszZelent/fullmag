@@ -1067,6 +1067,10 @@ void backend_demag_tangent_abi_uses_fresh_poisson_dispatch() {
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.cpp");
     const std::string gpu_stage_header =
         read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "stage_compute.hpp");
+    const std::string gpu_hypre_solver =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_device_solver.cpp");
+    const std::string gpu_hypre_stream_interop =
+        read_text_file(root / "gpu" / "cuda" / "demag_poisson" / "hypre_stream_interop.cpp");
     const std::string tangent_plane =
         read_text_file(root / "cpu" / "mfem" / "relaxation" / "tangent_plane_implicit.cpp");
 
@@ -1107,10 +1111,42 @@ void backend_demag_tangent_abi_uses_fresh_poisson_dispatch() {
         "frequency-domain device demag tangent-with-potential must use the fresh GPU Poisson apply");
     check(
         gpu_stage_compute.find("reset_initial_solution") != std::string::npos &&
-            gpu_stage_compute.find("cudaMemset(") != std::string::npos &&
+            gpu_stage_compute.find("cudaMemsetAsync(") != std::string::npos &&
             gpu_stage_compute.find("gpu.demag_poisson.poisson_solution") !=
                 std::string::npos,
         "fresh GPU Poisson apply must reset the persistent solution buffer before Hypre Mult");
+    check(
+        gpu_hypre_solver.find(
+            "workspace.solver->Setup(*workspace.b_par, *workspace.x_par)") !=
+                std::string::npos &&
+            gpu_hypre_solver.find("ctx.poisson_demag.last_setup_wall_time_ns =") !=
+                std::string::npos &&
+            gpu_hypre_solver.find("workspace.solver_setup_complete = true") !=
+                std::string::npos &&
+            gpu_hypre_solver.find("workspace.solver.reset()") ==
+                std::string::npos &&
+            gpu_hypre_solver.find("workspace.preconditioner.reset()") ==
+                std::string::npos,
+        "strict GPU demag must preserve one compatible Hypre solver and AMG setup across fresh RHS applies");
+    check(
+        gpu_stage_compute.find(
+            "workspace->solver_setup_complete &&\n        workspace->solver_setup_count == 1u") !=
+                std::string::npos &&
+            gpu_stage_compute.find("last_solver_setup_reused = true") ==
+                std::string::npos,
+        "strict GPU demag setup-reuse telemetry must derive from the persistent workspace instead of a hardcoded value");
+    check(
+        gpu_stage_compute.find("hypre_wait_for_fullmag(") <
+                gpu_stage_compute.find("workspace->solver->Mult(") &&
+            gpu_stage_compute.find("fullmag_wait_for_hypre(") >
+                gpu_stage_compute.find("workspace->solver->Mult(") &&
+            gpu_stage_compute.find("cudaDeviceSynchronize()") ==
+                std::string::npos &&
+            gpu_stage_compute.find("cudaStreamSynchronize(hypre_stream)") ==
+                std::string::npos &&
+            gpu_hypre_stream_interop.find("hypre_HandleComputeStream(hypre_handle())") !=
+                std::string::npos,
+        "strict GPU demag must order the exact Hypre compute stream with events instead of host-blocking synchronization");
 }
 
 void demag_robin_boundary_mass_excludes_periodic_seam_markers() {
@@ -1249,6 +1285,14 @@ void demag_poisson_solver_runtime_state_is_owned_by_poisson_module() {
         "uint64_t step_solver_apply_wall_time_ns",
         "bool last_solver_setup_reused",
         "uint32_t solves_current_step",
+        "uint32_t setup_count_current_step",
+        "uint32_t fresh_zero_guess_count_current_step",
+        "uint32_t event_wait_count_current_step",
+        "uint32_t global_sync_count_current_step",
+        "uint64_t setup_count",
+        "uint64_t fresh_zero_guess_count",
+        "uint64_t event_wait_count",
+        "uint64_t global_sync_count",
         "mfem::HypreParMatrix *cached_hypre_par",
         "mfem::HypreSolver *cached_hypre_preconditioner",
         "mfem::HypreSolver *cached_hypre_solver",

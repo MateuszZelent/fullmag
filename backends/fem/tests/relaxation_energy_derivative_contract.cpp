@@ -60,6 +60,23 @@ void check(bool condition, const std::string &message)
     }
 }
 
+void direct_increment_composition_does_not_subtract_replaced_terms_twice()
+{
+    const auto difference =
+        fullmag::fem::relaxation::compose_direct_energy_difference(
+            -10.0e-31,
+            -8.0e-31,
+            -8.0e-31,
+            8.5e-31,
+            3000);
+    check(
+        std::abs(difference.delta_joules - (-10.0e-31)) < 1.0e-45,
+        "direct Armijo composition must replace endpoint terms exactly once");
+    check(
+        std::abs(difference.absolute_term_sum_joules - 10.5e-31) < 1.0e-45,
+        "direct Armijo composition must retain the residual absolute scale");
+}
+
 std::array<double, 3> normalized(std::array<double, 3> value)
 {
     const double norm = std::sqrt(
@@ -1169,6 +1186,7 @@ void cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration()
 
 int main()
 {
+    direct_increment_composition_does_not_subtract_replaced_terms_twice();
     analytic_absolute_term_sum_resolves_component_cancellation();
     cpu_energy_weight_uses_nodal_ms_and_uniform_fallback();
     dimension_aware_reduction_guards_are_scale_relative();

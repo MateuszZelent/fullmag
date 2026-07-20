@@ -72,6 +72,26 @@ struct EnergyDifference {
     double roundoff_bound_joules = 0.0;
 };
 
+inline EnergyDifference compose_direct_energy_difference(
+    double endpoint_total_delta_joules,
+    double endpoint_replaced_delta_joules,
+    double direct_replaced_delta_joules,
+    double direct_replaced_absolute_term_sum_joules,
+    std::size_t scalar_term_count)
+{
+    const double residual_delta_joules =
+        endpoint_total_delta_joules - endpoint_replaced_delta_joules;
+    const double absolute_term_sum_joules =
+        std::abs(residual_delta_joules) +
+        direct_replaced_absolute_term_sum_joules;
+    return {
+        residual_delta_joules + direct_replaced_delta_joules,
+        absolute_term_sum_joules,
+        reduction_roundoff_bound(scalar_term_count) *
+            absolute_term_sum_joules,
+    };
+}
+
 enum class ArmijoDifferenceDecision {
     Accept,
     Reject,

@@ -865,6 +865,58 @@ mod all_in_gpu_fem_transfer_audit_tests {
     }
 
     #[test]
+    fn solver_profile_gap_excludes_all_steps_between_sparse_samples() {
+        let mut profile = crate::SolverProfileState::new(crate::SolverProfileConfig {
+            enabled: true,
+            sample_every: 3,
+            sample_interval_wall_ms: 0,
+            max_samples: 4,
+            emit_engine_log: false,
+            persist_artifact: false,
+        });
+
+        let first = profile
+            .record_step(&StepStats {
+                step: 3,
+                wall_time_ns: 1_000_000,
+                ..StepStats::default()
+            })
+            .expect("step 3 should be sampled");
+        assert_eq!(first.delta_wall_time_ns, None);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(profile
+            .record_step(&StepStats {
+                step: 4,
+                wall_time_ns: 2_000_000,
+                ..StepStats::default()
+            })
+            .is_none());
+        assert!(profile
+            .record_step(&StepStats {
+                step: 5,
+                wall_time_ns: 3_000_000,
+                ..StepStats::default()
+            })
+            .is_none());
+        let second = profile
+            .record_step(&StepStats {
+                step: 6,
+                wall_time_ns: 4_000_000,
+                ..StepStats::default()
+            })
+            .expect("step 6 should be sampled");
+
+        let delta = second
+            .delta_wall_time_ns
+            .expect("second sparse sample should have a wall delta");
+        assert_eq!(
+            second.unprofiled_gap_wall_time_ns,
+            Some(delta.saturating_sub(9_000_000)),
+        );
+    }
+
+    #[test]
     fn disabled_solver_profile_does_not_allocate_samples() {
         let mut profile = crate::SolverProfileState::default();
 

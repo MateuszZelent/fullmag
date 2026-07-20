@@ -67,7 +67,9 @@ void reset_metadata(FemGpuState &state)
     state.mesh_geometry.element_count = 0;
     state.mesh_geometry.uploaded = false;
     state.relaxation.node_count = 0;
+    state.relaxation.state_generation = 0;
     state.relaxation.nonlinear_cg_direction_valid = false;
+    state.relaxation.accepted_evaluation = {};
     state.demag_poisson.hybrid_stage_m_xyz.clear();
     state.demag_poisson.hybrid_demag_xyz.clear();
     state.demag_poisson.hybrid_demag_energy_joules = 0.0;
@@ -124,6 +126,7 @@ bool gpu_state_upload_magnetization_aos(
     state.residency.source_of_truth = FULLMAG_FEM_RESIDENCY_HOST_SOURCE_OF_TRUTH;
     state.rk.fsal_valid = false;
     state.relaxation.nonlinear_cg_direction_valid = false;
+    gpu_relax_note_external_state_change(state.relaxation);
     return true;
 }
 
@@ -188,6 +191,7 @@ bool gpu_state_upload_effective_fields_aos(
         return false;
     }
     state.residency.device_state = FemGpuSyncState::DeviceClean;
+    gpu_relax_note_external_state_change(state.relaxation);
     return true;
 }
 

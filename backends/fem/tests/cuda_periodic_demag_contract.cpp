@@ -5,6 +5,7 @@
 
 #include "context.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -14,12 +15,15 @@
 #include <cuda_runtime.h>
 #endif
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -53,6 +57,20 @@ std::filesystem::path fem_source_root()
 }
 
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI) && FULLMAG_HAS_CUDA_RUNTIME
+struct BlockingHostCallbackState {
+    std::atomic<bool> started{false};
+    std::atomic<bool> release{false};
+};
+
+void CUDART_CB block_independent_stream_until_released(void *opaque)
+{
+    auto &state = *static_cast<BlockingHostCallbackState *>(opaque);
+    state.started.store(true, std::memory_order_release);
+    while (!state.release.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
+
 void gpu_hypre_demag_rejects_one_iteration_candidate()
 {
     fullmag::fem::Context ctx;
@@ -110,6 +128,93 @@ void gpu_hypre_demag_rejects_one_iteration_candidate()
           "strict GPU failure includes tolerance");
     check(error.find("max_iterations=1") != std::string::npos,
           "strict GPU failure includes maximum iterations");
+
+    error.clear();
+    check(fullmag::fem::initialize_hypre_stream_interop(workspace.stream_interop, error),
+          "strict GPU fixture initializes exact HYPRE stream interop");
+    cudaStream_t fullmag_stream = nullptr;
+    cudaStream_t independent_stream = nullptr;
+    cudaEvent_t independent_done = nullptr;
+    int *producer_value = nullptr;
+    int *hypre_value = nullptr;
+    check(cudaStreamCreateWithFlags(&fullmag_stream, cudaStreamNonBlocking) == cudaSuccess,
+          "strict GPU fixture creates Fullmag stream");
+    check(cudaStreamCreateWithFlags(&independent_stream, cudaStreamNonBlocking) == cudaSuccess,
+          "strict GPU fixture creates independent stream");
+    check(cudaEventCreateWithFlags(&independent_done, cudaEventDisableTiming) == cudaSuccess,
+          "strict GPU fixture creates independent completion event");
+    check(cudaMalloc(reinterpret_cast<void **>(&producer_value), sizeof(int)) == cudaSuccess &&
+              cudaMalloc(reinterpret_cast<void **>(&hypre_value), sizeof(int)) == cudaSuccess,
+          "strict GPU fixture allocates stream-order sentinels");
+
+    BlockingHostCallbackState independent_callback;
+    check(cudaLaunchHostFunc(
+              independent_stream,
+              block_independent_stream_until_released,
+              &independent_callback) == cudaSuccess &&
+              cudaEventRecord(independent_done, independent_stream) == cudaSuccess,
+          "strict GPU fixture queues deliberately incomplete independent work");
+    const auto callback_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!independent_callback.started.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < callback_deadline) {
+        std::this_thread::yield();
+    }
+    const bool independent_started =
+        independent_callback.started.load(std::memory_order_acquire);
+
+    const int producer_host = 37;
+    int consumer_host = 0;
+    bool dependency_bridge_ok = independent_started;
+    dependency_bridge_ok = dependency_bridge_ok &&
+        cudaMemcpyAsync(
+            producer_value,
+            &producer_host,
+            sizeof(int),
+            cudaMemcpyHostToDevice,
+            fullmag_stream) == cudaSuccess;
+    dependency_bridge_ok = dependency_bridge_ok &&
+        fullmag::fem::hypre_wait_for_fullmag(
+            workspace.stream_interop, fullmag_stream, error);
+    dependency_bridge_ok = dependency_bridge_ok &&
+        cudaMemcpyAsync(
+            hypre_value,
+            producer_value,
+            sizeof(int),
+            cudaMemcpyDeviceToDevice,
+            workspace.stream_interop.hypre_stream) == cudaSuccess;
+    dependency_bridge_ok = dependency_bridge_ok &&
+        fullmag::fem::fullmag_wait_for_hypre(
+            workspace.stream_interop, fullmag_stream, error);
+    dependency_bridge_ok = dependency_bridge_ok &&
+        cudaMemcpyAsync(
+            &consumer_host,
+            hypre_value,
+            sizeof(int),
+            cudaMemcpyDeviceToHost,
+            fullmag_stream) == cudaSuccess &&
+        cudaStreamSynchronize(fullmag_stream) == cudaSuccess;
+    const cudaError_t independent_status = cudaEventQuery(independent_done);
+    independent_callback.release.store(true, std::memory_order_release);
+    const bool independent_cleanup_ok =
+        cudaStreamSynchronize(independent_stream) == cudaSuccess;
+
+    check(dependency_bridge_ok && consumer_host == producer_host,
+          "strict GPU event bridge orders Fullmag producer, HYPRE work, and Fullmag consumer");
+    check(independent_status == cudaErrorNotReady,
+          "strict GPU event bridge must not globally complete an independent stream");
+    check(independent_cleanup_ok,
+          "strict GPU fixture releases and completes independent work");
+    check(workspace.stream_interop.event_wait_count == 2u &&
+              workspace.stream_interop.global_sync_count == 0u,
+          "strict GPU event bridge reports two exact waits and zero global syncs");
+
+    cudaFree(hypre_value);
+    cudaFree(producer_value);
+    cudaEventDestroy(independent_done);
+    cudaStreamDestroy(independent_stream);
+    cudaStreamDestroy(fullmag_stream);
+    fullmag::fem::destroy_hypre_stream_interop(workspace.stream_interop);
     workspace.solver.reset();
     workspace.preconditioner.reset();
     workspace.x_par.reset();
@@ -165,7 +270,7 @@ int main()
             validate_pos < recover_pos,
         "strict GPU demag must reject a failed Hypre candidate before field recovery");
     check(
-        gpu_stage.find("cudaMemset rejected GPU Poisson demag candidate") !=
+        gpu_stage.find("cudaMemsetAsync rejected GPU Poisson demag candidate") !=
             std::string::npos,
         "strict GPU demag must invalidate the rejected scalar-potential candidate");
 

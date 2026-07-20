@@ -12,6 +12,7 @@
 #include "context.hpp"
 #include "fem_common.hpp"
 #include "gpu/cuda/demag_poisson/hypre_device_solver.hpp"
+#include "gpu/cuda/demag_poisson/hypre_stream_interop.hpp"
 #include "gpu/cuda/demag_poisson/operators.hpp"
 #include "gpu/cuda/runtime/gpu_state_runtime.hpp"
 
@@ -178,19 +179,12 @@ bool compute_device_demag_for_device_stage_impl(
     }
 
     if (reset_initial_solution) {
-        if (!cuda_ok(cudaMemset(
+        if (!cuda_ok(cudaMemsetAsync(
                 gpu.demag_poisson.poisson_solution,
                 0,
-                static_cast<size_t>(gpu.lifecycle.node_count) * sizeof(double)),
-                "cudaMemset GPU Poisson demag initial solution", reason)) {
-            return false;
-        }
-    }
-    if (workspace->compute_ready_event != nullptr) {
-        if (!cuda_ok(cudaEventRecord(workspace->compute_ready_event, stream),
-                "cudaEventRecord GPU demag solve inputs ready", reason) ||
-            !cuda_ok(cudaStreamWaitEvent(nullptr, workspace->compute_ready_event, 0),
-                "cudaStreamWaitEvent GPU demag default stream wait solve inputs", reason)) {
+                static_cast<size_t>(gpu.lifecycle.node_count) * sizeof(double),
+                stream),
+                "cudaMemsetAsync GPU Poisson demag initial solution", reason)) {
             return false;
         }
     }
@@ -203,28 +197,34 @@ bool compute_device_demag_for_device_stage_impl(
     } else {
         workspace->x_par->HypreReadWrite();
     }
-    if (reset_initial_solution &&
-        !reset_demag_poisson_hypre_device_solver_for_fresh_rhs(
+    if (!prepare_demag_poisson_hypre_device_solver_apply(
             ctx,
             *workspace,
+            reset_initial_solution,
             reason)) {
         return false;
     }
-    if (!set_demag_poisson_hypre_solver_iterative_mode(
-            ctx,
-            *workspace,
-            !reset_initial_solution,
-            reason)) {
+    ctx.poisson_demag.fresh_zero_guess_count =
+        workspace->fresh_zero_guess_count;
+    if (reset_initial_solution) {
+        ctx.poisson_demag.fresh_zero_guess_count_current_step += 1;
+    }
+    if (!hypre_wait_for_fullmag(workspace->stream_interop, stream, reason)) {
         return false;
     }
+    ctx.poisson_demag.event_wait_count =
+        workspace->stream_interop.event_wait_count;
+    ctx.poisson_demag.event_wait_count_current_step += 1;
     const auto solve_start = FemSteadyClock::now();
     workspace->solver->Mult(*workspace->b_par, *workspace->x_par);
-    if (!cuda_ok(
-            cudaDeviceSynchronize(),
-            "cudaDeviceSynchronize GPU demag Hypre solve",
-            reason)) {
+    if (!fullmag_wait_for_hypre(workspace->stream_interop, stream, reason)) {
         return false;
     }
+    ctx.poisson_demag.event_wait_count =
+        workspace->stream_interop.event_wait_count;
+    ctx.poisson_demag.event_wait_count_current_step += 1;
+    ctx.poisson_demag.global_sync_count =
+        workspace->stream_interop.global_sync_count;
     const uint64_t solver_apply_wall_time_ns = elapsed_ns(solve_start);
     ctx.poisson_demag.last_solver_apply_wall_time_ns = solver_apply_wall_time_ns;
     ctx.poisson_demag.step_solver_apply_wall_time_ns += solver_apply_wall_time_ns;
@@ -236,13 +236,16 @@ bool compute_device_demag_for_device_stage_impl(
     ctx.poisson_demag.last_iterations = iterations;
     ctx.poisson_demag.last_residual = residual;
     ctx.poisson_demag.last_setup_wall_time_ns = 0;
-    ctx.poisson_demag.last_solver_setup_reused = true;
+    ctx.poisson_demag.last_solver_setup_reused =
+        workspace->solver_setup_complete &&
+        workspace->solver_setup_count == 1u;
     if (!solve_converged) {
-        if (!cuda_ok(cudaMemset(
+        if (!cuda_ok(cudaMemsetAsync(
                 gpu.demag_poisson.poisson_solution,
                 0,
-                static_cast<size_t>(gpu.lifecycle.node_count) * sizeof(double)),
-                "cudaMemset rejected GPU Poisson demag candidate",
+                static_cast<size_t>(gpu.lifecycle.node_count) * sizeof(double),
+                stream),
+                "cudaMemsetAsync rejected GPU Poisson demag candidate",
                 reason)) {
             return false;
         }
@@ -250,14 +253,6 @@ bool compute_device_demag_for_device_stage_impl(
         return false;
     }
 
-    if (workspace->hypre_done_event != nullptr) {
-        if (!cuda_ok(cudaEventRecord(workspace->hypre_done_event, nullptr),
-                "cudaEventRecord GPU demag hypre done", reason) ||
-            !cuda_ok(cudaStreamWaitEvent(stream, workspace->hypre_done_event, 0),
-                "cudaStreamWaitEvent GPU demag compute stream wait solve", reason)) {
-            return false;
-        }
-    }
     GpuDemagPhaseTimer recover_timer;
     if (!recover_timer.start(
             timings.enabled,

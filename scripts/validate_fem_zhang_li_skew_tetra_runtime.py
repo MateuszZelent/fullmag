@@ -216,9 +216,8 @@ def main() -> None:
     if len(args.dt_log) != 3 or len(args.mesh_run) != 3:
         raise ValueError("expected exactly three dt logs and three mesh runs")
     dt_runs = [result_from_log(path) for path in args.dt_log]
-    # The native runner takes one final time-closure step below 3e-29 s here;
-    # all levels still end at the same requested physical time.
-    for index, (result, expected_steps) in enumerate(zip(dt_runs, (33, 65, 129), strict=True)):
+    # Every level now lands exactly on the shared requested physical time.
+    for index, (result, expected_steps) in enumerate(zip(dt_runs, (32, 64, 128), strict=True)):
         check_run(f"dt[{index}]", result, expected_steps)
         check_runtime_provenance(f"dt[{index}]", result, "fem_cpu_native", fixture_mesh, "cpu")
     dt_order = observed_order(*(flat_m(result) for result in dt_runs))

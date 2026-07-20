@@ -302,7 +302,12 @@ int run_backend_relaxation_step(
             return FULLMAG_FEM_ERR_INTERNAL;
         }
         gpu_rk_reset_phase_timing_events(ctx);
+        gpu_relax_reset_step_diagnostics(ctx.gpu_state.device.relaxation);
         ctx.poisson_demag.solves_current_step = 0;
+        ctx.poisson_demag.setup_count_current_step = 0;
+        ctx.poisson_demag.fresh_zero_guess_count_current_step = 0;
+        ctx.poisson_demag.event_wait_count_current_step = 0;
+        ctx.poisson_demag.global_sync_count_current_step = 0;
         ctx.poisson_demag.step_assemble_wall_time_ns = 0;
         ctx.poisson_demag.step_solver_apply_wall_time_ns = 0;
         ctx.poisson_demag.step_recover_wall_time_ns = 0;

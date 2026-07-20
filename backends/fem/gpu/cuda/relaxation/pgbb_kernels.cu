@@ -105,6 +105,7 @@ __global__ void direct_energy_difference_kernel(
     const double *ms, const double *ku, const double *ku2,
     const double *axis_x, const double *axis_y, const double *axis_z,
     const double *lumped_mass, const uint8_t *mask,
+    bool demag_enabled,
     double uniform_ku, double uniform_ku2, bool use_ku_field, bool use_ku2_field,
     double *block_delta, double *block_absolute, int n)
 {
@@ -115,10 +116,12 @@ __global__ void direct_energy_difference_kernel(
         const double dy = trial_my[i] - current_my[i];
         const double dz = trial_mz[i] - current_mz[i];
         const double volume = lumped_mass[i];
-        const double demag = -0.5 * kMu0 * ms[i] * volume *
-            (dx * (current_hx[i] + trial_hx[i]) +
-             dy * (current_hy[i] + trial_hy[i]) +
-             dz * (current_hz[i] + trial_hz[i]));
+        const double demag = demag_enabled
+            ? -0.5 * kMu0 * ms[i] * volume *
+                (dx * (current_hx[i] + trial_hx[i]) +
+                 dy * (current_hy[i] + trial_hy[i]) +
+                 dz * (current_hz[i] + trial_hz[i]))
+            : 0.0;
         const double zeeman = -kMu0 * ms[i] * volume *
             (dx * h_ext_x[i] + dy * h_ext_y[i] + dz * h_ext_z[i]);
         const double q0 = current_mx[i] * axis_x[i] + current_my[i] * axis_y[i] + current_mz[i] * axis_z[i];
@@ -916,6 +919,7 @@ void fullmag_cuda_relax_direct_energy_difference_blocks(
     const double *ms, const double *ku, const double *ku2,
     const double *axis_x, const double *axis_y, const double *axis_z,
     const double *lumped_mass, const uint8_t *magnetic_node_mask,
+    bool demag_enabled,
     double uniform_ku, double uniform_ku2, bool use_ku_field, bool use_ku2_field,
     double *block_delta_energy, double *block_absolute_terms, int n, cudaStream_t stream)
 {
@@ -925,7 +929,8 @@ void fullmag_cuda_relax_direct_energy_difference_blocks(
         current_h_demag_x, current_h_demag_y, current_h_demag_z,
         trial_h_demag_x, trial_h_demag_y, trial_h_demag_z,
         h_ext_x, h_ext_y, h_ext_z, ms, ku, ku2, axis_x, axis_y, axis_z,
-        lumped_mass, magnetic_node_mask, uniform_ku, uniform_ku2, use_ku_field, use_ku2_field,
+        lumped_mass, magnetic_node_mask, demag_enabled,
+        uniform_ku, uniform_ku2, use_ku_field, use_ku2_field,
         block_delta_energy, block_absolute_terms, n);
 }
 
