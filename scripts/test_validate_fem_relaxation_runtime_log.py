@@ -40,6 +40,33 @@ def load_benchmark_case_module():
     return module
 
 
+def load_validator_module():
+    spec = importlib.util.spec_from_file_location(
+        "validate_fem_relaxation_runtime_log", VALIDATOR
+    )
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_resolves_container_workspace_artifact_path_on_host(monkeypatch) -> None:
+    validator = load_validator_module()
+    with tempfile.TemporaryDirectory() as directory:
+        repo_root = Path(directory)
+        artifact_dir = repo_root / "examples" / "case.zarr" / "artifacts"
+        artifact_dir.mkdir(parents=True)
+        monkeypatch.chdir(repo_root)
+
+        resolved = validator.resolve_artifact_dir(
+            {"artifact_dir": "/workspace/examples/case.zarr/artifacts"},
+            repo_root / "runtime.log",
+        )
+
+        assert resolved == artifact_dir
+
+
 def just_recipe_source(justfile: str, recipe_name: str) -> str:
     marker = f"{recipe_name}:"
     start = justfile.index(marker)

@@ -321,16 +321,23 @@ down event pools when disabled, so ordinary disabled runs do not retain timing
 events and direct-minimizer runs can enable/disable profiling without rebuilding
 the runtime.
 
-Update 2026-06-05 GPU demag stream boundary: strict FEM GPU demag keeps RHS
-assembly, recovery, and energy reductions on the Fullmag CUDA compute stream,
-while the MFEM/Hypre Poisson `Mult` call remains bridged through explicit CUDA
-events to the MFEM/Hypre stream/default-stream execution path. The current
-bundled Hypre headers expose public memory-location and execution-policy
-controls, but not a public CUDA stream-binding setter. Until that contract is
-available, the production invariant is: no `cudaStreamSynchronize`,
-`cudaEventSynchronize`, or `cudaDeviceSynchronize` in the strict GPU demag
-stage; the only stream ordering around Hypre is the explicit event bridge.
-The `fem_cuda_demag_timing_contract` source test now enforces that boundary.
+Update 2026-07-20 GPU demag stream boundary: the managed HYPRE 3.1.0 runtime
+exposes the exact compute stream as
+`hypre_HandleComputeStream(hypre_handle())`. Strict FEM GPU demag records a
+Fullmag-ready event on the Fullmag compute stream, makes that exact HYPRE
+stream wait, records HYPRE-done on the HYPRE stream after `Mult`, and makes the
+Fullmag stream wait before recovery and energy reduction. Ordering through the
+legacy/default stream or a device-wide synchronization is not proof of this
+contract and is forbidden in strict GPU mode.
+
+The compatible Poisson matrix, Krylov object, and AMG hierarchy are set up once
+per demag workspace. A fresh magnetization RHS resets the solution vector to
+zero but does not recreate the solver or preconditioner. Matrix topology,
+boundary realization, solver/preconditioner policy, tolerance, AMG settings,
+device, or workspace changes invalidate the setup and rebuild it explicitly.
+Profiler setup time therefore reports real rebuild work rather than a
+hard-coded zero.
+
 Strict GPU demag solver setup also best-effort enables Hypre's public vendor
 sparse-kernel switches for device builds: SpTrans, SpMV, and SpGEMM. This keeps
 CUDA Hypre AMG setup and solver application on the optimized vendor sparse path

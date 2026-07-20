@@ -74,9 +74,9 @@ Additional GPU-capable parity host requirements:
 The repo expects an install prefix that exports `MFEMConfig.cmake` or
 `mfem-config.cmake`. The canonical build stack used by Fullmag is:
 
-- `MFEM v4.7`
+- `MFEM v4.9`
 - `libCEED v0.12.0`
-- `hypre v2.32.0`
+- `hypre v3.1.0`
 
 The corresponding reference build is encoded in
 [docker/fem-gpu/Dockerfile](/home/kkingstoun/git/fullmag/fullmag/docker/fem-gpu/Dockerfile).

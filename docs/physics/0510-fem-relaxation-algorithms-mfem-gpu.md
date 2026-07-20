@@ -481,6 +481,18 @@ accepted only when both ordinary and refined direct increments satisfy the
 unchanged strict inequality; unresolved ambiguity fails closed and restores
 the accepted state. No user-visible noise tolerance, algorithm substitution,
 or device fallback is permitted.
+
+For an accepted CUDA NCG endpoint \(m_{k+1}\), the already evaluated tuple
+\((m_{k+1}, H_d(m_{k+1}), H_\mathrm{eff}(m_{k+1}), E(m_{k+1}))\) may seed
+exactly one next-step current evaluation. Reuse is legal only when the state,
+drive, material, enabled-interaction, linear-solver policy, tolerance,
+direct-increment refinement, device-residency, and workspace signatures all
+match. The accepted endpoint token is consumed at most once. Any mismatch,
+rollback, external state upload, or distinct trial endpoint invalidates the
+token and requires a fresh zero-initial demag solve. This changes neither the
+energy in joules nor the FEM mass metric; it removes a duplicate evaluation of
+the same physical endpoint.
+
 CPU/MFEM relaxation qualification artifacts carry an `algorithm_policy` block
 with the resolved native realization, FEM mass metric, line-search policy, and
 preconditioner/linear-solver contract. They intentionally do not report an

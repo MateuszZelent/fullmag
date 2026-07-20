@@ -204,7 +204,9 @@ def resolve_artifact_dir(summary: dict[str, Any], log_path: Path) -> Path:
     raw = summary.get("artifact_dir")
     require(isinstance(raw, str) and raw, "JSON run summary must include artifact_dir")
     path = Path(raw)
-    if not path.is_absolute():
+    if path.is_absolute() and not path.exists() and path.is_relative_to("/workspace"):
+        path = (Path.cwd() / path.relative_to("/workspace")).resolve()
+    elif not path.is_absolute():
         path = (log_path.parent / path).resolve()
         if not path.exists():
             path = (Path.cwd() / raw).resolve()

@@ -63,6 +63,17 @@ hot-loop host sync, runtime moze przejsc na:
 - `all_in_gpu_legacy_sparse`, albo
 - `all_in_gpu_partial_assembly`.
 
+## Kolejnosc Fullmag/HYPRE bez globalnej bariery
+
+Strict GPU Poisson uzywa dwoch jawnych strumieni. Fullmag zapisuje zdarzenie
+gotowosci na swoim compute streamie, a
+`hypre_HandleComputeStream(hypre_handle())` czeka na to zdarzenie. Po `Mult`
+zdarzenie HYPRE-done jest zapisywane na dokladnie tym strumieniu HYPRE, po czym
+compute stream Fullmag czeka przed recovery i redukcja energii. A
+device-wide compatibility barrier is not strict GPU. `cudaDeviceSynchronize` moze istniec
+jedynie w jawnym trybie compatibility/debug i musi obnizyc provenance z trybu
+strict; nie jest dopuszczalnym ukrytym fallbackiem.
+
 ## TransferAudit
 
 Natywny backend publikuje `fullmag_fem_transfer_audit` w C ABI. Liczniki

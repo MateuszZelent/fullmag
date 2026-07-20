@@ -2,9 +2,9 @@ FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS deps
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_VERSION=3.30.5
-ENV MFEM_REF=v4.7
+ENV MFEM_REF=v4.9
 ENV LIBCEED_REF=v0.12.0
-ENV HYPRE_REF=v2.32.0
+ENV HYPRE_REF=v3.1.0
 ENV INSTALL_PREFIX=/opt/fullmag-deps
 ENV CUDA_HOME=/usr/local/cuda
 ENV CUDA_PATH=/usr/local/cuda

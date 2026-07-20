@@ -463,6 +463,14 @@ add_fem_source_facade_contract(
     tests/source_facade_export_progress_contract.cpp
 )
 add_fem_source_facade_contract(
+    fem_dependency_stack_contract
+    tests/dependency_stack_contract.cpp
+)
+add_fem_source_facade_contract(
+    fem_gpu_solver_docs_contract
+    tests/gpu_solver_docs_contract.cpp
+)
+add_fem_source_facade_contract(
     fem_relaxation_source_contract
     tests/relaxation_source_contract.cpp
 )
