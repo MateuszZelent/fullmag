@@ -2521,6 +2521,7 @@ generate-fem-gpu-performance-fixtures:
     COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_GMSH_THREADS=1 \
       fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/fem_gpu_benchmark.py \
         --meshes coarse \
         --scenarios box500_airbox_exchange_demag \
@@ -2549,6 +2550,7 @@ verify-fem-gpu-performance-regression:
           --demag-amg-relax-types 6 \
           --steps 64 \
           --fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json \
+          --fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
           --require-fixture-identity \
           --gpu-warmup \
           --repeat 5 \
@@ -2563,6 +2565,46 @@ verify-fem-gpu-performance-regression:
           --output .fullmag/reports/fem_gpu_performance_regression.csv \
           --cpu-gpu-summary-output .fullmag/reports/fem_gpu_performance_regression_summary.json'
 
+capture-fem-gpu-pre-remediation-performance-baseline:
+    COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime
+    mkdir -p .fullmag/reports
+    COMPOSE_PROJECT_NAME=fullmag docker compose --profile fem-gpu run --rm \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_BENCH_DOMAIN_HMAX=50e-9 \
+      -e FULLMAG_BENCH_AIRBOX_HMAX=100e-9 \
+      fem-gpu bash -lc 'cd /workspace && python3 scripts/analysis/fem_gpu_benchmark.py \
+        --meshes coarse \
+        --scenarios box500_airbox_exchange_demag \
+        --integrators heun \
+        --relax-algorithms nonlinear_cg \
+        --demag-preconditioners AMG \
+        --demag-amg-relax-types 6 \
+        --steps 64 \
+        --repeat 5 \
+        --fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json \
+        --fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+        --require-fixture-identity \
+        --gpu-warmup \
+        --reuse-generated-domain-mesh \
+        --require-stable-solver-mesh \
+        --require-demag-converged \
+        --require-cpu-gpu-consistency \
+        --require-gpu-strict-residency \
+        --output .fullmag/reports/fullmag_fem_gpu_pre_remediation_performance_baseline.csv \
+        --cpu-gpu-summary-output .fullmag/reports/fullmag_fem_gpu_pre_remediation_performance_baseline_summary.json'
+
+verify-fem-gpu-pre-remediation-runtime-restore:
+    state_file="$(mktemp /tmp/fullmag-fem-gpu-restore-state.XXXXXX.json)"; \
+      trap 'rm -f -- "$state_file"' EXIT; \
+      python3 scripts/verify_fem_gpu_runtime_restore.py capture \
+        --environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+        --state "$state_file"; \
+      COMPOSE_PROJECT_NAME=fullmag just rebuild-fem-runtime; \
+      python3 scripts/verify_fem_gpu_runtime_restore.py compare \
+        --environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
+        --state "$state_file"
+
 verify-fem-gpu-demag-performance-benchmark:
     just ensure-managed-fem-runtime
     mkdir -p .fullmag/reports
@@ -2572,11 +2614,11 @@ verify-fem-gpu-demag-performance-benchmark:
       -e FULLMAG_BENCH_DOMAIN_HMAX="${FULLMAG_BENCH_DOMAIN_HMAX:-50e-9}" \
       -e FULLMAG_BENCH_AIRBOX_HMAX="${FULLMAG_BENCH_AIRBOX_HMAX:-100e-9}" \
       -e FULLMAG_BENCH_MESHES="${FULLMAG_BENCH_MESHES:-coarse}" \
-      -e FULLMAG_BENCH_SCENARIOS="${FULLMAG_BENCH_SCENARIOS:-box500_airbox_exchange_demag}" \
+      -e FULLMAG_BENCH_SCENARIOS="${FULLMAG_BENCH_SCENARIOS:-box500_airbox_exchange_demag,box500_airbox_exchange_demag_anis_uniaxial,box500_airbox_exchange_demag_anis_cubic}" \
       -e FULLMAG_BENCH_INTEGRATORS="${FULLMAG_BENCH_INTEGRATORS:-heun}" \
       -e FULLMAG_BENCH_RELAX_ALGORITHMS="${FULLMAG_BENCH_RELAX_ALGORITHMS:-llg_overdamped,projected_gradient_bb,nonlinear_cg}" \
       -e FULLMAG_BENCH_DEMAG_SOLVERS="${FULLMAG_BENCH_DEMAG_SOLVERS:-CG}" \
-      -e FULLMAG_BENCH_DEMAG_PRECONDITIONERS="${FULLMAG_BENCH_DEMAG_PRECONDITIONERS:-AMG}" \
+      -e FULLMAG_BENCH_DEMAG_PRECONDITIONERS="${FULLMAG_BENCH_DEMAG_PRECONDITIONERS:-OMIT,AMG,JACOBI}" \
       -e FULLMAG_BENCH_DEMAG_RTOLS="${FULLMAG_BENCH_DEMAG_RTOLS:-1e-8}" \
       -e FULLMAG_BENCH_DEMAG_CONVERGENCE_MAX_ITERATIONS="${FULLMAG_BENCH_DEMAG_CONVERGENCE_MAX_ITERATIONS:-100}" \
       -e FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES="${FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES:-18}" \
@@ -2588,7 +2630,6 @@ verify-fem-gpu-demag-performance-benchmark:
       -e FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC="${FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC:-demag_solver_apply_wall_time_ms}" \
       -e FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS="${FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS:-5000}" \
       -e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-4}" \
-      -e FULLMAG_BENCH_REPEAT="${FULLMAG_BENCH_REPEAT:-1}" \
       -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-900}" \
       -e FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL="${FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL:-1e-6}" \
       -e FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J="${FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J:-1e-30}" \
@@ -2598,7 +2639,7 @@ verify-fem-gpu-demag-performance-benchmark:
       -e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-4}" \
       -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-4}" \
       -e FULLMAG_BENCH_MIN_SOLVER_NODES="${FULLMAG_BENCH_MIN_SOLVER_NODES:-800}" \
-      -e FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP="${FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP:-}" \
+      -e FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP="${FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP:-2}" \
       -e FULLMAG_BENCH_ACCEPTED_BASELINE="${FULLMAG_BENCH_ACCEPTED_BASELINE:-}" \
       -e FULLMAG_BENCH_REQUIRE_ACCEPTED_BASELINE="${FULLMAG_BENCH_REQUIRE_ACCEPTED_BASELINE:-0}" \
       -e FULLMAG_BENCH_MAX_PERFORMANCE_REGRESSION_PERCENT="${FULLMAG_BENCH_MAX_PERFORMANCE_REGRESSION_PERCENT:-10}" \
@@ -2610,12 +2651,10 @@ verify-fem-gpu-demag-performance-benchmark:
       fem-gpu bash -lc 'cd /workspace && \
         baseline_args=(); \
         demag_budget_args=(); \
-        speedup_args=(); \
         cache_args=(); \
         if [ -n "$FULLMAG_BENCH_ACCEPTED_BASELINE" ]; then baseline_args+=(--accepted-baseline "$FULLMAG_BENCH_ACCEPTED_BASELINE"); fi; \
         if [ "$FULLMAG_BENCH_REQUIRE_ACCEPTED_BASELINE" = "1" ]; then baseline_args+=(--require-accepted-baseline); fi; \
         if [ -n "$FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS" ]; then demag_budget_args+=(--max-demag-solver-apply-ms "$FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS"); fi; \
-        if [ -n "$FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP" ]; then speedup_args+=(--min-gpu-demag-total-speedup "$FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP"); fi; \
         if [ -n "$FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR" ]; then cache_args+=(--generated-domain-mesh-cache-dir "$FULLMAG_BENCH_DOMAIN_MESH_CACHE_DIR"); fi; \
         python3 scripts/analysis/fem_gpu_benchmark.py \
         --meshes "$FULLMAG_BENCH_MESHES" \
@@ -2637,7 +2676,6 @@ verify-fem-gpu-demag-performance-benchmark:
         --require-demag-single-setup \
         --require-zero-strict-gpu-global-sync \
         --steps "$FULLMAG_BENCH_STEPS" \
-        --repeat "$FULLMAG_BENCH_REPEAT" \
         --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
         --cpu-gpu-energy-rtol "$FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL" \
         --cpu-gpu-energy-atol "$FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J" \
@@ -2645,14 +2683,13 @@ verify-fem-gpu-demag-performance-benchmark:
         --output "$FULLMAG_BENCH_OUTPUT" \
         --cpu-gpu-summary-output "$FULLMAG_BENCH_SUMMARY" \
         --quiet-json-summary \
-        --fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json \
-        --require-fixture-identity \
         --gpu-warmup \
         --reuse-generated-domain-mesh \
         "${cache_args[@]}" \
         --require-adaptive-gpu-rk-acceptance \
         --emit-best-demag-policy \
         --best-demag-policy-metric "$FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC" \
+        --require-best-demag-policy \
         --require-gpu-control-readback-budget \
         --require-gpu-phase-timings \
         --gpu-control-readback-per-step "$FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP" \
@@ -2660,12 +2697,12 @@ verify-fem-gpu-demag-performance-benchmark:
         --gpu-pgbb-control-readback-per-step "$FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP" \
         --gpu-ncg-control-readback-per-step "$FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP" \
         --require-min-solver-nodes "$FULLMAG_BENCH_MIN_SOLVER_NODES" \
+        --min-gpu-demag-total-speedup "$FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP" \
         --require-demag-converged \
         --require-cpu-gpu-consistency \
         --require-gpu-strict-residency \
         --max-performance-regression-percent "$FULLMAG_BENCH_MAX_PERFORMANCE_REGRESSION_PERCENT" \
         "${baseline_args[@]}" \
-        "${speedup_args[@]}" \
         "${demag_budget_args[@]}"'
 
 bench-fem-gpu-demag-amg-profile-sweep:

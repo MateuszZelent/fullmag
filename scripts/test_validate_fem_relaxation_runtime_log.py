@@ -26,6 +26,7 @@ BENCHMARK = REPO_ROOT / "scripts" / "analysis" / "fem_gpu_benchmark.py"
 BENCHMARK_CASE = REPO_ROOT / "examples" / "bench_fem_gpu_long.py"
 FULLMAG_PYTHON_SRC = REPO_ROOT / "packages" / "fullmag-py" / "src"
 ZHANG_LI_VALIDATOR = REPO_ROOT / "scripts" / "validate_fem_zhang_li_skew_tetra_runtime.py"
+RUNTIME_RESTORE_VERIFIER = REPO_ROOT / "scripts" / "verify_fem_gpu_runtime_restore.py"
 
 
 def load_benchmark_module():
@@ -57,6 +58,53 @@ def load_validator_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def write_performance_fixture(
+    tmp_path: Path,
+    benchmark,
+    **overrides,
+) -> Path:
+    mesh = tmp_path / "mesh.json"
+    mesh.write_text(
+        json.dumps(
+            {
+                "mesh_name": "fixture",
+                "nodes": [[0.0, 0.0, 0.0]],
+                "elements": [[0, 0, 0, 0]],
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = {
+        "schema": "fullmag.fem_gpu.performance_fixture.v1",
+        "solver_mesh_path": "mesh.json",
+        "solver_mesh_sha256": benchmark.hashlib.sha256(mesh.read_bytes()).hexdigest(),
+        "solver_mesh_signature": "fixture-mesh",
+        "problem_ir_sha256": "a" * 64,
+        "scenario": "box500_airbox_exchange_demag",
+        "relaxation_algorithm": "nonlinear_cg",
+        "node_count": 1,
+        "element_count": 1,
+        "demag_policy": {
+            "solver": "CG",
+            "preconditioner": "AMG",
+            "rtol": 1e-12,
+            "amg_relax_type": 6,
+            "amg_coarsening": 8,
+            "amg_interpolation": 6,
+            "amg_aggressive_coarsening": 1,
+        },
+        "stop_condition": {
+            "kind": "torque_or_max_steps",
+            "max_steps": 64,
+            "benchmark_only_torque_target_apm": 1e-6,
+        },
+    }
+    payload.update(overrides)
+    manifest = tmp_path / "fixture.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    return manifest
 
 
 def test_benchmark_summary_reports_distribution() -> None:
@@ -100,36 +148,263 @@ def test_fixture_identity_rejects_mesh_hash_drift(tmp_path) -> None:
 
 def test_fixture_identity_rejects_row_drift(tmp_path) -> None:
     benchmark = load_benchmark_module()
-    mesh = tmp_path / "mesh.json"
-    mesh.write_text('{"nodes":[],"elements":[]}', encoding="utf-8")
-    mesh_sha256 = benchmark.hashlib.sha256(mesh.read_bytes()).hexdigest()
-    manifest = tmp_path / "fixture.json"
-    manifest.write_text(
-        json.dumps(
-            {
-                "schema": "fullmag.fem_gpu.performance_fixture.v1",
-                "solver_mesh_path": "mesh.json",
-                "solver_mesh_sha256": mesh_sha256,
-                "solver_mesh_signature": "fixture-mesh",
-                "problem_ir_sha256": "fixture-ir",
-                "stop_condition": {"max_steps": 64},
-            }
-        ),
-        encoding="utf-8",
-    )
-
+    manifest = write_performance_fixture(tmp_path, benchmark)
     fixture = benchmark.load_fixture_manifest(manifest)
 
     assert benchmark.verify_fixture_row(
         {
             "solver_mesh_signature": "different-mesh",
-            "problem_ir_sha256": "different-ir",
+            "executed_problem_ir_sha256": "different-ir",
+            "reported_scenario": "box500_airbox_exchange_demag",
+            "reported_relaxation_algorithm": "nonlinear_cg",
+            "steps": 64,
+            "executed_steps": 64,
+            "requested_relax_torque_tolerance_apm": 1e-6,
+            "requested_demag_solver": "CG",
+            "requested_demag_preconditioner": "AMG",
+            "requested_demag_relative_tolerance": 1e-12,
+            "requested_demag_amg_relax_type": 6,
+            "requested_demag_amg_coarsening": 8,
+            "requested_demag_amg_interpolation": 6,
+            "requested_demag_amg_aggressive_coarsening": 1,
+            "demag_linear_solver": "CG",
+            "demag_preconditioner": "AMG",
+            "demag_relative_tolerance": 1e-12,
+            "demag_amg_relax_type": 6,
+            "demag_amg_coarsening": 8,
+            "demag_amg_interpolation": 6,
+            "demag_amg_aggressive_coarsening": 1,
+            "node_count": 1,
+            "element_count": 1,
         },
         fixture,
     ) == [
         "solver_mesh_signature differs from fixture",
-        "problem_ir_sha256 differs from fixture",
+        "executed_problem_ir_sha256 differs from fixture",
     ]
+
+
+def test_fixture_manifest_sha_must_match_environment_pin(tmp_path) -> None:
+    benchmark = load_benchmark_module()
+    manifest = write_performance_fixture(tmp_path, benchmark)
+
+    with pytest.raises(ValueError, match="fixture manifest sha256 mismatch"):
+        benchmark.load_fixture_manifest(
+            manifest,
+            expected_manifest_sha256="0" * 64,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("reported_scenario", "other", "scenario differs from fixture"),
+        (
+            "reported_relaxation_algorithm",
+            "projected_gradient_bb",
+            "relaxation_algorithm differs from fixture",
+        ),
+        ("steps", 63, "steps differs from fixture stop condition"),
+        ("executed_steps", 65, "executed_steps violates fixture stop condition"),
+        ("requested_relax_torque_tolerance_apm", 2e-6, "torque target differs from fixture"),
+        ("requested_demag_solver", "GMRES", "demag solver differs from fixture"),
+        (
+            "requested_demag_preconditioner",
+            "JACOBI",
+            "demag preconditioner differs from fixture",
+        ),
+        ("requested_demag_relative_tolerance", 1e-8, "demag rtol differs from fixture"),
+        ("requested_demag_amg_relax_type", 18, "demag AMG relax type differs from fixture"),
+        ("node_count", 2, "node_count differs from fixture"),
+        ("element_count", 2, "element_count differs from fixture"),
+    ],
+)
+def test_fixture_identity_rejects_full_contract_tamper(
+    tmp_path,
+    field,
+    value,
+    message,
+) -> None:
+    benchmark = load_benchmark_module()
+    fixture = benchmark.load_fixture_manifest(
+        write_performance_fixture(tmp_path, benchmark)
+    )
+    row = {
+        "solver_mesh_signature": "fixture-mesh",
+        "executed_problem_ir_sha256": "a" * 64,
+        "reported_scenario": "box500_airbox_exchange_demag",
+        "reported_relaxation_algorithm": "nonlinear_cg",
+        "steps": 64,
+        "executed_steps": 64,
+        "requested_relax_torque_tolerance_apm": 1e-6,
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "AMG",
+        "requested_demag_relative_tolerance": 1e-12,
+        "requested_demag_amg_relax_type": 6,
+        "requested_demag_amg_coarsening": 8,
+        "requested_demag_amg_interpolation": 6,
+        "requested_demag_amg_aggressive_coarsening": 1,
+        "demag_linear_solver": "CG",
+        "demag_preconditioner": "AMG",
+        "demag_relative_tolerance": 1e-12,
+        "demag_amg_relax_type": 6,
+        "demag_amg_coarsening": 8,
+        "demag_amg_interpolation": 6,
+        "demag_amg_aggressive_coarsening": 1,
+        "node_count": 1,
+        "element_count": 1,
+    }
+    row[field] = value
+
+    assert message in benchmark.verify_fixture_row(row, fixture)
+
+
+def test_fixture_identity_rejects_resolved_demag_policy_tamper(tmp_path) -> None:
+    benchmark = load_benchmark_module()
+    fixture = benchmark.load_fixture_manifest(
+        write_performance_fixture(tmp_path, benchmark)
+    )
+    row = {
+        "solver_mesh_signature": "fixture-mesh",
+        "executed_problem_ir_sha256": "a" * 64,
+        "reported_scenario": "box500_airbox_exchange_demag",
+        "reported_relaxation_algorithm": "nonlinear_cg",
+        "steps": 64,
+        "executed_steps": 64,
+        "requested_relax_torque_tolerance_apm": 1e-6,
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "AMG",
+        "requested_demag_relative_tolerance": 1e-12,
+        "requested_demag_amg_relax_type": 6,
+        "requested_demag_amg_coarsening": 8,
+        "requested_demag_amg_interpolation": 6,
+        "requested_demag_amg_aggressive_coarsening": 1,
+        "demag_linear_solver": "CG",
+        "demag_preconditioner": "JACOBI",
+        "demag_relative_tolerance": 1e-12,
+        "demag_amg_relax_type": 6,
+        "demag_amg_coarsening": 8,
+        "demag_amg_interpolation": 6,
+        "demag_amg_aggressive_coarsening": 1,
+        "node_count": 1,
+        "element_count": 1,
+    }
+
+    assert "resolved demag preconditioner differs from fixture" in (
+        benchmark.verify_fixture_row(row, fixture)
+    )
+
+
+def test_fixture_identity_requires_hash_observed_from_executed_ir(tmp_path) -> None:
+    benchmark = load_benchmark_module()
+    fixture = benchmark.load_fixture_manifest(
+        write_performance_fixture(tmp_path, benchmark)
+    )
+
+    failures = benchmark.verify_fixture_row(
+        {
+            "solver_mesh_signature": "fixture-mesh",
+            "problem_ir_sha256": fixture.problem_ir_sha256,
+        },
+        fixture,
+    )
+
+    assert "executed_problem_ir_sha256 differs from fixture" in failures
+
+
+def test_fixture_execution_command_consumes_exact_canonical_ir() -> None:
+    benchmark = load_benchmark_module()
+
+    command = benchmark.problem_ir_execution_command(
+        binary=Path("/runtime/fullmag"),
+        problem_ir_path=Path("/tmp/canonical.problem-ir.json"),
+        run_dir=Path("/tmp/run"),
+        until_seconds=1e-12,
+    )
+
+    assert command == [
+        "/runtime/fullmag",
+        "run-json",
+        "/tmp/canonical.problem-ir.json",
+        "--until",
+        "1e-12",
+        "--output-dir",
+        "/tmp/run",
+    ]
+
+
+def test_fixture_stop_identity_is_extracted_from_exact_problem_ir() -> None:
+    benchmark = load_benchmark_module()
+
+    stop = benchmark.problem_ir_stop_condition(
+        {
+            "study": {
+                "stop": {
+                    "max_steps": 64,
+                    "torque_tolerance_apm": 1.0e-6,
+                }
+            }
+        }
+    )
+
+    assert stop == {
+        "kind": "torque_or_max_steps",
+        "benchmark_only_torque_target_apm": 1.0e-6,
+        "max_steps": 64,
+    }
+
+
+def test_run_json_artifacts_supply_authoritative_benchmark_payload(tmp_path) -> None:
+    benchmark = load_benchmark_module()
+    (tmp_path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "scalar_rows": 2,
+                "fem_gpu_relaxation_qualification": {
+                    "executed_steps": 2,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "scalars.csv").write_text(
+        "step,time,solver_dt,E_ex,E_demag,E_ext,E_ani,E_dmi,E_total,"
+        "max_dm_dt,max_h_eff,max_h_demag,max_torque_Apm,max_torque_T\n"
+        "2,2e-12,1e-12,1,2,3,4,5,15,6,7,8,9,10\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "solver_steps.csv").write_text(
+        "step,rejected_attempts,rhs_evals,demag_solves\n"
+        "1,1,2,3\n"
+        "2,0,3,4\n",
+        encoding="utf-8",
+    )
+
+    payload = benchmark.load_authoritative_benchmark_payload(tmp_path)
+
+    assert payload == {
+        "status": "completed",
+        "executed_steps": 2,
+        "artifact_dir": str(tmp_path),
+        "final_time_s": "2e-12",
+        "final_solver_dt_s": "1e-12",
+        "final_e_ex_j": "1",
+        "final_e_demag_j": "2",
+        "final_e_ext_j": "3",
+        "final_e_ani_j": "4",
+        "final_e_dmi_j": "5",
+        "final_e_total_j": "15",
+        "max_dm_dt": "6",
+        "max_h_eff": "7",
+        "max_h_demag": "8",
+        "max_torque_Apm": "9",
+        "max_torque_T": "10",
+        "rhs_evals": 3,
+        "total_rhs_evals": 5,
+        "demag_solves": 7,
+        "rejected_attempts": 1,
+    }
 
 
 def test_fixture_generation_uses_runtime_realized_mesh_signature() -> None:
@@ -159,20 +434,47 @@ def test_fem_gpu_performance_regression_recipe_is_fail_closed() -> None:
         "--require-accepted-baseline",
         "--max-performance-regression-percent 5",
         "benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json",
+        "--fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json",
         "FULLMAG_BENCH_DOMAIN_HMAX=50e-9",
         "FULLMAG_BENCH_AIRBOX_HMAX=100e-9",
     ]:
         assert required in recipe
 
 
-def test_pre_remediation_baseline_does_not_require_future_speedup() -> None:
+def test_authoritative_demag_benchmark_preserves_pre_task0_gate() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
     recipe = just_recipe_source(
         justfile, "verify-fem-gpu-demag-performance-benchmark"
     )
 
-    assert 'FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP="${FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP:-}"' in recipe
-    assert 'if [ -n "$FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP" ]' in recipe
+    assert "box500_airbox_exchange_demag,box500_airbox_exchange_demag_anis_uniaxial,box500_airbox_exchange_demag_anis_cubic" in recipe
+    assert 'FULLMAG_BENCH_DEMAG_PRECONDITIONERS="${FULLMAG_BENCH_DEMAG_PRECONDITIONERS:-OMIT,AMG,JACOBI}"' in recipe
+    assert 'FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP="${FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP:-2}"' in recipe
+    assert "--require-best-demag-policy" in recipe
+    assert '--min-gpu-demag-total-speedup "$FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP"' in recipe
+    assert "--fixture-manifest" not in recipe
+    assert "FULLMAG_BENCH_REPEAT" not in recipe
+
+
+def test_pre_remediation_capture_has_narrow_task0_contract() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    recipe = just_recipe_source(
+        justfile, "capture-fem-gpu-pre-remediation-performance-baseline"
+    )
+
+    for required in (
+        "box500_airbox_exchange_demag",
+        "--relax-algorithms nonlinear_cg",
+        "--demag-preconditioners AMG",
+        "--demag-amg-relax-types 6",
+        "--steps 64",
+        "--repeat 5",
+        "--fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json",
+        "--fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json",
+        "--require-fixture-identity",
+    ):
+        assert required in recipe
+    assert "--min-gpu-demag-total-speedup" not in recipe
     assert "--require-best-demag-policy" not in recipe
 
 
@@ -279,6 +581,55 @@ def test_performance_regression_gates_only_objective_metrics() -> None:
     ) == []
 
 
+@pytest.mark.parametrize(
+    ("side", "values", "reason"),
+    [
+        ("current", [None] * 5, "current wall_time_ms contains missing"),
+        ("accepted", [None] * 5, "accepted wall_time_ms contains missing"),
+        ("current", [10.0, 11.0, float("nan"), 13.0, 14.0], "current wall_time_ms contains non-finite"),
+        ("accepted", [10.0, 11.0, float("inf"), 13.0, 14.0], "accepted wall_time_ms contains non-finite"),
+        ("current", [10.0, 11.0, 0.0, 13.0, 14.0], "current wall_time_ms contains non-positive"),
+        ("accepted", [10.0, 11.0, -1.0, 13.0, 14.0], "accepted wall_time_ms contains non-positive"),
+        ("current", [10.0, 11.0, 12.0, 13.0], "current wall_time_ms requires at least 5 samples"),
+        ("accepted", [10.0, 11.0, 12.0, 13.0], "accepted wall_time_ms requires at least 5 samples"),
+    ],
+)
+def test_required_accepted_baseline_rejects_invalid_objective_samples(
+    side,
+    values,
+    reason,
+) -> None:
+    benchmark = load_benchmark_module()
+    base = {
+        "status": "ok",
+        "solver_mesh_signature": "mesh",
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "nonlinear_cg",
+        "timestep_policy": "fixed",
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "AMG",
+        "demag_solver_apply_wall_time_ms": 1.0,
+    }
+    valid = [{**base, "wall_time_ms": value} for value in [10, 11, 12, 13, 14]]
+    invalid = [{**base, "wall_time_ms": value} for value in values]
+    current = invalid if side == "current" else valid
+    accepted = invalid if side == "accepted" else valid
+
+    failures = benchmark.performance_regression_failures(
+        current,
+        accepted,
+        max_regression_percent=5.0,
+        require_complete_objectives=True,
+        required_sample_count=5,
+    )
+
+    assert any(reason in failure for failure in failures)
+
+
 def test_gpu_environment_identity_rejects_different_device() -> None:
     benchmark = load_benchmark_module()
 
@@ -308,6 +659,7 @@ def test_fixture_generation_recipe_uses_managed_runtime() -> None:
     assert "just ensure-managed-fem-runtime" in recipe
     assert "docker compose --profile fem-gpu run --rm" in recipe
     assert "PYTHONPATH=/workspace/packages/fullmag-py/src" in recipe
+    assert "FULLMAG_GMSH_THREADS=1" in recipe
     assert "--steps 1" in recipe
     assert "--reuse-generated-domain-mesh" in recipe
     assert "--write-fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json" in recipe
@@ -344,6 +696,58 @@ def test_runtime_restore_manifest_rejects_library_hash_drift(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="libfullmag_fem sha256 mismatch"):
         benchmark.validate_runtime_restore_manifest(restore_manifest)
+
+
+def test_runtime_restore_recipe_proves_controlled_export_invariance() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    recipe = just_recipe_source(
+        justfile, "verify-fem-gpu-pre-remediation-runtime-restore"
+    )
+
+    for required in (
+        "scripts/verify_fem_gpu_runtime_restore.py capture",
+        "benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json",
+        "just rebuild-fem-runtime",
+        "scripts/verify_fem_gpu_runtime_restore.py compare",
+    ):
+        assert required in recipe
+
+
+def test_runtime_restore_verifier_fails_clearly_for_missing_external_bundle(
+    tmp_path,
+) -> None:
+    environment = tmp_path / "environment.json"
+    environment.write_text(
+        json.dumps(
+            {
+                "runtime_bundle": {
+                    "root": "missing/bundle",
+                    "restore_manifest_path": "missing/bundle/restore-manifest-v2.json",
+                    "restore_manifest_sha256": "0" * 64,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(RUNTIME_RESTORE_VERIFIER),
+            "capture",
+            "--environment",
+            str(environment),
+            "--state",
+            str(tmp_path / "state.json"),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "external immutable FEM GPU runtime bundle is missing" in completed.stderr
 
 
 def test_resolves_container_workspace_artifact_path_on_host(monkeypatch) -> None:
@@ -1888,7 +2292,9 @@ def test_benchmark_mesh_env_forwards_requested_generated_mesh_sizes(monkeypatch)
 def test_benchmark_backend_runs_use_isolated_output_directory() -> None:
     source = BENCHMARK.read_text(encoding="utf-8")
 
-    assert '"--output-dir", str(run_dir)' in source
+    assert 'TemporaryDirectory(prefix=f"fullmag_{backend_label.lower()}_bench_")' in source
+    assert '"--output-dir",' in source
+    assert "str(run_dir)" in source
 
 
 def test_box500_relaxation_uses_mesh_independent_nonuniform_initial_state() -> None:

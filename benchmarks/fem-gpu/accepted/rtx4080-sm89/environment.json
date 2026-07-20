@@ -1,8 +1,8 @@
 {
   "schema": "fullmag.fem_gpu.performance_environment.v1",
   "evidence_kind": "managed_container_rtx4080_super",
-  "captured_at": "2026-07-20T22:44:09+02:00",
-  "benchmark_command": "COMPOSE_PROJECT_NAME=fullmag FULLMAG_BENCH_REPEAT=5 FULLMAG_BENCH_STEPS=64 FULLMAG_BENCH_RELAX_ALGORITHMS=nonlinear_cg FULLMAG_BENCH_DEMAG_AMG_RELAX_TYPES=6 just verify-fem-gpu-demag-performance-benchmark",
+  "captured_at": "2026-07-20T23:49:58+02:00",
+  "benchmark_command": "COMPOSE_PROJECT_NAME=fullmag just capture-fem-gpu-pre-remediation-performance-baseline",
   "gpu": {
     "uuid": "GPU-fcb9fbf1-8284-37c7-af5b-76bcbf2d2937",
     "name": "NVIDIA GeForce RTX 4080 SUPER",
@@ -33,6 +33,9 @@
     }
   },
   "runtime_bundle": {
+    "artifact_uri": "fullmag-runtime://fem-gpu/pre-remediation/sha256:65e02cbed5dcd5ab26fb2f6362cc7f78bc11c5ddd8c73ea3fef9fe8d1f48a76a",
+    "artifact_descriptor_path": "benchmarks/fem-gpu/runtime-artifacts/pre-remediation-sm52-65e02cbed5dc.json",
+    "artifact_descriptor_sha256": "89785aaf7789e3527e39daba7aa48a6853e45063a2b4ae46fec7a38ab68677ba",
     "root": ".fullmag/runtimes/fem-gpu-variants/pre-remediation-sm52-65e02cbed5dc",
     "selection_command": ".fullmag/runtimes/fem-gpu-variants/pre-remediation-sm52-65e02cbed5dc/bin/fullmag-fem-gpu runtime fem-availability --json",
     "manifest_sha256": "65e02cbed5dcd5ab26fb2f6362cc7f78bc11c5ddd8c73ea3fef9fe8d1f48a76a",
@@ -49,13 +52,13 @@
   },
   "fixture": {
     "manifest_path": "examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json",
-    "manifest_sha256": "0d8080698450485f931b19cfb44019564cc259a8feef198f1422ea7c23970743",
-    "solver_mesh_sha256": "04066b2c30688271b04d81b9ca745966014f1a38feaf9bea9c5b39be60470649",
-    "solver_mesh_signature": "ec5e32d10acfa3cbf4ef652e1e4e2dd2575fb588c05aa2cc9dec60e61bf64429",
-    "problem_ir_sha256": "d0ea1564182ed5c51dcde2ee6b6b4186e43cbc6c952e03d3b10013a5256e04db"
+    "manifest_sha256": "2f646b5f0410a4cd12a39e57c6347a3b9ea27deeb37003b822fc77646ee6be88",
+    "solver_mesh_sha256": "9c410c3b02cc86d3a832b923f13b5f9b0ec18c4be2babda148697c6dbc9c105a",
+    "solver_mesh_signature": "83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41",
+    "problem_ir_sha256": "ec36a24123cfa8d1d84e6da0987628e5da537c63fc5de44d91d15e1bd1c8ac25"
   },
   "artifacts": {
-    "benchmark_csv_sha256": "99c3a7e3d88fdc7f72f05231367f1c8c683b85e52362305de451686d0772ee73",
-    "summary_json_sha256": "01e8d24e065199634765e0ed330276d81c8916dc38e46ccf23568397f80b2d7a"
+    "benchmark_csv_sha256": "e08cb324d5fb6fbf732b46d3b51ffe86cd71a272de5e8c6ff29dfbfa9068fde2",
+    "summary_json_sha256": "a90d426e453a9883722086ad9cab73900a39c9a80ab8581f00cc92479fd52c9b"
   }
 }
