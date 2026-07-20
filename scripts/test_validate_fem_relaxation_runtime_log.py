@@ -3,12 +3,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 import importlib.util
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +24,7 @@ FEM_RELAXATION_NOTE = (
 )
 BENCHMARK = REPO_ROOT / "scripts" / "analysis" / "fem_gpu_benchmark.py"
 BENCHMARK_CASE = REPO_ROOT / "examples" / "bench_fem_gpu_long.py"
+FULLMAG_PYTHON_SRC = REPO_ROOT / "packages" / "fullmag-py" / "src"
 ZHANG_LI_VALIDATOR = REPO_ROOT / "scripts" / "validate_fem_zhang_li_skew_tetra_runtime.py"
 
 
@@ -28,11 +33,13 @@ def load_benchmark_module():
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
 def load_benchmark_case_module():
+    sys.path.insert(0, str(FULLMAG_PYTHON_SRC))
     spec = importlib.util.spec_from_file_location("bench_fem_gpu_long", BENCHMARK_CASE)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
@@ -50,6 +57,293 @@ def load_validator_module():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def test_benchmark_summary_reports_distribution() -> None:
+    benchmark = load_benchmark_module()
+    summary = benchmark.summarize_distribution([10.0, 11.0, 12.0, 20.0, 30.0])
+    assert summary == {
+        "count": 5,
+        "p50": 12.0,
+        "p95": 30.0,
+        "stddev": pytest.approx(7.5789181286),
+    }
+
+
+def test_benchmark_csv_uses_repository_line_endings(tmp_path) -> None:
+    benchmark = load_benchmark_module()
+    output = tmp_path / "benchmark.csv"
+
+    benchmark.write_csv([{"backend": "fem_gpu", "status": "ok"}], str(output))
+
+    assert output.read_bytes() == b"backend,status\nfem_gpu,ok\n"
+
+
+def test_fixture_identity_rejects_mesh_hash_drift(tmp_path) -> None:
+    benchmark = load_benchmark_module()
+    mesh = tmp_path / "mesh.json"
+    mesh.write_text('{"nodes":[],"elements":[]}', encoding="utf-8")
+    manifest = tmp_path / "fixture.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "fullmag.fem_gpu.performance_fixture.v1",
+                "solver_mesh_path": "mesh.json",
+                "solver_mesh_sha256": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="solver mesh sha256 mismatch"):
+        benchmark.load_fixture_manifest(manifest)
+
+
+def test_fixture_identity_rejects_row_drift(tmp_path) -> None:
+    benchmark = load_benchmark_module()
+    mesh = tmp_path / "mesh.json"
+    mesh.write_text('{"nodes":[],"elements":[]}', encoding="utf-8")
+    mesh_sha256 = benchmark.hashlib.sha256(mesh.read_bytes()).hexdigest()
+    manifest = tmp_path / "fixture.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "fullmag.fem_gpu.performance_fixture.v1",
+                "solver_mesh_path": "mesh.json",
+                "solver_mesh_sha256": mesh_sha256,
+                "solver_mesh_signature": "fixture-mesh",
+                "problem_ir_sha256": "fixture-ir",
+                "stop_condition": {"max_steps": 64},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fixture = benchmark.load_fixture_manifest(manifest)
+
+    assert benchmark.verify_fixture_row(
+        {
+            "solver_mesh_signature": "different-mesh",
+            "problem_ir_sha256": "different-ir",
+        },
+        fixture,
+    ) == [
+        "solver_mesh_signature differs from fixture",
+        "problem_ir_sha256 differs from fixture",
+    ]
+
+
+def test_fixture_generation_uses_runtime_realized_mesh_signature() -> None:
+    benchmark = load_benchmark_module()
+
+    assert benchmark.fixture_solver_mesh_signature(
+        {
+            "status": "ok",
+            "solver_mesh_signature": "runtime-realized-signature",
+        }
+    ) == "runtime-realized-signature"
+    with pytest.raises(ValueError, match="did not report solver_mesh_signature"):
+        benchmark.fixture_solver_mesh_signature({"status": "ok"})
+
+
+def test_fem_gpu_performance_regression_recipe_is_fail_closed() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    recipe = just_recipe_source(justfile, "verify-fem-gpu-performance-regression")
+
+    for required in [
+        "--fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json",
+        "--require-fixture-identity",
+        "--gpu-warmup",
+        "--repeat 5",
+        "--require-stable-solver-mesh",
+        "--accepted-baseline benchmarks/fem-gpu/accepted/rtx4080-sm89/benchmark.csv",
+        "--require-accepted-baseline",
+        "--max-performance-regression-percent 5",
+        "benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json",
+        "FULLMAG_BENCH_DOMAIN_HMAX=50e-9",
+        "FULLMAG_BENCH_AIRBOX_HMAX=100e-9",
+    ]:
+        assert required in recipe
+
+
+def test_pre_remediation_baseline_does_not_require_future_speedup() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    recipe = just_recipe_source(
+        justfile, "verify-fem-gpu-demag-performance-benchmark"
+    )
+
+    assert 'FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP="${FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP:-}"' in recipe
+    assert 'if [ -n "$FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP" ]' in recipe
+    assert "--require-best-demag-policy" not in recipe
+
+
+def test_benchmark_performance_summary_groups_repeat_distributions() -> None:
+    benchmark = load_benchmark_module()
+    base = {
+        "status": "ok",
+        "solver_mesh_signature": "mesh",
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "nonlinear_cg",
+        "timestep_policy": "fixed",
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "AMG",
+    }
+
+    summary = benchmark.performance_distribution_summary(
+        [
+            {**base, "wall_time_ms": 10.0},
+            {**base, "wall_time_ms": 12.0},
+            {**base, "wall_time_ms": 20.0},
+        ]
+    )
+
+    assert len(summary) == 1
+    assert summary[0]["metrics"]["wall_time_ms"] == {
+        "count": 3,
+        "p50": 12.0,
+        "p95": 20.0,
+        "stddev": pytest.approx(4.3204937989),
+    }
+
+
+def test_performance_regression_compares_p95_distributions() -> None:
+    benchmark = load_benchmark_module()
+    base = {
+        "status": "ok",
+        "solver_mesh_signature": "mesh",
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "nonlinear_cg",
+        "timestep_policy": "fixed",
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "AMG",
+    }
+    baseline = [
+        {**base, "wall_time_ms": value} for value in [10.0, 20.0, 30.0, 40.0, 50.0]
+    ]
+    within_limit = [
+        {**base, "wall_time_ms": value} for value in [10.0, 20.0, 30.0, 40.0, 52.0]
+    ]
+    regressed = [
+        {**base, "wall_time_ms": value} for value in [10.0, 20.0, 30.0, 40.0, 53.0]
+    ]
+
+    assert benchmark.performance_regression_failures(
+        within_limit,
+        baseline,
+        max_regression_percent=5.0,
+    ) == []
+    failures = benchmark.performance_regression_failures(
+        regressed,
+        baseline,
+        max_regression_percent=5.0,
+    )
+    assert len(failures) == 1
+    assert "p95" in failures[0]
+
+
+def test_performance_regression_gates_only_objective_metrics() -> None:
+    benchmark = load_benchmark_module()
+    base = {
+        "status": "ok",
+        "solver_mesh_signature": "mesh",
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "nonlinear_cg",
+        "timestep_policy": "fixed",
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "AMG",
+    }
+    baseline = [
+        {**base, "wall_time_ms": 100.0, "demag_assemble_wall_time_ms": 10.0}
+        for _ in range(5)
+    ]
+    current = [
+        {**base, "wall_time_ms": 104.0, "demag_assemble_wall_time_ms": 100.0}
+        for _ in range(5)
+    ]
+
+    assert benchmark.performance_regression_failures(
+        current,
+        baseline,
+        max_regression_percent=5.0,
+    ) == []
+
+
+def test_gpu_environment_identity_rejects_different_device() -> None:
+    benchmark = load_benchmark_module()
+
+    assert benchmark.gpu_environment_identity_failures(
+        {
+            "gpu": {
+                "uuid": "GPU-expected",
+                "name": "NVIDIA GeForce RTX 4080 SUPER",
+                "compute_capability": "8.9",
+            }
+        },
+        {
+            "uuid": "GPU-other",
+            "name": "NVIDIA GeForce RTX 4090",
+            "compute_capability": "8.9",
+        },
+    ) == [
+        "GPU uuid differs from accepted baseline",
+        "GPU name differs from accepted baseline",
+    ]
+
+
+def test_fixture_generation_recipe_uses_managed_runtime() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    recipe = just_recipe_source(justfile, "generate-fem-gpu-performance-fixtures")
+
+    assert "just ensure-managed-fem-runtime" in recipe
+    assert "docker compose --profile fem-gpu run --rm" in recipe
+    assert "PYTHONPATH=/workspace/packages/fullmag-py/src" in recipe
+    assert "--steps 1" in recipe
+    assert "--reuse-generated-domain-mesh" in recipe
+    assert "--write-fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json" in recipe
+    assert "--write-fixture-suite examples/assets/fem_performance/amg_qualification_suite_v1.json" in recipe
+
+
+def test_runtime_restore_manifest_rejects_library_hash_drift(tmp_path) -> None:
+    benchmark = load_benchmark_module()
+    bundle = tmp_path / "bundle"
+    (bundle / "lib").mkdir(parents=True)
+    (bundle / "manifest.json").write_text("manifest", encoding="utf-8")
+    (bundle / "snapshot.json").write_text("snapshot", encoding="utf-8")
+    (bundle / "lib" / "libfullmag_fem.so").write_text("library", encoding="utf-8")
+    restore_manifest = bundle / "restore-manifest-v2.json"
+    restore_manifest.write_text(
+        json.dumps(
+            {
+                "schema": "fullmag.fem_gpu.runtime_restore_manifest.v2",
+                "bundle_root": str(bundle),
+                "manifest_sha256": benchmark.hashlib.sha256(b"manifest").hexdigest(),
+                "immutable_snapshot_json_sha256": benchmark.hashlib.sha256(
+                    b"snapshot"
+                ).hexdigest(),
+                "libraries": {
+                    "libfullmag_fem": {
+                        "path": "lib/libfullmag_fem.so",
+                        "sha256": "0" * 64,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="libfullmag_fem sha256 mismatch"):
+        benchmark.validate_runtime_restore_manifest(restore_manifest)
 
 
 def test_resolves_container_workspace_artifact_path_on_host(monkeypatch) -> None:

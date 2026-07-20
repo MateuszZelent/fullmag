@@ -1,0 +1,21 @@
+{
+  "airbox_factor": 2.0,
+  "airbox_hmax_m": 1e-07,
+  "demag_rtol": 1e-12,
+  "domain_hmax_m": 5e-08,
+  "element_count": 5224,
+  "node_count": 1217,
+  "problem_ir_sha256": "d0ea1564182ed5c51dcde2ee6b6b4186e43cbc6c952e03d3b10013a5256e04db",
+  "relaxation_algorithm": "nonlinear_cg",
+  "resolution": "fine",
+  "scenario": "box500_airbox_exchange_demag",
+  "schema": "fullmag.fem_gpu.performance_fixture.v1",
+  "solver_mesh_path": "box500_airbox_exchange_demag_v1.mesh.json",
+  "solver_mesh_sha256": "04066b2c30688271b04d81b9ca745966014f1a38feaf9bea9c5b39be60470649",
+  "solver_mesh_signature": "ec5e32d10acfa3cbf4ef652e1e4e2dd2575fb588c05aa2cc9dec60e61bf64429",
+  "stop_condition": {
+    "benchmark_only_torque_target_apm": 1e-06,
+    "kind": "torque_or_max_steps",
+    "max_steps": 64
+  }
+}

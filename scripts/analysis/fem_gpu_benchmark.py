@@ -6,15 +6,19 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import importlib.util
 import json
 import math
 import os
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
 import time
 from collections.abc import Mapping
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -238,6 +242,7 @@ PERFORMANCE_REGRESSION_METRICS = (
     "demag_recover_wall_time_ms",
     "demag_energy_wall_time_ms",
 )
+PERFORMANCE_REGRESSION_OBJECTIVE_METRICS = ("wall_time_ms",)
 FEM_CPU_NO_PBC_ADAPTIVE_SCENARIOS = {
     "exchange_demag_anis_uniaxial",
     "exchange_demag_anis_cubic",
@@ -255,6 +260,148 @@ NATIVE_FEM_LIBRARY_NAMES = (
     "libfullmag_fem.dylib",
     "fullmag_fem.dll",
 )
+PERFORMANCE_FIXTURE_SCHEMA = "fullmag.fem_gpu.performance_fixture.v1"
+PERFORMANCE_FIXTURE_SUITE_SCHEMA = "fullmag.fem_gpu.performance_fixture_suite.v1"
+PERFORMANCE_FIXTURE_SCENARIO = "box500_airbox_exchange_demag"
+PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM = "nonlinear_cg"
+PERFORMANCE_FIXTURE_STEPS = 64
+PERFORMANCE_FIXTURE_TORQUE_TARGET_APM = 1e-6
+PERFORMANCE_FIXTURE_RESOLUTIONS = (
+    ("coarse", 250e-9, 500e-9),
+    ("medium", 100e-9, 250e-9),
+    ("fine", 50e-9, 100e-9),
+)
+
+
+@dataclass(frozen=True)
+class PerformanceFixture:
+    manifest_path: Path
+    solver_mesh_path: Path
+    solver_mesh_sha256: str
+    solver_mesh_signature: str
+    problem_ir_sha256: str
+    stop_condition: dict[str, object]
+
+
+def summarize_distribution(values: Sequence[float]) -> dict[str, float | int]:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        raise ValueError("performance distribution requires at least one value")
+    p95_index = max(0, math.ceil(0.95 * len(ordered)) - 1)
+    return {
+        "count": len(ordered),
+        "p50": statistics.median(ordered),
+        "p95": ordered[p95_index],
+        "stddev": statistics.pstdev(ordered),
+    }
+
+
+def load_fixture_manifest(path: Path) -> PerformanceFixture:
+    manifest_path = path.resolve()
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if payload.get("schema") != PERFORMANCE_FIXTURE_SCHEMA:
+        raise ValueError("unsupported FEM GPU performance fixture schema")
+    mesh_path = (manifest_path.parent / str(payload["solver_mesh_path"])).resolve()
+    actual_sha256 = hashlib.sha256(mesh_path.read_bytes()).hexdigest()
+    expected_sha256 = str(payload["solver_mesh_sha256"])
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"solver mesh sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
+        )
+    return PerformanceFixture(
+        manifest_path=manifest_path,
+        solver_mesh_path=mesh_path,
+        solver_mesh_sha256=expected_sha256,
+        solver_mesh_signature=str(payload["solver_mesh_signature"]),
+        problem_ir_sha256=str(payload["problem_ir_sha256"]),
+        stop_condition=dict(payload["stop_condition"]),
+    )
+
+
+def verify_fixture_row(
+    row: Mapping[str, object], fixture: PerformanceFixture
+) -> list[str]:
+    failures: list[str] = []
+    if row.get("solver_mesh_signature") != fixture.solver_mesh_signature:
+        failures.append("solver_mesh_signature differs from fixture")
+    if row.get("problem_ir_sha256") != fixture.problem_ir_sha256:
+        failures.append("problem_ir_sha256 differs from fixture")
+    return failures
+
+
+def runtime_fixture_mesh_path(fixture: PerformanceFixture) -> Path:
+    try:
+        return fixture.solver_mesh_path.relative_to(REPO_ROOT)
+    except ValueError:
+        return fixture.solver_mesh_path
+
+
+def fixture_solver_mesh_signature(runtime_row: Mapping[str, object]) -> str:
+    signature = runtime_row.get("solver_mesh_signature")
+    if runtime_row.get("status") != "ok" or not isinstance(signature, str) or not signature:
+        raise ValueError("fixture realization did not report solver_mesh_signature")
+    return signature
+
+
+def gpu_environment_identity_failures(
+    expected_environment: Mapping[str, object],
+    actual_gpu: Mapping[str, object],
+) -> list[str]:
+    expected_gpu = expected_environment.get("gpu")
+    if not isinstance(expected_gpu, Mapping):
+        return ["accepted baseline environment is missing GPU identity"]
+    failures: list[str] = []
+    for key, label in (
+        ("uuid", "GPU uuid"),
+        ("name", "GPU name"),
+        ("compute_capability", "GPU compute capability"),
+    ):
+        if str(expected_gpu.get(key) or "") != str(actual_gpu.get(key) or ""):
+            failures.append(f"{label} differs from accepted baseline")
+    return failures
+
+
+def validate_runtime_restore_manifest(path: Path) -> dict[str, object]:
+    restore_manifest_path = path.resolve()
+    payload = json.loads(restore_manifest_path.read_text(encoding="utf-8"))
+    if payload.get("schema") != "fullmag.fem_gpu.runtime_restore_manifest.v2":
+        raise ValueError("unsupported FEM GPU runtime restore manifest schema")
+    configured_root = Path(str(payload["bundle_root"]))
+    bundle_root = (
+        configured_root.resolve()
+        if configured_root.is_absolute()
+        else (REPO_ROOT / configured_root).resolve()
+    )
+    for filename, expected_key, label in (
+        ("manifest.json", "manifest_sha256", "manifest"),
+        ("snapshot.json", "immutable_snapshot_json_sha256", "snapshot"),
+    ):
+        actual_sha256 = hashlib.sha256((bundle_root / filename).read_bytes()).hexdigest()
+        expected_sha256 = str(payload[expected_key])
+        if actual_sha256 != expected_sha256:
+            raise ValueError(
+                f"{label} sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
+            )
+    libraries = payload.get("libraries")
+    if not isinstance(libraries, Mapping) or not libraries:
+        raise ValueError("runtime restore manifest has no libraries")
+    for name, raw_entry in libraries.items():
+        if not isinstance(raw_entry, Mapping):
+            raise ValueError(f"invalid runtime restore library entry: {name}")
+        library_path = bundle_root / str(raw_entry["path"])
+        actual_sha256 = hashlib.sha256(library_path.read_bytes()).hexdigest()
+        expected_sha256 = str(raw_entry["sha256"])
+        if actual_sha256 != expected_sha256:
+            raise ValueError(
+                f"{name} sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
+            )
+        expected_inode = raw_entry.get("inode_at_capture")
+        if expected_inode is not None and library_path.stat().st_ino != int(expected_inode):
+            raise ValueError(
+                f"{name} inode mismatch: expected {expected_inode}, "
+                f"got {library_path.stat().st_ino}"
+            )
+    return payload
 
 
 class ThreadCountSpec:
@@ -565,6 +712,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default=str(CSV_PATH),
         help="Output CSV path",
+    )
+    parser.add_argument(
+        "--fixture-manifest",
+        type=Path,
+        default=None,
+        help="Versioned FEM GPU performance fixture used to pin mesh and ProblemIR identity",
+    )
+    parser.add_argument(
+        "--require-fixture-identity",
+        action="store_true",
+        help="Fail unless every completed row matches --fixture-manifest",
+    )
+    parser.add_argument(
+        "--write-fixture-manifest",
+        type=Path,
+        default=None,
+        help="Generate the versioned primary FEM GPU performance fixture and exit",
+    )
+    parser.add_argument(
+        "--write-fixture-suite",
+        type=Path,
+        default=None,
+        help="Generate the three-resolution FEM GPU AMG qualification fixture suite and exit",
     )
     parser.add_argument(
         "--scenarios",
@@ -1977,6 +2147,198 @@ def generated_domain_mesh_env(
     return {"FULLMAG_BENCH_DOMAIN_MESH": str(cached)}
 
 
+def canonical_problem_ir_sha256(
+    *,
+    mesh_path: Path,
+    domain_mesh_path: Path,
+    scenario: str,
+    integrator: str,
+    relaxation_algorithm: str,
+    steps: int,
+    dt: float,
+    timestep_policy: str,
+    extra_env: Mapping[str, str],
+) -> str:
+    previous_environment = os.environ.copy()
+    try:
+        os.environ.update(extra_env)
+        os.environ["FULLMAG_BENCH_DOMAIN_MESH"] = str(domain_mesh_path)
+        os.environ["FULLMAG_BENCH_RELAX_ALGORITHM"] = relaxation_algorithm
+        spec = importlib.util.spec_from_file_location(
+            "fullmag_fem_gpu_benchmark_fixture_case",
+            BENCH_SCRIPT,
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load benchmark case from {BENCH_SCRIPT}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        problem = module.build(
+            mesh_path=mesh_path,
+            dt=dt,
+            steps=steps,
+            scenario=scenario,
+            integrator=integrator,
+            timestep_policy=timestep_policy,
+        )
+        problem_ir = problem.to_ir(include_geometry_assets=True)
+    finally:
+        os.environ.clear()
+        os.environ.update(previous_environment)
+
+    problem_meta = problem_ir.get("problem_meta")
+    if isinstance(problem_meta, dict):
+        runtime_metadata = problem_meta.get("runtime_metadata")
+        if isinstance(runtime_metadata, dict):
+            mesh_workflow = runtime_metadata.get("mesh_workflow")
+            if isinstance(mesh_workflow, dict) and "domain_mesh_source" in mesh_workflow:
+                mesh_workflow["domain_mesh_source"] = "fixture://solver_mesh"
+    encoded = json.dumps(problem_ir, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def performance_fixture_mesh_path(manifest_path: Path, resolution: str) -> Path:
+    if resolution == "fine":
+        name = manifest_path.name.removesuffix(".fixture.json") + ".mesh.json"
+    else:
+        name = f"box500_airbox_exchange_demag_amg_{resolution}_v1.mesh.json"
+    return manifest_path.parent / name
+
+
+def write_performance_fixture_files(
+    args: argparse.Namespace,
+    *,
+    input_mesh_path: Path,
+) -> None:
+    manifest_path = (
+        Path(args.write_fixture_manifest)
+        if args.write_fixture_manifest is not None
+        else Path(args.write_fixture_suite).parent
+        / "box500_airbox_exchange_demag_v1.fixture.json"
+    )
+    suite_path = (
+        Path(args.write_fixture_suite)
+        if args.write_fixture_suite is not None
+        else None
+    )
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    fixture_entries: list[dict[str, object]] = []
+    primary_manifest: dict[str, object] | None = None
+    for resolution, domain_hmax, airbox_hmax in PERFORMANCE_FIXTURE_RESOLUTIONS:
+        mesh_path = performance_fixture_mesh_path(manifest_path, resolution)
+        fixture_env = {
+            "FULLMAG_BENCH_DOMAIN_HMAX": repr(domain_hmax),
+            "FULLMAG_BENCH_AIRBOX_HMAX": repr(airbox_hmax),
+            "FULLMAG_BENCH_DEMAG_SOLVER": "CG",
+            "FULLMAG_BENCH_DEMAG_PRECONDITIONER": "AMG",
+            "FULLMAG_BENCH_DEMAG_RTOL": repr(MAX_DIRECT_MINIMIZER_DEMAG_RTOL),
+            "FULLMAG_BENCH_DEMAG_MAX_ITERATIONS": str(args.demag_max_iterations),
+            "FULLMAG_BENCH_DEMAG_PRINT_LEVEL": str(args.demag_print_level),
+            "FULLMAG_FEM_DEMAG_AMG_RELAX_TYPE": "6",
+            "FULLMAG_BENCH_RELAX_TORQUE_TOLERANCE": repr(
+                PERFORMANCE_FIXTURE_TORQUE_TARGET_APM
+            ),
+        }
+        export_generated_domain_mesh(
+            mesh_path=input_mesh_path,
+            scenario=PERFORMANCE_FIXTURE_SCENARIO,
+            integrator="heun",
+            steps=1,
+            dt=args.dt,
+            timestep_policy="fixed",
+            thread_spec=ThreadCountSpec(label="auto", env_value="auto"),
+            extra_env=fixture_env,
+            output_path=mesh_path,
+            timeout_s=args.case_timeout_s,
+        )
+        mesh_payload = json.loads(mesh_path.read_text(encoding="utf-8"))
+        mesh_sha256 = hashlib.sha256(mesh_path.read_bytes()).hexdigest()
+        realization_row = run_backend(
+            backend_label="fem_cpu",
+            binary=FULLMAG_CPU,
+            mesh_path=input_mesh_path,
+            scenario=PERFORMANCE_FIXTURE_SCENARIO,
+            integrator="heun",
+            relaxation_algorithm=PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM,
+            steps=1,
+            dt=args.dt,
+            timestep_policy="fixed",
+            thread_spec=ThreadCountSpec(label="auto", env_value="auto"),
+            timeout_s=args.case_timeout_s,
+            extra_env={
+                "FULLMAG_FEM_EXECUTION": "cpu",
+                "FULLMAG_BENCH_DOMAIN_MESH": str(mesh_path),
+                **fixture_env,
+            },
+        )
+        problem_ir_sha256 = canonical_problem_ir_sha256(
+            mesh_path=input_mesh_path,
+            domain_mesh_path=mesh_path,
+            scenario=PERFORMANCE_FIXTURE_SCENARIO,
+            integrator="heun",
+            relaxation_algorithm=PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM,
+            steps=PERFORMANCE_FIXTURE_STEPS,
+            dt=args.dt,
+            timestep_policy="fixed",
+            extra_env=fixture_env,
+        )
+        entry = {
+            "resolution": resolution,
+            "solver_mesh_path": os.path.relpath(mesh_path, manifest_path.parent),
+            "solver_mesh_sha256": mesh_sha256,
+            "solver_mesh_signature": fixture_solver_mesh_signature(realization_row),
+            "problem_ir_sha256": problem_ir_sha256,
+            "node_count": len(mesh_payload.get("nodes", [])),
+            "element_count": len(mesh_payload.get("elements", [])),
+            "domain_hmax_m": domain_hmax,
+            "airbox_hmax_m": airbox_hmax,
+        }
+        fixture_entries.append(entry)
+        if resolution == "fine":
+            primary_manifest = {
+                "schema": PERFORMANCE_FIXTURE_SCHEMA,
+                **entry,
+                "scenario": PERFORMANCE_FIXTURE_SCENARIO,
+                "relaxation_algorithm": PERFORMANCE_FIXTURE_RELAXATION_ALGORITHM,
+                "airbox_factor": BOX500_AIRBOX_SIZE_M[0]
+                / BOX500_AIRBOX_BODY_SIZE_M[0],
+                "demag_rtol": MAX_DIRECT_MINIMIZER_DEMAG_RTOL,
+                "stop_condition": {
+                    "kind": "torque_or_max_steps",
+                    "benchmark_only_torque_target_apm": PERFORMANCE_FIXTURE_TORQUE_TARGET_APM,
+                    "max_steps": PERFORMANCE_FIXTURE_STEPS,
+                },
+            }
+    if primary_manifest is None:
+        raise RuntimeError("fine FEM GPU performance fixture was not generated")
+    if args.write_fixture_manifest is not None:
+        manifest_path.write_text(
+            json.dumps(primary_manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(f"Fixture manifest written to {manifest_path}")
+    if suite_path is not None:
+        suite_path.parent.mkdir(parents=True, exist_ok=True)
+        suite_path.write_text(
+            json.dumps(
+                {
+                    "schema": PERFORMANCE_FIXTURE_SUITE_SCHEMA,
+                    "scenario": PERFORMANCE_FIXTURE_SCENARIO,
+                    "airbox_factor": BOX500_AIRBOX_SIZE_M[0]
+                    / BOX500_AIRBOX_BODY_SIZE_M[0],
+                    "fixtures": fixture_entries,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"Fixture suite written to {suite_path}")
+
+
 def run_backend(
     *,
     backend_label: str,
@@ -2682,7 +3044,7 @@ def write_csv(results: list[dict[str, object]], output_path: str) -> None:
                 seen.add(key)
                 fieldnames.append(key)
     with open(output_path, "w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
         for row in results:
             writer.writerow(row)
@@ -2804,6 +3166,53 @@ def average_performance_metrics_by_case(
     return averages
 
 
+def performance_distribution_summary(
+    rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    grouped: dict[tuple[str, ...], dict[str, list[float]]] = {}
+    for row in rows:
+        key = performance_regression_case_key(row)
+        if key is None or row.get("status") not in {None, "", "ok"}:
+            continue
+        metric_values = grouped.setdefault(key, {})
+        for metric in PERFORMANCE_REGRESSION_METRICS:
+            value = as_float(row.get(metric))
+            if value is not None and value > 0.0:
+                metric_values.setdefault(metric, []).append(value)
+    return [
+        {
+            "case_key": list(key),
+            "metrics": {
+                metric: summarize_distribution(values)
+                for metric, values in sorted(metric_values.items())
+            },
+        }
+        for key, metric_values in sorted(grouped.items())
+    ]
+
+
+def performance_metric_distributions_by_case(
+    rows: list[dict[str, object]],
+) -> dict[tuple[str, ...], dict[str, dict[str, float | int]]]:
+    grouped: dict[tuple[str, ...], dict[str, list[float]]] = {}
+    for row in rows:
+        key = performance_regression_case_key(row)
+        if key is None or row.get("status") not in {None, "", "ok"}:
+            continue
+        metric_values = grouped.setdefault(key, {})
+        for metric in PERFORMANCE_REGRESSION_METRICS:
+            value = as_float(row.get(metric))
+            if value is not None and value > 0.0:
+                metric_values.setdefault(metric, []).append(value)
+    return {
+        key: {
+            metric: summarize_distribution(values)
+            for metric, values in metric_values.items()
+        }
+        for key, metric_values in grouped.items()
+    }
+
+
 def comparable_baseline_case_count(
     results: list[dict[str, object]],
     baseline_results: list[dict[str, object]],
@@ -2823,28 +3232,29 @@ def performance_regression_failures(
     *,
     max_regression_percent: float,
 ) -> list[str]:
-    baseline_metrics = average_performance_metrics_by_case(baseline_results)
+    baseline_metrics = performance_metric_distributions_by_case(baseline_results)
+    current_metrics = performance_metric_distributions_by_case(results)
     allowed_ratio = 1.0 + max_regression_percent / 100.0
     failures: list[str] = []
-    for row in results:
-        if row.get("status") != "ok":
-            continue
-        key = performance_regression_case_key(row)
-        if key is None:
-            continue
+    for key, metrics in current_metrics.items():
         accepted_metrics = baseline_metrics.get(key)
         if not accepted_metrics:
             continue
-        for metric, accepted_value in accepted_metrics.items():
-            current_value = as_float(row.get(metric))
-            if current_value is None or current_value <= 0.0:
+        for metric in PERFORMANCE_REGRESSION_OBJECTIVE_METRICS:
+            current_distribution = metrics.get(metric)
+            if current_distribution is None:
                 continue
+            accepted_distribution = accepted_metrics.get(metric)
+            if accepted_distribution is None:
+                continue
+            current_value = float(current_distribution["p95"])
+            accepted_value = float(accepted_distribution["p95"])
             if current_value <= accepted_value * allowed_ratio:
                 continue
             regression_percent = ((current_value / accepted_value) - 1.0) * 100.0
             failures.append(
-                f"case={key} {metric}={current_value:.6g} exceeds accepted baseline "
-                f"{accepted_value:.6g} by {regression_percent:.2f}% "
+                f"case={key} {metric} p95={current_value:.6g} exceeds accepted baseline "
+                f"p95={accepted_value:.6g} by {regression_percent:.2f}% "
                 f"(limit {max_regression_percent:.2f}%)"
             )
     return failures
@@ -5319,6 +5729,22 @@ def main() -> None:
             raise SystemExit(2)
     if args.preflight_only:
         return
+    if args.write_fixture_manifest is not None or args.write_fixture_suite is not None:
+        fixture_input_meshes = resolve_meshes(args.meshes, args.sizes)
+        if len(fixture_input_meshes) != 1:
+            raise SystemExit("fixture generation requires exactly one input mesh preset")
+        write_performance_fixture_files(
+            args,
+            input_mesh_path=fixture_input_meshes[0],
+        )
+        return
+    fixture = (
+        load_fixture_manifest(args.fixture_manifest)
+        if args.fixture_manifest is not None
+        else None
+    )
+    if args.require_fixture_identity and fixture is None:
+        raise SystemExit("--require-fixture-identity needs --fixture-manifest")
     repeat_count = max(1, args.repeat)
 
     meshes = resolve_meshes(args.meshes, args.sizes)
@@ -5460,6 +5886,10 @@ def main() -> None:
                 },
                 timeout_s=args.case_timeout_s,
             )
+            if fixture is not None:
+                warmup_domain_mesh_env = {
+                    "FULLMAG_BENCH_DOMAIN_MESH": str(runtime_fixture_mesh_path(fixture))
+                }
             print(
                 f"  gpu_warmup scenario={warmup_scenario} relaxation_algorithm={warmup_relaxation_algorithm or 'none'} demag_policy={warmup_solver}/{warmup_preconditioner} demag_rtol={warmup_rtol!r} demag_amg_profile={warmup_amg_profile}",
                 flush=True,
@@ -5524,6 +5954,12 @@ def main() -> None:
                                 },
                                 timeout_s=args.case_timeout_s,
                             )
+                            if fixture is not None:
+                                domain_mesh_env = {
+                                    "FULLMAG_BENCH_DOMAIN_MESH": str(
+                                        runtime_fixture_mesh_path(fixture)
+                                    )
+                                }
                             demag_policy_pairs = demag_policy_pairs_for_scenario(
                                 scenario,
                                 demag_solvers,
@@ -5541,16 +5977,38 @@ def main() -> None:
                                         demag_preconditioner,
                                         demag_amg_profiles,
                                     ):
-                                        relaxation_label = relaxation_algorithm or "none"
-                                        print(
-                                            f"    scenario={scenario} relaxation_algorithm={relaxation_label} integrator={integrator} timestep_policy={timestep_policy} thread_count={thread_spec.label}:{thread_spec.env_value} demag_policy={demag_solver}/{demag_preconditioner} demag_rtol={qualified_demag_rtol!r} demag_amg_profile={demag_amg_profile}"
-                                        )
                                         demag_env = demag_policy_env(
                                             demag_solver,
                                             demag_preconditioner,
                                             qualified_demag_rtol,
                                             demag_amg_profile,
                                             args,
+                                        )
+                                        problem_ir_sha256 = canonical_problem_ir_sha256(
+                                            mesh_path=mesh_path,
+                                            domain_mesh_path=Path(
+                                                domain_mesh_env.get(
+                                                    "FULLMAG_BENCH_DOMAIN_MESH",
+                                                    str(mesh_path),
+                                                )
+                                            ),
+                                            scenario=scenario,
+                                            integrator=integrator,
+                                            relaxation_algorithm=(
+                                                relaxation_algorithm or "llg_overdamped"
+                                            ),
+                                            steps=args.steps,
+                                            dt=args.dt,
+                                            timestep_policy=timestep_policy,
+                                            extra_env={
+                                                **mesh_env,
+                                                **relax_env,
+                                                **demag_env,
+                                            },
+                                        )
+                                        relaxation_label = relaxation_algorithm or "none"
+                                        print(
+                                            f"    scenario={scenario} relaxation_algorithm={relaxation_label} integrator={integrator} timestep_policy={timestep_policy} thread_count={thread_spec.label}:{thread_spec.env_value} demag_policy={demag_solver}/{demag_preconditioner} demag_rtol={qualified_demag_rtol!r} demag_amg_profile={demag_amg_profile}"
                                         )
                                         for repeat_index in range(repeat_count):
                                             for backend in backends:
@@ -5607,6 +6065,7 @@ def main() -> None:
                                                 else:
                                                     continue
                                                 row["repeat_index"] = repeat_index
+                                                row["problem_ir_sha256"] = problem_ir_sha256
                                                 results.append(row)
 
     write_csv(results, args.output)
@@ -5633,15 +6092,27 @@ def main() -> None:
             torque_atol_t=args.cpu_gpu_torque_atol_t,
             max_step_delta=args.cpu_gpu_max_step_delta,
         )
+        cpu_gpu_summary_for_report["performance_distributions"] = (
+            performance_distribution_summary(results)
+        )
         if best_policy_rows:
             cpu_gpu_summary_for_report["best_demag_policy"] = best_policy_rows
-            summary_path = Path(args.cpu_gpu_summary_output)
-            summary_path.write_text(
-                json.dumps(cpu_gpu_summary_for_report, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+        summary_path = Path(args.cpu_gpu_summary_output)
+        summary_path.write_text(
+            json.dumps(cpu_gpu_summary_for_report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     gate_failures: list[str] = []
     gate_exit_code = 0
+    if args.require_fixture_identity and fixture is not None:
+        for row in results:
+            failures = verify_fixture_row(row, fixture)
+            if failures:
+                gate_failures.extend(
+                    f"case={repeated_case_key(row)} {failure}" for failure in failures
+                )
+        if gate_failures:
+            gate_exit_code = gate_exit_code or 18
     if args.require_stable_solver_mesh:
         failures = unstable_solver_mesh_groups(results)
         if failures:
