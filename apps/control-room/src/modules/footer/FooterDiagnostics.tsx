@@ -40,7 +40,8 @@ export interface SolverProfileRow {
   exchange: string;
   fieldCopy: string;
   finalization: string;
-  gap: string;
+  gapPerStep: string;
+  gapTotal: string;
   gpuSync: string;
   id: string;
   missing: string;
@@ -50,9 +51,10 @@ export interface SolverProfileRow {
   preview: string;
   relaxPreconditioner: string;
   rhs: string;
+  spanSteps: string;
+  spanWall: string;
   step: string;
   total: string;
-  wallDelta: string;
 }
 
 export interface SolverProfilePanelModel {
@@ -64,6 +66,7 @@ export interface SolverProfilePanelModel {
   sampleCount: number;
   state: string;
   threadSummary: string;
+  windowPhaseSummary: string;
 }
 
 type SolverProfileCopyStatus = "copied" | "failed" | "idle";
@@ -204,6 +207,10 @@ export function FooterDiagnostics() {
               <Timer size={13} aria-hidden="true" />
               <span>{profileModel.previewModeSummary}</span>
             </div>
+            <div className="fm-footer-diagnostics__threading">
+              <Timer size={13} aria-hidden="true" />
+              <span>{profileModel.windowPhaseSummary}</span>
+            </div>
             {profileModel.hasSingleThreadWarning ? (
               <div className="fm-footer-diagnostics__warning" role="status">
                 <AlertTriangle size={13} aria-hidden="true" />
@@ -215,13 +222,15 @@ export function FooterDiagnostics() {
                 className="fm-footer-diagnostics__profile-row fm-footer-diagnostics__profile-row--header"
                 role="row"
               >
-                <span role="columnheader">Step</span>
+                <span role="columnheader">Last step</span>
                 <span role="columnheader">Clock</span>
-                <span role="columnheader">Delta wall</span>
-                <span role="columnheader">Gap</span>
-                <span role="columnheader">Total</span>
-                <span role="columnheader">Exchange</span>
-                <span role="columnheader">Demag</span>
+                <span role="columnheader">Span steps</span>
+                <span role="columnheader">Span wall</span>
+                <span role="columnheader">Gap total</span>
+                <span role="columnheader">Gap/step</span>
+                <span role="columnheader">Total (last step)</span>
+                <span role="columnheader">Exchange (last step)</span>
+                <span role="columnheader">Demag (last step)</span>
                 <span role="columnheader">Demag detail</span>
                 <span role="columnheader">Setup</span>
                 <span role="columnheader">Relax prec.</span>
@@ -244,8 +253,10 @@ export function FooterDiagnostics() {
                 >
                   <span role="cell">{row.step}</span>
                   <span role="cell">{row.clock}</span>
-                  <span role="cell">{row.wallDelta}</span>
-                  <span role="cell">{row.gap}</span>
+                  <span role="cell">{row.spanSteps}</span>
+                  <span role="cell">{row.spanWall}</span>
+                  <span role="cell">{row.gapTotal}</span>
+                  <span role="cell">{row.gapPerStep}</span>
                   <span role="cell">{row.total}</span>
                   <span role="cell">{row.exchange}</span>
                   <span role="cell">{row.demag}</span>
@@ -368,13 +379,15 @@ export function serializeSolverProfileRows(
   rows: readonly SolverProfileRow[],
 ): string {
   const headers = [
-    "Step",
+    "Last step",
     "Clock",
-    "Delta wall",
-    "Gap",
-    "Total",
-    "Exchange",
-    "Demag",
+    "Span steps",
+    "Span wall",
+    "Gap total",
+    "Gap/step",
+    "Total (last step)",
+    "Exchange (last step)",
+    "Demag (last step)",
     "Demag detail",
     "Setup",
     "Relax prec.",
@@ -393,8 +406,10 @@ export function serializeSolverProfileRows(
     [
       row.step,
       row.clock,
-      row.wallDelta,
-      row.gap,
+      row.spanSteps,
+      row.spanWall,
+      row.gapTotal,
+      row.gapPerStep,
       row.total,
       row.exchange,
       row.demag,
@@ -468,7 +483,6 @@ export function buildSolverProfilePanelModel(
     }))
     .reverse()
     .map(({ sample, sourceIndex }) => {
-      const previousSample = latestSamples[sourceIndex - 1] ?? null;
       const phaseById = new Map(sample.phases.map((phase) => [phase.id, phase]));
       const demagPhaseById = new Map(
         sample.demag_subphases.map((phase) => [phase.id, phase]),
@@ -505,7 +519,8 @@ export function buildSolverProfilePanelModel(
           phaseById.get("finalization")?.wall_time_ns ?? 0,
           sample.finalization_field_copy_bytes ?? 0,
         ),
-        gap: formatOptionalNs(sample.unprofiled_gap_wall_time_ns),
+        gapPerStep: formatNs(sample.unprofiled_gap_per_step_ns),
+        gapTotal: formatNs(sample.unprofiled_gap_total_ns),
         gpuSync: formatGpuSync(sample),
         id: `${sample.step}:${sample.time}:${sample.sample_time_unix_ms}:${sourceIndex}`,
         missing: formatNs(sample.missing_ns),
@@ -517,13 +532,10 @@ export function buildSolverProfilePanelModel(
           phaseById.get("relax_preconditioner")?.wall_time_ns ?? 0,
         ),
         rhs: formatNs(phaseById.get("rhs_total")?.wall_time_ns ?? 0),
+        spanSteps: `${sample.span_first_step}-${sample.span_last_step} (${sample.span_step_count})`,
+        spanWall: formatNs(sample.span_monotonic_wall_time_ns),
         step: String(sample.step),
         total: formatNs(sample.total_ns),
-        wallDelta: formatWallDelta(
-          sample.delta_wall_time_ns,
-          sample.sample_time_unix_ms,
-          previousSample?.sample_time_unix_ms,
-        ),
       };
     });
   const rows = allRows.slice(0, 5);
@@ -540,7 +552,22 @@ export function buildSolverProfilePanelModel(
     sampleCount: profile?.aggregates.sample_count ?? 0,
     state: profile?.state ?? "pending",
     threadSummary: threading ? formatThreadSummary(threading) : "Threading pending",
+    windowPhaseSummary: formatWindowPhaseSummary(profile?.latest_samples.at(-1)),
   };
+}
+
+function formatWindowPhaseSummary(
+  sample: SolverProfileStepSampleResource | null | undefined,
+) {
+  if (!sample || sample.phase_windows.length === 0) return "Window phases pending";
+  const visible = sample.phase_windows.filter((phase) => phase.sum_wall_time_ns > 0);
+  if (visible.length === 0) return "Window phases: all zero";
+  return `Window phases: ${visible
+    .map(
+      (phase) =>
+        `${phase.label} sum ${formatNs(phase.sum_wall_time_ns)} / mean ${formatNs(phase.mean_wall_time_ns)} / max ${formatNs(phase.max_wall_time_ns)}`,
+    )
+    .join(" | ")}`;
 }
 
 function formatPreviewModeSummary(profile: SolverProfileResource | null | undefined) {
@@ -615,28 +642,6 @@ function formatWallClockMs(value: number | null | undefined) {
   return `${hours}:${minutes}:${seconds}.${millis}`;
 }
 
-function formatWallDelta(
-  deltaWallTimeNs: number | null | undefined,
-  sampleTimeUnixMs: number | null | undefined,
-  previousSampleTimeUnixMs: number | null | undefined,
-) {
-  if (deltaWallTimeNs != null && Number.isFinite(deltaWallTimeNs)) {
-    if (deltaWallTimeNs <= 0) return "first sample";
-    return formatMs(deltaWallTimeNs / 1_000_000);
-  }
-  if (
-    sampleTimeUnixMs == null ||
-    previousSampleTimeUnixMs == null ||
-    !Number.isFinite(sampleTimeUnixMs) ||
-    !Number.isFinite(previousSampleTimeUnixMs) ||
-    sampleTimeUnixMs <= 0 ||
-    previousSampleTimeUnixMs <= 0
-  ) {
-    return "first sample";
-  }
-  return formatMs(Math.max(0, sampleTimeUnixMs - previousSampleTimeUnixMs));
-}
-
 function formatPercent(value: number) {
   return `${Math.round(value)}%`;
 }
@@ -656,11 +661,6 @@ function formatCopyCost(wallTimeNs: number, bytes: number) {
   const time = formatNs(wallTimeNs);
   if (!Number.isFinite(bytes) || bytes <= 0) return time;
   return `${time} / ${formatBytes(bytes)}`;
-}
-
-function formatOptionalNs(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return "n/a";
-  return formatNs(value);
 }
 
 function formatArtifactCost(
@@ -740,22 +740,6 @@ function formatBytes(value: number) {
   if (value >= 1_048_576) return `${(value / 1_048_576).toFixed(1)} MiB`;
   if (value >= 1024) return `${(value / 1024).toFixed(1)} KiB`;
   return `${Math.round(value)} B`;
-}
-
-function formatMs(value: number) {
-  if (value >= 3_600_000) {
-    const hours = Math.floor(value / 3_600_000);
-    const minutes = Math.floor((value % 3_600_000) / 60_000);
-    const seconds = ((value % 60_000) / 1_000).toFixed(3).padStart(6, "0");
-    return `${hours}h ${String(minutes).padStart(2, "0")}m ${seconds}s`;
-  }
-  if (value >= 60_000) {
-    const minutes = Math.floor(value / 60_000);
-    const seconds = ((value % 60_000) / 1_000).toFixed(3).padStart(6, "0");
-    return `${minutes}m ${seconds}s`;
-  }
-  if (value >= 1_000) return `${(value / 1_000).toFixed(3)} s`;
-  return `${value.toFixed(0)} ms`;
 }
 
 function clampPercent(value: number) {

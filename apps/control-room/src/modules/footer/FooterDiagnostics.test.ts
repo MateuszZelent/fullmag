@@ -88,6 +88,15 @@ const profile: SolverProfileResource = {
       missing_ns: 25_000,
       native_ffi_overhead_wall_time_ns: 25_000,
       phase_sum_ns: 4_975_000,
+      phase_windows: [
+        {
+          id: "demag_total",
+          label: "Demag total",
+          max_wall_time_ns: 2_100_000,
+          mean_wall_time_ns: 2_000_000,
+          sum_wall_time_ns: 6_000_000,
+        },
+      ],
       phases: [
         {
           id: "exchange",
@@ -167,6 +176,15 @@ const profile: SolverProfileResource = {
       rejected_attempts: 0,
       rhs_evaluations: 2,
       sample_time_unix_ms: PROFILE_SAMPLE_TIME_MS,
+      sample_kinds: ["normal_step"],
+      span_first_step: 11,
+      span_last_step: 13,
+      span_monotonic_wall_time_ns: 100_000_000,
+      span_step_count: 3,
+      profiled_step_total_ns: 30_000_000,
+      native_solver_wall_time_ns: 15_000_000,
+      unprofiled_gap_total_ns: 70_000_000,
+      unprofiled_gap_per_step_ns: 23_333_333,
       step: 12,
       threading: {
         cap_reason: "auto-small-mesh-cap",
@@ -234,6 +252,9 @@ describe("FooterDiagnostics", () => {
     expect(model.threadSummary).toBe("OMP 8->1 | manual | auto-small-mesh-cap");
     expect(model.hasSingleThreadWarning).toBe(true);
     expect(model.previewModeSummary).toBe("3D preview enabled");
+    expect(model.windowPhaseSummary).toBe(
+      "Window phases: Demag total sum 6.0 ms / mean 2.0 ms / max 2.1 ms",
+    );
     expect(model.livePublisherSummary).toBe(
       "Live publish 7 / replace 20.0 us / merge 12.0 us / clone 8.0 us / sync 3.0 ms / lag 2.0 ms / payload 45.0 KiB / coalesced 4",
     );
@@ -245,16 +266,18 @@ describe("FooterDiagnostics", () => {
       exchange: "150.0 us",
       fieldCopy: "250.0 us / 24.0 MiB",
       finalization: "80.0 us / 8.0 KiB",
-      gap: "n/a",
+      gapPerStep: "23.3 ms",
+      gapTotal: "70.0 ms",
       gpuSync: "2 sync / ctrl 2 / 16 B",
       missing: "25.0 us",
       nativeFfi: "25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us",
       relaxPreconditioner: "750.0 us",
       rhs: "3.0 ms",
       clock: "03:04:05.123",
+      spanSteps: "11-13 (3)",
+      spanWall: "100.0 ms",
       step: "12",
       total: "5.0 ms",
-      wallDelta: "first sample",
     });
   });
 
@@ -271,6 +294,9 @@ describe("FooterDiagnostics", () => {
           ...profile.latest_samples[0],
           delta_wall_time_ns: 2_333_000_000,
           sample_time_unix_ms: PROFILE_SAMPLE_TIME_MS + 2_333,
+          span_first_step: 14,
+          span_last_step: 16,
+          span_monotonic_wall_time_ns: 2_333_000_000,
           time: 2e-12,
           total_ns: 6_000_000,
         },
@@ -279,7 +305,11 @@ describe("FooterDiagnostics", () => {
     const model = buildSolverProfilePanelModel(duplicateStepProfile);
 
     expect(model.rows.map((row) => row.step)).toEqual(["12", "12"]);
-    expect(model.rows.map((row) => row.wallDelta)).toEqual(["2.333 s", "first sample"]);
+    expect(model.rows.map((row) => row.spanSteps)).toEqual([
+      "14-16 (3)",
+      "11-13 (3)",
+    ]);
+    expect(model.rows.map((row) => row.spanWall)).toEqual(["2.33 s", "100.0 ms"]);
     expect(new Set(model.rows.map((row) => row.id)).size).toBe(2);
   });
 
@@ -297,8 +327,8 @@ describe("FooterDiagnostics", () => {
 
     expect(serializeSolverProfileRows(model.rows)).toBe(
       [
-        "Step\tClock\tDelta wall\tGap\tTotal\tExchange\tDemag\tDemag detail\tSetup\tRelax prec.\tRHS\tPreview\tCache\tField copy\tArtifact\tFinalization\tGPU sync\tNative\tOrchestr.\tMissing",
-        "12\t03:04:05.123\tfirst sample\tn/a\t5.0 ms\t150.0 us\t2.0 ms\tCG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms\treused\t750.0 us\t3.0 ms\t0 ns\t0 ns\t250.0 us / 24.0 MiB\t100.0 us / 4.0 KiB / q3 / w2 4.0 ms\t80.0 us / 8.0 KiB\t2 sync / ctrl 2 / 16 B\t25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us\t0 ns\t25.0 us",
+        "Last step\tClock\tSpan steps\tSpan wall\tGap total\tGap/step\tTotal (last step)\tExchange (last step)\tDemag (last step)\tDemag detail\tSetup\tRelax prec.\tRHS\tPreview\tCache\tField copy\tArtifact\tFinalization\tGPU sync\tNative\tOrchestr.\tMissing",
+        "12\t03:04:05.123\t11-13 (3)\t100.0 ms\t70.0 ms\t23.3 ms\t5.0 ms\t150.0 us\t2.0 ms\tCG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms\treused\t750.0 us\t3.0 ms\t0 ns\t0 ns\t250.0 us / 24.0 MiB\t100.0 us / 4.0 KiB / q3 / w2 4.0 ms\t80.0 us / 8.0 KiB\t2 sync / ctrl 2 / 16 B\t25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us\t0 ns\t25.0 us",
       ].join("\n"),
     );
   });
@@ -311,6 +341,7 @@ describe("FooterDiagnostics", () => {
     expect(model.sampleCount).toBe(0);
     expect(model.threadSummary).toBe("Threading pending");
     expect(model.previewModeSummary).toBe("Preview mode pending");
+    expect(model.windowPhaseSummary).toBe("Window phases pending");
     expect(model.hasSingleThreadWarning).toBe(false);
   });
 });

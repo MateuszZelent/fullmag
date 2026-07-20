@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -128,6 +128,15 @@ fn fem_mesh_generation_key(mesh: &fullmag_runner::FemMeshPayload) -> String {
 pub(crate) struct LocalLiveWorkspace {
     state: Arc<Mutex<LocalLiveWorkspaceState>>,
     publisher: CurrentLivePublisher,
+    pending_profile_orchestration_wall_time_ns: Arc<AtomicU64>,
+    pending_profile_persist_enqueue_wall_time_ns: Arc<AtomicU64>,
+    pending_profile_publisher_replace_wall_time_ns: Arc<AtomicU64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct LiveWorkspaceUpdateTimings {
+    pub live_state_build_wall_time_ns: u64,
+    pub publisher_replace_wall_time_ns: u64,
 }
 
 impl LocalLiveWorkspace {
@@ -135,6 +144,9 @@ impl LocalLiveWorkspace {
         Self {
             state: Arc::new(Mutex::new(initial)),
             publisher,
+            pending_profile_orchestration_wall_time_ns: Arc::new(AtomicU64::new(0)),
+            pending_profile_persist_enqueue_wall_time_ns: Arc::new(AtomicU64::new(0)),
+            pending_profile_publisher_replace_wall_time_ns: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -153,6 +165,22 @@ impl LocalLiveWorkspace {
             mutate(&mut state);
         }
         self.publish_snapshot();
+    }
+
+    pub fn update_profiled<F>(&self, mutate: F) -> LiveWorkspaceUpdateTimings
+    where
+        F: FnOnce(&mut LocalLiveWorkspaceState),
+    {
+        let build_start = Instant::now();
+        if let Ok(mut state) = self.state.lock() {
+            mutate(&mut state);
+        }
+        let mutate_wall_time_ns = elapsed_ns(build_start);
+        let mut timings = self.publish_snapshot_profiled();
+        timings.live_state_build_wall_time_ns = timings
+            .live_state_build_wall_time_ns
+            .saturating_add(mutate_wall_time_ns);
+        timings
     }
 
     pub fn snapshot(&self) -> LocalLiveWorkspaceState {
@@ -180,12 +208,22 @@ impl LocalLiveWorkspace {
     }
 
     pub fn publish_snapshot(&self) {
+        let _ = self.publish_snapshot_profiled();
+    }
+
+    fn publish_snapshot_profiled(&self) -> LiveWorkspaceUpdateTimings {
+        let build_start = Instant::now();
         let snapshot = self
             .state
             .lock()
             .map(|mut state| state.publish_delta())
             .unwrap_or_default();
-        self.publisher.replace(snapshot);
+        let live_state_build_wall_time_ns = elapsed_ns(build_start);
+        let publisher_replace_wall_time_ns = self.publisher.replace(snapshot);
+        LiveWorkspaceUpdateTimings {
+            live_state_build_wall_time_ns,
+            publisher_replace_wall_time_ns,
+        }
     }
 
     pub fn push_log(&self, level: &str, message: impl Into<String>) {
@@ -238,27 +276,53 @@ impl LocalLiveWorkspace {
     }
 
     fn record_solver_profile_step_inner(&self, stats: &fullmag_runner::StepStats, force: bool) {
+        let record_start = Instant::now();
+        let mut profiled_stats = stats.clone();
+        let pending_orchestration = self
+            .pending_profile_orchestration_wall_time_ns
+            .swap(0, Ordering::AcqRel);
+        profiled_stats.orchestration_wall_time_ns = profiled_stats
+            .orchestration_wall_time_ns
+            .saturating_add(pending_orchestration);
+        profiled_stats.wall_time_ns = profiled_stats
+            .wall_time_ns
+            .saturating_add(pending_orchestration);
+        profiled_stats.profile_persist_enqueue_wall_time_ns = profiled_stats
+            .profile_persist_enqueue_wall_time_ns
+            .saturating_add(
+                self.pending_profile_persist_enqueue_wall_time_ns
+                    .swap(0, Ordering::AcqRel),
+            );
+        profiled_stats.publisher_replace_wall_time_ns = profiled_stats
+            .publisher_replace_wall_time_ns
+            .saturating_add(
+                self.pending_profile_publisher_replace_wall_time_ns
+                    .swap(0, Ordering::AcqRel),
+            );
         let mut artifact_line: Option<(String, String)> = None;
         let mut should_publish = false;
+        let mut persist_enqueue_wall_time_ns = 0;
         if let Ok(mut state) = self.state.lock() {
             let persist_artifact = state.solver_profile.config().persist_artifact;
             let emit_engine_log = state.solver_profile.config().emit_engine_log;
             let sample = if force {
-                state.solver_profile.force_record_step(stats)
+                state.solver_profile.force_record_step(&profiled_stats)
             } else {
-                state.solver_profile.record_step(stats)
+                state.solver_profile.record_step(&profiled_stats)
             };
             if let Some(sample) = sample {
                 if emit_engine_log {
                     push_engine_log(&mut state.engine_log, "profile", sample.compact_log_line());
                 }
                 if persist_artifact {
+                    let persist_start = Instant::now();
                     let artifact_ref = "diagnostics/solver_profile.jsonl".to_string();
                     state.solver_profile.add_artifact_ref(artifact_ref.clone());
                     artifact_line = Some((
                         state.run.artifact_dir.clone(),
                         serde_json::to_string(&sample).unwrap_or_else(|_| "{}".to_string()),
                     ));
+                    persist_enqueue_wall_time_ns = elapsed_ns(persist_start);
                 }
                 should_publish = true;
             }
@@ -278,8 +342,14 @@ impl LocalLiveWorkspace {
             }
         }
         if should_publish {
-            self.publish_snapshot();
+            let timings = self.publish_snapshot_profiled();
+            self.pending_profile_publisher_replace_wall_time_ns
+                .fetch_add(timings.publisher_replace_wall_time_ns, Ordering::AcqRel);
         }
+        self.pending_profile_persist_enqueue_wall_time_ns
+            .fetch_add(persist_enqueue_wall_time_ns, Ordering::AcqRel);
+        self.pending_profile_orchestration_wall_time_ns
+            .fetch_add(elapsed_ns(record_start), Ordering::AcqRel);
     }
 
     /// Switch to fast publish mode (200ms throttle) during bootstrap/materialization,
@@ -752,7 +822,7 @@ impl CurrentLivePublisher {
         }
     }
 
-    pub fn replace(&self, mut payload: CurrentLiveSnapshotPayload) {
+    pub fn replace(&self, mut payload: CurrentLiveSnapshotPayload) -> u64 {
         let replace_start = Instant::now();
         let payload_estimated_bytes = estimate_live_payload_bytes(&payload);
         if let Ok(mut gate) = self.scalar_gate.lock() {
@@ -766,8 +836,8 @@ impl CurrentLivePublisher {
             merge_pending_publish_payload(&mut slot, payload, should_merge_pending);
             merge_wall_time_ns = elapsed_ns(merge_start);
         }
+        let replace_wall_time_ns = elapsed_ns(replace_start);
         if let Ok(mut diagnostics) = self.diagnostics.lock() {
-            let replace_wall_time_ns = elapsed_ns(replace_start);
             diagnostics.replace_count = diagnostics.replace_count.saturating_add(1);
             diagnostics.last_payload_estimated_bytes = payload_estimated_bytes;
             diagnostics.max_payload_estimated_bytes = diagnostics
@@ -788,6 +858,7 @@ impl CurrentLivePublisher {
                 .saturating_add(merge_wall_time_ns);
         }
         self.request_publish();
+        replace_wall_time_ns
     }
 
     #[cfg(test)]
@@ -1014,6 +1085,62 @@ mod tests {
             "mesh_revision": 17,
         }));
         LocalLiveWorkspace::new(state, no_op_publisher())
+    }
+
+    #[test]
+    fn profiled_workspace_update_and_profile_persistence_report_owner_timings() {
+        let _guard = ENV_LOCK.lock().expect("environment lock poisoned");
+        let artifact_dir = std::env::temp_dir().join(format!(
+            "fullmag-profile-owner-timings-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&artifact_dir).expect("create profile test artifact dir");
+        let mut state = workspace_with_domain_mesh().snapshot();
+        state.run.artifact_dir = artifact_dir.display().to_string();
+        let workspace = LocalLiveWorkspace::new(state, no_op_publisher());
+        workspace.set_solver_profile_config(fullmag_runner::SolverProfileConfig {
+            enabled: true,
+            sample_every: 1,
+            sample_interval_wall_ms: 0,
+            max_samples: 4,
+            emit_engine_log: false,
+            persist_artifact: true,
+        });
+
+        let update_timings = workspace.update_profiled(|state| {
+            state.run.total_steps = 1;
+        });
+        assert!(update_timings.live_state_build_wall_time_ns > 0);
+        assert!(update_timings.publisher_replace_wall_time_ns > 0);
+
+        workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+            step: 1,
+            wall_time_ns: 1,
+            ..fullmag_runner::StepStats::default()
+        });
+        workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+            step: 2,
+            wall_time_ns: 1,
+            ..fullmag_runner::StepStats::default()
+        });
+        let snapshot = workspace.snapshot().solver_profile.snapshot();
+        let latest = snapshot
+            .latest_samples
+            .last()
+            .expect("second profile sample should be present");
+        let phase = |id: &str| {
+            latest
+                .phases
+                .iter()
+                .find(|phase| phase.id == id)
+                .map(|phase| phase.wall_time_ns)
+                .unwrap_or(0)
+        };
+        assert!(phase("profile_persist_enqueue") > 0);
+        assert!(phase("publisher_replace") > 0);
+        assert!(phase("orchestration") > 0);
+
+        std::fs::remove_dir_all(&artifact_dir).expect("remove profile test artifact dir");
     }
 
     fn structured_event(kind: &str, payload: serde_json::Value) -> PythonProgressEvent {

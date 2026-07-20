@@ -420,6 +420,21 @@ pub struct StepStats {
     /// Wall-clock time spent in synchronous runner/CLI live callback orchestration (ns).
     #[serde(default)]
     pub orchestration_wall_time_ns: u64,
+    /// Wall-clock time spent materializing or cloning FEM mesh payloads for this callback (ns).
+    #[serde(default)]
+    pub mesh_payload_wall_time_ns: u64,
+    /// Number of deep `StepUpdate` clones performed by host orchestration.
+    #[serde(default)]
+    pub step_update_deep_clone_count: u64,
+    /// Wall-clock time spent building the live-state resource under the workspace lock (ns).
+    #[serde(default)]
+    pub live_state_build_wall_time_ns: u64,
+    /// Wall-clock time spent replacing the pending publisher payload synchronously (ns).
+    #[serde(default)]
+    pub publisher_replace_wall_time_ns: u64,
+    /// Wall-clock time spent preparing an enabled profiler sample for persistence (ns).
+    #[serde(default)]
+    pub profile_persist_enqueue_wall_time_ns: u64,
     /// Wall-clock time spent copying full field payloads for live/artifact handoff (ns).
     #[serde(default)]
     pub field_copy_wall_time_ns: u64,
@@ -600,6 +615,11 @@ impl Default for StepStats {
             preview_wall_time_ns: 0,
             cached_preview_wall_time_ns: 0,
             orchestration_wall_time_ns: 0,
+            mesh_payload_wall_time_ns: 0,
+            step_update_deep_clone_count: 0,
+            live_state_build_wall_time_ns: 0,
+            publisher_replace_wall_time_ns: 0,
+            profile_persist_enqueue_wall_time_ns: 0,
             field_copy_wall_time_ns: 0,
             field_copy_bytes: 0,
             artifact_enqueue_block_wall_time_ns: 0,

@@ -7575,6 +7575,16 @@ export interface components {
             /** Format: int64 */
             wall_time_ns: number;
         };
+        SolverProfilePhaseWindowResource: {
+            id: string;
+            label: string;
+            /** Format: int64 */
+            max_wall_time_ns: number;
+            /** Format: int64 */
+            mean_wall_time_ns: number;
+            /** Format: int64 */
+            sum_wall_time_ns: number;
+        };
         SolverProfileResource: {
             aggregates: components["schemas"]["SolverProfileAggregatesResource"];
             artifact_refs: string[];
@@ -7587,6 +7597,8 @@ export interface components {
             state: string;
             threading?: null | components["schemas"]["SolverProfileThreadingResource"];
         };
+        /** @enum {string} */
+        SolverProfileSampleKindResource: "normal_step" | "publish" | "preview" | "finalization" | "stall";
         SolverProfileStepSampleResource: {
             /** Format: int64 */
             artifact_enqueue_bytes?: number;
@@ -7639,12 +7651,17 @@ export interface components {
             /** Format: int64 */
             native_ffi_overhead_wall_time_ns?: number;
             /** Format: int64 */
+            native_solver_wall_time_ns: number;
+            /** Format: int64 */
             phase_sum_ns: number;
+            phase_windows: components["schemas"]["SolverProfilePhaseWindowResource"][];
             phases: components["schemas"]["SolverProfilePhaseResource"][];
             /** Format: double */
             poisson_final_residual: number;
             /** Format: int32 */
             poisson_iterations: number;
+            /** Format: int64 */
+            profiled_step_total_ns: number;
             /** Format: int32 */
             rejected_attempts: number;
             /** Format: int64 */
@@ -7667,8 +7684,17 @@ export interface components {
             relaxation_update_wall_time_ns?: number;
             /** Format: int32 */
             rhs_evaluations: number;
+            sample_kinds: components["schemas"]["SolverProfileSampleKindResource"][];
             /** Format: int64 */
             sample_time_unix_ms?: number;
+            /** Format: int64 */
+            span_first_step: number;
+            /** Format: int64 */
+            span_last_step: number;
+            /** Format: int64 */
+            span_monotonic_wall_time_ns: number;
+            /** Format: int64 */
+            span_step_count: number;
             /** Format: int64 */
             step: number;
             threading: components["schemas"]["SolverProfileThreadingResource"];
@@ -7676,6 +7702,10 @@ export interface components {
             time: number;
             /** Format: int64 */
             total_ns: number;
+            /** Format: int64 */
+            unprofiled_gap_per_step_ns: number;
+            /** Format: int64 */
+            unprofiled_gap_total_ns: number;
             /** Format: int64 */
             unprofiled_gap_wall_time_ns?: number | null;
         };

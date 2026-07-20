@@ -1146,10 +1146,10 @@ fn publish_live_step_update(
     run_id: &str,
     session_id: &str,
     artifact_dir: &Path,
-    update: &fullmag_runner::StepUpdate,
+    update: &mut fullmag_runner::StepUpdate,
     include_scalar_row: bool,
 ) {
-    live_workspace.update(|state| {
+    let timings = live_workspace.update_profiled(|state| {
         apply_live_step_update_to_workspace_state(
             state,
             run_id,
@@ -1159,6 +1159,51 @@ fn publish_live_step_update(
             include_scalar_row,
         );
     });
+    update.stats.live_state_build_wall_time_ns = update
+        .stats
+        .live_state_build_wall_time_ns
+        .saturating_add(timings.live_state_build_wall_time_ns);
+    update.stats.publisher_replace_wall_time_ns = update
+        .stats
+        .publisher_replace_wall_time_ns
+        .saturating_add(timings.publisher_replace_wall_time_ns);
+}
+
+fn offset_step_update_profiled(
+    update: &fullmag_runner::StepUpdate,
+    step_offset: u64,
+    time_offset: f64,
+    finished: bool,
+) -> fullmag_runner::StepUpdate {
+    let mesh_payload_start = Instant::now();
+    let fem_mesh = update.fem_mesh.clone();
+    let mesh_payload_wall_time_ns = if fem_mesh.is_some() {
+        mesh_payload_start.elapsed().as_nanos() as u64
+    } else {
+        0
+    };
+    let mut stats = update.stats.clone();
+    stats.step = stats.step.saturating_add(step_offset);
+    stats.time += time_offset;
+    stats.mesh_payload_wall_time_ns = stats
+        .mesh_payload_wall_time_ns
+        .saturating_add(mesh_payload_wall_time_ns);
+    stats.step_update_deep_clone_count = stats.step_update_deep_clone_count.saturating_add(1);
+    fullmag_runner::StepUpdate {
+        stats,
+        grid: update.grid,
+        fem_mesh,
+        magnetization: update.magnetization.clone(),
+        preview_field: update.preview_field.clone(),
+        cached_preview_fields: update.cached_preview_fields.clone(),
+        hysteresis_field_m_t: update.hysteresis_field_m_t,
+        hysteresis_point_index: update.hysteresis_point_index,
+        hysteresis_settle_step_index: update.hysteresis_settle_step_index,
+        hysteresis_settle_step_kind: update.hysteresis_settle_step_kind.clone(),
+        hysteresis_settle_step_method: update.hysteresis_settle_step_method.clone(),
+        scalar_row_due: update.scalar_row_due,
+        finished,
+    }
 }
 
 fn solver_profile_config_from_command(
@@ -7812,7 +7857,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     Some(&current_stage_id),
                     |update| {
                         let callback_start = Instant::now();
-                        let adjusted = offset_step_update(
+                        let mut adjusted = offset_step_update_profiled(
                             &update,
                             step_offset,
                             time_offset,
@@ -7829,7 +7874,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     &run_id,
                                     &session_id,
                                     &artifact_dir,
-                                    &adjusted,
+                                    &mut adjusted,
                                     false,
                                 );
                             }
@@ -7849,13 +7894,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             );
                             return fullmag_runner::StepAction::Continue;
                         }
-                        let s = &adjusted.stats;
                         if live_cadence.should_log(&adjusted) {
                             eprintln!(
                                 "{}",
                                 format_stage_progress_line(
                                     &stage_progress_label,
-                                    s,
+                                    &adjusted.stats,
                                     torque_mode,
                                     None,
                                     adjusted.hysteresis_field_m_t,
@@ -7869,21 +7913,21 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 &run_id,
                                 &session_id,
                                 &artifact_dir,
-                                &adjusted,
+                                &mut adjusted,
                                 true,
                             );
                         }
                         if let Some(action) = display_selection_handle.process_running_control() {
                             record_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                s,
+                                &adjusted.stats,
                                 callback_start,
                             );
                             return action;
                         }
                         record_solver_profile_step_with_orchestration(
                             &live_workspace,
-                            s,
+                            &adjusted.stats,
                             callback_start,
                         );
                         fullmag_runner::StepAction::Continue
@@ -7900,13 +7944,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     Some(&current_stage_id),
                     |update| {
                         let callback_start = Instant::now();
-                        let adjusted = offset_step_update(
+                        let mut adjusted = offset_step_update_profiled(
                             &update,
                             step_offset,
                             time_offset,
                             update.finished && is_session_final_stage,
                         );
-                        let s = &adjusted.stats;
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
                             heartbeat.record(&adjusted);
                         }
@@ -7916,7 +7959,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 "{}",
                                 format_stage_progress_line(
                                     &stage_progress_label,
-                                    s,
+                                    &adjusted.stats,
                                     torque_mode,
                                     None,
                                     adjusted.hysteresis_field_m_t,
@@ -7930,13 +7973,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 &run_id,
                                 &session_id,
                                 &artifact_dir,
-                                &adjusted,
+                                &mut adjusted,
                                 true,
                             );
                         }
                         record_solver_profile_step_with_orchestration(
                             &live_workspace,
-                            s,
+                            &adjusted.stats,
                             callback_start,
                         );
                         fullmag_runner::StepAction::Continue
@@ -8997,7 +9040,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let interrupt_signal = running_control.running_interrupt_signal();
                     let mut on_step = |update| {
                         let callback_start = Instant::now();
-                        let adjusted = offset_step_update(&update, step_offset, time_offset, false);
+                        let mut adjusted =
+                            offset_step_update_profiled(&update, step_offset, time_offset, false);
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
                             heartbeat.record(&adjusted);
                         }
@@ -9009,7 +9053,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     &run_id,
                                     &session_id,
                                     &artifact_dir,
-                                    &adjusted,
+                                    &mut adjusted,
                                     false,
                                 );
                             }
@@ -9028,13 +9072,12 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             );
                             return fullmag_runner::StepAction::Continue;
                         }
-                        let s = &adjusted.stats;
                         if live_cadence.should_log(&adjusted) {
                             eprintln!(
                                 "{}",
                                 format_stage_progress_line(
                                     &interactive_progress_label,
-                                    s,
+                                    &adjusted.stats,
                                     torque_mode,
                                     None,
                                     adjusted.hysteresis_field_m_t,
@@ -9048,7 +9091,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 &run_id,
                                 &session_id,
                                 &artifact_dir,
-                                &adjusted,
+                                &mut adjusted,
                                 true,
                             );
                         }
@@ -9056,14 +9099,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         if let Some(action) = running_control.process_running_control() {
                             record_solver_profile_step_with_orchestration(
                                 &live_workspace,
-                                s,
+                                &adjusted.stats,
                                 callback_start,
                             );
                             return action;
                         }
                         record_solver_profile_step_with_orchestration(
                             &live_workspace,
-                            s,
+                            &adjusted.stats,
                             callback_start,
                         );
                         fullmag_runner::StepAction::Continue
@@ -10090,7 +10133,7 @@ mod tests {
         initial_step_update, interactive_session_should_stay_alive,
         live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
         live_step_ingest_preview_len, mark_ui_shell_preparation_ready,
-        mesh_build_pipeline_status_json, mesh_source_scene_revision,
+        mesh_build_pipeline_status_json, mesh_source_scene_revision, offset_step_update_profiled,
         own_preparation_boundary_failure, plan_materialized_stage_snapshot,
         prepare_remesh_stage_transaction, project_script_export_failure,
         resolve_adaptive_convergence_metric, resolved_shared_domain_object_region_markers,
@@ -12839,6 +12882,24 @@ mod tests {
         assert_eq!(payload.object_segments[0].element_count, 1);
         assert_eq!(payload.object_segments[1].object_id, "right");
         assert_eq!(payload.object_segments[1].boundary_face_count, 1);
+    }
+
+    #[test]
+    fn profiled_step_update_clone_accounts_mesh_payload_and_clone_count() {
+        let mut update = test_step_update(7);
+        update.fem_mesh = Some(
+            fem_mesh_payload_from_backend_plan(&tiny_shared_domain_fem_plan())
+                .expect("shared-domain plan should produce a FEM mesh payload"),
+        );
+
+        let adjusted = offset_step_update_profiled(&update, 10, 2.0, true);
+
+        assert_eq!(adjusted.stats.step, 17);
+        assert_eq!(adjusted.stats.time, 2.0);
+        assert_eq!(adjusted.stats.step_update_deep_clone_count, 1);
+        assert!(adjusted.stats.mesh_payload_wall_time_ns > 0);
+        assert!(adjusted.fem_mesh.is_some());
+        assert!(adjusted.finished);
     }
 
     #[test]

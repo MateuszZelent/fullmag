@@ -54,6 +54,25 @@ pub struct SolverProfilePhaseResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SolverProfileSampleKindResource {
+    NormalStep,
+    Publish,
+    Preview,
+    Finalization,
+    Stall,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SolverProfilePhaseWindowResource {
+    pub id: String,
+    pub label: String,
+    pub sum_wall_time_ns: u64,
+    pub mean_wall_time_ns: u64,
+    pub max_wall_time_ns: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct SolverProfileStepSampleResource {
     pub step: u64,
     #[serde(default)]
@@ -62,6 +81,16 @@ pub struct SolverProfileStepSampleResource {
     pub delta_wall_time_ns: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unprofiled_gap_wall_time_ns: Option<u64>,
+    pub span_first_step: u64,
+    pub span_last_step: u64,
+    pub span_step_count: u64,
+    pub span_monotonic_wall_time_ns: u64,
+    pub profiled_step_total_ns: u64,
+    pub native_solver_wall_time_ns: u64,
+    pub unprofiled_gap_total_ns: u64,
+    pub unprofiled_gap_per_step_ns: u64,
+    pub sample_kinds: Vec<SolverProfileSampleKindResource>,
+    pub phase_windows: Vec<SolverProfilePhaseWindowResource>,
     pub time: f64,
     pub dt: f64,
     pub total_ns: u64,

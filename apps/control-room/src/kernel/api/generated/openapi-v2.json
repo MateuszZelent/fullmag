@@ -17829,6 +17829,39 @@
         ],
         "type": "object"
       },
+      "SolverProfilePhaseWindowResource": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "max_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mean_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sum_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "sum_wall_time_ns",
+          "mean_wall_time_ns",
+          "max_wall_time_ns"
+        ],
+        "type": "object"
+      },
       "SolverProfileResource": {
         "properties": {
           "aggregates": {
@@ -17890,6 +17923,16 @@
           "artifact_refs"
         ],
         "type": "object"
+      },
+      "SolverProfileSampleKindResource": {
+        "enum": [
+          "normal_step",
+          "publish",
+          "preview",
+          "finalization",
+          "stall"
+        ],
+        "type": "string"
       },
       "SolverProfileStepSampleResource": {
         "properties": {
@@ -18031,10 +18074,21 @@
             "minimum": 0,
             "type": "integer"
           },
+          "native_solver_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "phase_sum_ns": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "phase_windows": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfilePhaseWindowResource"
+            },
+            "type": "array"
           },
           "phases": {
             "items": {
@@ -18048,6 +18102,11 @@
           },
           "poisson_iterations": {
             "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "profiled_step_total_ns": {
+            "format": "int64",
             "minimum": 0,
             "type": "integer"
           },
@@ -18106,7 +18165,33 @@
             "minimum": 0,
             "type": "integer"
           },
+          "sample_kinds": {
+            "items": {
+              "$ref": "#/components/schemas/SolverProfileSampleKindResource"
+            },
+            "type": "array"
+          },
           "sample_time_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "span_first_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "span_last_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "span_monotonic_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "span_step_count": {
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -18128,6 +18213,16 @@
             "minimum": 0,
             "type": "integer"
           },
+          "unprofiled_gap_per_step_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unprofiled_gap_total_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "unprofiled_gap_wall_time_ns": {
             "format": "int64",
             "minimum": 0,
@@ -18139,6 +18234,16 @@
         },
         "required": [
           "step",
+          "span_first_step",
+          "span_last_step",
+          "span_step_count",
+          "span_monotonic_wall_time_ns",
+          "profiled_step_total_ns",
+          "native_solver_wall_time_ns",
+          "unprofiled_gap_total_ns",
+          "unprofiled_gap_per_step_ns",
+          "sample_kinds",
+          "phase_windows",
           "time",
           "dt",
           "total_ns",

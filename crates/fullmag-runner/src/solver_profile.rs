@@ -119,6 +119,25 @@ pub struct SolverProfilePhaseSample {
     pub percent_of_total: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SolverProfileSampleKind {
+    NormalStep,
+    Publish,
+    Preview,
+    Finalization,
+    Stall,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SolverProfilePhaseWindow {
+    pub id: String,
+    pub label: String,
+    pub sum_wall_time_ns: u64,
+    pub mean_wall_time_ns: u64,
+    pub max_wall_time_ns: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SolverProfileStepSample {
     pub step: u64,
@@ -127,6 +146,16 @@ pub struct SolverProfileStepSample {
     pub delta_wall_time_ns: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unprofiled_gap_wall_time_ns: Option<u64>,
+    pub span_first_step: u64,
+    pub span_last_step: u64,
+    pub span_step_count: u64,
+    pub span_monotonic_wall_time_ns: u64,
+    pub profiled_step_total_ns: u64,
+    pub native_solver_wall_time_ns: u64,
+    pub unprofiled_gap_total_ns: u64,
+    pub unprofiled_gap_per_step_ns: u64,
+    pub sample_kinds: Vec<SolverProfileSampleKind>,
+    pub phase_windows: Vec<SolverProfilePhaseWindow>,
     pub time: f64,
     pub dt: f64,
     pub total_ns: u64,
@@ -212,6 +241,16 @@ impl SolverProfileStepSample {
             sample_time_unix_ms: unix_time_millis(),
             delta_wall_time_ns: None,
             unprofiled_gap_wall_time_ns: None,
+            span_first_step: stats.step,
+            span_last_step: stats.step,
+            span_step_count: 1,
+            span_monotonic_wall_time_ns: 0,
+            profiled_step_total_ns: stats.wall_time_ns,
+            native_solver_wall_time_ns: native_solver_wall_time_ns(stats),
+            unprofiled_gap_total_ns: 0,
+            unprofiled_gap_per_step_ns: 0,
+            sample_kinds: sample_kinds(stats, 0),
+            phase_windows: Vec::new(),
             time: stats.time,
             dt: stats.dt,
             total_ns,
@@ -303,6 +342,30 @@ impl SolverProfileStepSample {
                     "orchestration",
                     "Orchestration",
                     stats.orchestration_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "mesh_payload",
+                    "Mesh payload",
+                    stats.mesh_payload_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "live_state_build",
+                    "Live state build",
+                    stats.live_state_build_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "publisher_replace",
+                    "Publisher replace",
+                    stats.publisher_replace_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "profile_persist_enqueue",
+                    "Profile persist enqueue",
+                    stats.profile_persist_enqueue_wall_time_ns,
                     total_ns,
                 ),
                 phase(
@@ -406,15 +469,17 @@ impl SolverProfileStepSample {
 
     pub fn compact_log_line(&self) -> String {
         format!(
-            "solver-profile step={} total={} delta={} gap={} exchange={} demag={} demag.solve={} demag.policy={}/{} relax_preconditioner={} relax_prec_cache={}/{} native_ffi={} rhs={} preview={} cache={} field_copy={} artifact_enqueue={} artifact_writer={}/{} finalization={} orchestration={} sync={} gpu_sync={} control_scalar_sync={} control_scalar_d2h={} omp={}/{} omp_reason={}",
+            "solver-profile step={} span={}..{} span_steps={} span_wall={} profiled_total={} native_solver={} gap_total={} gap_per_step={} last_step_total={} exchange={} demag={} demag.solve={} demag.policy={}/{} relax_preconditioner={} relax_prec_cache={}/{} native_ffi={} rhs={} preview={} cache={} field_copy={} artifact_enqueue={} artifact_writer={}/{} finalization={} orchestration={} missing={} gpu_sync={} control_scalar_sync={} control_scalar_d2h={} omp={}/{} omp_reason={}",
             self.step,
+            self.span_first_step,
+            self.span_last_step,
+            self.span_step_count,
+            format_duration_ns(self.span_monotonic_wall_time_ns),
+            format_duration_ns(self.profiled_step_total_ns),
+            format_duration_ns(self.native_solver_wall_time_ns),
+            format_duration_ns(self.unprofiled_gap_total_ns),
+            format_duration_ns(self.unprofiled_gap_per_step_ns),
             format_duration_ns(self.total_ns),
-            self.delta_wall_time_ns
-                .map(format_duration_ns)
-                .unwrap_or_else(|| "n/a".to_string()),
-            self.unprofiled_gap_wall_time_ns
-                .map(format_duration_ns)
-                .unwrap_or_else(|| "n/a".to_string()),
             format_duration_ns(phase_time(&self.phases, "exchange")),
             format_duration_ns(phase_time(&self.phases, "demag_total")),
             format_duration_ns(phase_time(&self.demag_subphases, "demag_solver_apply")),
@@ -442,6 +507,44 @@ impl SolverProfileStepSample {
             self.threading.cap_reason,
         )
     }
+}
+
+fn duration_ns(duration: std::time::Duration) -> u64 {
+    duration.as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
+fn native_solver_wall_time_ns(stats: &StepStats) -> u64 {
+    let interaction_total = stats
+        .exchange_wall_time_ns
+        .saturating_add(stats.demag_wall_time_ns)
+        .saturating_add(stats.extra_energy_wall_time_ns);
+    let rhs_or_interactions = stats.rhs_wall_time_ns.max(interaction_total);
+    rhs_or_interactions
+        .saturating_add(stats.relaxation_preconditioner_wall_time_ns)
+        .saturating_add(stats.relaxation_state_copy_wall_time_ns)
+        .saturating_add(stats.relaxation_state_upload_wall_time_ns)
+        .saturating_add(stats.relaxation_retraction_wall_time_ns)
+        .saturating_add(stats.relaxation_gradient_wall_time_ns)
+        .saturating_add(stats.relaxation_metric_wall_time_ns)
+        .saturating_add(stats.relaxation_line_search_wall_time_ns)
+        .saturating_add(stats.relaxation_update_wall_time_ns)
+}
+
+fn sample_kinds(stats: &StepStats, gap_total_ns: u64) -> Vec<SolverProfileSampleKind> {
+    let mut kinds = vec![SolverProfileSampleKind::NormalStep];
+    if stats.publisher_replace_wall_time_ns > 0 {
+        kinds.push(SolverProfileSampleKind::Publish);
+    }
+    if stats.preview_wall_time_ns > 0 || stats.cached_preview_wall_time_ns > 0 {
+        kinds.push(SolverProfileSampleKind::Preview);
+    }
+    if stats.finalization_wall_time_ns > 0 {
+        kinds.push(SolverProfileSampleKind::Finalization);
+    }
+    if gap_total_ns > stats.wall_time_ns {
+        kinds.push(SolverProfileSampleKind::Stall);
+    }
+    kinds
 }
 
 fn unix_time_millis() -> u64 {
@@ -501,6 +604,18 @@ pub struct SolverProfileSnapshot {
     pub live_publisher: Option<LivePublisherDiagnostics>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct PendingProfileWindow {
+    started_at: Option<Instant>,
+    first_step: Option<u64>,
+    last_step: u64,
+    step_count: u64,
+    profiled_step_total_ns: u64,
+    native_solver_wall_time_ns: u64,
+    phase_windows: Vec<SolverProfilePhaseWindow>,
+    sample_kinds: Vec<SolverProfileSampleKind>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SolverProfileState {
     config: SolverProfileConfig,
@@ -508,8 +623,7 @@ pub struct SolverProfileState {
     samples: VecDeque<SolverProfileStepSample>,
     artifact_refs: Vec<String>,
     last_sampled_instant: Option<Instant>,
-    profiled_wall_time_since_sample_ns: u64,
-    pending_step_total: Option<(u64, u64)>,
+    pending_window: PendingProfileWindow,
 }
 
 impl Default for SolverProfileState {
@@ -526,8 +640,7 @@ impl SolverProfileState {
             samples: VecDeque::new(),
             artifact_refs: Vec::new(),
             last_sampled_instant: None,
-            profiled_wall_time_since_sample_ns: 0,
-            pending_step_total: None,
+            pending_window: PendingProfileWindow::default(),
         }
     }
 
@@ -542,8 +655,7 @@ impl SolverProfileState {
         }
         self.config = config;
         self.last_sampled_instant = None;
-        self.profiled_wall_time_since_sample_ns = 0;
-        self.pending_step_total = None;
+        self.pending_window = PendingProfileWindow::default();
         self.trim_samples();
         self.revision = self.revision.wrapping_add(1);
     }
@@ -552,9 +664,16 @@ impl SolverProfileState {
         if !self.config.enabled {
             return None;
         }
-        self.account_step_total(stats);
+        self.record_step_at(stats, Instant::now())
+    }
+
+    fn record_step_at(
+        &mut self,
+        stats: &StepStats,
+        now: Instant,
+    ) -> Option<SolverProfileStepSample> {
+        self.account_step(stats, now);
         if self.config.sample_interval_wall_ms > 0 {
-            let now = Instant::now();
             let threshold = std::time::Duration::from_millis(self.config.sample_interval_wall_ms);
             if let Some(last) = self.last_sampled_instant {
                 if now.duration_since(last) < threshold {
@@ -566,54 +685,100 @@ impl SolverProfileState {
             return None;
         }
 
-        Some(self.push_step_sample(stats))
+        Some(self.push_step_sample(stats, now))
     }
 
     pub fn force_record_step(&mut self, stats: &StepStats) -> Option<SolverProfileStepSample> {
         if !self.config.enabled {
             return None;
         }
-        self.account_step_total(stats);
-        Some(self.push_step_sample(stats))
+        let now = Instant::now();
+        self.account_step(stats, now);
+        Some(self.push_step_sample(stats, now))
     }
 
-    fn account_step_total(&mut self, stats: &StepStats) {
-        if self.samples.is_empty()
-            || (self.pending_step_total.is_none()
-                && self.samples.back().map(|sample| sample.step) == Some(stats.step))
-        {
+    fn account_step(&mut self, stats: &StepStats, now: Instant) {
+        let pending = &mut self.pending_window;
+        pending.started_at.get_or_insert(now);
+        if pending.first_step.is_none() {
+            pending.first_step = Some(stats.step);
+        }
+        if pending.step_count > 0 && pending.last_step == stats.step {
             return;
         }
-        if let Some((step, previous_total_ns)) = self.pending_step_total {
-            if step == stats.step {
-                self.profiled_wall_time_since_sample_ns = self
-                    .profiled_wall_time_since_sample_ns
-                    .saturating_sub(previous_total_ns)
-                    .saturating_add(stats.wall_time_ns);
-                self.pending_step_total = Some((stats.step, stats.wall_time_ns));
-                return;
+        pending.last_step = stats.step;
+        pending.step_count = pending.step_count.saturating_add(1);
+        pending.profiled_step_total_ns = pending
+            .profiled_step_total_ns
+            .saturating_add(stats.wall_time_ns);
+        pending.native_solver_wall_time_ns = pending
+            .native_solver_wall_time_ns
+            .saturating_add(native_solver_wall_time_ns(stats));
+
+        let step_sample = SolverProfileStepSample::from_step_stats(stats);
+        for phase in step_sample
+            .phases
+            .iter()
+            .chain(step_sample.demag_subphases.iter())
+        {
+            if let Some(window) = pending
+                .phase_windows
+                .iter_mut()
+                .find(|window| window.id == phase.id)
+            {
+                window.sum_wall_time_ns =
+                    window.sum_wall_time_ns.saturating_add(phase.wall_time_ns);
+                window.max_wall_time_ns = window.max_wall_time_ns.max(phase.wall_time_ns);
+            } else {
+                pending.phase_windows.push(SolverProfilePhaseWindow {
+                    id: phase.id.clone(),
+                    label: phase.label.clone(),
+                    sum_wall_time_ns: phase.wall_time_ns,
+                    mean_wall_time_ns: 0,
+                    max_wall_time_ns: phase.wall_time_ns,
+                });
             }
         }
-        self.profiled_wall_time_since_sample_ns = self
-            .profiled_wall_time_since_sample_ns
-            .saturating_add(stats.wall_time_ns);
-        self.pending_step_total = Some((stats.step, stats.wall_time_ns));
+        for kind in sample_kinds(stats, 0) {
+            if !pending.sample_kinds.contains(&kind) {
+                pending.sample_kinds.push(kind);
+            }
+        }
     }
 
-    fn push_step_sample(&mut self, stats: &StepStats) -> SolverProfileStepSample {
+    fn push_step_sample(&mut self, stats: &StepStats, now: Instant) -> SolverProfileStepSample {
         let mut sample = SolverProfileStepSample::from_step_stats(stats);
-        sample.delta_wall_time_ns = self.samples.back().and_then(|previous| {
-            sample
-                .sample_time_unix_ms
-                .checked_sub(previous.sample_time_unix_ms)
-                .map(|delta_ms| delta_ms.saturating_mul(1_000_000))
-        });
-        sample.unprofiled_gap_wall_time_ns = sample
-            .delta_wall_time_ns
-            .map(|delta| delta.saturating_sub(self.profiled_wall_time_since_sample_ns));
+        let has_previous_sample = !self.samples.is_empty();
+        let mut pending = std::mem::take(&mut self.pending_window);
+        let span_wall_time_ns = pending
+            .started_at
+            .map(|started_at| duration_ns(now.duration_since(started_at)))
+            .unwrap_or(0);
+        let gap_total_ns = span_wall_time_ns.saturating_sub(pending.profiled_step_total_ns);
+        for phase in &mut pending.phase_windows {
+            phase.mean_wall_time_ns = phase.sum_wall_time_ns / pending.step_count.max(1);
+        }
+        if gap_total_ns > pending.profiled_step_total_ns
+            && !pending
+                .sample_kinds
+                .contains(&SolverProfileSampleKind::Stall)
+        {
+            pending.sample_kinds.push(SolverProfileSampleKind::Stall);
+        }
+        sample.span_first_step = pending.first_step.unwrap_or(stats.step);
+        sample.span_last_step = pending.last_step;
+        sample.span_step_count = pending.step_count;
+        sample.span_monotonic_wall_time_ns = span_wall_time_ns;
+        sample.profiled_step_total_ns = pending.profiled_step_total_ns;
+        sample.native_solver_wall_time_ns = pending.native_solver_wall_time_ns;
+        sample.unprofiled_gap_total_ns = gap_total_ns;
+        sample.unprofiled_gap_per_step_ns = gap_total_ns / pending.step_count.max(1);
+        sample.sample_kinds = pending.sample_kinds;
+        sample.phase_windows = pending.phase_windows;
+        sample.delta_wall_time_ns = has_previous_sample.then_some(span_wall_time_ns);
+        sample.unprofiled_gap_wall_time_ns = has_previous_sample.then_some(gap_total_ns);
         self.samples.push_back(sample.clone());
-        self.profiled_wall_time_since_sample_ns = 0;
-        self.pending_step_total = None;
+        self.pending_window.started_at = Some(now);
         self.trim_samples();
         self.revision = self.revision.wrapping_add(1);
         sample
@@ -729,4 +894,116 @@ fn format_bytes(value: u64) -> String {
         return format!("{:.1}KiB", value as f64 / 1024.0);
     }
     format!("{value}B")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::{SolverProfileConfig, SolverProfileState};
+    use crate::types::StepStats;
+
+    fn enabled_profile(sample_every: u64) -> SolverProfileState {
+        SolverProfileState::new(SolverProfileConfig {
+            enabled: true,
+            sample_every,
+            sample_interval_wall_ms: 0,
+            max_samples: 8,
+            emit_engine_log: false,
+            persist_artifact: false,
+        })
+    }
+
+    #[test]
+    fn sparse_sample_is_one_closed_monotonic_step_interval() {
+        let mut profile = enabled_profile(13);
+        let start = Instant::now();
+
+        assert!(profile
+            .record_step_at(
+                &StepStats {
+                    step: 11,
+                    wall_time_ns: 10_000_000,
+                    ..StepStats::default()
+                },
+                start,
+            )
+            .is_none());
+        assert!(profile
+            .record_step_at(
+                &StepStats {
+                    step: 12,
+                    wall_time_ns: 10_000_000,
+                    ..StepStats::default()
+                },
+                start + Duration::from_millis(40),
+            )
+            .is_none());
+        let sample = profile
+            .record_step_at(
+                &StepStats {
+                    step: 13,
+                    wall_time_ns: 10_000_000,
+                    ..StepStats::default()
+                },
+                start + Duration::from_millis(100),
+            )
+            .expect("step 13 should close the interval");
+
+        assert_eq!(sample.span_first_step, 11);
+        assert_eq!(sample.span_last_step, 13);
+        assert_eq!(sample.span_step_count, 3);
+        assert_eq!(sample.span_monotonic_wall_time_ns, 100_000_000);
+        assert_eq!(sample.profiled_step_total_ns, 30_000_000);
+        assert_eq!(sample.unprofiled_gap_total_ns, 70_000_000);
+        assert_eq!(sample.unprofiled_gap_per_step_ns, 23_333_333);
+    }
+
+    #[test]
+    fn monotonic_span_is_independent_of_backwards_unix_clock() {
+        let mut profile = enabled_profile(2);
+        let start = Instant::now();
+        assert!(profile
+            .record_step_at(
+                &StepStats {
+                    step: 1,
+                    ..StepStats::default()
+                },
+                start
+            )
+            .is_none());
+        let first = profile
+            .record_step_at(
+                &StepStats {
+                    step: 2,
+                    ..StepStats::default()
+                },
+                start + Duration::from_millis(10),
+            )
+            .expect("step 2 should close the first interval");
+        assert_eq!(first.span_monotonic_wall_time_ns, 10_000_000);
+        profile.samples.back_mut().unwrap().sample_time_unix_ms = u64::MAX;
+
+        assert!(profile
+            .record_step_at(
+                &StepStats {
+                    step: 3,
+                    ..StepStats::default()
+                },
+                start + Duration::from_millis(20),
+            )
+            .is_none());
+        let second = profile
+            .record_step_at(
+                &StepStats {
+                    step: 4,
+                    ..StepStats::default()
+                },
+                start + Duration::from_millis(30),
+            )
+            .expect("step 4 should close the second interval");
+
+        assert!(second.span_monotonic_wall_time_ns > 0);
+        assert!(second.sample_time_unix_ms < u64::MAX);
+    }
 }
