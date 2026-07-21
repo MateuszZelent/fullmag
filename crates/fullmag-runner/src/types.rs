@@ -2791,6 +2791,44 @@ mod tests {
     }
 
     #[test]
+    fn remeshed_stage_asset_publishes_and_executes_one_new_generation() {
+        let mut plan = tiny_fem_plan();
+        plan.mesh.nodes[1][0] += 0.25;
+        reset_fem_mesh_payload_build_count();
+        reset_fem_mesh_fingerprint_count();
+
+        let remeshed_asset = StageFemMeshAsset::build_from_fem_plan(&plan);
+        let published_generation = remeshed_asset
+            .payload
+            .generation_id
+            .as_deref()
+            .expect("published remesh generation");
+        let context = super::FemStageExecutionContext::from_mesh_identity(
+            remeshed_asset.identity.clone(),
+        );
+        for step in 0..8 {
+            let update = StepUpdate {
+                stats: StepStats { step, ..StepStats::default() },
+                grid: [0, 0, 0],
+                fem_mesh_generation_id: context.generation_id(),
+                magnetization: None,
+                preview_field: None,
+                cached_preview_fields: None,
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
+                scalar_row_due: false,
+                finished: step == 7,
+            };
+            assert_eq!(update.fem_mesh_generation_id.as_deref(), Some(published_generation));
+        }
+        assert_eq!(fem_mesh_payload_build_count(), 1);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+    }
+
+    #[test]
     fn fem_mesh_topology_fingerprint_changes_for_node_reorder() {
         let base = FemMeshPayload::from(&tiny_fem_plan());
         let mut reordered = base.clone();

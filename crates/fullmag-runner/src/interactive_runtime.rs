@@ -33,9 +33,9 @@ use crate::schedules::{
     OutputSchedule,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewField, LivePreviewRequest,
-    ResolvedFallback, RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats,
-    StepUpdate,
+    ExecutedRun, ExecutionProvenance, FemStageExecutionContext, FieldSnapshot, LivePreviewField,
+    LivePreviewRequest, ResolvedFallback, RunError, RunResult, RunStatus, StateObservables,
+    StepAction, StepStats, StepUpdate,
 };
 use crate::DisplaySelectionState;
 
@@ -212,6 +212,22 @@ mod tests {
         ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
         IntegratorChoice, RelaxationAlgorithmIR, RelaxationControlIR,
     };
+
+    #[test]
+    fn interactive_fem_runtime_reuses_runtime_owned_stage_context() {
+        let runtime_source = include_str!("interactive_runtime.rs");
+        assert!(runtime_source.contains("stage_context: FemStageExecutionContext"));
+        assert!(runtime_source
+            .contains("pub(crate) fn stage_context(&self) -> &FemStageExecutionContext"));
+        let runner_source = include_str!("lib.rs");
+        let interactive = runner_source
+            .split("pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible")
+            .nth(1)
+            .and_then(|tail| tail.split("/// Create an interactive runtime").next())
+            .expect("interactive FEM execution function");
+        assert!(interactive.contains("runtime.stage_context()"));
+        assert!(!interactive.contains("StageFemMeshAsset::build_from_fem_plan"));
+    }
 
     fn make_soa_fdm_plan() -> FdmPlanIR {
         FdmPlanIR {
@@ -538,6 +554,7 @@ struct CudaInteractiveFdmPreviewRuntime {
 
 pub struct InteractiveFemPreviewRuntime {
     inner: InteractiveFemPreviewRuntimeInner,
+    stage_context: FemStageExecutionContext,
 }
 
 enum InteractiveFemPreviewRuntimeInner {
@@ -845,7 +862,9 @@ impl InteractiveFemPreviewRuntime {
                 FemEngine::CpuNative => fem_plan_for_cpu_native(plan),
                 FemEngine::NativeGpu => fem_plan_for_native_gpu(plan),
             };
-            let mesh = crate::types::FemMeshPayload::from(&effective_plan);
+            let stage_asset = crate::types::StageFemMeshAsset::build_from_fem_plan(&effective_plan);
+            let mesh = stage_asset.payload;
+            let stage_context = FemStageExecutionContext::from_mesh_identity(stage_asset.identity);
             let backend = NativeFemBackend::create(&effective_plan)?;
             let device_info = backend.device_info()?;
             let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;
@@ -861,8 +880,15 @@ impl InteractiveFemPreviewRuntime {
                 total_time: effective_plan.time_stage.start_time_s,
                 antenna_field,
             });
-            Ok(Self { inner })
+            Ok(Self {
+                inner,
+                stage_context,
+            })
         }
+    }
+
+    pub(crate) fn stage_context(&self) -> &FemStageExecutionContext {
+        &self.stage_context
     }
 
     pub fn matches_plan(&self, plan: &FemPlanIR) -> bool {

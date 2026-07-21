@@ -1767,6 +1767,27 @@ pub fn run_planned_problem_with_callback(
     until_seconds: f64,
     output_dir: &Path,
     field_every_n: u64,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let stage_asset = StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
+    run_planned_problem_with_callback_and_fem_mesh_identity(
+        problem,
+        plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
+        until_seconds,
+        output_dir,
+        field_every_n,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
@@ -1778,10 +1799,13 @@ pub fn run_planned_problem_with_callback(
             output_dir,
             field_every_n,
             None,
+            fem_mesh_identity,
             &mut on_step,
         );
     }
-    let fem_stage_context = types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan);
+    let fem_stage_context = fem_mesh_identity
+        .cloned()
+        .map(types::FemStageExecutionContext::from_mesh_identity);
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
@@ -1996,6 +2020,7 @@ pub fn run_planned_problem_with_callback_and_hysteresis_stage_id(
             output_dir,
             field_every_n,
             hysteresis_stage_id,
+            None,
             &mut on_step,
         );
     }
@@ -2572,7 +2597,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
                 .to_string(),
         });
     };
-    let stage_asset = StageFemMeshAsset::build_from_fem_plan(fem);
+    let fem_mesh_generation_id = runtime.stage_context().generation_id();
 
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
@@ -2636,7 +2661,6 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         wall_time_ns: 0,
         ..StepStats::default()
     });
-    let fem_mesh_generation_id = Some(stage_asset.identity.generation_id().to_string());
     on_step(StepUpdate {
         stats: final_stats,
         grid: [0, 0, 0],

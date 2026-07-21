@@ -2262,6 +2262,7 @@ fn fem_mesh_payload_from_backend_plan(
     }
 }
 
+#[cfg(test)]
 fn fem_live_mesh_payload_and_initial_magnetization(
     backend_plan: &BackendPlanIR,
 ) -> anyhow::Result<(fullmag_runner::FemMeshPayload, Vec<[f64; 3]>)> {
@@ -4468,6 +4469,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
     stage: &mut ResolvedScriptStage,
     execution_plan: &mut ExecutionPlanIR,
     stage_result: &mut fullmag_runner::RunResult,
+    stage_fem_mesh_asset: &mut Option<fullmag_runner::StageFemMeshAsset>,
     live_workspace: &LocalLiveWorkspace,
     stage_index: usize,
     stage_count: usize,
@@ -4847,11 +4849,11 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
 
         let candidate_execution_plan =
             fullmag_plan::plan(&candidate_stage.ir).map_err(|error| anyhow!(error.to_string()))?;
-        let stage_fem_mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
+        let remeshed_mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
             &candidate_execution_plan.backend_plan,
         )
         .ok_or_else(|| anyhow!("adaptive FEM replan did not produce an exact FEM mesh payload"))?;
-        let mesh_payload = stage_fem_mesh_asset.payload.clone();
+        let mesh_payload = remeshed_mesh_asset.payload.clone();
 
         // Commit only after transfer, marker propagation, IR validation and replanning succeed.
         *stage = candidate_stage;
@@ -4910,7 +4912,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         let adaptive_pass_label = format!("adaptive remesh pass {}", remesh_pass_count);
         let mut adaptive_initial_update = initial_step_update(
             &execution_plan.backend_plan,
-            Some(stage_fem_mesh_asset.identity.generation_id().to_string()),
+            Some(remeshed_mesh_asset.identity.generation_id().to_string()),
         );
         adaptive_initial_update.stats.step += global_step_offset + local_step_offset;
         adaptive_initial_update.stats.time += global_time_offset + local_time_offset;
@@ -4925,8 +4927,10 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             torque_mode,
         ));
         let mut live_cadence = LiveProgressCadence::default();
-        let pass_result = fullmag_runner::run_problem_with_callback(
+        let pass_result = fullmag_runner::run_planned_problem_with_callback_and_fem_mesh_identity(
             &stage.ir,
+            execution_plan,
+            Some(&remeshed_mesh_asset.identity),
             stage.until_seconds,
             &pass_output_dir,
             field_every_n,
@@ -4992,6 +4996,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         stage_result.steps.extend(pass_steps);
         stage_result.final_magnetization = pass_result.final_magnetization;
         stage_result.status = pass_result.status;
+        *stage_fem_mesh_asset = Some(remeshed_mesh_asset);
 
         eprintln!(
             "stage {}/{} ({}) adaptive pass {} complete",
@@ -7194,7 +7199,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     new_ram as f64 / 1e9
                                 );
 
-                                let (live_mesh_payload, remeshed_magnetization, remeshed_plan) = {
+                                let (remeshed_mesh_asset, remeshed_magnetization, remeshed_plan) = {
                                     let mut remeshed_problem = stages[0].ir.clone();
                                     apply_current_fem_overrides(
                                         &mut remeshed_problem,
@@ -7243,14 +7248,22 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                     }
                                     let remeshed_plan = fullmag_plan::plan(&remeshed_problem)
                                         .map_err(|error| anyhow!(error.to_string()))?;
-                                    let (mesh_payload, magnetization) =
-                                        fem_live_mesh_payload_and_initial_magnetization(
-                                            &remeshed_plan.backend_plan,
-                                        )
-                                        .context(
-                                            "auto-coarsen updated backend plan is inconsistent",
-                                        )?;
-                                    (mesh_payload, magnetization, remeshed_plan)
+                                    let mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
+                                        &remeshed_plan.backend_plan,
+                                    )
+                                    .ok_or_else(|| anyhow!("auto-coarsen updated backend plan did not produce a FEM mesh asset"))?;
+                                    let magnetization = current_stage_magnetization_vectors(
+                                        None,
+                                        &remeshed_plan.backend_plan,
+                                    );
+                                    if mesh_asset.payload.nodes.len() != magnetization.len() {
+                                        bail!(
+                                            "auto-coarsen FEM mesh has {} nodes but initial magnetization has {} vectors",
+                                            mesh_asset.payload.nodes.len(),
+                                            magnetization.len()
+                                        );
+                                    }
+                                    (mesh_asset, magnetization, remeshed_plan)
                                 };
                                 let prepared_remesh = prepare_remesh_stage_transaction(
                                     &stages,
@@ -7266,6 +7279,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 )?;
 
                                 if new_ram <= ram_budget {
+                                    let live_mesh_payload = remeshed_mesh_asset.payload.clone();
+                                    initial_fem_mesh_asset = Some(remeshed_mesh_asset);
                                     current_mesh_quality = remesh_result.quality.clone();
                                     current_fem_mesh_override = Some(new_mesh.clone());
                                     current_fem_hmax_override = Some(current_hmax);
@@ -8121,6 +8136,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             &mut stage,
             &mut execution_plan,
             &mut stage_result,
+            &mut stage_fem_mesh_asset,
             &live_workspace,
             stage_index,
             stage_count,
@@ -8144,9 +8160,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 .map_err(join_errors)?;
             execution_plan =
                 fullmag_plan::plan(&stage.ir).map_err(|error| anyhow!(error.to_string()))?;
-            stage_fem_mesh_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(
-                &execution_plan.backend_plan,
-            );
         }
         force_record_solver_profile_finalization(
             &live_workspace,
@@ -10264,6 +10277,22 @@ mod tests {
         assert!(!adaptive.contains("offset_step_update(\n                &initial_step_update"));
         assert!(adaptive
             .contains("StageProgressHeartbeat::spawn(\n            adaptive_initial_update"));
+    }
+
+    #[test]
+    fn remesh_paths_keep_one_authoritative_stage_mesh_asset() {
+        let source = include_str!("orchestrator.rs");
+        let production = source;
+        assert!(production.contains("initial_fem_mesh_asset = Some(remeshed_mesh_asset)"));
+        let adaptive = production
+            .split("fn maybe_execute_adaptive_relaxation_followup_passes")
+            .nth(1)
+            .and_then(|tail| tail.split("pub(crate) fn build_session_manifest").next())
+            .expect("adaptive follow-up implementation");
+        assert!(adaptive.contains("stage_fem_mesh_asset: &mut Option<"));
+        assert!(adaptive.contains("run_planned_problem_with_callback_and_fem_mesh_identity"));
+        assert!(!adaptive.contains("run_problem_with_callback("));
+        assert!(adaptive.contains("*stage_fem_mesh_asset = Some(remeshed_mesh_asset)"));
     }
 
     #[test]

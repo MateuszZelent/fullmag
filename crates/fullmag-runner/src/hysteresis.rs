@@ -425,14 +425,14 @@ pub(crate) fn run_planned_hysteresis_with_callback(
     output_dir: &Path,
     field_every_n: u64,
     stage_id: Option<&str>,
+    fem_mesh_identity: Option<&crate::types::StageFemMeshIdentity>,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
 ) -> Result<RunResult, RunError> {
-    let stage_asset = crate::types::StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
     let dummy_display = || crate::interactive::DisplaySelectionState::default();
     run_planned_hysteresis_with_live_preview(
         problem,
         plan,
-        stage_asset.as_ref().map(|asset| &asset.identity),
+        fem_mesh_identity,
         until_seconds,
         output_dir,
         field_every_n,
