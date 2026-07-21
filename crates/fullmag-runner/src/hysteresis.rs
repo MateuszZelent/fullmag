@@ -400,11 +400,13 @@ pub(crate) fn run_planned_hysteresis(
     output_dir: &Path,
     stage_id: Option<&str>,
 ) -> Result<RunResult, RunError> {
+    let stage_asset = crate::types::StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
     let dummy_display = || crate::interactive::DisplaySelectionState::default();
     let mut default_on_step = |_| StepAction::Continue;
     run_planned_hysteresis_with_live_preview(
         problem,
         plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
         until_seconds,
         output_dir,
         1,
@@ -425,10 +427,12 @@ pub(crate) fn run_planned_hysteresis_with_callback(
     stage_id: Option<&str>,
     on_step: &mut (dyn FnMut(StepUpdate) -> StepAction + Send),
 ) -> Result<RunResult, RunError> {
+    let stage_asset = crate::types::StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
     let dummy_display = || crate::interactive::DisplaySelectionState::default();
     run_planned_hysteresis_with_live_preview(
         problem,
         plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
         until_seconds,
         output_dir,
         field_every_n,
@@ -443,6 +447,7 @@ pub(crate) fn run_planned_hysteresis_with_callback(
 pub(crate) fn run_planned_hysteresis_with_live_preview(
     problem: &ProblemIR,
     plan: &ExecutionPlanIR,
+    fem_mesh_identity: Option<&crate::types::StageFemMeshIdentity>,
     until_seconds: f64,
     output_dir: &Path,
     field_every_n: u64,
@@ -521,7 +526,8 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             message: "Expected Hysteresis study stage".to_string(),
         });
     };
-    let fem_mesh_generation_id = hysteresis_mesh_generation_id(&plan.backend_plan);
+    let fem_mesh_generation_id = fem_mesh_identity
+        .map(|identity| identity.generation_id().to_string());
 
     let u_H = hysteresis_field_axis(orientation.as_ref(), *direction);
     let u_meas = hysteresis_measurement_axis(measurement_axis, u_H, plan)?;
@@ -2247,6 +2253,7 @@ fn run_settle_at_field(
                 retry_timestep_override.or_else(|| settle_step_timestep_s(&step));
             let executed_run = execute_settle_step_at_field(
                 backend_plan,
+                fem_mesh_generation_id,
                 problem,
                 &step_input_magnetization,
                 H_ext,
@@ -2528,6 +2535,7 @@ fn ensure_fem_settle_timestep(plan: &mut fullmag_ir::FemPlanIR) {
 
 fn execute_settle_step_at_field(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     initial_magnetization: &[[f64; 3]],
     H_ext: [f64; 3],
@@ -2580,6 +2588,13 @@ fn execute_settle_step_at_field(
             Ok(executed)
         }
         BackendPlanIR::Fem(fem) => {
+            let stage_context = crate::types::FemStageExecutionContext::from_mesh_identity(
+                crate::types::StageFemMeshIdentity::from_generation_id(
+                    fem_mesh_generation_id
+                        .clone()
+                        .expect("FEM hysteresis stage generation"),
+                ),
+            );
             let mut mutated_fem = fem.clone();
             mutated_fem.initial_magnetization = initial_magnetization.to_vec();
             mutated_fem.external_field = Some(H_ext);
@@ -2605,9 +2620,10 @@ fn execute_settle_step_at_field(
                 interrupt_requested,
                 on_step: &mut live_on_step,
             };
-            fem::relax::execute_fem_relax(
+            fem::relax::execute_fem_relax_with_context(
                 fem_engine_kind(resolution.engine),
                 &mutated_fem,
+                &stage_context,
                 until_seconds,
                 &[],
                 Some(live),
@@ -3155,17 +3171,6 @@ fn hysteresis_progress_update(
         hysteresis_settle_step_method: Some(hysteresis_settle_step_method(step).to_string()),
         scalar_row_due: false,
         finished: false,
-    }
-}
-
-fn hysteresis_mesh_generation_id(backend_plan: &BackendPlanIR) -> Option<String> {
-    match backend_plan {
-        BackendPlanIR::Fem(plan) => Some(crate::types::fem_plan_mesh_generation_id(plan)),
-        BackendPlanIR::FemEigen(plan) => Some(crate::types::fem_eigen_mesh_generation_id(plan)),
-        BackendPlanIR::FemFrequencyResponse(plan) => Some(
-            crate::types::fem_frequency_response_mesh_generation_id(plan),
-        ),
-        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
     }
 }
 
@@ -6338,12 +6343,10 @@ mod tests {
             use_consistent_mass: None,
         };
 
-        let expected_generation = crate::types::fem_plan_mesh_generation_id(&plan);
+        crate::types::reset_fem_mesh_fingerprint_count();
+        let stage_asset = crate::types::StageFemMeshAsset::build_from_fem_plan(&plan);
+        let expected_generation = stage_asset.identity.generation_id().to_string();
         let backend_plan = BackendPlanIR::Fem(plan);
-        assert_eq!(
-            hysteresis_mesh_generation_id(&backend_plan).as_deref(),
-            Some(expected_generation.as_str())
-        );
         let step = SettleStepIR::Minimize {
             method: "projected_gradient_bb".to_string(),
             torque_tolerance: 5e-5,
@@ -6358,20 +6361,28 @@ mod tests {
             retry_timestep_scale: None,
             retry_max_attempts: None,
         };
-        let update = hysteresis_progress_update(
-            &backend_plan,
-            &Some(expected_generation.clone()),
-            Some(0),
-            10.0,
-            0,
-            &step,
-            None,
-            None,
-        );
-        assert_eq!(
-            update.fem_mesh_generation_id.as_deref(),
-            Some(expected_generation.as_str())
-        );
+        for (point, retry) in [(0, 0), (1, 0), (1, 1)] {
+            let update = hysteresis_progress_update(
+                &backend_plan,
+                &Some(expected_generation.clone()),
+                Some(point),
+                10.0 - 20.0 * point as f64,
+                retry,
+                &step,
+                None,
+                None,
+            );
+            assert_eq!(
+                update.fem_mesh_generation_id.as_deref(),
+                Some(expected_generation.as_str())
+            );
+            let _retry_context = crate::types::FemStageExecutionContext::from_mesh_identity(
+                crate::types::StageFemMeshIdentity::from_generation_id(
+                    expected_generation.clone(),
+                ),
+            );
+        }
+        assert_eq!(crate::types::fem_mesh_fingerprint_count(), 1);
         let averaging = hysteresis_averaging_context(&backend_plan);
         let m_avg = average_hysteresis_magnetization(
             &[

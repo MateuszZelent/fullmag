@@ -44,8 +44,9 @@ use crate::schedules::{
     OutputSchedule,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FieldSnapshot, LivePreviewRequest, LiveStepConsumer,
-    RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FemStageExecutionContext, FieldSnapshot, LivePreviewRequest,
+    LiveStepConsumer, RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats,
+    StepUpdate,
 };
 
 use std::time::Instant;
@@ -57,7 +58,33 @@ pub(crate) fn execute_reference_fem(
     live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
-    execute_reference_fem_impl(plan, until_seconds, outputs, live, artifact_writer)
+    let stage_context = FemStageExecutionContext::from_fem_plan(plan);
+    execute_reference_fem_with_context(
+        plan,
+        &stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
+}
+
+pub(crate) fn execute_reference_fem_with_context(
+    plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'_>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
+    execute_reference_fem_impl(
+        plan,
+        stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
 }
 
 pub(crate) fn snapshot_preview(
@@ -514,12 +541,13 @@ fn reference_demag_provenance_name(plan: &FemPlanIR) -> Option<String> {
 
 fn execute_reference_fem_impl(
     plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
     until_seconds: f64,
     outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
-    let fem_mesh_generation_id = Some(crate::types::fem_plan_mesh_generation_id(plan));
+    let fem_mesh_generation_id = stage_context.generation_id();
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),

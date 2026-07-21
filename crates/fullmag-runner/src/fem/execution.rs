@@ -50,7 +50,8 @@ pub(crate) fn execute_fem<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
-    let fem_mesh_generation_id = Some(crate::types::fem_plan_mesh_generation_id(plan));
+    let stage_asset = crate::types::StageFemMeshAsset::build_from_fem_plan(plan);
+    let fem_mesh_generation_id = Some(stage_asset.identity.generation_id().to_string());
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     if let Err(reason) = validate_periodic_region_material_certificate(&normalized_plan) {
         return Err(RunError {

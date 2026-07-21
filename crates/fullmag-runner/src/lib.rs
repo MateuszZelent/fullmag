@@ -280,9 +280,9 @@ pub use types::{
     InitialTimestepReason, LegacyDtPolicy, LivePreviewField, LivePreviewRequest,
     LiveVectorFieldSnapshot, LlgTimestepCapabilityId, LlgTimestepQualificationId,
     RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy, RunError, RunResult,
-    RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StepAction, StepStats, StepUpdate,
-    TimestepBackend, TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
-    TimestepValidationState,
+    RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset, StageFemMeshIdentity,
+    StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice, TimestepExecutionIdentity,
+    TimestepPolicyProvenance, TimestepValidationState,
 };
 
 use crate::capabilities::{
@@ -1563,8 +1563,16 @@ pub fn run_planned_problem(
             dispatch::execute_fem_eigen(engine, fem, &plan.output_plan.outputs)
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation(
-                response, output_dir, None, None,
+            let stage_context = types::FemStageExecutionContext::from_backend_plan(
+                &plan.backend_plan,
+            )
+            .expect("FEM stage context");
+            frequency_response::execute_fem_frequency_response_validation_with_context(
+                response,
+                &stage_context,
+                output_dir,
+                None,
+                None,
             )
         }
     });
@@ -1639,7 +1647,10 @@ pub fn fem_observables_for_magnetization(
     fem_baseline::fem_observables_for_magnetization(plan, magnetization)
 }
 
-fn fem_eigen_progress_update(progress: fem_eigen::FemEigenProgress) -> StepUpdate {
+fn fem_eigen_progress_update(
+    progress: fem_eigen::FemEigenProgress,
+    fem_mesh_generation_id: Option<String>,
+) -> StepUpdate {
     let mut progress_scalars = std::collections::HashMap::new();
     progress_scalars.insert("phase_code".to_string(), f64::from(progress.phase_index));
     progress_scalars.insert("phase_count".to_string(), f64::from(progress.phase_count));
@@ -1711,7 +1722,7 @@ fn fem_eigen_progress_update(progress: fem_eigen::FemEigenProgress) -> StepUpdat
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh_generation_id: None,
+        fem_mesh_generation_id,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -1770,6 +1781,7 @@ pub fn run_planned_problem_with_callback(
             &mut on_step,
         );
     }
+    let fem_stage_context = types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan);
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
@@ -1827,18 +1839,20 @@ pub fn run_planned_problem_with_callback(
                 on_step: &mut on_step,
             });
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax(
+                fem::relax::execute_fem_relax_with_context(
                     fem_engine_kind(resolution.engine),
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
                 )
             } else {
-                dispatch::execute_fem(
+                dispatch::execute_fem_with_context(
                     resolution.engine,
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
@@ -1850,7 +1864,12 @@ pub fn run_planned_problem_with_callback(
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
-            let mut progress_callback = |progress| on_step(fem_eigen_progress_update(progress));
+            let mut progress_callback = |progress| {
+                on_step(fem_eigen_progress_update(
+                    progress,
+                    fem_stage_context.as_ref().and_then(|context| context.generation_id()),
+                ))
+            };
             dispatch::execute_fem_eigen_with_progress(
                 engine,
                 fem,
@@ -1859,8 +1878,9 @@ pub fn run_planned_problem_with_callback(
             )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation(
+            frequency_response::execute_fem_frequency_response_validation_with_context(
                 response,
+                fem_stage_context.as_ref().expect("FEM stage context"),
                 output_dir,
                 None,
                 Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
@@ -1939,14 +1959,9 @@ pub fn run_planned_problem_with_callback(
     on_step(StepUpdate {
         stats: final_stats,
         grid: final_grid,
-        fem_mesh_generation_id: match &plan.backend_plan {
-            BackendPlanIR::Fem(fem) => Some(fem_plan_mesh_generation_id(fem)),
-            BackendPlanIR::FemEigen(eigen) => Some(fem_eigen_mesh_generation_id(eigen)),
-            BackendPlanIR::FemFrequencyResponse(response) => {
-                Some(fem_frequency_response_mesh_generation_id(response))
-            }
-            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
-        },
+        fem_mesh_generation_id: fem_stage_context
+            .as_ref()
+            .and_then(|context| context.generation_id()),
         magnetization: Some(final_m),
         preview_field: None,
         cached_preview_fields: None,
@@ -2073,6 +2088,33 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let stage_asset = StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity(
+        problem,
+        plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
+        until_seconds,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
@@ -2080,6 +2122,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         return hysteresis::run_planned_hysteresis_with_live_preview(
             problem,
             plan,
+            fem_mesh_identity,
             until_seconds,
             output_dir,
             field_every_n,
@@ -2090,6 +2133,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             &mut on_step,
         );
     }
+    let fem_stage_context = fem_mesh_identity
+        .cloned()
+        .map(types::FemStageExecutionContext::from_mesh_identity);
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
         artifacts::build_field_context(problem, plan),
@@ -2153,18 +2199,20 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                 on_step: &mut on_step,
             });
             let mut executed = if fem.relaxation.is_some() {
-                fem::relax::execute_fem_relax(
+                fem::relax::execute_fem_relax_with_context(
                     fem_engine_kind(resolution.engine),
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
                     artifact_writer.clone(),
                 )
             } else {
-                dispatch::execute_fem(
+                dispatch::execute_fem_with_context(
                     resolution.engine,
                     fem,
+                    fem_stage_context.as_ref().expect("FEM stage context"),
                     until_seconds,
                     &plan.output_plan.outputs,
                     live,
@@ -2176,7 +2224,12 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         }
         BackendPlanIR::FemEigen(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
-            let mut progress_callback = |progress| on_step(fem_eigen_progress_update(progress));
+            let mut progress_callback = |progress| {
+                on_step(fem_eigen_progress_update(
+                    progress,
+                    fem_stage_context.as_ref().and_then(|context| context.generation_id()),
+                ))
+            };
             dispatch::execute_fem_eigen_with_progress(
                 engine,
                 fem,
@@ -2185,8 +2238,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             )
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            frequency_response::execute_fem_frequency_response_validation(
+            frequency_response::execute_fem_frequency_response_validation_with_context(
                 response,
+                fem_stage_context.as_ref().expect("FEM stage context"),
                 output_dir,
                 interrupt_requested,
                 Some(&mut on_step as &mut dyn FnMut(StepUpdate) -> StepAction),
@@ -2258,14 +2312,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     on_step(StepUpdate {
         stats: final_stats,
         grid: final_grid,
-        fem_mesh_generation_id: match &plan.backend_plan {
-            BackendPlanIR::Fem(fem) => Some(fem_plan_mesh_generation_id(fem)),
-            BackendPlanIR::FemEigen(eigen) => Some(fem_eigen_mesh_generation_id(eigen)),
-            BackendPlanIR::FemFrequencyResponse(response) => {
-                Some(fem_frequency_response_mesh_generation_id(response))
-            }
-            BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
-        },
+        fem_mesh_generation_id: fem_stage_context
+            .as_ref()
+            .and_then(|context| context.generation_id()),
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -2292,6 +2341,35 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
     initial_snapshot: bool,
     hysteresis_stage_id: Option<&str>,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    let stage_asset = StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
+        problem,
+        plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
+        until_seconds,
+        output_dir,
+        field_every_n,
+        display_selection,
+        interrupt_requested,
+        initial_snapshot,
+        hysteresis_stage_id,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_hysteresis_stage_id_and_fem_mesh_identity(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+    interrupt_requested: Option<&std::sync::atomic::AtomicBool>,
+    initial_snapshot: bool,
+    hysteresis_stage_id: Option<&str>,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
@@ -2299,6 +2377,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         return hysteresis::run_planned_hysteresis_with_live_preview(
             problem,
             plan,
+            fem_mesh_identity,
             until_seconds,
             output_dir,
             field_every_n,
@@ -2309,9 +2388,10 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             &mut on_step,
         );
     }
-    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot(
+    run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity(
         problem,
         plan,
+        fem_mesh_identity,
         until_seconds,
         output_dir,
         field_every_n,
@@ -2492,6 +2572,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
                 .to_string(),
         });
     };
+    let stage_asset = StageFemMeshAsset::build_from_fem_plan(fem);
 
     let mut artifact_pipeline = artifact_pipeline::ArtifactPipeline::start(
         output_dir.to_path_buf(),
@@ -2555,7 +2636,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         wall_time_ns: 0,
         ..StepStats::default()
     });
-    let fem_mesh_generation_id = Some(fem_plan_mesh_generation_id(fem));
+    let fem_mesh_generation_id = Some(stage_asset.identity.generation_id().to_string());
     on_step(StepUpdate {
         stats: final_stats,
         grid: [0, 0, 0],
@@ -3629,7 +3710,10 @@ mod tests {
     fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
         let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
             .expect("read lib.rs");
-        let route_count = source.matches("fem::relax::execute_fem_relax(").count();
+        let route_count = source.matches("fem::relax::execute_fem_relax(").count()
+            + source
+                .matches("fem::relax::execute_fem_relax_with_context(")
+                .count();
         assert!(
             route_count >= 3,
             "run entrypoints should route FEM relaxation through fem::relax::execute_fem_relax, found {route_count}"

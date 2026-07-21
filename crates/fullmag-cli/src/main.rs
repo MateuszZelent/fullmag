@@ -912,7 +912,7 @@ mod tests {
             ..Default::default()
         });
 
-        let update = initial_step_update(&plan);
+        let update = initial_step_update(&plan, None);
         assert_eq!(update.stats.step, 0);
         assert_eq!(update.grid, [4, 3, 1]);
         assert!(update.fem_mesh_generation_id.is_none());
@@ -1034,7 +1034,12 @@ mod tests {
             use_consistent_mass: None,
         });
 
-        let update = initial_step_update(&plan);
+        let stage_asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(&plan)
+            .expect("FEM stage asset");
+        let update = initial_step_update(
+            &plan,
+            Some(stage_asset.identity.generation_id().to_string()),
+        );
         assert_eq!(update.stats.step, 0);
         assert_eq!(update.grid, [0, 0, 0]);
         assert!(update.fem_mesh_generation_id.is_some());

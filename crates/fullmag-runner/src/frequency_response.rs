@@ -250,13 +250,31 @@ fn frequency_response_solver_method_rejection_reason(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn execute_fem_frequency_response_validation(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
     output_dir: &Path,
     interrupt_requested: Option<&AtomicBool>,
     on_step: Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
 ) -> Result<ExecutedRun, RunError> {
-    let fem_mesh_generation_id = Some(crate::types::fem_frequency_response_mesh_generation_id(plan));
+    let stage_asset = crate::types::StageFemMeshAsset::build_from_fem_frequency_response_plan(plan);
+    execute_fem_frequency_response_validation_with_context(
+        plan,
+        &crate::types::FemStageExecutionContext::from_mesh_identity(stage_asset.identity),
+        output_dir,
+        interrupt_requested,
+        on_step,
+    )
+}
+
+pub(crate) fn execute_fem_frequency_response_validation_with_context(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+    stage_context: &crate::types::FemStageExecutionContext,
+    output_dir: &Path,
+    interrupt_requested: Option<&AtomicBool>,
+    on_step: Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
+) -> Result<ExecutedRun, RunError> {
+    let fem_mesh_generation_id = stage_context.generation_id();
     let mut on_step = on_step;
     #[cfg(not(feature = "fem-gpu"))]
     let _ = &on_step;

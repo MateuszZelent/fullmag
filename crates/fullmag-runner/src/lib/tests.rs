@@ -13,7 +13,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 fn fem_relaxation_entrypoints_route_through_fem_relax_module() {
     let source = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
         .expect("read lib.rs");
-    let route_count = source.matches("fem::relax::execute_fem_relax(").count();
+    let route_count = source.matches("fem::relax::execute_fem_relax(").count()
+        + source
+            .matches("fem::relax::execute_fem_relax_with_context(")
+            .count();
     assert!(
             route_count >= 3,
             "run entrypoints should route FEM relaxation through fem::relax::execute_fem_relax, found {route_count}"

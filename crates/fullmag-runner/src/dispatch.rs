@@ -73,8 +73,8 @@ pub(crate) use crate::solver_runtime::selection::{
 #[cfg(feature = "fem-gpu")]
 use crate::types::FemPoissonDemagProvenance;
 use crate::types::{
-    AuxiliaryArtifact, ExecutedRun, LivePreviewRequest, LiveStepConsumer, ResolvedFallback,
-    RunError, StepAction, StepUpdate,
+    AuxiliaryArtifact, ExecutedRun, FemStageExecutionContext, LivePreviewRequest, LiveStepConsumer,
+    ResolvedFallback, RunError, StepAction, StepUpdate,
 };
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::types::{ExecutionProvenance, StepStats};
@@ -2046,6 +2046,27 @@ pub(crate) fn execute_fem<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let stage_context = FemStageExecutionContext::from_fem_plan(plan);
+    execute_fem_with_context(
+        engine,
+        plan,
+        &stage_context,
+        until_seconds,
+        outputs,
+        live,
+        artifact_writer,
+    )
+}
+
+pub(crate) fn execute_fem_with_context<'a>(
+    engine: FemEngine,
+    plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    live: Option<LiveStepConsumer<'a>>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     let pbc_decision = fem_static_periodic_decision(&normalized_plan);
     match pbc_decision.lane {
@@ -2070,8 +2091,9 @@ pub(crate) fn execute_fem<'a>(
                         .unwrap_or("operator reduction required")
                 ),
             );
-            let mut executed = fem_baseline::execute_reference_fem(
+            let mut executed = fem_baseline::execute_reference_fem_with_context(
                 &normalized_plan,
+                stage_context,
                 until_seconds,
                 outputs,
                 live,
@@ -2103,6 +2125,7 @@ pub(crate) fn execute_fem<'a>(
             execute_native_fem(
                 FemEngine::CpuNative,
                 &cpu_plan,
+                stage_context,
                 until_seconds,
                 outputs,
                 live,
@@ -2124,6 +2147,7 @@ pub(crate) fn execute_fem<'a>(
                 let mut executed = execute_native_fem(
                     FemEngine::CpuNative,
                     &cpu_plan,
+                    stage_context,
                     until_seconds,
                     outputs,
                     live,
@@ -2146,6 +2170,7 @@ pub(crate) fn execute_fem<'a>(
             execute_native_fem(
                 FemEngine::NativeGpu,
                 &gpu_plan,
+                stage_context,
                 until_seconds,
                 outputs,
                 live,
@@ -5269,12 +5294,13 @@ fn record_native_fem_initial_field_snapshots(
 fn execute_native_fem(
     engine: FemEngine,
     plan: &FemPlanIR,
+    stage_context: &FemStageExecutionContext,
     until_seconds: f64,
     outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
-    let fem_mesh_generation_id = Some(crate::types::fem_plan_mesh_generation_id(plan));
+    let fem_mesh_generation_id = stage_context.generation_id();
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -5562,6 +5588,7 @@ pub(crate) fn fem_poisson_demag_provenance(
 fn execute_native_fem(
     _engine: FemEngine,
     _plan: &FemPlanIR,
+    _stage_context: &FemStageExecutionContext,
     _until_seconds: f64,
     _outputs: &[OutputIR],
     _live: Option<LiveStepConsumer<'_>>,

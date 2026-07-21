@@ -410,7 +410,10 @@ pub(crate) fn running_run_manifest_from_update(
     }
 }
 
-pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runner::StepUpdate {
+pub(crate) fn initial_step_update(
+    backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: Option<String>,
+) -> fullmag_runner::StepUpdate {
     let stats = fullmag_runner::StepStats {
         step: 0,
         time: 0.0,
@@ -464,7 +467,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
         BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh_generation_id: Some(fullmag_runner::fem_plan_mesh_generation_id(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(&fem.initial_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -479,7 +482,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
         BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh_generation_id: Some(fullmag_runner::fem_eigen_mesh_generation_id(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(&fem.equilibrium_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -497,9 +500,7 @@ pub(crate) fn initial_step_update(backend_plan: &BackendPlanIR) -> fullmag_runne
             fullmag_runner::StepUpdate {
                 stats,
                 grid: [0, 0, 0],
-                fem_mesh_generation_id: Some(
-                    fullmag_runner::fem_frequency_response_mesh_generation_id(fem),
-                ),
+                fem_mesh_generation_id,
                 magnetization: Some(flatten_magnetization(&fem.equilibrium_magnetization)),
                 preview_field: None,
                 cached_preview_fields: None,
@@ -564,6 +565,7 @@ fn frequency_response_range_hz(frequencies_hz: &[f64]) -> Option<(f64, f64)> {
 
 pub(crate) fn final_stage_step_update(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: Option<String>,
     steps: &[fullmag_runner::StepStats],
     final_magnetization: &[[f64; 3]],
     step_offset: u64,
@@ -611,10 +613,10 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::Fem(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh_generation_id: Some(fullmag_runner::fem_plan_mesh_generation_id(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(final_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -626,10 +628,10 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemEigen(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh_generation_id: Some(fullmag_runner::fem_eigen_mesh_generation_id(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(final_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -641,12 +643,10 @@ pub(crate) fn final_stage_step_update(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemFrequencyResponse(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh_generation_id: Some(
-                fullmag_runner::fem_frequency_response_mesh_generation_id(fem),
-            ),
+            fem_mesh_generation_id,
             magnetization: Some(flatten_magnetization(final_magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -663,6 +663,7 @@ pub(crate) fn final_stage_step_update(
 
 pub(crate) fn snapshot_step_update_from_stats(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: Option<String>,
     stats: fullmag_runner::StepStats,
     magnetization: &[[f64; 3]],
     finished: bool,
@@ -702,10 +703,10 @@ pub(crate) fn snapshot_step_update_from_stats(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::Fem(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::Fem(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh_generation_id: Some(fullmag_runner::fem_plan_mesh_generation_id(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -717,10 +718,10 @@ pub(crate) fn snapshot_step_update_from_stats(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::FemEigen(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemEigen(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh_generation_id: Some(fullmag_runner::fem_eigen_mesh_generation_id(fem)),
+            fem_mesh_generation_id: fem_mesh_generation_id.clone(),
             magnetization: Some(flatten_magnetization(magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -732,12 +733,10 @@ pub(crate) fn snapshot_step_update_from_stats(
             scalar_row_due: true,
             finished,
         },
-        BackendPlanIR::FemFrequencyResponse(fem) => fullmag_runner::StepUpdate {
+        BackendPlanIR::FemFrequencyResponse(_fem) => fullmag_runner::StepUpdate {
             stats,
             grid: [0, 0, 0],
-            fem_mesh_generation_id: Some(
-                fullmag_runner::fem_frequency_response_mesh_generation_id(fem),
-            ),
+            fem_mesh_generation_id,
             magnetization: Some(flatten_magnetization(magnetization)),
             preview_field: None,
             cached_preview_fields: None,
@@ -4282,7 +4281,13 @@ mod tests {
         plan.frequencies_hz.values_hz = vec![2.0e9, 3.5e9, 5.0e9];
         plan.enable_demag = true;
         plan.magnetostatic_bc = fullmag_ir::MagnetostaticBoundaryConditionIR::PeriodicAirboxK0;
-        let update = initial_step_update(&BackendPlanIR::FemFrequencyResponse(plan));
+        let backend_plan = BackendPlanIR::FemFrequencyResponse(plan);
+        let asset = fullmag_runner::StageFemMeshAsset::build_from_backend_plan(&backend_plan)
+            .expect("frequency-response FEM asset");
+        let update = initial_step_update(
+            &backend_plan,
+            Some(asset.identity.generation_id().to_string()),
+        );
 
         let progress = update
             .stats
