@@ -62,8 +62,11 @@ Runtime throughput follows the same single-owner rule. The revisioned
 `solver_steps_per_second` is accepted steps divided by
 `native_solver_wall_time_ns` from one closed profiler window;
 `end_to_end_steps_per_second` uses the accepted-step count and monotonic span
-from that same window; and `published_steps_per_second` uses only distinct
-steps whose HTTP delta or full-snapshot fallback completed successfully.
+from that same window; and `published_steps_per_second` uses the accepted-step
+delta between the first and latest ordered, same-run publication endpoints
+whose HTTP delta or full-snapshot fallback completed successfully. Duplicate
+or out-of-order endpoints do not advance the window; a new run establishes a
+new zero-count boundary.
 Every object carries `value`, `window_step_count`,
 `window_wall_time_ns`, and `source_revision`.
 
@@ -71,8 +74,11 @@ The legacy `status.metrics.steps_per_second` scalar is a deprecated
 compatibility alias of the end-to-end value. It is absent without a closed
 monotonic span and never falls back to lifetime steps divided by the last-step
 time. `simulation/stages/execution` exclusively owns
-`time_to_tolerance_seconds`, present only for a converged completion caused
-by a configured tolerance criterion.
+`time_to_tolerance_seconds`, present only when the canonical completion record
+has a coherent torque or energy metric kind/name, finite non-negative value and
+threshold, and `value <= threshold`. Gradient/numerical-stagnation completion
+fails closed until the canonical metric vocabulary distinguishes a genuine
+gradient tolerance.
 
 ### 3. Revision-based cache
 

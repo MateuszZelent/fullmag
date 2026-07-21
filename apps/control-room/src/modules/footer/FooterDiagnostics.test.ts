@@ -264,7 +264,7 @@ describe("FooterDiagnostics", () => {
     ]);
   });
 
-  it("labels truthful rates and current versus delta counters", () => {
+  it("labels truthful rates and adjacent monotonic counter deltas", () => {
     const twoSamples = structuredClone(profile);
     twoSamples.latest_samples.unshift({
       ...structuredClone(profile.latest_samples[0]!),
@@ -275,6 +275,7 @@ describe("FooterDiagnostics", () => {
       hot_loop_host_sync_count: 1,
       hot_loop_control_scalar_host_sync_count: 1,
       hot_loop_control_scalar_d2h_bytes: 8,
+      sample_time_unix_ms: PROFILE_SAMPLE_TIME_MS - 1_000,
       step: 11,
     });
     const model = buildSolverProfilePanelModel(twoSamples);
@@ -285,6 +286,60 @@ describe("FooterDiagnostics", () => {
     expect(model.rows[0]?.artifact).toContain("writer delta 1");
     expect(model.rows[0]?.gpuSync).toContain("delta 1 sync");
     expect(model.rows[0]?.gpuSync).toContain("cumulative 2 sync");
+  });
+
+  it("marks deltas unavailable when the retained ring has no predecessor", () => {
+    const model = buildSolverProfilePanelModel(profile);
+
+    expect(model.rows[0]?.artifact).toContain("writer delta unavailable");
+    expect(model.rows[0]?.gpuSync).toContain("delta unavailable");
+    expect(model.rows[0]?.artifact).toContain("writer cumulative 2 / 4.0 ms");
+    expect(model.rows[0]?.gpuSync).toContain("cumulative 2 sync");
+  });
+
+  it("labels monotonic-step counter resets instead of fabricating zero deltas", () => {
+    const resetProfile = structuredClone(profile);
+    resetProfile.latest_samples = [
+      {
+        ...structuredClone(profile.latest_samples[0]!),
+        artifact_writer_jobs_completed: 5,
+        artifact_writer_job_wall_time_ns: 8_000_000,
+        hot_loop_host_sync_count: 7,
+        sample_time_unix_ms: PROFILE_SAMPLE_TIME_MS - 1_000,
+        step: 11,
+      },
+      {
+        ...structuredClone(profile.latest_samples[0]!),
+        artifact_writer_jobs_completed: 2,
+        artifact_writer_job_wall_time_ns: 1_000_000,
+        hot_loop_host_sync_count: 1,
+        step: 12,
+      },
+    ];
+
+    const model = buildSolverProfilePanelModel(resetProfile);
+    expect(model.rows[0]?.artifact).toContain("writer delta reset");
+    expect(model.rows[0]?.gpuSync).toContain("delta reset");
+  });
+
+  it("does not infer deltas from reversed or out-of-order samples", () => {
+    const reversed = structuredClone(profile);
+    reversed.latest_samples = [
+      structuredClone(profile.latest_samples[0]!),
+      {
+        ...structuredClone(profile.latest_samples[0]!),
+        artifact_writer_jobs_completed: 3,
+        artifact_writer_job_wall_time_ns: 5_000_000,
+        hot_loop_host_sync_count: 3,
+        sample_time_unix_ms: PROFILE_SAMPLE_TIME_MS - 1_000,
+        step: 11,
+      },
+    ];
+
+    const model = buildSolverProfilePanelModel(reversed);
+    expect(model.rows[0]?.step).toBe("11");
+    expect(model.rows[0]?.artifact).toContain("writer delta unavailable");
+    expect(model.rows[0]?.gpuSync).toContain("delta unavailable");
   });
 
   it("builds solver profile rows and warns when OpenMP is effectively single-threaded", () => {
@@ -303,7 +358,7 @@ describe("FooterDiagnostics", () => {
     );
     expect(model.rows[0]).toMatchObject({
       artifact:
-        "enqueue now 100.0 us / 4.0 KiB / queue current 1 / max 3 / writer delta 2 / 4.0 ms / writer cumulative 2 / 4.0 ms",
+        "enqueue now 100.0 us / 4.0 KiB / queue current 1 / max 3 / writer delta unavailable / writer cumulative 2 / 4.0 ms",
       demag: "2.0 ms",
       demagDetail: "CG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms",
       demagSetup: "reused",
@@ -313,7 +368,7 @@ describe("FooterDiagnostics", () => {
       finalization: "80.0 us / 8.0 KiB",
       gapPerStep: "23.3 ms",
       gapTotal: "70.0 ms",
-      gpuSync: "delta 2 sync / cumulative 2 sync / ctrl 2 / 16 B",
+      gpuSync: "delta unavailable / cumulative 2 sync / ctrl 2 / 16 B",
       missing: "25.0 us",
       nativeFfi: "25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us",
       relaxPreconditioner: "750.0 us",
@@ -373,7 +428,7 @@ describe("FooterDiagnostics", () => {
     expect(serializeSolverProfileRows(model.rows)).toBe(
       [
         "Last step\tClock\tSpan steps\tSpan wall\tGap total\tGap/step\tTotal (last step)\tExchange (last step)\tDemag (last step)\tDemag detail\tSetup\tRelax prec.\tRHS\tPreview\tCache\tField copy\tArtifact\tFinalization\tGPU sync\tNative\tOrchestr.\tMissing\tDeep clones (last step)",
-        "12\t03:04:05.123\t11-13 (3)\t100.0 ms\t70.0 ms\t23.3 ms\t5.0 ms\t150.0 us\t2.0 ms\tCG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms\treused\t750.0 us\t3.0 ms\t0 ns\t0 ns\t250.0 us / 24.0 MiB\tenqueue now 100.0 us / 4.0 KiB / queue current 1 / max 3 / writer delta 2 / 4.0 ms / writer cumulative 2 / 4.0 ms\t80.0 us / 8.0 KiB\tdelta 2 sync / cumulative 2 sync / ctrl 2 / 16 B\t25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us\t0 ns\t25.0 us\t0",
+        "12\t03:04:05.123\t11-13 (3)\t100.0 ms\t70.0 ms\t23.3 ms\t5.0 ms\t150.0 us\t2.0 ms\tCG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms\treused\t750.0 us\t3.0 ms\t0 ns\t0 ns\t250.0 us / 24.0 MiB\tenqueue now 100.0 us / 4.0 KiB / queue current 1 / max 3 / writer delta unavailable / writer cumulative 2 / 4.0 ms\t80.0 us / 8.0 KiB\tdelta unavailable / cumulative 2 sync / ctrl 2 / 16 B\t25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us\t0 ns\t25.0 us\t0",
       ].join("\n"),
     );
   });

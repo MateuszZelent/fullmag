@@ -502,6 +502,12 @@ export function buildSolverProfilePanelModel(
     .reverse()
     .map(({ sample, sourceIndex }) => {
       const previous = sourceIndex > 0 ? latestSamples[sourceIndex - 1] : undefined;
+      const hasMonotonicPredecessor =
+        previous !== undefined &&
+        sample.step > previous.step &&
+        typeof sample.sample_time_unix_ms === "number" &&
+        typeof previous.sample_time_unix_ms === "number" &&
+        sample.sample_time_unix_ms > previous.sample_time_unix_ms;
       const phaseById = new Map(sample.phases.map((phase) => [phase.id, phase]));
       const demagPhaseById = new Map(
         sample.demag_subphases.map((phase) => [phase.id, phase]),
@@ -522,10 +528,16 @@ export function buildSolverProfilePanelModel(
           sample.artifact_enqueue_bytes ?? 0,
           sample.artifact_queue_depth_current ?? 0,
           sample.artifact_queue_depth_max ?? 0,
-          (sample.artifact_writer_jobs_completed ?? 0) -
-            (previous?.artifact_writer_jobs_completed ?? 0),
-          (sample.artifact_writer_job_wall_time_ns ?? 0) -
-            (previous?.artifact_writer_job_wall_time_ns ?? 0),
+          formatCounterPairDelta(
+            sample.artifact_writer_jobs_completed ?? 0,
+            sample.artifact_writer_job_wall_time_ns ?? 0,
+            hasMonotonicPredecessor
+              ? (previous?.artifact_writer_jobs_completed ?? 0)
+              : undefined,
+            hasMonotonicPredecessor
+              ? (previous?.artifact_writer_job_wall_time_ns ?? 0)
+              : undefined,
+          ),
           sample.artifact_writer_jobs_completed ?? 0,
           sample.artifact_writer_job_wall_time_ns ?? 0,
         ),
@@ -546,7 +558,10 @@ export function buildSolverProfilePanelModel(
         ),
         gapPerStep: formatNs(sample.unprofiled_gap_per_step_ns ?? 0),
         gapTotal: formatNs(sample.unprofiled_gap_total_ns ?? 0),
-        gpuSync: formatGpuSync(sample, previous),
+        gpuSync: formatGpuSync(
+          sample,
+          hasMonotonicPredecessor ? previous : undefined,
+        ),
         id: `${sample.step}:${sample.time}:${sample.sample_time_unix_ms}:${sourceIndex}`,
         missing: formatNs(sample.missing_ns),
         nativeFfi: formatNativeCost(phaseById),
@@ -698,17 +713,46 @@ function formatArtifactCost(
   bytes: number,
   queueDepthCurrent: number,
   queueDepthMax: number,
-  writerJobsDelta: number,
-  writerWallTimeDeltaNs: number,
+  writerDelta: CounterPairDelta,
   writerJobsCumulative: number,
   writerWallTimeCumulativeNs: number,
 ) {
   return [
     `enqueue now ${formatCopyCost(wallTimeNs, bytes)}`,
     `queue current ${Math.max(0, Math.round(queueDepthCurrent))} / max ${Math.max(0, Math.round(queueDepthMax))}`,
-    `writer delta ${Math.max(0, Math.round(writerJobsDelta))} / ${formatNs(Math.max(0, writerWallTimeDeltaNs))}`,
+    formatWriterDelta(writerDelta),
     `writer cumulative ${Math.max(0, Math.round(writerJobsCumulative))} / ${formatNs(Math.max(0, writerWallTimeCumulativeNs))}`,
   ].join(" / ");
+}
+
+type CounterPairDelta =
+  | { kind: "value"; count: number; wallTimeNs: number }
+  | { kind: "reset" }
+  | { kind: "unavailable" };
+
+function formatCounterPairDelta(
+  count: number,
+  wallTimeNs: number,
+  previousCount: number | undefined,
+  previousWallTimeNs: number | undefined,
+): CounterPairDelta {
+  if (previousCount === undefined || previousWallTimeNs === undefined) {
+    return { kind: "unavailable" };
+  }
+  if (count < previousCount || wallTimeNs < previousWallTimeNs) {
+    return { kind: "reset" };
+  }
+  return {
+    kind: "value",
+    count: count - previousCount,
+    wallTimeNs: wallTimeNs - previousWallTimeNs,
+  };
+}
+
+function formatWriterDelta(delta: CounterPairDelta) {
+  if (delta.kind === "unavailable") return "writer delta unavailable";
+  if (delta.kind === "reset") return "writer delta reset";
+  return `writer delta ${Math.round(delta.count)} / ${formatNs(delta.wallTimeNs)}`;
 }
 
 function formatNativeCost(phaseById: Map<string, SolverProfilePhaseResource>) {
@@ -752,23 +796,26 @@ function formatGpuSync(
   previous?: SolverProfileResource["latest_samples"][number],
 ) {
   const syncCount = sample.hot_loop_host_sync_count ?? 0;
-  const deltaSyncCount = Math.max(
-    0,
-    syncCount - (previous?.hot_loop_host_sync_count ?? 0),
-  );
+  const previousSyncCount = previous?.hot_loop_host_sync_count;
+  const deltaLabel =
+    previousSyncCount === undefined
+      ? "delta unavailable"
+      : syncCount < previousSyncCount
+        ? "delta reset"
+        : `delta ${Math.round(syncCount - previousSyncCount)} sync`;
   const controlSyncCount = sample.hot_loop_control_scalar_host_sync_count ?? 0;
   const controlBytes = sample.hot_loop_control_scalar_d2h_bytes ?? 0;
   if (syncCount <= 0 && controlSyncCount <= 0 && controlBytes <= 0) {
-    return "delta 0 sync / cumulative 0 sync";
+    return `${deltaLabel} / cumulative 0 sync`;
   }
   if (controlSyncCount > 0 || controlBytes > 0) {
-    return `delta ${Math.round(deltaSyncCount)} sync / cumulative ${Math.round(syncCount)} sync / ctrl ${Math.round(controlSyncCount)} / ${formatBytes(controlBytes)}`;
+    return `${deltaLabel} / cumulative ${Math.round(syncCount)} sync / ctrl ${Math.round(controlSyncCount)} / ${formatBytes(controlBytes)}`;
   }
   const totalBytes = (sample.hot_loop_h2d_bytes ?? 0) + (sample.hot_loop_d2h_bytes ?? 0);
   if (totalBytes > 0) {
-    return `delta ${Math.round(deltaSyncCount)} sync / cumulative ${Math.round(syncCount)} sync / ${formatBytes(totalBytes)}`;
+    return `${deltaLabel} / cumulative ${Math.round(syncCount)} sync / ${formatBytes(totalBytes)}`;
   }
-  return `delta ${Math.round(deltaSyncCount)} sync / cumulative ${Math.round(syncCount)} sync`;
+  return `${deltaLabel} / cumulative ${Math.round(syncCount)} sync`;
 }
 
 function formatRateSummary(profile: SolverProfileResource | null | undefined) {

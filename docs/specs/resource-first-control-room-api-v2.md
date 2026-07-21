@@ -182,12 +182,16 @@ The simulation resources expose one algorithm-specific relaxation contract:
   numerical stagnation is failed/non-converged. Table rows and artifacts do
   not infer completion.
 - `time_to_tolerance_seconds` uses stage start/completion timestamps only
-  when `status=completed`, `converged=true`, and the reason is `torque`,
-  `energy`, or `gradient`; it is absent for
-  `max_steps`, cancellation, skipped, stopped, and failed records.
+  when `status=completed`, `converged=true`, the reason and canonical metric
+  kind/name form a coherent torque or energy tolerance, both value and
+  threshold are finite and non-negative, and `value <= threshold`; it is absent
+  for gradient/numerical stagnation, `max_steps`, time budgets, cancellation,
+  skipped, stopped, failed, missing, mismatched, or non-finite records.
 - solver and end-to-end rates share the same closed profiler window and source
-  revision. Successful-publication rate advances only after an HTTP delta or
-  fallback full snapshot succeeds. Each rate is
+  revision. Successful-publication rate is the accepted-step delta between
+  ordered same-run successful HTTP endpoints divided by their completion span;
+  duplicates and out-of-order endpoints are ignored, while a run change resets
+  the zero-count boundary. Each rate is
   `{ value, window_step_count, window_wall_time_ns, source_revision }`.
 - deprecated `status.metrics.steps_per_second` is only an end-to-end scalar
   alias. Without a closed monotonic profiler span it is null; status never

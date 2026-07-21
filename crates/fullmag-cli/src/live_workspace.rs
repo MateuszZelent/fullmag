@@ -569,39 +569,188 @@ fn record_live_publish_diagnostics(
 
 #[derive(Debug, Default)]
 struct SuccessfulPublishWindow {
+    run_id: Option<String>,
     first_completed_at: Option<Instant>,
+    first_step: Option<u64>,
     last_step: Option<u64>,
 }
 
 impl SuccessfulPublishWindow {
     fn record_success(
         &mut self,
+        run_id: &str,
         step: u64,
         completed_at: Instant,
         diagnostics: &mut fullmag_runner::LivePublisherDiagnostics,
-    ) {
-        if self.last_step == Some(step) {
-            return;
+    ) -> bool {
+        if self.run_id.as_deref() != Some(run_id) {
+            self.run_id = Some(run_id.to_string());
+            self.first_completed_at = Some(completed_at);
+            self.first_step = Some(step);
+            self.last_step = Some(step);
+            diagnostics.successful_publish_step_count = 0;
+            diagnostics.successful_publish_window_wall_time_ns = 0;
+            diagnostics.successful_publish_source_revision = diagnostics
+                .successful_publish_source_revision
+                .saturating_add(1);
+            return true;
         }
-        let first = *self.first_completed_at.get_or_insert(completed_at);
+
+        let Some(last_step) = self.last_step else {
+            return false;
+        };
+        if step <= last_step {
+            return false;
+        }
+
+        let Some(first_step) = self.first_step else {
+            return false;
+        };
+        let Some(first_completed_at) = self.first_completed_at else {
+            return false;
+        };
         self.last_step = Some(step);
-        diagnostics.successful_publish_step_count =
-            diagnostics.successful_publish_step_count.saturating_add(1);
+        diagnostics.successful_publish_step_count = step.saturating_sub(first_step);
         diagnostics.successful_publish_window_wall_time_ns = completed_at
-            .checked_duration_since(first)
+            .checked_duration_since(first_completed_at)
             .map(|duration| duration.as_nanos().min(u128::from(u64::MAX)) as u64)
             .unwrap_or(0);
         diagnostics.successful_publish_source_revision = diagnostics
             .successful_publish_source_revision
             .saturating_add(1);
+        true
     }
 }
 
-fn published_step(payload: &CurrentLiveSnapshotPayload) -> Option<u64> {
-    payload
-        .live_state
-        .as_ref()
-        .map(|state| state.latest_step.step)
+fn published_endpoint(payload: &CurrentLiveSnapshotPayload) -> Option<(&str, u64)> {
+    Some((
+        payload.run.as_ref()?.run_id.as_str(),
+        payload.live_state.as_ref()?.latest_step.step,
+    ))
+}
+
+#[derive(Debug)]
+struct PublishCycleResult {
+    succeeded: bool,
+    used_fallback: bool,
+    delta_error: Option<anyhow::Error>,
+    fallback_error: Option<anyhow::Error>,
+}
+
+impl PublishCycleResult {
+    fn succeeded(&self) -> bool {
+        self.succeeded
+    }
+
+    fn used_fallback(&self) -> bool {
+        self.used_fallback
+    }
+
+    fn fallback_error(&self) -> Option<&anyhow::Error> {
+        self.fallback_error.as_ref()
+    }
+}
+
+fn execute_publish_cycle<DeltaSync, FullSync>(
+    session_id: &str,
+    snapshot: &CurrentLiveSnapshotPayload,
+    fallback_allowed: bool,
+    delta_sync: &mut DeltaSync,
+    full_sync: &mut FullSync,
+) -> PublishCycleResult
+where
+    DeltaSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
+    FullSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
+{
+    match delta_sync(session_id, snapshot) {
+        Ok(()) => PublishCycleResult {
+            succeeded: true,
+            used_fallback: false,
+            delta_error: None,
+            fallback_error: None,
+        },
+        Err(delta_error) if fallback_allowed => match full_sync(session_id, snapshot) {
+            Ok(()) => PublishCycleResult {
+                succeeded: true,
+                used_fallback: true,
+                delta_error: Some(delta_error),
+                fallback_error: None,
+            },
+            Err(fallback_error) => PublishCycleResult {
+                succeeded: false,
+                used_fallback: true,
+                delta_error: Some(delta_error),
+                fallback_error: Some(fallback_error),
+            },
+        },
+        Err(delta_error) => PublishCycleResult {
+            succeeded: false,
+            used_fallback: false,
+            delta_error: Some(delta_error),
+            fallback_error: None,
+        },
+    }
+}
+
+#[derive(Debug)]
+struct FinalPublishResult {
+    primary: PublishCycleResult,
+    authoritative_error: Option<anyhow::Error>,
+}
+
+fn publish_final_snapshot_with_diagnostics<DeltaSync, FullSync>(
+    session_id: &str,
+    snapshot: &mut CurrentLiveSnapshotPayload,
+    diagnostics: &Arc<Mutex<fullmag_runner::LivePublisherDiagnostics>>,
+    successful_publish_window: &mut SuccessfulPublishWindow,
+    fallback_allowed: bool,
+    delta_sync: &mut DeltaSync,
+    full_sync: &mut FullSync,
+) -> FinalPublishResult
+where
+    DeltaSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
+    FullSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
+{
+    attach_live_publisher_diagnostics(snapshot, diagnostics);
+    let primary = execute_publish_cycle(
+        session_id,
+        snapshot,
+        fallback_allowed,
+        delta_sync,
+        full_sync,
+    );
+    if !primary.succeeded() {
+        return FinalPublishResult {
+            primary,
+            authoritative_error: None,
+        };
+    }
+
+    let diagnostics_changed = published_endpoint(snapshot)
+        .and_then(|(run_id, step)| {
+            diagnostics.lock().ok().map(|mut values| {
+                successful_publish_window.record_success(run_id, step, Instant::now(), &mut values)
+            })
+        })
+        .unwrap_or(false);
+    if !diagnostics_changed {
+        return FinalPublishResult {
+            primary,
+            authoritative_error: None,
+        };
+    }
+
+    attach_live_publisher_diagnostics(snapshot, diagnostics);
+    match full_sync(session_id, snapshot) {
+        Ok(()) => FinalPublishResult {
+            primary,
+            authoritative_error: None,
+        },
+        Err(error) => FinalPublishResult {
+            primary,
+            authoritative_error: Some(error),
+        },
+    }
 }
 
 fn preserve_pending_live_step_payload(
@@ -1954,24 +2103,15 @@ mod tests {
     }
 
     #[test]
-    fn successful_publish_window_counts_only_completed_distinct_http_syncs() {
+    fn successful_publish_window_uses_monotonic_endpoint_step_deltas() {
         let start = Instant::now();
         let mut window = super::SuccessfulPublishWindow::default();
         let mut diagnostics = fullmag_runner::LivePublisherDiagnostics::default();
-        window.record_success(8, start, &mut diagnostics);
+        window.record_success("run-a", 10, start, &mut diagnostics);
         window.record_success(
-            9,
-            start + std::time::Duration::from_secs(1),
-            &mut diagnostics,
-        );
-        window.record_success(
-            10,
+            "run-a",
+            13,
             start + std::time::Duration::from_secs(3),
-            &mut diagnostics,
-        );
-        window.record_success(
-            10,
-            start + std::time::Duration::from_secs(4),
             &mut diagnostics,
         );
         assert_eq!(diagnostics.successful_publish_step_count, 3);
@@ -1979,7 +2119,200 @@ mod tests {
             diagnostics.successful_publish_window_wall_time_ns,
             3_000_000_000
         );
+    }
+
+    #[test]
+    fn successful_publish_window_ignores_duplicates_and_out_of_order_then_resets_by_run() {
+        let start = Instant::now();
+        let mut window = super::SuccessfulPublishWindow::default();
+        let mut diagnostics = fullmag_runner::LivePublisherDiagnostics::default();
+        window.record_success("run-a", 10, start, &mut diagnostics);
+        window.record_success(
+            "run-a",
+            13,
+            start + std::time::Duration::from_secs(3),
+            &mut diagnostics,
+        );
+        window.record_success(
+            "run-a",
+            13,
+            start + std::time::Duration::from_secs(4),
+            &mut diagnostics,
+        );
+        window.record_success(
+            "run-a",
+            12,
+            start + std::time::Duration::from_secs(5),
+            &mut diagnostics,
+        );
+        assert_eq!(diagnostics.successful_publish_step_count, 3);
+        assert_eq!(diagnostics.successful_publish_source_revision, 2);
+
+        window.record_success(
+            "run-b",
+            2,
+            start + std::time::Duration::from_secs(6),
+            &mut diagnostics,
+        );
+        assert_eq!(diagnostics.successful_publish_step_count, 0);
+        assert_eq!(diagnostics.successful_publish_window_wall_time_ns, 0);
         assert_eq!(diagnostics.successful_publish_source_revision, 3);
+        window.record_success(
+            "run-b",
+            5,
+            start + std::time::Duration::from_secs(8),
+            &mut diagnostics,
+        );
+        assert_eq!(diagnostics.successful_publish_step_count, 3);
+        assert_eq!(
+            diagnostics.successful_publish_window_wall_time_ns,
+            2_000_000_000
+        );
+    }
+
+    fn publisher_payload(run_id: &str, step: u64) -> CurrentLiveSnapshotPayload {
+        let mut payload = payload_with_live_step(step, None, None, None, None);
+        payload.run = Some(RunManifest {
+            run_id: run_id.to_string(),
+            session_id: "test-session".to_string(),
+            status: "running".to_string(),
+            total_steps: step as usize,
+            final_time: None,
+            final_e_ex: None,
+            final_e_demag: None,
+            final_e_ext: None,
+            final_e_ani: None,
+            final_e_dmi: None,
+            final_e_total: None,
+            artifact_dir: String::new(),
+        });
+        payload.solver_profile = Some(fullmag_runner::SolverProfileState::default().snapshot());
+        payload
+    }
+
+    #[test]
+    fn publish_cycle_uses_delta_then_full_fallback_and_reports_both_failure() {
+        let payload = publisher_payload("run-a", 13);
+        let direct = super::execute_publish_cycle(
+            "test-session",
+            &payload,
+            true,
+            &mut |_, _| Ok(()),
+            &mut |_, _| panic!("fallback must not run after delta success"),
+        );
+        assert!(direct.succeeded());
+        assert!(!direct.used_fallback());
+
+        let mut delta_calls = 0;
+        let mut full_calls = 0;
+        let recovered = super::execute_publish_cycle(
+            "test-session",
+            &payload,
+            true,
+            &mut |_, _| {
+                delta_calls += 1;
+                Err(anyhow::anyhow!("delta failed"))
+            },
+            &mut |_, _| {
+                full_calls += 1;
+                Ok(())
+            },
+        );
+        assert!(recovered.succeeded());
+        assert!(recovered.used_fallback());
+        assert_eq!((delta_calls, full_calls), (1, 1));
+
+        let failed = super::execute_publish_cycle(
+            "test-session",
+            &payload,
+            true,
+            &mut |_, _| Err(anyhow::anyhow!("delta failed")),
+            &mut |_, _| Err(anyhow::anyhow!("full failed")),
+        );
+        assert!(!failed.succeeded());
+        assert!(failed.fallback_error().is_some());
+    }
+
+    #[test]
+    fn final_drain_fallback_publishes_authoritative_success_diagnostics() {
+        let start = Instant::now();
+        let diagnostics = std::sync::Arc::new(std::sync::Mutex::new(
+            fullmag_runner::LivePublisherDiagnostics::default(),
+        ));
+        let mut window = super::SuccessfulPublishWindow::default();
+        {
+            let mut values = diagnostics.lock().unwrap();
+            window.record_success("run-a", 10, start, &mut values);
+        }
+        let mut payload = publisher_payload("run-a", 13);
+        let full_payloads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = full_payloads.clone();
+        let result = super::publish_final_snapshot_with_diagnostics(
+            "test-session",
+            &mut payload,
+            &diagnostics,
+            &mut window,
+            true,
+            &mut |_, _| Err(anyhow::anyhow!("delta failed")),
+            &mut move |_, payload| {
+                captured.lock().unwrap().push(payload.clone());
+                Ok(())
+            },
+        );
+        assert!(result.primary.succeeded());
+        assert!(result.authoritative_error.is_none());
+
+        let payloads = full_payloads.lock().unwrap();
+        assert_eq!(payloads.len(), 2, "fallback plus authoritative final sync");
+        let profile = payloads[1].solver_profile.as_ref().unwrap();
+        assert_eq!(
+            profile
+                .rates
+                .published_steps_per_second
+                .as_ref()
+                .map(|rate| rate.window_step_count),
+            Some(3)
+        );
+        assert_eq!(
+            profile
+                .live_publisher
+                .as_ref()
+                .map(|publisher| publisher.successful_publish_step_count),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn final_drain_both_sync_failure_does_not_advance_or_claim_visibility() {
+        let diagnostics = std::sync::Arc::new(std::sync::Mutex::new(
+            fullmag_runner::LivePublisherDiagnostics::default(),
+        ));
+        let mut window = super::SuccessfulPublishWindow::default();
+        let mut payload = publisher_payload("run-a", 13);
+        let mut full_calls = 0;
+        let result = super::publish_final_snapshot_with_diagnostics(
+            "test-session",
+            &mut payload,
+            &diagnostics,
+            &mut window,
+            true,
+            &mut |_, _| Err(anyhow::anyhow!("delta failed")),
+            &mut |_, _| {
+                full_calls += 1;
+                Err(anyhow::anyhow!("full failed"))
+            },
+        );
+
+        assert!(!result.primary.succeeded());
+        assert!(result.authoritative_error.is_none());
+        assert_eq!(full_calls, 1);
+        assert_eq!(
+            diagnostics
+                .lock()
+                .unwrap()
+                .successful_publish_source_revision,
+            0
+        );
     }
 
     #[test]
@@ -2054,7 +2387,20 @@ fn current_live_publisher_loop(
             attach_live_publisher_diagnostics(&mut snapshot, &diagnostics);
             sending.store(true, Ordering::Release);
             let cycle_start = Instant::now();
-            let publish_result = sync_current_live_delta(&session_id, &snapshot);
+            let fallback_allowed = api_is_ready(api_port());
+            let mut delta_sync = |session_id: &str, payload: &CurrentLiveSnapshotPayload| {
+                sync_current_live_delta(session_id, payload)
+            };
+            let mut full_sync = |session_id: &str, payload: &CurrentLiveSnapshotPayload| {
+                sync_current_live_snapshot(session_id, payload)
+            };
+            let publish_result = execute_publish_cycle(
+                &session_id,
+                &snapshot,
+                fallback_allowed,
+                &mut delta_sync,
+                &mut full_sync,
+            );
             let publish_wall_time_ns = elapsed_ns(cycle_start);
             let cycle_ms = publish_wall_time_ns / 1_000_000;
             record_live_publish_diagnostics(
@@ -2073,35 +2419,36 @@ fn current_live_publisher_loop(
                     );
                 }
             }
-            let mut publish_succeeded = publish_result.is_ok();
-            if let Err(error) = publish_result {
-                if api_is_ready(api_port()) {
-                    let fallback_result = sync_current_live_snapshot(&session_id, &snapshot);
-                    match fallback_result {
-                        Ok(()) => {
-                            publish_succeeded = true;
-                            eprintln!(
-                                "fullmag live snapshot sync warning: {:#}; recovered with full snapshot",
-                                error
-                            );
-                        }
-                        Err(fallback_error) => {
-                            pending.store(true, Ordering::Release);
-                            eprintln!(
-                                "fullmag live snapshot sync warning: {:#}; full snapshot fallback failed: {:#}",
-                                error, fallback_error
-                            );
-                        }
-                    }
-                } else {
-                    pending.store(true, Ordering::Release);
+            if publish_result.succeeded() && publish_result.used_fallback() {
+                if let Some(error) = publish_result.delta_error.as_ref() {
+                    eprintln!(
+                        "fullmag live snapshot sync warning: {:#}; recovered with full snapshot",
+                        error
+                    );
+                }
+            } else if !publish_result.succeeded() {
+                pending.store(true, Ordering::Release);
+                if let Some(fallback_error) = publish_result.fallback_error() {
+                    eprintln!(
+                        "fullmag live snapshot sync warning: {:#}; full snapshot fallback failed: {:#}",
+                        publish_result
+                            .delta_error
+                            .as_ref()
+                            .expect("failed cycle has a delta error"),
+                        fallback_error
+                    );
                 }
             }
-            if publish_succeeded {
-                if let (Some(step), Ok(mut values)) =
-                    (published_step(&snapshot), diagnostics.lock())
+            if publish_result.succeeded() {
+                if let (Some((run_id, step)), Ok(mut values)) =
+                    (published_endpoint(&snapshot), diagnostics.lock())
                 {
-                    successful_publish_window.record_success(step, Instant::now(), &mut values);
+                    successful_publish_window.record_success(
+                        run_id,
+                        step,
+                        Instant::now(),
+                        &mut values,
+                    );
                 }
             }
             last_publish_at = Some(Instant::now());
@@ -2118,10 +2465,24 @@ fn current_live_publisher_loop(
             .and_then(|mut value| value.take())
             .map(elapsed_ns)
             .unwrap_or(0);
-        attach_live_publisher_diagnostics(&mut snapshot, &diagnostics);
         sending.store(true, Ordering::Release);
         let cycle_start = Instant::now();
-        let publish_result = sync_current_live_delta(&session_id, &snapshot);
+        let fallback_allowed = api_is_ready(api_port());
+        let mut delta_sync = |session_id: &str, payload: &CurrentLiveSnapshotPayload| {
+            sync_current_live_delta(session_id, payload)
+        };
+        let mut full_sync = |session_id: &str, payload: &CurrentLiveSnapshotPayload| {
+            sync_current_live_snapshot(session_id, payload)
+        };
+        let publish_result = publish_final_snapshot_with_diagnostics(
+            &session_id,
+            &mut snapshot,
+            &diagnostics,
+            &mut successful_publish_window,
+            fallback_allowed,
+            &mut delta_sync,
+            &mut full_sync,
+        );
         record_live_publish_diagnostics(
             &diagnostics,
             clone_wall_time_ns,
@@ -2129,14 +2490,30 @@ fn current_live_publisher_loop(
             publish_lag_wall_time_ns,
         );
         sending.store(false, Ordering::Release);
-        if publish_result.is_ok() {
-            if let (Some(step), Ok(mut values)) = (published_step(&snapshot), diagnostics.lock()) {
-                successful_publish_window.record_success(step, Instant::now(), &mut values);
+        if publish_result.primary.succeeded() && publish_result.primary.used_fallback() {
+            if let Some(error) = publish_result.primary.delta_error.as_ref() {
+                eprintln!(
+                    "fullmag final live snapshot sync warning: {:#}; recovered with full snapshot",
+                    error
+                );
             }
-        } else if let Err(error) = publish_result {
-            if api_is_ready(api_port()) {
-                eprintln!("fullmag live snapshot sync warning: {:#}", error);
+        } else if !publish_result.primary.succeeded() {
+            if let Some(error) = publish_result.primary.delta_error.as_ref() {
+                if let Some(fallback_error) = publish_result.primary.fallback_error() {
+                    eprintln!(
+                        "fullmag final live snapshot sync warning: {:#}; full snapshot fallback failed: {:#}",
+                        error, fallback_error
+                    );
+                } else if fallback_allowed {
+                    eprintln!("fullmag final live snapshot sync warning: {:#}", error);
+                }
             }
+        }
+        if let Some(error) = publish_result.authoritative_error {
+            eprintln!(
+                "fullmag final live snapshot diagnostics sync warning: {:#}",
+                error
+            );
         }
     }
 }
