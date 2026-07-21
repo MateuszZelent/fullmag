@@ -519,6 +519,7 @@ fn execute_reference_fem_impl(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let fem_mesh_generation_id = Some(crate::types::fem_plan_mesh_generation_id(plan));
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -666,7 +667,7 @@ fn execute_reference_fem_impl(
                 let action = (live.on_step)(StepUpdate {
                     stats: current_stats.clone(),
                     grid: live.grid,
-                    fem_mesh_generation_id: Some(crate::types::fem_plan_mesh_generation_id(plan)),
+                    fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                     magnetization: None,
                     preview_field,
                     cached_preview_fields: None,
@@ -811,7 +812,7 @@ fn execute_reference_fem_impl(
                 let action = (live.on_step)(StepUpdate {
                     stats: update_stats,
                     grid: live.grid,
-                    fem_mesh_generation_id: Some(crate::types::fem_plan_mesh_generation_id(plan)),
+                    fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
@@ -882,7 +883,7 @@ fn execute_reference_fem_impl(
             let action = (live.on_step)(StepUpdate {
                 stats: update_stats,
                 grid: live.grid,
-                fem_mesh_generation_id: Some(crate::types::fem_plan_mesh_generation_id(plan)),
+                fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                 magnetization,
                 preview_field,
                 cached_preview_fields: None,

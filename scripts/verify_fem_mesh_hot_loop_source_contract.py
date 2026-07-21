@@ -10,6 +10,7 @@ import re
 
 STEP = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*::)*StepUpdate\s*\{")
 PAYLOAD = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*::)*FemMeshPayload::from\s*\(")
+GENERATION_HASH = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*::)*fem_(?:plan|eigen|frequency_response)_mesh_generation_id\s*\(")
 
 
 def mask_non_code(source: str) -> str:
@@ -54,7 +55,20 @@ def balanced_body(code: str, brace: int) -> str:
     raise ValueError("unbalanced StepUpdate literal")
 
 
-def check_text(name: str, source: str, allow_payload_functions: set[str] | None = None) -> list[str]:
+def inside_loop(code: str, position: int) -> bool:
+    for loop in re.finditer(r"\b(?:loop\s*|while\b[^\{]*|for\b[^\{]*)\{", code[:position]):
+        brace = code.find("{", loop.start())
+        try:
+            body = balanced_body(code, brace)
+        except ValueError:
+            continue
+        if brace < position < brace + len(body) + 2:
+            return True
+    return False
+
+
+def check_text(name: str, source: str, allow_payload_functions: set[str] | None = None,
+               allow_generation_loop_functions: set[str] | None = None) -> list[str]:
     code = mask_non_code(source)
     errors: list[str] = []
     for match in STEP.finditer(code):
@@ -69,10 +83,17 @@ def check_text(name: str, source: str, allow_payload_functions: set[str] | None 
     for payload in PAYLOAD.finditer(code):
         functions = list(re.finditer(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", code[:payload.start()]))
         function = functions[-1].group(1) if functions else ""
-        if function not in (allow_payload_functions or set()):
+        if inside_loop(code, payload.start()) or function not in (allow_payload_functions or set()):
             errors.append(f"{name}: FemMeshPayload::from outside a stage owner ({function})")
-    if re.search(r"\b(?:latest_step|update)\.fem_mesh\b", code):
-        errors.append(f"{name}: nested step mesh ownership")
+    for mesh_access in re.finditer(r"\.[ \t\r\n]*fem_mesh\b", code):
+        errors.append(f"{name}: unclassified .fem_mesh access")
+    for generation_hash in GENERATION_HASH.finditer(code):
+        if re.search(r"\bfn\s*$", code[max(0, generation_hash.start() - 12):generation_hash.start()]):
+            continue
+        functions = list(re.finditer(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", code[:generation_hash.start()]))
+        function = functions[-1].group(1) if functions else ""
+        if inside_loop(code, generation_hash.start()) and function not in (allow_generation_loop_functions or set()):
+            errors.append(f"{name}: topology generation hash inside loop")
     return errors
 
 
@@ -92,13 +113,40 @@ def check_repo(root: pathlib.Path) -> list[str]:
         "crates/fullmag-cli/src/orchestrator.rs": {"fem_mesh_payload_from_backend_plan"},
         "crates/fullmag-api/src/quantities.rs": {"extract_fem_mesh_from_metadata"},
     }
+    generation_stage_owners = {
+        "crates/fullmag-runner/src/types.rs": {"from"},
+        "crates/fullmag-cli/src/orchestrator.rs": {"run_script_mode"},
+    }
     for base in roots:
         for path in base.rglob("*.rs"):
             rel = path.relative_to(root).as_posix()
-            file_errors = check_text(rel, path.read_text(), owners.get(rel))
-            if rel in {"crates/fullmag-api/src/session.rs", "crates/fullmag-api/src/router_v2/tests.rs"}:
-                file_errors = [e for e in file_errors if "nested step mesh ownership" not in e]
+            file_errors = check_text(rel, path.read_text(), owners.get(rel), generation_stage_owners.get(rel))
+            file_errors = [e for e in file_errors if "unclassified .fem_mesh access" not in e]
             errors.extend(file_errors)
+    mesh_inventory = []
+    for base in roots:
+        for path in base.rglob("*.rs"):
+            rel = path.relative_to(root).as_posix()
+            code = mask_non_code(path.read_text())
+            test_module = re.search(r"(?m)^\s*mod\s+tests\s*\{", code)
+            for access in re.finditer(r"\.[ \t\r\n]*fem_mesh\b", code):
+                receiver = code[max(0, access.start() - 40):access.start()]
+                if ("/tests.rs" in rel or "#[cfg(test)]" in code[:access.start()][-200:]
+                        or (test_module is not None and access.start() > test_module.start())):
+                    category = "test_fixture"
+                elif re.search(r"(?:latest_step|update)\s*$", receiver):
+                    category = "legacy_nested_input"
+                    tail = code[access.start():access.start() + 80]
+                    if rel != "crates/fullmag-api/src/session.rs" or ".take()" not in tail:
+                        errors.append(f"{rel}: nested mesh access must be input-only take")
+                elif rel.startswith("crates/fullmag-cli/"):
+                    category = "cli_stage_resource"
+                else:
+                    category = "api_top_level_resource"
+                mesh_inventory.append((rel, category))
+    if not mesh_inventory:
+        errors.append("mesh access inventory is unexpectedly empty")
+    print(f"[verify_fem_mesh_hot_loop_source_contract] classified {len(mesh_inventory)} .fem_mesh accesses")
     live = (root / "crates/fullmag-cli/src/live_workspace.rs").read_text()
     code = mask_non_code(live)
     if "build_publish_payload(include_mesh" not in code or not re.search(r"include_mesh\s*\.then\s*\(\|\|\s*\{.*?self\.fem_mesh\.clone", code, re.S):
@@ -108,12 +156,15 @@ def check_repo(root: pathlib.Path) -> list[str]:
 
 def self_test() -> None:
     mutations = [
-        "fn f(){ let _ = crate::types::FemMeshPayload::from(plan); }",
-        "fn f(){ let _ = LiveStepView { fem_mesh: mesh }; update.fem_mesh.take(); }",
-        "fn f(){ let _ = crate::types::StepUpdate { stats }; }",
+        ("fn f(){ let _ = crate::types::FemMeshPayload::from(plan); }", None),
+        ("fn f(){ let _ = LiveStepView { fem_mesh: mesh }; update.fem_mesh.take(); }", None),
+        ("fn f(){ let _ = crate::types::StepUpdate { stats }; }", None),
+        ("fn fem_mesh_payload_from_backend_plan(){ loop { let _ = crate::types::FemMeshPayload::from(plan); } }", {"fem_mesh_payload_from_backend_plan"}),
+        ("fn f(frame: Frame){ let _ = frame.fem_mesh; }", None),
+        ("fn f(){ loop { let _ = crate::types::fem_plan_mesh_generation_id(plan); } }", None),
     ]
-    for i, mutation in enumerate(mutations):
-        if not check_text(f"mutation-{i}", mutation):
+    for i, (mutation, owners) in enumerate(mutations):
+        if not check_text(f"mutation-{i}", mutation, owners):
             raise SystemExit(f"mutation fixture {i} escaped the checker")
     valid = 'fn f(){ let _ = crate::types::StepUpdate { fem_mesh_generation_id: None }; /* } */ let s="{"; }'
     if check_text("valid", valid):

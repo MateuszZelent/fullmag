@@ -16,7 +16,7 @@ use crate::native_fem::NativeFemBackend;
 use crate::relaxation::direct_minimizer::direct_minimizer_step_budget;
 use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
 use crate::types::{
-    FemMeshPayload, LiveStepConsumer, RunError, RunStatus, StepAction, StepStats, StepUpdate,
+    LiveStepConsumer, RunError, RunStatus, StepAction, StepStats, StepUpdate,
 };
 
 use super::preview::{FemCachedPreviewHandoff, FemLiveMagnetizationHandoff, FemLivePreviewHandoff};
@@ -33,6 +33,7 @@ pub(crate) fn execute_direct_minimizer(
     backend: &mut NativeFemBackend,
     engine: FemEngine,
     plan: &FemPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     node_count: usize,
     control: &RelaxationControlIR,
     mut current_stats: StepStats,
@@ -41,7 +42,6 @@ pub(crate) fn execute_direct_minimizer(
     steps: &mut Vec<StepStats>,
     mut last_preview_revision: Option<u64>,
 ) -> Result<DirectMinimizerExecution, RunError> {
-    let fem_mesh_generation_id = Some(crate::types::fem_plan_mesh_generation_id(plan));
     let mut latest_stats: Option<StepStats> = None;
     let mut backend_completion: Option<StageCompletionIR> = None;
     let mut cancelled = false;

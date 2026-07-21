@@ -50,6 +50,7 @@ pub(crate) fn execute_fem<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let fem_mesh_generation_id = Some(crate::types::fem_plan_mesh_generation_id(plan));
     let normalized_plan = normalized_fem_plan_for_runtime(plan)?;
     if let Err(reason) = validate_periodic_region_material_certificate(&normalized_plan) {
         return Err(RunError {
@@ -96,7 +97,7 @@ pub(crate) fn execute_fem<'a>(
     match engine {
         FemEngine::CpuNative => {
             let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
-            execute_native_fem(&cpu_plan, until_seconds, outputs, live, artifact_writer)
+            execute_native_fem(&cpu_plan, &fem_mesh_generation_id, until_seconds, outputs, live, artifact_writer)
         }
         FemEngine::NativeGpu => {
             if let Some(min_nodes) = should_fallback_to_cpu_for_small_fem_gpu(&normalized_plan) {
@@ -112,6 +113,7 @@ pub(crate) fn execute_fem<'a>(
                 let cpu_plan = fem_plan_for_cpu_native(&normalized_plan);
                 return execute_native_fem(
                     &cpu_plan,
+                    &fem_mesh_generation_id,
                     until_seconds,
                     outputs,
                     live,
@@ -119,7 +121,7 @@ pub(crate) fn execute_fem<'a>(
                 );
             }
             let gpu_plan = fem_plan_for_native_gpu(&normalized_plan);
-            execute_native_fem(&gpu_plan, until_seconds, outputs, live, artifact_writer)
+            execute_native_fem(&gpu_plan, &fem_mesh_generation_id, until_seconds, outputs, live, artifact_writer)
         }
     }
 }
@@ -158,6 +160,7 @@ pub(crate) fn native_fem_requires_initial_snapshot(
 #[cfg(feature = "fem-gpu")]
 fn execute_native_fem(
     plan: &FemPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     until_seconds: f64,
     outputs: &[OutputIR],
     mut live: Option<LiveStepConsumer<'_>>,
@@ -320,6 +323,7 @@ fn execute_native_fem(
         let outcome = crate::fem::relax::direct_minimizer::execute_direct_minimizer(
             &mut backend,
             plan,
+            &fem_mesh_generation_id,
             node_count,
             direct_minimizer,
             current_stats,
@@ -342,6 +346,7 @@ fn execute_native_fem(
         let outcome = crate::fem::relax::llg_overdamped::execute_llg_overdamped(
             &mut backend,
             plan,
+            &fem_mesh_generation_id,
             plan.time_stage.start_time_s + until_seconds,
             &time_events.times_s,
             node_count,
@@ -363,6 +368,7 @@ fn execute_native_fem(
     crate::fem::relax::finalize::finalize_native_fem_relaxation(
         &mut backend,
         plan,
+        &fem_mesh_generation_id,
         node_count,
         initial_magnetization,
         field_schedules,
@@ -381,6 +387,7 @@ fn execute_native_fem(
 #[cfg(not(feature = "fem-gpu"))]
 fn execute_native_fem(
     _plan: &FemPlanIR,
+    _fem_mesh_generation_id: &Option<String>,
     _until_seconds: f64,
     _outputs: &[OutputIR],
     _live: Option<LiveStepConsumer<'_>>,

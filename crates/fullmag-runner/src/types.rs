@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicBool;
 #[cfg(test)]
 thread_local! {
     static FEM_MESH_PAYLOAD_BUILD_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static FEM_MESH_FINGERPRINT_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -20,6 +21,16 @@ fn reset_fem_mesh_payload_build_count() {
 #[cfg(test)]
 fn fem_mesh_payload_build_count() -> u64 {
     FEM_MESH_PAYLOAD_BUILD_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn reset_fem_mesh_fingerprint_count() {
+    FEM_MESH_FINGERPRINT_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn fem_mesh_fingerprint_count() -> u64 {
+    FEM_MESH_FINGERPRINT_COUNT.with(std::cell::Cell::get)
 }
 
 fn record_fem_mesh_payload_build() {
@@ -1534,6 +1545,8 @@ fn stable_fem_mesh_generation_id(
     domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR,
     domain_frame: &Option<fullmag_ir::DomainFrameIR>,
 ) -> String {
+    #[cfg(test)]
+    FEM_MESH_FINGERPRINT_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     let mut hasher = Sha256::new();
     update_hash_bytes(&mut hasher, "schema", b"fullmag:fem-mesh-payload:v1");
     update_hash_str(&mut hasher, "mesh_name", &mesh.mesh_name);
@@ -2430,8 +2443,8 @@ pub(crate) struct StateObservables {
 #[cfg(test)]
 mod tests {
     use super::{
-        fem_mesh_payload_build_count, fem_mesh_topology_fingerprint,
-        fem_plan_mesh_generation_id, normalized_payload_element_markers,
+        fem_mesh_fingerprint_count, fem_mesh_payload_build_count, fem_mesh_topology_fingerprint,
+        normalized_payload_element_markers, reset_fem_mesh_fingerprint_count,
         reset_fem_mesh_payload_build_count, ExecutionProvenance, FemMeshPartPayload,
         FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
         LivePreviewField, LlgTimestepCapabilityId, LlgTimestepQualificationId,
@@ -2583,20 +2596,21 @@ mod tests {
     #[test]
     fn fem_mesh_payload_is_built_once_while_step_updates_reuse_generation() {
         reset_fem_mesh_payload_build_count();
+        reset_fem_mesh_fingerprint_count();
         let mut plan = tiny_fem_plan();
         let stage_mesh = FemMeshPayload::from(&plan);
+        let stage_generation = stage_mesh.generation_id.clone().expect("stage generation");
         for _ in 0..12 {
-            assert_eq!(
-                fem_plan_mesh_generation_id(&plan),
-                stage_mesh.generation_id.clone().expect("stage generation")
-            );
+            assert_eq!(stage_generation, stage_mesh.generation_id.clone().unwrap());
         }
         assert_eq!(fem_mesh_payload_build_count(), 1);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
 
         plan.mesh.nodes[0][0] += 0.25;
         let remeshed = FemMeshPayload::from(&plan);
         assert_ne!(remeshed.generation_id, stage_mesh.generation_id);
         assert_eq!(fem_mesh_payload_build_count(), 2);
+        assert_eq!(fem_mesh_fingerprint_count(), 2);
     }
 
     #[test]

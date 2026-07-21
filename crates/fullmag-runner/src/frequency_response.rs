@@ -256,6 +256,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
     interrupt_requested: Option<&AtomicBool>,
     on_step: Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
 ) -> Result<ExecutedRun, RunError> {
+    let fem_mesh_generation_id = Some(crate::types::fem_frequency_response_mesh_generation_id(plan));
     let mut on_step = on_step;
     #[cfg(not(feature = "fem-gpu"))]
     let _ = &on_step;
@@ -286,6 +287,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
         output_dir,
         interrupt_requested,
         &mut on_step,
+        &fem_mesh_generation_id,
     )? {
         return Ok(executed);
     }
@@ -353,9 +355,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
                 if let Some(on_step) = on_step.as_deref_mut() {
                     let completed_frequency_count = completed_points as u64;
                     let action = on_step(dense_frequency_response_progress_update(
-                        Some(crate::types::fem_frequency_response_mesh_generation_id(
-                            plan,
-                        )),
+                        fem_mesh_generation_id.clone(),
                         completed_frequency_count,
                         plan.frequencies_hz.values_hz.len() as u64,
                         plan.frequencies_hz.values_hz[completed_points - 1],
@@ -1722,6 +1722,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
     output_dir: &Path,
     interrupt_requested: Option<&AtomicBool>,
     on_step: &mut Option<&mut dyn FnMut(StepUpdate) -> StepAction>,
+    fem_mesh_generation_id: &Option<String>,
 ) -> Result<Option<ExecutedRun>, RunError> {
     let requested_gpu = plan.requested_device == fullmag_ir::ExecutionDevice::Gpu;
     if plan.solver_policy.as_ref().and_then(|policy| policy.method)
@@ -1820,9 +1821,7 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         }
         if let Some(on_step) = live_progress_sink.borrow_mut().as_deref_mut() {
             let action = on_step(native_frequency_response_progress_update(
-                Some(crate::types::fem_frequency_response_mesh_generation_id(
-                    plan,
-                )),
+                fem_mesh_generation_id.clone(),
                 progress,
                 response_frequency_range_hz,
                 payload.drive_norm,

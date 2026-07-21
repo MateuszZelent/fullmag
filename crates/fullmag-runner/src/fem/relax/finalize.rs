@@ -31,6 +31,7 @@ pub(crate) fn finalize_native_fem_relaxation(
     backend: &mut NativeFemBackend,
     engine: FemEngine,
     plan: &FemPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     node_count: usize,
     initial_magnetization: Vec<[f64; 3]>,
     mut field_schedules: Vec<OutputSchedule>,
@@ -87,7 +88,7 @@ pub(crate) fn finalize_native_fem_relaxation(
                 let _ = (live.on_step)(StepUpdate {
                     stats: live_stats,
                     grid: live.grid,
-                    fem_mesh_generation_id: None,
+                    fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                     magnetization: None,
                     preview_field: None,
                     cached_preview_fields: Some(cached),

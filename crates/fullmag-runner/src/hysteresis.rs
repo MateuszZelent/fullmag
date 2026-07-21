@@ -521,6 +521,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             message: "Expected Hysteresis study stage".to_string(),
         });
     };
+    let fem_mesh_generation_id = hysteresis_mesh_generation_id(&plan.backend_plan);
 
     let u_H = hysteresis_field_axis(orientation.as_ref(), *direction);
     let u_meas = hysteresis_measurement_axis(measurement_axis, u_H, plan)?;
@@ -587,6 +588,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         };
         let probe_run = run_hysteresis_saturation_probe(
             &plan.backend_plan,
+            &fem_mesh_generation_id,
             problem,
             &current_m,
             u_H,
@@ -613,6 +615,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
         let preparation_field_Apm = field_mT_to_h_apm(preparation_field_mT);
         let solve_res = run_settle_at_field(
             &plan.backend_plan,
+            &fem_mesh_generation_id,
             problem,
             &current_m,
             [
@@ -655,6 +658,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
 
             let point_run = run_settle_at_field(
                 &plan.backend_plan,
+                &fem_mesh_generation_id,
                 problem,
                 &current_m,
                 H_ext,
@@ -817,7 +821,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                     ..point_stats
                 },
                 grid: hysteresis_magnetization_grid(plan, &current_m),
-                fem_mesh_generation_id: hysteresis_mesh_generation_id(&plan.backend_plan),
+                fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                 magnetization: Some(current_m.iter().flat_map(|v| v.iter().copied()).collect()),
                 preview_field: None,
                 cached_preview_fields: None,
@@ -886,6 +890,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                 let variant_run = run_hysteresis_angular_family_variant(
                     variant,
                     plan,
+                    &fem_mesh_generation_id,
                     problem,
                     output_dir,
                     &family_initial_m,
@@ -919,6 +924,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                 policy,
                 states,
                 plan,
+                &fem_mesh_generation_id,
                 problem,
                 output_dir,
                 u_H,
@@ -968,6 +974,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                     minor_loops,
                     states,
                     &plan,
+                    &fem_mesh_generation_id,
                     problem,
                     output_dir,
                     u_H,
@@ -1191,6 +1198,7 @@ fn append_stage_steps(
 
 fn run_hysteresis_saturation_probe(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     initial_m: &[[f64; 3]],
     u_H: [f64; 3],
@@ -1216,6 +1224,7 @@ fn run_hysteresis_saturation_probe(
         let H_Apm = field_mT_to_h_apm(field_value_mT);
         let solve_res = run_settle_at_field(
             backend_plan,
+            fem_mesh_generation_id,
             problem,
             &current_m,
             [H_Apm * u_H[0], H_Apm * u_H[1], H_Apm * u_H[2]],
@@ -2116,6 +2125,7 @@ struct HysteresisProgressContext {
 
 fn run_settle_at_field(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     initial_m: &[[f64; 3]],
     H_ext: [f64; 3],
@@ -2176,6 +2186,7 @@ fn run_settle_at_field(
             let stats = pre_solver_hysteresis_stats(&current_magnetization, H_ext, &averaging);
             let action = (*on_step)(hysteresis_progress_update(
                 backend_plan,
+                &fem_mesh_generation_id,
                 progress.point_idx,
                 progress.field_m_t,
                 settle_idx,
@@ -2284,6 +2295,7 @@ fn run_settle_at_field(
         if let Some(progress) = hysteresis_progress.as_ref() {
             let action = (*on_step)(hysteresis_progress_update(
                 backend_plan,
+                &fem_mesh_generation_id,
                 progress.point_idx,
                 progress.field_m_t,
                 settle_idx,
@@ -3120,6 +3132,7 @@ fn settle_trace_resolved_parameters(
 
 fn hysteresis_progress_update(
     backend_plan: &BackendPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     point_idx: Option<usize>,
     H_mT: f64,
     settle_idx: usize,
@@ -3130,7 +3143,7 @@ fn hysteresis_progress_update(
     StepUpdate {
         stats: stats.cloned().unwrap_or_default(),
         grid: hysteresis_progress_grid(backend_plan, magnetization),
-        fem_mesh_generation_id: hysteresis_mesh_generation_id(backend_plan),
+        fem_mesh_generation_id: fem_mesh_generation_id.clone(),
         magnetization: magnetization
             .map(|values| values.iter().flat_map(|v| v.iter().copied()).collect()),
         preview_field: None,
@@ -4203,6 +4216,7 @@ fn combine_run_status(left: RunStatus, right: RunStatus) -> RunStatus {
 fn run_hysteresis_angular_family_variant(
     variant: &fullmag_ir::HysteresisAngularVariantIR,
     plan: &ExecutionPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     output_dir: &Path,
     initial_m: &[[f64; 3]],
@@ -4247,6 +4261,7 @@ fn run_hysteresis_angular_family_variant(
         let field_vector_A_per_m = [H_Apm * u_H[0], H_Apm * u_H[1], H_Apm * u_H[2]];
         let point_run = run_settle_at_field(
             &plan.backend_plan,
+            fem_mesh_generation_id,
             problem,
             &current_m,
             field_vector_A_per_m,
@@ -4450,6 +4465,7 @@ fn run_hysteresis_adaptive_refinement(
     policy: &AdaptiveRefinementIR,
     major_states: &[HysteresisMajorPointState],
     plan: &ExecutionPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     output_dir: &Path,
     u_H: [f64; 3],
@@ -4520,6 +4536,7 @@ fn run_hysteresis_adaptive_refinement(
             let field_vector_A_per_m = [field_Apm * u_H[0], field_Apm * u_H[1], field_Apm * u_H[2]];
             let solve_res = run_settle_at_field(
                 backend_plan,
+                fem_mesh_generation_id,
                 problem,
                 &parent.magnetization,
                 field_vector_A_per_m,
@@ -4661,6 +4678,7 @@ fn run_hysteresis_minor_loops(
     configured_loops: &[fullmag_ir::MinorLoopIR],
     major_states: &[HysteresisMajorPointState],
     plan: &ExecutionPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     problem: &ProblemIR,
     output_dir: &Path,
     u_H: [f64; 3],
@@ -4705,6 +4723,7 @@ fn run_hysteresis_minor_loops(
             } else {
                 let reversal_res = run_settle_at_field(
                     &plan.backend_plan,
+                    fem_mesh_generation_id,
                     problem,
                     &parent.magnetization,
                     reversal_field_vector_A_per_m,
@@ -4830,6 +4849,7 @@ fn run_hysteresis_minor_loops(
             ];
             let solve_res = run_settle_at_field(
                 &plan.backend_plan,
+                fem_mesh_generation_id,
                 problem,
                 &previous_magnetization,
                 field_vector_A_per_m,
@@ -6133,6 +6153,7 @@ mod tests {
 
         let update = hysteresis_progress_update(
             backend_plan,
+            &None,
             Some(0),
             100.0,
             0,
@@ -6339,6 +6360,7 @@ mod tests {
         };
         let update = hysteresis_progress_update(
             &backend_plan,
+            &Some(expected_generation.clone()),
             Some(0),
             10.0,
             0,
@@ -8379,6 +8401,7 @@ mod tests {
 
         let run = run_settle_at_field(
             &plan.backend_plan,
+            &None,
             &problem,
             &[[1.0, 0.0, 0.0]],
             [0.0, 0.0, 0.0],
@@ -8433,6 +8456,7 @@ mod tests {
 
         let run = run_settle_at_field(
             &plan.backend_plan,
+            &None,
             &problem,
             &[[1.0, 0.0, 0.0]],
             [0.0, 0.0, 0.0],

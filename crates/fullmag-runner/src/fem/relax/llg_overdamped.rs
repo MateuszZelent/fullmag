@@ -29,7 +29,7 @@ use crate::relaxation::llg_overdamped_uses_pure_damping;
 use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
 use crate::types::{ExecutionProvenance, RelaxationControllerPolicyProvenance};
 #[cfg(feature = "fem-gpu")]
-use crate::types::{FemMeshPayload, LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
+use crate::types::{LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
 #[cfg(feature = "fem-gpu")]
 use super::preview::{FemCachedPreviewHandoff, FemLiveMagnetizationHandoff, FemLivePreviewHandoff};
@@ -170,6 +170,7 @@ pub(crate) fn execute_llg_overdamped(
     backend: &mut NativeFemBackend,
     engine: FemEngine,
     plan: &FemPlanIR,
+    fem_mesh_generation_id: &Option<String>,
     until_seconds: f64,
     time_event_schedule_s: &[f64],
     node_count: usize,
@@ -193,7 +194,6 @@ pub(crate) fn execute_llg_overdamped(
     let mut live_preview_handoff = FemLivePreviewHandoff::default();
     let mut cached_preview_handoff = FemCachedPreviewHandoff::default();
     let mut live_magnetization_handoff = FemLiveMagnetizationHandoff::default();
-    let fem_mesh_generation_id = Some(crate::types::fem_plan_mesh_generation_id(plan));
     let drive_discontinuities = crate::time_events::resolved_stage_drive_discontinuities(
         &plan.field_drives,
         plan.time_stage.start_time_s,

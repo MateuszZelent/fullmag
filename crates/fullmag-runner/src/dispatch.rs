@@ -5274,6 +5274,7 @@ fn execute_native_fem(
     mut live: Option<LiveStepConsumer<'_>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
+    let fem_mesh_generation_id = Some(crate::types::fem_plan_mesh_generation_id(plan));
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -5452,6 +5453,7 @@ fn execute_native_fem(
             &mut backend,
             engine,
             plan,
+            &fem_mesh_generation_id,
             node_count,
             native_step_control,
             current_stats,
@@ -5474,6 +5476,7 @@ fn execute_native_fem(
             &mut backend,
             engine,
             plan,
+            &fem_mesh_generation_id,
             plan.time_stage.start_time_s + until_seconds,
             &time_events
                 .as_ref()
@@ -5499,6 +5502,7 @@ fn execute_native_fem(
         &mut backend,
         engine,
         plan,
+        &fem_mesh_generation_id,
         node_count,
         initial_magnetization,
         field_schedules,

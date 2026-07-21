@@ -1391,11 +1391,11 @@ pub(crate) fn apply_current_live_snapshot(
         current.session.artifact_dir = run.artifact_dir.clone();
         current.run = Some(run);
     }
-    if let Some(live_state) = req.live_state {
+    if let Some(mut live_state) = req.live_state {
         if current.run.is_none() && current.session.status == "bootstrapping" {
             current.session.status = live_state.status.clone();
         }
-        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.clone() {
+        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.take() {
             apply_fem_mesh_update(current, fem_mesh);
         }
         current.live_state = Some(live_state);
@@ -3214,6 +3214,7 @@ mod tests {
     fn snapshot_promotes_active_preview_field_into_preview_cache() {
         let mut current = test_current_snapshot();
         assert!(current.preview_cache.get("H_eff").is_none());
+        let legacy_mesh = domain_fem_mesh("legacy-domain-gen");
 
         let req = CurrentLiveSnapshotRequest {
             session_id: "test-session".to_string(),
@@ -3246,7 +3247,7 @@ mod tests {
                     wall_time_ns: 100,
                     grid: [1, 1, 1],
                     fem_mesh_generation_id: None,
-                    fem_mesh: None,
+                    fem_mesh: Some(legacy_mesh),
                     magnetization: None,
                     per_object_scalars: Default::default(),
                     preview_field: Some(preview_field("H_eff")),
@@ -3262,6 +3263,12 @@ mod tests {
             fem_mesh: None,
         };
         apply_current_live_snapshot(&mut current, req).unwrap();
+
+        assert_eq!(
+            current.fem_mesh.as_ref().and_then(|mesh| mesh.generation_id.as_deref()),
+            Some("legacy-domain-gen")
+        );
+        assert!(current.live_state.as_ref().unwrap().latest_step.fem_mesh.is_none());
 
         let cached = current
             .preview_cache

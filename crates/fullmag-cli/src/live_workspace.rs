@@ -845,7 +845,7 @@ fn merge_pending_publish_payload(
 
     if should_merge_pending {
         if incoming.fem_mesh.is_none() {
-            incoming.fem_mesh = slot.fem_mesh.clone();
+            incoming.fem_mesh = slot.fem_mesh.take();
         }
     }
 
@@ -1948,6 +1948,7 @@ mod tests {
             Some(fem_mesh("mesh-gen-1")),
             Some(vec![preview_field("m", 7, 1.0)]),
         );
+        let mesh_nodes_ptr = slot.fem_mesh.as_ref().unwrap().nodes.as_ptr();
         let incoming = payload_with_live_step(2, None, None, None, None);
 
         merge_pending_publish_payload(&mut slot, incoming, true);
@@ -1959,6 +1960,7 @@ mod tests {
             live_state.latest_step.magnetization.as_deref(),
             Some(&[0.0, 0.0, 1.0][..])
         );
+        assert_eq!(slot.fem_mesh.as_ref().unwrap().nodes.as_ptr(), mesh_nodes_ptr);
         assert_eq!(
             slot.fem_mesh
                 .as_ref()
