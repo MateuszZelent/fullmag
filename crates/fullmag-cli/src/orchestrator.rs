@@ -1250,12 +1250,15 @@ fn record_solver_profile_step_with_orchestration(
     stats.wall_time_ns = stats
         .wall_time_ns
         .saturating_add(orchestration_wall_time_ns);
-    live_workspace.record_solver_profile_step(stats);
+    let record_start = Instant::now();
+    let sampled = live_workspace.record_solver_profile_step(stats);
     let callback_wall_time_ns = saturating_nanos_u64(callback_start.elapsed());
     live_workspace.finish_solver_profile_callback(
         stats.step,
         orchestration_wall_time_ns,
         callback_wall_time_ns,
+        sampled,
+        record_start,
     );
 }
 

@@ -266,15 +266,17 @@ impl LocalLiveWorkspace {
             .unwrap_or_default()
     }
 
-    pub fn record_solver_profile_step(&self, stats: &fullmag_runner::StepStats) {
-        self.record_solver_profile_step_inner(stats, false);
+    pub fn record_solver_profile_step(&self, stats: &fullmag_runner::StepStats) -> bool {
+        self.record_solver_profile_step_inner(stats, false)
     }
 
     pub fn force_record_solver_profile_step(&self, stats: &fullmag_runner::StepStats) {
         if !self.solver_profile_enabled() {
             return;
         }
-        self.record_solver_profile_step_inner(stats, true);
+        let record_start = Instant::now();
+        let sampled = self.record_solver_profile_step_inner(stats, true);
+        self.emit_completed_solver_profile_sample(stats.step, sampled, record_start);
         // Finalization is outside the solver callback. Flush the completed
         // callback amendment and recorder overhead at this non-recursive
         // boundary so the last callback is eventually authoritative.
@@ -290,6 +292,8 @@ impl LocalLiveWorkspace {
         step: u64,
         recorded_callback_wall_time_ns: u64,
         callback_wall_time_ns: u64,
+        sampled: bool,
+        record_start: Instant,
     ) {
         if !self.solver_profile_enabled() {
             return;
@@ -301,6 +305,7 @@ impl LocalLiveWorkspace {
                 callback_wall_time_ns,
             );
         }
+        self.emit_completed_solver_profile_sample(step, sampled, record_start);
     }
 
     pub fn record_heartbeat_seed_deep_clone(&self) {
@@ -321,34 +326,53 @@ impl LocalLiveWorkspace {
         }
     }
 
-    fn record_solver_profile_step_inner(&self, stats: &fullmag_runner::StepStats, force: bool) {
+    fn record_solver_profile_step_inner(
+        &self,
+        stats: &fullmag_runner::StepStats,
+        force: bool,
+    ) -> bool {
         if !self.solver_profile_enabled() {
-            return;
+            return false;
         }
-        let record_start = Instant::now();
-        let mut artifact_line: Option<(String, String)> = None;
-        let mut should_publish = false;
         if let Ok(mut state) = self.state.lock() {
-            let persist_artifact = state.solver_profile.config().persist_artifact;
-            let emit_engine_log = state.solver_profile.config().emit_engine_log;
             let sample = if force {
                 state.solver_profile.force_record_step(stats)
             } else {
                 state.solver_profile.record_step(stats)
             };
-            if let Some(sample) = sample {
-                if emit_engine_log {
-                    push_engine_log(&mut state.engine_log, "profile", sample.compact_log_line());
+            return sample.is_some();
+        }
+        false
+    }
+
+    fn emit_completed_solver_profile_sample(
+        &self,
+        step: u64,
+        sampled: bool,
+        record_start: Instant,
+    ) {
+        let mut artifact_line: Option<(String, String)> = None;
+        if sampled {
+            if let Ok(mut state) = self.state.lock() {
+                let persist_artifact = state.solver_profile.config().persist_artifact;
+                let emit_engine_log = state.solver_profile.config().emit_engine_log;
+                if let Some(sample) = state.solver_profile.latest_step_sample(step) {
+                    if emit_engine_log {
+                        push_engine_log(
+                            &mut state.engine_log,
+                            "profile",
+                            sample.compact_log_line(),
+                        );
+                    }
+                    if persist_artifact {
+                        let artifact_ref = "diagnostics/solver_profile.jsonl".to_string();
+                        state.solver_profile.add_artifact_ref(artifact_ref.clone());
+                        artifact_line = Some((
+                            state.run.artifact_dir.clone(),
+                            serde_json::to_string(&sample).unwrap_or_else(|_| "{}".to_string()),
+                        ));
+                    }
                 }
-                if persist_artifact {
-                    let artifact_ref = "diagnostics/solver_profile.jsonl".to_string();
-                    state.solver_profile.add_artifact_ref(artifact_ref.clone());
-                    artifact_line = Some((
-                        state.run.artifact_dir.clone(),
-                        serde_json::to_string(&sample).unwrap_or_else(|_| "{}".to_string()),
-                    ));
-                }
-                should_publish = true;
             }
         }
         let persist_start = Instant::now();
@@ -368,7 +392,7 @@ impl LocalLiveWorkspace {
             }
         }
         let persist_wall_time_ns = persisted.then(|| elapsed_ns(persist_start)).unwrap_or(0);
-        let publisher_wall_time_ns = should_publish
+        let publisher_wall_time_ns = sampled
             .then(|| {
                 self.publish_snapshot_profiled()
                     .publisher_replace_wall_time_ns
@@ -910,6 +934,8 @@ impl CurrentLivePublisher {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::{
         apply_python_progress_event, bootstrap_live_state, merge_detailed_mesh_workspace,
         merge_pending_publish_payload, replace_cached_preview_fields, CurrentLivePublisher,
@@ -1152,16 +1178,20 @@ mod tests {
         assert!(update_timings.live_state_build_wall_time_ns > 0);
         assert!(update_timings.publisher_replace_wall_time_ns > 0);
 
-        workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+        let first_record_start = Instant::now();
+        let first_sampled = workspace.record_solver_profile_step(&fullmag_runner::StepStats {
             step: 1,
             wall_time_ns: 1,
             ..fullmag_runner::StepStats::default()
         });
-        workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+        workspace.finish_solver_profile_callback(1, 0, 1, first_sampled, first_record_start);
+        let second_record_start = Instant::now();
+        let second_sampled = workspace.record_solver_profile_step(&fullmag_runner::StepStats {
             step: 2,
             wall_time_ns: 1,
             ..fullmag_runner::StepStats::default()
         });
+        workspace.finish_solver_profile_callback(2, 0, 1, second_sampled, second_record_start);
         let snapshot = workspace.snapshot().solver_profile.snapshot();
         assert_eq!(snapshot.latest_samples.len(), 2);
         assert!(snapshot.overhead.last_persist_wall_time_ns > 0);
@@ -1219,12 +1249,13 @@ mod tests {
             LocalLiveWorkspace::new(workspace_with_domain_mesh().snapshot(), publisher.clone());
         let disabled_before = workspace.snapshot().solver_profile.snapshot();
         let disabled_replaces = publisher.diagnostics_snapshot().replace_count;
-        workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+        let disabled_record_start = Instant::now();
+        let disabled_sampled = workspace.record_solver_profile_step(&fullmag_runner::StepStats {
             step: 1,
             wall_time_ns: 10,
             ..fullmag_runner::StepStats::default()
         });
-        workspace.finish_solver_profile_callback(1, 1, 2);
+        workspace.finish_solver_profile_callback(1, 1, 2, disabled_sampled, disabled_record_start);
         workspace.record_heartbeat_seed_deep_clone();
         workspace.record_heartbeat_worker_deep_clone();
         let disabled_after = workspace.snapshot().solver_profile.snapshot();
@@ -1244,25 +1275,27 @@ mod tests {
             persist_artifact: false,
         });
         let enabled_replaces = publisher.diagnostics_snapshot().replace_count;
-        workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+        let sparse_record_start = Instant::now();
+        let sparse_sampled = workspace.record_solver_profile_step(&fullmag_runner::StepStats {
             step: 1,
             wall_time_ns: 10,
             orchestration_wall_time_ns: 1,
             ..fullmag_runner::StepStats::default()
         });
-        workspace.finish_solver_profile_callback(1, 1, 2);
+        workspace.finish_solver_profile_callback(1, 1, 2, sparse_sampled, sparse_record_start);
         assert_eq!(
             publisher.diagnostics_snapshot().replace_count,
             enabled_replaces
         );
 
-        workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+        let sampled_record_start = Instant::now();
+        let sampled = workspace.record_solver_profile_step(&fullmag_runner::StepStats {
             step: 2,
             wall_time_ns: 10,
             orchestration_wall_time_ns: 1,
             ..fullmag_runner::StepStats::default()
         });
-        workspace.finish_solver_profile_callback(2, 1, 2);
+        workspace.finish_solver_profile_callback(2, 1, 2, sampled, sampled_record_start);
         assert_eq!(
             publisher.diagnostics_snapshot().replace_count,
             enabled_replaces + 1
@@ -1284,6 +1317,89 @@ mod tests {
             .as_ref()
             .expect("final profile publication");
         assert_eq!(profile.latest_samples.last().unwrap().span_step_count, 0);
+    }
+
+    #[test]
+    fn one_sampled_callback_is_identical_in_memory_published_and_first_jsonl_row() {
+        let _guard = ENV_LOCK.lock().expect("environment lock poisoned");
+        let artifact_dir = std::env::temp_dir().join(format!(
+            "fullmag-profile-completed-sample-parity-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&artifact_dir).expect("create parity artifact dir");
+        let publisher = no_op_publisher();
+        let mut state = workspace_with_domain_mesh().snapshot();
+        state.run.artifact_dir = artifact_dir.display().to_string();
+        let workspace = LocalLiveWorkspace::new(state, publisher.clone());
+        workspace.set_solver_profile_config(fullmag_runner::SolverProfileConfig {
+            enabled: true,
+            sample_every: 1,
+            sample_interval_wall_ms: 0,
+            max_samples: 4,
+            emit_engine_log: false,
+            persist_artifact: true,
+        });
+
+        let record_start = Instant::now();
+        let sampled = workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+            step: 1,
+            wall_time_ns: 100,
+            rhs_wall_time_ns: 40,
+            orchestration_wall_time_ns: 10,
+            ..fullmag_runner::StepStats::default()
+        });
+        assert!(sampled);
+        workspace.finish_solver_profile_callback(1, 10, 25, sampled, record_start);
+
+        let local_snapshot = workspace.snapshot().solver_profile.snapshot();
+        let local = local_snapshot.latest_samples.last().unwrap();
+        let payload = publisher.payload.lock().expect("payload lock");
+        let published = payload
+            .solver_profile
+            .as_ref()
+            .expect("published profile")
+            .latest_samples
+            .last()
+            .unwrap();
+        let jsonl = std::fs::read_to_string(
+            artifact_dir
+                .join("diagnostics")
+                .join("solver_profile.jsonl"),
+        )
+        .expect("read profile JSONL");
+        let persisted: fullmag_runner::SolverProfileStepSample =
+            serde_json::from_str(jsonl.lines().next().expect("first JSONL row"))
+                .expect("decode first profile row");
+
+        for candidate in [published, &persisted] {
+            assert_eq!(candidate.total_ns, local.total_ns);
+            assert_eq!(
+                candidate.profiled_step_total_ns,
+                local.profiled_step_total_ns
+            );
+            assert_eq!(
+                candidate.span_monotonic_wall_time_ns,
+                local.span_monotonic_wall_time_ns
+            );
+            assert_eq!(candidate.phase_windows, local.phase_windows);
+            assert_eq!(candidate.phases, local.phases);
+            assert_eq!(candidate.demag_subphases, local.demag_subphases);
+        }
+        assert_eq!(
+            local
+                .phases
+                .iter()
+                .find(|phase| phase.id == "orchestration")
+                .unwrap()
+                .wall_time_ns,
+            25
+        );
+        assert!(local_snapshot.overhead.last_persist_wall_time_ns > 0);
+        assert!(local_snapshot.overhead.last_publisher_replace_wall_time_ns > 0);
+        assert_eq!(publisher.diagnostics_snapshot().replace_count, 2);
+
+        drop(payload);
+        std::fs::remove_dir_all(&artifact_dir).expect("remove parity artifact dir");
     }
 
     fn structured_event(kind: &str, payload: serde_json::Value) -> PythonProgressEvent {

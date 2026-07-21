@@ -1025,6 +1025,14 @@ impl SolverProfileState {
         }
     }
 
+    pub fn latest_step_sample(&self, step: u64) -> Option<SolverProfileStepSample> {
+        self.samples
+            .iter()
+            .rev()
+            .find(|sample| sample.step == step)
+            .cloned()
+    }
+
     fn trim_samples(&mut self) {
         while self.samples.len() > self.config.max_samples {
             self.samples.pop_front();
