@@ -8,6 +8,7 @@ import hashlib
 import json
 import pathlib
 import re
+import tempfile
 
 
 STEP = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*::)*StepUpdate\s*\{")
@@ -23,8 +24,8 @@ PRODUCER = re.compile(
 
 # SHA-256 over sorted exact records: file, receiver, operation, normalized
 # containing statement. This pins all semantic occurrences, not aggregate counts.
-EXPECTED_MESH_ACCESS_INVENTORY_SHA256 = "eec0964c7cef2e28b6431679219bb64755e757657a63e0a3ce28be737e69bea3"
-EXPECTED_PRODUCER_INVENTORY_SHA256 = "91826ae45a8a18f434e39731eb816dc00a4a5a41b52d18e32028767dcc922ab8"
+EXPECTED_MESH_ACCESS_INVENTORY_SHA256 = "12767a57b0ca0db77bac201b3b6b66bbf3d3bb596924672ee789463878f70f29"
+EXPECTED_PRODUCER_INVENTORY_SHA256 = "cdeed5aba93ff904c45c8875e055aa7d14f60625bde3bf6d288986d63015fb13"
 
 def mask_non_code(source: str) -> str:
     out = list(source)
@@ -109,14 +110,59 @@ def function_at(code: str, position: int) -> str:
     return functions[-1].group(1) if functions else ""
 
 
-def mesh_access_record(rel: str, code: str, access: re.Match[str]) -> tuple[str, str, str, str]:
+def enclosing_context(code: str, position: int) -> str:
+    constructs: list[dict[str, object]] = []
+    for loop in re.finditer(r"\b(?:loop\s*|while\b[^\{]*|for\b[^\{]*)\{", code[:position]):
+        brace = code.find("{", loop.start())
+        try:
+            body = balanced_body(code, brace)
+        except ValueError:
+            continue
+        header = re.sub(r"\s+", " ", code[loop.start():brace].strip())
+        constructs.append({"brace": brace, "end": brace + len(body) + 2,
+                           "kind": "loop", "header": header})
+    for callback in re.finditer(r"\|[^|]*\|\s*\{", code[:position]):
+        brace = code.find("{", callback.start())
+        try:
+            body = balanced_body(code, brace)
+        except ValueError:
+            continue
+        header = re.sub(r"\s+", " ", code[callback.start():brace].strip())
+        constructs.append({"brace": brace, "end": brace + len(body) + 2,
+                           "kind": "callback", "header": header})
+    constructs.sort(key=lambda item: int(item["brace"]))
+    for construct in constructs:
+        brace = int(construct["brace"])
+        parents = [candidate for candidate in constructs
+                   if int(candidate["brace"]) < brace < int(candidate["end"])]
+        construct["parent"] = int(max(parents, key=lambda item: int(item["brace"]))["brace"]) if parents else -1
+        siblings = [candidate for candidate in constructs
+                    if int(candidate["brace"]) <= brace
+                    and candidate["kind"] == construct["kind"]
+                    and candidate["header"] == construct["header"]
+                    and candidate.get("parent", -1) == construct["parent"]]
+        construct["ordinal"] = len(siblings)
+    ancestry = [construct for construct in constructs
+                if int(construct["brace"]) < position < int(construct["end"])]
+    if inside_expression_callback(code, position):
+        statement_start = max(code.rfind(";", 0, position), code.rfind("{", 0, position)) + 1
+        header = re.sub(r"\s+", " ", code[statement_start:position].strip())
+        ancestry.append({"brace": position, "end": position, "kind": "callback-expression",
+                         "header": header, "ordinal": 1})
+    return ">".join(
+        f"{item['kind']}#{item['ordinal']}:{item['header']}" for item in ancestry
+    ) if ancestry else "stage"
+
+
+def mesh_access_record(rel: str, code: str, access: re.Match[str]) -> tuple[str, str, str, str, str]:
     prefix = code[max(0, access.start() - 100):access.start()]
     receivers = re.findall(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", prefix)
     receiver = receivers[-1] if receivers else "<expression>"
     tail = code[access.end():access.end() + 80]
     operation_match = re.match(r"\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*)|([=]))", tail)
     operation = (operation_match.group(1) or "assign") if operation_match else "read"
-    return rel, receiver, operation, containing_statement(code, access.start())
+    return (rel, receiver, operation, enclosing_context(code, access.start()),
+            containing_statement(code, access.start()))
 
 
 def inventory_sha256(records: list[tuple[str, ...]]) -> str:
@@ -124,13 +170,14 @@ def inventory_sha256(records: list[tuple[str, ...]]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def producer_record(code: str, producer: re.Match[str]) -> tuple[str, str, str]:
+def producer_record(code: str, producer: re.Match[str]) -> tuple[str, str, str, str]:
     return (function_at(code, producer.start()), producer.group("operation"),
+            enclosing_context(code, producer.start()),
             containing_statement(code, producer.start()))
 
 
 def check_text(name: str, source: str,
-               allowed_producer_records: set[tuple[str, str, str]] | None = None,
+               allowed_producer_records: set[tuple[str, str, str, str]] | None = None,
                validate_producers: bool = True) -> list[str]:
     code = mask_non_code(source)
     errors: list[str] = []
@@ -150,8 +197,8 @@ def check_text(name: str, source: str,
         if re.search(r"(?<!generation_id)\bfem_mesh\s*:", body):
             errors.append(f"{name}: StepUpdate literal owns fem_mesh")
     for producer in PRODUCER.finditer(code) if validate_producers else ():
-        function, operation, statement = producer_record(code, producer)
-        allowed = (function, operation, statement) in (allowed_producer_records or set())
+        function, operation, context, statement = producer_record(code, producer)
+        allowed = (function, operation, context, statement) in (allowed_producer_records or set())
         if operation.startswith("FemMeshPayload::from") and not allowed:
             errors.append(f"{name}: {operation} outside a stage owner ({function})")
         if (inside_loop(code, producer.start()) or inside_callback(code, producer.start()) or inside_expression_callback(code, producer.start())) and not allowed:
@@ -165,26 +212,26 @@ def check_text(name: str, source: str,
     for (function, operation), count in producers_by_function.items():
         matching_allowed = [record for record in (allowed_producer_records or set())
                             if record[0] == function and record[1] == operation]
-        if count > 1 and len(matching_allowed) != count:
+        if count > 1 and not allowed_producer_records and len(matching_allowed) != count:
             errors.append(f"{name}: duplicate mesh producer {operation} in stage owner {function}")
     return errors
 
 
-def check_repo(root: pathlib.Path) -> list[str]:
+def check_repo(root: pathlib.Path,
+               expected_mesh_digest: str = EXPECTED_MESH_ACCESS_INVENTORY_SHA256,
+               expected_producer_digest: str = EXPECTED_PRODUCER_INVENTORY_SHA256,
+               require_live_guard: bool = True) -> list[str]:
     errors: list[str] = []
     roots = [root / "crates/fullmag-runner/src", root / "crates/fullmag-cli/src", root / "crates/fullmag-api/src"]
+    mesh_inventory: list[tuple[str, str, str, str, str]] = []
+    producer_inventory: list[tuple[str, str, str, str, str]] = []
+    source_by_path: list[tuple[str, str]] = []
     for base in roots:
         for path in base.rglob("*.rs"):
             rel = path.relative_to(root).as_posix()
-            # Producer ownership is enforced below by the exact per-occurrence inventory.
-            file_errors = check_text(rel, path.read_text(), validate_producers=False)
-            errors.extend(file_errors)
-    mesh_inventory: list[tuple[str, str, str, str]] = []
-    producer_inventory: list[tuple[str, str, str, str]] = []
-    for base in roots:
-        for path in base.rglob("*.rs"):
-            rel = path.relative_to(root).as_posix()
-            code = mask_non_code(path.read_text())
+            source = path.read_text()
+            source_by_path.append((rel, source))
+            code = mask_non_code(source)
             for access in re.finditer(r"\.[ \t\r\n]*fem_mesh\b", code):
                 record = mesh_access_record(rel, code, access)
                 mesh_inventory.append(record)
@@ -193,20 +240,27 @@ def check_repo(root: pathlib.Path) -> list[str]:
                     rel,
                     function_at(code, producer.start()),
                     producer.group("operation"),
+                    enclosing_context(code, producer.start()),
                     containing_statement(code, producer.start()),
                 ))
     mesh_digest = inventory_sha256(mesh_inventory)
     producer_digest = inventory_sha256(producer_inventory)
-    if mesh_digest != EXPECTED_MESH_ACCESS_INVENTORY_SHA256:
-        errors.append(f"mesh access operation inventory drifted: expected={EXPECTED_MESH_ACCESS_INVENTORY_SHA256} actual={mesh_digest}")
-    if producer_digest != EXPECTED_PRODUCER_INVENTORY_SHA256:
-        errors.append(f"mesh producer inventory drifted: expected={EXPECTED_PRODUCER_INVENTORY_SHA256} actual={producer_digest}")
+    if mesh_digest != expected_mesh_digest:
+        errors.append(f"mesh access operation inventory drifted: expected={expected_mesh_digest} actual={mesh_digest}")
+    if producer_digest != expected_producer_digest:
+        errors.append(f"mesh producer inventory drifted: expected={expected_producer_digest} actual={producer_digest}")
+    allowed_by_file: dict[str, set[tuple[str, str, str, str]]] = {}
+    for rel, function, operation, context, statement in producer_inventory:
+        allowed_by_file.setdefault(rel, set()).add((function, operation, context, statement))
+    for rel, source in source_by_path:
+        errors.extend(check_text(rel, source, allowed_by_file.get(rel, set()), validate_producers=True))
     print(f"[verify_fem_mesh_hot_loop_source_contract] classified {len(mesh_inventory)} .fem_mesh accesses")
     print(f"[verify_fem_mesh_hot_loop_source_contract] classified {len(producer_inventory)} mesh producers")
-    live = (root / "crates/fullmag-cli/src/live_workspace.rs").read_text()
-    code = mask_non_code(live)
-    if "build_publish_payload(include_mesh" not in code or not re.search(r"include_mesh\s*\.then\s*\(\|\|\s*\{.*?self\.fem_mesh\.clone", code, re.S):
-        errors.append("live_workspace.rs: mesh clone is not guarded by include_mesh")
+    if require_live_guard:
+        live = (root / "crates/fullmag-cli/src/live_workspace.rs").read_text()
+        code = mask_non_code(live)
+        if "build_publish_payload(include_mesh" not in code or not re.search(r"include_mesh\s*\.then\s*\(\|\|\s*\{.*?self\.fem_mesh\.clone", code, re.S):
+            errors.append("live_workspace.rs: mesh clone is not guarded by include_mesh")
     return errors
 
 
@@ -235,14 +289,91 @@ def self_test() -> None:
     valid = 'fn f(){ let _ = crate::types::StepUpdate { fem_mesh_generation_id: None }; /* } */ let s="{"; }'
     if check_text("valid", valid):
         raise SystemExit("valid qualified StepUpdate fixture was rejected")
-    access = [("file.rs", "state", "take", "state.fem_mesh.take()")]
-    substituted_access = [("file.rs", "state", "clone", "state.fem_mesh.clone()")]
+    access = [("file.rs", "state", "take", "stage", "state.fem_mesh.take()")]
+    substituted_access = [("file.rs", "state", "clone", "stage", "state.fem_mesh.clone()")]
     if inventory_sha256(access) == inventory_sha256(substituted_access):
         raise SystemExit("per-occurrence mesh operation substitution escaped inventory")
-    producer = [("file.rs", "stage", "StageFemMeshAsset::build_from_fem_plan", "let asset = StageFemMeshAsset::build_from_fem_plan(plan)")]
+    producer = [("file.rs", "stage", "StageFemMeshAsset::build_from_fem_plan", "stage", "let asset = StageFemMeshAsset::build_from_fem_plan(plan)")]
     duplicate_producer = producer + producer
     if inventory_sha256(producer) == inventory_sha256(duplicate_producer):
         raise SystemExit("cross-boundary duplicate producer escaped inventory")
+    with tempfile.TemporaryDirectory(prefix="fullmag-mesh-gate-") as temp:
+        root = pathlib.Path(temp)
+        runner = root / "crates/fullmag-runner/src"
+        (root / "crates/fullmag-cli/src").mkdir(parents=True)
+        (root / "crates/fullmag-api/src").mkdir(parents=True)
+        runner.mkdir(parents=True)
+        path = runner / "fixture.rs"
+        plain = "fn stage(){ let asset = StageFemMeshAsset::build_from_fem_plan(plan); let mesh = state.fem_mesh.clone(); }"
+        path.write_text(plain)
+        code = mask_non_code(plain)
+        mesh_records = [mesh_access_record(path.relative_to(root).as_posix(), code, match)
+                        for match in re.finditer(r"\.[ \t\r\n]*fem_mesh\b", code)]
+        producer_records = [(path.relative_to(root).as_posix(), *producer_record(code, match))
+                            for match in PRODUCER.finditer(code)]
+        mesh_digest = inventory_sha256(mesh_records)
+        producer_digest = inventory_sha256(producer_records)
+        for mutation in (
+            "fn stage(){ loop { let asset = StageFemMeshAsset::build_from_fem_plan(plan); let mesh = state.fem_mesh.clone(); } }",
+            "fn stage(){ let callback = || { let asset = StageFemMeshAsset::build_from_fem_plan(plan); let mesh = state.fem_mesh.clone(); }; }",
+        ):
+            path.write_text(mutation)
+            if not check_repo(root, mesh_digest, producer_digest, require_live_guard=False):
+                raise SystemExit("repository-mode context mutation escaped inventory")
+        producer_statements = (
+            "let asset = StageFemMeshAsset::build_from_fem_plan(plan);",
+            "let identity = StageFemMeshIdentity::from_fem_plan(plan);",
+            "let context = FemStageExecutionContext::from_fem_plan(plan);",
+        )
+        for producer_statement in producer_statements:
+            for baseline, mutation in (
+                (
+                    f"fn stage(){{ for stage in stages {{ {producer_statement} let mesh = state.fem_mesh.clone(); }} }}",
+                    f"fn stage(){{ for stage in stages {{ for step in steps {{ {producer_statement} let mesh = state.fem_mesh.clone(); }} }} }}",
+                ),
+                (
+                    f"fn stage(){{ let outer = || {{ {producer_statement} let mesh = state.fem_mesh.clone(); }}; }}",
+                    f"fn stage(){{ let outer = || {{ let inner = || {{ {producer_statement} let mesh = state.fem_mesh.clone(); }}; }}; }}",
+                ),
+            ):
+                path.write_text(baseline)
+                code = mask_non_code(baseline)
+                mesh_records = [mesh_access_record(path.relative_to(root).as_posix(), code, match)
+                                for match in re.finditer(r"\.[ \t\r\n]*fem_mesh\b", code)]
+                producer_records = [(path.relative_to(root).as_posix(), *producer_record(code, match))
+                                    for match in PRODUCER.finditer(code)]
+                path.write_text(mutation)
+                if not check_repo(root, inventory_sha256(mesh_records),
+                                  inventory_sha256(producer_records), require_live_guard=False):
+                    raise SystemExit("repository-mode nested-context mutation escaped inventory")
+            sibling_baseline = (
+                f"fn stage(){{ for stage in stages {{ {producer_statement} let mesh = state.fem_mesh.clone(); }} "
+                "for stage in stages { consume(); } }"
+            )
+            sibling_mutation = (
+                "fn stage(){ for stage in stages { consume(); } "
+                f"for stage in stages {{ {producer_statement} let mesh = state.fem_mesh.clone(); }} }}"
+            )
+            callback_baseline = (
+                f"fn stage(){{ let first = || {{ {producer_statement} let mesh = state.fem_mesh.clone(); }}; "
+                "let second = || { consume(); }; }"
+            )
+            callback_mutation = (
+                "fn stage(){ let first = || { consume(); }; "
+                f"let second = || {{ {producer_statement} let mesh = state.fem_mesh.clone(); }}; }}"
+            )
+            for baseline, mutation in ((sibling_baseline, sibling_mutation),
+                                       (callback_baseline, callback_mutation)):
+                path.write_text(baseline)
+                code = mask_non_code(baseline)
+                mesh_records = [mesh_access_record(path.relative_to(root).as_posix(), code, match)
+                                for match in re.finditer(r"\.[ \t\r\n]*fem_mesh\b", code)]
+                producer_records = [(path.relative_to(root).as_posix(), *producer_record(code, match))
+                                    for match in PRODUCER.finditer(code)]
+                path.write_text(mutation)
+                if not check_repo(root, inventory_sha256(mesh_records),
+                                  inventory_sha256(producer_records), require_live_guard=False):
+                    raise SystemExit("repository-mode sibling-owner mutation escaped inventory")
 
 
 def main() -> None:
