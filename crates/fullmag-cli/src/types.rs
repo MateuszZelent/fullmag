@@ -919,6 +919,13 @@ impl CurrentLivePreviewFieldCache {
         self.0.insert(field.quantity.clone(), field);
     }
 
+    pub fn insert_replacing(
+        &mut self,
+        field: fullmag_runner::LivePreviewField,
+    ) -> Option<fullmag_runner::LivePreviewField> {
+        self.0.insert(field.quantity.clone(), field)
+    }
+
     pub fn replace_all(
         &mut self,
         fields: impl IntoIterator<Item = fullmag_runner::LivePreviewField>,
@@ -935,6 +942,13 @@ impl CurrentLivePreviewFieldCache {
 
     pub fn take_vec(&mut self) -> Vec<fullmag_runner::LivePreviewField> {
         std::mem::take(&mut self.0).into_values().collect()
+    }
+
+    #[cfg(test)]
+    pub fn vector_values_ptr(&self, quantity: &str) -> Option<*const f64> {
+        self.0
+            .get(quantity)
+            .map(|field| field.vector_field_values.as_ptr())
     }
 }
 

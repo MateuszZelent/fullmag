@@ -49,6 +49,7 @@ pub(crate) struct LocalLiveWorkspaceState {
     pub latest_fields: CurrentLiveLatestFields,
     pub preview_fields: CurrentLivePreviewFieldCache,
     pub pending_preview_fields: CurrentLivePreviewFieldCache,
+    pub superseded_pending_preview_fields: Vec<fullmag_runner::LivePreviewField>,
     pub clear_preview_cache: bool,
     pub engine_log: Vec<EngineLogEntry>,
     pub solver_profile: fullmag_runner::SolverProfileState,
@@ -57,17 +58,18 @@ pub(crate) struct LocalLiveWorkspaceState {
 }
 
 #[cfg(test)]
-static FEM_MESH_PAYLOAD_CLONE_COUNT: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+thread_local! {
+    static FEM_MESH_PAYLOAD_CLONE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
 fn reset_fem_mesh_payload_clone_count() {
-    FEM_MESH_PAYLOAD_CLONE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+    FEM_MESH_PAYLOAD_CLONE_COUNT.set(0);
 }
 
 #[cfg(test)]
 fn fem_mesh_payload_clone_count() -> u64 {
-    FEM_MESH_PAYLOAD_CLONE_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+    FEM_MESH_PAYLOAD_CLONE_COUNT.get()
 }
 
 impl LocalLiveWorkspaceState {
@@ -83,7 +85,7 @@ impl LocalLiveWorkspaceState {
         let fem_mesh = include_mesh
             .then(|| {
                 #[cfg(test)]
-                FEM_MESH_PAYLOAD_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                FEM_MESH_PAYLOAD_CLONE_COUNT.set(FEM_MESH_PAYLOAD_CLONE_COUNT.get() + 1);
                 self.fem_mesh.clone()
             })
             .flatten();
@@ -122,16 +124,44 @@ impl LocalLiveWorkspaceState {
         )
     }
 
-    pub fn publish_delta(&mut self) -> CurrentLiveSnapshotPayload {
-        let preview_fields = (!self.pending_preview_fields.is_empty())
-            .then_some(self.pending_preview_fields.take_vec());
+    fn take_publish_delta_parts(
+        &mut self,
+    ) -> (
+        CurrentLiveSnapshotPayload,
+        Vec<fullmag_runner::LivePreviewField>,
+        Vec<fullmag_runner::LivePreviewField>,
+    ) {
+        let preview_fields = self.pending_preview_fields.take_vec();
+        let superseded_preview_fields =
+            std::mem::take(&mut self.superseded_pending_preview_fields);
         let clear_preview_cache = std::mem::take(&mut self.clear_preview_cache);
         let next_mesh_generation_id = self.fem_mesh.as_ref().map(fem_mesh_generation_key);
         let include_mesh = next_mesh_generation_id.is_some()
             && next_mesh_generation_id != self.published_fem_mesh_generation_id;
-        let payload = self.build_publish_payload(include_mesh, preview_fields, clear_preview_cache);
+        let payload = self.build_publish_payload(include_mesh, None, clear_preview_cache);
         if let Some(generation_id) = next_mesh_generation_id.filter(|_| include_mesh) {
             self.published_fem_mesh_generation_id = Some(generation_id);
+        }
+        (payload, preview_fields, superseded_preview_fields)
+    }
+
+    fn commit_published_preview_cache(
+        &mut self,
+        fields: impl IntoIterator<Item = fullmag_runner::LivePreviewField>,
+    ) {
+        for field in fields {
+            self.preview_fields.insert(field);
+        }
+    }
+
+    #[cfg(test)]
+    pub fn publish_delta(&mut self) -> CurrentLiveSnapshotPayload {
+        let (mut payload, preview_fields, superseded_preview_fields) =
+            self.take_publish_delta_parts();
+        drop(superseded_preview_fields);
+        if !preview_fields.is_empty() {
+            self.commit_published_preview_cache(preview_fields.clone());
+            payload.preview_fields = Some(preview_fields);
         }
         payload
     }
@@ -1137,7 +1167,7 @@ impl CurrentLivePublisher {
     }
 
     #[cfg(test)]
-    fn spawn_with_test_sink<Sink>(session_id: &str, sink: Sink) -> Self
+    pub(crate) fn spawn_with_test_sink<Sink>(session_id: &str, sink: Sink) -> Self
     where
         Sink: Fn(&str, &CurrentLiveSnapshotPayload) -> Result<()> + Send + Sync + 'static,
     {
@@ -1415,6 +1445,7 @@ mod tests {
                 latest_fields: Default::default(),
                 preview_fields: Default::default(),
                 pending_preview_fields: Default::default(),
+                superseded_pending_preview_fields: Vec::new(),
                 clear_preview_cache: false,
                 engine_log: Vec::new(),
                 solver_profile: fullmag_runner::SolverProfileState::default(),
@@ -1655,14 +1686,23 @@ mod tests {
                 .insert(preview_field("h_eff", 1, 2.0));
         });
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while attempts.load(std::sync::atomic::Ordering::Acquire) < 2
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while second_payload.lock().unwrap().is_none()
             && std::time::Instant::now() < deadline
         {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(attempts.load(std::sync::atomic::Ordering::Acquire), 2);
         assert_eq!(*second_payload.lock().unwrap(), Some((true, true)));
+        assert_eq!(
+            workspace
+                .snapshot()
+                .preview_fields
+                .to_vec()
+                .first()
+                .map(|field| field.vector_field_values.len()),
+            Some(3)
+        );
     }
 
     fn workspace_state_with_preparation(revision: u64) -> LocalLiveWorkspaceState {
@@ -2894,16 +2934,30 @@ fn build_pending_payload_from_workspace(
     let Some(source) = source else {
         return;
     };
-    let state_lock_start = Instant::now();
     let mut state = match source.lock() {
         Ok(state) => state,
         Err(_) => return,
     };
-    let state_lock_wall_time_ns = elapsed_ns(state_lock_start);
+    let state_lock_start = Instant::now();
     let build_start = Instant::now();
-    let mut incoming = state.publish_delta();
-    let delta_build_wall_time_ns = elapsed_ns(build_start);
+    let (mut incoming, preview_fields, superseded_preview_fields) =
+        state.take_publish_delta_parts();
     drop(state);
+    drop(superseded_preview_fields);
+    let mut state_lock_wall_time_ns = elapsed_ns(state_lock_start);
+    let persistent_preview_fields = preview_fields.clone();
+    if !preview_fields.is_empty() {
+        incoming.preview_fields = Some(preview_fields);
+    }
+    if !persistent_preview_fields.is_empty() {
+        if let Ok(mut state) = source.lock() {
+            let cache_lock_start = Instant::now();
+            state.commit_published_preview_cache(persistent_preview_fields);
+            state_lock_wall_time_ns = state_lock_wall_time_ns
+                .saturating_add(elapsed_ns(cache_lock_start));
+        }
+    }
+    let delta_build_wall_time_ns = elapsed_ns(build_start);
     if let Ok(mut gate) = scalar_gate.lock() {
         gate.filter_payload(&mut incoming);
     }
@@ -3037,6 +3091,7 @@ pub(crate) fn clear_cached_preview_fields(state: &mut LocalLiveWorkspaceState) {
     }
     state.preview_fields.clear();
     state.pending_preview_fields.clear();
+    state.superseded_pending_preview_fields.clear();
     state.clear_preview_cache = true;
 }
 
@@ -3090,24 +3145,29 @@ pub(crate) fn upsert_cached_preview_field(
     state.pending_preview_fields.insert(field.clone());
 }
 
-#[allow(dead_code)]
-pub(crate) fn merge_cached_preview_fields_from_update(
+pub(crate) fn ingest_preview_fields_from_update(
     state: &mut LocalLiveWorkspaceState,
-    update: &fullmag_runner::StepUpdate,
+    update: &mut fullmag_runner::StepUpdate,
 ) {
-    // Skip if 3D preview is disabled (benchmark mode)
     if feature_flags().disable_preview_3d {
+        update.cached_preview_fields = None;
+        update.preview_field = None;
         return;
     }
-    if let Some(fields) = update.cached_preview_fields.as_ref() {
+    if let Some(fields) = update.cached_preview_fields.take() {
         for field in fields {
-            upsert_cached_preview_field(state, field);
+            if let Some(previous) = state.pending_preview_fields.insert_replacing(field) {
+                state.superseded_pending_preview_fields.push(previous);
+            }
         }
     }
-    if let Some(preview_field) = update.preview_field.as_ref() {
-        upsert_cached_preview_field(state, preview_field);
+    if let Some(field) = update.preview_field.take() {
+        if let Some(previous) = state.pending_preview_fields.insert_replacing(field) {
+            state.superseded_pending_preview_fields.push(previous);
+        }
     }
 }
+
 
 fn mesh_build_stage_status(
     stage_id: &str,

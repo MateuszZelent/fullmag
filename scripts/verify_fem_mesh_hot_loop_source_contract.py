@@ -24,7 +24,7 @@ PRODUCER = re.compile(
 
 # SHA-256 over sorted exact records: file, receiver, operation, normalized
 # containing statement. This pins all semantic occurrences, not aggregate counts.
-EXPECTED_MESH_ACCESS_INVENTORY_SHA256 = "12767a57b0ca0db77bac201b3b6b66bbf3d3bb596924672ee789463878f70f29"
+EXPECTED_MESH_ACCESS_INVENTORY_SHA256 = "92f096f11bd1d7eea7bd621c35c6e36ac782f609e7380600652180c5c83adf44"
 EXPECTED_PRODUCER_INVENTORY_SHA256 = "cdeed5aba93ff904c45c8875e055aa7d14f60625bde3bf6d288986d63015fb13"
 
 def mask_non_code(source: str) -> str:

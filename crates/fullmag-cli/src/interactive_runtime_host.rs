@@ -1016,6 +1016,7 @@ mod tests {
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),

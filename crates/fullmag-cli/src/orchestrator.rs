@@ -1278,31 +1278,6 @@ fn force_record_solver_profile_finalization(
     live_workspace.force_record_solver_profile_step(&adjusted);
 }
 
-fn live_step_ingest_legacy_mag_len(update: &fullmag_runner::StepUpdate) -> usize {
-    update
-        .magnetization
-        .as_ref()
-        .map(|values| values.len())
-        .unwrap_or(0)
-}
-
-fn live_step_ingest_preview_len(update: &fullmag_runner::StepUpdate) -> usize {
-    update
-        .preview_field
-        .as_ref()
-        .map(|field| field.vector_field_values.len())
-        .unwrap_or(0)
-}
-
-fn live_step_ingest_cached_m_preview_len(update: &fullmag_runner::StepUpdate) -> usize {
-    update
-        .cached_preview_fields
-        .as_ref()
-        .and_then(|fields| fields.iter().find(|field| field.quantity == "m"))
-        .map(|field| field.vector_field_values.len())
-        .unwrap_or(0)
-}
-
 fn apply_live_step_update_to_workspace_state(
     state: &mut LocalLiveWorkspaceState,
     run_id: &str,
@@ -1312,38 +1287,20 @@ fn apply_live_step_update_to_workspace_state(
     include_scalar_row: bool,
 ) -> fullmag_runner::StepUpdate {
     preserve_frequency_response_progress_scalars_from_live_state(state, &mut update);
-    let cached_preview_count = update
-        .cached_preview_fields
-        .as_ref()
-        .map(|fields| fields.len())
-        .unwrap_or(0);
-    if update.stats.step <= 2 || update.preview_field.is_some() || cached_preview_count > 0 {
-        eprintln!(
-            "[fullmag-cli] live step ingest step={} legacy_mag_len={} preview_field={} preview_quantity={} preview_len={} cached_preview_fields={} cached_m_preview_len={} scalar_row_due={} finished={}",
-            update.stats.step,
-            live_step_ingest_legacy_mag_len(&update),
-            update.preview_field.is_some(),
-            update
-                .preview_field
-                .as_ref()
-                .map(|field| field.quantity.as_str())
-                .unwrap_or("-"),
-            live_step_ingest_preview_len(&update),
-            cached_preview_count,
-            live_step_ingest_cached_m_preview_len(&update),
-            update.scalar_row_due,
-            update.finished,
-        );
-    }
     state.session.status = if update.finished {
         "completed".to_string()
     } else {
         "running".to_string()
     };
     state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, &update);
-    let previous_step = state.live_state.latest_step.clone();
+    let previous_magnetization = state.live_state.latest_step.magnetization.take();
+    let previous_fem_mesh_generation_id = state
+        .live_state
+        .latest_step
+        .fem_mesh_generation_id
+        .take();
     let incoming_has_magnetization_preview = step_update_has_magnetization_preview(&update);
-    merge_cached_preview_fields_from_update(state, &update);
+    crate::live_workspace::ingest_preview_fields_from_update(state, &mut update);
     apply_hysteresis_progress_to_stage_execution(state, &update);
     apply_fem_eigen_progress_to_stage_execution(state, &update);
     apply_fem_frequency_response_progress_to_stage_execution(state, &update);
@@ -1367,7 +1324,7 @@ fn apply_live_step_update_to_workspace_state(
     };
     state.live_state = live_state_manifest_from_update(update);
     if state.live_state.latest_step.magnetization.is_none() && !incoming_has_magnetization_preview {
-        state.live_state.latest_step.magnetization = previous_step.magnetization;
+        state.live_state.latest_step.magnetization = previous_magnetization;
     }
     if state
         .live_state
@@ -1375,7 +1332,7 @@ fn apply_live_step_update_to_workspace_state(
         .fem_mesh_generation_id
         .is_none()
     {
-        state.live_state.latest_step.fem_mesh_generation_id = previous_step.fem_mesh_generation_id;
+        state.live_state.latest_step.fem_mesh_generation_id = previous_fem_mesh_generation_id;
     }
     remainder
 }
@@ -6074,6 +6031,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
@@ -6373,6 +6331,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 latest_fields: CurrentLiveLatestFields::default(),
                 preview_fields: CurrentLivePreviewFieldCache::default(),
                 pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+                superseded_pending_preview_fields: Vec::new(),
                 clear_preview_cache: false,
                 engine_log: failed_snapshot.engine_log,
                 solver_profile: fullmag_runner::SolverProfileState::default(),
@@ -6610,6 +6569,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         latest_fields: CurrentLiveLatestFields::default(),
         preview_fields: CurrentLivePreviewFieldCache::default(),
         pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+        superseded_pending_preview_fields: Vec::new(),
         clear_preview_cache: false,
         engine_log: previous_workspace.engine_log,
         solver_profile: fullmag_runner::SolverProfileState::default(),
@@ -10175,6 +10135,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
@@ -10219,8 +10180,7 @@ mod tests {
         format_stage_progress_line, has_heavy_live_payload,
         initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
         initial_step_update, interactive_session_should_stay_alive,
-        live_step_ingest_cached_m_preview_len, live_step_ingest_legacy_mag_len,
-        live_step_ingest_preview_len, mark_ui_shell_preparation_ready,
+        mark_ui_shell_preparation_ready,
         mesh_build_pipeline_status_json, mesh_source_scene_revision, offset_step_update,
         own_preparation_boundary_failure, plan_materialized_stage_snapshot,
         prepare_remesh_stage_transaction, project_script_export_failure,
@@ -10719,20 +10679,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn live_step_ingest_diagnostics_distinguish_preview_m_from_legacy_magnetization() {
-        let mut update = test_step_update(50);
-        update.preview_field = Some(test_preview_field("m", 7, -1.0));
-        update.cached_preview_fields = Some(vec![
-            test_preview_field("m", 7, -1.0),
-            test_preview_field("H_eff", 7, 2.0),
-        ]);
-
-        assert_eq!(live_step_ingest_legacy_mag_len(&update), 0);
-        assert_eq!(live_step_ingest_preview_len(&update), 3);
-        assert_eq!(live_step_ingest_cached_m_preview_len(&update), 3);
-    }
-
     fn test_workspace_state() -> crate::live_workspace::LocalLiveWorkspaceState {
         crate::live_workspace::LocalLiveWorkspaceState {
             fem_mesh: None,
@@ -10788,6 +10734,7 @@ mod tests {
             latest_fields: CurrentLiveLatestFields::default(),
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
+            superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
@@ -12166,13 +12113,17 @@ mod tests {
         );
 
         assert_eq!(state.live_state.latest_step.step, 12);
-        assert!(state.live_state.latest_step.preview_field.is_some());
-        assert_eq!(state.preview_fields.to_vec().len(), 2);
+        assert!(state.live_state.latest_step.preview_field.is_none());
+        assert!(state.preview_fields.is_empty());
+        assert!(state.latest_fields.is_empty());
         assert_eq!(state.pending_preview_fields.to_vec().len(), 2);
         assert_eq!(
             state.latest_scalar_row.as_ref().map(|row| row.step),
             Some(12)
         );
+        let delta = state.publish_delta();
+        assert_eq!(delta.preview_fields.as_ref().map(Vec::len), Some(2));
+        assert_eq!(state.preview_fields.to_vec().len(), 2);
     }
 
     #[test]
@@ -12197,6 +12148,101 @@ mod tests {
     }
 
     #[test]
+    fn production_ingest_preserves_large_retained_magnetization_by_pointer() {
+        let mut state = test_workspace_state();
+        state.live_state.latest_step.magnetization = Some(vec![1.0; 3_000_000]);
+        let retained_ptr = state
+            .live_state
+            .latest_step
+            .magnetization
+            .as_ref()
+            .unwrap()
+            .as_ptr();
+        let publisher = crate::live_workspace::CurrentLivePublisher::spawn_with_test_sink(
+            "production-retained-magnetization-ingest",
+            |_, _| Ok(()),
+        );
+        let workspace = crate::live_workspace::LocalLiveWorkspace::new(state, publisher);
+        let mut callback_durations = Vec::new();
+
+        for step in 1..=5 {
+            let update = test_step_update(step);
+            let mut observed_ptr = std::ptr::null();
+            let started = Instant::now();
+            workspace.update_profiled(|state| {
+                let _ = apply_live_step_update_to_workspace_state(
+                    state,
+                    "run-test",
+                    "session-test",
+                    PathBuf::from("/tmp/artifacts").as_path(),
+                    update,
+                    false,
+                );
+                observed_ptr = state
+                    .live_state
+                    .latest_step
+                    .magnetization
+                    .as_ref()
+                    .unwrap()
+                    .as_ptr();
+            });
+            callback_durations.push(started.elapsed());
+            assert_eq!(observed_ptr, retained_ptr, "thin ingest must preserve Vec ownership");
+        }
+
+        callback_durations.sort_unstable();
+        assert!(callback_durations[callback_durations.len() - 1] < Duration::from_millis(10));
+    }
+
+    #[test]
+    fn production_ingest_moves_large_preview_into_single_pending_owner() {
+        let publisher = crate::live_workspace::CurrentLivePublisher::spawn_with_test_sink(
+            "production-preview-ingest",
+            |_, _| Ok(()),
+        );
+        let workspace = crate::live_workspace::LocalLiveWorkspace::new(
+            test_workspace_state(),
+            publisher,
+        );
+        let mut callback_durations = Vec::new();
+
+        for step in 1..=5 {
+            let mut preview = test_preview_field("h_eff", step, 2.0);
+            preview.vector_field_values = vec![step as f64; 3_000_000];
+            let input_ptr = preview.vector_field_values.as_ptr();
+            let mut update = test_step_update(step);
+            update.preview_field = Some(preview);
+            let mut observed_ptr = std::ptr::null();
+            let started = Instant::now();
+            workspace.update_profiled(|state| {
+                let _ = apply_live_step_update_to_workspace_state(
+                    state,
+                    "run-test",
+                    "session-test",
+                    PathBuf::from("/tmp/artifacts").as_path(),
+                    update,
+                    false,
+                );
+                observed_ptr = state
+                    .pending_preview_fields
+                    .vector_values_ptr("h_eff")
+                    .unwrap();
+                assert_ne!(
+                    state.preview_fields.vector_values_ptr("h_eff"),
+                    Some(input_ptr),
+                    "the current preview must not be cloned into the persistent cache in callback"
+                );
+                assert!(state.latest_fields.is_empty());
+            });
+            callback_durations.push(started.elapsed());
+            assert_eq!(observed_ptr, input_ptr, "preview Vec must move into pending cache");
+        }
+
+        callback_durations.sort_unstable();
+        assert!(callback_durations[callback_durations.len() - 1] < Duration::from_millis(10));
+    }
+
+    #[test]
     fn publish_live_step_update_does_not_shadow_fresh_m_preview_with_previous_magnetization() {
         let mut state = test_workspace_state();
         state.live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
@@ -12213,12 +12259,11 @@ mod tests {
         );
 
         assert_eq!(state.live_state.latest_step.magnetization, None);
+        let delta = state.publish_delta();
         assert_eq!(
-            state
-                .preview_fields
-                .to_vec()
-                .first()
-                .map(|field| field.vector_field_values.as_slice()),
+            delta.preview_fields.as_ref().and_then(|fields| fields.first()).map(
+                |field| field.vector_field_values.as_slice()
+            ),
             Some(&[0.0, 0.0, -1.0][..])
         );
     }
