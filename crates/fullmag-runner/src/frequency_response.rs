@@ -353,6 +353,9 @@ pub(crate) fn execute_fem_frequency_response_validation(
                 if let Some(on_step) = on_step.as_deref_mut() {
                     let completed_frequency_count = completed_points as u64;
                     let action = on_step(dense_frequency_response_progress_update(
+                        Some(crate::types::fem_frequency_response_mesh_generation_id(
+                            plan,
+                        )),
                         completed_frequency_count,
                         plan.frequencies_hz.values_hz.len() as u64,
                         plan.frequencies_hz.values_hz[completed_points - 1],
@@ -416,6 +419,7 @@ pub(crate) fn execute_fem_frequency_response_validation(
 }
 
 fn dense_frequency_response_progress_update(
+    fem_mesh_generation_id: Option<String>,
     completed_frequency_count: u64,
     total_frequency_count: u64,
     frequency_hz: f64,
@@ -464,7 +468,7 @@ fn dense_frequency_response_progress_update(
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh_generation_id: None,
+        fem_mesh_generation_id,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -480,6 +484,7 @@ fn dense_frequency_response_progress_update(
 
 #[cfg(any(feature = "fem-gpu", test))]
 fn native_frequency_response_progress_update(
+    fem_mesh_generation_id: Option<String>,
     progress: NativeFrequencyDomainProgress,
     frequency_range_hz: Option<(f64, f64)>,
     drive_norm: f64,
@@ -558,7 +563,7 @@ fn native_frequency_response_progress_update(
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh_generation_id: None,
+        fem_mesh_generation_id,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -1815,6 +1820,9 @@ fn try_execute_fem_frequency_response_native_production_cpu(
         }
         if let Some(on_step) = live_progress_sink.borrow_mut().as_deref_mut() {
             let action = on_step(native_frequency_response_progress_update(
+                Some(crate::types::fem_frequency_response_mesh_generation_id(
+                    plan,
+                )),
                 progress,
                 response_frequency_range_hz,
                 payload.drive_norm,
@@ -4682,12 +4690,17 @@ mod tests {
         };
 
         let update = native_frequency_response_progress_update(
+            Some("mesh-gen-test".to_string()),
             progress,
             Some((1.0e9, 4.0e9)),
             3.5,
             true,
             true,
             false,
+        );
+        assert_eq!(
+            update.fem_mesh_generation_id.as_deref(),
+            Some("mesh-gen-test")
         );
 
         assert_eq!(update.stats.step, 2);
@@ -4734,12 +4747,17 @@ mod tests {
         };
 
         let update = native_frequency_response_progress_update(
+            Some("mesh-gen-test".to_string()),
             progress,
             Some((2.0e9, 5.0e9)),
             1.0,
             true,
             true,
             false,
+        );
+        assert_eq!(
+            update.fem_mesh_generation_id.as_deref(),
+            Some("mesh-gen-test")
         );
 
         let live_progress = update

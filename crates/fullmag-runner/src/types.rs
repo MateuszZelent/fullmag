@@ -7,6 +7,26 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
 
+#[cfg(test)]
+thread_local! {
+    static FEM_MESH_PAYLOAD_BUILD_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_fem_mesh_payload_build_count() {
+    FEM_MESH_PAYLOAD_BUILD_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn fem_mesh_payload_build_count() -> u64 {
+    FEM_MESH_PAYLOAD_BUILD_COUNT.with(std::cell::Cell::get)
+}
+
+fn record_fem_mesh_payload_build() {
+    #[cfg(test)]
+    FEM_MESH_PAYLOAD_BUILD_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+}
+
 // ----- public types -----
 
 /// Public result type returned by [`crate::run_reference_fem_eigen`].
@@ -1608,6 +1628,7 @@ fn update_hash_serialized<T: Serialize + ?Sized>(hasher: &mut Sha256, label: &st
 
 impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
     fn from(plan: &fullmag_ir::FemPlanIR) -> Self {
+        record_fem_mesh_payload_build();
         let magnetic_markers = (!plan.region_materials.is_empty()).then(|| {
             plan.region_materials
                 .iter()
@@ -1618,14 +1639,7 @@ impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
             &plan.mesh.element_markers,
             magnetic_markers.as_ref(),
         );
-        let generation_id = stable_fem_mesh_generation_id(
-            &plan.mesh,
-            &element_markers,
-            &plan.object_segments,
-            &plan.mesh_parts,
-            plan.domain_mesh_mode,
-            &plan.domain_frame,
-        );
+        let generation_id = fem_plan_mesh_generation_id(plan);
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
@@ -1667,19 +1681,32 @@ impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
             build_report: plan.mesh_build_report.clone(),
         }
     }
+}
+
+pub fn fem_plan_mesh_generation_id(plan: &fullmag_ir::FemPlanIR) -> String {
+    let magnetic_markers = (!plan.region_materials.is_empty()).then(|| {
+        plan.region_materials
+            .iter()
+            .map(|region| region.element_marker)
+            .collect::<BTreeSet<_>>()
+    });
+    let element_markers =
+        normalized_payload_element_markers(&plan.mesh.element_markers, magnetic_markers.as_ref());
+    stable_fem_mesh_generation_id(
+        &plan.mesh,
+        &element_markers,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        plan.domain_mesh_mode,
+        &plan.domain_frame,
+    )
 }
 
 impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
     fn from(plan: &fullmag_ir::FemEigenPlanIR) -> Self {
+        record_fem_mesh_payload_build();
         let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
-        let generation_id = stable_fem_mesh_generation_id(
-            &plan.mesh,
-            &element_markers,
-            &plan.object_segments,
-            &plan.mesh_parts,
-            plan.domain_mesh_mode,
-            &plan.domain_frame,
-        );
+        let generation_id = fem_eigen_mesh_generation_id(plan);
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
@@ -1723,17 +1750,23 @@ impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
     }
 }
 
+pub fn fem_eigen_mesh_generation_id(plan: &fullmag_ir::FemEigenPlanIR) -> String {
+    let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
+    stable_fem_mesh_generation_id(
+        &plan.mesh,
+        &element_markers,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        plan.domain_mesh_mode,
+        &plan.domain_frame,
+    )
+}
+
 impl From<&fullmag_ir::FemFrequencyResponsePlanIR> for FemMeshPayload {
     fn from(plan: &fullmag_ir::FemFrequencyResponsePlanIR) -> Self {
+        record_fem_mesh_payload_build();
         let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
-        let generation_id = stable_fem_mesh_generation_id(
-            &plan.mesh,
-            &element_markers,
-            &plan.object_segments,
-            &plan.mesh_parts,
-            plan.domain_mesh_mode,
-            &plan.domain_frame,
-        );
+        let generation_id = fem_frequency_response_mesh_generation_id(plan);
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
@@ -1775,6 +1808,20 @@ impl From<&fullmag_ir::FemFrequencyResponsePlanIR> for FemMeshPayload {
             build_report: plan.mesh_build_report.clone(),
         }
     }
+}
+
+pub fn fem_frequency_response_mesh_generation_id(
+    plan: &fullmag_ir::FemFrequencyResponsePlanIR,
+) -> String {
+    let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
+    stable_fem_mesh_generation_id(
+        &plan.mesh,
+        &element_markers,
+        &plan.object_segments,
+        &plan.mesh_parts,
+        plan.domain_mesh_mode,
+        &plan.domain_frame,
+    )
 }
 
 impl From<&fullmag_ir::FemMeshPartIR> for FemMeshPartPayload {
@@ -2383,8 +2430,10 @@ pub(crate) struct StateObservables {
 #[cfg(test)]
 mod tests {
     use super::{
-        fem_mesh_topology_fingerprint, normalized_payload_element_markers, ExecutionProvenance,
-        FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
+        fem_mesh_payload_build_count, fem_mesh_topology_fingerprint,
+        fem_plan_mesh_generation_id, normalized_payload_element_markers,
+        reset_fem_mesh_payload_build_count, ExecutionProvenance, FemMeshPartPayload,
+        FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
         LivePreviewField, LlgTimestepCapabilityId, LlgTimestepQualificationId,
         RequestedTimestepPolicy, ResolvedTimestepPolicy, StepStats, StepUpdate, TimestepBackend,
         TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
@@ -2529,6 +2578,25 @@ mod tests {
 
         assert_eq!(first.generation_id, second.generation_id);
         assert_eq!(first.mesh_id, second.mesh_id);
+    }
+
+    #[test]
+    fn fem_mesh_payload_is_built_once_while_step_updates_reuse_generation() {
+        reset_fem_mesh_payload_build_count();
+        let mut plan = tiny_fem_plan();
+        let stage_mesh = FemMeshPayload::from(&plan);
+        for _ in 0..12 {
+            assert_eq!(
+                fem_plan_mesh_generation_id(&plan),
+                stage_mesh.generation_id.clone().expect("stage generation")
+            );
+        }
+        assert_eq!(fem_mesh_payload_build_count(), 1);
+
+        plan.mesh.nodes[0][0] += 0.25;
+        let remeshed = FemMeshPayload::from(&plan);
+        assert_ne!(remeshed.generation_id, stage_mesh.generation_id);
+        assert_eq!(fem_mesh_payload_build_count(), 2);
     }
 
     #[test]

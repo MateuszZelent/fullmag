@@ -41,7 +41,7 @@ pub(crate) fn execute_direct_minimizer(
     steps: &mut Vec<StepStats>,
     mut last_preview_revision: Option<u64>,
 ) -> Result<DirectMinimizerExecution, RunError> {
-    let fem_mesh_generation_id = FemMeshPayload::from(plan).generation_id;
+    let fem_mesh_generation_id = Some(crate::types::fem_plan_mesh_generation_id(plan));
     let mut latest_stats: Option<StepStats> = None;
     let mut backend_completion: Option<StageCompletionIR> = None;
     let mut cancelled = false;

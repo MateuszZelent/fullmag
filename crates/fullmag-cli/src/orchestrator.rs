@@ -1333,7 +1333,12 @@ fn apply_live_step_update_to_workspace_state(
     {
         state.live_state.latest_step.magnetization = previous_step.magnetization;
     }
-    if state.live_state.latest_step.fem_mesh_generation_id.is_none() {
+    if state
+        .live_state
+        .latest_step
+        .fem_mesh_generation_id
+        .is_none()
+    {
         state.live_state.latest_step.fem_mesh_generation_id = previous_step.fem_mesh_generation_id;
     }
     merge_cached_preview_fields_from_update(state, &update);
@@ -2246,35 +2251,15 @@ fn session_runtime_selection_for_problem(
     selection
 }
 
-#[cfg(test)]
-thread_local! {
-    static FEM_MESH_PAYLOAD_BUILD_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-fn reset_fem_mesh_payload_build_count() {
-    FEM_MESH_PAYLOAD_BUILD_COUNT.with(|count| count.set(0));
-}
-
-#[cfg(test)]
-fn fem_mesh_payload_build_count() -> u64 {
-    FEM_MESH_PAYLOAD_BUILD_COUNT.with(std::cell::Cell::get)
-}
-
 fn fem_mesh_payload_from_backend_plan(
     backend_plan: &BackendPlanIR,
 ) -> Option<fullmag_runner::FemMeshPayload> {
-    let payload = match backend_plan {
+    match backend_plan {
         BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
         BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
         BackendPlanIR::FemFrequencyResponse(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
         BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
-    };
-    #[cfg(test)]
-    if payload.is_some() {
-        FEM_MESH_PAYLOAD_BUILD_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     }
-    payload
 }
 
 fn fem_live_mesh_payload_and_initial_magnetization(
@@ -2297,9 +2282,10 @@ fn initial_live_state_manifest_from_backend_plan(
     update: &fullmag_runner::StepUpdate,
     backend_plan: &BackendPlanIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
-) -> anyhow::Result<LiveStateManifest> {
+) -> anyhow::Result<(LiveStateManifest, Option<fullmag_runner::FemMeshPayload>)> {
     let mut live_state = live_state_manifest_from_update(update);
-    if let Some(mesh_payload) = fem_mesh_payload_from_backend_plan(backend_plan) {
+    let mesh_payload = fem_mesh_payload_from_backend_plan(backend_plan);
+    if let Some(mesh_payload) = mesh_payload.as_ref() {
         let initial_magnetization =
             current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
         if mesh_payload.nodes.len() != initial_magnetization.len() {
@@ -2312,7 +2298,7 @@ fn initial_live_state_manifest_from_backend_plan(
         live_state.latest_step.fem_mesh_generation_id = mesh_payload.generation_id.clone();
         live_state.latest_step.magnetization = Some(flatten_magnetization(&initial_magnetization));
     }
-    Ok(live_state)
+    Ok((live_state, mesh_payload))
 }
 
 fn default_domain_region_markers(
@@ -4892,7 +4878,8 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
         }));
         live_workspace.update(|state| {
             state.metadata = Some(current_live_metadata(&stage.ir, execution_plan, "running"));
-            state.live_state.latest_step.fem_mesh_generation_id = mesh_payload.generation_id.clone();
+            state.live_state.latest_step.fem_mesh_generation_id =
+                mesh_payload.generation_id.clone();
             state.fem_mesh = Some(mesh_payload);
             state.live_state.latest_step.magnetization =
                 Some(flatten_magnetization(&transferred_magnetization));
@@ -6452,6 +6439,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         mut current_plan_summary,
         initial_execution_plan,
         initial_live_state,
+        initial_fem_mesh,
     ) = run_solver_initialization(&live_workspace, !solver_initialization_required, || {
         let initial_magnetization_override = run_solver_initialization_safety_check(
             &live_workspace,
@@ -6495,7 +6483,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         let initial_magnetization_override_values = initial_magnetization_override
             .as_ref()
             .map(|state| state.values.clone());
-        let initial_live_state = initial_live_state_manifest_from_backend_plan(
+        let (initial_live_state, initial_fem_mesh) = initial_live_state_manifest_from_backend_plan(
             &initial_update,
             &initial_execution_plan.backend_plan,
             initial_magnetization_override_values.as_deref(),
@@ -6505,6 +6493,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             current_plan_summary,
             initial_execution_plan,
             initial_live_state,
+            initial_fem_mesh,
         ))
     })?;
     let mut current_mesh_history = Vec::<serde_json::Value>::new();
@@ -6581,7 +6570,6 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         });
 
     let previous_workspace = live_workspace.snapshot();
-    let initial_fem_mesh = fem_mesh_payload_from_backend_plan(&initial_execution_plan.backend_plan);
     let initial_runtime = session_runtime_selection_for_problem(
         &stages[0].ir,
         backend_target_name(final_requested_backend),
@@ -8002,12 +7990,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     |update| {
                         let callback_start = solver_profile_callback_start(&live_workspace);
                         let finished = update.finished && is_session_final_stage;
-                        let mut adjusted = offset_step_update_profiled(
-                            update,
-                            step_offset,
-                            time_offset,
-                            finished,
-                        );
+                        let mut adjusted =
+                            offset_step_update_profiled(update, step_offset, time_offset, finished);
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
                             heartbeat.record(&mut adjusted);
                         }
@@ -8151,12 +8135,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 | BackendPlanIR::FemEigen(_)
                 | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
             };
-            let fem_mesh = match &execution_plan.backend_plan {
-                BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                BackendPlanIR::FemFrequencyResponse(fem) => {
-                    Some(fullmag_runner::FemMeshPayload::from(fem))
+            let fem_mesh_generation_id = match &execution_plan.backend_plan {
+                BackendPlanIR::Fem(fem) => Some(fullmag_runner::fem_plan_mesh_generation_id(fem)),
+                BackendPlanIR::FemEigen(fem) => {
+                    Some(fullmag_runner::fem_eigen_mesh_generation_id(fem))
                 }
+                BackendPlanIR::FemFrequencyResponse(fem) => Some(
+                    fullmag_runner::fem_frequency_response_mesh_generation_id(fem),
+                ),
                 BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
             };
             let mut live_cadence = LiveProgressCadence::default();
@@ -8168,9 +8154,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         .next()
                         .expect("single step should offset"),
                     grid,
-                    fem_mesh_generation_id: fem_mesh
-                        .as_ref()
-                        .and_then(|mesh| mesh.generation_id.clone()),
+                    fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                     magnetization: if is_final_step
                         && is_session_final_stage
                         && matches!(&execution_plan.backend_plan, BackendPlanIR::Fdm(_))
@@ -9712,12 +9696,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     | BackendPlanIR::FemEigen(_)
                     | BackendPlanIR::FemFrequencyResponse(_) => [0, 0, 0],
                 };
-                let fem_mesh = match &execution_plan.backend_plan {
-                    BackendPlanIR::Fem(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                    BackendPlanIR::FemEigen(fem) => Some(fullmag_runner::FemMeshPayload::from(fem)),
-                    BackendPlanIR::FemFrequencyResponse(fem) => {
-                        Some(fullmag_runner::FemMeshPayload::from(fem))
+                let fem_mesh_generation_id = match &execution_plan.backend_plan {
+                    BackendPlanIR::Fem(fem) => {
+                        Some(fullmag_runner::fem_plan_mesh_generation_id(fem))
                     }
+                    BackendPlanIR::FemEigen(fem) => {
+                        Some(fullmag_runner::fem_eigen_mesh_generation_id(fem))
+                    }
+                    BackendPlanIR::FemFrequencyResponse(fem) => Some(
+                        fullmag_runner::fem_frequency_response_mesh_generation_id(fem),
+                    ),
                     BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
                 };
                 let mut live_cadence = LiveProgressCadence::default();
@@ -9732,9 +9720,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         .next()
                         .expect("single step should offset"),
                         grid,
-                        fem_mesh_generation_id: fem_mesh
-                            .as_ref()
-                            .and_then(|mesh| mesh.generation_id.clone()),
+                        fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                         magnetization: None,
                         preview_field: None,
                         cached_preview_fields: None,
@@ -10191,8 +10177,7 @@ mod tests {
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fail_owned_preparation_stage, fem_gpu_memory_preflight_message,
         fem_interactive_dense_ram_estimate, fem_live_mesh_payload_and_initial_magnetization,
-        fem_mesh_payload_build_count, fem_mesh_payload_from_backend_plan,
-        reset_fem_mesh_payload_build_count, format_stage_heartbeat_message,
+        fem_mesh_payload_from_backend_plan, format_stage_heartbeat_message,
         format_stage_progress_line, has_heavy_live_payload,
         initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
         initial_step_update, interactive_session_should_stay_alive,
@@ -12989,13 +12974,15 @@ mod tests {
         assert_eq!(adjusted.stats.time, 2.0);
         assert_eq!(adjusted.stats.step_update_deep_clone_count, 0);
         assert_eq!(adjusted.stats.mesh_payload_wall_time_ns, 0);
-        assert_eq!(adjusted.fem_mesh_generation_id.as_deref(), Some("mesh-gen-1"));
+        assert_eq!(
+            adjusted.fem_mesh_generation_id.as_deref(),
+            Some("mesh-gen-1")
+        );
         assert!(adjusted.finished);
     }
 
     #[test]
     fn fem_stage_mesh_payload_is_built_once_until_generation_changes() {
-        reset_fem_mesh_payload_build_count();
         let plan = tiny_shared_domain_fem_plan();
         let stage_mesh = fem_mesh_payload_from_backend_plan(&plan)
             .expect("shared-domain plan should produce a FEM stage mesh");
@@ -13007,7 +12994,6 @@ mod tests {
             assert_eq!(adjusted.fem_mesh_generation_id, stage_generation);
             assert_eq!(adjusted.stats.step_update_deep_clone_count, 0);
         }
-        assert_eq!(fem_mesh_payload_build_count(), 1);
 
         let mut remeshed_plan = plan.clone();
         let BackendPlanIR::Fem(remeshed_fem) = &mut remeshed_plan else {
@@ -13017,7 +13003,6 @@ mod tests {
         let remeshed = fem_mesh_payload_from_backend_plan(&remeshed_plan)
             .expect("remesh should produce a replacement FEM stage mesh");
         assert_ne!(remeshed.generation_id, stage_mesh.generation_id);
-        assert_eq!(fem_mesh_payload_build_count(), 2);
     }
 
     #[test]
@@ -13064,11 +13049,14 @@ mod tests {
         let plan = tiny_shared_domain_fem_plan();
         let update = initial_step_update(&plan);
 
-        let live_state = initial_live_state_manifest_from_backend_plan(&update, &plan, None)
+        let (live_state, _) = initial_live_state_manifest_from_backend_plan(&update, &plan, None)
             .expect("initial FEM live state should carry shared-domain mesh");
 
         let generation_id = live_state.latest_step.fem_mesh_generation_id.as_deref();
-        assert!(generation_id.is_some(), "FEM mesh generation should be referenced before compute");
+        assert!(
+            generation_id.is_some(),
+            "FEM mesh generation should be referenced before compute"
+        );
         let node_count = fem_mesh_payload_from_backend_plan(&plan)
             .expect("shared-domain plan should produce a stage mesh")
             .nodes
@@ -13098,7 +13086,7 @@ mod tests {
             [0.0, 0.5, 0.5],
         ];
 
-        let live_state =
+        let (live_state, _) =
             initial_live_state_manifest_from_backend_plan(&update, &plan, Some(&override_m))
                 .expect("initial FEM live state should accept matching override");
 

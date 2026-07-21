@@ -274,13 +274,15 @@ pub use solver_profile::{
     SolverProfileState, SolverProfileStepSample, SolverProfileThreading, SolverRateDiagnostics,
 };
 pub use types::{
-    fem_mesh_topology_fingerprint, ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment,
-    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy, LivePreviewField,
-    LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
-    LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
-    RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StepAction, StepStats,
-    StepUpdate, TimestepBackend, TimestepDevice, TimestepExecutionIdentity,
-    TimestepPolicyProvenance, TimestepValidationState,
+    fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
+    fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, ExecutionProvenance,
+    FemEigenRunResult, FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload,
+    InitialTimestepReason, LegacyDtPolicy, LivePreviewField, LivePreviewRequest,
+    LiveVectorFieldSnapshot, LlgTimestepCapabilityId, LlgTimestepQualificationId,
+    RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy, RunError, RunResult,
+    RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StepAction, StepStats, StepUpdate,
+    TimestepBackend, TimestepDevice, TimestepExecutionIdentity, TimestepPolicyProvenance,
+    TimestepValidationState,
 };
 
 use crate::capabilities::{
@@ -1938,9 +1940,11 @@ pub fn run_planned_problem_with_callback(
         stats: final_stats,
         grid: final_grid,
         fem_mesh_generation_id: match &plan.backend_plan {
-            BackendPlanIR::Fem(fem) => FemMeshPayload::from(fem).generation_id,
-            BackendPlanIR::FemEigen(eigen) => FemMeshPayload::from(eigen).generation_id,
-            BackendPlanIR::FemFrequencyResponse(response) => FemMeshPayload::from(response).generation_id,
+            BackendPlanIR::Fem(fem) => Some(fem_plan_mesh_generation_id(fem)),
+            BackendPlanIR::FemEigen(eigen) => Some(fem_eigen_mesh_generation_id(eigen)),
+            BackendPlanIR::FemFrequencyResponse(response) => {
+                Some(fem_frequency_response_mesh_generation_id(response))
+            }
             BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
         },
         magnetization: Some(final_m),
@@ -2255,9 +2259,11 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         stats: final_stats,
         grid: final_grid,
         fem_mesh_generation_id: match &plan.backend_plan {
-            BackendPlanIR::Fem(fem) => FemMeshPayload::from(fem).generation_id,
-            BackendPlanIR::FemEigen(eigen) => FemMeshPayload::from(eigen).generation_id,
-            BackendPlanIR::FemFrequencyResponse(response) => FemMeshPayload::from(response).generation_id,
+            BackendPlanIR::Fem(fem) => Some(fem_plan_mesh_generation_id(fem)),
+            BackendPlanIR::FemEigen(eigen) => Some(fem_eigen_mesh_generation_id(eigen)),
+            BackendPlanIR::FemFrequencyResponse(response) => {
+                Some(fem_frequency_response_mesh_generation_id(response))
+            }
             BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
         },
         magnetization: None,
@@ -2549,7 +2555,7 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         wall_time_ns: 0,
         ..StepStats::default()
     });
-    let fem_mesh_generation_id = FemMeshPayload::from(fem).generation_id;
+    let fem_mesh_generation_id = Some(fem_plan_mesh_generation_id(fem));
     on_step(StepUpdate {
         stats: final_stats,
         grid: [0, 0, 0],

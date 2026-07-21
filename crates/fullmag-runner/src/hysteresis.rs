@@ -817,7 +817,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                     ..point_stats
                 },
                 grid: hysteresis_magnetization_grid(plan, &current_m),
-                fem_mesh_generation_id: None,
+                fem_mesh_generation_id: hysteresis_mesh_generation_id(&plan.backend_plan),
                 magnetization: Some(current_m.iter().flat_map(|v| v.iter().copied()).collect()),
                 preview_field: None,
                 cached_preview_fields: None,
@@ -3130,7 +3130,7 @@ fn hysteresis_progress_update(
     StepUpdate {
         stats: stats.cloned().unwrap_or_default(),
         grid: hysteresis_progress_grid(backend_plan, magnetization),
-        fem_mesh_generation_id: None,
+        fem_mesh_generation_id: hysteresis_mesh_generation_id(backend_plan),
         magnetization: magnetization
             .map(|values| values.iter().flat_map(|v| v.iter().copied()).collect()),
         preview_field: None,
@@ -3142,6 +3142,17 @@ fn hysteresis_progress_update(
         hysteresis_settle_step_method: Some(hysteresis_settle_step_method(step).to_string()),
         scalar_row_due: false,
         finished: false,
+    }
+}
+
+fn hysteresis_mesh_generation_id(backend_plan: &BackendPlanIR) -> Option<String> {
+    match backend_plan {
+        BackendPlanIR::Fem(plan) => Some(crate::types::fem_plan_mesh_generation_id(plan)),
+        BackendPlanIR::FemEigen(plan) => Some(crate::types::fem_eigen_mesh_generation_id(plan)),
+        BackendPlanIR::FemFrequencyResponse(plan) => Some(
+            crate::types::fem_frequency_response_mesh_generation_id(plan),
+        ),
+        BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
     }
 }
 
@@ -6056,7 +6067,7 @@ mod tests {
                 ..StepStats::default()
             },
             grid: [4, 1, 1],
-                    fem_mesh_generation_id: None,
+            fem_mesh_generation_id: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             preview_field: None,
             cached_preview_fields: None,
@@ -6141,6 +6152,7 @@ mod tests {
             Some("projected_gradient_bb")
         );
         assert_eq!(update.grid, [1, 1, 1]);
+        assert_eq!(update.fem_mesh_generation_id, None);
         assert_eq!(update.magnetization.as_ref().map(Vec::len), Some(6));
         assert!(update.stats.max_h_eff > 79_000.0);
         assert!(update.stats.max_torque_Apm > 79_000.0);
@@ -6305,7 +6317,40 @@ mod tests {
             use_consistent_mass: None,
         };
 
-        let averaging = hysteresis_averaging_context(&BackendPlanIR::Fem(plan));
+        let expected_generation = crate::types::fem_plan_mesh_generation_id(&plan);
+        let backend_plan = BackendPlanIR::Fem(plan);
+        assert_eq!(
+            hysteresis_mesh_generation_id(&backend_plan).as_deref(),
+            Some(expected_generation.as_str())
+        );
+        let step = SettleStepIR::Minimize {
+            method: "projected_gradient_bb".to_string(),
+            torque_tolerance: 5e-5,
+            energy_tolerance: 1e-20,
+            max_steps: 2,
+            applies_to: None,
+            stop_criteria: None,
+            timestep_s: None,
+            max_pseudotime_s: None,
+            max_physical_time_s: None,
+            on_non_convergence: "fail".to_string(),
+            retry_timestep_scale: None,
+            retry_max_attempts: None,
+        };
+        let update = hysteresis_progress_update(
+            &backend_plan,
+            Some(0),
+            10.0,
+            0,
+            &step,
+            None,
+            None,
+        );
+        assert_eq!(
+            update.fem_mesh_generation_id.as_deref(),
+            Some(expected_generation.as_str())
+        );
+        let averaging = hysteresis_averaging_context(&backend_plan);
         let m_avg = average_hysteresis_magnetization(
             &[
                 [1.0, 0.0, 0.0],

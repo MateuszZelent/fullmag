@@ -32,8 +32,7 @@ use crate::preview::{
 };
 use crate::quantities::normalized_quantity_name;
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
-    RelaxationTorqueConfirmation,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 use crate::scalar_metrics::{
     apply_average_m_to_step_stats, average_magnetization_components,
@@ -667,7 +666,7 @@ fn execute_reference_fem_impl(
                 let action = (live.on_step)(StepUpdate {
                     stats: current_stats.clone(),
                     grid: live.grid,
-                    fem_mesh_generation_id: crate::types::FemMeshPayload::from(plan).generation_id,
+                    fem_mesh_generation_id: Some(crate::types::fem_plan_mesh_generation_id(plan)),
                     magnetization: None,
                     preview_field,
                     cached_preview_fields: None,
@@ -812,7 +811,7 @@ fn execute_reference_fem_impl(
                 let action = (live.on_step)(StepUpdate {
                     stats: update_stats,
                     grid: live.grid,
-                    fem_mesh_generation_id: crate::types::FemMeshPayload::from(plan).generation_id,
+                    fem_mesh_generation_id: Some(crate::types::fem_plan_mesh_generation_id(plan)),
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
@@ -883,7 +882,7 @@ fn execute_reference_fem_impl(
             let action = (live.on_step)(StepUpdate {
                 stats: update_stats,
                 grid: live.grid,
-                fem_mesh_generation_id: crate::types::FemMeshPayload::from(plan).generation_id,
+                fem_mesh_generation_id: Some(crate::types::fem_plan_mesh_generation_id(plan)),
                 magnetization,
                 preview_field,
                 cached_preview_fields: None,

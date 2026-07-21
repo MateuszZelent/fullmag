@@ -53,16 +53,37 @@ pub(crate) struct LocalLiveWorkspaceState {
     pub(crate) published_fem_mesh_generation_id: Option<String>,
 }
 
+#[cfg(test)]
+static FEM_MESH_PAYLOAD_CLONE_COUNT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+fn reset_fem_mesh_payload_clone_count() {
+    FEM_MESH_PAYLOAD_CLONE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+fn fem_mesh_payload_clone_count() -> u64 {
+    FEM_MESH_PAYLOAD_CLONE_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 impl LocalLiveWorkspaceState {
     pub fn build_publish_payload(
         &self,
+        include_mesh: bool,
         preview_fields: Option<Vec<fullmag_runner::LivePreviewField>>,
         clear_preview_cache: bool,
     ) -> CurrentLiveSnapshotPayload {
         let live_state = self.live_state.clone();
         let mut metadata = self.metadata.clone();
 
-        let fem_mesh = self.fem_mesh.clone();
+        let fem_mesh = include_mesh
+            .then(|| {
+                #[cfg(test)]
+                FEM_MESH_PAYLOAD_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.fem_mesh.clone()
+            })
+            .flatten();
         if live_state.latest_step.step > 0 {
             metadata = None;
         }
@@ -92,6 +113,7 @@ impl LocalLiveWorkspaceState {
 
     pub fn snapshot(&self) -> CurrentLiveSnapshotPayload {
         self.build_publish_payload(
+            true,
             (!self.preview_fields.is_empty()).then_some(self.preview_fields.to_vec()),
             self.clear_preview_cache,
         )
@@ -101,13 +123,11 @@ impl LocalLiveWorkspaceState {
         let preview_fields = (!self.pending_preview_fields.is_empty())
             .then_some(self.pending_preview_fields.take_vec());
         let clear_preview_cache = std::mem::take(&mut self.clear_preview_cache);
-        let mut payload = self.build_publish_payload(preview_fields, clear_preview_cache);
-        let next_mesh_generation_id = payload.fem_mesh.as_ref().map(fem_mesh_generation_key);
-        if next_mesh_generation_id.is_some()
-            && next_mesh_generation_id == self.published_fem_mesh_generation_id
-        {
-            payload.fem_mesh = None;
-        } else if let Some(generation_id) = next_mesh_generation_id {
+        let next_mesh_generation_id = self.fem_mesh.as_ref().map(fem_mesh_generation_key);
+        let include_mesh = next_mesh_generation_id.is_some()
+            && next_mesh_generation_id != self.published_fem_mesh_generation_id;
+        let payload = self.build_publish_payload(include_mesh, preview_fields, clear_preview_cache);
+        if let Some(generation_id) = next_mesh_generation_id.filter(|_| include_mesh) {
             self.published_fem_mesh_generation_id = Some(generation_id);
         }
         payload
@@ -1130,8 +1150,9 @@ mod tests {
     use std::time::Instant;
 
     use super::{
-        apply_python_progress_event, bootstrap_live_state, merge_detailed_mesh_workspace,
-        merge_pending_publish_payload, replace_cached_preview_fields, CurrentLivePublisher,
+        apply_python_progress_event, bootstrap_live_state, fem_mesh_payload_clone_count,
+        merge_detailed_mesh_workspace, merge_pending_publish_payload,
+        replace_cached_preview_fields, reset_fem_mesh_payload_clone_count, CurrentLivePublisher,
         CurrentLiveScalarRow, CurrentLiveSnapshotPayload, LiveTelemetryPublishGate,
         LocalLiveWorkspace, LocalLiveWorkspaceState,
     };
@@ -1952,6 +1973,7 @@ mod tests {
 
     #[test]
     fn publish_delta_promotes_domain_mesh_once() {
+        reset_fem_mesh_payload_clone_count();
         let mut state = workspace_with_domain_mesh().snapshot();
 
         let first = state.publish_delta();
@@ -1973,15 +1995,30 @@ mod tests {
         for step in 2..=12 {
             state.live_state.latest_step.step = step;
             let delta = state.publish_delta();
-            assert!(delta.fem_mesh.is_none(), "step {step} republished the stage mesh");
+            assert!(
+                delta.fem_mesh.is_none(),
+                "step {step} republished the stage mesh"
+            );
             assert_eq!(
-                delta
-                    .live_state
-                    .as_ref()
-                    .and_then(|live_state| live_state.latest_step.fem_mesh_generation_id.as_deref()),
+                delta.live_state.as_ref().and_then(|live_state| live_state
+                    .latest_step
+                    .fem_mesh_generation_id
+                    .as_deref()),
                 Some("mesh-gen-1")
             );
         }
+        assert_eq!(
+            fem_mesh_payload_clone_count(),
+            1,
+            "only the first delta clones topology"
+        );
+
+        let _full_resync = state.snapshot();
+        assert_eq!(
+            fem_mesh_payload_clone_count(),
+            2,
+            "full resync clones topology once"
+        );
     }
 
     #[test]
