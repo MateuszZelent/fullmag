@@ -136,7 +136,7 @@
 
 .fm-footer-diagnostics__profile-row {
   display: grid;
-  grid-template-columns: var(--fm-footer-freq-indicator-col-width) repeat(21, minmax(58px, auto));
+  grid-template-columns: var(--fm-footer-freq-indicator-col-width) repeat(22, minmax(58px, auto));
   min-width: 0;
   align-items: center;
   gap: var(--fm-space-2);

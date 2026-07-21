@@ -17803,6 +17803,49 @@
         },
         "type": "object"
       },
+      "SolverProfileOverheadDiagnosticsResource": {
+        "properties": {
+          "last_persist_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_publisher_replace_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_record_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_persist_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_publisher_replace_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total_record_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "last_record_wall_time_ns",
+          "total_record_wall_time_ns",
+          "last_persist_wall_time_ns",
+          "total_persist_wall_time_ns",
+          "last_publisher_replace_wall_time_ns",
+          "total_publisher_replace_wall_time_ns"
+        ],
+        "type": "object"
+      },
       "SolverProfilePhaseResource": {
         "properties": {
           "id": {
@@ -17891,6 +17934,9 @@
                 "$ref": "#/components/schemas/LivePublisherDiagnosticsResource"
               }
             ]
+          },
+          "overhead": {
+            "$ref": "#/components/schemas/SolverProfileOverheadDiagnosticsResource"
           },
           "preview_3d_disabled": {
             "type": "boolean"
@@ -18201,6 +18247,11 @@
             "minimum": 0,
             "type": "integer"
           },
+          "step_update_deep_clone_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "threading": {
             "$ref": "#/components/schemas/SolverProfileThreadingResource"
           },
@@ -18234,16 +18285,6 @@
         },
         "required": [
           "step",
-          "span_first_step",
-          "span_last_step",
-          "span_step_count",
-          "span_monotonic_wall_time_ns",
-          "profiled_step_total_ns",
-          "native_solver_wall_time_ns",
-          "unprofiled_gap_total_ns",
-          "unprofiled_gap_per_step_ns",
-          "sample_kinds",
-          "phase_windows",
           "time",
           "dt",
           "total_ns",

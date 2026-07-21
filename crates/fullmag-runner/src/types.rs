@@ -791,8 +791,8 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(snapshot.latest_samples[1].step, 3);
         assert!(snapshot.latest_samples[1].sample_time_unix_ms > 0);
         assert!(snapshot.latest_samples[1].delta_wall_time_ns.is_some());
-        assert_eq!(snapshot.latest_samples[1].phase_sum_ns, 840);
-        assert_eq!(snapshot.latest_samples[1].missing_ns, 160);
+        assert_eq!(snapshot.latest_samples[1].phase_sum_ns, 815);
+        assert_eq!(snapshot.latest_samples[1].missing_ns, 185);
         assert_eq!(snapshot.latest_samples[1].artifact_enqueue_bytes, 4096);
         assert_eq!(snapshot.latest_samples[1].artifact_queue_depth_max, 3);
         assert_eq!(snapshot.latest_samples[1].artifact_queue_depth_current, 1);
@@ -881,7 +881,10 @@ mod all_in_gpu_fem_transfer_audit_tests {
         assert_eq!(finalization_phase.wall_time_ns, 700);
         assert_eq!(forced.finalization_field_copy_wall_time_ns, 500);
         assert_eq!(forced.finalization_field_copy_bytes, 24_000);
-        assert_eq!(profile.snapshot().latest_samples.len(), 2);
+        let samples = profile.snapshot().latest_samples;
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples[1].span_step_count, 1);
+        assert_eq!(samples[2].span_step_count, 0);
     }
 
     #[test]

@@ -146,15 +146,25 @@ pub struct SolverProfileStepSample {
     pub delta_wall_time_ns: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unprofiled_gap_wall_time_ns: Option<u64>,
+    #[serde(default)]
     pub span_first_step: u64,
+    #[serde(default)]
     pub span_last_step: u64,
+    #[serde(default)]
     pub span_step_count: u64,
+    #[serde(default)]
     pub span_monotonic_wall_time_ns: u64,
+    #[serde(default)]
     pub profiled_step_total_ns: u64,
+    #[serde(default)]
     pub native_solver_wall_time_ns: u64,
+    #[serde(default)]
     pub unprofiled_gap_total_ns: u64,
+    #[serde(default)]
     pub unprofiled_gap_per_step_ns: u64,
+    #[serde(default)]
     pub sample_kinds: Vec<SolverProfileSampleKind>,
+    #[serde(default)]
     pub phase_windows: Vec<SolverProfilePhaseWindow>,
     pub time: f64,
     pub dt: f64,
@@ -201,6 +211,8 @@ pub struct SolverProfileStepSample {
     pub hot_loop_control_scalar_host_sync_count: u64,
     pub relaxation_preconditioner_cache_hits: u32,
     pub relaxation_preconditioner_cache_misses: u32,
+    #[serde(default)]
+    pub step_update_deep_clone_count: u64,
     pub threading: SolverProfileThreading,
 }
 
@@ -214,20 +226,7 @@ impl SolverProfileStepSample {
             .saturating_add(stats.demag_recover_wall_time_ns)
             .saturating_add(stats.demag_energy_wall_time_ns);
         let demag_total_ns = stats.demag_wall_time_ns.max(demag_subphase_sum_ns);
-        let phase_sum_ns = stats
-            .exchange_wall_time_ns
-            .saturating_add(stats.rhs_wall_time_ns)
-            .saturating_add(demag_total_ns)
-            .saturating_add(stats.extra_energy_wall_time_ns)
-            .saturating_add(stats.snapshot_wall_time_ns)
-            .saturating_add(stats.relaxation_preconditioner_wall_time_ns)
-            .saturating_add(stats.relaxation_state_copy_wall_time_ns)
-            .saturating_add(stats.relaxation_state_upload_wall_time_ns)
-            .saturating_add(stats.relaxation_retraction_wall_time_ns)
-            .saturating_add(stats.relaxation_gradient_wall_time_ns)
-            .saturating_add(stats.relaxation_metric_wall_time_ns)
-            .saturating_add(stats.relaxation_line_search_wall_time_ns)
-            .saturating_add(stats.relaxation_update_wall_time_ns)
+        let phase_sum_ns = native_solver_wall_time_ns(stats)
             .saturating_add(stats.native_ffi_overhead_wall_time_ns)
             .saturating_add(stats.preview_wall_time_ns)
             .saturating_add(stats.cached_preview_wall_time_ns)
@@ -463,6 +462,7 @@ impl SolverProfileStepSample {
             hot_loop_control_scalar_host_sync_count: stats.hot_loop_control_scalar_host_sync_count,
             relaxation_preconditioner_cache_hits: stats.relaxation_preconditioner_cache_hits,
             relaxation_preconditioner_cache_misses: stats.relaxation_preconditioner_cache_misses,
+            step_update_deep_clone_count: stats.step_update_deep_clone_count,
             threading: SolverProfileThreading::from_stats(stats),
         }
     }
@@ -514,12 +514,23 @@ fn duration_ns(duration: std::time::Duration) -> u64 {
 }
 
 fn native_solver_wall_time_ns(stats: &StepStats) -> u64 {
+    // Snapshot encloses exchange, normalized demag, and local interactions.
+    // RHS and relaxation-driver phases are sequential in the native sources.
+    let demag_subphase_sum = stats
+        .demag_assemble_wall_time_ns
+        .saturating_add(stats.demag_solver_setup_wall_time_ns)
+        .saturating_add(stats.demag_solver_apply_wall_time_ns)
+        .saturating_add(stats.demag_recover_wall_time_ns)
+        .saturating_add(stats.demag_energy_wall_time_ns);
+    let normalized_demag = stats.demag_wall_time_ns.max(demag_subphase_sum);
     let interaction_total = stats
         .exchange_wall_time_ns
-        .saturating_add(stats.demag_wall_time_ns)
+        .saturating_add(normalized_demag)
         .saturating_add(stats.extra_energy_wall_time_ns);
-    let rhs_or_interactions = stats.rhs_wall_time_ns.max(interaction_total);
-    rhs_or_interactions
+    stats
+        .snapshot_wall_time_ns
+        .max(interaction_total)
+        .saturating_add(stats.rhs_wall_time_ns)
         .saturating_add(stats.relaxation_preconditioner_wall_time_ns)
         .saturating_add(stats.relaxation_state_copy_wall_time_ns)
         .saturating_add(stats.relaxation_state_upload_wall_time_ns)
@@ -563,6 +574,16 @@ pub struct SolverProfileAggregates {
     pub average_demag_ns: u64,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SolverProfileOverheadDiagnostics {
+    pub last_record_wall_time_ns: u64,
+    pub total_record_wall_time_ns: u64,
+    pub last_persist_wall_time_ns: u64,
+    pub total_persist_wall_time_ns: u64,
+    pub last_publisher_replace_wall_time_ns: u64,
+    pub total_publisher_replace_wall_time_ns: u64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct LivePublisherDiagnostics {
     pub replace_count: u64,
@@ -599,6 +620,8 @@ pub struct SolverProfileSnapshot {
     pub threading: Option<SolverProfileThreading>,
     pub latest_samples: Vec<SolverProfileStepSample>,
     pub aggregates: SolverProfileAggregates,
+    #[serde(default)]
+    pub overhead: SolverProfileOverheadDiagnostics,
     pub artifact_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_publisher: Option<LivePublisherDiagnostics>,
@@ -624,6 +647,7 @@ pub struct SolverProfileState {
     artifact_refs: Vec<String>,
     last_sampled_instant: Option<Instant>,
     pending_window: PendingProfileWindow,
+    overhead: SolverProfileOverheadDiagnostics,
 }
 
 impl Default for SolverProfileState {
@@ -641,6 +665,7 @@ impl SolverProfileState {
             artifact_refs: Vec::new(),
             last_sampled_instant: None,
             pending_window: PendingProfileWindow::default(),
+            overhead: SolverProfileOverheadDiagnostics::default(),
         }
     }
 
@@ -692,14 +717,66 @@ impl SolverProfileState {
         if !self.config.enabled {
             return None;
         }
-        let now = Instant::now();
-        self.account_step(stats, now);
-        Some(self.push_step_sample(stats, now))
+        self.force_record_step_at(stats, Instant::now())
+    }
+
+    fn force_record_step_at(
+        &mut self,
+        stats: &StepStats,
+        now: Instant,
+    ) -> Option<SolverProfileStepSample> {
+        if self.pending_window.step_count > 0 {
+            let mut step_only = stats.clone();
+            step_only.finalization_wall_time_ns = 0;
+            step_only.finalization_field_copy_wall_time_ns = 0;
+            step_only.finalization_field_copy_bytes = 0;
+            self.push_step_sample(&step_only, now);
+        }
+        let mut finalization = StepStats {
+            step: stats.step,
+            time: stats.time,
+            dt: stats.dt,
+            wall_time_ns: stats.finalization_wall_time_ns,
+            finalization_wall_time_ns: stats.finalization_wall_time_ns,
+            finalization_field_copy_wall_time_ns: stats.finalization_field_copy_wall_time_ns,
+            finalization_field_copy_bytes: stats.finalization_field_copy_bytes,
+            ..StepStats::default()
+        };
+        finalization.wall_time_ns = finalization
+            .wall_time_ns
+            .max(finalization.finalization_field_copy_wall_time_ns);
+        let mut sample = SolverProfileStepSample::from_step_stats(&finalization);
+        sample.span_first_step = stats.step;
+        sample.span_last_step = stats.step;
+        sample.span_step_count = 0;
+        sample.span_monotonic_wall_time_ns = finalization.wall_time_ns;
+        sample.profiled_step_total_ns = finalization.wall_time_ns;
+        sample.native_solver_wall_time_ns = 0;
+        sample.sample_kinds = vec![SolverProfileSampleKind::Finalization];
+        sample.phase_windows = sample
+            .phases
+            .iter()
+            .filter(|phase| phase.id == "finalization")
+            .map(|phase| SolverProfilePhaseWindow {
+                id: phase.id.clone(),
+                label: phase.label.clone(),
+                sum_wall_time_ns: phase.wall_time_ns,
+                mean_wall_time_ns: phase.wall_time_ns,
+                max_wall_time_ns: phase.wall_time_ns,
+            })
+            .collect();
+        self.samples.push_back(sample.clone());
+        self.trim_samples();
+        self.revision = self.revision.wrapping_add(1);
+        Some(sample)
     }
 
     fn account_step(&mut self, stats: &StepStats, now: Instant) {
         let pending = &mut self.pending_window;
-        pending.started_at.get_or_insert(now);
+        let step_started_at = now
+            .checked_sub(std::time::Duration::from_nanos(stats.wall_time_ns))
+            .unwrap_or(now);
+        pending.started_at.get_or_insert(step_started_at);
         if pending.first_step.is_none() {
             pending.first_step = Some(stats.step);
         }
@@ -778,7 +855,6 @@ impl SolverProfileState {
         sample.delta_wall_time_ns = has_previous_sample.then_some(span_wall_time_ns);
         sample.unprofiled_gap_wall_time_ns = has_previous_sample.then_some(gap_total_ns);
         self.samples.push_back(sample.clone());
-        self.pending_window.started_at = Some(now);
         self.trim_samples();
         self.revision = self.revision.wrapping_add(1);
         sample
@@ -796,6 +872,25 @@ impl SolverProfileState {
         }
     }
 
+    pub fn record_overhead(&mut self, record_ns: u64, persist_ns: u64, publisher_ns: u64) {
+        self.overhead.last_record_wall_time_ns = record_ns;
+        self.overhead.total_record_wall_time_ns = self
+            .overhead
+            .total_record_wall_time_ns
+            .saturating_add(record_ns);
+        self.overhead.last_persist_wall_time_ns = persist_ns;
+        self.overhead.total_persist_wall_time_ns = self
+            .overhead
+            .total_persist_wall_time_ns
+            .saturating_add(persist_ns);
+        self.overhead.last_publisher_replace_wall_time_ns = publisher_ns;
+        self.overhead.total_publisher_replace_wall_time_ns = self
+            .overhead
+            .total_publisher_replace_wall_time_ns
+            .saturating_add(publisher_ns);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     pub fn snapshot(&self) -> SolverProfileSnapshot {
         let latest_samples: Vec<_> = self.samples.iter().cloned().collect();
         SolverProfileSnapshot {
@@ -810,6 +905,7 @@ impl SolverProfileState {
             preview_3d_disabled: false,
             threading: latest_samples.last().map(|sample| sample.threading.clone()),
             aggregates: aggregate_samples(&latest_samples),
+            overhead: self.overhead.clone(),
             latest_samples,
             artifact_refs: self.artifact_refs.clone(),
             live_publisher: None,
@@ -900,7 +996,7 @@ fn format_bytes(value: u64) -> String {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{SolverProfileConfig, SolverProfileState};
+    use super::{native_solver_wall_time_ns, phase_time, SolverProfileConfig, SolverProfileState};
     use crate::types::StepStats;
 
     fn enabled_profile(sample_every: u64) -> SolverProfileState {
@@ -953,10 +1049,12 @@ mod tests {
         assert_eq!(sample.span_first_step, 11);
         assert_eq!(sample.span_last_step, 13);
         assert_eq!(sample.span_step_count, 3);
-        assert_eq!(sample.span_monotonic_wall_time_ns, 100_000_000);
+        // Step 11 completed at `start` after 10 ms of work, so the closed
+        // interval begins at its inferred execution start and ends at step 13.
+        assert_eq!(sample.span_monotonic_wall_time_ns, 110_000_000);
         assert_eq!(sample.profiled_step_total_ns, 30_000_000);
-        assert_eq!(sample.unprofiled_gap_total_ns, 70_000_000);
-        assert_eq!(sample.unprofiled_gap_per_step_ns, 23_333_333);
+        assert_eq!(sample.unprofiled_gap_total_ns, 80_000_000);
+        assert_eq!(sample.unprofiled_gap_per_step_ns, 26_666_666);
     }
 
     #[test]
@@ -1005,5 +1103,143 @@ mod tests {
 
         assert!(second.span_monotonic_wall_time_ns > 0);
         assert!(second.sample_time_unix_ms < u64::MAX);
+    }
+
+    #[test]
+    fn sample_every_one_encloses_nonzero_step_work() {
+        let mut profile = enabled_profile(1);
+        let sample = profile
+            .record_step_at(
+                &StepStats {
+                    step: 1,
+                    wall_time_ns: 7_000_000,
+                    ..StepStats::default()
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(sample.span_step_count, 1);
+        assert_eq!(sample.span_monotonic_wall_time_ns, 7_000_000);
+        assert_eq!(sample.unprofiled_gap_total_ns, 0);
+    }
+
+    #[test]
+    fn native_total_uses_snapshot_enclosure_then_sequential_rhs_and_relaxation() {
+        let stats = StepStats {
+            snapshot_wall_time_ns: 30,
+            exchange_wall_time_ns: 10,
+            demag_wall_time_ns: 4,
+            demag_assemble_wall_time_ns: 3,
+            demag_solver_apply_wall_time_ns: 5,
+            extra_energy_wall_time_ns: 6,
+            rhs_wall_time_ns: 7,
+            relaxation_gradient_wall_time_ns: 11,
+            relaxation_update_wall_time_ns: 13,
+            ..StepStats::default()
+        };
+        assert_eq!(native_solver_wall_time_ns(&stats), 61);
+    }
+
+    #[test]
+    fn forced_finalization_never_recounts_the_last_step() {
+        let mut profile = enabled_profile(1);
+        let completion = Instant::now();
+        profile
+            .record_step_at(
+                &StepStats {
+                    step: 9,
+                    wall_time_ns: 100,
+                    rhs_wall_time_ns: 40,
+                    ..StepStats::default()
+                },
+                completion,
+            )
+            .unwrap();
+        let finalization = profile
+            .force_record_step_at(
+                &StepStats {
+                    step: 9,
+                    wall_time_ns: 100,
+                    rhs_wall_time_ns: 40,
+                    finalization_wall_time_ns: 17,
+                    ..StepStats::default()
+                },
+                completion + Duration::from_nanos(17),
+            )
+            .unwrap();
+        assert_eq!(finalization.span_step_count, 0);
+        assert_eq!(finalization.profiled_step_total_ns, 17);
+        assert_eq!(finalization.native_solver_wall_time_ns, 0);
+        assert_eq!(phase_time(&finalization.phases, "rhs_total"), 0);
+        assert_eq!(phase_time(&finalization.phases, "finalization"), 17);
+    }
+
+    #[test]
+    fn forced_finalization_flushes_a_pending_step_once_then_appends_one_event() {
+        let mut profile = enabled_profile(2);
+        let start = Instant::now();
+        profile
+            .record_step_at(
+                &StepStats {
+                    step: 2,
+                    wall_time_ns: 10,
+                    ..StepStats::default()
+                },
+                start,
+            )
+            .unwrap();
+        assert!(profile
+            .record_step_at(
+                &StepStats {
+                    step: 3,
+                    wall_time_ns: 20,
+                    ..StepStats::default()
+                },
+                start + Duration::from_nanos(20)
+            )
+            .is_none());
+        profile
+            .force_record_step_at(
+                &StepStats {
+                    step: 3,
+                    wall_time_ns: 20,
+                    finalization_wall_time_ns: 5,
+                    ..StepStats::default()
+                },
+                start + Duration::from_nanos(25),
+            )
+            .unwrap();
+        let samples = profile.snapshot().latest_samples;
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples[1].span_step_count, 1);
+        assert_eq!(samples[1].profiled_step_total_ns, 20);
+        assert_eq!(samples[2].span_step_count, 0);
+        assert_eq!(samples[2].profiled_step_total_ns, 5);
+    }
+
+    #[test]
+    fn additive_interval_fields_default_for_an_old_serialized_sample() {
+        let sample = super::SolverProfileStepSample::from_step_stats(&StepStats::default());
+        let mut old = serde_json::to_value(sample).unwrap();
+        let object = old.as_object_mut().unwrap();
+        for key in [
+            "span_first_step",
+            "span_last_step",
+            "span_step_count",
+            "span_monotonic_wall_time_ns",
+            "profiled_step_total_ns",
+            "native_solver_wall_time_ns",
+            "unprofiled_gap_total_ns",
+            "unprofiled_gap_per_step_ns",
+            "sample_kinds",
+            "phase_windows",
+            "step_update_deep_clone_count",
+        ] {
+            object.remove(key);
+        }
+        let decoded: super::SolverProfileStepSample = serde_json::from_value(old).unwrap();
+        assert_eq!(decoded.span_step_count, 0);
+        assert!(decoded.phase_windows.is_empty());
+        assert_eq!(decoded.step_update_deep_clone_count, 0);
     }
 }

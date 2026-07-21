@@ -263,6 +263,7 @@ describe("FooterDiagnostics", () => {
       demag: "2.0 ms",
       demagDetail: "CG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms",
       demagSetup: "reused",
+      deepClones: "0",
       exchange: "150.0 us",
       fieldCopy: "250.0 us / 24.0 MiB",
       finalization: "80.0 us / 8.0 KiB",
@@ -327,10 +328,29 @@ describe("FooterDiagnostics", () => {
 
     expect(serializeSolverProfileRows(model.rows)).toBe(
       [
-        "Last step\tClock\tSpan steps\tSpan wall\tGap total\tGap/step\tTotal (last step)\tExchange (last step)\tDemag (last step)\tDemag detail\tSetup\tRelax prec.\tRHS\tPreview\tCache\tField copy\tArtifact\tFinalization\tGPU sync\tNative\tOrchestr.\tMissing",
-        "12\t03:04:05.123\t11-13 (3)\t100.0 ms\t70.0 ms\t23.3 ms\t5.0 ms\t150.0 us\t2.0 ms\tCG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms\treused\t750.0 us\t3.0 ms\t0 ns\t0 ns\t250.0 us / 24.0 MiB\t100.0 us / 4.0 KiB / q3 / w2 4.0 ms\t80.0 us / 8.0 KiB\t2 sync / ctrl 2 / 16 B\t25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us\t0 ns\t25.0 us",
+        "Last step\tClock\tSpan steps\tSpan wall\tGap total\tGap/step\tTotal (last step)\tExchange (last step)\tDemag (last step)\tDemag detail\tSetup\tRelax prec.\tRHS\tPreview\tCache\tField copy\tArtifact\tFinalization\tGPU sync\tNative\tOrchestr.\tMissing\tDeep clones (last step)",
+        "12\t03:04:05.123\t11-13 (3)\t100.0 ms\t70.0 ms\t23.3 ms\t5.0 ms\t150.0 us\t2.0 ms\tCG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms\treused\t750.0 us\t3.0 ms\t0 ns\t0 ns\t250.0 us / 24.0 MiB\t100.0 us / 4.0 KiB / q3 / w2 4.0 ms\t80.0 us / 8.0 KiB\t2 sync / ctrl 2 / 16 B\t25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us\t0 ns\t25.0 us\t0",
       ].join("\n"),
     );
+  });
+
+  it("degrades safely for an older profiler payload without interval fields", () => {
+    const older = structuredClone(profile) as SolverProfileResource;
+    const sample = older.latest_samples[0] as unknown as Record<string, unknown>;
+    for (const key of [
+      "span_first_step", "span_last_step", "span_step_count",
+      "span_monotonic_wall_time_ns", "unprofiled_gap_total_ns",
+      "unprofiled_gap_per_step_ns", "phase_windows", "step_update_deep_clone_count",
+    ]) delete sample[key];
+
+    const model = buildSolverProfilePanelModel(older);
+    expect(model.rows[0]).toMatchObject({
+      spanSteps: "12-12 (1)",
+      spanWall: "5.0 ms",
+      gapTotal: "0 ns",
+      deepClones: "0",
+    });
+    expect(model.windowPhaseSummary).toBe("Window phases pending");
   });
 
   it("keeps the profiler panel idle when the resource is missing", () => {

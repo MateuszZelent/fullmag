@@ -270,8 +270,8 @@ pub use runtime_registry::{
 };
 pub use solver_profile::{
     LivePublisherDiagnostics, SolverProfileAggregates, SolverProfileConfig,
-    SolverProfilePhaseSample, SolverProfileSnapshot, SolverProfileState, SolverProfileStepSample,
-    SolverProfileThreading,
+    SolverProfileOverheadDiagnostics, SolverProfilePhaseSample, SolverProfileSnapshot,
+    SolverProfileState, SolverProfileStepSample, SolverProfileThreading,
 };
 pub use types::{
     fem_mesh_topology_fingerprint, ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment,

@@ -34,6 +34,7 @@ export interface SolverProfileRow {
   artifact: string;
   cache: string;
   clock: string;
+  deepClones: string;
   demag: string;
   demagDetail: string;
   demagSetup: string;
@@ -61,6 +62,7 @@ export interface SolverProfilePanelModel {
   allRows: SolverProfileRow[];
   hasSingleThreadWarning: boolean;
   livePublisherSummary: string;
+  overheadSummary: string;
   previewModeSummary: string;
   rows: SolverProfileRow[];
   sampleCount: number;
@@ -211,6 +213,10 @@ export function FooterDiagnostics() {
               <Timer size={13} aria-hidden="true" />
               <span>{profileModel.windowPhaseSummary}</span>
             </div>
+            <div className="fm-footer-diagnostics__threading">
+              <Timer size={13} aria-hidden="true" />
+              <span>{profileModel.overheadSummary}</span>
+            </div>
             {profileModel.hasSingleThreadWarning ? (
               <div className="fm-footer-diagnostics__warning" role="status">
                 <AlertTriangle size={13} aria-hidden="true" />
@@ -218,6 +224,9 @@ export function FooterDiagnostics() {
               </div>
             ) : null}
             <div className="fm-footer-diagnostics__profile-table" role="table">
+              <div className="fm-footer-diagnostics__threading">
+                Last-step phases (interval aggregates are shown separately above)
+              </div>
               <div
                 className="fm-footer-diagnostics__profile-row fm-footer-diagnostics__profile-row--header"
                 role="row"
@@ -244,6 +253,7 @@ export function FooterDiagnostics() {
                 <span role="columnheader">Native</span>
                 <span role="columnheader">Orchestr.</span>
                 <span role="columnheader">Missing</span>
+                <span role="columnheader">Deep clones (last step)</span>
               </div>
               {profileModel.rows.map((row) => (
                 <div
@@ -273,6 +283,7 @@ export function FooterDiagnostics() {
                   <span role="cell">{row.nativeFfi}</span>
                   <span role="cell">{row.orchestration}</span>
                   <span role="cell">{row.missing}</span>
+                  <span role="cell">{row.deepClones}</span>
                 </div>
               ))}
             </div>
@@ -401,6 +412,7 @@ export function serializeSolverProfileRows(
     "Native",
     "Orchestr.",
     "Missing",
+    "Deep clones (last step)",
   ];
   const body = rows.map((row) =>
     [
@@ -426,6 +438,7 @@ export function serializeSolverProfileRows(
       row.nativeFfi,
       row.orchestration,
       row.missing,
+      row.deepClones,
     ].join("\t"),
   );
   return [headers.join("\t"), ...body].join("\n");
@@ -507,6 +520,7 @@ export function buildSolverProfilePanelModel(
         ),
         cache: formatNs(phaseById.get("cached_preview")?.wall_time_ns ?? 0),
         clock: formatWallClockMs(sample.sample_time_unix_ms),
+        deepClones: String(sample.step_update_deep_clone_count ?? 0),
         demag: formatNs(phaseById.get("demag_total")?.wall_time_ns ?? 0),
         demagDetail: formatDemagDetail(sample, demagPhaseById),
         demagSetup: formatDemagSetup(sample, phaseById),
@@ -519,8 +533,8 @@ export function buildSolverProfilePanelModel(
           phaseById.get("finalization")?.wall_time_ns ?? 0,
           sample.finalization_field_copy_bytes ?? 0,
         ),
-        gapPerStep: formatNs(sample.unprofiled_gap_per_step_ns),
-        gapTotal: formatNs(sample.unprofiled_gap_total_ns),
+        gapPerStep: formatNs(sample.unprofiled_gap_per_step_ns ?? 0),
+        gapTotal: formatNs(sample.unprofiled_gap_total_ns ?? 0),
         gpuSync: formatGpuSync(sample),
         id: `${sample.step}:${sample.time}:${sample.sample_time_unix_ms}:${sourceIndex}`,
         missing: formatNs(sample.missing_ns),
@@ -532,8 +546,8 @@ export function buildSolverProfilePanelModel(
           phaseById.get("relax_preconditioner")?.wall_time_ns ?? 0,
         ),
         rhs: formatNs(phaseById.get("rhs_total")?.wall_time_ns ?? 0),
-        spanSteps: `${sample.span_first_step}-${sample.span_last_step} (${sample.span_step_count})`,
-        spanWall: formatNs(sample.span_monotonic_wall_time_ns),
+        spanSteps: `${sample.span_first_step ?? sample.step}-${sample.span_last_step ?? sample.step} (${sample.span_step_count ?? 1})`,
+        spanWall: formatNs(sample.span_monotonic_wall_time_ns ?? sample.total_ns),
         step: String(sample.step),
         total: formatNs(sample.total_ns),
       };
@@ -547,6 +561,9 @@ export function buildSolverProfilePanelModel(
     allRows,
     hasSingleThreadWarning: threading?.effective_omp_threads === 1,
     livePublisherSummary: formatLivePublisherSummary(profile?.live_publisher),
+    overheadSummary: profile?.overhead
+      ? `Profiler overhead: record ${formatNs(profile.overhead.last_record_wall_time_ns)} / persist ${formatNs(profile.overhead.last_persist_wall_time_ns)} / publish ${formatNs(profile.overhead.last_publisher_replace_wall_time_ns)}`
+      : "Profiler overhead pending",
     previewModeSummary: formatPreviewModeSummary(profile),
     rows,
     sampleCount: profile?.aggregates.sample_count ?? 0,
@@ -559,8 +576,9 @@ export function buildSolverProfilePanelModel(
 function formatWindowPhaseSummary(
   sample: SolverProfileStepSampleResource | null | undefined,
 ) {
-  if (!sample || sample.phase_windows.length === 0) return "Window phases pending";
-  const visible = sample.phase_windows.filter((phase) => phase.sum_wall_time_ns > 0);
+  const phaseWindows = sample?.phase_windows ?? [];
+  if (phaseWindows.length === 0) return "Window phases pending";
+  const visible = phaseWindows.filter((phase) => phase.sum_wall_time_ns > 0);
   if (visible.length === 0) return "Window phases: all zero";
   return `Window phases: ${visible
     .map(

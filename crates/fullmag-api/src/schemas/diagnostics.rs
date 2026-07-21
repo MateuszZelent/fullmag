@@ -81,15 +81,25 @@ pub struct SolverProfileStepSampleResource {
     pub delta_wall_time_ns: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unprofiled_gap_wall_time_ns: Option<u64>,
+    #[serde(default)]
     pub span_first_step: u64,
+    #[serde(default)]
     pub span_last_step: u64,
+    #[serde(default)]
     pub span_step_count: u64,
+    #[serde(default)]
     pub span_monotonic_wall_time_ns: u64,
+    #[serde(default)]
     pub profiled_step_total_ns: u64,
+    #[serde(default)]
     pub native_solver_wall_time_ns: u64,
+    #[serde(default)]
     pub unprofiled_gap_total_ns: u64,
+    #[serde(default)]
     pub unprofiled_gap_per_step_ns: u64,
+    #[serde(default)]
     pub sample_kinds: Vec<SolverProfileSampleKindResource>,
+    #[serde(default)]
     pub phase_windows: Vec<SolverProfilePhaseWindowResource>,
     pub time: f64,
     pub dt: f64,
@@ -164,7 +174,19 @@ pub struct SolverProfileStepSampleResource {
     pub relaxation_preconditioner_cache_hits: u32,
     #[serde(default)]
     pub relaxation_preconditioner_cache_misses: u32,
+    #[serde(default)]
+    pub step_update_deep_clone_count: u64,
     pub threading: SolverProfileThreadingResource,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct SolverProfileOverheadDiagnosticsResource {
+    pub last_record_wall_time_ns: u64,
+    pub total_record_wall_time_ns: u64,
+    pub last_persist_wall_time_ns: u64,
+    pub total_persist_wall_time_ns: u64,
+    pub last_publisher_replace_wall_time_ns: u64,
+    pub total_publisher_replace_wall_time_ns: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
@@ -212,6 +234,8 @@ pub struct SolverProfileResource {
     pub threading: Option<SolverProfileThreadingResource>,
     pub latest_samples: Vec<SolverProfileStepSampleResource>,
     pub aggregates: SolverProfileAggregatesResource,
+    #[serde(default)]
+    pub overhead: SolverProfileOverheadDiagnosticsResource,
     pub artifact_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_publisher: Option<LivePublisherDiagnosticsResource>,
@@ -227,9 +251,43 @@ impl Default for SolverProfileResource {
             threading: None,
             latest_samples: Vec::new(),
             aggregates: SolverProfileAggregatesResource::default(),
+            overhead: SolverProfileOverheadDiagnosticsResource::default(),
             artifact_refs: Vec::new(),
             live_publisher: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::SolverProfileStepSampleResource;
+
+    #[test]
+    fn older_cli_sample_defaults_additive_interval_and_clone_fields() {
+        let runner_sample = fullmag_runner::SolverProfileStepSample::from_step_stats(
+            &fullmag_runner::StepStats::default(),
+        );
+        let mut value = serde_json::to_value(runner_sample).unwrap();
+        let object = value.as_object_mut().unwrap();
+        for key in [
+            "span_first_step",
+            "span_last_step",
+            "span_step_count",
+            "span_monotonic_wall_time_ns",
+            "profiled_step_total_ns",
+            "native_solver_wall_time_ns",
+            "unprofiled_gap_total_ns",
+            "unprofiled_gap_per_step_ns",
+            "sample_kinds",
+            "phase_windows",
+            "step_update_deep_clone_count",
+        ] {
+            object.remove(key);
+        }
+        let decoded: SolverProfileStepSampleResource = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.span_step_count, 0);
+        assert!(decoded.phase_windows.is_empty());
+        assert_eq!(decoded.step_update_deep_clone_count, 0);
     }
 }
 

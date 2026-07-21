@@ -7567,6 +7567,20 @@ export interface components {
             /** Format: int64 */
             sample_interval_wall_ms?: number;
         };
+        SolverProfileOverheadDiagnosticsResource: {
+            /** Format: int64 */
+            last_persist_wall_time_ns: number;
+            /** Format: int64 */
+            last_publisher_replace_wall_time_ns: number;
+            /** Format: int64 */
+            last_record_wall_time_ns: number;
+            /** Format: int64 */
+            total_persist_wall_time_ns: number;
+            /** Format: int64 */
+            total_publisher_replace_wall_time_ns: number;
+            /** Format: int64 */
+            total_record_wall_time_ns: number;
+        };
         SolverProfilePhaseResource: {
             id: string;
             label: string;
@@ -7591,6 +7605,7 @@ export interface components {
             config: components["schemas"]["SolverProfileCommandConfig"];
             latest_samples: components["schemas"]["SolverProfileStepSampleResource"][];
             live_publisher?: null | components["schemas"]["LivePublisherDiagnosticsResource"];
+            overhead?: components["schemas"]["SolverProfileOverheadDiagnosticsResource"];
             preview_3d_disabled?: boolean;
             /** Format: int64 */
             revision: number;
@@ -7651,17 +7666,17 @@ export interface components {
             /** Format: int64 */
             native_ffi_overhead_wall_time_ns?: number;
             /** Format: int64 */
-            native_solver_wall_time_ns: number;
+            native_solver_wall_time_ns?: number;
             /** Format: int64 */
             phase_sum_ns: number;
-            phase_windows: components["schemas"]["SolverProfilePhaseWindowResource"][];
+            phase_windows?: components["schemas"]["SolverProfilePhaseWindowResource"][];
             phases: components["schemas"]["SolverProfilePhaseResource"][];
             /** Format: double */
             poisson_final_residual: number;
             /** Format: int32 */
             poisson_iterations: number;
             /** Format: int64 */
-            profiled_step_total_ns: number;
+            profiled_step_total_ns?: number;
             /** Format: int32 */
             rejected_attempts: number;
             /** Format: int64 */
@@ -7684,28 +7699,30 @@ export interface components {
             relaxation_update_wall_time_ns?: number;
             /** Format: int32 */
             rhs_evaluations: number;
-            sample_kinds: components["schemas"]["SolverProfileSampleKindResource"][];
+            sample_kinds?: components["schemas"]["SolverProfileSampleKindResource"][];
             /** Format: int64 */
             sample_time_unix_ms?: number;
             /** Format: int64 */
-            span_first_step: number;
+            span_first_step?: number;
             /** Format: int64 */
-            span_last_step: number;
+            span_last_step?: number;
             /** Format: int64 */
-            span_monotonic_wall_time_ns: number;
+            span_monotonic_wall_time_ns?: number;
             /** Format: int64 */
-            span_step_count: number;
+            span_step_count?: number;
             /** Format: int64 */
             step: number;
+            /** Format: int64 */
+            step_update_deep_clone_count?: number;
             threading: components["schemas"]["SolverProfileThreadingResource"];
             /** Format: double */
             time: number;
             /** Format: int64 */
             total_ns: number;
             /** Format: int64 */
-            unprofiled_gap_per_step_ns: number;
+            unprofiled_gap_per_step_ns?: number;
             /** Format: int64 */
-            unprofiled_gap_total_ns: number;
+            unprofiled_gap_total_ns?: number;
             /** Format: int64 */
             unprofiled_gap_wall_time_ns?: number | null;
         };
