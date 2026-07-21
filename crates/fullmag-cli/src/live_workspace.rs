@@ -51,6 +51,7 @@ pub(crate) struct LocalLiveWorkspaceState {
     pub pending_preview_fields: CurrentLivePreviewFieldCache,
     pub superseded_pending_preview_fields: Vec<fullmag_runner::LivePreviewField>,
     pub clear_preview_cache: bool,
+    pub preview_cache_revision: u64,
     pub engine_log: Vec<EngineLogEntry>,
     pub solver_profile: fullmag_runner::SolverProfileState,
     pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
@@ -130,10 +131,10 @@ impl LocalLiveWorkspaceState {
         CurrentLiveSnapshotPayload,
         Vec<fullmag_runner::LivePreviewField>,
         Vec<fullmag_runner::LivePreviewField>,
+        u64,
     ) {
         let preview_fields = self.pending_preview_fields.take_vec();
-        let superseded_preview_fields =
-            std::mem::take(&mut self.superseded_pending_preview_fields);
+        let superseded_preview_fields = std::mem::take(&mut self.superseded_pending_preview_fields);
         let clear_preview_cache = std::mem::take(&mut self.clear_preview_cache);
         let next_mesh_generation_id = self.fem_mesh.as_ref().map(fem_mesh_generation_key);
         let include_mesh = next_mesh_generation_id.is_some()
@@ -142,25 +143,45 @@ impl LocalLiveWorkspaceState {
         if let Some(generation_id) = next_mesh_generation_id.filter(|_| include_mesh) {
             self.published_fem_mesh_generation_id = Some(generation_id);
         }
-        (payload, preview_fields, superseded_preview_fields)
+        (
+            payload,
+            preview_fields,
+            superseded_preview_fields,
+            self.preview_cache_revision,
+        )
     }
 
-    fn commit_published_preview_cache(
+    fn commit_published_preview_cache_if_current(
         &mut self,
-        fields: impl IntoIterator<Item = fullmag_runner::LivePreviewField>,
-    ) {
+        expected_revision: u64,
+        fields: Vec<fullmag_runner::LivePreviewField>,
+    ) -> std::result::Result<(), Vec<fullmag_runner::LivePreviewField>> {
+        if self.preview_cache_revision != expected_revision {
+            return Err(fields);
+        }
         for field in fields {
             self.preview_fields.insert(field);
         }
+        Ok(())
+    }
+
+    fn advance_preview_cache_revision(&mut self) {
+        self.preview_cache_revision = self
+            .preview_cache_revision
+            .checked_add(1)
+            .expect("preview cache revision overflow");
     }
 
     #[cfg(test)]
     pub fn publish_delta(&mut self) -> CurrentLiveSnapshotPayload {
-        let (mut payload, preview_fields, superseded_preview_fields) =
+        let (mut payload, preview_fields, superseded_preview_fields, preview_cache_revision) =
             self.take_publish_delta_parts();
         drop(superseded_preview_fields);
         if !preview_fields.is_empty() {
-            self.commit_published_preview_cache(preview_fields.clone());
+            let _ = self.commit_published_preview_cache_if_current(
+                preview_cache_revision,
+                preview_fields.clone(),
+            );
             payload.preview_fields = Some(preview_fields);
         }
         payload
@@ -1107,6 +1128,24 @@ impl CurrentLivePublisher {
         delta_sink: LivePublishSink,
         full_sink: LivePublishSink,
     ) -> Self {
+        Self::spawn_with_sinks_and_start_barrier(
+            session_id,
+            coalesce_delay,
+            enable_api_fallback,
+            delta_sink,
+            full_sink,
+            None,
+        )
+    }
+
+    fn spawn_with_sinks_and_start_barrier(
+        session_id: &str,
+        coalesce_delay: std::time::Duration,
+        enable_api_fallback: bool,
+        delta_sink: LivePublishSink,
+        full_sink: LivePublishSink,
+        worker_start_barrier: Option<Arc<std::sync::Barrier>>,
+    ) -> Self {
         let (wake_tx, wake_rx) = mpsc::sync_channel(1);
         let pending = Arc::new(AtomicBool::new(false));
         let sending = Arc::new(AtomicBool::new(false));
@@ -1131,6 +1170,9 @@ impl CurrentLivePublisher {
         std::thread::Builder::new()
             .name(thread_name)
             .spawn(move || {
+                if let Some(barrier) = worker_start_barrier {
+                    barrier.wait();
+                }
                 current_live_publisher_loop(
                     worker_session_id,
                     worker_pending,
@@ -1179,6 +1221,27 @@ impl CurrentLivePublisher {
             Arc::clone(&sink),
             sink,
         )
+    }
+
+    #[cfg(test)]
+    fn spawn_with_blocked_test_sink<Sink>(
+        session_id: &str,
+        sink: Sink,
+    ) -> (Self, Arc<std::sync::Barrier>)
+    where
+        Sink: Fn(&str, &CurrentLiveSnapshotPayload) -> Result<()> + Send + Sync + 'static,
+    {
+        let sink: LivePublishSink = Arc::new(sink);
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let publisher = Self::spawn_with_sinks_and_start_barrier(
+            session_id,
+            std::time::Duration::from_millis(25),
+            false,
+            Arc::clone(&sink),
+            sink,
+            Some(Arc::clone(&barrier)),
+        );
+        (publisher, barrier)
     }
 
     fn bind_state(&self, state: Arc<Mutex<LocalLiveWorkspaceState>>) {
@@ -1267,7 +1330,8 @@ mod tests {
     use std::time::Instant;
 
     use super::{
-        apply_python_progress_event, bootstrap_live_state, fem_mesh_payload_clone_count,
+        apply_python_progress_event, bootstrap_live_state, clear_cached_preview_fields,
+        fem_mesh_payload_clone_count, ingest_preview_fields_from_update,
         merge_detailed_mesh_workspace, merge_pending_publish_payload,
         replace_cached_preview_fields, reset_fem_mesh_payload_clone_count, CurrentLivePublisher,
         CurrentLiveScalarRow, CurrentLiveSnapshotPayload, LiveTelemetryPublishGate,
@@ -1302,6 +1366,45 @@ mod tests {
             auto_downscale_message: None,
             active_mask: None,
         }
+    }
+
+    fn preview_update(field: fullmag_runner::LivePreviewField) -> fullmag_runner::StepUpdate {
+        fullmag_runner::StepUpdate {
+            stats: fullmag_runner::StepStats::default(),
+            grid: [1, 1, 1],
+            fem_mesh_generation_id: None,
+            magnetization: None,
+            preview_field: Some(field),
+            cached_preview_fields: None,
+            hysteresis_field_m_t: None,
+            hysteresis_point_index: None,
+            hysteresis_settle_step_index: None,
+            hysteresis_settle_step_kind: None,
+            hysteresis_settle_step_method: None,
+            scalar_row_due: false,
+            finished: false,
+        }
+    }
+
+    fn commit_taken_preview_after_barriers(
+        state: std::sync::Arc<std::sync::Mutex<LocalLiveWorkspaceState>>,
+        taken: std::sync::Arc<std::sync::Barrier>,
+        resume: std::sync::Arc<std::sync::Barrier>,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let (_, preview_fields, superseded, revision) =
+                state.lock().unwrap().take_publish_delta_parts();
+            drop(superseded);
+            let persistent_preview_fields = preview_fields.clone();
+            taken.wait();
+            resume.wait();
+            let stale_preview_fields = state
+                .lock()
+                .unwrap()
+                .commit_published_preview_cache_if_current(revision, persistent_preview_fields)
+                .err();
+            drop(stale_preview_fields);
+        })
     }
 
     fn fem_mesh(generation_id: &str) -> fullmag_runner::FemMeshPayload {
@@ -1348,7 +1451,10 @@ mod tests {
 
     #[test]
     fn live_publisher_records_replace_payload_and_coalesced_wake_diagnostics() {
-        let publisher = no_op_publisher();
+        let (publisher, worker_start_barrier) = CurrentLivePublisher::spawn_with_blocked_test_sink(
+            "coalesced-wake-test-publisher",
+            |_, _| Ok(()),
+        );
         let mut live_state = bootstrap_live_state("running");
         live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
 
@@ -1362,6 +1468,7 @@ mod tests {
             solver_profile: Some(fullmag_runner::SolverProfileState::default().snapshot()),
             ..CurrentLiveSnapshotPayload::default()
         });
+        worker_start_barrier.wait();
 
         let diagnostics = publisher.diagnostics_snapshot();
         assert_eq!(diagnostics.replace_count, 2);
@@ -1370,6 +1477,63 @@ mod tests {
         assert_eq!(diagnostics.max_payload_estimated_bytes, 6 * 8);
         assert!(diagnostics.last_replace_wall_time_ns > 0);
         assert!(diagnostics.last_merge_wall_time_ns > 0);
+    }
+
+    #[test]
+    fn stale_preview_commit_cannot_resurrect_cache_after_clear() {
+        let state = std::sync::Arc::new(std::sync::Mutex::new(
+            workspace_with_domain_mesh().snapshot(),
+        ));
+        let mut update = preview_update(preview_field("h_eff", 1, 1.0));
+        ingest_preview_fields_from_update(&mut state.lock().unwrap(), &mut update);
+        let taken = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let resume = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let worker = commit_taken_preview_after_barriers(
+            std::sync::Arc::clone(&state),
+            std::sync::Arc::clone(&taken),
+            std::sync::Arc::clone(&resume),
+        );
+
+        taken.wait();
+        clear_cached_preview_fields(&mut state.lock().unwrap());
+        resume.wait();
+        worker.join().unwrap();
+
+        let state = state.lock().unwrap();
+        assert!(state.preview_fields.is_empty());
+        assert!(state.pending_preview_fields.is_empty());
+        assert!(state.clear_preview_cache);
+        assert_eq!(state.preview_cache_revision, 2);
+    }
+
+    #[test]
+    fn stale_preview_commit_cannot_overwrite_newer_pending_field() {
+        let state = std::sync::Arc::new(std::sync::Mutex::new(
+            workspace_with_domain_mesh().snapshot(),
+        ));
+        let mut update_a = preview_update(preview_field("h_eff", 1, 1.0));
+        ingest_preview_fields_from_update(&mut state.lock().unwrap(), &mut update_a);
+        let taken = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let resume = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let worker = commit_taken_preview_after_barriers(
+            std::sync::Arc::clone(&state),
+            std::sync::Arc::clone(&taken),
+            std::sync::Arc::clone(&resume),
+        );
+
+        taken.wait();
+        let mut update_b = preview_update(preview_field("h_eff", 2, 2.0));
+        ingest_preview_fields_from_update(&mut state.lock().unwrap(), &mut update_b);
+        resume.wait();
+        worker.join().unwrap();
+
+        let state = state.lock().unwrap();
+        assert!(state.preview_fields.is_empty());
+        let pending = state.pending_preview_fields.to_vec();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].config_revision, 2);
+        assert_eq!(pending[0].vector_field_values, vec![0.0, 0.0, 2.0]);
+        assert_eq!(state.preview_cache_revision, 2);
     }
 
     fn no_op_publisher() -> CurrentLivePublisher {
@@ -1447,6 +1611,7 @@ mod tests {
                 pending_preview_fields: Default::default(),
                 superseded_pending_preview_fields: Vec::new(),
                 clear_preview_cache: false,
+                preview_cache_revision: 0,
                 engine_log: Vec::new(),
                 solver_profile: fullmag_runner::SolverProfileState::default(),
                 published_fem_mesh_generation_id: None,
@@ -1612,9 +1777,9 @@ mod tests {
     #[test]
     fn final_profile_sink_failure_is_visible_without_another_producer_call() {
         let persist_worker =
-            crate::solver_profile_persistence::SolverProfilePersistWorker::spawn_with_sink(
-                |_| Err(anyhow::anyhow!("injected final sample write failure")),
-            );
+            crate::solver_profile_persistence::SolverProfilePersistWorker::spawn_with_sink(|_| {
+                Err(anyhow::anyhow!("injected final sample write failure"))
+            });
         let workspace = LocalLiveWorkspace::new_with_profile_persistence(
             workspace_with_domain_mesh().snapshot(),
             no_op_publisher(),
@@ -1633,7 +1798,11 @@ mod tests {
         });
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while !workspace.snapshot().solver_profile.snapshot().persistence_failed
+        while !workspace
+            .snapshot()
+            .solver_profile
+            .snapshot()
+            .persistence_failed
             && std::time::Instant::now() < deadline
         {
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -1647,7 +1816,9 @@ mod tests {
                 .iter()
                 .filter(|entry| {
                     entry.level == "error"
-                        && entry.message.contains("injected final sample write failure")
+                        && entry
+                            .message
+                            .contains("injected final sample write failure")
                 })
                 .count(),
             1
@@ -1687,9 +1858,7 @@ mod tests {
         });
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while second_payload.lock().unwrap().is_none()
-            && std::time::Instant::now() < deadline
-        {
+        while second_payload.lock().unwrap().is_none() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(attempts.load(std::sync::atomic::Ordering::Acquire), 2);
@@ -2318,7 +2487,10 @@ mod tests {
             live_state.latest_step.magnetization.as_deref(),
             Some(&[0.0, 0.0, 1.0][..])
         );
-        assert_eq!(slot.fem_mesh.as_ref().unwrap().nodes.as_ptr(), mesh_nodes_ptr);
+        assert_eq!(
+            slot.fem_mesh.as_ref().unwrap().nodes.as_ptr(),
+            mesh_nodes_ptr
+        );
         assert_eq!(
             slot.fem_mesh
                 .as_ref()
@@ -2940,7 +3112,7 @@ fn build_pending_payload_from_workspace(
     };
     let state_lock_start = Instant::now();
     let build_start = Instant::now();
-    let (mut incoming, preview_fields, superseded_preview_fields) =
+    let (mut incoming, preview_fields, superseded_preview_fields, preview_cache_revision) =
         state.take_publish_delta_parts();
     drop(state);
     drop(superseded_preview_fields);
@@ -2952,9 +3124,16 @@ fn build_pending_payload_from_workspace(
     if !persistent_preview_fields.is_empty() {
         if let Ok(mut state) = source.lock() {
             let cache_lock_start = Instant::now();
-            state.commit_published_preview_cache(persistent_preview_fields);
-            state_lock_wall_time_ns = state_lock_wall_time_ns
-                .saturating_add(elapsed_ns(cache_lock_start));
+            let stale_preview_fields = state
+                .commit_published_preview_cache_if_current(
+                    preview_cache_revision,
+                    persistent_preview_fields,
+                )
+                .err();
+            state_lock_wall_time_ns =
+                state_lock_wall_time_ns.saturating_add(elapsed_ns(cache_lock_start));
+            drop(state);
+            drop(stale_preview_fields);
         }
     }
     let delta_build_wall_time_ns = elapsed_ns(build_start);
@@ -3089,6 +3268,7 @@ pub(crate) fn clear_cached_preview_fields(state: &mut LocalLiveWorkspaceState) {
     if feature_flags().disable_preview_3d {
         return;
     }
+    state.advance_preview_cache_revision();
     state.preview_fields.clear();
     state.pending_preview_fields.clear();
     state.superseded_pending_preview_fields.clear();
@@ -3103,6 +3283,7 @@ pub(crate) fn replace_cached_preview_fields(
     if feature_flags().disable_preview_3d {
         return;
     }
+    state.advance_preview_cache_revision();
     let fields = fields.into_iter().collect::<Vec<_>>();
     for field in &fields {
         promote_preview_field_to_latest_fields(&mut state.latest_fields, field);
@@ -3140,6 +3321,7 @@ pub(crate) fn upsert_cached_preview_field(
     if feature_flags().disable_preview_3d {
         return;
     }
+    state.advance_preview_cache_revision();
     promote_preview_field_to_latest_fields(&mut state.latest_fields, field);
     state.preview_fields.insert(field.clone());
     state.pending_preview_fields.insert(field.clone());
@@ -3154,20 +3336,24 @@ pub(crate) fn ingest_preview_fields_from_update(
         update.preview_field = None;
         return;
     }
-    if let Some(fields) = update.cached_preview_fields.take() {
+    let cached_preview_fields = update.cached_preview_fields.take();
+    let preview_field = update.preview_field.take();
+    if cached_preview_fields.is_some() || preview_field.is_some() {
+        state.advance_preview_cache_revision();
+    }
+    if let Some(fields) = cached_preview_fields {
         for field in fields {
             if let Some(previous) = state.pending_preview_fields.insert_replacing(field) {
                 state.superseded_pending_preview_fields.push(previous);
             }
         }
     }
-    if let Some(field) = update.preview_field.take() {
+    if let Some(field) = preview_field {
         if let Some(previous) = state.pending_preview_fields.insert_replacing(field) {
             state.superseded_pending_preview_fields.push(previous);
         }
     }
 }
-
 
 fn mesh_build_stage_status(
     stage_id: &str,

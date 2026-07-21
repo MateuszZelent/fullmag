@@ -1018,6 +1018,7 @@ mod tests {
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),
             clear_preview_cache: false,
+            preview_cache_revision: 0,
             engine_log: Vec::new(),
             solver_profile: fullmag_runner::SolverProfileState::default(),
             published_fem_mesh_generation_id: None,
