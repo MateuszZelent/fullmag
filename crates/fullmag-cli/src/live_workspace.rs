@@ -128,6 +128,7 @@ fn fem_mesh_generation_key(mesh: &fullmag_runner::FemMeshPayload) -> String {
 pub(crate) struct LocalLiveWorkspace {
     state: Arc<Mutex<LocalLiveWorkspaceState>>,
     publisher: CurrentLivePublisher,
+    solver_profile_enabled: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -138,9 +139,11 @@ pub(crate) struct LiveWorkspaceUpdateTimings {
 
 impl LocalLiveWorkspace {
     pub fn new(initial: LocalLiveWorkspaceState, publisher: CurrentLivePublisher) -> Self {
+        let solver_profile_enabled = initial.solver_profile.config().enabled;
         Self {
             state: Arc::new(Mutex::new(initial)),
             publisher,
+            solver_profile_enabled: Arc::new(AtomicBool::new(solver_profile_enabled)),
         }
     }
 
@@ -228,6 +231,8 @@ impl LocalLiveWorkspace {
     }
 
     pub fn set_solver_profile_config(&self, config: fullmag_runner::SolverProfileConfig) {
+        self.solver_profile_enabled
+            .store(config.enabled, Ordering::Release);
         if config.enabled {
             std::env::set_var("FULLMAG_FEM_STEP_PROFILE", "1");
         } else {
@@ -266,7 +271,18 @@ impl LocalLiveWorkspace {
     }
 
     pub fn force_record_solver_profile_step(&self, stats: &fullmag_runner::StepStats) {
+        if !self.solver_profile_enabled() {
+            return;
+        }
         self.record_solver_profile_step_inner(stats, true);
+        // Finalization is outside the solver callback. Flush the completed
+        // callback amendment and recorder overhead at this non-recursive
+        // boundary so the last callback is eventually authoritative.
+        self.publish_snapshot();
+    }
+
+    pub fn solver_profile_enabled(&self) -> bool {
+        self.solver_profile_enabled.load(Ordering::Acquire)
     }
 
     pub fn finish_solver_profile_callback(
@@ -275,6 +291,9 @@ impl LocalLiveWorkspace {
         recorded_callback_wall_time_ns: u64,
         callback_wall_time_ns: u64,
     ) {
+        if !self.solver_profile_enabled() {
+            return;
+        }
         if let Ok(mut state) = self.state.lock() {
             state.solver_profile.amend_latest_callback_return(
                 step,
@@ -282,26 +301,28 @@ impl LocalLiveWorkspace {
                 callback_wall_time_ns,
             );
         }
-        // This is an explicit, non-profiled flush: the payload contains the
-        // complete synchronous callback interval without recursively timing
-        // its own publication.
-        self.publish_snapshot();
     }
 
     pub fn record_heartbeat_seed_deep_clone(&self) {
+        if !self.solver_profile_enabled() {
+            return;
+        }
         if let Ok(mut state) = self.state.lock() {
             state.solver_profile.record_heartbeat_seed_deep_clone();
         }
     }
 
     pub fn record_heartbeat_worker_deep_clone(&self) {
+        if !self.solver_profile_enabled() {
+            return;
+        }
         if let Ok(mut state) = self.state.lock() {
             state.solver_profile.record_heartbeat_worker_deep_clone();
         }
     }
 
     fn record_solver_profile_step_inner(&self, stats: &fullmag_runner::StepStats, force: bool) {
-        if !self.solver_profile_config().enabled {
+        if !self.solver_profile_enabled() {
             return;
         }
         let record_start = Instant::now();
@@ -367,9 +388,6 @@ impl LocalLiveWorkspace {
                 .solver_profile
                 .complete_overhead_record(completed_record_wall_time_ns);
         }
-        // Publish the completed overhead record outside the measured record
-        // operation, otherwise the profiler would recursively profile itself.
-        self.publish_snapshot();
     }
 
     /// Switch to fast publish mode (200ms throttle) during bootstrap/materialization,
@@ -1149,6 +1167,7 @@ mod tests {
         assert!(snapshot.overhead.last_persist_wall_time_ns > 0);
         assert!(snapshot.overhead.last_publisher_replace_wall_time_ns > 0);
         assert!(snapshot.overhead.last_record_wall_time_ns > 0);
+        workspace.publish_snapshot();
         let published_overhead = publisher
             .payload
             .lock()
@@ -1191,6 +1210,80 @@ mod tests {
         });
         let enabled = workspace.snapshot().solver_profile.snapshot();
         assert_eq!(enabled.latest_samples[0].profiled_step_total_ns, 7);
+    }
+
+    #[test]
+    fn profiler_callback_publication_respects_disabled_sparse_sampled_and_final_boundaries() {
+        let publisher = no_op_publisher();
+        let workspace =
+            LocalLiveWorkspace::new(workspace_with_domain_mesh().snapshot(), publisher.clone());
+        let disabled_before = workspace.snapshot().solver_profile.snapshot();
+        let disabled_replaces = publisher.diagnostics_snapshot().replace_count;
+        workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+            step: 1,
+            wall_time_ns: 10,
+            ..fullmag_runner::StepStats::default()
+        });
+        workspace.finish_solver_profile_callback(1, 1, 2);
+        workspace.record_heartbeat_seed_deep_clone();
+        workspace.record_heartbeat_worker_deep_clone();
+        let disabled_after = workspace.snapshot().solver_profile.snapshot();
+        assert_eq!(disabled_after.revision, disabled_before.revision);
+        assert_eq!(disabled_after.overhead, disabled_before.overhead);
+        assert_eq!(
+            publisher.diagnostics_snapshot().replace_count,
+            disabled_replaces
+        );
+
+        workspace.set_solver_profile_config(fullmag_runner::SolverProfileConfig {
+            enabled: true,
+            sample_every: 2,
+            sample_interval_wall_ms: 0,
+            max_samples: 4,
+            emit_engine_log: false,
+            persist_artifact: false,
+        });
+        let enabled_replaces = publisher.diagnostics_snapshot().replace_count;
+        workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+            step: 1,
+            wall_time_ns: 10,
+            orchestration_wall_time_ns: 1,
+            ..fullmag_runner::StepStats::default()
+        });
+        workspace.finish_solver_profile_callback(1, 1, 2);
+        assert_eq!(
+            publisher.diagnostics_snapshot().replace_count,
+            enabled_replaces
+        );
+
+        workspace.record_solver_profile_step(&fullmag_runner::StepStats {
+            step: 2,
+            wall_time_ns: 10,
+            orchestration_wall_time_ns: 1,
+            ..fullmag_runner::StepStats::default()
+        });
+        workspace.finish_solver_profile_callback(2, 1, 2);
+        assert_eq!(
+            publisher.diagnostics_snapshot().replace_count,
+            enabled_replaces + 1
+        );
+
+        workspace.force_record_solver_profile_step(&fullmag_runner::StepStats {
+            step: 2,
+            wall_time_ns: 5,
+            finalization_wall_time_ns: 5,
+            ..fullmag_runner::StepStats::default()
+        });
+        assert_eq!(
+            publisher.diagnostics_snapshot().replace_count,
+            enabled_replaces + 3
+        );
+        let published = publisher.payload.lock().expect("payload lock");
+        let profile = published
+            .solver_profile
+            .as_ref()
+            .expect("final profile publication");
+        assert_eq!(profile.latest_samples.last().unwrap().span_step_count, 0);
     }
 
     fn structured_event(kind: &str, payload: serde_json::Value) -> PythonProgressEvent {

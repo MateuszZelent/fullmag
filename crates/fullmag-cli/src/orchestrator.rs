@@ -1240,8 +1240,11 @@ fn drain_solver_profile_commands(
 fn record_solver_profile_step_with_orchestration(
     live_workspace: &LocalLiveWorkspace,
     stats: &mut fullmag_runner::StepStats,
-    callback_start: Instant,
+    callback_start: Option<Instant>,
 ) {
+    let Some(callback_start) = callback_start else {
+        return;
+    };
     let orchestration_wall_time_ns = callback_start.elapsed().as_nanos() as u64;
     stats.orchestration_wall_time_ns = orchestration_wall_time_ns;
     stats.wall_time_ns = stats
@@ -1254,6 +1257,10 @@ fn record_solver_profile_step_with_orchestration(
         orchestration_wall_time_ns,
         callback_wall_time_ns,
     );
+}
+
+fn solver_profile_callback_start(live_workspace: &LocalLiveWorkspace) -> Option<Instant> {
+    live_workspace.solver_profile_enabled().then(Instant::now)
 }
 
 fn force_record_solver_profile_finalization(
@@ -4900,13 +4907,11 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             current_stage_artifact_dir.join(format!("adaptive_pass_{:02}", remesh_pass_count));
         fs::create_dir_all(&pass_output_dir)?;
         let adaptive_pass_label = format!("adaptive remesh pass {}", remesh_pass_count);
+        let mut adaptive_initial_update = initial_step_update(&execution_plan.backend_plan);
+        adaptive_initial_update.stats.step += global_step_offset + local_step_offset;
+        adaptive_initial_update.stats.time += global_time_offset + local_time_offset;
         let mut stage_heartbeat = Some(StageProgressHeartbeat::spawn(
-            offset_step_update(
-                &initial_step_update(&execution_plan.backend_plan),
-                global_step_offset + local_step_offset,
-                global_time_offset + local_time_offset,
-                false,
-            ),
+            adaptive_initial_update,
             live_workspace.clone(),
             run_id.to_string(),
             session_id.to_string(),
@@ -4922,7 +4927,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             &pass_output_dir,
             field_every_n,
             |update| {
-                let callback_start = Instant::now();
+                let callback_start = solver_profile_callback_start(live_workspace);
                 let mut adjusted = offset_step_update_profiled(
                     &update,
                     global_step_offset + local_step_offset,
@@ -7889,7 +7894,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     !args.headless && !preview_3d_disabled,
                     Some(&current_stage_id),
                     |update| {
-                        let callback_start = Instant::now();
+                        let callback_start = solver_profile_callback_start(&live_workspace);
                         let mut adjusted = offset_step_update_profiled(
                             &update,
                             step_offset,
@@ -7976,7 +7981,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     field_every_n,
                     Some(&current_stage_id),
                     |update| {
-                        let callback_start = Instant::now();
+                        let callback_start = solver_profile_callback_start(&live_workspace);
                         let mut adjusted = offset_step_update_profiled(
                             &update,
                             step_offset,
@@ -9072,7 +9077,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     let display_selection = || running_control.display_selection_snapshot();
                     let interrupt_signal = running_control.running_interrupt_signal();
                     let mut on_step = |update| {
-                        let callback_start = Instant::now();
+                        let callback_start = solver_profile_callback_start(&live_workspace);
                         let mut adjusted =
                             offset_step_update_profiled(&update, step_offset, time_offset, false);
                         if let Some(heartbeat) = stage_heartbeat.as_mut() {
@@ -9218,7 +9223,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         field_every_n,
                         Some(&current_stage_id),
                         |update| {
-                            let callback_start = Instant::now();
+                            let callback_start = solver_profile_callback_start(&live_workspace);
                             let mut adjusted = offset_step_update_profiled(
                                 &update,
                                 step_offset,
@@ -10200,7 +10205,7 @@ mod tests {
             .nth(1)
             .and_then(|tail| tail.split("pub(crate) fn build_session_manifest").next())
             .expect("adaptive follow-up implementation");
-        assert!(adaptive.contains("let callback_start = Instant::now();"));
+        assert!(adaptive.contains("solver_profile_callback_start(live_workspace)"));
         assert!(adaptive.contains("live_workspace.update_profiled"));
         assert!(adaptive.contains("record_solver_profile_step_with_orchestration"));
         assert_eq!(
@@ -10211,6 +10216,9 @@ mod tests {
             production.matches("snapshot.latest_update.clone()").count(),
             1
         );
+        assert!(!adaptive.contains("offset_step_update(\n                &initial_step_update"));
+        assert!(adaptive
+            .contains("StageProgressHeartbeat::spawn(\n            adaptive_initial_update"));
     }
 
     #[test]

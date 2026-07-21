@@ -910,6 +910,9 @@ impl SolverProfileState {
     }
 
     pub fn record_heartbeat_seed_deep_clone(&mut self) {
+        if !self.config.enabled {
+            return;
+        }
         self.overhead.heartbeat_seed_deep_clone_count = self
             .overhead
             .heartbeat_seed_deep_clone_count
@@ -918,6 +921,9 @@ impl SolverProfileState {
     }
 
     pub fn record_heartbeat_worker_deep_clone(&mut self) {
+        if !self.config.enabled {
+            return;
+        }
         self.overhead.heartbeat_worker_deep_clone_count = self
             .overhead
             .heartbeat_worker_deep_clone_count
@@ -980,6 +986,20 @@ impl SolverProfileState {
             window.sum_wall_time_ns = window.sum_wall_time_ns.saturating_add(delta);
             window.max_wall_time_ns = window.max_wall_time_ns.max(callback_wall_time_ns);
             window.mean_wall_time_ns = window.sum_wall_time_ns / sample.span_step_count.max(1);
+        }
+        for phase in sample
+            .phases
+            .iter_mut()
+            .chain(sample.demag_subphases.iter_mut())
+        {
+            if phase.id == "unattributed" {
+                phase.wall_time_ns = sample.missing_ns;
+            }
+            phase.percent_of_total = if sample.total_ns > 0 {
+                (phase.wall_time_ns as f64 / sample.total_ns as f64) * 100.0
+            } else {
+                0.0
+            };
         }
         self.revision = self.revision.wrapping_add(1);
     }
@@ -1354,6 +1374,16 @@ mod tests {
         assert_eq!(sample.profiled_step_total_ns, 26);
         assert_eq!(sample.span_monotonic_wall_time_ns, 26);
         assert_eq!(sample.unprofiled_gap_total_ns, 0);
+        for phase in sample.phases.iter().chain(sample.demag_subphases.iter()) {
+            let expected = (phase.wall_time_ns as f64 / sample.total_ns as f64) * 100.0;
+            assert!((phase.percent_of_total - expected).abs() < 1.0e-12);
+        }
+        let unattributed = sample
+            .phases
+            .iter()
+            .find(|phase| phase.id == "unattributed")
+            .unwrap();
+        assert_eq!(unattributed.wall_time_ns, sample.missing_ns);
     }
 
     #[test]
