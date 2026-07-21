@@ -269,6 +269,37 @@ impl LocalLiveWorkspace {
         self.record_solver_profile_step_inner(stats, true);
     }
 
+    pub fn finish_solver_profile_callback(
+        &self,
+        step: u64,
+        recorded_callback_wall_time_ns: u64,
+        callback_wall_time_ns: u64,
+    ) {
+        if let Ok(mut state) = self.state.lock() {
+            state.solver_profile.amend_latest_callback_return(
+                step,
+                recorded_callback_wall_time_ns,
+                callback_wall_time_ns,
+            );
+        }
+        // This is an explicit, non-profiled flush: the payload contains the
+        // complete synchronous callback interval without recursively timing
+        // its own publication.
+        self.publish_snapshot();
+    }
+
+    pub fn record_heartbeat_seed_deep_clone(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.solver_profile.record_heartbeat_seed_deep_clone();
+        }
+    }
+
+    pub fn record_heartbeat_worker_deep_clone(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.solver_profile.record_heartbeat_worker_deep_clone();
+        }
+    }
+
     fn record_solver_profile_step_inner(&self, stats: &fullmag_runner::StepStats, force: bool) {
         if !self.solver_profile_config().enabled {
             return;
@@ -330,6 +361,15 @@ impl LocalLiveWorkspace {
                 publisher_wall_time_ns,
             );
         }
+        let completed_record_wall_time_ns = elapsed_ns(record_start);
+        if let Ok(mut state) = self.state.lock() {
+            state
+                .solver_profile
+                .complete_overhead_record(completed_record_wall_time_ns);
+        }
+        // Publish the completed overhead record outside the measured record
+        // operation, otherwise the profiler would recursively profile itself.
+        self.publish_snapshot();
     }
 
     /// Switch to fast publish mode (200ms throttle) during bootstrap/materialization,
@@ -1077,7 +1117,8 @@ mod tests {
         std::fs::create_dir_all(&artifact_dir).expect("create profile test artifact dir");
         let mut state = workspace_with_domain_mesh().snapshot();
         state.run.artifact_dir = artifact_dir.display().to_string();
-        let workspace = LocalLiveWorkspace::new(state, no_op_publisher());
+        let publisher = no_op_publisher();
+        let workspace = LocalLiveWorkspace::new(state, publisher.clone());
         workspace.set_solver_profile_config(fullmag_runner::SolverProfileConfig {
             enabled: true,
             sample_every: 1,
@@ -1108,6 +1149,16 @@ mod tests {
         assert!(snapshot.overhead.last_persist_wall_time_ns > 0);
         assert!(snapshot.overhead.last_publisher_replace_wall_time_ns > 0);
         assert!(snapshot.overhead.last_record_wall_time_ns > 0);
+        let published_overhead = publisher
+            .payload
+            .lock()
+            .expect("published payload lock")
+            .solver_profile
+            .as_ref()
+            .expect("published solver profile")
+            .overhead
+            .clone();
+        assert_eq!(published_overhead, snapshot.overhead);
 
         std::fs::remove_dir_all(&artifact_dir).expect("remove profile test artifact dir");
     }

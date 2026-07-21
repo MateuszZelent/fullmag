@@ -529,8 +529,7 @@ fn native_solver_wall_time_ns(stats: &StepStats) -> u64 {
         .saturating_add(stats.extra_energy_wall_time_ns);
     stats
         .snapshot_wall_time_ns
-        .max(interaction_total)
-        .saturating_add(stats.rhs_wall_time_ns)
+        .max(interaction_total.saturating_add(stats.rhs_wall_time_ns))
         .saturating_add(stats.relaxation_preconditioner_wall_time_ns)
         .saturating_add(stats.relaxation_state_copy_wall_time_ns)
         .saturating_add(stats.relaxation_state_upload_wall_time_ns)
@@ -582,6 +581,8 @@ pub struct SolverProfileOverheadDiagnostics {
     pub total_persist_wall_time_ns: u64,
     pub last_publisher_replace_wall_time_ns: u64,
     pub total_publisher_replace_wall_time_ns: u64,
+    pub heartbeat_seed_deep_clone_count: u64,
+    pub heartbeat_worker_deep_clone_count: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -725,12 +726,21 @@ impl SolverProfileState {
         stats: &StepStats,
         now: Instant,
     ) -> Option<SolverProfileStepSample> {
+        let finalization_wall_time_ns = stats
+            .finalization_wall_time_ns
+            .max(stats.finalization_field_copy_wall_time_ns);
+        let finalization_started_at = now
+            .checked_sub(std::time::Duration::from_nanos(finalization_wall_time_ns))
+            .unwrap_or(now);
         if self.pending_window.step_count > 0 {
             let mut step_only = stats.clone();
+            step_only.wall_time_ns = step_only
+                .wall_time_ns
+                .saturating_sub(finalization_wall_time_ns);
             step_only.finalization_wall_time_ns = 0;
             step_only.finalization_field_copy_wall_time_ns = 0;
             step_only.finalization_field_copy_bytes = 0;
-            self.push_step_sample(&step_only, now);
+            self.push_step_sample(&step_only, finalization_started_at);
         }
         let mut finalization = StepStats {
             step: stats.step,
@@ -742,9 +752,7 @@ impl SolverProfileState {
             finalization_field_copy_bytes: stats.finalization_field_copy_bytes,
             ..StepStats::default()
         };
-        finalization.wall_time_ns = finalization
-            .wall_time_ns
-            .max(finalization.finalization_field_copy_wall_time_ns);
+        finalization.wall_time_ns = finalization_wall_time_ns;
         let mut sample = SolverProfileStepSample::from_step_stats(&finalization);
         sample.span_first_step = stats.step;
         sample.span_last_step = stats.step;
@@ -888,6 +896,91 @@ impl SolverProfileState {
             .overhead
             .total_publisher_replace_wall_time_ns
             .saturating_add(publisher_ns);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn complete_overhead_record(&mut self, record_ns: u64) {
+        let delta = record_ns.saturating_sub(self.overhead.last_record_wall_time_ns);
+        self.overhead.last_record_wall_time_ns = record_ns;
+        self.overhead.total_record_wall_time_ns = self
+            .overhead
+            .total_record_wall_time_ns
+            .saturating_add(delta);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn record_heartbeat_seed_deep_clone(&mut self) {
+        self.overhead.heartbeat_seed_deep_clone_count = self
+            .overhead
+            .heartbeat_seed_deep_clone_count
+            .saturating_add(1);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn record_heartbeat_worker_deep_clone(&mut self) {
+        self.overhead.heartbeat_worker_deep_clone_count = self
+            .overhead
+            .heartbeat_worker_deep_clone_count
+            .saturating_add(1);
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn amend_latest_callback_return(
+        &mut self,
+        step: u64,
+        recorded_callback_wall_time_ns: u64,
+        callback_wall_time_ns: u64,
+    ) {
+        let delta = callback_wall_time_ns.saturating_sub(recorded_callback_wall_time_ns);
+        if delta == 0 {
+            return;
+        }
+        if self.pending_window.step_count > 0 && self.pending_window.last_step == step {
+            self.pending_window.profiled_step_total_ns = self
+                .pending_window
+                .profiled_step_total_ns
+                .saturating_add(delta);
+            if let Some(window) = self
+                .pending_window
+                .phase_windows
+                .iter_mut()
+                .find(|phase| phase.id == "orchestration")
+            {
+                window.sum_wall_time_ns = window.sum_wall_time_ns.saturating_add(delta);
+                window.max_wall_time_ns = window.max_wall_time_ns.max(callback_wall_time_ns);
+            }
+            self.revision = self.revision.wrapping_add(1);
+            return;
+        }
+        let Some(sample) = self
+            .samples
+            .iter_mut()
+            .rev()
+            .find(|sample| sample.step == step && sample.span_step_count > 0)
+        else {
+            return;
+        };
+        if let Some(phase) = sample
+            .phases
+            .iter_mut()
+            .find(|phase| phase.id == "orchestration")
+        {
+            phase.wall_time_ns = callback_wall_time_ns;
+        }
+        sample.total_ns = sample.total_ns.saturating_add(delta);
+        sample.phase_sum_ns = sample.phase_sum_ns.saturating_add(delta);
+        sample.profiled_step_total_ns = sample.profiled_step_total_ns.saturating_add(delta);
+        sample.span_monotonic_wall_time_ns =
+            sample.span_monotonic_wall_time_ns.saturating_add(delta);
+        if let Some(window) = sample
+            .phase_windows
+            .iter_mut()
+            .find(|phase| phase.id == "orchestration")
+        {
+            window.sum_wall_time_ns = window.sum_wall_time_ns.saturating_add(delta);
+            window.max_wall_time_ns = window.max_wall_time_ns.max(callback_wall_time_ns);
+            window.mean_wall_time_ns = window.sum_wall_time_ns / sample.span_step_count.max(1);
+        }
         self.revision = self.revision.wrapping_add(1);
     }
 
@@ -1137,7 +1230,26 @@ mod tests {
             relaxation_update_wall_time_ns: 13,
             ..StepStats::default()
         };
-        assert_eq!(native_solver_wall_time_ns(&stats), 61);
+        assert_eq!(native_solver_wall_time_ns(&stats), 55);
+        assert_eq!(
+            native_solver_wall_time_ns(&StepStats {
+                snapshot_wall_time_ns: 0,
+                exchange_wall_time_ns: 10,
+                rhs_wall_time_ns: 7,
+                ..StepStats::default()
+            }),
+            17
+        );
+        assert_eq!(
+            native_solver_wall_time_ns(&StepStats {
+                snapshot_wall_time_ns: 50,
+                exchange_wall_time_ns: 10,
+                rhs_wall_time_ns: 7,
+                relaxation_update_wall_time_ns: 13,
+                ..StepStats::default()
+            }),
+            63
+        );
     }
 
     #[test]
@@ -1213,8 +1325,85 @@ mod tests {
         assert_eq!(samples.len(), 3);
         assert_eq!(samples[1].span_step_count, 1);
         assert_eq!(samples[1].profiled_step_total_ns, 20);
+        assert_eq!(samples[1].span_monotonic_wall_time_ns, 20);
+        assert_eq!(samples[1].unprofiled_gap_total_ns, 0);
+        assert_eq!(samples[1].total_ns, 15);
+        assert_eq!(samples[1].missing_ns, 15);
         assert_eq!(samples[2].span_step_count, 0);
         assert_eq!(samples[2].profiled_step_total_ns, 5);
+        assert_eq!(samples[2].span_monotonic_wall_time_ns, 5);
+    }
+
+    #[test]
+    fn callback_return_amends_an_emitted_sample_without_creating_gap() {
+        let mut profile = enabled_profile(1);
+        profile
+            .record_step_at(
+                &StepStats {
+                    step: 4,
+                    wall_time_ns: 20,
+                    orchestration_wall_time_ns: 5,
+                    ..StepStats::default()
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        profile.amend_latest_callback_return(4, 5, 11);
+        let sample = profile.snapshot().latest_samples.pop().unwrap();
+        assert_eq!(phase_time(&sample.phases, "orchestration"), 11);
+        assert_eq!(sample.profiled_step_total_ns, 26);
+        assert_eq!(sample.span_monotonic_wall_time_ns, 26);
+        assert_eq!(sample.unprofiled_gap_total_ns, 0);
+    }
+
+    #[test]
+    fn callback_return_amends_a_pending_sparse_interval() {
+        let mut profile = enabled_profile(2);
+        let start = Instant::now();
+        assert!(profile
+            .record_step_at(
+                &StepStats {
+                    step: 1,
+                    wall_time_ns: 20,
+                    orchestration_wall_time_ns: 5,
+                    ..StepStats::default()
+                },
+                start,
+            )
+            .is_none());
+        profile.amend_latest_callback_return(1, 5, 11);
+        let sample = profile
+            .record_step_at(
+                &StepStats {
+                    step: 2,
+                    wall_time_ns: 10,
+                    ..StepStats::default()
+                },
+                start + Duration::from_nanos(16),
+            )
+            .unwrap();
+        assert_eq!(sample.profiled_step_total_ns, 36);
+        assert_eq!(sample.unprofiled_gap_total_ns, 0);
+        assert_eq!(
+            sample
+                .phase_windows
+                .iter()
+                .find(|window| window.id == "orchestration")
+                .unwrap()
+                .sum_wall_time_ns,
+            11
+        );
+    }
+
+    #[test]
+    fn asynchronous_heartbeat_clone_owners_are_counted_separately() {
+        let mut profile = enabled_profile(1);
+        profile.record_heartbeat_seed_deep_clone();
+        profile.record_heartbeat_worker_deep_clone();
+        profile.record_heartbeat_worker_deep_clone();
+        let overhead = profile.snapshot().overhead;
+        assert_eq!(overhead.heartbeat_seed_deep_clone_count, 1);
+        assert_eq!(overhead.heartbeat_worker_deep_clone_count, 2);
     }
 
     #[test]

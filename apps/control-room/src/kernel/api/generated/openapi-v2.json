@@ -17805,6 +17805,16 @@
       },
       "SolverProfileOverheadDiagnosticsResource": {
         "properties": {
+          "heartbeat_seed_deep_clone_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "heartbeat_worker_deep_clone_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "last_persist_wall_time_ns": {
             "format": "int64",
             "minimum": 0,

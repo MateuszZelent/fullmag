@@ -1248,6 +1248,12 @@ fn record_solver_profile_step_with_orchestration(
         .wall_time_ns
         .saturating_add(orchestration_wall_time_ns);
     live_workspace.record_solver_profile_step(stats);
+    let callback_wall_time_ns = saturating_nanos_u64(callback_start.elapsed());
+    live_workspace.finish_solver_profile_callback(
+        stats.step,
+        orchestration_wall_time_ns,
+        callback_wall_time_ns,
+    );
 }
 
 fn force_record_solver_profile_finalization(
@@ -2023,6 +2029,14 @@ struct StageProgressHeartbeat {
     join_handle: Option<JoinHandle<()>>,
 }
 
+fn clone_heartbeat_seed(
+    live_workspace: &LocalLiveWorkspace,
+    update: &fullmag_runner::StepUpdate,
+) -> fullmag_runner::StepUpdate {
+    live_workspace.record_heartbeat_seed_deep_clone();
+    update.clone()
+}
+
 impl StageProgressHeartbeat {
     fn spawn(
         initial_update: fullmag_runner::StepUpdate,
@@ -2052,22 +2066,27 @@ impl StageProgressHeartbeat {
                     Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                 }
-                let snapshot = match thread_snapshot.lock() {
-                    Ok(snapshot) => snapshot.clone(),
-                    Err(_) => break,
-                };
-                if snapshot.latest_update.finished
-                    || snapshot.last_step_at.elapsed() < LIVE_PROGRESS_PUBLISH_INTERVAL
+                let (mut heartbeat_update, last_step_at, stage_started_at) =
+                    match thread_snapshot.lock() {
+                        Ok(snapshot) => (
+                            snapshot.latest_update.clone(),
+                            snapshot.last_step_at,
+                            snapshot.stage_started_at,
+                        ),
+                        Err(_) => break,
+                    };
+                live_workspace.record_heartbeat_worker_deep_clone();
+                if heartbeat_update.finished
+                    || last_step_at.elapsed() < LIVE_PROGRESS_PUBLISH_INTERVAL
                 {
                     continue;
                 }
 
-                let mut heartbeat_update = snapshot.latest_update.clone();
                 heartbeat_update.stats.wall_time_ns = heartbeat_update
                     .stats
                     .wall_time_ns
-                    .max(saturating_nanos_u64(snapshot.stage_started_at.elapsed()));
-                let idle_for = snapshot.last_step_at.elapsed();
+                    .max(saturating_nanos_u64(stage_started_at.elapsed()));
+                let idle_for = last_step_at.elapsed();
                 let terminal_line = format_stage_progress_line(
                     &terminal_prefix,
                     &heartbeat_update.stats,
@@ -4903,6 +4922,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
             &pass_output_dir,
             field_every_n,
             |update| {
+                let callback_start = Instant::now();
                 let mut adjusted = offset_step_update_profiled(
                     &update,
                     global_step_offset + local_step_offset,
@@ -4913,7 +4933,7 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                     heartbeat.record(&mut adjusted);
                 }
                 if live_cadence.should_publish(&adjusted) {
-                    live_workspace.update(|state| {
+                    let timings = live_workspace.update_profiled(|state| {
                         apply_live_step_update_to_workspace_state(
                             state,
                             run_id,
@@ -4932,7 +4952,20 @@ fn maybe_execute_adaptive_relaxation_followup_passes(
                             current_mesh_history,
                         );
                     });
+                    adjusted.stats.live_state_build_wall_time_ns = adjusted
+                        .stats
+                        .live_state_build_wall_time_ns
+                        .saturating_add(timings.live_state_build_wall_time_ns);
+                    adjusted.stats.publisher_replace_wall_time_ns = adjusted
+                        .stats
+                        .publisher_replace_wall_time_ns
+                        .saturating_add(timings.publisher_replace_wall_time_ns);
                 }
+                record_solver_profile_step_with_orchestration(
+                    live_workspace,
+                    &mut adjusted.stats,
+                    callback_start,
+                );
                 fullmag_runner::StepAction::Continue
             },
         );
@@ -7830,7 +7863,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         );
         let mut stage_heartbeat = use_live_callback.then(|| {
             StageProgressHeartbeat::spawn(
-                stage_initial_update.clone(),
+                clone_heartbeat_seed(&live_workspace, &stage_initial_update),
                 live_workspace.clone(),
                 run_id.clone(),
                 session_id.clone(),
@@ -9022,7 +9055,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             let interactive_progress_label = format!("interactive {}", stage.entrypoint_kind);
             let mut stage_heartbeat = use_live_callback.then(|| {
                 StageProgressHeartbeat::spawn(
-                    stage_initial_update.clone(),
+                    clone_heartbeat_seed(&live_workspace, &stage_initial_update),
                     live_workspace.clone(),
                     run_id.clone(),
                     session_id.clone(),
@@ -10154,6 +10187,31 @@ mod tests {
         PreparationStageId, PreparationStageStatus, PreparationStatus, SimulationPreparationState,
     };
     use crate::types::PythonProgressEvent;
+
+    #[test]
+    fn adaptive_followup_callback_and_heartbeat_clone_sites_stay_profiled() {
+        let source = include_str!("orchestrator.rs");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production orchestrator source");
+        let adaptive = source
+            .split("fn maybe_execute_adaptive_relaxation_followup_passes")
+            .nth(1)
+            .and_then(|tail| tail.split("pub(crate) fn build_session_manifest").next())
+            .expect("adaptive follow-up implementation");
+        assert!(adaptive.contains("let callback_start = Instant::now();"));
+        assert!(adaptive.contains("live_workspace.update_profiled"));
+        assert!(adaptive.contains("record_solver_profile_step_with_orchestration"));
+        assert_eq!(
+            production.matches("stage_initial_update.clone()").count(),
+            0
+        );
+        assert_eq!(
+            production.matches("snapshot.latest_update.clone()").count(),
+            1
+        );
+    }
 
     #[test]
     fn mesh_source_scene_revision_reads_geometry_realization_contract() {

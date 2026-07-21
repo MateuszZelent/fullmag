@@ -7569,6 +7569,10 @@ export interface components {
         };
         SolverProfileOverheadDiagnosticsResource: {
             /** Format: int64 */
+            heartbeat_seed_deep_clone_count?: number;
+            /** Format: int64 */
+            heartbeat_worker_deep_clone_count?: number;
+            /** Format: int64 */
             last_persist_wall_time_ns: number;
             /** Format: int64 */
             last_publisher_replace_wall_time_ns: number;

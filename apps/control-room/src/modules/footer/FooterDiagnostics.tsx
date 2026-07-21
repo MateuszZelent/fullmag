@@ -562,7 +562,7 @@ export function buildSolverProfilePanelModel(
     hasSingleThreadWarning: threading?.effective_omp_threads === 1,
     livePublisherSummary: formatLivePublisherSummary(profile?.live_publisher),
     overheadSummary: profile?.overhead
-      ? `Profiler overhead: record ${formatNs(profile.overhead.last_record_wall_time_ns)} / persist ${formatNs(profile.overhead.last_persist_wall_time_ns)} / publish ${formatNs(profile.overhead.last_publisher_replace_wall_time_ns)}`
+      ? `Profiler overhead: record ${formatNs(profile.overhead.last_record_wall_time_ns)} / persist ${formatNs(profile.overhead.last_persist_wall_time_ns)} / publish ${formatNs(profile.overhead.last_publisher_replace_wall_time_ns)} / async clones seed ${profile.overhead.heartbeat_seed_deep_clone_count ?? 0}, worker ${profile.overhead.heartbeat_worker_deep_clone_count ?? 0}`
       : "Profiler overhead pending",
     previewModeSummary: formatPreviewModeSummary(profile),
     rows,

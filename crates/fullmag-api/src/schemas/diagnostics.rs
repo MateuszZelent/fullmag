@@ -187,6 +187,10 @@ pub struct SolverProfileOverheadDiagnosticsResource {
     pub total_persist_wall_time_ns: u64,
     pub last_publisher_replace_wall_time_ns: u64,
     pub total_publisher_replace_wall_time_ns: u64,
+    #[serde(default)]
+    pub heartbeat_seed_deep_clone_count: u64,
+    #[serde(default)]
+    pub heartbeat_worker_deep_clone_count: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
