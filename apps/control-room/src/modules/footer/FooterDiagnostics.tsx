@@ -64,6 +64,7 @@ export interface SolverProfilePanelModel {
   livePublisherSummary: string;
   overheadSummary: string;
   previewModeSummary: string;
+  rateSummary: string;
   rows: SolverProfileRow[];
   sampleCount: number;
   state: string;
@@ -212,6 +213,10 @@ export function FooterDiagnostics() {
             <div className="fm-footer-diagnostics__threading">
               <Timer size={13} aria-hidden="true" />
               <span>{profileModel.windowPhaseSummary}</span>
+            </div>
+            <div className="fm-footer-diagnostics__threading">
+              <Timer size={13} aria-hidden="true" />
+              <span>{profileModel.rateSummary}</span>
             </div>
             <div className="fm-footer-diagnostics__threading">
               <Timer size={13} aria-hidden="true" />
@@ -496,6 +501,7 @@ export function buildSolverProfilePanelModel(
     }))
     .reverse()
     .map(({ sample, sourceIndex }) => {
+      const previous = sourceIndex > 0 ? latestSamples[sourceIndex - 1] : undefined;
       const phaseById = new Map(sample.phases.map((phase) => [phase.id, phase]));
       const demagPhaseById = new Map(
         sample.demag_subphases.map((phase) => [phase.id, phase]),
@@ -514,7 +520,12 @@ export function buildSolverProfilePanelModel(
         artifact: formatArtifactCost(
           phaseById.get("artifact_enqueue")?.wall_time_ns ?? 0,
           sample.artifact_enqueue_bytes ?? 0,
+          sample.artifact_queue_depth_current ?? 0,
           sample.artifact_queue_depth_max ?? 0,
+          (sample.artifact_writer_jobs_completed ?? 0) -
+            (previous?.artifact_writer_jobs_completed ?? 0),
+          (sample.artifact_writer_job_wall_time_ns ?? 0) -
+            (previous?.artifact_writer_job_wall_time_ns ?? 0),
           sample.artifact_writer_jobs_completed ?? 0,
           sample.artifact_writer_job_wall_time_ns ?? 0,
         ),
@@ -535,7 +546,7 @@ export function buildSolverProfilePanelModel(
         ),
         gapPerStep: formatNs(sample.unprofiled_gap_per_step_ns ?? 0),
         gapTotal: formatNs(sample.unprofiled_gap_total_ns ?? 0),
-        gpuSync: formatGpuSync(sample),
+        gpuSync: formatGpuSync(sample, previous),
         id: `${sample.step}:${sample.time}:${sample.sample_time_unix_ms}:${sourceIndex}`,
         missing: formatNs(sample.missing_ns),
         nativeFfi: formatNativeCost(phaseById),
@@ -565,6 +576,7 @@ export function buildSolverProfilePanelModel(
       ? `Profiler overhead: record ${formatNs(profile.overhead.last_record_wall_time_ns)} / persist ${formatNs(profile.overhead.last_persist_wall_time_ns)} / publish ${formatNs(profile.overhead.last_publisher_replace_wall_time_ns)} / async clones seed ${profile.overhead.heartbeat_seed_deep_clone_count ?? 0}, worker ${profile.overhead.heartbeat_worker_deep_clone_count ?? 0}`
       : "Profiler overhead pending",
     previewModeSummary: formatPreviewModeSummary(profile),
+    rateSummary: formatRateSummary(profile),
     rows,
     sampleCount: profile?.aggregates.sample_count ?? 0,
     state: profile?.state ?? "pending",
@@ -684,24 +696,19 @@ function formatCopyCost(wallTimeNs: number, bytes: number) {
 function formatArtifactCost(
   wallTimeNs: number,
   bytes: number,
-  queueDepth: number,
-  writerJobsCompleted: number,
-  writerWallTimeNs: number,
+  queueDepthCurrent: number,
+  queueDepthMax: number,
+  writerJobsDelta: number,
+  writerWallTimeDeltaNs: number,
+  writerJobsCumulative: number,
+  writerWallTimeCumulativeNs: number,
 ) {
-  const cost = formatCopyCost(wallTimeNs, bytes);
-  const parts = [cost];
-  if (Number.isFinite(queueDepth) && queueDepth > 0) {
-    parts.push(`q${Math.round(queueDepth)}`);
-  }
-  if (
-    Number.isFinite(writerJobsCompleted) &&
-    writerJobsCompleted > 0 &&
-    Number.isFinite(writerWallTimeNs) &&
-    writerWallTimeNs > 0
-  ) {
-    parts.push(`w${Math.round(writerJobsCompleted)} ${formatNs(writerWallTimeNs)}`);
-  }
-  return parts.join(" / ");
+  return [
+    `enqueue now ${formatCopyCost(wallTimeNs, bytes)}`,
+    `queue current ${Math.max(0, Math.round(queueDepthCurrent))} / max ${Math.max(0, Math.round(queueDepthMax))}`,
+    `writer delta ${Math.max(0, Math.round(writerJobsDelta))} / ${formatNs(Math.max(0, writerWallTimeDeltaNs))}`,
+    `writer cumulative ${Math.max(0, Math.round(writerJobsCumulative))} / ${formatNs(Math.max(0, writerWallTimeCumulativeNs))}`,
+  ].join(" / ");
 }
 
 function formatNativeCost(phaseById: Map<string, SolverProfilePhaseResource>) {
@@ -740,17 +747,46 @@ function formatLivePublisherSummary(
   ].join(" / ");
 }
 
-function formatGpuSync(sample: SolverProfileResource["latest_samples"][number]) {
+function formatGpuSync(
+  sample: SolverProfileResource["latest_samples"][number],
+  previous?: SolverProfileResource["latest_samples"][number],
+) {
   const syncCount = sample.hot_loop_host_sync_count ?? 0;
+  const deltaSyncCount = Math.max(
+    0,
+    syncCount - (previous?.hot_loop_host_sync_count ?? 0),
+  );
   const controlSyncCount = sample.hot_loop_control_scalar_host_sync_count ?? 0;
   const controlBytes = sample.hot_loop_control_scalar_d2h_bytes ?? 0;
-  if (syncCount <= 0 && controlSyncCount <= 0 && controlBytes <= 0) return "0";
+  if (syncCount <= 0 && controlSyncCount <= 0 && controlBytes <= 0) {
+    return "delta 0 sync / cumulative 0 sync";
+  }
   if (controlSyncCount > 0 || controlBytes > 0) {
-    return `${Math.round(syncCount)} sync / ctrl ${Math.round(controlSyncCount)} / ${formatBytes(controlBytes)}`;
+    return `delta ${Math.round(deltaSyncCount)} sync / cumulative ${Math.round(syncCount)} sync / ctrl ${Math.round(controlSyncCount)} / ${formatBytes(controlBytes)}`;
   }
   const totalBytes = (sample.hot_loop_h2d_bytes ?? 0) + (sample.hot_loop_d2h_bytes ?? 0);
-  if (totalBytes > 0) return `${Math.round(syncCount)} sync / ${formatBytes(totalBytes)}`;
-  return `${Math.round(syncCount)} sync`;
+  if (totalBytes > 0) {
+    return `delta ${Math.round(deltaSyncCount)} sync / cumulative ${Math.round(syncCount)} sync / ${formatBytes(totalBytes)}`;
+  }
+  return `delta ${Math.round(deltaSyncCount)} sync / cumulative ${Math.round(syncCount)} sync`;
+}
+
+function formatRateSummary(profile: SolverProfileResource | null | undefined) {
+  const values = [
+    ["Solver", profile?.rates?.solver_steps_per_second],
+    ["End-to-end", profile?.rates?.end_to_end_steps_per_second],
+    ["Published", profile?.rates?.published_steps_per_second],
+  ] as const;
+  const visible = values.flatMap(([label, metric]) =>
+    metric
+      ? [
+          `${label} ${metric.value.toFixed(2)} steps/s (${metric.window_step_count} / ${(
+            metric.window_wall_time_ns / 1.0e9
+          ).toFixed(2)} s)`,
+        ]
+      : [],
+  );
+  return visible.length > 0 ? visible.join(" | ") : "Rates pending";
 }
 
 function formatBytes(value: number) {

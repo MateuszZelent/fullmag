@@ -42,7 +42,7 @@ The API is organized by platform concepts, not by frontend screens:
 | `workspace` | UI shell state: layout, ribbon, selection, active tree node |
 | `analysis` | Analysis products such as eigenmodes and dispersion |
 | `persistence` | Checkpoints, exports, imports, recovery |
-| `diagnostics` | GPU telemetry and engine logs |
+| `diagnostics` | GPU/CPU telemetry, engine logs, and revisioned solver/publisher performance diagnostics |
 
 The default frontend base path is `/v2/sessions/current`.
 
@@ -125,8 +125,9 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `model/geometry/*` | geometry capability, validation, realization, and diagnostic projections derived from the current scene |
 | `simulation/runs/current` and `simulation/runs/{run_id}` | run metadata, requested/resolved execution, artifact location, run-level totals |
 | `simulation/preparation` | bounded startup preparation aggregate: canonical stage order/status, current progress, stage timing, requested/resolved execution summaries, safe log tail, and safe failure correlation |
-| `simulation/stages/execution` | full stage tree and stage state |
+| `simulation/stages/execution` | full stage tree and stage state, including tolerance-qualified completion duration |
 | `simulation/solver/status` | live solver state: runtime state, algorithm, step, algorithm-appropriate `dt`, exact torque, separate RHS norm, convergence, stop reason/metric/unit, warnings |
+| `diagnostics/solver-profile` | opt-in bounded phase profile plus explicit solver, end-to-end, and successful-publication rate objects |
 | `simulation/solver/energies/*` | current and historical energy samples |
 | `data/tables/default/rows` | table-shaped scalar history for ECharts windows, including `cursor`, `from_row`/`to_row`, `from_t`/`to_t`, `limit`, `target_points`, `decimation`, and `include_tail` query identity; JSON rows are the control-plane/debug view, while `rows.bin` is the production data-plane payload for chart values |
 | `data/scalars` | compatibility projection of the default scalar table, not a second scalar-history owner |
@@ -180,6 +181,17 @@ The simulation resources expose one algorithm-specific relaxation contract:
   threshold, and diagnostics. Budget exhaustion is completed/non-converged;
   numerical stagnation is failed/non-converged. Table rows and artifacts do
   not infer completion.
+- `time_to_tolerance_seconds` uses stage start/completion timestamps only
+  when `status=completed`, `converged=true`, and the reason is `torque`,
+  `energy`, or `gradient`; it is absent for
+  `max_steps`, cancellation, skipped, stopped, and failed records.
+- solver and end-to-end rates share the same closed profiler window and source
+  revision. Successful-publication rate advances only after an HTTP delta or
+  fallback full snapshot succeeds. Each rate is
+  `{ value, window_step_count, window_wall_time_ns, source_revision }`.
+- deprecated `status.metrics.steps_per_second` is only an end-to-end scalar
+  alias. Without a closed monotonic profiler span it is null; status never
+  carries the full rate objects.
 
 The Study Explorer node and its Inspector consume these typed v2 resources
 through the generated transport, handwritten facade, and resource hooks. They

@@ -2062,7 +2062,7 @@ async fn status_exposes_typed_relaxation_algorithm_from_canonical_metadata() {
 }
 
 #[tokio::test]
-async fn status_steps_per_second_uses_solver_wall_time_not_session_uptime() {
+async fn status_steps_per_second_is_absent_without_a_closed_end_to_end_span() {
     let app = test_router_with_runtime_read_models().await;
     let response = app
         .oneshot(
@@ -2078,10 +2078,7 @@ async fn status_steps_per_second_uses_solver_wall_time_not_session_uptime() {
 
     let json = body_json(response).await;
     assert_eq!(json["metrics"]["total_steps"], 42);
-    assert_eq!(
-        json["metrics"]["steps_per_second"],
-        serde_json::json!(420_000_000.0)
-    );
+    assert!(json["metrics"]["steps_per_second"].is_null());
 }
 
 // ─── domain endpoints ───────────────────────────────────────────────────────

@@ -57,6 +57,23 @@ Heavy data is fetched lazily from dedicated resource endpoints:
 Control-plane JSON and data-plane binary are separate by design.
 `status` remains thin; field vectors and topology stay out of the status payload.
 
+Runtime throughput follows the same single-owner rule. The revisioned
+`diagnostics/solver-profile` resource owns three explicit rate objects:
+`solver_steps_per_second` is accepted steps divided by
+`native_solver_wall_time_ns` from one closed profiler window;
+`end_to_end_steps_per_second` uses the accepted-step count and monotonic span
+from that same window; and `published_steps_per_second` uses only distinct
+steps whose HTTP delta or full-snapshot fallback completed successfully.
+Every object carries `value`, `window_step_count`,
+`window_wall_time_ns`, and `source_revision`.
+
+The legacy `status.metrics.steps_per_second` scalar is a deprecated
+compatibility alias of the end-to-end value. It is absent without a closed
+monotonic span and never falls back to lifetime steps divided by the last-step
+time. `simulation/stages/execution` exclusively owns
+`time_to_tolerance_seconds`, present only for a converged completion caused
+by a configured tolerance criterion.
+
 ### 3. Revision-based cache
 
 Every resource carries a revision (`field_revision`, `domain_generation_id`,

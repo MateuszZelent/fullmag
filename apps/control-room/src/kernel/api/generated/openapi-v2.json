@@ -8609,6 +8609,21 @@
             "minimum": 0,
             "type": "integer"
           },
+          "successful_publish_source_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "successful_publish_step_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "successful_publish_window_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "total_clone_wall_time_ns": {
             "format": "int64",
             "minimum": 0,
@@ -11677,6 +11692,8 @@
       "MetricsSummary": {
         "properties": {
           "steps_per_second": {
+            "deprecated": true,
+            "description": "Deprecated compatibility alias of the diagnostics end-to-end rate.",
             "format": "double",
             "type": [
               "number",
@@ -13803,6 +13820,36 @@
           "field_component",
           "colormap",
           "auto_contrast"
+        ],
+        "type": "object"
+      },
+      "RateMetricResource": {
+        "properties": {
+          "source_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          },
+          "window_step_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "window_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "value",
+          "window_step_count",
+          "window_wall_time_ns",
+          "source_revision"
         ],
         "type": "object"
       },
@@ -17951,6 +17998,9 @@
           "preview_3d_disabled": {
             "type": "boolean"
           },
+          "rates": {
+            "$ref": "#/components/schemas/SolverRateDiagnosticsResource"
+          },
           "revision": {
             "format": "int64",
             "minimum": 0,
@@ -18352,6 +18402,41 @@
           "effective_omp_threads",
           "thread_mode"
         ],
+        "type": "object"
+      },
+      "SolverRateDiagnosticsResource": {
+        "properties": {
+          "end_to_end_steps_per_second": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RateMetricResource"
+              }
+            ]
+          },
+          "published_steps_per_second": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RateMetricResource"
+              }
+            ]
+          },
+          "solver_steps_per_second": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RateMetricResource"
+              }
+            ]
+          }
+        },
         "type": "object"
       },
       "SolverStatusResource": {
@@ -19082,6 +19167,13 @@
             "type": "string"
           },
           "threshold": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "time_to_tolerance_seconds": {
             "format": "double",
             "type": [
               "number",

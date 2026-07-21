@@ -585,6 +585,67 @@ pub struct SolverProfileOverheadDiagnostics {
     pub heartbeat_worker_deep_clone_count: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RateMetric {
+    pub value: f64,
+    pub window_step_count: u64,
+    pub window_wall_time_ns: u64,
+    pub source_revision: u64,
+}
+
+impl RateMetric {
+    fn from_window(
+        window_step_count: u64,
+        window_wall_time_ns: u64,
+        source_revision: u64,
+    ) -> Option<Self> {
+        (window_step_count > 0 && window_wall_time_ns > 0).then(|| Self {
+            value: window_step_count as f64 * 1.0e9 / window_wall_time_ns as f64,
+            window_step_count,
+            window_wall_time_ns,
+            source_revision,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SolverRateDiagnostics {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_steps_per_second: Option<RateMetric>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_to_end_steps_per_second: Option<RateMetric>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_steps_per_second: Option<RateMetric>,
+}
+
+impl SolverRateDiagnostics {
+    pub fn from_closed_windows(
+        source_revision: u64,
+        step_count: u64,
+        native_solver_wall_time_ns: u64,
+        span_wall_time_ns: u64,
+        published: Option<(u64, u64, u64)>,
+    ) -> Self {
+        Self {
+            solver_steps_per_second: RateMetric::from_window(
+                step_count,
+                native_solver_wall_time_ns,
+                source_revision,
+            ),
+            end_to_end_steps_per_second: RateMetric::from_window(
+                step_count,
+                span_wall_time_ns,
+                source_revision,
+            ),
+            published_steps_per_second: published.and_then(
+                |(step_count, wall_time_ns, revision)| {
+                    RateMetric::from_window(step_count, wall_time_ns, revision)
+                },
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct LivePublisherDiagnostics {
     pub replace_count: u64,
@@ -608,6 +669,9 @@ pub struct LivePublisherDiagnostics {
     pub last_publish_lag_wall_time_ns: u64,
     pub max_publish_lag_wall_time_ns: u64,
     pub total_publish_lag_wall_time_ns: u64,
+    pub successful_publish_step_count: u64,
+    pub successful_publish_window_wall_time_ns: u64,
+    pub successful_publish_source_revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -621,6 +685,8 @@ pub struct SolverProfileSnapshot {
     pub threading: Option<SolverProfileThreading>,
     pub latest_samples: Vec<SolverProfileStepSample>,
     pub aggregates: SolverProfileAggregates,
+    #[serde(default)]
+    pub rates: SolverRateDiagnostics,
     #[serde(default)]
     pub overhead: SolverProfileOverheadDiagnostics,
     pub artifact_refs: Vec<String>,
@@ -1006,6 +1072,20 @@ impl SolverProfileState {
 
     pub fn snapshot(&self) -> SolverProfileSnapshot {
         let latest_samples: Vec<_> = self.samples.iter().cloned().collect();
+        let rates = latest_samples
+            .iter()
+            .rev()
+            .find(|sample| sample.span_step_count > 0)
+            .map(|sample| {
+                SolverRateDiagnostics::from_closed_windows(
+                    self.revision,
+                    sample.span_step_count,
+                    sample.native_solver_wall_time_ns,
+                    sample.span_monotonic_wall_time_ns,
+                    None,
+                )
+            })
+            .unwrap_or_default();
         SolverProfileSnapshot {
             revision: self.revision,
             state: if self.config.enabled {
@@ -1018,6 +1098,7 @@ impl SolverProfileState {
             preview_3d_disabled: false,
             threading: latest_samples.last().map(|sample| sample.threading.clone()),
             aggregates: aggregate_samples(&latest_samples),
+            rates,
             overhead: self.overhead.clone(),
             latest_samples,
             artifact_refs: self.artifact_refs.clone(),
@@ -1468,5 +1549,26 @@ mod tests {
         assert_eq!(decoded.span_step_count, 0);
         assert!(decoded.phase_windows.is_empty());
         assert_eq!(decoded.step_update_deep_clone_count, 0);
+    }
+
+    #[test]
+    fn truthful_rates_share_the_exact_closed_profiler_window() {
+        let rates = super::SolverRateDiagnostics::from_closed_windows(
+            7,
+            10,
+            2_000_000_000,
+            5_000_000_000,
+            Some((3, 3_000_000_000, 11)),
+        );
+        assert_eq!(rates.solver_steps_per_second.unwrap().value, 5.0);
+        assert_eq!(rates.end_to_end_steps_per_second.unwrap().value, 2.0);
+        assert_eq!(rates.published_steps_per_second.unwrap().value, 1.0);
+    }
+
+    #[test]
+    fn end_to_end_rate_is_absent_without_a_closed_span() {
+        let rates =
+            super::SolverRateDiagnostics::from_closed_windows(7, 10, 2_000_000_000, 0, None);
+        assert!(rates.end_to_end_steps_per_second.is_none());
     }
 }

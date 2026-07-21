@@ -202,6 +202,24 @@ pub struct SolverProfileAggregatesResource {
     pub average_demag_ns: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RateMetricResource {
+    pub value: f64,
+    pub window_step_count: u64,
+    pub window_wall_time_ns: u64,
+    pub source_revision: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+pub struct SolverRateDiagnosticsResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solver_steps_per_second: Option<RateMetricResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_to_end_steps_per_second: Option<RateMetricResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_steps_per_second: Option<RateMetricResource>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct LivePublisherDiagnosticsResource {
     pub replace_count: u64,
@@ -225,6 +243,12 @@ pub struct LivePublisherDiagnosticsResource {
     pub last_publish_lag_wall_time_ns: u64,
     pub max_publish_lag_wall_time_ns: u64,
     pub total_publish_lag_wall_time_ns: u64,
+    #[serde(default)]
+    pub successful_publish_step_count: u64,
+    #[serde(default)]
+    pub successful_publish_window_wall_time_ns: u64,
+    #[serde(default)]
+    pub successful_publish_source_revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -238,6 +262,8 @@ pub struct SolverProfileResource {
     pub threading: Option<SolverProfileThreadingResource>,
     pub latest_samples: Vec<SolverProfileStepSampleResource>,
     pub aggregates: SolverProfileAggregatesResource,
+    #[serde(default)]
+    pub rates: SolverRateDiagnosticsResource,
     #[serde(default)]
     pub overhead: SolverProfileOverheadDiagnosticsResource,
     pub artifact_refs: Vec<String>,
@@ -255,6 +281,7 @@ impl Default for SolverProfileResource {
             threading: None,
             latest_samples: Vec::new(),
             aggregates: SolverProfileAggregatesResource::default(),
+            rates: SolverRateDiagnosticsResource::default(),
             overhead: SolverProfileOverheadDiagnosticsResource::default(),
             artifact_refs: Vec::new(),
             live_publisher: None,

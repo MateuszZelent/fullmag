@@ -164,6 +164,8 @@ describe("FooterTelemetry", () => {
     expect(byId["energy-total"]?.value).toBe("15");
     expect(byId["max-torque"]?.value).toBe("6.000000e-3 T");
     expect(byId.step?.value).toBe("99");
+    expect(byId.rate?.label).toBe("End-to-end rate");
+    expect(byId.rate?.detail).toBe("Closed profiler span");
   });
 
   it("uses detailed runtime state for the visible compute status", () => {

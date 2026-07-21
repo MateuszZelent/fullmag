@@ -5305,6 +5305,12 @@ export interface components {
             /** Format: int64 */
             replace_count: number;
             /** Format: int64 */
+            successful_publish_source_revision?: number;
+            /** Format: int64 */
+            successful_publish_step_count?: number;
+            /** Format: int64 */
+            successful_publish_window_wall_time_ns?: number;
+            /** Format: int64 */
             total_clone_wall_time_ns: number;
             /** Format: int64 */
             total_merge_wall_time_ns: number;
@@ -6071,7 +6077,11 @@ export interface components {
             revision: number;
         };
         MetricsSummary: {
-            /** Format: double */
+            /**
+             * Format: double
+             * @deprecated
+             * @description Deprecated compatibility alias of the diagnostics end-to-end rate.
+             */
             steps_per_second?: number | null;
             /** Format: int64 */
             total_steps: number;
@@ -6574,6 +6584,16 @@ export interface components {
             /** Format: double */
             contrast_min?: number | null;
             field_component: components["schemas"]["FieldComponent"];
+        };
+        RateMetricResource: {
+            /** Format: int64 */
+            source_revision: number;
+            /** Format: double */
+            value: number;
+            /** Format: int64 */
+            window_step_count: number;
+            /** Format: int64 */
+            window_wall_time_ns: number;
         };
         RealizedGeometryBody: {
             body_id: string;
@@ -7611,6 +7631,7 @@ export interface components {
             live_publisher?: null | components["schemas"]["LivePublisherDiagnosticsResource"];
             overhead?: components["schemas"]["SolverProfileOverheadDiagnosticsResource"];
             preview_3d_disabled?: boolean;
+            rates?: components["schemas"]["SolverRateDiagnosticsResource"];
             /** Format: int64 */
             revision: number;
             state: string;
@@ -7740,6 +7761,11 @@ export interface components {
             /** Format: int32 */
             requested_omp_threads: number;
             thread_mode: string;
+        };
+        SolverRateDiagnosticsResource: {
+            end_to_end_steps_per_second?: null | components["schemas"]["RateMetricResource"];
+            published_steps_per_second?: null | components["schemas"]["RateMetricResource"];
+            solver_steps_per_second?: null | components["schemas"]["RateMetricResource"];
         };
         SolverStatusResource: {
             /** Format: double */
@@ -7909,6 +7935,8 @@ export interface components {
             status: string;
             /** Format: double */
             threshold?: number | null;
+            /** Format: double */
+            time_to_tolerance_seconds?: number | null;
         };
         StageExecutionResource: {
             /** Format: int32 */

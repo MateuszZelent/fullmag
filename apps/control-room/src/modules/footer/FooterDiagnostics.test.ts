@@ -14,6 +14,26 @@ import {
 const PROFILE_SAMPLE_TIME_MS = new Date(2026, 0, 2, 3, 4, 5, 123).getTime();
 
 const profile: SolverProfileResource = {
+  rates: {
+    end_to_end_steps_per_second: {
+      source_revision: 3,
+      value: 2,
+      window_step_count: 10,
+      window_wall_time_ns: 5_000_000_000,
+    },
+    published_steps_per_second: {
+      source_revision: 7,
+      value: 1,
+      window_step_count: 3,
+      window_wall_time_ns: 3_000_000_000,
+    },
+    solver_steps_per_second: {
+      source_revision: 3,
+      value: 5,
+      window_step_count: 10,
+      window_wall_time_ns: 2_000_000_000,
+    },
+  },
   aggregates: {
     average_demag_ns: 2_000_000,
     average_exchange_ns: 150_000,
@@ -244,6 +264,29 @@ describe("FooterDiagnostics", () => {
     ]);
   });
 
+  it("labels truthful rates and current versus delta counters", () => {
+    const twoSamples = structuredClone(profile);
+    twoSamples.latest_samples.unshift({
+      ...structuredClone(profile.latest_samples[0]!),
+      artifact_queue_depth_current: 2,
+      artifact_queue_depth_max: 9,
+      artifact_writer_jobs_completed: 1,
+      artifact_writer_job_wall_time_ns: 1_000_000,
+      hot_loop_host_sync_count: 1,
+      hot_loop_control_scalar_host_sync_count: 1,
+      hot_loop_control_scalar_d2h_bytes: 8,
+      step: 11,
+    });
+    const model = buildSolverProfilePanelModel(twoSamples);
+    expect(model.rateSummary).toContain("Solver 5.00 steps/s (10 / 2.00 s)");
+    expect(model.rateSummary).toContain("End-to-end 2.00 steps/s (10 / 5.00 s)");
+    expect(model.rateSummary).toContain("Published 1.00 steps/s (3 / 3.00 s)");
+    expect(model.rows[0]?.artifact).toContain("queue current 1 / max 3");
+    expect(model.rows[0]?.artifact).toContain("writer delta 1");
+    expect(model.rows[0]?.gpuSync).toContain("delta 1 sync");
+    expect(model.rows[0]?.gpuSync).toContain("cumulative 2 sync");
+  });
+
   it("builds solver profile rows and warns when OpenMP is effectively single-threaded", () => {
     const model = buildSolverProfilePanelModel(profile);
 
@@ -259,7 +302,8 @@ describe("FooterDiagnostics", () => {
       "Live publish 7 / replace 20.0 us / merge 12.0 us / clone 8.0 us / sync 3.0 ms / lag 2.0 ms / payload 45.0 KiB / coalesced 4",
     );
     expect(model.rows[0]).toMatchObject({
-      artifact: "100.0 us / 4.0 KiB / q3 / w2 4.0 ms",
+      artifact:
+        "enqueue now 100.0 us / 4.0 KiB / queue current 1 / max 3 / writer delta 2 / 4.0 ms / writer cumulative 2 / 4.0 ms",
       demag: "2.0 ms",
       demagDetail: "CG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms",
       demagSetup: "reused",
@@ -269,7 +313,7 @@ describe("FooterDiagnostics", () => {
       finalization: "80.0 us / 8.0 KiB",
       gapPerStep: "23.3 ms",
       gapTotal: "70.0 ms",
-      gpuSync: "2 sync / ctrl 2 / 16 B",
+      gpuSync: "delta 2 sync / cumulative 2 sync / ctrl 2 / 16 B",
       missing: "25.0 us",
       nativeFfi: "25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us",
       relaxPreconditioner: "750.0 us",
@@ -329,7 +373,7 @@ describe("FooterDiagnostics", () => {
     expect(serializeSolverProfileRows(model.rows)).toBe(
       [
         "Last step\tClock\tSpan steps\tSpan wall\tGap total\tGap/step\tTotal (last step)\tExchange (last step)\tDemag (last step)\tDemag detail\tSetup\tRelax prec.\tRHS\tPreview\tCache\tField copy\tArtifact\tFinalization\tGPU sync\tNative\tOrchestr.\tMissing\tDeep clones (last step)",
-        "12\t03:04:05.123\t11-13 (3)\t100.0 ms\t70.0 ms\t23.3 ms\t5.0 ms\t150.0 us\t2.0 ms\tCG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms\treused\t750.0 us\t3.0 ms\t0 ns\t0 ns\t250.0 us / 24.0 MiB\t100.0 us / 4.0 KiB / q3 / w2 4.0 ms\t80.0 us / 8.0 KiB\t2 sync / ctrl 2 / 16 B\t25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us\t0 ns\t25.0 us\t0",
+        "12\t03:04:05.123\t11-13 (3)\t100.0 ms\t70.0 ms\t23.3 ms\t5.0 ms\t150.0 us\t2.0 ms\tCG/JACOBI / 1 solve / 12 it / res 1.0e-8 / apply 1.9 ms\treused\t750.0 us\t3.0 ms\t0 ns\t0 ns\t250.0 us / 24.0 MiB\tenqueue now 100.0 us / 4.0 KiB / queue current 1 / max 3 / writer delta 2 / 4.0 ms / writer cumulative 2 / 4.0 ms\t80.0 us / 8.0 KiB\tdelta 2 sync / cumulative 2 sync / ctrl 2 / 16 B\t25.0 us / upload 15.0 us / grad 30.0 us / metric 10.0 us / ls 5.0 us\t0 ns\t25.0 us\t0",
       ].join("\n"),
     );
   });

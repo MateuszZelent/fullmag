@@ -431,6 +431,13 @@ pub async fn get_stage_execution(
                     command_id: record.command_id.clone(),
                     started_at_unix_ms: record.started_at_unix_ms,
                     completed_at_unix_ms: record.completed_at_unix_ms,
+                    time_to_tolerance_seconds: time_to_tolerance_seconds(
+                        record.status.as_str(),
+                        record.converged,
+                        record.reason,
+                        record.started_at_unix_ms,
+                        record.completed_at_unix_ms,
+                    ),
                     reason: record.reason.clone().map(StageStopReason::from),
                     converged: record.converged,
                     artifact_refs: record.artifact_refs.clone(),
@@ -482,6 +489,80 @@ struct StageProgressProjection {
     progress_label: Option<String>,
     progress_detail: Option<String>,
     last_progress_unix_ms: Option<u64>,
+}
+
+fn time_to_tolerance_seconds(
+    status: &str,
+    converged: bool,
+    reason: Option<fullmag_ir::StageStopReason>,
+    started_at_unix_ms: Option<u64>,
+    completed_at_unix_ms: Option<u64>,
+) -> Option<f64> {
+    if status != "completed"
+        || !converged
+        || !matches!(
+            reason,
+            Some(
+                fullmag_ir::StageStopReason::Torque
+                    | fullmag_ir::StageStopReason::Energy
+                    | fullmag_ir::StageStopReason::Gradient
+            )
+        )
+    {
+        return None;
+    }
+    let elapsed_ms = completed_at_unix_ms?.checked_sub(started_at_unix_ms?)?;
+    Some(elapsed_ms as f64 / 1_000.0)
+}
+
+#[cfg(test)]
+mod time_to_tolerance_tests {
+    use super::time_to_tolerance_seconds;
+    use fullmag_ir::StageStopReason;
+
+    #[test]
+    fn duration_is_exposed_only_for_tolerance_qualified_completion() {
+        for reason in [
+            StageStopReason::Torque,
+            StageStopReason::Energy,
+            StageStopReason::Gradient,
+        ] {
+            assert_eq!(
+                time_to_tolerance_seconds(
+                    "completed",
+                    true,
+                    Some(reason),
+                    Some(1_000),
+                    Some(6_000),
+                ),
+                Some(5.0)
+            );
+        }
+    }
+
+    #[test]
+    fn duration_is_absent_for_budget_cancel_failure_and_missing_span() {
+        for (status, converged, reason) in [
+            ("completed", false, Some(StageStopReason::MaxSteps)),
+            ("cancelled", false, Some(StageStopReason::UserCancelled)),
+            ("failed", false, Some(StageStopReason::BackendError)),
+        ] {
+            assert_eq!(
+                time_to_tolerance_seconds(status, converged, reason, Some(1_000), Some(6_000)),
+                None
+            );
+        }
+        assert_eq!(
+            time_to_tolerance_seconds(
+                "completed",
+                true,
+                Some(StageStopReason::Torque),
+                None,
+                Some(6_000),
+            ),
+            None
+        );
+    }
 }
 
 fn frequency_response_stage_progress(

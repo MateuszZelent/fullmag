@@ -519,6 +519,19 @@ fn attach_live_publisher_diagnostics(
         return;
     };
     if let Some(profile) = payload.solver_profile.as_mut() {
+        profile.rates.published_steps_per_second =
+            fullmag_runner::SolverRateDiagnostics::from_closed_windows(
+                profile.revision,
+                0,
+                0,
+                0,
+                Some((
+                    diagnostics.successful_publish_step_count,
+                    diagnostics.successful_publish_window_wall_time_ns,
+                    diagnostics.successful_publish_source_revision,
+                )),
+            )
+            .published_steps_per_second;
         profile.live_publisher = Some(diagnostics);
     }
 }
@@ -552,6 +565,43 @@ fn record_live_publish_diagnostics(
             .total_publish_lag_wall_time_ns
             .saturating_add(publish_lag_wall_time_ns);
     }
+}
+
+#[derive(Debug, Default)]
+struct SuccessfulPublishWindow {
+    first_completed_at: Option<Instant>,
+    last_step: Option<u64>,
+}
+
+impl SuccessfulPublishWindow {
+    fn record_success(
+        &mut self,
+        step: u64,
+        completed_at: Instant,
+        diagnostics: &mut fullmag_runner::LivePublisherDiagnostics,
+    ) {
+        if self.last_step == Some(step) {
+            return;
+        }
+        let first = *self.first_completed_at.get_or_insert(completed_at);
+        self.last_step = Some(step);
+        diagnostics.successful_publish_step_count =
+            diagnostics.successful_publish_step_count.saturating_add(1);
+        diagnostics.successful_publish_window_wall_time_ns = completed_at
+            .checked_duration_since(first)
+            .map(|duration| duration.as_nanos().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0);
+        diagnostics.successful_publish_source_revision = diagnostics
+            .successful_publish_source_revision
+            .saturating_add(1);
+    }
+}
+
+fn published_step(payload: &CurrentLiveSnapshotPayload) -> Option<u64> {
+    payload
+        .live_state
+        .as_ref()
+        .map(|state| state.latest_step.step)
 }
 
 fn preserve_pending_live_step_payload(
@@ -1904,6 +1954,35 @@ mod tests {
     }
 
     #[test]
+    fn successful_publish_window_counts_only_completed_distinct_http_syncs() {
+        let start = Instant::now();
+        let mut window = super::SuccessfulPublishWindow::default();
+        let mut diagnostics = fullmag_runner::LivePublisherDiagnostics::default();
+        window.record_success(8, start, &mut diagnostics);
+        window.record_success(
+            9,
+            start + std::time::Duration::from_secs(1),
+            &mut diagnostics,
+        );
+        window.record_success(
+            10,
+            start + std::time::Duration::from_secs(3),
+            &mut diagnostics,
+        );
+        window.record_success(
+            10,
+            start + std::time::Duration::from_secs(4),
+            &mut diagnostics,
+        );
+        assert_eq!(diagnostics.successful_publish_step_count, 3);
+        assert_eq!(
+            diagnostics.successful_publish_window_wall_time_ns,
+            3_000_000_000
+        );
+        assert_eq!(diagnostics.successful_publish_source_revision, 3);
+    }
+
+    #[test]
     fn live_scalar_telemetry_gate_keeps_first_and_final_samples_only_inside_window() {
         let mut gate = LiveTelemetryPublishGate::default();
         let mut first = CurrentLiveSnapshotPayload {
@@ -1948,6 +2027,7 @@ fn current_live_publisher_loop(
     wake_rx: mpsc::Receiver<()>,
 ) {
     let mut last_publish_at: Option<Instant> = None;
+    let mut successful_publish_window = SuccessfulPublishWindow::default();
     let mut slow_publish_count: u64 = 0;
     while wake_rx.recv().is_ok() {
         while pending.swap(false, Ordering::AcqRel) {
@@ -1993,11 +2073,13 @@ fn current_live_publisher_loop(
                     );
                 }
             }
+            let mut publish_succeeded = publish_result.is_ok();
             if let Err(error) = publish_result {
                 if api_is_ready(api_port()) {
                     let fallback_result = sync_current_live_snapshot(&session_id, &snapshot);
                     match fallback_result {
                         Ok(()) => {
+                            publish_succeeded = true;
                             eprintln!(
                                 "fullmag live snapshot sync warning: {:#}; recovered with full snapshot",
                                 error
@@ -2013,6 +2095,13 @@ fn current_live_publisher_loop(
                     }
                 } else {
                     pending.store(true, Ordering::Release);
+                }
+            }
+            if publish_succeeded {
+                if let (Some(step), Ok(mut values)) =
+                    (published_step(&snapshot), diagnostics.lock())
+                {
+                    successful_publish_window.record_success(step, Instant::now(), &mut values);
                 }
             }
             last_publish_at = Some(Instant::now());
@@ -2040,7 +2129,11 @@ fn current_live_publisher_loop(
             publish_lag_wall_time_ns,
         );
         sending.store(false, Ordering::Release);
-        if let Err(error) = publish_result {
+        if publish_result.is_ok() {
+            if let (Some(step), Ok(mut values)) = (published_step(&snapshot), diagnostics.lock()) {
+                successful_publish_window.record_success(step, Instant::now(), &mut values);
+            }
+        } else if let Err(error) = publish_result {
             if api_is_ready(api_port()) {
                 eprintln!("fullmag live snapshot sync warning: {:#}", error);
             }

@@ -404,10 +404,10 @@ export function buildFooterTelemetryModel(
           ]
         : []),
       {
-        detail: "Throughput",
+        detail: "Closed profiler span",
         icon: <Radio size={13} aria-hidden="true" />,
-        id: "steps-per-second",
-        label: "Steps/s",
+        id: "rate",
+        label: "End-to-end rate",
         subdetail: `${formatInteger(totalSteps)} steps`,
         value: formatFixed(stepsPerSecond, 1, "0.0"),
       },

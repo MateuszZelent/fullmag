@@ -269,9 +269,9 @@ pub use runtime_registry::{
     RuntimeRegistry,
 };
 pub use solver_profile::{
-    LivePublisherDiagnostics, SolverProfileAggregates, SolverProfileConfig,
+    LivePublisherDiagnostics, RateMetric, SolverProfileAggregates, SolverProfileConfig,
     SolverProfileOverheadDiagnostics, SolverProfilePhaseSample, SolverProfileSnapshot,
-    SolverProfileState, SolverProfileStepSample, SolverProfileThreading,
+    SolverProfileState, SolverProfileStepSample, SolverProfileThreading, SolverRateDiagnostics,
 };
 pub use types::{
     fem_mesh_topology_fingerprint, ExecutionProvenance, FemEigenRunResult, FemMeshObjectSegment,
