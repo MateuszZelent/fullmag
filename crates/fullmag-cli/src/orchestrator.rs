@@ -9217,6 +9217,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         if let Err(error) = interactive_runtime_host.ensure_runtime_for_problem(
                             &stage.ir,
                             &execution_plan,
+                            stage_fem_mesh_asset.as_ref(),
                             continuation_magnetization.as_deref(),
                             &live_workspace,
                         ) {
@@ -11923,6 +11924,22 @@ mod tests {
             source.contains("resolve_planned_runtime_engine(problem, plan)")
                 && source.contains("resolve_planned_runtime_capabilities(problem, plan)"),
             "live metadata must resolve runtime information from the materialized plan"
+        );
+    }
+
+    #[test]
+    fn production_interactive_route_threads_authoritative_fem_mesh_asset() {
+        let orchestrator = include_str!("orchestrator.rs");
+        let host = include_str!("interactive_runtime_host.rs");
+        let runner = include_str!("../../fullmag-runner/src/lib.rs");
+
+        assert!(orchestrator.contains(
+            "ensure_runtime_for_problem(\n                            &stage.ir,\n                            &execution_plan,\n                            stage_fem_mesh_asset.as_ref(),"
+        ));
+        assert!(host.contains("stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>"));
+        assert!(host.contains("create_planned_interactive_runtime_with_stage_fem_mesh_asset("));
+        assert!(
+            runner.contains("pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(")
         );
     }
 

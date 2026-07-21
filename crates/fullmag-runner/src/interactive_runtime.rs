@@ -809,6 +809,16 @@ impl InteractiveFdmPreviewRuntime {
     }
 }
 
+#[cfg_attr(not(any(test, feature = "fem-gpu")), allow(dead_code))]
+pub(crate) fn reuse_stage_fem_mesh_asset(
+    stage_asset: &crate::types::StageFemMeshAsset,
+) -> (crate::types::FemMeshPayload, FemStageExecutionContext) {
+    (
+        stage_asset.payload.clone(),
+        FemStageExecutionContext::from_mesh_identity(stage_asset.identity.clone()),
+    )
+}
+
 impl InteractiveFemPreviewRuntime {
     pub fn create(problem: &ProblemIR) -> Result<Self, RunError> {
         let plan = fullmag_plan::plan(problem)?;
@@ -825,12 +835,13 @@ impl InteractiveFemPreviewRuntime {
             dispatch::fem_engine_label(resolution.engine),
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
-        Self::from_fem_plan(fem, resolution.engine, resolution.fallback)
+        Self::from_fem_plan(fem, resolution.engine, resolution.fallback, None)
     }
 
     pub(crate) fn create_from_plan(
         problem: &ProblemIR,
         plan: &FemPlanIR,
+        stage_asset: Option<&crate::types::StageFemMeshAsset>,
     ) -> Result<Self, RunError> {
         let resolution = dispatch::resolve_fem_engine_for_plan_with_trail(problem, plan)?;
         eprintln!(
@@ -838,17 +849,18 @@ impl InteractiveFemPreviewRuntime {
             dispatch::fem_engine_label(resolution.engine),
             resolution.fallback.as_ref().map(|f| &f.reason),
         );
-        Self::from_fem_plan(plan, resolution.engine, resolution.fallback)
+        Self::from_fem_plan(plan, resolution.engine, resolution.fallback, stage_asset)
     }
 
     fn from_fem_plan(
         plan: &FemPlanIR,
         engine: FemEngine,
         fallback: Option<ResolvedFallback>,
+        stage_asset: Option<&crate::types::StageFemMeshAsset>,
     ) -> Result<Self, RunError> {
         #[cfg(not(feature = "fem-gpu"))]
         {
-            let _ = (plan, engine, fallback);
+            let _ = (plan, engine, fallback, stage_asset);
             return Err(RunError {
                 message:
                     "interactive native FEM runtime requested but the runner was built without fem-gpu"
@@ -862,9 +874,16 @@ impl InteractiveFemPreviewRuntime {
                 FemEngine::CpuNative => fem_plan_for_cpu_native(plan),
                 FemEngine::NativeGpu => fem_plan_for_native_gpu(plan),
             };
-            let stage_asset = crate::types::StageFemMeshAsset::build_from_fem_plan(&effective_plan);
-            let mesh = stage_asset.payload;
-            let stage_context = FemStageExecutionContext::from_mesh_identity(stage_asset.identity);
+            let owned_stage_asset;
+            let stage_asset = match stage_asset {
+                Some(stage_asset) => stage_asset,
+                None => {
+                    owned_stage_asset =
+                        crate::types::StageFemMeshAsset::build_from_fem_plan(&effective_plan);
+                    &owned_stage_asset
+                }
+            };
+            let (mesh, stage_context) = reuse_stage_fem_mesh_asset(stage_asset);
             let backend = NativeFemBackend::create(&effective_plan)?;
             let device_info = backend.device_info()?;
             let antenna_field = crate::antenna_fields::compute_antenna_field(&effective_plan)?;

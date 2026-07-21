@@ -634,6 +634,7 @@ impl InteractiveRuntimeHost {
         &mut self,
         problem: &ProblemIR,
         plan: &ExecutionPlanIR,
+        stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
         continuation_magnetization: Option<&[[f64; 3]]>,
         live_workspace: &LocalLiveWorkspace,
     ) -> Result<()> {
@@ -644,6 +645,7 @@ impl InteractiveRuntimeHost {
             &mut self.runtime,
             problem,
             plan,
+            stage_fem_mesh_asset,
             continuation_magnetization,
         )?;
         if let Some(runtime) = self.runtime.as_mut() {
@@ -847,11 +849,13 @@ fn refresh_interactive_preview_snapshot(
 fn create_interactive_preview_runtime(
     base_problem: &ProblemIR,
     plan: &ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<fullmag_runner::InteractiveRuntime> {
-    fullmag_runner::create_planned_interactive_runtime(
+    fullmag_runner::create_planned_interactive_runtime_with_stage_fem_mesh_asset(
         base_problem,
         plan,
+        stage_fem_mesh_asset,
         continuation_magnetization,
     )
     .map_err(|error| anyhow!(error.to_string()))
@@ -869,6 +873,7 @@ fn ensure_interactive_preview_runtime(
     runtime: &mut Option<fullmag_runner::InteractiveRuntime>,
     problem: &ProblemIR,
     plan: &ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&fullmag_runner::StageFemMeshAsset>,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<()> {
     let needs_rebuild = runtime
@@ -878,6 +883,7 @@ fn ensure_interactive_preview_runtime(
         *runtime = Some(create_interactive_preview_runtime(
             problem,
             plan,
+            stage_fem_mesh_asset,
             continuation_magnetization,
         )?);
     }

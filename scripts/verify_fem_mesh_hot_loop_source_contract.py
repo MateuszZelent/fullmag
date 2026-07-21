@@ -15,8 +15,8 @@ PRODUCER = re.compile(
     r"(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*::)*(?P<operation>"
     r"FemMeshPayload::from(?:_[A-Za-z0-9_]+)?|"
     r"StageFemMeshAsset::build_from_[A-Za-z0-9_]+|"
-    r"StageFemMeshIdentity::from_(?:fem|eigen|frequency_response|backend)_plan|"
-    r"FemStageExecutionContext::from_backend_plan|"
+    r"StageFemMeshIdentity::from_(?:fem|fem_eigen|fem_frequency_response|backend)_plan|"
+    r"FemStageExecutionContext::from_[A-Za-z0-9_]+|"
     r"fem_(?:plan|eigen|frequency_response)_mesh_generation_id"
     r")\s*\("
 )
@@ -24,7 +24,7 @@ PRODUCER = re.compile(
 # SHA-256 over sorted exact records: file, receiver, operation, normalized
 # containing statement. This pins all semantic occurrences, not aggregate counts.
 EXPECTED_MESH_ACCESS_INVENTORY_SHA256 = "eec0964c7cef2e28b6431679219bb64755e757657a63e0a3ce28be737e69bea3"
-EXPECTED_PRODUCER_INVENTORY_SHA256 = "c0ae1c9c1d957181ca2603e9215a940884c49766b81ca83f8d835312dd1f3dfb"
+EXPECTED_PRODUCER_INVENTORY_SHA256 = "91826ae45a8a18f434e39731eb816dc00a4a5a41b52d18e32028767dcc922ab8"
 
 def mask_non_code(source: str) -> str:
     out = list(source)
@@ -124,8 +124,14 @@ def inventory_sha256(records: list[tuple[str, ...]]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def check_text(name: str, source: str, allow_payload_functions: set[str] | None = None,
-               allow_generation_loop_functions: set[str] | None = None) -> list[str]:
+def producer_record(code: str, producer: re.Match[str]) -> tuple[str, str, str]:
+    return (function_at(code, producer.start()), producer.group("operation"),
+            containing_statement(code, producer.start()))
+
+
+def check_text(name: str, source: str,
+               allowed_producer_records: set[tuple[str, str, str]] | None = None,
+               validate_producers: bool = True) -> list[str]:
     code = mask_non_code(source)
     errors: list[str] = []
     for match in STEP.finditer(code):
@@ -143,23 +149,23 @@ def check_text(name: str, source: str, allow_payload_functions: set[str] | None 
             errors.append(f"{name}: FEM-shaped StepUpdate uses generation None")
         if re.search(r"(?<!generation_id)\bfem_mesh\s*:", body):
             errors.append(f"{name}: StepUpdate literal owns fem_mesh")
-    for producer in PRODUCER.finditer(code):
-        function = function_at(code, producer.start())
-        operation = producer.group("operation")
-        if operation.startswith("FemMeshPayload::from") and function not in (allow_payload_functions or set()):
+    for producer in PRODUCER.finditer(code) if validate_producers else ():
+        function, operation, statement = producer_record(code, producer)
+        allowed = (function, operation, statement) in (allowed_producer_records or set())
+        if operation.startswith("FemMeshPayload::from") and not allowed:
             errors.append(f"{name}: {operation} outside a stage owner ({function})")
-        if (inside_loop(code, producer.start()) or inside_callback(code, producer.start()) or inside_expression_callback(code, producer.start())) and function not in (allow_generation_loop_functions or set()):
+        if (inside_loop(code, producer.start()) or inside_callback(code, producer.start()) or inside_expression_callback(code, producer.start())) and not allowed:
             errors.append(f"{name}: mesh producer {operation} inside loop/callback ({function})")
-    for mesh_access in re.finditer(r"\.[ \t\r\n]*fem_mesh\b", code):
-        errors.append(f"{name}: unclassified .fem_mesh access")
     producers_by_function: dict[tuple[str, str], int] = {}
-    for producer in PRODUCER.finditer(code):
+    for producer in PRODUCER.finditer(code) if validate_producers else ():
         function = function_at(code, producer.start())
         operation = producer.group("operation")
         if function:
             producers_by_function[(function, operation)] = producers_by_function.get((function, operation), 0) + 1
     for (function, operation), count in producers_by_function.items():
-        if count > 1 and function not in ((allow_payload_functions or set()) | (allow_generation_loop_functions or set())):
+        matching_allowed = [record for record in (allowed_producer_records or set())
+                            if record[0] == function and record[1] == operation]
+        if count > 1 and len(matching_allowed) != count:
             errors.append(f"{name}: duplicate mesh producer {operation} in stage owner {function}")
     return errors
 
@@ -167,37 +173,11 @@ def check_text(name: str, source: str, allow_payload_functions: set[str] | None 
 def check_repo(root: pathlib.Path) -> list[str]:
     errors: list[str] = []
     roots = [root / "crates/fullmag-runner/src", root / "crates/fullmag-cli/src", root / "crates/fullmag-api/src"]
-    owners = {
-        "crates/fullmag-runner/src/types.rs": {
-            "from", "fem_mesh_payload_generation_id_is_stable_for_same_plan",
-            "fem_mesh_topology_fingerprint_changes_for_node_reorder",
-            "fem_mesh_topology_fingerprint_changes_for_element_connectivity",
-            "fem_mesh_topology_fingerprint_changes_for_mesh_part_node_indices",
-            "fem_mesh_payload_is_built_once_while_step_updates_reuse_generation",
-            "build_from_fem_plan", "build_from_fem_eigen_plan",
-            "build_from_fem_frequency_response_plan",
-        },
-        "crates/fullmag-runner/src/interactive_runtime.rs": {"from_fem_plan"},
-        "crates/fullmag-runner/src/interactive_runtime/fem/mod.rs": {"from_fem_plan"},
-        "crates/fullmag-cli/src/orchestrator.rs": {"fem_mesh_payload_from_backend_plan"},
-        "crates/fullmag-api/src/quantities.rs": {"extract_fem_mesh_from_metadata"},
-    }
-    generation_stage_owners = {
-        "crates/fullmag-runner/src/types.rs": {
-            "from", "fem_mesh_payload_generation_id_is_stable_for_same_plan",
-            "build_from_fem_plan", "build_from_fem_eigen_plan",
-            "build_from_fem_frequency_response_plan",
-        },
-        "crates/fullmag-cli/src/orchestrator.rs": {
-            "maybe_execute_adaptive_relaxation_followup_passes", "run_script_mode",
-        },
-        "crates/fullmag-api/src/quantities.rs": {"extract_fem_mesh_from_metadata"},
-    }
     for base in roots:
         for path in base.rglob("*.rs"):
             rel = path.relative_to(root).as_posix()
-            file_errors = check_text(rel, path.read_text(), owners.get(rel), generation_stage_owners.get(rel))
-            file_errors = [e for e in file_errors if "unclassified .fem_mesh access" not in e]
+            # Producer ownership is enforced below by the exact per-occurrence inventory.
+            file_errors = check_text(rel, path.read_text(), validate_producers=False)
             errors.extend(file_errors)
     mesh_inventory: list[tuple[str, str, str, str]] = []
     producer_inventory: list[tuple[str, str, str, str]] = []
@@ -233,10 +213,8 @@ def check_repo(root: pathlib.Path) -> list[str]:
 def self_test() -> None:
     mutations = [
         ("fn f(){ let _ = crate::types::FemMeshPayload::from(plan); }", None),
-        ("fn f(){ let _ = LiveStepView { fem_mesh: mesh }; update.fem_mesh.take(); }", None),
         ("fn f(){ let _ = crate::types::StepUpdate { stats }; }", None),
         ("fn fem_mesh_payload_from_backend_plan(){ loop { let _ = crate::types::FemMeshPayload::from(plan); } }", {"fem_mesh_payload_from_backend_plan"}),
-        ("fn f(frame: Frame){ let _ = frame.fem_mesh; }", None),
         ("fn f(){ loop { let _ = crate::types::fem_plan_mesh_generation_id(plan); } }", None),
         ("fn f(){ let callback = || { crate::types::fem_plan_mesh_generation_id(plan) }; }", None),
         ("fn stage(){ let a=fem_plan_mesh_generation_id(plan); let b=fem_plan_mesh_generation_id(plan); }", None),
@@ -244,6 +222,10 @@ def self_test() -> None:
         ("fn f(){ let callback = || { StageFemMeshAsset::build_from_fem_plan(plan) }; }", None),
         ("fn stage(){ StageFemMeshAsset::build_from_fem_plan(plan); StageFemMeshAsset::build_from_fem_plan(plan); }", None),
         ("fn f(){ let callback = || { StageFemMeshIdentity::from_fem_plan(plan) }; }", None),
+        ("fn f(){ let callback = || { FemStageExecutionContext::from_fem_plan(plan) }; }", None),
+        ("fn stage(){ FemStageExecutionContext::from_fem_plan(plan); FemStageExecutionContext::from_fem_plan(plan); }", None),
+        ("fn f(){ let callback = || { StageFemMeshIdentity::from_fem_eigen_plan(plan) }; }", None),
+        ("fn f(){ let callback = || { StageFemMeshIdentity::from_fem_frequency_response_plan(plan) }; }", None),
         ("fn f(){ let callback = || fem_plan_mesh_generation_id(plan); }", None),
         ("fn fem(fem_grid: [u32; 3]){ let _=StepUpdate { grid: fem_grid, fem_mesh_generation_id: None }; }", None),
     ]

@@ -2709,12 +2709,27 @@ pub fn create_planned_interactive_runtime(
     plan: &fullmag_ir::ExecutionPlanIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
 ) -> Result<InteractiveRuntime, RunError> {
+    create_planned_interactive_runtime_with_stage_fem_mesh_asset(
+        problem,
+        plan,
+        None,
+        continuation_magnetization,
+    )
+}
+
+/// Create a unified interactive runtime while reusing the stage-owned FEM mesh asset.
+pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    stage_fem_mesh_asset: Option<&StageFemMeshAsset>,
+    continuation_magnetization: Option<&[[f64; 3]]>,
+) -> Result<InteractiveRuntime, RunError> {
     let backend: Box<dyn InteractiveBackend> = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => Box::new(InteractiveFdmPreviewRuntime::create_from_plan(
             problem, fdm,
         )?),
         BackendPlanIR::Fem(fem) => Box::new(InteractiveFemPreviewRuntime::create_from_plan(
-            problem, fem,
+            problem, fem, stage_fem_mesh_asset,
         )?),
         _ => {
             return Err(RunError {

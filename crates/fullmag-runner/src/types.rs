@@ -2791,6 +2791,19 @@ mod tests {
     }
 
     #[test]
+    fn production_interactive_asset_reuse_does_not_rebuild_or_refingerprint_mesh() {
+        reset_fem_mesh_payload_build_count();
+        reset_fem_mesh_fingerprint_count();
+        let stage_asset = StageFemMeshAsset::build_from_fem_plan(&tiny_fem_plan());
+
+        let (mesh, context) = crate::interactive_runtime::reuse_stage_fem_mesh_asset(&stage_asset);
+
+        assert_eq!(mesh.generation_id.as_deref(), context.generation_id().as_deref());
+        assert_eq!(fem_mesh_payload_build_count(), 1);
+        assert_eq!(fem_mesh_fingerprint_count(), 1);
+    }
+
+    #[test]
     fn remeshed_stage_asset_publishes_and_executes_one_new_generation() {
         let mut plan = tiny_fem_plan();
         plan.mesh.nodes[1][0] += 0.25;
