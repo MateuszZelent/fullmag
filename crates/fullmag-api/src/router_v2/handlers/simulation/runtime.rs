@@ -1338,7 +1338,7 @@ fn average_hysteresis_live_magnetization(
     if values.len() < 3 || values.len() % 3 != 0 {
         return None;
     }
-    if let Some(mesh) = step.fem_mesh.as_ref().or(snapshot_mesh) {
+    if let Some(mesh) = snapshot_mesh {
         if let Some(weighted) = average_fem_magnetization_by_element_volume(values, mesh) {
             return Some(weighted);
         }
@@ -2314,7 +2314,7 @@ fn latest_magnetization_average(
     if values.len() < 3 || values.len() % 3 != 0 {
         return None;
     }
-    if let Some(mesh) = live_state.latest_step.fem_mesh.as_ref() {
+    if let Some(mesh) = snapshot.fem_mesh.as_ref() {
         if let Some(average) = mesh
             .mesh_parts
             .iter()

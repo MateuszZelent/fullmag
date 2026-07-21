@@ -817,7 +817,7 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
                     ..point_stats
                 },
                 grid: hysteresis_magnetization_grid(plan, &current_m),
-                fem_mesh: None,
+                fem_mesh_generation_id: None,
                 magnetization: Some(current_m.iter().flat_map(|v| v.iter().copied()).collect()),
                 preview_field: None,
                 cached_preview_fields: None,
@@ -3130,7 +3130,7 @@ fn hysteresis_progress_update(
     StepUpdate {
         stats: stats.cloned().unwrap_or_default(),
         grid: hysteresis_progress_grid(backend_plan, magnetization),
-        fem_mesh: None,
+        fem_mesh_generation_id: None,
         magnetization: magnetization
             .map(|values| values.iter().flat_map(|v| v.iter().copied()).collect()),
         preview_field: None,
@@ -6056,7 +6056,7 @@ mod tests {
                 ..StepStats::default()
             },
             grid: [4, 1, 1],
-            fem_mesh: None,
+                    fem_mesh_generation_id: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             preview_field: None,
             cached_preview_fields: None,

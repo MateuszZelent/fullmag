@@ -41,6 +41,7 @@ pub(crate) fn execute_direct_minimizer(
     steps: &mut Vec<StepStats>,
     mut last_preview_revision: Option<u64>,
 ) -> Result<DirectMinimizerExecution, RunError> {
+    let fem_mesh_generation_id = FemMeshPayload::from(plan).generation_id;
     let mut latest_stats: Option<StepStats> = None;
     let mut backend_completion: Option<StageCompletionIR> = None;
     let mut cancelled = false;
@@ -118,7 +119,7 @@ pub(crate) fn execute_direct_minimizer(
                     let action = (live.on_step)(StepUpdate {
                         stats: live_stats,
                         grid: live.grid,
-                        fem_mesh: Some(FemMeshPayload::from(plan)),
+                        fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                         magnetization,
                         preview_field,
                         cached_preview_fields,
@@ -238,7 +239,7 @@ pub(crate) fn execute_direct_minimizer(
             let action = (live.on_step)(StepUpdate {
                 stats: live_stats,
                 grid: live.grid,
-                fem_mesh: Some(FemMeshPayload::from(plan)),
+                fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                 magnetization,
                 preview_field,
                 cached_preview_fields,

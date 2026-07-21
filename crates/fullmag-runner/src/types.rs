@@ -1143,9 +1143,9 @@ pub struct StepUpdate {
     pub stats: StepStats,
     /// Grid dimensions [nx, ny, nz] for client-side reconstruction.
     pub grid: [u32; 3],
-    /// Optional FEM mesh payload for mesh-native preview in the control room.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fem_mesh: Option<FemMeshPayload>,
+    /// Stage-scoped FEM mesh generation resolved through the separate mesh resource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_mesh_generation_id: Option<String>,
     /// **Deprecated (Q16):** Use [`fullmag_quantities::LiveQuantityFrame`]
     /// with `quantity_id = "m"` via [`Self::to_v2()`] instead.
     ///
@@ -2642,7 +2642,7 @@ mod tests {
         let update = StepUpdate {
             stats: StepStats::default(),
             grid: [4, 1, 1],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             preview_field: None,
             cached_preview_fields: None,
@@ -2673,7 +2673,7 @@ mod tests {
         let update = StepUpdate {
             stats: StepStats::default(),
             grid: [4, 1, 1],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: None,
             preview_field: Some(LivePreviewField {
                 config_revision: 1,

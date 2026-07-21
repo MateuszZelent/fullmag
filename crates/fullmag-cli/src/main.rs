@@ -915,7 +915,7 @@ mod tests {
         let update = initial_step_update(&plan);
         assert_eq!(update.stats.step, 0);
         assert_eq!(update.grid, [4, 3, 1]);
-        assert!(update.fem_mesh.is_none());
+        assert!(update.fem_mesh_generation_id.is_none());
         assert_eq!(update.magnetization.as_ref().map(Vec::len), Some(36));
         assert!(!update.finished);
     }
@@ -1037,10 +1037,7 @@ mod tests {
         let update = initial_step_update(&plan);
         assert_eq!(update.stats.step, 0);
         assert_eq!(update.grid, [0, 0, 0]);
-        assert_eq!(
-            update.fem_mesh.as_ref().map(|payload| payload.nodes.len()),
-            Some(mesh.nodes.len())
-        );
+        assert!(update.fem_mesh_generation_id.is_some());
         assert_eq!(update.magnetization.as_ref().map(Vec::len), Some(12));
         assert!(!update.finished);
     }

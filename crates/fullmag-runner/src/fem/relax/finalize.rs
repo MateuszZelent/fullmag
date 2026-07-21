@@ -87,7 +87,7 @@ pub(crate) fn finalize_native_fem_relaxation(
                 let _ = (live.on_step)(StepUpdate {
                     stats: live_stats,
                     grid: live.grid,
-                    fem_mesh: None,
+                    fem_mesh_generation_id: None,
                     magnetization: None,
                     preview_field: None,
                     cached_preview_fields: Some(cached),

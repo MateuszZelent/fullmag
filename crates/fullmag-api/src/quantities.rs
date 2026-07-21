@@ -216,6 +216,7 @@ mod tests {
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),

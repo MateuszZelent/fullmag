@@ -464,7 +464,7 @@ fn dense_frequency_response_progress_update(
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh: None,
+        fem_mesh_generation_id: None,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -558,7 +558,7 @@ fn native_frequency_response_progress_update(
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh: None,
+        fem_mesh_generation_id: None,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,

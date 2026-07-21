@@ -1709,7 +1709,7 @@ fn fem_eigen_progress_update(progress: fem_eigen::FemEigenProgress) -> StepUpdat
             ..StepStats::default()
         },
         grid: [0, 0, 0],
-        fem_mesh: None,
+        fem_mesh_generation_id: None,
         magnetization: None,
         preview_field: None,
         cached_preview_fields: None,
@@ -1937,10 +1937,10 @@ pub fn run_planned_problem_with_callback(
     on_step(StepUpdate {
         stats: final_stats,
         grid: final_grid,
-        fem_mesh: match &plan.backend_plan {
-            BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(fem)),
-            BackendPlanIR::FemEigen(eigen) => Some(FemMeshPayload::from(eigen)),
-            BackendPlanIR::FemFrequencyResponse(response) => Some(FemMeshPayload::from(response)),
+        fem_mesh_generation_id: match &plan.backend_plan {
+            BackendPlanIR::Fem(fem) => FemMeshPayload::from(fem).generation_id,
+            BackendPlanIR::FemEigen(eigen) => FemMeshPayload::from(eigen).generation_id,
+            BackendPlanIR::FemFrequencyResponse(response) => FemMeshPayload::from(response).generation_id,
             BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
         },
         magnetization: Some(final_m),
@@ -2254,10 +2254,10 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
     on_step(StepUpdate {
         stats: final_stats,
         grid: final_grid,
-        fem_mesh: match &plan.backend_plan {
-            BackendPlanIR::Fem(fem) => Some(FemMeshPayload::from(fem)),
-            BackendPlanIR::FemEigen(eigen) => Some(FemMeshPayload::from(eigen)),
-            BackendPlanIR::FemFrequencyResponse(response) => Some(FemMeshPayload::from(response)),
+        fem_mesh_generation_id: match &plan.backend_plan {
+            BackendPlanIR::Fem(fem) => FemMeshPayload::from(fem).generation_id,
+            BackendPlanIR::FemEigen(eigen) => FemMeshPayload::from(eigen).generation_id,
+            BackendPlanIR::FemFrequencyResponse(response) => FemMeshPayload::from(response).generation_id,
             BackendPlanIR::Fdm(_) | BackendPlanIR::FdmMultilayer(_) => None,
         },
         magnetization: None,
@@ -2430,7 +2430,7 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
     on_step(StepUpdate {
         stats: final_stats,
         grid: fdm.grid.cells,
-        fem_mesh: None,
+        fem_mesh_generation_id: None,
         magnetization: Some(final_m),
         preview_field: None,
         cached_preview_fields: None,
@@ -2549,10 +2549,11 @@ pub fn run_problem_with_interactive_fem_runtime_live_preview_interruptible(
         wall_time_ns: 0,
         ..StepStats::default()
     });
+    let fem_mesh_generation_id = FemMeshPayload::from(fem).generation_id;
     on_step(StepUpdate {
         stats: final_stats,
         grid: [0, 0, 0],
-        fem_mesh: Some(FemMeshPayload::from(fem)),
+        fem_mesh_generation_id,
         magnetization: Some(
             executed
                 .result

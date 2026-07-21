@@ -193,6 +193,7 @@ pub(crate) fn execute_llg_overdamped(
     let mut live_preview_handoff = FemLivePreviewHandoff::default();
     let mut cached_preview_handoff = FemCachedPreviewHandoff::default();
     let mut live_magnetization_handoff = FemLiveMagnetizationHandoff::default();
+    let fem_mesh_generation_id = FemMeshPayload::from(plan).generation_id;
     let drive_discontinuities = crate::time_events::resolved_stage_drive_discontinuities(
         &plan.field_drives,
         plan.time_stage.start_time_s,
@@ -293,7 +294,7 @@ pub(crate) fn execute_llg_overdamped(
                     let action = (live.on_step)(StepUpdate {
                         stats: live_stats,
                         grid: live.grid,
-                        fem_mesh: (current_stats.step == 0).then_some(FemMeshPayload::from(plan)),
+                        fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                         magnetization,
                         preview_field,
                         cached_preview_fields,
@@ -436,7 +437,7 @@ pub(crate) fn execute_llg_overdamped(
             let action = (live.on_step)(StepUpdate {
                 stats: live_stats,
                 grid: live.grid,
-                fem_mesh: Some(FemMeshPayload::from(plan)),
+                fem_mesh_generation_id: fem_mesh_generation_id.clone(),
                 magnetization,
                 preview_field,
                 cached_preview_fields,

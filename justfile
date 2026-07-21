@@ -152,6 +152,7 @@ verify-fdm-pbc-production:
     python3 scripts/verify_pbc_production_matrix.py --manifest scripts/pbc_production_matrix.v1.json
 
 verify-fem-relaxation-source-contract:
+    bash scripts/verify_fem_mesh_hot_loop_source_contract.sh
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_relaxation_source_contract fem_stage_completion_contract fem_rk_explicit_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_stage_completion_contract && native/build/backends/fem/fem_rk_explicit_contract'
 

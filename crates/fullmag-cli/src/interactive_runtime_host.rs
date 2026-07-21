@@ -957,6 +957,7 @@ mod tests {
         live_state.latest_step.magnetization = Some(vec![1.0, 0.0, 0.0]);
 
         LocalLiveWorkspaceState {
+            fem_mesh: None,
             session: SessionManifest {
                 session_id: "session-test".to_string(),
                 run_id: "run-test".to_string(),

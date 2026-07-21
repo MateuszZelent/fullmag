@@ -156,7 +156,7 @@ pub(crate) fn execute_cuda_fdm(
                     let action = (live.on_step)(StepUpdate {
                         stats: current_stats.clone(),
                         grid: live.grid,
-                        fem_mesh: None,
+                        fem_mesh_generation_id: None,
                         magnetization: Some(flatten_vectors(&state.magnetization)),
                         preview_field,
                         cached_preview_fields: None,
@@ -319,7 +319,7 @@ pub(crate) fn execute_cuda_fdm(
                     let action = (live.on_step)(StepUpdate {
                         stats: current_stats.clone(),
                         grid: live.grid,
-                        fem_mesh: None,
+                        fem_mesh_generation_id: None,
                         magnetization: None,
                         preview_field,
                         cached_preview_fields: None,
@@ -400,7 +400,7 @@ pub(crate) fn execute_cuda_fdm(
                 let action = (live.on_step)(StepUpdate {
                     stats: sampled_stats.clone(),
                     grid: live.grid,
-                    fem_mesh: None,
+                    fem_mesh_generation_id: None,
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,

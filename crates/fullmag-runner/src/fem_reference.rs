@@ -667,8 +667,7 @@ fn execute_reference_fem_impl(
                 let action = (live.on_step)(StepUpdate {
                     stats: current_stats.clone(),
                     grid: live.grid,
-                    fem_mesh: (current_stats.step == 0)
-                        .then_some(crate::types::FemMeshPayload::from(plan)),
+                    fem_mesh_generation_id: crate::types::FemMeshPayload::from(plan).generation_id,
                     magnetization: None,
                     preview_field,
                     cached_preview_fields: None,
@@ -813,11 +812,7 @@ fn execute_reference_fem_impl(
                 let action = (live.on_step)(StepUpdate {
                     stats: update_stats,
                     grid: live.grid,
-                    fem_mesh: if step_count <= 1 {
-                        Some(crate::types::FemMeshPayload::from(plan))
-                    } else {
-                        None
-                    },
+                    fem_mesh_generation_id: crate::types::FemMeshPayload::from(plan).generation_id,
                     magnetization,
                     preview_field,
                     cached_preview_fields: None,
@@ -888,11 +883,7 @@ fn execute_reference_fem_impl(
             let action = (live.on_step)(StepUpdate {
                 stats: update_stats,
                 grid: live.grid,
-                fem_mesh: if step_count <= 1 {
-                    Some(crate::types::FemMeshPayload::from(plan))
-                } else {
-                    None
-                },
+                fem_mesh_generation_id: crate::types::FemMeshPayload::from(plan).generation_id,
                 magnetization,
                 preview_field,
                 cached_preview_fields: None,

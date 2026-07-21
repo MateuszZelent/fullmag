@@ -219,7 +219,8 @@ pub(crate) struct LiveStepView {
     pub max_torque_T: f64,
     pub wall_time_ns: u64,
     pub grid: [u32; 3],
-    pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_mesh_generation_id: Option<String>,
     /// **Deprecated (Q16):** Spatial data flows through `latest_fields`.
     pub magnetization: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

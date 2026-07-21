@@ -284,15 +284,15 @@ impl InteractiveRuntime {
             .flat_map(|v| v.iter().copied())
             .collect();
 
-        let (grid, fem_mesh) = match self.backend.geometry() {
+        let (grid, fem_mesh_generation_id) = match self.backend.geometry() {
             BackendGeometry::Fdm { grid } => (grid, None),
-            BackendGeometry::Fem { mesh } => ([0u32, 0, 0], Some(mesh)),
+            BackendGeometry::Fem { mesh } => ([0u32, 0, 0], mesh.generation_id),
         };
 
         on_step(StepUpdate {
             stats: final_stats,
             grid,
-            fem_mesh,
+            fem_mesh_generation_id,
             magnetization: Some(final_m),
             preview_field: None,
             cached_preview_fields: None,

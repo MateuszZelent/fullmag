@@ -49,6 +49,7 @@ pub(crate) struct LocalLiveWorkspaceState {
     pub clear_preview_cache: bool,
     pub engine_log: Vec<EngineLogEntry>,
     pub solver_profile: fullmag_runner::SolverProfileState,
+    pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
     pub(crate) published_fem_mesh_generation_id: Option<String>,
 }
 
@@ -61,12 +62,7 @@ impl LocalLiveWorkspaceState {
         let live_state = self.live_state.clone();
         let mut metadata = self.metadata.clone();
 
-        // Promote fem_mesh to a top-level payload field while keeping the
-        // step copy for compatibility with an already-running API process that
-        // predates the top-level field. The API still treats the top-level
-        // field as authoritative when supported, and publish_delta suppresses
-        // repeated mesh sends by generation id.
-        let fem_mesh = live_state.latest_step.fem_mesh.clone();
+        let fem_mesh = self.fem_mesh.clone();
         if live_state.latest_step.step > 0 {
             metadata = None;
         }
@@ -767,8 +763,8 @@ fn preserve_pending_live_step_payload(
             .filter(|values| magnetization_matches_fem_mesh(values, current_fem_mesh_counts))
             .cloned();
     }
-    if incoming.fem_mesh.is_none() {
-        incoming.fem_mesh = existing.fem_mesh.clone();
+    if incoming.fem_mesh_generation_id.is_none() {
+        incoming.fem_mesh_generation_id = existing.fem_mesh_generation_id.clone();
     }
     if allow_previous_preview && incoming.preview_field.is_none() {
         incoming.preview_field = existing.preview_field.clone();
@@ -809,12 +805,10 @@ fn merge_pending_publish_payload(
     if let (Some(existing_state), Some(incoming_state)) =
         (slot.live_state.as_ref(), incoming.live_state.as_mut())
     {
-        let current_fem_mesh_counts = incoming_state
-            .latest_step
+        let current_fem_mesh_counts = incoming
             .fem_mesh
             .as_ref()
-            .or(incoming.fem_mesh.as_ref())
-            .or(existing_state.latest_step.fem_mesh.as_ref())
+            .or(slot.fem_mesh.as_ref())
             .map(fem_mesh_point_counts);
         preserve_pending_live_step_payload(
             &existing_state.latest_step,
@@ -1263,7 +1257,7 @@ mod tests {
 
     fn workspace_with_domain_mesh() -> LocalLiveWorkspace {
         let mut live_state = bootstrap_live_state("running");
-        live_state.latest_step.fem_mesh = Some(fem_mesh("mesh-gen-1"));
+        live_state.latest_step.fem_mesh_generation_id = Some("mesh-gen-1".to_string());
 
         LocalLiveWorkspace::new(
             LocalLiveWorkspaceState {
@@ -1311,6 +1305,7 @@ mod tests {
                     artifact_dir: String::new(),
                 },
                 live_state,
+                fem_mesh: Some(fem_mesh("mesh-gen-1")),
                 metadata: None,
                 mesh_workspace: None,
                 stage_execution: None,
@@ -1967,21 +1962,26 @@ mod tests {
                 .and_then(|mesh| mesh.generation_id.as_deref()),
             Some("mesh-gen-1")
         );
-        assert!(
+        assert_eq!(
             first
                 .live_state
                 .as_ref()
-                .and_then(|live_state| live_state.latest_step.fem_mesh.as_ref())
-                .is_some(),
-            "runtime state keeps FEM mesh for compatibility with an already-running API"
-        );
-        assert!(
-            state.live_state.latest_step.fem_mesh.is_some(),
-            "local workspace must retain the FEM mesh for preview and inspector state"
+                .and_then(|live_state| live_state.latest_step.fem_mesh_generation_id.as_deref()),
+            Some("mesh-gen-1")
         );
 
-        let second = state.publish_delta();
-        assert!(second.fem_mesh.is_none());
+        for step in 2..=12 {
+            state.live_state.latest_step.step = step;
+            let delta = state.publish_delta();
+            assert!(delta.fem_mesh.is_none(), "step {step} republished the stage mesh");
+            assert_eq!(
+                delta
+                    .live_state
+                    .as_ref()
+                    .and_then(|live_state| live_state.latest_step.fem_mesh_generation_id.as_deref()),
+                Some("mesh-gen-1")
+            );
+        }
     }
 
     #[test]
@@ -2027,21 +2027,15 @@ mod tests {
 
         let snapshot = workspace.snapshot();
         assert_eq!(
-            snapshot
-                .live_state
-                .latest_step
-                .fem_mesh
-                .as_ref()
-                .map(|mesh| mesh.mesh_id.as_str()),
+            snapshot.fem_mesh.as_ref().map(|mesh| mesh.mesh_id.as_str()),
             Some("mesh-id")
         );
         assert_eq!(
             snapshot
                 .live_state
                 .latest_step
-                .fem_mesh
-                .as_ref()
-                .and_then(|mesh| mesh.generation_id.as_deref()),
+                .fem_mesh_generation_id
+                .as_deref(),
             Some("mesh-gen-1")
         );
     }
@@ -2541,7 +2535,7 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             max_torque_T: 0.0,
             wall_time_ns: 0,
             grid: [0, 0, 0],
-            fem_mesh: None,
+            fem_mesh_generation_id: None,
             magnetization: None,
             per_object_scalars: Default::default(),
             preview_field: None,

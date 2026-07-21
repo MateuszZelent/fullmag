@@ -496,7 +496,12 @@ pub(crate) struct StepUpdateView {
     pub max_torque_T: f64,
     pub wall_time_ns: u64,
     pub grid: [u32; 3],
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fem_mesh_generation_id: Option<String>,
+    /// Transitional input-only compatibility for legacy publishers.
+    /// Ingestion promotes this payload to the top-level stage mesh resource;
+    /// API responses never serialize it back into a step frame.
+    #[serde(default, skip_serializing)]
     pub fem_mesh: Option<FemMeshPayload>,
     /// **Deprecated (Q16):** Spatial data now flows through `latest_fields`.
     /// Retained for backwards-compatible imports / load_state only.
@@ -1581,6 +1586,7 @@ mod tests {
             max_torque_T: 0.0,
             wall_time_ns: 0,
             grid: [2, 1, 1],
+            fem_mesh_generation_id: None,
             fem_mesh: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             per_object_scalars: Default::default(),

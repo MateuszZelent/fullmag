@@ -1250,15 +1250,9 @@ fn finalize_current_live_apply(
 
     if current.fem_mesh.is_none() {
         current.fem_mesh = current
-            .live_state
+            .metadata
             .as_ref()
-            .and_then(|state| state.latest_step.fem_mesh.clone())
-            .or_else(|| {
-                current
-                    .metadata
-                    .as_ref()
-                    .and_then(extract_fem_mesh_from_metadata)
-            });
+            .and_then(extract_fem_mesh_from_metadata);
     }
     if let Some(node_count) = current.fem_mesh.as_ref().map(|mesh| mesh.nodes.len()) {
         expand_uniform_material_latest_fields(&mut current.latest_fields, node_count);
@@ -1519,7 +1513,7 @@ pub(crate) fn apply_current_live_runtime_frame(
         if current.run.is_none() && current.session.status == "bootstrapping" {
             current.session.status = live_state.status.clone();
         }
-        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.clone() {
+        if let Some(fem_mesh) = live_state.latest_step.fem_mesh.take() {
             apply_fem_mesh_update(current, fem_mesh);
         }
         // Preserve heavy payload fields from the previous state when the
@@ -1533,8 +1527,9 @@ pub(crate) fn apply_current_live_runtime_frame(
             if live_state.latest_step.magnetization.is_none() {
                 live_state.latest_step.magnetization = prev.latest_step.magnetization.clone();
             }
-            if live_state.latest_step.fem_mesh.is_none() {
-                live_state.latest_step.fem_mesh = prev.latest_step.fem_mesh.clone();
+            if live_state.latest_step.fem_mesh_generation_id.is_none() {
+                live_state.latest_step.fem_mesh_generation_id =
+                    prev.latest_step.fem_mesh_generation_id.clone();
             }
             if live_state.latest_step.preview_field.is_none() {
                 live_state.latest_step.preview_field = prev.latest_step.preview_field.clone();
@@ -1857,6 +1852,7 @@ mod tests {
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: Some(magnetization),
                 per_object_scalars: Default::default(),
@@ -2009,6 +2005,47 @@ mod tests {
         assert_eq!(mesh.mesh_id, "domain-mesh-id");
         assert_eq!(mesh.generation_id.as_deref(), Some("domain-gen-1"));
         assert_eq!(current.mesh_revision, mesh_revision);
+    }
+
+    #[test]
+    fn runtime_frame_accepts_stage_mesh_once_and_preserves_it_across_steps() {
+        let mut current = test_current_snapshot();
+        let session_id = current.session.session_id.clone();
+        apply_current_live_runtime_frame(
+            &mut current,
+            CurrentLiveRuntimeFrameRequest {
+                session_id: session_id.clone(),
+                live_state: None,
+                engine_log: None,
+                solver_profile: None,
+                fem_mesh: Some(domain_fem_mesh("domain-gen-1")),
+            },
+        )
+        .expect("initial stage mesh frame should apply");
+        let mesh_revision = current.mesh_revision;
+
+        for _ in 0..12 {
+            apply_current_live_runtime_frame(
+                &mut current,
+                CurrentLiveRuntimeFrameRequest {
+                    session_id: session_id.clone(),
+                    live_state: None,
+                    engine_log: None,
+                    solver_profile: None,
+                    fem_mesh: None,
+                },
+            )
+            .expect("generation-only step frame should preserve stage mesh");
+        }
+
+        assert_eq!(current.mesh_revision, mesh_revision);
+        assert_eq!(
+            current
+                .fem_mesh
+                .as_ref()
+                .and_then(|mesh| mesh.generation_id.as_deref()),
+            Some("domain-gen-1")
+        );
     }
 
     #[test]
@@ -2390,6 +2427,7 @@ mod tests {
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
@@ -2442,6 +2480,7 @@ mod tests {
                 max_torque_T: 0.0,
                 wall_time_ns: 0,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
@@ -3019,6 +3058,7 @@ mod tests {
                         max_torque_T: 0.0,
                         wall_time_ns: 0,
                         grid: [1, 1, 1],
+                        fem_mesh_generation_id: None,
                         fem_mesh: None,
                         magnetization: Some(vec![0.0, 0.0, 1.0]),
                         per_object_scalars: Default::default(),
@@ -3205,6 +3245,7 @@ mod tests {
                     max_torque_T: 0.0,
                     wall_time_ns: 100,
                     grid: [1, 1, 1],
+                    fem_mesh_generation_id: None,
                     fem_mesh: None,
                     magnetization: None,
                     per_object_scalars: Default::default(),
@@ -3258,6 +3299,7 @@ mod tests {
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
@@ -3335,6 +3377,7 @@ mod tests {
                 max_torque_T: 0.0,
                 wall_time_ns: 100,
                 grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
@@ -3368,6 +3411,7 @@ mod tests {
                         max_torque_T: 0.0,
                         wall_time_ns: 100,
                         grid: [1, 1, 1],
+                        fem_mesh_generation_id: None,
                         fem_mesh: None,
                         magnetization: None,
                         per_object_scalars: Default::default(),

@@ -4096,16 +4096,7 @@ fn build_preview_state_from_live_field(
     let display_kind = display_kind_for_quantity(&field.quantity).to_string();
 
     if field.spatial_kind == "mesh" {
-        let mesh = current
-            .fem_mesh
-            .as_ref()
-            .or_else(|| {
-                current
-                    .live_state
-                    .as_ref()
-                    .and_then(|state| state.latest_step.fem_mesh.as_ref())
-            })?
-            .clone();
+        let mesh = current.fem_mesh.as_ref()?.clone();
         let (min, max) = component_min_max(&vectors, component);
         let active_mask = field
             .active_mask
