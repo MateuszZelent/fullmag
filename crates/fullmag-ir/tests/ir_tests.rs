@@ -265,6 +265,44 @@ fn regional_field_drive_validation_is_fail_closed() {
 }
 
 #[test]
+fn regional_field_drive_rejects_non_finite_waveform_frequencies() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "bad-waveform".into(),
+        name: "Bad waveform".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::Sinusoidal {
+            frequency_hz: f64::NAN,
+            phase_rad: 0.0,
+            offset: 0.0,
+        },
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
+    });
+
+    let errors = ir
+        .validate()
+        .expect_err("non-finite sinusoidal frequency must fail validation");
+    assert!(errors.iter().any(|error| error.contains("frequency_hz")));
+
+    ir.field_drives[0].waveform = TimeDependenceIR::SincPulse {
+        cutoff_hz: f64::NAN,
+        t0: 0.0,
+        amplitude: 1.0,
+    };
+    let errors = ir
+        .validate()
+        .expect_err("non-finite sinc cutoff must fail validation");
+    assert!(errors.iter().any(|error| error.contains("cutoff_hz")));
+}
+
+#[test]
 fn active_stage_id_controls_minimizer_drive_validation() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.problem_meta.runtime_metadata.insert(
@@ -298,6 +336,44 @@ fn active_stage_id_controls_minimizer_drive_validation() {
     ir.problem_meta.runtime_metadata.insert("active_stage_id".into(), serde_json::json!("missing"));
     let errors = ir.validate().expect_err("unknown active stage must fail closed");
     assert!(errors.iter().any(|error| error.contains("active_stage_id") && error.contains("missing")));
+}
+
+#[test]
+fn all_time_evolution_drive_is_inactive_during_relaxation() {
+    let mut ir = ProblemIR::bootstrap_example();
+    let sampling = ir.study.sampling().clone();
+    ir.study = StudyIR::Relaxation {
+        algorithm: RelaxationAlgorithmIR::ProjectedGradientBb,
+        dynamics: None,
+        stop: RelaxStopIR {
+            torque_tolerance_apm: None,
+            energy_tolerance_j: None,
+            max_steps: Some(2),
+            max_relaxation_time_s: None,
+        },
+        sampling,
+    };
+    ir.field_drives.push(RegionalFieldDriveIR {
+        id: "time-evolution-only".into(),
+        name: "Time evolution only".into(),
+        kind: FieldDriveKindIR::Regional,
+        enabled: true,
+        target: FieldTargetIR::Global {},
+        amplitude_b_t: 1e-3,
+        direction: [0.0, 1.0, 0.0],
+        spatial_profile: FieldSpatialProfileIR::Uniform {},
+        waveform: TimeDependenceIR::SincPulse {
+            cutoff_hz: 20e9,
+            t0: 50e-12,
+            amplitude: 1.0,
+        },
+        time_origin: FieldTimeOriginIR::StageLocal,
+        activation: DriveActivationIR::AllTimeEvolution {},
+        migration: None,
+    });
+
+    ir.validate()
+        .expect("all_time_evolution drive must be inactive during relaxation");
 }
 
 #[test]

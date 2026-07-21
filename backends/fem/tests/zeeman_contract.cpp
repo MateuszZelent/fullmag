@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -311,6 +312,63 @@ void regional_drive_waveform_golden_values() {
     check_near(fullmag::fem::evaluate_time_dependence(waveform, 1.0), 3.0, 1e-15, "owned PWL interpolation");
 }
 
+void regional_drive_invalid_numeric_descriptors_fail_closed() {
+    fullmag::fem::OwnedTimeDependence waveform;
+    std::string error;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double infinity = std::numeric_limits<double>::infinity();
+
+    auto waveform_desc = constant_waveform_desc();
+    waveform_desc.kind = FULLMAG_FEM_TIME_SINUSOIDAL;
+    waveform_desc.parameters.sinusoidal = {nan, 0.0, 0.0};
+    check(
+        !fullmag::fem::copy_time_dependence(waveform_desc, waveform, error),
+        "non-finite sinusoidal frequency rejected");
+    waveform_desc.parameters.sinusoidal = {1.0e9, infinity, 0.0};
+    check(
+        !fullmag::fem::copy_time_dependence(waveform_desc, waveform, error),
+        "non-finite sinusoidal phase rejected");
+
+    waveform_desc = constant_waveform_desc();
+    waveform_desc.kind = FULLMAG_FEM_TIME_PULSE;
+    waveform_desc.parameters.pulse = {2.0, 1.0};
+    check(
+        !fullmag::fem::copy_time_dependence(waveform_desc, waveform, error),
+        "non-increasing pulse interval rejected");
+
+    waveform_desc = constant_waveform_desc();
+    waveform_desc.kind = FULLMAG_FEM_TIME_SINC_PULSE;
+    waveform_desc.parameters.sinc_pulse = {nan, 0.0, 1.0};
+    check(
+        !fullmag::fem::copy_time_dependence(waveform_desc, waveform, error),
+        "non-finite sinc cutoff rejected");
+    waveform_desc.parameters.sinc_pulse = {1.0e9, -1.0, 1.0};
+    check(
+        !fullmag::fem::copy_time_dependence(waveform_desc, waveform, error),
+        "negative sinc center time rejected");
+
+    fullmag::fem::Context ctx;
+    auto drive = global_uniform_drive_desc();
+    fullmag_fem_plan_desc plan{};
+    plan.regional_field_drives = &drive;
+    plan.regional_field_drive_count = 1;
+
+    drive.amplitude_b_t = -1.0;
+    check(
+        !fullmag::fem::copy_regional_field_drive_plan(ctx, plan, error),
+        "negative regional drive amplitude rejected");
+    drive = global_uniform_drive_desc();
+    drive.time_origin = FULLMAG_FEM_TIME_ABSOLUTE + 1u;
+    check(
+        !fullmag::fem::copy_regional_field_drive_plan(ctx, plan, error),
+        "invalid regional drive time origin rejected");
+    drive = global_uniform_drive_desc();
+    plan.stage_start_time_s = nan;
+    check(
+        !fullmag::fem::copy_regional_field_drive_plan(ctx, plan, error),
+        "non-finite stage start time rejected");
+}
+
 void global_uniform_regional_drive_projects_and_materializes_exactly() {
     fullmag::fem::Context ctx;
     ctx.mesh.n_nodes = 4;
@@ -587,6 +645,7 @@ int main() {
     regional_drive_descriptor_validation_and_owned_copy();
     regional_drive_abi_layout_is_self_consistent();
     regional_drive_waveform_golden_values();
+    regional_drive_invalid_numeric_descriptors_fail_closed();
     global_uniform_regional_drive_projects_and_materializes_exactly();
     spatial_sinc_regional_drive_uses_tetra_volume_projection();
     geometry_mask_projection_matches_analytic_clipped_tetra_volume();

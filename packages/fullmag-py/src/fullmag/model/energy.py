@@ -245,6 +245,8 @@ class PiecewiseLinear:
         )
         if len(converted) < 2:
             raise ValueError("PiecewiseLinear requires at least 2 points")
+        if any(not math.isfinite(t) or not math.isfinite(value) for t, value in converted):
+            raise ValueError("PiecewiseLinear points must be finite")
         ts = [p[0] for p in converted]
         if any(t2 <= t1 for t1, t2 in zip(ts, ts[1:])):
             raise ValueError("PiecewiseLinear times must be strictly increasing")

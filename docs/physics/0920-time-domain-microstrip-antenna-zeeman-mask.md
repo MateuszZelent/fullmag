@@ -1,10 +1,11 @@
-# Time-domain microstrip antenna as prescribed Zeeman mask
+# Time-domain regional magnetic-field drive
 
-- Status: draft implementation plan
+- Status: canonical physics and numerics contract
 - Owners: Fullmag core
-- Last updated: 2026-06-09
+- Last updated: 2026-07-16
 - Related ADRs:
   - `docs/adr/0011-resource-first-api.md`
+  - `docs/adr/0019-regional-field-drive-and-stage-time-semantics.md`
 - Related specs:
   - `docs/specs/problem-ir-v0.md`
   - `docs/specs/capability-matrix-v0.md`
@@ -27,6 +28,12 @@
 > MuMax-style prescribed regional field. It is not the conductor-backed
 > variable-width microstrip/CPW solver. The latter is defined by physics note
 > 0950 and ADR 0017 as a separate staged field-basis workflow.
+
+> The historical `antenna_field_source(model="prescribed_zeeman_mask")` and
+> `H_ant` wording below describes the compatibility origin of this feature.
+> New authoring uses `RegionalFieldDrive` and the distinct quantities
+> `H_drive`, `B_drive`, `E_drive`, and `eden_drive`. Compatibility input may be
+> migrated, but canonical Python/UI export must never recreate the old model.
 
 ## 1. Problem statement
 
@@ -192,7 +199,7 @@ For spin-wave time-domain work, add these canonical waveform families:
 
 ```text
 sinc_pulse:
-  f(t) = sinc(2 * pi * fc * (t - t0))
+  f(t) = a * sinc(2 * fc * (t - t0))
 
 gaussian_sine:
   f(t) = sin(2 * pi * f0 * (t - t0) + phase) * exp(-0.5 * ((t - t0) / sigma_t)^2)
@@ -206,6 +213,20 @@ The production MVP should implement `sinusoidal` and `sinc_pulse` first.
 functions. A raw Python callback must not be accepted by canonical scripts or
 compiled solvers because it is not serializable, not reproducible, and not GPU
 portable.
+
+Here `sinc(q)=sin(pi*q)/(pi*q)`, so the canonical pulse is
+
+```text
+f(t) = a * sin(2*pi*fc*(t-t0)) / (2*pi*fc*(t-t0)),
+f(t0) = a.
+```
+
+The UI and every executable backend must evaluate this exact convention. The
+shift `t0` is the symmetry centre, not a delayed on/off event. If the selected
+run starts at local time zero, the physically sampled source is the finite
+window `f(t)` for `0 <= t < T`; the UI must show that actual window and may
+also show the centred coordinate `tau=t-t0`. It must not silently reflect,
+extend, or recenter the waveform.
 
 If a "dowolna funkcja czasu" UI is needed, it should lower to one of:
 
@@ -520,14 +541,32 @@ Planner diagnostics must distinguish:
 
 ### 5.1 Runtime stage impact
 
-Time-dependent antenna field sources are active only during time-integration
-stages. Relaxation/minimization behavior must be explicit:
+The canonical pipeline is ordered state, not a bag of globally declared
+sources. A typical spectroscopy workflow is:
 
-- default: disabled during `minimize` and static `relax` unless the stage opts
-  into `include_time_dependent_sources=True`;
-- time-domain `run`/`evolve` stages: enabled by default;
-- continuation stages: preserve source definitions and current time origin
-  policy.
+```text
+Relax(stage_id="relax")
+AddFieldDrive(stage_id="add-k0-antenna", drive=RegionalFieldDrive(...))
+Run(stage_id="excite", ...)
+```
+
+`AddFieldDrive` is a typed, zero-duration pipeline action. It leaves the
+magnetization, mesh, absolute solver time, and material state unchanged and
+adds the complete drive descriptor to the persistent problem state seen by
+subsequent stages. Therefore:
+
+1. the `Relax` stage snapshot has no such drive in `ProblemIR.field_drives`;
+2. no antenna field or drive energy exists during relaxation;
+3. the action is recorded as its own completed stage in authoring, runtime
+   progress, provenance, and exported Python;
+4. the following `Run` starts from the relaxed magnetization and sees the
+   drive;
+5. removing or moving the action changes exactly the downstream stages;
+6. duplicate drive ids and invalid targets fail at the action boundary.
+
+The older global-definition plus `DriveActivation.stage_ids(...)` form remains
+valid compatibility input. It does not replace the explicit action in new UI
+pipelines. Dynamic drives remain invalid in minimize/direct-relax stages.
 
 The stage must record whether `t` is:
 
@@ -538,38 +577,75 @@ The stage must record whether `t` is:
 The default for new spin-wave stages should be stage-local time because users
 usually design a pulse relative to the drive stage start.
 
+### 5.1.1 Stage-local outputs and sampling
+
+Output policy belongs to the compute stage that produces the samples. A `Run`
+may define:
+
+- table autosave enabled/disabled, period `t_sampling`, and scalar quantities;
+- field autosave entries such as `m`, `H_drive`, `H_demag`, and `H_eff`, each
+  with its own cadence;
+- a Gamma-response analysis request (component, weighting, detrend, window,
+  and susceptibility floor).
+
+Global output settings are backward-compatible defaults only. A stage-local
+value wins when present. UI preview and script export must preserve the same
+precedence and must label which value is effective.
+
+For a planned run of duration `T` sampled every `Delta t_s`, the samples are
+
+```text
+t_n = n * Delta t_s,  n = 0, ..., N-1,
+N = floor(T / Delta t_s) when T/Delta t_s is integral,
+Delta f = 1 / (N * Delta t_s),
+f_Nyquist = 1 / (2 * Delta t_s).
+```
+
+This half-open convention avoids counting both ends of a continuation boundary.
+For `T=2 ns` and `Delta t_s=0.5 ps`, `N=4000`, `Delta f=0.5 GHz`, and
+`f_Nyquist=1 THz`. The integration step `dt`, table/response `t_sampling`, and
+field snapshot cadence are distinct quantities and must be displayed
+separately.
+
+The source preview FFT uses the authored waveform evaluated on this planned
+clock. The response FFT uses actual artifact timestamps. Before an FFT, the
+runtime/UI verifies finite strictly increasing samples and uniform spacing
+within the documented tolerance. Nonuniform samples are marked uncertified and
+are not silently resampled. After execution, actual `N`, `Delta t`, duration,
+`Delta f`, and Nyquist replace planned estimates.
+
 ### 5.2 Quantities
 
 Add active vector quantity:
 
 ```text
-H_ant
+H_drive
 unit: A/m
 n_comp: 3
 location: cell_center for FDM, node for FEM MVP
-available when: at least one executable prescribed antenna source exists
+available when: at least one executable regional drive is present and active
 ```
 
 Add optional scalar energy outputs:
 
 ```text
-E_ant
-eden_ant
+E_drive
+eden_drive
 ```
 
 The energy density convention follows Zeeman:
 
 ```text
-eden_ant = - Ms * dot(m, B_ant)
+eden_drive = - Ms * dot(m, B_drive)
 ```
 
 or equivalently:
 
 ```text
-eden_ant = - mu0 * Ms * dot(m, H_ant)
+eden_drive = - mu0 * Ms * dot(m, H_drive)
 ```
 
-`H_ant` must be unavailable if the source is absent or unsupported. The browser
+`H_drive` must be unavailable if the source is absent or unsupported. The browser
 must not synthesize it from object geometry.
 
 ### 5.3 Artifacts
@@ -745,6 +821,29 @@ Required round-trip cases:
 2. UI creates antenna object and source, then exports Python.
 3. Exported Python reloads to the same ProblemIR.
 4. Visualization settings for antenna object survive scene document round-trip.
+
+### 6.6 Study pipeline authoring and scientific preview
+
+The Study tree exposes `Add antenna` as a first-class stage between relaxation
+and time evolution. Its dedicated inspector edits the complete canonical
+`RegionalFieldDrive`: id/name/enabled state, amplitude and direction, global /
+object / region target, spatial profile, waveform, stage-local/absolute clock,
+and compatibility activation metadata. It includes a live plot of the actual
+`sinc(t-t0)` window and its discrete source spectrum.
+
+The `Run` inspector owns `Sampling & outputs` and `Gamma response` sections. It
+must show, before execution, the effective integration `dt`, response
+`t_sampling`, `N`, duration, `Delta f`, Nyquist, sinc cutoff, and the provenance
+of every cadence (stage-local or inherited). After execution the analysis view
+shows actual drive and magnetization traces, source/response spectra, and peak
+table from the versioned resource
+`/v2/sessions/current/analysis/spin-wave/gamma.v1`.
+
+The inspector and analysis module share only pure physics/sampling models under
+`src/shared/domain/physics`; the inspector must not import analysis module
+state. HTTP v2 resources remain the source of truth and realtime events only
+invalidate them. Unknown stage kinds fail closed and never render as a relax
+stage.
 
 ## 7. Test case: permalloy box waveguide drive
 
@@ -1023,17 +1122,18 @@ quantity metadata must expose sampling location.
 - [x] Runtime/provenance plan
 - [x] UI/control-room plan
 - [x] Permalloy box test plan
-- [ ] Python API implementation
-- [ ] ProblemIR implementation
-- [ ] Planner implementation
-- [ ] Capability matrix update
-- [ ] FDM CPU implementation
-- [ ] FDM GPU implementation
-- [ ] FEM CPU implementation
-- [ ] FEM GPU implementation
-- [ ] OpenAPI/resource implementation
-- [ ] UI implementation
-- [ ] Tests/benchmarks
+- [x] Python regional-drive API implementation
+- [x] ProblemIR regional-drive implementation
+- [x] Planner regional-drive implementation
+- [x] Capability matrix update for implemented lanes
+- [x] FDM CPU implementation
+- [x] FDM GPU implementation
+- [x] FEM CPU implementation
+- [x] FEM GPU implementation
+- [x] OpenAPI/resource implementation for regional drive and Gamma response
+- [ ] Explicit `AddFieldDrive` pipeline action and stage-local outputs
+- [ ] Dedicated stage inspectors and complete planned/actual FFT UI
+- [ ] End-to-end browser/runtime qualification for the explicit pipeline
 
 ## 12. Deferred work
 
@@ -1045,7 +1145,8 @@ quantity metadata must expose sampling location.
 4. Full arbitrary expression language before parser parity is proven.
 5. Quadrature-owned FEM mask integration.
 6. Hybrid execution.
-7. Automatic spin-wave spectral analysis from time-domain antenna runs.
+7. Nonuniform-time spectral estimation (NUFFT/Lomb--Scargle); the canonical
+   FFT path intentionally fails closed instead of resampling.
 
 ## 13. References
 

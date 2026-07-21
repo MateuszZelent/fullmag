@@ -290,6 +290,40 @@ class TableAutosave:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class GammaResponseAnalysis:
+    response_component: str = "my"
+    weighting: str = "Ms_times_lumped_volume"
+    detrend: str = "linear"
+    window: str = "hann"
+    susceptibility_floor_fraction: float = 1e-6
+
+    def __post_init__(self) -> None:
+        if self.response_component not in {"my", "mz"}:
+            raise ValueError("response_component must be 'my' or 'mz'")
+        if self.weighting != "Ms_times_lumped_volume":
+            raise ValueError("weighting must be 'Ms_times_lumped_volume'")
+        if self.detrend not in {"none", "mean", "linear"}:
+            raise ValueError("detrend must be 'none', 'mean', or 'linear'")
+        if self.window != "hann":
+            raise ValueError("window must be 'hann'")
+        floor = float(self.susceptibility_floor_fraction)
+        if not math.isfinite(floor) or not 0.0 <= floor < 1.0:
+            raise ValueError("susceptibility_floor_fraction must be finite in [0, 1)")
+        object.__setattr__(self, "susceptibility_floor_fraction", floor)
+
+    def to_runtime_metadata(self) -> dict[str, object]:
+        return {
+            "schema_version": "spin_wave_response.request.v1",
+            "analysis": "gamma",
+            "response_component": self.response_component,
+            "weighting": self.weighting,
+            "detrend": self.detrend,
+            "window": self.window,
+            "susceptibility_floor_fraction": self.susceptibility_floor_fraction,
+        }
+
+
 def _require_supported_table_quantity(quantity: str) -> str:
     normalized = require_non_empty(quantity, "quantity")
     normalized = TABLE_AUTOSAVE_QUANTITY_ALIASES.get(normalized, normalized)

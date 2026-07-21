@@ -3,7 +3,7 @@
 - Status: accepted
 - Date: 2026-07-15
 - Decision makers: Fullmag core
-- Governing physics: `docs/physics/0920-regional-time-domain-field-drive.md`
+- Governing physics: `docs/physics/0920-time-domain-microstrip-antenna-zeeman-mask.md`
 - Implementation plan: `docs/audits/2026-07-15-fem-pbc-time-domain-field-drive-implementation-plan.md`
 
 ## Context
@@ -51,6 +51,17 @@ waveform is invalid in a minimizer.
 Every waveform declares `stage_local` or `absolute` time origin. Stage-local
 time is `t_abs-stage_start`; it is the default. The runtime preserves stage
 start time and requested activation in plan and provenance.
+
+New study pipelines author source introduction as the typed zero-duration
+`AddFieldDrive` action. The action contains the full canonical drive, preserves
+the incoming magnetization/runtime state, and mutates the persistent problem
+state for following stages. Consequently a preceding relax snapshot has no
+drive at all; it is not merely a globally declared drive with a false enabled
+flag. Global declaration plus activation remains compatibility input.
+
+Sampling/output/response-analysis policy is owned by the following compute
+stage. Stage-local values override global compatibility defaults, are exported
+to canonical Python, and are preserved in runtime provenance.
 
 ### 4. Waveforms form a closed serializable catalogue
 
@@ -105,6 +116,13 @@ response. Finite-k propagation uses an open supercell/waveguide, a localized
 source, absorber qualification, uniform physical probes, and `S(k,f)`.
 Time-domain finite-k does not claim to replace infinite-crystal Bloch
 dispersion.
+
+### 10. Spectral previews distinguish plan from evidence
+
+Before execution, the UI evaluates the authored waveform on the effective
+stage-local sampling clock and labels FFT metrics as planned. After execution,
+the Gamma analysis resource supplies actual timestamps and metrics. Uniform
+sampling is validated; no layer silently resamples a nonuniform response.
 
 ## Consequences
 

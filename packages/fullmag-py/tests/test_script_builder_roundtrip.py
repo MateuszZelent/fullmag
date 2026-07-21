@@ -61,6 +61,92 @@ study.stages.add_run(stage_id="excite", until=4e-12, output_every=1e-12)
 
 
 class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
+    def test_add_field_drive_roundtrip_preserves_pipeline_order_without_global_leakage(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("ordered-drive")
+        study.engine("fem")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_minimize(stage_id="relax", method="bb", max_steps=2)
+        study.stages.add_field_drive(
+            fm.RegionalFieldDrive(
+                id="k0-sinc",
+                name="K0 sinc",
+                target=fm.FieldTarget.global_domain(),
+                amplitude_B_T=1e-3,
+                direction=(0, 1, 0),
+                spatial_profile=fm.UniformFieldProfile(),
+                waveform=fm.SincPulse(cutoff_hz=40e9, t0=50e-12),
+                time_origin="stage_local",
+            ),
+            stage_id="add-antenna",
+        )
+        study.stages.add_run(stage_id="excite", until=2e-9, output_every=5e-13)
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertNotIn("study.field_drives.add(", rendered)
+        relax_at = rendered.index('study.stages.add_relax(stage_id="relax"')
+        add_at = rendered.index("study.stages.add_field_drive(")
+        run_at = rendered.index('study.stages.add_run(stage_id="excite"')
+        self.assertLess(relax_at, add_at)
+        self.assertLess(add_at, run_at)
+        self.assertEqual(
+            [
+                stage.action["kind"] if stage.action else stage.problem.study.to_ir()["kind"]
+                for stage in rewritten.stages
+            ],
+            ["relaxation", "add_field_drive", "time_evolution"],
+        )
+        self.assertEqual(rewritten.stages[0].problem.field_drives, ())
+        self.assertEqual(
+            [drive.id for drive in rewritten.stages[2].problem.field_drives],
+            ["k0-sinc"],
+        )
+
+    def test_run_stage_sampling_and_gamma_analysis_roundtrip(self) -> None:
+        script = """
+        import fullmag as fm
+        study = fm.study("sampling-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_run(
+            stage_id="excite",
+            until=2e-9,
+            outputs=[fm.SaveField("m", every=2e-12), fm.SaveField("H_drive", every=5e-13)],
+            table_autosave=fm.TableAutosave(
+                t_sampl=5e-13,
+                quantities=["time", "step", "mx", "my", "mz", "E_drive"],
+            ),
+            spin_wave_response=fm.GammaResponseAnalysis(response_component="my"),
+        )
+        """
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten = _load_text(str(rendered), root, "rewritten.py")
+
+        self.assertIn("table_autosave=fm.TableAutosave(", rendered)
+        self.assertIn("outputs=[fm.SaveField(", rendered)
+        self.assertIn("spin_wave_response=fm.GammaResponseAnalysis(", rendered)
+        before = loaded.stages[0].problem.to_ir(include_geometry_assets=False)
+        after = rewritten.stages[0].problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(before["study"]["sampling"], after["study"]["sampling"])
+        self.assertEqual(
+            before["problem_meta"]["runtime_metadata"]["spin_wave_response"],
+            after["problem_meta"]["runtime_metadata"]["spin_wave_response"],
+        )
+
     def test_canonical_rewrite_preserves_drives_and_stage_ids(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

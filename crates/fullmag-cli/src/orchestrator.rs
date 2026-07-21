@@ -4992,6 +4992,22 @@ fn execute_synthetic_stage(
                 message: format!("Changed execution device to {}", device),
             })
         }
+        ResolvedScriptStageAction::AddFieldDrive { drive } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "add_field_drive",
+                    "drive": drive,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!("Added regional field drive {}", drive.id),
+            })
+        }
     }
 }
 

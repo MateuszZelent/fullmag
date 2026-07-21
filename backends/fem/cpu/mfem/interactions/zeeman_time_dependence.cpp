@@ -41,6 +41,46 @@ bool copy_time_dependence(
         error = "regional field drive PWL waveform requires at least two points";
         return false;
     }
+    if (source.kind != FULLMAG_FEM_TIME_PIECEWISE_LINEAR && source.point_count != 0) {
+        error = "regional field drive non-PWL waveform must not define control points";
+        return false;
+    }
+    switch (source.kind) {
+    case FULLMAG_FEM_TIME_CONSTANT:
+    case FULLMAG_FEM_TIME_PIECEWISE_LINEAR:
+        break;
+    case FULLMAG_FEM_TIME_SINUSOIDAL: {
+        const auto &parameters = source.parameters.sinusoidal;
+        if (!std::isfinite(parameters.frequency_hz) || parameters.frequency_hz <= 0.0 ||
+            !std::isfinite(parameters.phase_rad) || !std::isfinite(parameters.offset)) {
+            error = "regional field drive sinusoidal parameters must be finite with positive frequency";
+            return false;
+        }
+        break;
+    }
+    case FULLMAG_FEM_TIME_PULSE: {
+        const auto &parameters = source.parameters.pulse;
+        if (!std::isfinite(parameters.t_on_s) || !std::isfinite(parameters.t_off_s) ||
+            parameters.t_off_s <= parameters.t_on_s) {
+            error = "regional field drive pulse requires finite t_off greater than t_on";
+            return false;
+        }
+        break;
+    }
+    case FULLMAG_FEM_TIME_SINC_PULSE: {
+        const auto &parameters = source.parameters.sinc_pulse;
+        if (!std::isfinite(parameters.cutoff_hz) || parameters.cutoff_hz <= 0.0 ||
+            !std::isfinite(parameters.t0_s) || parameters.t0_s < 0.0 ||
+            !std::isfinite(parameters.amplitude)) {
+            error = "regional field drive sinc parameters must be finite with positive cutoff and non-negative t0";
+            return false;
+        }
+        break;
+    }
+    default:
+        error = "regional field drive waveform kind is unsupported";
+        return false;
+    }
     destination.kind = source.kind;
     destination.parameters = source.parameters;
     destination.points.clear();

@@ -1445,6 +1445,7 @@ const studyTab: RibbonTabContent = {
       tone: "authoring",
       actions: [
         { id: "study.add-relax-stage", icon: icon(Play), label: "Relax", iconColor: "text-emerald-400", menu: menu("study-relax",  "Relax stage",      ["Overdamped relax", "LLG relax", "Minimizer", "Stop criteria"]) },
+        { id: "study.add-field-drive-stage", icon: icon(RadioTower), label: "Antenna", iconColor: "text-cyan-400", menu: menu("study-antenna-stage", "Add antenna instruction", ["Global or regional target", "Sinc waveform", "Source FFT", "Stage activation"]) },
         { id: "study.add-run-stage",   icon: icon(Zap),  label: "Run",   iconColor: "text-yellow-400",  menu: menu("study-run-stage", "Run stage",  ["Time integration", "Pulse response", "RF drive", "Thermal noise"]) },
         { id: "study.add-hysteresis-stage", icon: icon(BarChart3), label: "Hysteresis", iconColor: "text-pink-400" },
         { id: "study.add-eigenmodes-stage", icon: icon(Sigma), label: "Eigenmodes", iconColor: "text-violet-400" },

@@ -81,7 +81,7 @@ DEFAULT_ADAPTIVE_ATOL = 1e-6
 
 
 def _builder_base_problem(loaded: LoadedProblem) -> Problem:
-    return loaded.workspace_problem or loaded.problem
+    return loaded.pipeline_base_problem(loaded.workspace_problem or loaded.problem)
 
 
 def export_builder_draft(loaded: LoadedProblem) -> dict[str, object]:
@@ -412,7 +412,13 @@ def _export_study_pipeline_node(stage: LoadedStage, *, index: int) -> dict[str, 
 
 def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
     kind = str(stage_draft.get("kind") or "").strip().lower()
-    if kind in {"save_state", "load_state", "export", "change_device"}:
+    if kind in {
+        "save_state",
+        "load_state",
+        "export",
+        "change_device",
+        "add_field_drive",
+    }:
         return kind
     entrypoint = str(stage_draft.get("entrypoint_kind") or "").strip().lower()
     if entrypoint == "relax" or "relax" in kind:
@@ -476,6 +482,19 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 "kind": "change_device",
                 "entrypoint_kind": stage.entrypoint_kind,
                 "device": _text_value(action.get("device")) or "auto",
+            }
+        if action_kind == "add_field_drive":
+            drive = action.get("drive")
+            if isinstance(drive, RegionalFieldDrive):
+                drive_payload: object = drive.to_ir()
+            elif isinstance(drive, dict):
+                drive_payload = drive
+            else:
+                raise TypeError("add_field_drive action requires a RegionalFieldDrive")
+            return {
+                "kind": "add_field_drive",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "drive": drive_payload,
             }
 
     study = stage.problem.study
@@ -606,6 +625,11 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
         "torque_tolerance": "",
         "energy_tolerance": "",
         "max_steps": "",
+        "sampling": study.to_ir()["sampling"],
+        "spin_wave_response": _normalize_mapping(
+            stage.problem.runtime_metadata.get("spin_wave_response")
+        )
+        or None,
     }
 
 
@@ -1838,6 +1862,99 @@ def _render_regional_field_drive_expr(drive: RegionalFieldDrive) -> str:
     return f"fm.RegionalFieldDrive({', '.join(kwargs)})"
 
 
+def _render_regional_field_drive_payload_expr(drive: dict[str, object]) -> str:
+    target = _normalize_mapping(drive.get("target"))
+    target_kind = str(target.get("kind") or "")
+    if target_kind == "global":
+        target_expr = "fm.FieldTarget.global_domain()"
+    elif target_kind == "object":
+        target_expr = f"fm.FieldTarget.object({_py_repr(str(target.get('object_id') or ''))})"
+    elif target_kind == "region":
+        target_expr = (
+            "fm.FieldTarget.region("
+            f"{_py_repr(str(target.get('object_id') or ''))}, "
+            f"{_py_repr(str(target.get('region_id') or ''))})"
+        )
+    else:
+        raise ValueError(f"unsupported field target kind: {target_kind}")
+
+    profile = _normalize_mapping(drive.get("spatial_profile"))
+    profile_kind = str(profile.get("kind") or "")
+    if profile_kind == "uniform":
+        profile_expr = "fm.UniformFieldProfile()"
+    elif profile_kind == "sinc":
+        profile_args = [
+            f"axis={_py_literal(profile.get('axis'))}",
+            f"period_m={_py_number(float(profile.get('period_m', 0.0)))}",
+        ]
+        if abs(float(profile.get("center_m", 0.0))) > 0.0:
+            profile_args.append(f"center_m={_py_number(float(profile['center_m']))}")
+        if profile.get("width_m") is not None:
+            profile_args.append(f"width_m={_py_number(float(profile['width_m']))}")
+        if profile.get("window") not in (None, "none"):
+            profile_args.append(f"window={_py_repr(str(profile['window']))}")
+        profile_expr = f"fm.SincFieldProfile({', '.join(profile_args)})"
+    elif profile_kind == "geometry_mask":
+        envelope = _normalize_mapping(profile.get("envelope"))
+        profile_expr = (
+            "fm.GeometryMaskFieldProfile("
+            f"object_id={_py_repr(str(profile.get('object_id') or ''))}, "
+            f"envelope={_render_field_profile_payload_expr(envelope)})"
+        )
+    else:
+        raise ValueError(f"unsupported field profile kind: {profile_kind}")
+
+    activation = _normalize_mapping(drive.get("activation"))
+    activation_kind = str(activation.get("kind") or "all_time_evolution")
+    if activation_kind == "all_time_evolution":
+        activation_expr = "fm.DriveActivation.all_time_evolution()"
+    elif activation_kind == "stage_ids":
+        activation_expr = (
+            "fm.DriveActivation.stage_ids("
+            f"{_py_literal(activation.get('stage_ids') or [])})"
+        )
+    else:
+        raise ValueError(f"unsupported drive activation kind: {activation_kind}")
+
+    waveform = _normalize_mapping(drive.get("waveform"))
+    kwargs = [
+        f"id={_py_repr(str(drive.get('id') or ''))}",
+        f"name={_py_repr(str(drive.get('name') or ''))}",
+        f"target={target_expr}",
+        f"amplitude_B_T={_py_number(float(drive.get('amplitude_B_T', 0.0)))}",
+        f"direction={_py_literal(drive.get('direction'))}",
+        f"spatial_profile={profile_expr}",
+        f"waveform={_render_waveform_override(waveform)}",
+        f"time_origin={_py_repr(str(drive.get('time_origin') or 'stage_local'))}",
+        f"activation={activation_expr}",
+    ]
+    if drive.get("enabled") is False:
+        kwargs.append("enabled=False")
+    migration = drive.get("migration")
+    if isinstance(migration, dict):
+        kwargs.append(f"migration={_py_literal(migration)}")
+    return f"fm.RegionalFieldDrive({', '.join(kwargs)})"
+
+
+def _render_field_profile_payload_expr(profile: dict[str, object]) -> str:
+    kind = str(profile.get("kind") or "")
+    if kind == "uniform":
+        return "fm.UniformFieldProfile()"
+    if kind == "sinc":
+        args = [
+            f"axis={_py_literal(profile.get('axis'))}",
+            f"period_m={_py_number(float(profile.get('period_m', 0.0)))}",
+        ]
+        if abs(float(profile.get("center_m", 0.0))) > 0.0:
+            args.append(f"center_m={_py_number(float(profile['center_m']))}")
+        if profile.get("width_m") is not None:
+            args.append(f"width_m={_py_number(float(profile['width_m']))}")
+        if profile.get("window") not in (None, "none"):
+            args.append(f"window={_py_repr(str(profile['window']))}")
+        return f"fm.SincFieldProfile({', '.join(args)})"
+    raise ValueError(f"unsupported field profile kind: {kind}")
+
+
 def _render_field_drives(problem: Problem, *, surface: str) -> list[str]:
     if not problem.field_drives:
         return []
@@ -2829,6 +2946,49 @@ def _render_outputs(problem: Problem, magnet_vars: dict[str, str], *, surface: s
     return lines
 
 
+def _render_time_output_expr(output: object) -> str:
+    if isinstance(output, SaveField):
+        return f"fm.SaveField({_py_repr(output.field)}, every={_py_number(output.every)})"
+    if isinstance(output, SaveScalar):
+        return f"fm.SaveScalar({_py_repr(output.scalar)}, every={_py_number(output.every)})"
+    if isinstance(output, Snapshot):
+        kwargs = [
+            f"field={_py_repr(output.field)}",
+            f"component={_py_repr(output.component)}",
+            f"every={_py_number(output.every)}",
+        ]
+        if output.layer is not None:
+            kwargs.append(f"layer={_py_repr(output.layer)}")
+        return f"fm.Snapshot({', '.join(kwargs)})"
+    raise TypeError(f"unsupported time output {type(output).__name__}")
+
+
+def _render_table_autosave_expr(table: TableAutosave | None) -> str:
+    if table is None:
+        return "False"
+    kwargs = [f"t_sampl={_py_number(table.t_sampl)}"]
+    quantities = tuple(table.quantities or DEFAULT_TABLE_AUTOSAVE_QUANTITIES)
+    kwargs.append(f"quantities={_py_literal(list(quantities))}")
+    if table.table_id != "default":
+        kwargs.append(f"table_id={_py_repr(table.table_id)}")
+    return f"fm.TableAutosave({', '.join(kwargs)})"
+
+
+def _render_gamma_response_expr(value: object) -> str:
+    request = _normalize_mapping(value)
+    if not request:
+        return "False"
+    kwargs = [
+        f"response_component={_py_repr(str(request.get('response_component') or 'my'))}",
+        f"weighting={_py_repr(str(request.get('weighting') or 'Ms_times_lumped_volume'))}",
+        f"detrend={_py_repr(str(request.get('detrend') or 'linear'))}",
+        f"window={_py_repr(str(request.get('window') or 'hann'))}",
+        "susceptibility_floor_fraction="
+        f"{_py_number(float(request.get('susceptibility_floor_fraction', 1e-6)))}",
+    ]
+    return f"fm.GammaResponseAnalysis({', '.join(kwargs)})"
+
+
 def _render_table_autosave(
     problem: Problem,
     *,
@@ -2883,8 +3043,6 @@ def _render_stages(
     lines = ["# Stages" if is_study_surface else "# Run"]
     previous_dynamics_signature: dict[str, object] | None = None
     for index, stage in enumerate(stages):
-        if stage.problem.study is None:
-            continue
         if stage.action is not None:
             action_kind = str(stage.action.get("kind") if isinstance(stage.action, dict) else "").strip().lower()
             if action_kind == "save_state":
@@ -2904,6 +3062,23 @@ def _render_stages(
                 if is_study_surface:
                     lines.append(f"study.stages.change_device({_py_repr(action_device)})")
                 continue
+            if action_kind == "add_field_drive":
+                drive = stage.action.get("drive")
+                if isinstance(drive, RegionalFieldDrive):
+                    drive_expr = _render_regional_field_drive_expr(drive)
+                elif isinstance(drive, dict):
+                    drive_expr = _render_regional_field_drive_payload_expr(drive)
+                else:
+                    raise TypeError("add_field_drive action requires a RegionalFieldDrive")
+                if not is_study_surface:
+                    raise ValueError("add_field_drive action requires the study API surface")
+                call_parts = [drive_expr]
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(f"study.stages.add_field_drive({', '.join(call_parts)})")
+                continue
+            continue
+        if stage.problem.study is None:
             continue
         study = stage.problem.study
         stage_override = _stage_override_for(stage_overrides, index=index, stage=stage)
@@ -3172,6 +3347,21 @@ def _render_stages(
             if stage.output_every_seconds is not None:
                 run_parts.append(
                     f"output_every={_py_number(stage.output_every_seconds)}"
+                )
+            if isinstance(study, TimeEvolution):
+                run_parts.append(
+                    "outputs=["
+                    + ", ".join(_render_time_output_expr(output) for output in study.outputs)
+                    + "]"
+                )
+                run_parts.append(
+                    f"table_autosave={_render_table_autosave_expr(study._table_autosave)}"
+                )
+                run_parts.append(
+                    "spin_wave_response="
+                    + _render_gamma_response_expr(
+                        stage.problem.runtime_metadata.get("spin_wave_response")
+                    )
                 )
             lines.append(f"study.stages.add_run({', '.join(run_parts)})")
         else:
@@ -3689,6 +3879,8 @@ def _render_drive_override(drive: dict[str, object]) -> str:
 
 def _render_waveform_override(waveform: dict[str, object]) -> str:
     kind = str(waveform.get("kind") or "")
+    if kind == "constant":
+        return "fm.Constant()"
     if kind == "sinusoidal":
         kwargs = [f"frequency_hz={_py_number(float(waveform.get('frequency_hz', 0.0)))}"]  # type: ignore[arg-type]
         if abs(float(waveform.get("phase_rad", 0.0))) > 1e-15:
@@ -3708,6 +3900,8 @@ def _render_waveform_override(waveform: dict[str, object]) -> str:
         if abs(float(waveform.get("amplitude", 1.0)) - 1.0) > 1e-15:
             kwargs.append(f"amplitude={_py_number(float(waveform.get('amplitude', 1.0)))}")
         return f"fm.SincPulse({', '.join(kwargs)})"
+    if kind == "piecewise_linear":
+        return f"fm.PiecewiseLinear({_py_literal(waveform.get('points') or [])})"
     raise ValueError(f"unsupported waveform override kind: {kind}")
 
 

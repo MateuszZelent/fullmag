@@ -1,0 +1,175 @@
+"""Relax a periodic antidot, then excite and analyse its k=0 modes in time.
+
+This is the time-domain continuation of
+``fem_periodic_antidot_relax_exchange_coupled.py``.  The ``relax`` stage finds
+the equilibrium state.  The zero-duration ``add-k0-antenna`` instruction adds
+a spatially uniform transverse sinc drive without changing the relaxed state.
+The following ``excite`` run continues from that complete state, evaluates the
+drive in time, and samples the volume-averaged magnetisation for a Gamma-point
+FFT response.
+
+Sampling contract:
+    - integration step: 0.1 ps,
+    - response/antenna sample step: 0.5 ps,
+    - simulated response window: 2 ns,
+    - half-open response clock: 4000 samples,
+    - Nyquist frequency: 1 THz,
+    - FFT-bin spacing: 0.5 GHz.
+
+Run with:
+    fullmag --dev -i examples/fem_periodic_antidot_relax_exchange_coupled_time_domain_k0.py
+"""
+
+import fullmag as fm
+
+
+study = fm.study("fem_periodic_antidot_relax_exchange_coupled_time_domain_k0")
+
+# Engine and universe
+study.engine("fem")
+study.device("gpu", precision="double")
+study.universe(
+    mode="manual",
+    size=(200e-9, 200e-9, 90e-9),
+    center=(0.0, 0.0, 0.0),
+    padding=(0.0, 0.0, 0.0),
+)
+study.universe.mesh(
+    minimum_element_size=5e-9,
+    maximum_element_size=100e-9,
+    growth_rate=1.5,
+)
+study.pbc(x=True, y=True, demag="periodic_airbox_k0")
+study.interactive(True)
+
+# Geometry
+film = fm.Box(size=(200e-9, 200e-9, 10e-9), name="periodic_antidot_base")
+hole = fm.Cylinder(radius=25e-9, height=10e-9, name="central_hole")
+body = study.geometry(film - hole, name="periodic_antidot_film")
+
+# Material and mesh
+body.Ms = 800e3
+body.Aex = 13e-12
+body.alpha = 0.02
+body.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+body.mesh.thin_film(
+    minimum_element_size=3e-9,
+    maximum_element_size=8e-9,
+    curvature_factor=0.25,
+    narrow_region_resolution=1.5,
+    layers=1,
+    order=1,
+)
+
+hole_transition = body.add_region(
+    "hole_transition_refinement",
+    fm.Cylinder(
+        radius=43e-9,
+        height=10e-9,
+        name="hole_transition_refinement",
+    ),
+    priority=10,
+    realization_policy="conformal",
+)
+hole_transition.mesh(
+    minimum_element_size=0.5e-9,
+    maximum_element_size=3e-9,
+    transition_distance=10e-9,
+    order=1,
+)
+
+# Scenario provenance
+study.runtime_metadata(
+    "periodic_antidot_relaxation",
+    {
+        "scenario": "exchange_coupled_time_domain_k0",
+        "exchange_coupled_across_periods": True,
+        "magnetostatic_pbc": "periodic_airbox_k0",
+        "periodic_pair_ids": ["x_faces", "y_faces"],
+        "film_size_m": [200e-9, 200e-9, 10e-9],
+        "universe_size_m": [200e-9, 200e-9, 90e-9],
+        "lateral_air_gap_m": [0.0, 0.0],
+        "excitation": "global_uniform_sinc",
+        "wave_vector": "Gamma_k0",
+    },
+)
+
+# Interactions, mesh, and time solver
+study.b_ext(10e-3, 0.0, 0.0)
+study.exchange()
+study.demag(realization="poisson_robin")
+study.fem_demag_solver(
+    solver="CG",
+    preconditioner="AMG",
+    rtol=1e-12,
+    max_iterations=500,
+)
+study.objects.mesh.defaults(
+    algorithm_2d=6,
+    algorithm_3d=1,
+    smoothing_steps=1,
+    optimize_iterations=1,
+    size_from_curvature=8,
+    narrow_regions=1,
+)
+study.build_domain_mesh()
+study.solver(dt=1e-13, g=2.115)
+
+# The ordering is physical: relax first, then mutate the current configuration,
+# then continue time integration from the unchanged relaxed magnetisation.
+study.stages.add_minimize(
+    stage_id="relax",
+    method="bb",
+    max_steps=500,
+    tol=5.0e2,
+)
+
+study.stages.add_field_drive(
+    stage_id="add-k0-antenna",
+    drive=fm.RegionalFieldDrive(
+        id="k0-sinc-antenna",
+        name="Uniform transverse k0 sinc antenna",
+        target=fm.FieldTarget.global_domain(),
+        amplitude_B_T=1e-3,
+        direction=(0.0, 1.0, 0.0),
+        spatial_profile=fm.UniformFieldProfile(),
+        waveform=fm.SincPulse(cutoff_hz=40e9, t0=50e-12),
+        time_origin="stage_local",
+        activation=fm.DriveActivation.stage_ids(["excite"]),
+    ),
+)
+
+study.stages.add_run(
+    stage_id="excite",
+    until=2e-9,
+    table_autosave=fm.TableAutosave(
+        t_sampl=5e-13,
+        quantities=[
+            "t",
+            "step",
+            "mx",
+            "my",
+            "mz",
+            "e_ex",
+            "e_demag",
+            "e_drive",
+            "e_total",
+            "max_h_demag",
+            "max_torque",
+        ],
+    ),
+    outputs=[
+        fm.SaveField("m", every=2e-12),
+        fm.SaveField("H_drive", every=5e-13),
+        fm.SaveField("H_demag", every=2e-12),
+        fm.SaveField("H_eff", every=2e-12),
+        fm.SaveField("demag_phi", every=10e-12),
+    ],
+    spin_wave_response=fm.GammaResponseAnalysis(
+        response_component="my",
+        weighting="Ms_times_lumped_volume",
+        detrend="linear",
+        window="hann",
+        susceptibility_floor_fraction=1e-6,
+    ),
+)

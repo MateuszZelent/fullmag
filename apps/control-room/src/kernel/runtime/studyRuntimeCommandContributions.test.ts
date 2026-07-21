@@ -379,6 +379,7 @@ describe("study runtime command contributions", () => {
     const commitTransaction = vi.fn(async () => ({ scene_revision: 5 }));
 
     const commands = [
+      ["study.add-field-drive-stage", "add_field_drive"],
       ["study.add-run-stage", "run"],
       ["study.add-hysteresis-stage", "hysteresis"],
       ["study.add-eigenmodes-stage", "eigenmodes"],

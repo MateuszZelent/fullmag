@@ -279,6 +279,7 @@ pub enum StudyPrimitiveStageKind {
     FrequencyResponse,
     Hysteresis,
     ChangeDevice,
+    AddFieldDrive,
     SetField,
     SetCurrent,
     SaveState,
@@ -848,6 +849,57 @@ mod tests {
         assert_eq!(
             node.payload.get("device").and_then(|value| value.as_str()),
             Some("cpu")
+        );
+    }
+
+    #[test]
+    fn study_pipeline_accepts_add_field_drive_primitive_stage() {
+        let document: StudyPipelineDocument = serde_json::from_value(serde_json::json!({
+            "version": "study_pipeline.v1",
+            "nodes": [
+                {
+                    "id": "add-k0-antenna",
+                    "label": "Add antenna",
+                    "enabled": true,
+                    "source": "ui_authored",
+                    "node_kind": "primitive",
+                    "stage_kind": "add_field_drive",
+                    "payload": {
+                        "kind": "add_field_drive",
+                        "entrypoint_kind": "flat_add_field_drive",
+                        "drive": {
+                            "id": "k0-sinc",
+                            "name": "K0 sinc",
+                            "kind": "regional",
+                            "enabled": true,
+                            "target": {"kind": "global"},
+                            "amplitude_B_T": 0.001,
+                            "direction": [0.0, 1.0, 0.0],
+                            "spatial_profile": {"kind": "uniform"},
+                            "waveform": {
+                                "kind": "sinc_pulse",
+                                "cutoff_hz": 40000000000.0,
+                                "t0": 5e-11,
+                                "amplitude": 1.0
+                            },
+                            "time_origin": "stage_local",
+                            "activation": {"kind": "all_time_evolution"}
+                        }
+                    }
+                }
+            ]
+        }))
+        .expect("add_field_drive primitive stage should deserialize");
+
+        let StudyPipelineNode::Primitive(node) = &document.nodes[0] else {
+            panic!("expected primitive add_field_drive stage");
+        };
+        assert_eq!(
+            node.payload
+                .get("drive")
+                .and_then(|value| value.get("id"))
+                .and_then(|value| value.as_str()),
+            Some("k0-sinc")
         );
     }
 }

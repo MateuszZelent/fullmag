@@ -108,12 +108,53 @@ const DEFAULT_RELAX_STAGE: JsonObject = {
 };
 
 const DEFAULT_RUN_STAGE: JsonObject = {
-  demag_interval_s: "",
-  entrypoint_kind: "run",
-  fixed_timestep: "",
-  integrator: "auto",
+  entrypoint_kind: "flat_run",
   kind: "run",
+  sampling: {
+    outputs: [
+      { every_seconds: 2e-12, kind: "field", name: "m" },
+      { every_seconds: 5e-13, kind: "field", name: "H_drive" },
+    ],
+    table_autosave: {
+      kind: "table_autosave",
+      quantities: ["t", "step", "mx", "my", "mz", "e_drive"],
+      sample_period_s: 5e-13,
+      table_id: "default",
+    },
+  },
+  spin_wave_response: {
+    analysis: "gamma",
+    detrend: "linear",
+    response_component: "my",
+    schema_version: "spin_wave_response.request.v1",
+    susceptibility_floor_fraction: 1e-6,
+    weighting: "Ms_times_lumped_volume",
+    window: "hann",
+  },
   until_seconds: "1e-9",
+};
+
+const DEFAULT_ADD_FIELD_DRIVE_STAGE: JsonObject = {
+  drive: {
+    activation: { kind: "all_time_evolution" },
+    amplitude_B_T: 1e-3,
+    direction: [0, 1, 0],
+    enabled: true,
+    id: "k0-sinc-antenna",
+    kind: "regional",
+    name: "Uniform transverse k0 sinc antenna",
+    spatial_profile: { kind: "uniform" },
+    target: { kind: "global" },
+    time_origin: "stage_local",
+    waveform: {
+      amplitude: 1,
+      cutoff_hz: 40e9,
+      kind: "sinc_pulse",
+      t0: 50e-12,
+    },
+  },
+  entrypoint_kind: "flat_add_field_drive",
+  kind: "add_field_drive",
 };
 
 const DEFAULT_EIGENMODES_STAGE: JsonObject = {
@@ -1523,6 +1564,7 @@ function stageWithDefaultId(stage: JsonObject, index: number): JsonObject {
 
 function stageSelectionKind(kind: string):
   | "study.stage.action"
+  | "study.stage.add_field_drive"
   | "study.stage.eigenmodes"
   | "study.stage.frequency_response"
   | "study.stage.hysteresis"
@@ -1530,6 +1572,7 @@ function stageSelectionKind(kind: string):
   | "study.stage.run"
   | "study.stage.save_state" {
   if (kind === "eigenmodes") return "study.stage.eigenmodes";
+  if (kind === "add_field_drive") return "study.stage.add_field_drive";
   if (kind === "frequency_response") return "study.stage.frequency_response";
   if (kind === "hysteresis") return "study.stage.hysteresis";
   if (kind === "relax") return "study.stage.relax";
@@ -1876,6 +1919,12 @@ export const STUDY_RUNTIME_COMMANDS: CommandContribution[] = [
     "Add Relax Stage",
     DEFAULT_RELAX_STAGE,
     "Relax stage added.",
+  ),
+  addStageCommand(
+    "study.add-field-drive-stage",
+    "Add Antenna Stage",
+    DEFAULT_ADD_FIELD_DRIVE_STAGE,
+    "Antenna instruction added.",
   ),
   addStageCommand(
     "study.add-run-stage",

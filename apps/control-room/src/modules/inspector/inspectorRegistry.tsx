@@ -691,6 +691,7 @@ const PANELS: InspectorPanelContribution[] = [
     title: "Study Stage",
     selectionKinds: [
       "study.stage.action",
+      "study.stage.add_field_drive",
       "study.stage.hysteresis",
       "study.stage.relax",
       "study.stage.run",

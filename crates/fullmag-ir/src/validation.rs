@@ -22,8 +22,8 @@ fn validate_time_dependence(label: &str, value: &TimeDependenceIR, errors: &mut 
             phase_rad,
             offset,
         } => {
-            if *frequency_hz <= 0.0 {
-                errors.push(format!("{label} frequency_hz must be > 0"));
+            if !frequency_hz.is_finite() || *frequency_hz <= 0.0 {
+                errors.push(format!("{label} frequency_hz must be finite and > 0"));
             }
             if !phase_rad.is_finite() || !offset.is_finite() {
                 errors.push(format!("{label} phase_rad and offset must be finite"));
@@ -58,8 +58,8 @@ fn validate_time_dependence(label: &str, value: &TimeDependenceIR, errors: &mut 
             t0,
             amplitude,
         } => {
-            if *cutoff_hz <= 0.0 {
-                errors.push(format!("{label} sinc_pulse cutoff_hz must be > 0"));
+            if !cutoff_hz.is_finite() || *cutoff_hz <= 0.0 {
+                errors.push(format!("{label} sinc_pulse cutoff_hz must be finite and > 0"));
             }
             if !t0.is_finite() || *t0 < 0.0 || !amplitude.is_finite() {
                 errors.push(format!(
@@ -196,7 +196,9 @@ pub(crate) fn validate_field_drives(problem: &ProblemIR, errors: &mut Vec<String
         validate_field_spatial_profile(index, &drive.spatial_profile, &geometry_names, errors);
         validate_time_dependence(format!("field_drives[{index}] waveform").as_str(), &drive.waveform, errors);
         let active_in_current_stage = match (&drive.activation, active_stage_id) {
-            (DriveActivationIR::AllTimeEvolution {}, _) => true,
+            (DriveActivationIR::AllTimeEvolution {}, _) => {
+                matches!(problem.study, StudyIR::TimeEvolution { .. })
+            }
             (DriveActivationIR::StageIds { stage_ids }, Some(active)) => {
                 stage_ids.iter().any(|stage_id| stage_id == active)
             }

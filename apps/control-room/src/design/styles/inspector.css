@@ -150,6 +150,10 @@
   color: var(--fm-danger);
 }
 
+.fm-sinc-preview__message--preview_only {
+  color: var(--fm-warning);
+}
+
 /* ── Sections ── */
 .fm-inspector-section {
   border: 1px solid var(--fm-border-subtle);
@@ -2575,6 +2579,34 @@ button.fm-study-stage-card:focus-visible {
   color: var(--fm-text-muted);
   font-family: var(--fm-font-mono);
   font-size: 10px;
+}
+
+.fm-study-stage-note {
+  margin: var(--fm-space-1) var(--fm-space-2);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+  line-height: 1.45;
+}
+
+.fm-study-run-output-list {
+  display: grid;
+  gap: var(--fm-space-1);
+}
+
+.fm-study-run-output-row {
+  display: grid;
+  grid-template-columns: auto minmax(4.5rem, 0.7fr) minmax(0, 1fr) minmax(5.5rem, 0.8fr) auto;
+  align-items: center;
+  gap: var(--fm-space-1);
+  border: 1px solid var(--fm-border-subtle);
+  border-radius: var(--fm-radius-sm);
+  padding: var(--fm-space-1);
+}
+
+.fm-study-run-output-row small {
+  grid-column: 2 / -1;
+  color: var(--fm-warning);
+  font-size: var(--fm-font-size-xs);
 }
 
 .fm-study-checkpoint-list {
