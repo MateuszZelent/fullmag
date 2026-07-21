@@ -139,16 +139,15 @@ pub(crate) fn emit_initial_state_warnings(
 }
 
 pub(crate) fn offset_step_update(
-    update: &fullmag_runner::StepUpdate,
+    mut update: fullmag_runner::StepUpdate,
     step_offset: u64,
     time_offset: f64,
     finished: bool,
 ) -> fullmag_runner::StepUpdate {
-    let mut adjusted = update.clone();
-    adjusted.stats.step += step_offset;
-    adjusted.stats.time += time_offset;
-    adjusted.finished = finished;
-    adjusted
+    update.stats.step = update.stats.step.saturating_add(step_offset);
+    update.stats.time += time_offset;
+    update.finished = finished;
+    update
 }
 
 pub(crate) fn offset_step_stats(
@@ -346,7 +345,7 @@ pub(crate) fn flatten_magnetization(values: &[[f64; 3]]) -> Vec<f64> {
 }
 
 pub(crate) fn live_state_manifest_from_update(
-    update: &fullmag_runner::StepUpdate,
+    mut update: fullmag_runner::StepUpdate,
 ) -> LiveStateManifest {
     let status_str = if update.finished {
         "completed"
@@ -375,10 +374,10 @@ pub(crate) fn live_state_manifest_from_update(
             max_torque_T: update.stats.max_torque_T,
             wall_time_ns: update.stats.wall_time_ns,
             grid: update.grid,
-            fem_mesh_generation_id: update.fem_mesh_generation_id.clone(),
-            magnetization: update.magnetization.clone(),
+            fem_mesh_generation_id: update.fem_mesh_generation_id.take(),
+            magnetization: update.magnetization.take(),
             per_object_scalars: update.stats.per_object_scalars.clone(),
-            preview_field: update.preview_field.clone(),
+            preview_field: update.preview_field.take(),
             finished: update.finished,
         },
     }

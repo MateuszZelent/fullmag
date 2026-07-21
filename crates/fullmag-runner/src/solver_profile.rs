@@ -648,6 +648,22 @@ impl SolverRateDiagnostics {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct LivePublisherDiagnostics {
+    #[serde(default)]
+    pub state_lock_wall_time_ns: u64,
+    #[serde(default)]
+    pub delta_build_wall_time_ns: u64,
+    #[serde(default)]
+    pub replace_wall_time_ns: u64,
+    #[serde(default)]
+    pub clone_wall_time_ns: u64,
+    #[serde(default)]
+    pub http_wall_time_ns: u64,
+    #[serde(default)]
+    pub published_first_step: u64,
+    #[serde(default)]
+    pub published_last_step: u64,
+    #[serde(default)]
+    pub published_span_wall_time_ns: u64,
     pub replace_count: u64,
     pub publish_count: u64,
     pub coalesced_wake_count: u64,
@@ -690,6 +706,8 @@ pub struct SolverProfileSnapshot {
     #[serde(default)]
     pub overhead: SolverProfileOverheadDiagnostics,
     pub artifact_refs: Vec<String>,
+    #[serde(default)]
+    pub persistence_failed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_publisher: Option<LivePublisherDiagnostics>,
 }
@@ -715,6 +733,7 @@ pub struct SolverProfileState {
     last_sampled_instant: Option<Instant>,
     pending_window: PendingProfileWindow,
     overhead: SolverProfileOverheadDiagnostics,
+    persistence_failed: bool,
 }
 
 impl Default for SolverProfileState {
@@ -724,6 +743,14 @@ impl Default for SolverProfileState {
 }
 
 impl SolverProfileState {
+    pub fn disable_artifact_persistence(&mut self) {
+        self.persistence_failed = true;
+        if self.config.persist_artifact {
+            self.config.persist_artifact = false;
+            self.revision = self.revision.saturating_add(1);
+        }
+    }
+
     pub fn new(config: SolverProfileConfig) -> Self {
         Self {
             config: config.normalized(),
@@ -733,6 +760,7 @@ impl SolverProfileState {
             last_sampled_instant: None,
             pending_window: PendingProfileWindow::default(),
             overhead: SolverProfileOverheadDiagnostics::default(),
+            persistence_failed: false,
         }
     }
 
@@ -1102,6 +1130,7 @@ impl SolverProfileState {
             overhead: self.overhead.clone(),
             latest_samples,
             artifact_refs: self.artifact_refs.clone(),
+            persistence_failed: self.persistence_failed,
             live_publisher: None,
         }
     }
