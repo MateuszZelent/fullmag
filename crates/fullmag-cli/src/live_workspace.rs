@@ -1333,9 +1333,10 @@ mod tests {
         apply_python_progress_event, bootstrap_live_state, clear_cached_preview_fields,
         fem_mesh_payload_clone_count, ingest_preview_fields_from_update,
         merge_detailed_mesh_workspace, merge_pending_publish_payload,
-        replace_cached_preview_fields, reset_fem_mesh_payload_clone_count, CurrentLivePublisher,
-        CurrentLiveScalarRow, CurrentLiveSnapshotPayload, LiveTelemetryPublishGate,
-        LocalLiveWorkspace, LocalLiveWorkspaceState,
+        replace_cached_preview_fields, reset_fem_mesh_payload_clone_count,
+        upsert_cached_preview_field, CurrentLivePublisher, CurrentLiveScalarRow,
+        CurrentLiveSnapshotPayload, LiveTelemetryPublishGate, LocalLiveWorkspace,
+        LocalLiveWorkspaceState,
     };
     use crate::simulation_preparation::{
         PreparationStageId, PreparationStageStatus, SimulationPreparationState,
@@ -1350,6 +1351,10 @@ mod tests {
     fn preview_field(quantity: &str, revision: u64, z: f64) -> fullmag_runner::LivePreviewField {
         fullmag_runner::LivePreviewField {
             config_revision: revision,
+            source_step: 0,
+            source_revision: revision,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
             quantity: quantity.to_string(),
             unit: "A/m".to_string(),
             spatial_kind: "mesh".to_string(),
@@ -2419,6 +2424,39 @@ mod tests {
             .any(|field| field.quantity == "eden_total"));
     }
 
+    #[test]
+    fn idle_preview_refresh_cannot_replace_newer_terminal_preview_provenance() {
+        let workspace = workspace_with_domain_mesh();
+        workspace.update(|state| {
+            state.live_state.latest_step.step = 52;
+
+            let mut terminal = preview_field("H_demag", 7, 52.0);
+            terminal.source_step = 52;
+            terminal.materialized_at_unix_ms = 200;
+            state.pending_preview_fields.insert(terminal);
+
+            let regenerated = preview_field("H_demag", 7, 0.0);
+            upsert_cached_preview_field(state, &regenerated);
+            replace_cached_preview_fields(state, vec![regenerated]);
+        });
+
+        let snapshot = workspace.snapshot();
+        for cache in [&snapshot.preview_fields, &snapshot.pending_preview_fields] {
+            let field = cache
+                .to_vec()
+                .into_iter()
+                .find(|field| field.quantity == "H_demag")
+                .expect("terminal H_demag should remain cached");
+            assert_eq!(field.source_step, 52);
+            assert_eq!(field.materialized_at_unix_ms, 200);
+            assert_eq!(field.vector_field_values, vec![0.0, 0.0, 52.0]);
+        }
+        assert_eq!(
+            snapshot.latest_fields.0["H_demag"]["source_step"],
+            serde_json::json!(52)
+        );
+    }
+
     fn payload_with_live_step(
         step: u64,
         preview: Option<fullmag_runner::LivePreviewField>,
@@ -3283,14 +3321,54 @@ pub(crate) fn replace_cached_preview_fields(
     if feature_flags().disable_preview_3d {
         return;
     }
+    let source_step = state.live_state.latest_step.step;
+    let fields = newest_preview_fields(
+        state
+            .preview_fields
+            .to_vec()
+            .into_iter()
+            .chain(state.pending_preview_fields.to_vec())
+            .chain(fields.into_iter().map(|mut field| {
+                align_preview_field_source_step(&mut field, source_step);
+                field
+            })),
+    );
     state.advance_preview_cache_revision();
-    let fields = fields.into_iter().collect::<Vec<_>>();
     for field in &fields {
         promote_preview_field_to_latest_fields(&mut state.latest_fields, field);
     }
-    state.preview_fields.replace_all(fields);
-    state.pending_preview_fields = state.preview_fields.clone();
+    state.preview_fields.replace_all(fields.clone());
+    state.pending_preview_fields.replace_all(fields);
     state.clear_preview_cache = true;
+}
+
+fn align_preview_field_source_step(field: &mut fullmag_runner::LivePreviewField, source_step: u64) {
+    if field.source_step == 0 && source_step > 0 {
+        field.source_step = source_step;
+    }
+}
+
+fn preview_field_source_key(field: &fullmag_runner::LivePreviewField) -> (u64, u64, u64) {
+    (
+        field.source_step,
+        field.source_revision,
+        field.materialized_at_unix_ms,
+    )
+}
+
+fn newest_preview_fields(
+    fields: impl IntoIterator<Item = fullmag_runner::LivePreviewField>,
+) -> Vec<fullmag_runner::LivePreviewField> {
+    let mut newest = BTreeMap::<String, fullmag_runner::LivePreviewField>::new();
+    for field in fields {
+        let should_insert = newest.get(&field.quantity).is_none_or(|current| {
+            preview_field_source_key(&field) >= preview_field_source_key(current)
+        });
+        if should_insert {
+            newest.insert(field.quantity.clone(), field);
+        }
+    }
+    newest.into_values().collect()
 }
 
 fn promote_preview_field_to_latest_fields(
@@ -3303,6 +3381,10 @@ fn promote_preview_field_to_latest_fields(
             "quantity": field.quantity,
             "unit": field.unit,
             "values": field.vector_field_values,
+            "source_step": field.source_step,
+            "source_revision": field.source_revision,
+            "materialized_at_unix_ms": field.materialized_at_unix_ms,
+            "materialization_wall_time_ns": field.materialization_wall_time_ns,
             "layout": {
                 "grid_cells": field.preview_grid,
                 "original_grid_cells": field.original_grid,
@@ -3321,10 +3403,24 @@ pub(crate) fn upsert_cached_preview_field(
     if feature_flags().disable_preview_3d {
         return;
     }
+    let mut incoming = field.clone();
+    align_preview_field_source_step(&mut incoming, state.live_state.latest_step.step);
+    let quantity = incoming.quantity.clone();
+    let newest = newest_preview_fields(
+        state
+            .preview_fields
+            .to_vec()
+            .into_iter()
+            .chain(state.pending_preview_fields.to_vec())
+            .chain(std::iter::once(incoming)),
+    )
+    .into_iter()
+    .find(|field| field.quantity == quantity)
+    .expect("incoming preview field should remain represented");
     state.advance_preview_cache_revision();
-    promote_preview_field_to_latest_fields(&mut state.latest_fields, field);
-    state.preview_fields.insert(field.clone());
-    state.pending_preview_fields.insert(field.clone());
+    promote_preview_field_to_latest_fields(&mut state.latest_fields, &newest);
+    state.preview_fields.insert(newest.clone());
+    state.pending_preview_fields.insert(newest);
 }
 
 pub(crate) fn ingest_preview_fields_from_update(

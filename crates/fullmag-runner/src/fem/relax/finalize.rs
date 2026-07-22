@@ -78,6 +78,7 @@ pub(crate) fn finalize_native_fem_relaxation(
                 &display_selection,
                 plan,
                 node_count,
+                final_stats.step,
             ) {
                 let cached_preview_wall_time_ns = cached_start.elapsed().as_nanos() as u64;
                 let mut live_stats = final_stats.clone();

@@ -514,6 +514,8 @@ bool schedule_gpu_snapshot_payload(
 
     err = cudaEventRecord(staging_done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(FEM snapshot.staging_done_event)", err);
+    err = cudaStreamWaitEvent(compute_stream, staging_done_event, 0);
+    if (err != cudaSuccess) return fail("cudaStreamWaitEvent(FEM snapshot.staging_done_event)", err);
 
     auto *host = static_cast<double *>(snapshot.host_aos);
     const size_t host_pitch = 3u * sizeof(double);

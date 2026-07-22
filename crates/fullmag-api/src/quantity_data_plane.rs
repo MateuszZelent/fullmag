@@ -323,14 +323,17 @@ impl BinaryCache {
 
 /// Projection cache key.
 ///
-/// Format: `fmvp-proj:{quantity_id}:{field_revision}:{domain_generation_id}:{component}:v2`
+/// Format: `fmvp-proj:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{component}:v3`
 pub(crate) fn projection_cache_key(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     component: &str,
 ) -> String {
-    format!("fmvp-proj:{quantity_id}:{field_revision}:{domain_generation_id}:{component}:v2")
+    format!(
+        "fmvp-proj:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{component}:v3"
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -608,8 +611,8 @@ mod tests {
 
     #[test]
     fn projection_cache_key_format() {
-        let key = projection_cache_key("m", 7, 42, "x");
-        assert_eq!(key, "fmvp-proj:m:7:42:x:v2");
+        let key = projection_cache_key("m", "session-17", 7, 42, "x");
+        assert_eq!(key, "fmvp-proj:m:session-17:7:42:x:v3");
     }
 
     #[test]

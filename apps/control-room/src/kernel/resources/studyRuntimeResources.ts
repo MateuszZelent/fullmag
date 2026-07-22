@@ -1751,6 +1751,21 @@ export function resolveFieldMetaResourceKeyWithComponent(
   return resolveFieldMetaResourceKey(quantityId, { component });
 }
 
+export function fieldMetaFreshnessRevision(
+  data: FieldMetaResource | null,
+): string | null {
+  if (!data) return null;
+  return [
+    data.field_revision,
+    data.state,
+    data.source_revision,
+    data.source_step,
+    data.stale_by_steps,
+    data.materialized_at_unix_ms,
+    data.materialization_wall_time_ns,
+  ].join(":");
+}
+
 export function useFieldMetaResource({
   enabled = true,
   component = null,
@@ -1796,7 +1811,7 @@ export function useFieldMetaResource({
   return useResource<FieldMetaResource | null>({
     enabled,
     load,
-    resolveRevision: (data) => data?.field_revision ?? null,
+    resolveRevision: fieldMetaFreshnessRevision,
     resourceKey,
   });
 }

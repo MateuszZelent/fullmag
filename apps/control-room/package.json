@@ -42,6 +42,7 @@
     "test": "vitest run",
     "typecheck": "node scripts/typecheck-control-room.mjs",
     "smoke:compute-performance": "node scripts/smoke-compute-performance.mjs",
+    "smoke:fem-preview-freshness": "node scripts/smoke-fem-preview-freshness.mjs",
     "bench:compute-performance": "vitest run src/kernel/performance/computePerformanceMicrobench.test.ts --pool=threads"
   },
   "dependencies": {

@@ -15,11 +15,9 @@ use crate::interactive_runtime::{
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::direct_minimizer::direct_minimizer_step_budget;
 use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
-use crate::types::{
-    LiveStepConsumer, RunError, RunStatus, StepAction, StepStats, StepUpdate,
-};
+use crate::types::{LiveStepConsumer, RunError, RunStatus, StepAction, StepStats, StepUpdate};
 
-use super::preview::{FemCachedPreviewHandoff, FemLiveMagnetizationHandoff, FemLivePreviewHandoff};
+use super::preview::{FemLiveMagnetizationHandoff, FemPreviewHandoff};
 use super::scalars::ensure_fem_object_scalars;
 
 pub(crate) struct DirectMinimizerExecution {
@@ -48,8 +46,7 @@ pub(crate) fn execute_direct_minimizer(
     let mut paused = false;
     let mut accepted_steps = 0u64;
     let mut last_cached_preview_revision = last_preview_revision;
-    let mut live_preview_handoff = FemLivePreviewHandoff::default();
-    let mut cached_preview_handoff = FemCachedPreviewHandoff::default();
+    let mut preview_handoff = FemPreviewHandoff::default();
     let mut live_magnetization_handoff = FemLiveMagnetizationHandoff::default();
 
     while accepted_steps < direct_minimizer_step_budget(control) {
@@ -70,9 +67,16 @@ pub(crate) fn execute_direct_minimizer(
                     let preview_start = std::time::Instant::now();
                     let preview_field = if preview_due && !preview_targets_global_scalar {
                         let request = display_selection.preview_request();
-                        live_preview_handoff.request_preview(backend, &request, node_count)?
+                        preview_handoff.request_preview(
+                            backend,
+                            &request,
+                            node_count,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
+                        )?
                     } else {
-                        live_preview_handoff.poll_completed()?
+                        preview_handoff.poll_active()?
                     };
                     live_stats.preview_wall_time_ns = preview_start.elapsed().as_nanos() as u64;
                     let cached_preview_due = cached_display_refresh_due(
@@ -83,16 +87,26 @@ pub(crate) fn execute_direct_minimizer(
                     );
                     let cached_start = std::time::Instant::now();
                     let cached_preview_fields = if cached_preview_due {
-                        cached_preview_handoff.request_cached_previews(
+                        preview_handoff.request_cached_previews(
                             backend,
                             engine,
                             &display_selection,
                             plan,
                             node_count,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
                         )?
                     } else {
-                        cached_preview_handoff.poll_completed()?
+                        preview_handoff.poll_cached(
+                            backend,
+                            node_count,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
+                        )?
                     };
+                    live_stats.preview_superseded_count = preview_handoff.take_superseded_count();
                     live_stats.cached_preview_wall_time_ns =
                         cached_start.elapsed().as_nanos() as u64;
                     let live_preview_wall_time_ns = live_stats
@@ -202,9 +216,16 @@ pub(crate) fn execute_direct_minimizer(
             let preview_field = if preview_due && !preview_targets_global_scalar {
                 let selection = display_selection.as_ref().expect("checked preview_due");
                 let request = selection.preview_request();
-                live_preview_handoff.request_preview(backend, &request, node_count)?
+                preview_handoff.request_preview(
+                    backend,
+                    &request,
+                    node_count,
+                    current_stats.step,
+                    current_stats.time,
+                    current_stats.dt,
+                )?
             } else {
-                live_preview_handoff.poll_completed()?
+                preview_handoff.poll_active()?
             };
             live_stats.preview_wall_time_ns = preview_start.elapsed().as_nanos() as u64;
             let cached_preview_due = display_selection
@@ -221,13 +242,34 @@ pub(crate) fn execute_direct_minimizer(
             let cached_start = std::time::Instant::now();
             let cached_preview_fields = if cached_preview_due {
                 match display_selection.as_ref() {
-                    Some(selection) => cached_preview_handoff
-                        .request_cached_previews(backend, engine, selection, plan, node_count)?,
-                    None => cached_preview_handoff.poll_completed()?,
+                    Some(selection) => preview_handoff.request_cached_previews(
+                        backend,
+                        engine,
+                        selection,
+                        plan,
+                        node_count,
+                        current_stats.step,
+                        current_stats.time,
+                        current_stats.dt,
+                    )?,
+                    None => preview_handoff.poll_cached(
+                        backend,
+                        node_count,
+                        current_stats.step,
+                        current_stats.time,
+                        current_stats.dt,
+                    )?,
                 }
             } else {
-                cached_preview_handoff.poll_completed()?
+                preview_handoff.poll_cached(
+                    backend,
+                    node_count,
+                    current_stats.step,
+                    current_stats.time,
+                    current_stats.dt,
+                )?
             };
+            live_stats.preview_superseded_count = preview_handoff.take_superseded_count();
             live_stats.cached_preview_wall_time_ns = cached_start.elapsed().as_nanos() as u64;
             let live_preview_wall_time_ns = live_stats
                 .preview_wall_time_ns

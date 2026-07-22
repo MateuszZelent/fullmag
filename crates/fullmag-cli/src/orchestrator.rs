@@ -5873,6 +5873,35 @@ fn execute_synthetic_stage(
 
 // ── main orchestration entry point ───────────────────────────────────────────
 
+fn resolve_preview_field_every_n(
+    preview_3d_disabled: bool,
+    requested_backend_name: &str,
+    override_raw: Option<&str>,
+) -> Result<u64> {
+    if preview_3d_disabled {
+        return Ok(u64::MAX);
+    }
+    if let Some(raw) = override_raw {
+        let every_n = match raw.trim().parse::<u64>() {
+            Ok(every_n) => every_n,
+            Err(_) => bail!("FULLMAG_PREVIEW_EVERY_N must be a positive integer, got '{raw}'"),
+        };
+        if every_n == 0 || every_n > u64::from(u32::MAX) {
+            bail!(
+                "FULLMAG_PREVIEW_EVERY_N must be between 1 and {}, got {}",
+                u32::MAX,
+                every_n
+            );
+        }
+        return Ok(every_n);
+    }
+    Ok(if requested_backend_name == "fem" {
+        10
+    } else {
+        50
+    })
+}
+
 pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let args = ScriptCli::parse_from(raw_args);
     if args.headless {
@@ -5976,15 +6005,19 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // When 3D preview is disabled, set field_every_n to infinity to skip expensive computations.
     // Keep FEM cadence aligned with interactive control-room expectations:
     // too-large step intervals make 3D magnetization look "stuck" even while
-    // the run progresses in wall-clock time.
+    // the run progresses in wall-clock time. The explicit override exists for
+    // reproducible preview performance qualification and applies to both the
+    // active field and the cached-field refresh cadence.
     let preview_3d_disabled = crate::live_workspace::feature_flags().disable_preview_3d;
-    let field_every_n: u64 = if preview_3d_disabled {
-        u64::MAX
-    } else if requested_backend_name == "fem" {
-        10
-    } else {
-        50
-    };
+    let preview_every_n_override_raw = std::env::var("FULLMAG_PREVIEW_EVERY_N").ok();
+    let field_every_n = resolve_preview_field_every_n(
+        preview_3d_disabled,
+        &requested_backend_name,
+        preview_every_n_override_raw.as_deref(),
+    )?;
+    let preview_every_n_override = preview_every_n_override_raw
+        .as_ref()
+        .map(|_| field_every_n as u32);
     let current_live_publisher = CurrentLivePublisher::spawn(&session_id);
     let bootstrapping_runtime = requested_runtime_selection(
         &requested_backend_name,
@@ -6621,6 +6654,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     // If the script declared `fm.visualization(active_quantity_id="...")`, push a
     // synthetic display-sync so the control room opens on that quantity.
     // If airbox or geometry hints are present, patch visualization overrides once.
+    let mut initial_display_hint_applied = false;
     if let Some(viz_hint) = stages[0]
         .ir
         .problem_meta
@@ -6629,7 +6663,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     {
         if let Some(qty) = viz_hint.get("active_quantity_id").and_then(|v| v.as_str()) {
             if !qty.is_empty() {
-                display_selection_handle.set_quantity_hint(qty);
+                display_selection_handle.set_quantity_hint(qty, preview_every_n_override);
+                initial_display_hint_applied = true;
             }
         }
 
@@ -6963,6 +6998,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     e
                 );
             }
+        }
+    }
+    if !initial_display_hint_applied {
+        if let Some(every_n) = preview_every_n_override {
+            display_selection_handle.set_quantity_hint("m", Some(every_n));
         }
     }
 
@@ -10184,11 +10224,11 @@ mod tests {
         format_stage_progress_line, has_heavy_live_payload,
         initial_live_state_manifest_from_backend_plan, initial_magnetization_state_override,
         initial_step_update, interactive_session_should_stay_alive,
-        mark_ui_shell_preparation_ready,
-        mesh_build_pipeline_status_json, mesh_source_scene_revision, offset_step_update,
-        own_preparation_boundary_failure, plan_materialized_stage_snapshot,
-        prepare_remesh_stage_transaction, project_script_export_failure,
-        resolve_adaptive_convergence_metric, resolved_shared_domain_object_region_markers,
+        mark_ui_shell_preparation_ready, mesh_build_pipeline_status_json,
+        mesh_source_scene_revision, offset_step_update, own_preparation_boundary_failure,
+        plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
+        project_script_export_failure, resolve_adaptive_convergence_metric,
+        resolve_preview_field_every_n, resolved_shared_domain_object_region_markers,
         run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
         shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
@@ -10665,6 +10705,10 @@ mod tests {
     fn test_preview_field(quantity: &str, revision: u64, z: f64) -> LivePreviewField {
         LivePreviewField {
             config_revision: revision,
+            source_step: 0,
+            source_revision: revision,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
             quantity: quantity.to_string(),
             unit: "A/m".to_string(),
             spatial_kind: "mesh".to_string(),
@@ -11844,7 +11888,7 @@ mod tests {
             "orchestrator must resolve the preview-disabled benchmark flag once"
         );
         assert!(
-            source.contains("let field_every_n: u64 = if preview_3d_disabled {\n        u64::MAX"),
+            source.contains("resolve_preview_field_every_n(\n        preview_3d_disabled"),
             "preview-disabled benchmark mode must disable heavy payload cadence"
         );
         assert!(
@@ -11852,6 +11896,28 @@ mod tests {
                 && source.contains("!preview_3d_disabled"),
             "preview-disabled benchmark mode must also disable initial 3D preview snapshots"
         );
+    }
+
+    #[test]
+    fn preview_matrix_cadence_override_is_positive_and_explicit() {
+        assert_eq!(
+            resolve_preview_field_every_n(false, "fem", Some("25")).unwrap(),
+            25
+        );
+        assert_eq!(
+            resolve_preview_field_every_n(false, "fem", None).unwrap(),
+            10
+        );
+        assert_eq!(
+            resolve_preview_field_every_n(false, "fdm", None).unwrap(),
+            50
+        );
+        assert_eq!(
+            resolve_preview_field_every_n(true, "fem", Some("25")).unwrap(),
+            u64::MAX
+        );
+        assert!(resolve_preview_field_every_n(false, "fem", Some("0")).is_err());
+        assert!(resolve_preview_field_every_n(false, "fem", Some("not-a-number")).is_err());
     }
 
     #[test]
@@ -12043,6 +12109,10 @@ mod tests {
         let mut heavy = test_step_update(3);
         heavy.preview_field = Some(LivePreviewField {
             config_revision: 1,
+            source_step: 0,
+            source_revision: 1,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
             quantity: "m".to_string(),
             unit: "A/m".to_string(),
             spatial_kind: "grid".to_string(),

@@ -2690,6 +2690,10 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                         per_object_scalars: Default::default(),
                         preview_field: Some(LivePreviewField {
                             config_revision: 4,
+                            source_step: 0,
+                            source_revision: 4,
+                            materialized_at_unix_ms: 0,
+                            materialization_wall_time_ns: 0,
                             quantity: "H_eff".to_string(),
                             unit: "A/m".to_string(),
                             spatial_kind: "grid".to_string(),
@@ -23765,6 +23769,10 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
         .expect("mock latest_fields should deserialize");
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 4,
+            source_step: 4,
+            source_revision: 4,
+            materialized_at_unix_ms: 1_700_000_000_456,
+            materialization_wall_time_ns: 80_000_000,
             quantity: "m".to_string(),
             unit: "1".to_string(),
             spatial_kind: "grid".to_string(),
@@ -23813,6 +23821,7 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
     }
     let app = build_v2_router().with_state(state);
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/v2/sessions/current/data/fields/m/samples/vector?format=bin")
@@ -23830,6 +23839,159 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
         .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
         .collect();
     assert_eq!(values, vec![0.0, 0.0, -1.0, 0.0, -1.0, 0.0]);
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["source_step"], 4);
+    assert_eq!(meta["source_revision"], 4);
+    assert_eq!(meta["materialized_at_unix_ms"], 1_700_000_000_456_u64);
+    assert_eq!(meta["stale_by_steps"], 5);
+    assert_eq!(meta["materialization_wall_time_ns"], 80_000_000);
+    assert_eq!(meta["state"], "stale_complete");
+}
+
+#[tokio::test]
+async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 25;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [
+                    [9.0, 9.0, 9.0],
+                    [8.0, 8.0, 8.0]
+                ],
+                "source_step": 0,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_100_u64,
+                "layout": {
+                    "grid_cells": [2, 1, 1]
+                }
+            }
+        }))
+        .expect("mock latest_fields should deserialize");
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 4,
+            source_step: 52,
+            source_revision: 4,
+            materialized_at_unix_ms: 1_700_000_000_456,
+            materialization_wall_time_ns: 80_000_000,
+            quantity: "H_demag".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "magnetic_only".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+        snapshot.live_state = Some(LiveState {
+            status: "completed".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 52,
+                time: 5.2e-12,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                preview_field: None,
+                finished: true,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    let metadata_length = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+    let values: Vec<f64> = bytes[48 + metadata_length..]
+        .chunks_exact(8)
+        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+    assert_eq!(values, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["source_step"], 52);
+    assert_eq!(meta["source_revision"], 4);
+    assert_eq!(meta["materialized_at_unix_ms"], 1_700_000_000_456_u64);
+    assert_eq!(meta["stale_by_steps"], 0);
+    assert_eq!(meta["state"], "complete");
+
+    let catalog_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let descriptor = catalog["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["quantity_id"] == "H_demag")
+        .expect("H_demag field descriptor");
+    assert_eq!(descriptor["source_step"], 52);
+    assert_eq!(descriptor["source_revision"], 4);
+    assert_eq!(descriptor["state"], "complete");
 }
 
 #[tokio::test]
@@ -25506,6 +25668,63 @@ async fn field_vector_component_etag_304() {
     assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
     let body = body_bytes(second).await;
     assert!(body.is_empty(), "304 body must be empty");
+}
+
+#[tokio::test]
+async fn field_vector_cache_identity_includes_session_id() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [[1.0, 2.0, 3.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .unwrap();
+        snapshot.field_samples_revision = 1;
+        snapshot
+            .field_quantity_revisions
+            .insert("H_demag".to_string(), 1);
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let uri = "/v2/sessions/current/data/fields/H_demag/samples/vector?component=full";
+    let first = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_etag = first.headers().get("etag").unwrap().clone();
+    let first_bytes = body_bytes(first).await;
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.session.session_id = "replacement-session".to_string();
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [[4.0, 5.0, 6.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .unwrap();
+    }
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("if-none-match", first_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_bytes = body_bytes(second).await;
+    assert_ne!(second_bytes, first_bytes);
 }
 
 #[tokio::test]

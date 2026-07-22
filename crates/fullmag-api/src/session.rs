@@ -1429,7 +1429,7 @@ pub(crate) fn apply_current_live_snapshot(
         .as_ref()
         .and_then(|ls| ls.latest_step.preview_field.clone())
     {
-        current.preview_cache.insert(preview_field);
+        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
     }
     if let Some(engine_log) = req.engine_log {
         current.engine_log = engine_log;
@@ -1539,7 +1539,7 @@ pub(crate) fn apply_current_live_runtime_frame(
         // query handlers (get_field_meta, get_field_vector, etc.) can find
         // it — same rationale as in apply_current_live_snapshot.
         if let Some(preview_field) = live_state.latest_step.preview_field.clone() {
-            current.preview_cache.insert(preview_field);
+            merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
         }
         current.live_state = Some(live_state);
     }
@@ -1676,7 +1676,22 @@ pub(crate) fn merge_cached_preview_fields(
     incoming: Vec<LivePreviewField>,
 ) {
     for field in incoming {
-        current.insert(field);
+        let source = (
+            field.source_step,
+            field.source_revision,
+            field.materialized_at_unix_ms,
+        );
+        let should_insert = current.get(&field.quantity).is_none_or(|cached| {
+            source
+                >= (
+                    cached.source_step,
+                    cached.source_revision,
+                    cached.materialized_at_unix_ms,
+                )
+        });
+        if should_insert {
+            current.insert(field);
+        }
     }
 }
 
@@ -2899,6 +2914,10 @@ mod tests {
             auto_downscale_message: None,
             auto_downscaled: false,
             config_revision: 1,
+            source_step: 0,
+            source_revision: 1,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
             original_grid: [1, 1, 1],
             preview_grid: [1, 1, 1],
             quantity: quantity.to_string(),
@@ -3275,6 +3294,28 @@ mod tests {
             .get("H_eff")
             .expect("active preview field should be promoted into preview_cache");
         assert_eq!(cached.quantity, "H_eff");
+    }
+
+    #[test]
+    fn cached_preview_merge_never_regresses_source_provenance() {
+        let mut current = CachedPreviewFields::default();
+        let mut terminal = preview_field("H_demag");
+        terminal.source_step = 52;
+        terminal.source_revision = 4;
+        terminal.materialized_at_unix_ms = 1_700_000_000_456;
+        terminal.vector_field_values = vec![0.0, 1.0, 0.0];
+        merge_cached_preview_fields(&mut current, vec![terminal]);
+
+        let mut carried_active = preview_field("H_demag");
+        carried_active.source_step = 0;
+        carried_active.source_revision = 4;
+        carried_active.materialized_at_unix_ms = 1_700_000_000_100;
+        carried_active.vector_field_values = vec![1.0, 0.0, 0.0];
+        merge_cached_preview_fields(&mut current, vec![carried_active]);
+
+        let cached = current.get("H_demag").expect("terminal cached field");
+        assert_eq!(cached.source_step, 52);
+        assert_eq!(cached.vector_field_values, vec![0.0, 1.0, 0.0]);
     }
 
     #[test]

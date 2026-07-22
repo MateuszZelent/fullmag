@@ -4406,17 +4406,15 @@ mod tests {
             let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
                 .expect("read FEM relaxation source");
             assert!(
-                source.contains("FemLivePreviewHandoff::default()"),
+                source.contains("FemPreviewHandoff::default()"),
                 "{path} must keep live preview snapshot state across solver steps"
             );
             assert!(
-                source.contains("live_preview_handoff.poll_completed()?"),
+                source.contains("preview_handoff.poll_active()?"),
                 "{path} must poll completed preview snapshots without blocking"
             );
             assert!(
-                source.contains(
-                    "live_preview_handoff.request_preview(backend, &request, node_count)?"
-                ),
+                source.contains("preview_handoff.request_preview("),
                 "{path} must request live preview through the handoff boundary"
             );
             assert!(
@@ -4431,16 +4429,51 @@ mod tests {
         ))
         .expect("read fem/relax/preview.rs");
         assert!(
-            preview.contains("struct FemLivePreviewHandoff"),
+            preview.contains("struct FemPreviewHandoff"),
             "fem/relax/preview.rs must own live preview handoff state"
         );
         assert!(
-            preview.contains("snapshot.is_ready()"),
-            "live preview handoff must use the nonblocking native readiness check"
+            preview.contains("try_take_completed"),
+            "live preview handoff must poll the bounded worker without blocking"
         );
         assert!(
             preview.contains("last_good"),
             "live preview handoff must retain the last completed preview"
+        );
+    }
+
+    #[test]
+    fn fem_preview_materialization_stays_outside_callback_deadline() {
+        let preview = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/fem/relax/preview.rs"
+        ))
+        .expect("read fem/relax/preview.rs");
+        let hot_path = preview
+            .split("/// Build the active FEM preview field.")
+            .next()
+            .expect("preview hot-path section");
+
+        assert!(
+            preview.contains("struct PendingFemPreviewState"),
+            "FEM live and cache previews must share one bounded materialization state"
+        );
+        assert!(
+            preview.contains("preview_superseded_count"),
+            "busy preview requests must be counted explicitly"
+        );
+        assert!(
+            !hot_path.contains("backend.copy_live_preview_field(request, node_count)?"),
+            "energy-density previews must not synchronously copy fields on the solver callback"
+        );
+        assert!(
+            !preview.contains("pending: Vec<(LivePreviewRequest, NativeFemPreviewSnapshot)>"),
+            "cached previews must not accumulate an unbounded set of native snapshots"
+        );
+        assert!(
+            preview.contains("let mut last_good_field = field.clone();")
+                && preview.contains("result.last_good_field"),
+            "retained heavy preview clones must be created by the worker and only moved by the solver callback"
         );
     }
 
@@ -4646,9 +4679,9 @@ mod tests {
             "interactive FEM mesh preview cache must materialize spatial scalar fields such as eden_total"
         );
         assert!(
-            module.contains("struct FemCachedPreviewHandoff")
+            module.contains("struct FemPreviewHandoff")
                 && module.contains("request_cached_previews(")
-                && module.contains("snapshot.is_ready()"),
+                && module.contains("try_take_completed"),
             "fem/relax/preview.rs must own nonblocking cached-preview handoff state"
         );
         for path in [
@@ -4663,12 +4696,12 @@ mod tests {
                 "{path} must use the resolved FEM engine for cached-preview quantities, not hard-code CPU"
             );
             assert!(
-                source.contains("FemCachedPreviewHandoff::default()"),
-                "{path} must keep cached-preview snapshot state across solver steps"
+                source.contains("FemPreviewHandoff::default()"),
+                "{path} must keep one shared preview materializer across solver steps"
             );
             assert!(
-                source.contains("cached_preview_handoff.request_cached_previews(")
-                    && source.contains("cached_preview_handoff.poll_completed()?"),
+                source.contains("preview_handoff.request_cached_previews(")
+                    && source.contains("preview_handoff.poll_cached("),
                 "{path} must use cached-preview handoff readiness instead of synchronous waits"
             );
             assert!(

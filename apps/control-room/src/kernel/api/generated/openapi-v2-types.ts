@@ -4034,7 +4034,18 @@ export interface components {
             kind: string;
             label: string;
             location: string;
+            /** Format: int64 */
+            materialization_wall_time_ns: number;
+            /** Format: int64 */
+            materialized_at_unix_ms: number;
             quantity_id: string;
+            /** Format: int64 */
+            source_revision: number;
+            /** Format: int64 */
+            source_step: number;
+            /** Format: int64 */
+            stale_by_steps: number;
+            state: components["schemas"]["FieldMaterializationState"];
             unit: string;
         };
         FieldDriveCreateRequest: {
@@ -4079,6 +4090,8 @@ export interface components {
             width_m?: number | null;
             window?: string;
         };
+        /** @enum {string} */
+        FieldMaterializationState: "complete" | "stale_complete" | "pending" | "error";
         FieldMatrixResponse: {
             aggregation?: string | null;
             bounds: components["schemas"]["FieldSliceBounds"];
@@ -4119,7 +4132,18 @@ export interface components {
             kind: string;
             label: string;
             location: string;
+            /** Format: int64 */
+            materialization_wall_time_ns: number;
+            /** Format: int64 */
+            materialized_at_unix_ms: number;
             quantity_id: string;
+            /** Format: int64 */
+            source_revision: number;
+            /** Format: int64 */
+            source_step: number;
+            /** Format: int64 */
+            stale_by_steps: number;
+            state: components["schemas"]["FieldMaterializationState"];
             stats?: null | components["schemas"]["FieldStats"];
             unit: string;
         };

@@ -671,6 +671,132 @@ fn field_vector_binary_header_counts(binary: &[u8]) -> (u8, usize, usize) {
 
 // ── Catalog ──────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy)]
+struct FieldFreshness {
+    source_step: u64,
+    source_revision: u64,
+    materialized_at_unix_ms: u64,
+    stale_by_steps: u64,
+    materialization_wall_time_ns: u64,
+    state: FieldMaterializationState,
+}
+
+fn completed_field_freshness(
+    current_step: u64,
+    source_step: u64,
+    source_revision: u64,
+    materialized_at_unix_ms: u64,
+    materialization_wall_time_ns: u64,
+) -> FieldFreshness {
+    let stale_by_steps = current_step.saturating_sub(source_step);
+    FieldFreshness {
+        source_step,
+        source_revision,
+        materialized_at_unix_ms,
+        stale_by_steps,
+        materialization_wall_time_ns,
+        state: if stale_by_steps == 0 {
+            FieldMaterializationState::Complete
+        } else {
+            FieldMaterializationState::StaleComplete
+        },
+    }
+}
+
+fn current_source_step(snapshot: &SessionStateResponse) -> u64 {
+    snapshot
+        .live_state
+        .as_ref()
+        .map(|state| state.latest_step.step)
+        .unwrap_or(0)
+}
+
+fn latest_json_field_freshness(
+    snapshot: &SessionStateResponse,
+    value: &serde_json::Value,
+    quantity_id: &str,
+) -> FieldFreshness {
+    let current_step = current_source_step(snapshot);
+    completed_field_freshness(
+        current_step,
+        value
+            .get("source_step")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        value
+            .get("source_revision")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_else(|| field_quantity_revision(snapshot, quantity_id)),
+        value
+            .get("materialized_at_unix_ms")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_else(|| {
+                snapshot
+                    .live_state
+                    .as_ref()
+                    .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
+                    .unwrap_or(0)
+            }),
+        value
+            .get("materialization_wall_time_ns")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+    )
+}
+
+fn preview_field_freshness(
+    snapshot: &SessionStateResponse,
+    field: &fullmag_runner::LivePreviewField,
+) -> FieldFreshness {
+    completed_field_freshness(
+        current_source_step(snapshot),
+        field.source_step,
+        field.source_revision,
+        field.materialized_at_unix_ms,
+        field.materialization_wall_time_ns,
+    )
+}
+
+fn preview_cache_is_fresher(snapshot: &SessionStateResponse, quantity_id: &str) -> bool {
+    let Some(preview) = snapshot.preview_cache.get(quantity_id) else {
+        return false;
+    };
+    let Some(latest) = snapshot.latest_fields.get(quantity_id) else {
+        return true;
+    };
+    let preview = preview_field_freshness(snapshot, preview);
+    let latest = latest_json_field_freshness(snapshot, latest, quantity_id);
+    (
+        preview.source_step,
+        preview.source_revision,
+        preview.materialized_at_unix_ms,
+    ) > (
+        latest.source_step,
+        latest.source_revision,
+        latest.materialized_at_unix_ms,
+    )
+}
+
+fn pending_field_freshness(snapshot: &SessionStateResponse) -> FieldFreshness {
+    FieldFreshness {
+        source_step: current_source_step(snapshot),
+        source_revision: snapshot.display_selection.revision,
+        materialized_at_unix_ms: 0,
+        stale_by_steps: 0,
+        materialization_wall_time_ns: 0,
+        state: FieldMaterializationState::Pending,
+    }
+}
+
+fn invalid_live_magnetization_is_present(snapshot: &SessionStateResponse) -> bool {
+    snapshot
+        .live_state
+        .as_ref()
+        .and_then(|state| state.latest_step.magnetization.as_ref())
+        .is_some()
+        && !live_magnetization_available(snapshot)
+}
+
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/data/fields",
@@ -693,6 +819,9 @@ pub async fn get_field_catalog(
     let mut quantities = Vec::new();
 
     for (qid, value) in snapshot.latest_fields.entries() {
+        if preview_cache_is_fresher(snapshot, qid) {
+            continue;
+        }
         let n_comp = quantity_spec(qid)
             .map(|spec| spec.n_comp as usize)
             .unwrap_or(3);
@@ -706,6 +835,8 @@ pub async fn get_field_catalog(
             quantity_unit(qid),
             field_quantity_revision(snapshot, qid),
             gen_id,
+            latest_json_field_freshness(snapshot, value, qid),
+            true,
         );
     }
 
@@ -725,16 +856,52 @@ pub async fn get_field_catalog(
             &field.unit,
             field_quantity_revision(snapshot, qid),
             gen_id,
+            preview_field_freshness(snapshot, field),
+            true,
         );
     }
 
-    if live_magnetization_available(snapshot) && !quantities.iter().any(|q| q.quantity_id == "m") {
+    if live_magnetization_available(snapshot) {
+        quantities.retain(|quantity| quantity.quantity_id != "m");
         push_field_descriptor(
             &mut quantities,
             "m",
             quantity_unit("m"),
             field_quantity_revision(snapshot, "m"),
             gen_id,
+            completed_field_freshness(
+                current_source_step(snapshot),
+                current_source_step(snapshot),
+                field_quantity_revision(snapshot, "m"),
+                snapshot
+                    .live_state
+                    .as_ref()
+                    .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
+                    .unwrap_or(0),
+                0,
+            ),
+            true,
+        );
+    }
+
+    let selected_quantity = canonical_quantity_id(&snapshot.display_selection.selection.quantity);
+    if !quantities
+        .iter()
+        .any(|quantity| quantity.quantity_id == selected_quantity.as_ref())
+        && snapshot
+            .live_state
+            .as_ref()
+            .is_some_and(|state| state.status == "running")
+        && !(selected_quantity.as_ref() == "m" && invalid_live_magnetization_is_present(snapshot))
+    {
+        push_field_descriptor(
+            &mut quantities,
+            selected_quantity.as_ref(),
+            quantity_unit(selected_quantity.as_ref()),
+            field_quantity_revision(snapshot, selected_quantity.as_ref()),
+            gen_id,
+            pending_field_freshness(snapshot),
+            false,
         );
     }
 
@@ -810,7 +977,11 @@ pub async fn get_field_meta(
                 values.len()
             };
             let grid = json_field_grid(raw).unwrap_or([element_count as u32, 1, 1]);
-            Some((values, grid))
+            Some((
+                values,
+                grid,
+                latest_json_field_freshness(snapshot, raw, quantity_id),
+            ))
         } else {
             None
         }
@@ -825,12 +996,23 @@ pub async fn get_field_meta(
             ) {
                 return None;
             }
-            Some((field.vector_field_values.clone(), field.preview_grid))
+            Some((
+                field.vector_field_values.clone(),
+                field.preview_grid,
+                preview_field_freshness(snapshot, field),
+            ))
         } else {
             None
         }
     };
-    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(snapshot_id) =
+    let cached_field_values = || {
+        if preview_cache_is_fresher(snapshot, quantity_id) {
+            preview_field_values().or_else(latest_field_values)
+        } else {
+            latest_field_values().or_else(preview_field_values)
+        }
+    };
+    let raw_values_opt: Option<(Vec<f64>, [u32; 3], FieldFreshness)> = if let Some(snapshot_id) =
         requested_snapshot_id
     {
         if quantity_id != "m" {
@@ -840,21 +1022,81 @@ pub async fn get_field_meta(
         }
         validate_hysteresis_snapshot_stage_scope(&state, query.stage_id.as_deref(), snapshot_id)
             .await?;
-        Some(persisted_hysteresis_magnetization_values(
-            snapshot,
-            snapshot_id,
-        )?)
+        let (values, grid) = persisted_hysteresis_magnetization_values(snapshot, snapshot_id)?;
+        Some((
+            values,
+            grid,
+            completed_field_freshness(
+                current_source_step(snapshot),
+                current_source_step(snapshot),
+                field_quantity_revision(snapshot, quantity_id),
+                snapshot
+                    .live_state
+                    .as_ref()
+                    .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
+                    .unwrap_or(0),
+                0,
+            ),
+        ))
     } else if quantity_id == "m" {
         live_magnetization_values(snapshot)
-            .or_else(preview_field_values)
-            .or_else(latest_field_values)
+            .map(|(values, grid)| {
+                (
+                    values,
+                    grid,
+                    completed_field_freshness(
+                        current_source_step(snapshot),
+                        current_source_step(snapshot),
+                        field_quantity_revision(snapshot, quantity_id),
+                        snapshot
+                            .live_state
+                            .as_ref()
+                            .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
+                            .unwrap_or(0),
+                        0,
+                    ),
+                )
+            })
+            .or_else(cached_field_values)
     } else {
-        latest_field_values().or_else(preview_field_values)
+        cached_field_values()
     };
 
-    let (raw_values, grid) = raw_values_opt.ok_or_else(|| {
-        ApiError::not_found(format!("field '{}' not available in memory", quantity_id))
-    })?;
+    let Some((raw_values, grid, freshness)) = raw_values_opt else {
+        let selected_quantity =
+            canonical_quantity_id(&snapshot.display_selection.selection.quantity);
+        if requested_snapshot_id.is_none()
+            && selected_quantity.as_ref() == quantity_id
+            && snapshot
+                .live_state
+                .as_ref()
+                .is_some_and(|state| state.status == "running")
+            && !(quantity_id == "m" && invalid_live_magnetization_is_present(snapshot))
+        {
+            let freshness = pending_field_freshness(snapshot);
+            return Ok(Json(FieldMeta {
+                quantity_id: quantity_id.to_string(),
+                label,
+                kind,
+                components: n_comp,
+                location,
+                unit,
+                field_revision: field_quantity_revision(snapshot, quantity_id),
+                domain_generation_id: gen_id,
+                stats: None,
+                source_step: freshness.source_step,
+                source_revision: freshness.source_revision,
+                materialized_at_unix_ms: freshness.materialized_at_unix_ms,
+                stale_by_steps: freshness.stale_by_steps,
+                materialization_wall_time_ns: freshness.materialization_wall_time_ns,
+                state: freshness.state,
+            }));
+        }
+        return Err(ApiError::not_found(format!(
+            "field '{}' not available in memory",
+            quantity_id
+        )));
+    };
     let raw_point_count = if n_comp > 0 {
         raw_values.len() / n_comp as usize
     } else {
@@ -890,6 +1132,12 @@ pub async fn get_field_meta(
         field_revision: field_quantity_revision(snapshot, quantity_id),
         domain_generation_id: gen_id,
         stats: projected_field_stats(&raw_values, n_comp as usize, &component)?,
+        source_step: freshness.source_step,
+        source_revision: freshness.source_revision,
+        materialized_at_unix_ms: freshness.materialized_at_unix_ms,
+        stale_by_steps: freshness.stale_by_steps,
+        materialization_wall_time_ns: freshness.materialization_wall_time_ns,
+        state: freshness.state,
     }))
 }
 
@@ -944,6 +1192,8 @@ fn push_field_descriptor(
     unit: &str,
     field_revision: u64,
     domain_generation_id: u64,
+    freshness: FieldFreshness,
+    available: bool,
 ) {
     let spec = quantity_spec(quantity_id);
     let n_comp = spec.map(|s| s.n_comp).unwrap_or(3);
@@ -960,7 +1210,13 @@ fn push_field_descriptor(
         unit: unit.to_string(),
         field_revision,
         domain_generation_id,
-        available: true,
+        available,
+        source_step: freshness.source_step,
+        source_revision: freshness.source_revision,
+        materialized_at_unix_ms: freshness.materialized_at_unix_ms,
+        stale_by_steps: freshness.stale_by_steps,
+        materialization_wall_time_ns: freshness.materialization_wall_time_ns,
+        state: freshness.state,
     });
 }
 
@@ -1592,6 +1848,7 @@ pub async fn get_field_vector(
 
     let component = parse_component(query.component.as_deref(), n_comp)?;
 
+    let session_id = snapshot.session.session_id.clone();
     let field_revision = field_quantity_revision(snapshot, quantity_id);
     let gen_id = domain_generation_id(snapshot);
     let requested_snapshot_id = query
@@ -1633,6 +1890,13 @@ pub async fn get_field_vector(
             None
         }
     };
+    let cached_field_values = || {
+        if preview_cache_is_fresher(snapshot, quantity_id) {
+            preview_field_values().or_else(latest_field_values)
+        } else {
+            latest_field_values().or_else(preview_field_values)
+        }
+    };
     let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(snapshot_id) =
         requested_snapshot_id
     {
@@ -1648,11 +1912,9 @@ pub async fn get_field_vector(
             snapshot_id,
         )?)
     } else if quantity_id == "m" {
-        live_magnetization_values(snapshot)
-            .or_else(preview_field_values)
-            .or_else(latest_field_values)
+        live_magnetization_values(snapshot).or_else(cached_field_values)
     } else {
-        latest_field_values().or_else(preview_field_values)
+        cached_field_values()
     };
     let has_field_source = snapshot.latest_fields.get(quantity_id).is_some()
         || snapshot.preview_cache.get(quantity_id).is_some()
@@ -1725,7 +1987,13 @@ pub async fn get_field_vector(
         .unwrap_or_default();
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
         "{}:{scope_token}{geometry_scope_token}{sample_token}{snapshot_token}{topology_etag_token}",
-        component_etag_token(quantity_id, field_revision, gen_id, &component)
+        component_etag_token(
+            quantity_id,
+            session_id.as_str(),
+            field_revision,
+            gen_id,
+            &component,
+        )
     ));
     let scoped_grid = resolved_scope
         .as_ref()
@@ -1791,6 +2059,7 @@ pub async fn get_field_vector(
     };
     let cache_key = crate::quantity_data_plane::projection_cache_key(
         quantity_id,
+        session_id.as_str(),
         field_revision,
         gen_id,
         &format!("{comp_key}:{scope_token}{sample_token}{snapshot_token}{topology_cache_token}"),

@@ -2017,6 +2017,12 @@ verify-fem-frequency-domain-shared-domain-static-periodic-parity-runtime cpu_thr
 verify-fem-relaxation-runtime:
     bash scripts/verify_fem_relaxation_runtime.sh
 
+verify-fem-preview-surface-matrix:
+    if [ -z "${FULLMAG_MATRIX_PYTHON:-}" ]; then just ensure-python; fi
+    just ensure-managed-fem-runtime
+    just build-static-control-room
+    "${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}" scripts/verify_fem_preview_surface_matrix.py
+
 verify-fem-relaxation-convergence:
     FULLMAG_RELAX_MAX_STEPS="${FULLMAG_RELAX_MAX_STEPS:-16}" \
     FULLMAG_FEM_RELAXATION_MIN_STEPS="${FULLMAG_FEM_RELAXATION_MIN_STEPS:-16}" \

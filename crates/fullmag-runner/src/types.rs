@@ -448,6 +448,9 @@ pub struct StepStats {
     /// Wall-clock time spent on cached (non-active) preview field copies (ns).
     #[serde(default)]
     pub cached_preview_wall_time_ns: u64,
+    /// Preview requests deliberately superseded while the bounded worker was busy.
+    #[serde(default)]
+    pub preview_superseded_count: u64,
     /// Wall-clock time spent in synchronous runner/CLI live callback orchestration (ns).
     #[serde(default)]
     pub orchestration_wall_time_ns: u64,
@@ -645,6 +648,7 @@ impl Default for StepStats {
             native_ffi_overhead_wall_time_ns: 0,
             preview_wall_time_ns: 0,
             cached_preview_wall_time_ns: 0,
+            preview_superseded_count: 0,
             orchestration_wall_time_ns: 0,
             mesh_payload_wall_time_ns: 0,
             step_update_deep_clone_count: 0,
@@ -1321,6 +1325,18 @@ impl Default for LivePreviewRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LivePreviewField {
     pub config_revision: u64,
+    /// Solver step whose state was captured for this completed field.
+    #[serde(default)]
+    pub source_step: u64,
+    /// Display/materialization request revision used for this field.
+    #[serde(default)]
+    pub source_revision: u64,
+    /// Wall-clock completion time for asynchronous materialization.
+    #[serde(default)]
+    pub materialized_at_unix_ms: u64,
+    /// Worker-side wait and field-materialization duration.
+    #[serde(default)]
+    pub materialization_wall_time_ns: u64,
     pub quantity: String,
     pub unit: String,
     pub spatial_kind: String,
@@ -2987,6 +3003,10 @@ mod tests {
             magnetization: None,
             preview_field: Some(LivePreviewField {
                 config_revision: 1,
+                source_step: 0,
+                source_revision: 1,
+                materialized_at_unix_ms: 0,
+                materialization_wall_time_ns: 0,
                 quantity: "eden_total".to_string(),
                 unit: "wrong".to_string(),
                 spatial_kind: "grid".to_string(),

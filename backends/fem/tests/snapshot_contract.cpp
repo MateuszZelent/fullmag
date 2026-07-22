@@ -123,6 +123,13 @@ void gpu_snapshot_preserves_full_domain_observable_fields() {
     check(
         api.find("fullmag_cuda_apply_full_domain_demag_correction(") != std::string::npos,
         "GPU full-domain H_eff snapshots must combine current magnetic and full-domain demag in staging");
+    const std::size_t staging_done =
+        api.find("cudaEventRecord(staging_done_event, io_stream)");
+    const std::size_t compute_wait =
+        api.find("cudaStreamWaitEvent(compute_stream, staging_done_event, 0)", staging_done);
+    check(
+        staging_done != std::string::npos && compute_wait != std::string::npos,
+        "GPU snapshot staging must complete before the compute stream can mutate source fields");
     check(
         api.find("FEM GPU full-domain H_eff snapshot requires allocated demag component buffers") !=
             std::string::npos,

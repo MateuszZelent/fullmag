@@ -216,7 +216,13 @@ function backendMeta(fieldRevision = 12): FieldMetaResource {
     kind: "vector",
     label: "Magnetization",
     location: "node",
+    materialization_wall_time_ns: 0,
+    materialized_at_unix_ms: 0,
     quantity_id: "m",
+    source_revision: fieldRevision,
+    source_step: 0,
+    stale_by_steps: 0,
+    state: "complete",
     stats: { max: 3, mean: 2, min: 1 },
     unit: "A/m",
   };

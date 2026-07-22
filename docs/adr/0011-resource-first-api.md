@@ -124,6 +124,19 @@ hashing, so artifact insertion order cannot change the validator. A matching
 `200` even when pair cardinality and mesh revision remain unchanged. Realtime
 events only invalidate this resource; the next HTTP GET remains authoritative.
 
+#### 3c. 2026-07-21 addendum: field materialization freshness
+
+The `data/fields` catalog and per-quantity field metadata, rather than thin
+session status, own asynchronous materialization freshness. They expose the
+source step and revision, materialization timestamp and wall time, derived
+step staleness, and the state vocabulary `complete | stale_complete | pending
+| error`.
+
+`stale_complete` is a usable completed payload. The Control Room retains it
+while topology generation remains compatible, including while a newer
+materialization is pending. Thin status continues to publish only the field
+resource revision pointer; it does not duplicate per-quantity freshness.
+
 ### 4. Workspace and authoring are first-class resource families
 
 The resource-first split applies not only to runtime data, but also to control-room authoring.

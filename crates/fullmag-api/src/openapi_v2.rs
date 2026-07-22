@@ -258,6 +258,7 @@ use utoipa::OpenApi;
         crate::schemas::quantities::QuantityCatalogEntry,
         crate::schemas::fields::FieldCatalog,
         crate::schemas::fields::FieldDescriptor,
+        crate::schemas::fields::FieldMaterializationState,
         crate::schemas::fields::FieldMeta,
         crate::schemas::fields::FieldStats,
         crate::schemas::fields::FieldVectorQuery,

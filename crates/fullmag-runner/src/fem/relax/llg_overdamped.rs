@@ -32,7 +32,7 @@ use crate::types::{ExecutionProvenance, RelaxationControllerPolicyProvenance};
 use crate::types::{LiveStepConsumer, RunError, StepAction, StepStats, StepUpdate};
 
 #[cfg(feature = "fem-gpu")]
-use super::preview::{FemCachedPreviewHandoff, FemLiveMagnetizationHandoff, FemLivePreviewHandoff};
+use super::preview::{FemLiveMagnetizationHandoff, FemPreviewHandoff};
 #[cfg(feature = "fem-gpu")]
 use super::scalars::ensure_fem_object_scalars;
 
@@ -191,8 +191,7 @@ pub(crate) fn execute_llg_overdamped(
     let mut torque_confirmation = RelaxationTorqueConfirmation::default();
     let mut last_cached_preview_revision = last_preview_revision;
     let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
-    let mut live_preview_handoff = FemLivePreviewHandoff::default();
-    let mut cached_preview_handoff = FemCachedPreviewHandoff::default();
+    let mut preview_handoff = FemPreviewHandoff::default();
     let mut live_magnetization_handoff = FemLiveMagnetizationHandoff::default();
     let drive_discontinuities = crate::time_events::resolved_stage_drive_discontinuities(
         &plan.field_drives,
@@ -245,9 +244,16 @@ pub(crate) fn execute_llg_overdamped(
                     let preview_start = std::time::Instant::now();
                     let preview_field = if preview_due && !preview_targets_global_scalar {
                         let request = display_selection.preview_request();
-                        live_preview_handoff.request_preview(backend, &request, node_count)?
+                        preview_handoff.request_preview(
+                            backend,
+                            &request,
+                            node_count,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
+                        )?
                     } else {
-                        live_preview_handoff.poll_completed()?
+                        preview_handoff.poll_active()?
                     };
                     live_stats.preview_wall_time_ns = preview_start.elapsed().as_nanos() as u64;
                     let cached_preview_due = cached_display_refresh_due(
@@ -258,16 +264,26 @@ pub(crate) fn execute_llg_overdamped(
                     );
                     let cached_start = std::time::Instant::now();
                     let cached_preview_fields = if cached_preview_due {
-                        cached_preview_handoff.request_cached_previews(
+                        preview_handoff.request_cached_previews(
                             backend,
                             engine,
                             &display_selection,
                             plan,
                             node_count,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
                         )?
                     } else {
-                        cached_preview_handoff.poll_completed()?
+                        preview_handoff.poll_cached(
+                            backend,
+                            node_count,
+                            current_stats.step,
+                            current_stats.time,
+                            current_stats.dt,
+                        )?
                     };
+                    live_stats.preview_superseded_count = preview_handoff.take_superseded_count();
                     live_stats.cached_preview_wall_time_ns =
                         cached_start.elapsed().as_nanos() as u64;
                     let live_preview_wall_time_ns = live_stats
@@ -400,9 +416,16 @@ pub(crate) fn execute_llg_overdamped(
             let preview_field = if preview_due && !preview_targets_global_scalar {
                 let selection = display_selection.as_ref().expect("checked preview_due");
                 let request = selection.preview_request();
-                live_preview_handoff.request_preview(backend, &request, node_count)?
+                preview_handoff.request_preview(
+                    backend,
+                    &request,
+                    node_count,
+                    current_stats.step,
+                    current_stats.time,
+                    current_stats.dt,
+                )?
             } else {
-                live_preview_handoff.poll_completed()?
+                preview_handoff.poll_active()?
             };
             live_stats.preview_wall_time_ns = preview_start.elapsed().as_nanos() as u64;
             let cached_preview_due = display_selection
@@ -419,13 +442,34 @@ pub(crate) fn execute_llg_overdamped(
             let cached_start = std::time::Instant::now();
             let cached_preview_fields = if cached_preview_due {
                 match display_selection.as_ref() {
-                    Some(selection) => cached_preview_handoff
-                        .request_cached_previews(backend, engine, selection, plan, node_count)?,
-                    None => cached_preview_handoff.poll_completed()?,
+                    Some(selection) => preview_handoff.request_cached_previews(
+                        backend,
+                        engine,
+                        selection,
+                        plan,
+                        node_count,
+                        current_stats.step,
+                        current_stats.time,
+                        current_stats.dt,
+                    )?,
+                    None => preview_handoff.poll_cached(
+                        backend,
+                        node_count,
+                        current_stats.step,
+                        current_stats.time,
+                        current_stats.dt,
+                    )?,
                 }
             } else {
-                cached_preview_handoff.poll_completed()?
+                preview_handoff.poll_cached(
+                    backend,
+                    node_count,
+                    current_stats.step,
+                    current_stats.time,
+                    current_stats.dt,
+                )?
             };
+            live_stats.preview_superseded_count = preview_handoff.take_superseded_count();
             live_stats.cached_preview_wall_time_ns = cached_start.elapsed().as_nanos() as u64;
             let live_preview_wall_time_ns = live_stats
                 .preview_wall_time_ns

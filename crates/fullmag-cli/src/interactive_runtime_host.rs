@@ -217,9 +217,12 @@ impl CurrentLiveDisplaySelectionHandle {
     ///
     /// Pushes a synthetic display-sync command before the solver loop starts, so
     /// the control room opens with the requested quantity already selected.
-    pub(super) fn set_quantity_hint(&self, quantity: &str) {
+    pub(super) fn set_quantity_hint(&self, quantity: &str, every_n: Option<u32>) {
         let mut selection = CurrentDisplaySelection::default();
         selection.selection.quantity = quantity.to_string();
+        if let Some(every_n) = every_n {
+            selection.selection.every_n = every_n;
+        }
         selection.selection.canonicalize();
         let command = synthetic_display_sync_command(selection);
         self.push_command_front(command);

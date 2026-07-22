@@ -212,6 +212,30 @@ may project the current active quantity, camera, and layer policy, but it does
 not own field payload freshness; `data/fields/*` does. Conversely,
 `data/fields/*` does not own camera or workspace-shell freshness.
 
+### Field materialization freshness
+
+Field catalog descriptors and `data/fields/{quantity_id}/meta` own the
+materialization state for each quantity. Both resources expose
+`source_step`, `source_revision`, `materialized_at_unix_ms`,
+`stale_by_steps`, `materialization_wall_time_ns`, and `state`, where `state`
+is one of `complete`, `stale_complete`, `pending`, or `error`.
+
+- `complete` means the materialized payload was produced from the current
+  solver step.
+- `stale_complete` means a complete payload remains available, but its
+  `source_step` precedes the current solver step by `stale_by_steps`.
+- `pending` means the selected quantity is being materialized and no complete
+  payload for that quantity is available yet.
+- `error` is reserved for an explicit materialization failure; it must not be
+  inferred from ordinary staleness.
+
+A client must retain and render `stale_complete` data while its topology
+generation remains compatible. A quantity switch resolves to the last
+complete frame for that quantity or to explicit `pending`; waiting must not
+clear an otherwise compatible viewport payload. The thin session status owns
+only field-family revision pointers and never copies these per-quantity
+freshness fields.
+
 ## 3.2 Capability ownership
 
 Capability resources have distinct scopes:

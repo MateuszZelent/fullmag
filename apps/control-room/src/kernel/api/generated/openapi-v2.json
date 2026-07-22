@@ -3833,8 +3833,36 @@
           "location": {
             "type": "string"
           },
+          "materialization_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "materialized_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "quantity_id": {
             "type": "string"
+          },
+          "source_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stale_by_steps": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/FieldMaterializationState"
           },
           "unit": {
             "type": "string"
@@ -3849,7 +3877,13 @@
           "unit",
           "field_revision",
           "domain_generation_id",
-          "available"
+          "available",
+          "source_step",
+          "source_revision",
+          "materialized_at_unix_ms",
+          "stale_by_steps",
+          "materialization_wall_time_ns",
+          "state"
         ],
         "type": "object"
       },
@@ -4012,6 +4046,15 @@
             "type": "object"
           }
         ]
+      },
+      "FieldMaterializationState": {
+        "enum": [
+          "complete",
+          "stale_complete",
+          "pending",
+          "error"
+        ],
+        "type": "string"
       },
       "FieldMatrixResponse": {
         "properties": {
@@ -4190,8 +4233,36 @@
           "location": {
             "type": "string"
           },
+          "materialization_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "materialized_at_unix_ms": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "quantity_id": {
             "type": "string"
+          },
+          "source_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_step": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stale_by_steps": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/FieldMaterializationState"
           },
           "stats": {
             "oneOf": [
@@ -4215,7 +4286,13 @@
           "location",
           "unit",
           "field_revision",
-          "domain_generation_id"
+          "domain_generation_id",
+          "source_step",
+          "source_revision",
+          "materialized_at_unix_ms",
+          "stale_by_steps",
+          "materialization_wall_time_ns",
+          "state"
         ],
         "type": "object"
       },
