@@ -1,310 +1,179 @@
-# Task 5 independent re-review after remediation
+# Task 5 final independent re-review
 
-Reviewed range: `7599f78968ca21014685d1617eb14f3dc8a69bca..156322e8f1c5cfaeb88386734a90ff326c457538`
+Reviewed range: `7599f78968ca21014685d1617eb14f3dc8a69bca..c2c65ad6d91cbdfbed2caa0a10c10ebbca911c24`
 
-Task 5 implementation commit: `ad67da90cfa678c750a4bc1f1dabb4ca73483ae8`
-
-Remediation commits: `09f00cce7c21f7943079525f96f72198d3038374`, `156322e8f1c5cfaeb88386734a90ff326c457538`
+Final remediation commit: `c2c65ad6d91cbdfbed2caa0a10c10ebbca911c24`
 
 Review date: 2026-07-23
 
 ## Verdicts
 
-`SPEC_VERDICT: CHANGES_REQUIRED`
+`SPEC_VERDICT: APPROVED`
 
-`QUALITY_VERDICT: CHANGES_REQUIRED`
+`QUALITY_VERDICT: APPROVED`
 
-The remediation closes all three findings from the preceding review at the
-planner/API/preview-evidence level. Public freshness is again the canonical
-four-state contract with retained-payload provenance; the bounded CPU DG0 lane
-is production-executable through the planner; DG0 field-dot energy densities
-use a conservative P1 tetrahedral weak-form projection and match native scalar
-energies; the stale callback contract is explicitly included in the managed
-recipe; the heterogeneous matrix serializer is rectangular; and the removed
-exchange assertion checked stale documentation presence rather than executable
-physics.
+No actionable findings remain in the reviewed Task 5 scope. Commit `c2c65ad6`
+closes the two blockers from the preceding independent review with native
+fail-closed enforcement, executable managed regressions, an allocation-free
+material reduction, and a fresh ordinary-time DG0 runtime artifact. The
+previously approved four-state freshness/provenance, conservative energy
+projection, five energy variants, callback test inclusion, matrix serializer,
+and removal of the stale documentation-presence assertion remain unchanged.
 
-Approval is still blocked by two newly identified implementation defects. The
-native ABI does not enforce the same `ordinary time evolution only` restriction
-as the planner and can enter a native relaxation algorithm through an already
-accepted DG0 handle. Separately, the DG0 step-statistics path allocates and
-zeroes three `3*N` vectors on every accepted CPU step. The first is a semantic
-fail-closed gap; the second is a solver-hot-path performance regression.
+## Scope and matrix-rerun decision
 
-## Required findings
+The final remediation changes native FEM material/runtime code, two native
+contracts, CMake/`just` gates, and the canonical physics/capability documents.
+It does not change `crates/fullmag-runner/src/native_fem.rs`, GPU preview
+snapshot/materialization code, API freshness, Control Room code, or the matrix
+verifier. Therefore the 216-run cross-surface matrix was not repeated. The
+fresh focused DG0 run is the proportional runtime check for the changed CPU
+lane; the prior 216-run artifact remains the accepted preview/GPU evidence.
 
-### [P1] Native relaxation entry bypasses the planner's DG0 workflow restriction
+## Blocker P1 closure: native ABI rejects every DG0 relaxation route
 
-Files:
+### Source enforcement
 
-- `crates/fullmag-plan/src/fem.rs:79-93`
-- `crates/fullmag-plan/src/tests.rs:10697-10724`
-- `backends/fem/core/fem_material_fields.cpp:117-155`
-- `backends/fem/core/fem_material_fields.cpp:268-279`
-- `backends/fem/src/api.cpp:2705-2727`
+- `validate_elementwise_ms_relaxation_support` returns false with an explicit
+  `Ms_element_field`/ordinary-RK diagnostic whenever element-DG0 `M_s` reaches
+  a native relaxation boundary
+  (`backends/fem/core/fem_material_fields.cpp:298-305`).
+- Context construction rejects a no-precession plan with relaxation stop
+  criteria before MFEM runtime initialization
+  (`backends/fem/core/fem_context_builder.cpp:126-132`). This is the native
+  LLG-overdamped plan boundary.
+- `run_backend_step` repeats the same LLG-overdamped guard before the first RK
+  attempt (`backends/fem/cpu/mfem/runtime/backend_step.cpp:201-211`). The
+  duplicate boundary is intentional fail-closed protection for a reusable
+  context.
+- `run_backend_relaxation_step` rejects before algorithm dispatch
+  (`backend_step.cpp:284-294`), so PG-BB, nonlinear-CG, and tangent-plane cannot
+  enter their native implementation from a reusable ordinary-time handle.
+- Ordinary precessional explicit RK is not rejected by either guard.
 
-The planner correctly rejects `Ms_element_field` whenever
-`FemPlanIR.relaxation` is present (`fem.rs:91-93`). Its regression explicitly
-expects a reusable non-relaxation CPU handle to be accepted and an authored
-PG-BB relaxation plan to be rejected (`tests.rs:10697-10724`).
+This mirrors the existing planner restriction without moving workflow policy
+into Rust or weakening the allowed CPU exchange/consistent-mass lane.
 
-The native validator has no equivalent workflow predicate. It accepts every CPU
-handle with exchange enabled, consistent mass enabled, and no unsupported local
-owner (`fem_material_fields.cpp:117-155,268-279`). Once accepted,
-`fullmag_fem_backend_relax_step` calls `run_backend_relaxation_step` without
-checking `Ms_element_field` or any qualified workflow mode
-(`api.cpp:2705-2727`). A direct native/Rust backend caller can therefore execute
-the unqualified DG0 relaxation path that the planner deliberately rejects.
-There is no native regression proving rejection at this boundary.
+### Native ABI regression
 
-Required change: carry an explicit qualified workflow/operation mode into the
-native context, or guard every native relaxation entry point against
-element-DG0 `M_s`. Add managed native tests showing that ordinary CPU RK
-time evolution with consistent-mass exchange still executes, while PG-BB,
-nonlinear-CG, and the LLG-overdamped relaxation route fail closed unless and
-until separately qualified. Planner rejection alone is insufficient for a
-native contract.
+`backends/fem/tests/element_dg0_workflow_contract.cpp:84-140` uses the public C
+ABI and proves all required branches:
 
-### [P2] DG0 average magnetization allocates three full vectors on every CPU step
+1. a CPU/double DG0 plan with exchange and consistent mass creates a handle and
+   completes `fullmag_fem_backend_step` with `FULLMAG_FEM_OK`;
+2. the same reusable handle returns `FULLMAG_FEM_ERR_UNAVAILABLE` with a named
+   material/workflow error for PG-BB, nonlinear-CG, and tangent-plane;
+3. an LLG-overdamped plan (`precession_enabled=false` plus relaxation stop
+   criteria) fails at `fullmag_fem_backend_create`.
 
-Files:
+The target is linked to `fullmag_fem`, registered with CTest, and explicitly
+executed by `verify-fem-material-element-ms-contract`.
 
-- `backends/fem/cpu/mfem/runtime/step_metrics.cpp:20-45`
-- `backends/fem/cpu/mfem/runtime/step_metrics.cpp:105-136`
-- `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp:446`
+`P1 STATUS: CLOSED`
 
-For elementwise `M_s`, `average_magnetization_components` constructs and
-zero-initializes `unit_x`, `unit_y`, and `unit_z`, each with
-`ctx.state.m_xyz.size()` doubles, then fills them and performs four material
-mass-bilinear traversals. `fill_common_step_metrics` calls this helper for every
-accepted step, including the production DG0 RK path. Thus the new lane adds
-three heap allocations and `9*N` double initialization writes per step before
-the reductions themselves.
+## Blocker P2 closure: allocation-free one-pass DG0 average
 
-This violates the native FEM hot-path rule and scales memory traffic with mesh
-size. The small qualification mesh does not expose the production cost.
+### Numerical realization
 
-Required change: make the DG0 reduction allocation-free. For example, add a
-material-adapter reduction that integrates the three components and denominator
-directly in one element traversal, or precompute immutable basis/denominator
-workspace during context initialization and reuse it. Add a contract or
-allocation/performance regression proving no per-step heap allocation in the
-DG0 step-statistics path.
-
-## Closure of the three previous findings
-
-### 1. Canonical freshness and retained payload provenance: closed
-
-- `FieldMaterializationState` contains exactly `complete`, `stale_complete`,
-  `pending`, and `error` (`crates/fullmag-api/src/schemas/fields.rs:15-22`).
-- Internal `Superseded` maps to public `pending` only when there is no completed
-  payload (`fields.rs:762-786`). Pending or superseded work over a retained
-  payload changes only its public state to `stale_complete`; error keeps the
-  retained payload identity while exposing the failure (`fields.rs:789-805`).
-- Catalog mutation no longer overwrites retained source identity
-  (`fields.rs:939-978`), and meta construction applies the request state only
-  after payload provenance has been selected (`fields.rs:1166-1230`).
-- The API regression proves: retained step 4/revision 7 remains available and
-  `stale_complete` while step 9 is pending; no-payload pending reports step
-  9/revision 13 and `available=false`; internal supersession retains step 4;
-  error retains step/time/duration and readable statistics
-  (`crates/fullmag-api/src/router_v2/tests.rs:24246-24431`).
-- Generated TypeScript exposes the same four-state union. No public
-  `superseded` state remains.
-
-### 2. Planner/native CPU DG0 reachability and energy semantics: closed for ordinary time evolution
-
-- Planner legality requires CPU, exchange, `use_consistent_mass=true`, no
-  relaxation, and no anisotropy/DMI/thermal/STT/Oersted/magnetoelastic owner.
-  Poisson demag and Zeeman remain valid additional consumers
-  (`crates/fullmag-plan/src/fem.rs:79-149`).
-- Native handle validation mirrors the exchange/consistent-mass and unsupported
-  owner checks; GPU remains rejected
-  (`backends/fem/core/fem_material_fields.cpp:117-155,268-279`).
-- Both targeted planner regressions passed during this re-review:
-  `fem_cpu_exchange_and_zeeman_plan_preserves_conformal_dg0_ms` and
-  `fem_planner_elementwise_material_legality_distinguishes_a_from_ms`.
-- The managed DG0 artifact is genuine native CPU execution: metadata records
-  `execution_engine=fem_cpu_native`, `mfem_device=cpu`,
-  `use_consistent_mass=true`, no nodal `ms_field`, element-DG0 values spanning
-  `400000..800000 A/m`, Poisson-Robin demag, and ordinary `study.run`.
-
-The remaining native relaxation bypass is the separate P1 finding above; it
-does not invalidate the exercised ordinary-time DG0 artifact.
-
-### 3. Conservative weak-form energy projection and independent scalar oracles: closed
-
-- The implementation uses the exact P1 tetrahedron identity
-  `V/20 * (sum_i u_i.v_i + (sum_i u_i).(sum_i v_i))`, distributes each
-  element integral conservatively to the four nodes, and labels the result
-  `fem_nodal_conservative_tetra_projection`
-  (`crates/fullmag-runner/src/native_fem.rs:3521-3637`).
-- The same conservative path is used for exchange, demag, external, and total
-  field-dot densities in asynchronous snapshot materialization
-  (`native_fem.rs:3737-3785`).
-- The focused test constructs a case where the old projected-`M_s` formula is
-  wrong by a factor of three and proves conservative integrals independently
-  for exchange, demag, external, and total terms
-  (`native_fem.rs:3876-3975`).
-- Five separate managed artifacts compare API-integrated projected density at
-  source step 52 against native scalar rows:
-
-  | Variant | Independent terms | Maximum relative error |
-  |---|---|---:|
-  | CPU element-DG0 `M_s` | `eden_ex`, `eden_demag`, `eden_ext`, `eden_total` | `1.9450934198233654e-9` |
-  | GPU uniaxial | `eden_ani`, `eden_total` | `3.2853607098039007e-11` |
-  | GPU cubic | `eden_ani`, `eden_total` | `3.8805584161779044e-11` |
-  | GPU interfacial DMI | `eden_dmi`, `eden_total` | `2.7557566216410217e-11` |
-  | GPU bulk DMI | `eden_dmi`, `eden_total` | `4.16346561728891e-11` |
-
-  Evidence is under
-  `.fullmag/reports/fem-preview-energy-qualification/*/{raw_rows.json,outputs}`.
-  The DMI/anisotropy terms are nonzero and the terminal cache contains the
-  correct distinct native field owner for each fixture.
-
-## Additional remediation audit
-
-### Stale callback test inclusion: closed
-
-`fem_preview_materialization_stays_outside_callback_deadline` now asserts the
-single bounded handoff/retention owner and no longer requires the removed
-duplicate `last_good` clone. `justfile:2051-2055` defines an exact managed gate
-for this test and also invokes it explicitly before the `task5_` filter in the
-review-unit recipe. The old hidden-red-test defect is removed.
-
-### Matrix serializer schema: closed
-
-`matrix_csv_columns` builds the ordered union of public keys and
-`matrix_csv_record` fills absent heterogeneous cells with `None`
-(`scripts/verify_fem_preview_surface_matrix.py:95-115`). The writer uses that
-explicit schema (`:2005-2013`). During re-review:
-
-- `python3 -m unittest scripts.test_verify_fem_preview_surface_matrix`: 13/13
-  passed.
-- The final `matrix.csv` parsed as 180 data rows, 59 columns, every row
-  rectangular, with the header exactly equal to the ordered union of public
-  `raw_rows.json` keys.
-
-### Removed documentation-presence assertion: accepted
-
-The deleted function in `backends/fem/tests/exchange_contract.cpp` only searched
-an old prose progress report for fixed phrases. It did not execute exchange
-physics or validate an operator result. `fem_exchange_contract` and its native
-directional-derivative/runtime coverage remain in the managed material gate.
-Removing this stale presence assertion does not reduce executable coverage.
-
-## Final matrix assessment
-
-Authoritative artifact:
-`.fullmag/reports/fem-preview-surface-matrix/20260723-090252/summary.json`
-
-- Shape: four modes x three cadences x three surfaces x one warm-up plus five
-  measured executions = 36 warm-ups + 180 measured executions.
-- Surfaces: `headless`, `interactive_no_browser`, `control_room`; modes:
-  `disabled`, `m`, `H_demag`, `full_cache`; cadences: 10, 25, 50.
-- Callback deadline: 2,000,000 ns. Observed production callback maximum:
-  1,105,207 ns; callback-thread CPU maximum: 1,077,007 ns;
-  callback-plus-fence maximum: 1,414,746 ns; wall outliers: zero.
-- 60 rows prove live asynchronous publication; 30 rows contain managed energy
-  comparisons; terminal payload/mask hashes are stable across surfaces.
-- Browser retention proof reports `stale_complete`, with a retained canvas hash
-  and callback maximum 193,395 ns.
-- The artifact is internally consistent with `raw_rows.json`, `matrix.csv`,
-  `retention_proof.json`, `api.log`, and per-run outputs. It is accepted as
-  production-executable evidence for the bounded fixtures, not as evidence that
-  the native ABI fail-closed gap or large-mesh allocation issue is absent.
-
-## Verification performed during this re-review
-
-- `git diff --check 7599f78968ca21014685d1617eb14f3dc8a69bca..156322e8f1c5cfaeb88386734a90ff326c457538`: passed.
-- `python3 -m unittest scripts.test_verify_fem_preview_surface_matrix`: 13/13
-  passed.
-- Targeted `fullmag-plan` tests listed above: 2/2 passed.
-- Mechanical JSON/CSV inspection of the final 09:02:52 matrix and all five
-  energy-qualification artifact sets: passed.
-- Exact managed callback gate attempted with
-  `just verify-fem-preview-callback-source-contract`: did not reach test
-  execution because Docker failed to create the Compose network with
-  `all predefined address pools have been fully subnetted`.
-- Host diagnostic of the same Rust test also did not reach test execution:
-  `fullmag-fem-sys` stopped because host `cmake` is absent. This host path is
-  diagnostic only and is not counted as native proof.
-
-The Docker failure is an environment limitation, not a product-test failure.
-Official Docker guidance lists removing confirmed-unused networks, tearing down
-stale Compose projects, reusing an external network, or configuring address
-pools as remedies. No shared Docker network was pruned or reconfigured during
-this review because that would mutate unrelated agent state.
-
-The pre-existing modification to `.superpowers/sdd/progress.md` was preserved.
-No production code was modified and no commit was created by this review.
-
-## Implementer response to required findings (2026-07-23)
-
-Submission status: `READY_FOR_REREVIEW`
-
-This section records the implementation response and fresh evidence. It does not
-alter the independent `SPEC_VERDICT: CHANGES_REQUIRED` or
-`QUALITY_VERDICT: CHANGES_REQUIRED` above; only a new independent review may do
-that.
-
-### P1 response: native relaxation now fails closed
-
-- A single material-owned guard rejects element-DG0 `M_s` at the native
-  relaxation boundary without adding workflow state to `Context`.
-- LLG-overdamped plans reject during Context construction and are guarded again
-  at the pure-damping RK entry. The common direct-relaxation dispatcher rejects
-  before PG-BB, nonlinear-CG, or tangent-plane implicit execution.
-- The new public-ABI fixture first proves that ordinary CPU RK with exchange and
-  consistent mass executes, then exercises all three direct algorithms on the
-  same reusable handle and exercises LLG-overdamped backend creation.
-
-RED command and result:
+`P1TetrahedralMaterialRealization::ms_weighted_aos3_average_reduction`
+(`backends/fem/core/fem_element_quadrature_material.cpp:349-386`) performs one
+traversal over the precomputed active element ordinals. For each active P1
+tetrahedron it accumulates
 
 ```text
-env COMPOSE_PROJECT_NAME=fullmag just verify-fem-material-element-ms-contract
-FAIL: DG0 direct relaxation must fail unavailable
-exit 1
+numerator += M_s,T * V_T * (sum_i m_i) / 4
+denominator += M_s,T * V_T
 ```
 
-GREEN command and result: the same command returned exit 0 after all existing
-material/context/interaction contracts and the new ABI fixture ran.
+for all three components. The return type contains only three doubles and one
+denominator. There are no nodal unit fields, DG0-to-node projection, scratch
+vectors, `new`, or `malloc` on the valid path. Size/location/nonfinite checks
+fail explicitly.
 
-### P2 response: DG0 step-statistics reduction is allocation-free
+`average_magnetization_components` calls this adapter once and divides the
+three accumulated components by the common denominator
+(`backends/fem/cpu/mfem/runtime/step_metrics.cpp:20-38`). The former three
+mesh-sized vectors and four mass-bilinear traversals are gone.
 
-- `average_magnetization_components` no longer creates three `3*N` unit vectors
-  or invokes four mass-bilinear traversals.
-- The material realization and adapter expose one direct active-element reduction
-  returning three weighted component integrals plus the denominator.
-- The allocation regression constructs Context/material state before enabling its
-  counter, then measures only the actual average helper call and asserts zero heap
-  allocations plus the expected `(0.25, 0.75, 0.0)` value.
+### Allocation-counter validity
 
-RED command and result:
+`backends/fem/tests/step_metrics_contract.cpp:19-52,253-292`:
 
-```text
-env COMPOSE_PROJECT_NAME=fullmag just verify-fem-dg0-step-metrics-contract
-FAIL: DG0 average magnetization must not heap-allocate
-exit 1
-```
+- overrides global throwing `operator new` and `operator new[]` in the test
+  executable;
+- constructs all context/material state before enabling the probe;
+- enables the counter only around the actual production
+  `average_magnetization_components` call;
+- asserts zero allocations and independently checks the expected weighted
+  average `(0.25, 0.75, 0.0)`.
 
-GREEN result: the same command returned exit 0.
+The counter observes allocations made inside the linked production shared
+library, not a copied test helper. `readelf -Ws` confirms that
+`fem_step_metrics_contract` defines global `_Znwm`/`_Znam`, while
+`libfullmag_fem.so` imports those symbols and contains the production
+`ms_weighted_aos3_average_reduction` implementation. It would therefore count
+the `std::vector` allocations used by the previous implementation. The helper's
+current valid path performs none.
 
-### Fresh integration evidence
+The focused target is also included in the broader material gate and has its
+own `verify-fem-dg0-step-metrics-contract` recipe.
 
-- Managed runtime rebuild/export: exit 0 and final `bundle: valid`.
-- Managed review-unit recipe: exit 0; callback 1/1, Task 5 runner 16/16,
-  backend source-layout 2/2, and all focused API/CLI/planner tests passed.
-- Focused real CPU ordinary-time DG0 energy artifact:
-  `.fullmag/reports/fem-preview-energy-qualification/dg0-ms-native-relax-remediation`.
-  It reached source step 52 with element-DG0 `M_s=400000..800000 A/m`; exchange,
-  demag, external, and total projected integrals matched native scalars with a
-  maximum relative error of `1.9450934198233654e-9`.
-- Capability JSON parsed successfully and its Markdown/JSON DG0 notes both state
-  native ABI enforcement plus allocation-free material-weighted statistics.
+`P2 STATUS: CLOSED`
 
-The canonical 216-row preview matrix was not rerun because this response does not
-modify `native_fem.rs`, preview scheduling/materialization, API, frontend, or GPU
-preview operators. The bounded native ABI test, allocation counter, rebuilt
-managed bundle, review-unit recipe, and focused real CPU DG0 energy fixture are
-the relevant new evidence.
+## Fresh managed DG0 runtime artifact
+
+Artifact:
+`.fullmag/reports/fem-preview-energy-qualification/dg0-ms-native-relax-remediation`
+
+Independent inspection of `summary.json`, `raw_rows.json`, and measured-run
+metadata confirms:
+
+- one warm-up plus one measured `interactive_no_browser/full_cache` run;
+- `execution_engine=fem_cpu_native`, `mfem_device=cpu`, double precision;
+- ordinary precessional RK45, `relaxation=null`;
+- exchange enabled with `use_consistent_mass=true`;
+- Poisson-Robin demag and Zeeman enabled;
+- no nodal `ms_field`; 420 element-DG0 values spanning
+  `400000..800000 A/m`;
+- source step 52 and complete terminal fields;
+- conservative location `fem_nodal_conservative_tetra_projection`;
+- native-scalar comparison errors:
+  - `eden_ex`: `3.1071020392641258e-12` relative;
+  - `eden_demag`: `1.9450934198233654e-9` relative;
+  - `eden_ext`: `5.127337643115762e-15` relative;
+  - `eden_total`: `9.898426546466125e-11` relative;
+- production callback maximum 244,802 ns and callback-plus-fence maximum
+  315,875 ns against the 2,000,000 ns deadline, with zero wall outliers.
+
+This artifact proves that the new relaxation guards do not reject or perturb
+the qualified ordinary CPU RK path. It is not used as proof of the fail-closed
+branches or allocation count; those are covered by the managed native gates.
+
+## Verification performed during final re-review
+
+- `git diff --check 156322e8f1c5cfaeb88386734a90ff326c457538..c2c65ad6d91cbdfbed2caa0a10c10ebbca911c24`:
+  passed.
+- `verify-fem-dg0-step-metrics-contract`: passed in the managed
+  `fullmag/fem-gpu:local` container; `fullmag_fem` and
+  `fem_step_metrics_contract` built and the allocation-counter executable
+  exited 0.
+- `verify-fem-material-element-ms-contract`: passed in the same managed
+  container. All 15 requested native targets built; the recipe executed the new
+  ABI workflow contract, step-metrics contract, and the existing material,
+  exchange, Zeeman, anisotropy, and Poisson-demag contracts; exit 0.
+- Fresh DG0 runtime artifact: mechanically verified as listed above.
+- Symbol-level allocation-probe inspection with `readelf`: passed.
+
+The repository's normal Compose invocation still cannot allocate a new project
+network because the Docker daemon reports `all predefined address pools have
+been fully subnetted`. No network was pruned. For independent execution, both
+unchanged `just` recipe bodies were run with a temporary Compose override that
+attached only the test container to the already-existing user-defined
+`fullmag_default` network. This changed networking plumbing only; image, source
+mount, CMake flags, targets, linked libraries, and executable commands remained
+the authoritative managed recipe. The override file and the three temporary
+unused cache volumes created during the workaround were removed afterward.
+
+The pre-existing unrelated modification to `.superpowers/sdd/progress.md` was
+preserved. This review changed only this reviewer-owned report, modified no
+production code, and created no commit.
