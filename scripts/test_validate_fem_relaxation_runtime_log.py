@@ -459,11 +459,12 @@ def test_fem_gpu_performance_regression_recipe_is_fail_closed() -> None:
     recipe = just_recipe_source(justfile, "verify-fem-gpu-performance-regression")
 
     for required in [
-        "--fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json",
-        "--require-fixture-identity",
-        "--gpu-warmup",
-        "--repeat 5",
-        "--require-stable-solver-mesh",
+            "--fixture-manifest examples/assets/fem_performance/box500_airbox_exchange_demag_v1.fixture.json",
+            "--require-fixture-identity",
+            "--gpu-warmup",
+            'FULLMAG_BENCH_REPEAT="${FULLMAG_BENCH_REPEAT:-5}"',
+            '--repeat "$FULLMAG_BENCH_REPEAT"',
+            "--require-stable-solver-mesh",
         "--accepted-baseline benchmarks/fem-gpu/accepted/rtx4080-sm89/benchmark.csv",
         "--require-accepted-baseline",
         "--max-performance-regression-percent 5",
@@ -2791,10 +2792,10 @@ def test_gpu_ncg_control_readback_budget_matches_cumulative_armijo_sync_structur
         "status": "ok",
         "scenario": "box500_airbox_exchange_demag_anis_uniaxial",
         "relaxation_algorithm": "nonlinear_cg",
-        "executed_steps": 32,
-        "total_rhs_evals": 64,
+        "executed_steps": 64,
+        "total_rhs_evals": 128,
         "rejected_attempts": 0,
-        "hot_loop_control_scalar_host_sync_count": 99,
+        "hot_loop_control_scalar_host_sync_count": 195,
     }
     common = {
         "base": 3,
@@ -2809,20 +2810,39 @@ def test_gpu_ncg_control_readback_budget_matches_cumulative_armijo_sync_structur
         [row], ncg_per_step=3, **common
     ) == []
     assert benchmark.gpu_control_readback_budget_failures(
-        [{**row, "hot_loop_control_scalar_host_sync_count": 100}],
+        [{**row, "hot_loop_control_scalar_host_sync_count": 196}],
         ncg_per_step=3,
         **common,
     )
     extra_trial_row = {
         **row,
-        "total_rhs_evals": 66,
-        "hot_loop_control_scalar_host_sync_count": 101,
+        "total_rhs_evals": 129,
+        "rejected_attempts": 1,
+        "hot_loop_control_scalar_host_sync_count": 196,
     }
     assert benchmark.gpu_control_readback_budget_failures(
         [extra_trial_row], ncg_per_step=3, **common
     ) == []
     assert benchmark.gpu_control_readback_budget_failures(
-        [{**extra_trial_row, "hot_loop_control_scalar_host_sync_count": 102}],
+        [{**extra_trial_row, "hot_loop_control_scalar_host_sync_count": 197}],
+        ncg_per_step=3,
+        **common,
+    )
+
+    # One step exhausts 31 normal trials at the 30-backtrack boundary, then
+    # accepts its first forced-restart recovery trial. That recovery trial is
+    # an additional logical RHS record even though it is not another backtrack.
+    forced_recovery_row = {
+        **row,
+        "total_rhs_evals": 159,
+        "rejected_attempts": 30,
+        "hot_loop_control_scalar_host_sync_count": 226,
+    }
+    assert benchmark.gpu_control_readback_budget_failures(
+        [forced_recovery_row], ncg_per_step=3, **common
+    ) == []
+    assert benchmark.gpu_control_readback_budget_failures(
+        [{**forced_recovery_row, "hot_loop_control_scalar_host_sync_count": 227}],
         ncg_per_step=3,
         **common,
     )
@@ -2953,7 +2973,7 @@ def main() -> int:
         test_fem_gpu_performance_regression_recipe_enforces_ncg_control_budget,
         test_gpu_pgbb_control_readback_budget_matches_direct_difference_sync_structure,
         test_direct_minimizer_benchmark_uses_qualified_demag_tolerance,
-        test_fem_pgbb_demag_is_excluded_from_production_manifest,
+        test_fem_pgbb_demag_is_included_in_current_production_manifest,
         test_cpu_gpu_consistency_preflight_reports_unavailable_native_fem_gpu,
         test_runtime_gate_can_preserve_logs_for_audit,
     ]:

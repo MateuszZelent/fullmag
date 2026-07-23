@@ -294,9 +294,14 @@ The three nonlinear-CG phases are the batched current energy/gradient/direction
 metrics, the first Armijo trial energy, and the accepted final-stats/PR+ batch.
 Every further Armijo trial adds exactly one energy-scalar synchronization. The
 benchmark therefore publishes `total_rhs_evals`, the sum over all returned step
-records, without changing the existing last-step `rhs_evals`. Native direct
-minimizers define each step's `rhs_evals` as `2 + backtracks`, so their exact
-gate is
+records, without changing the existing last-step `rhs_evals` field name. For
+direct minimizers these are logical evaluation records rather than a claim that
+cached endpoint fields were physically recomputed: every executed step records
+one current state and its first trial, then one record for every additional
+normal or forced-recovery Armijo trial and every refinement RHS evaluation. An
+ordinary step without forced recovery therefore reports `2 + backtracks`; a
+forced-recovery trial is counted even when it does not increment the rejected
+backtrack counter. Their exact gate is
 
 `base + per_step * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`.
 
@@ -317,7 +322,10 @@ computation remains device-side; nonlinear-CG takes the trial total energy from
 `GpuDirectArmijoResult::trial_snapshot` instead of performing a separate total
 energy readback before the Armijo batch. Each Armijo trial after the first adds
 exactly one synchronization, including forced-restart recovery trials. The
-exact cumulative limit is therefore
+matching `rhs_evals` telemetry publishes two nominal logical records per
+executed step even when the accepted current endpoint is reused, plus exactly
+one record for every additional normal or recovery trial. The exact cumulative
+limit is therefore
 
 `initial_syncs + 3 * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`.
 

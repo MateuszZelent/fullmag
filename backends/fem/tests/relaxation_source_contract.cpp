@@ -1042,12 +1042,28 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             relaxation_state.find("direct_energy_refinements_current_step") !=
                 std::string::npos &&
             nonlinear_cg_source.find(
-                "backtracks + 1u + current_evaluation_count") !=
+                "uint32_t logical_rhs_evaluations = 1u;") !=
+                std::string::npos &&
+            nonlinear_cg_source.find(
+                "uint32_t &logical_rhs_evaluations") !=
+                std::string::npos &&
+            nonlinear_cg_source.find(
+                "logical_rhs_evaluations += 1u;") !=
+                std::string::npos &&
+            nonlinear_cg_source.find(
+                "logical_rhs_evaluations += 1u;",
+                nonlinear_cg_source.find(
+                    "logical_rhs_evaluations += 1u;") + 1u) !=
+                std::string::npos &&
+            nonlinear_cg_source.find(
+                "logical_rhs_evaluations + refinement_rhs_evaluations") !=
+                std::string::npos &&
+            nonlinear_cg_source.find("current_evaluation_count") ==
                 std::string::npos &&
             nonlinear_cg_source.find(
                 "gpu_relax_accept_monotone_recovery_step") ==
                 std::string::npos,
-        "native FEM GPU nonlinear-CG must consume accepted endpoint evaluations once and account only executed RHS evaluations");
+        "native FEM GPU nonlinear-CG must consume accepted endpoint evaluations once while publishing one logical current-state record, every normal/recovery Armijo trial exactly once, and refinement evaluations");
     check(
         nonlinear_cg_source.find("gpu_rk_capture_step_transaction_device(ctx, reason)") !=
                 std::string::npos &&
@@ -1584,7 +1600,16 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos,
         "native FEM GPU nonlinear-CG must own a device-resident Armijo/PR+ accepted-step loop with static periodic trial projection");
     check(
-        ncg_source.find(
+        direct_energy_source.find(
+            "auto &trial = result.trial_snapshot;") !=
+                std::string::npos &&
+            direct_energy_source.find(
+                "std::copy_n(scalars.begin(), kGpuFinalScalarSlots, trial.terms_j.begin());") !=
+                std::string::npos &&
+            direct_energy_source.find(
+                "trial.total_energy_j += trial.terms_j[") !=
+                std::string::npos &&
+            ncg_source.find(
             "last_trial_energy_j =\n                armijo_result.trial_snapshot.total_energy_j;") !=
                 std::string::npos &&
             ncg_source.find(
@@ -1592,7 +1617,7 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos &&
             ncg_source.find(
                 "gpu_copy_scalar_to_host") == std::string::npos,
-        "native FEM GPU nonlinear-CG normal and recovery Armijo trials must reuse the batched trial snapshot total for diagnostics without a separate scalar readback");
+        "native FEM GPU direct Armijo evaluation must populate the trial snapshot total and both normal and recovery nonlinear-CG consumers must use it without a separate scalar readback");
     check(
         scalar_readback_header.find("gpu_rk_read_control_scalar_result(") !=
                 std::string::npos &&

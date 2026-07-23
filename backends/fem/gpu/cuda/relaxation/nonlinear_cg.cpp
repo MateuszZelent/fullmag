@@ -862,6 +862,7 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
     uint32_t &backtracks,
     GpuDirectEnergySnapshot &accepted_snapshot,
     bool &accepted_refined,
+    uint32_t &logical_rhs_evaluations,
     uint32_t &refinement_rhs_evaluations,
     std::string &reason)
 {
@@ -929,6 +930,7 @@ bool gpu_relax_retry_ncg_line_search_with_restart(
                     reason)) {
                 return false;
             }
+            logical_rhs_evaluations += 1u;
 
             const double armijo_rhs =
                 kArmijoCoefficient * trial_step * p_dot_g;
@@ -1106,7 +1108,10 @@ int gpu_relax_nonlinear_cg_step(
     GpuDirectEnergySnapshot current_snapshot{};
     const bool reused_current =
         consume_ncg_accepted_evaluation(ctx, current_snapshot);
-    const uint32_t current_evaluation_count = reused_current ? 0u : 1u;
+    // rhs_evaluations is a logical line-search record count. Reusing the
+    // accepted endpoint avoids physical work but still supplies this step's
+    // nominal current-state record.
+    uint32_t logical_rhs_evaluations = 1u;
     double gradient_norm_sq = 0.0;
     double gradient_energy_norm_sq = 0.0;
     double p_dot_g = 0.0;
@@ -1261,6 +1266,7 @@ int gpu_relax_nonlinear_cg_step(
                 reason,
                 error);
         }
+        logical_rhs_evaluations += 1u;
 
         const double armijo_rhs =
             kArmijoCoefficient * trial_step * p_dot_g;
@@ -1354,6 +1360,7 @@ int gpu_relax_nonlinear_cg_step(
                 backtracks,
                 accepted_snapshot,
                 accepted_refined,
+                logical_rhs_evaluations,
                 refinement_rhs_evaluations,
                 reason)) {
             line_search_accepted = true;
@@ -1439,7 +1446,7 @@ int gpu_relax_nonlinear_cg_step(
     out_stats.dt_seconds = 0.0;
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations =
-        backtracks + 1u + current_evaluation_count + refinement_rhs_evaluations;
+        logical_rhs_evaluations + refinement_rhs_evaluations;
     double ncg_tail_scalars[kNcgScalarTailCount] = {0.0, 0.0, 0.0};
     if (!gpu_rk_finalize_step_stats_control_readback_with_scalar_tail(
             ctx,
@@ -1498,7 +1505,7 @@ int gpu_relax_nonlinear_cg_step(
     out_stats.max_rhs_amplitude = 0.0;
     out_stats.rejected_attempts = backtracks;
     out_stats.rhs_evaluations =
-        backtracks + 1u + current_evaluation_count + refinement_rhs_evaluations;
+        logical_rhs_evaluations + refinement_rhs_evaluations;
     publish_ncg_accepted_evaluation(
         ctx, accepted_step, accepted_snapshot, accepted_refined);
     update_stage_completion_from_stats(ctx, out_stats);

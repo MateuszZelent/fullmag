@@ -1,58 +1,166 @@
-# Task 7 report — canonical FEM GPU NCG three-sync accounting
+# Task 7 report — exact FEM GPU NCG sync-budget accounting
 
 Date: 2026-07-23
 
-Status: implementation complete. The canonical NCG sync budget, energy/trajectory consistency, managed source contract, and managed runtime contract pass. The exact performance recipe remains red only because its pre-existing accepted fixture/baseline mesh signature does not match the currently realized solver mesh; the NCG sync gate itself passes all five GPU rows.
+Status: **DONE_WITH_CONCERNS**. The review findings are fixed and the focused,
+managed source, managed runtime, and one-repeat production-like 64-step NCG
+proofs pass their Task 7 contracts. The performance recipe still exits 18 only
+because the pre-existing accepted fixture/baseline mesh signature differs from
+the currently realized solver mesh. The full five-repeat performance suite was
+not rerun because the review requested the smallest sufficient managed proof.
 
-## Delivered contract
+## Root cause
 
-- GPU NCG trial preparation now computes fresh-demag effective field and final energy-term slots entirely on device through `gpu_relax_compute_effective_field_and_energy_terms`.
-- Normal and forced-restart recovery trials reuse `GpuDirectArmijoResult::trial_snapshot.total_energy_j`; the redundant standalone total-energy reduction/readback is gone.
-- Non-finite trial-energy diagnostics, rollback, direct-energy refinement, fresh-zero demag, PR+ direction update, profiler behavior, and public FEM ABI remain unchanged.
-- The benchmark applies the exact cumulative NCG limit:
+GPU NCG derived `rhs_evaluations` from physical work:
 
-  `initial_syncs + 3 * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`.
+- accepted-endpoint reuse set `current_evaluation_count=0`, so a normal
+  64-step run published 65 records instead of the canonical 128 logical
+  current-state/trial records;
+- `backtracks + 1` represented normal trials but omitted the first forced
+  recovery Armijo trial, because that trial is not another rejected backtrack;
+- refinement evaluations were already explicit and remain included.
 
-- `run-json` now publishes the same last-step and cumulative RHS telemetry already present in script-mode summaries, and the benchmark recognizes the `output_dir`-identified `run-json` payload.
-- The managed performance recipe honors `FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP` and `FULLMAG_BENCH_REPEAT`, and enables the control-readback budget gate.
+The budget consumer and `run_json_summary` cumulative sum were correct. The
+producer telemetry was not. Two independent review findings were also valid:
+the standalone Python runner referenced a nonexistent test name, and the
+energy-derivative test only assigned a struct member and read it back.
 
-## TDD chronology
+## Fix
 
-1. Managed source-contract RED failed with:
-   `native FEM GPU direct minimizers must expose a fresh-demag effective-field/energy-term compute helper without a host scalar readback`.
-2. Focused Python RED rejected the old NCG default/budget structure; 32 accepted steps with 64 RHS evaluations now allow 99 synchronizations and reject 100, while 66 RHS evaluations allow 101 and reject 102.
-3. Recipe-source RED showed that the performance recipe ignored both requested environment overrides and did not enable the sync gate.
-4. The first measured rerun failed closed on missing `total_rhs_evals`. Investigation showed that direct minimizers have no timestep policy and therefore intentionally do not write `solver_steps.csv`; the canonical `run-json` summary also omitted RHS counters.
-5. A source RED required `run_json_summary` to publish last-step and cumulative RHS telemetry. The Rust summary and its unit assertion now publish `rhs_evals` and the exact sum of all `StepStats::rhs_evals`.
-6. The next measured rerun still failed closed because the parser rejected JSON summaries identified by `output_dir`. A focused RED reproduced `payload is None`; recognizing the existing `run-json` discriminator made the focused parser test green.
+- `backends/fem/gpu/cuda/relaxation/nonlinear_cg.cpp`
+  now owns an explicit logical RHS-record counter. Every executed step starts
+  with one current-state record, every normal or recovery Armijo trial adds one
+  record, and refinement RHS evaluations remain additive. Accepted endpoint
+  reuse still avoids recomputation; only telemetry changed.
+- `backends/fem/tests/relaxation_source_contract.cpp` now requires separate
+  normal/recovery trial increments and proves that direct Armijo populates
+  `trial_snapshot.total_energy_j` while both NCG consumers use that value.
+- `backends/fem/tests/relaxation_energy_derivative_contract.cpp` no longer
+  contains the tautological struct assignment/readback test.
+- `scripts/test_validate_fem_relaxation_runtime_log.py` now covers the actual
+  64-step nominal budget, one extra trial, and the 30-backtrack forced-recovery
+  boundary, and its no-argument runner calls the defined production-manifest
+  test. Its older fail-closed recipe assertion now checks the configurable
+  repeat argument and its default of five instead of requiring the obsolete
+  literal `--repeat 5` spelling.
+- `docs/physics/0532-fem-demag-solver-policy-and-runtime-threading.md` now
+  states that direct-minimizer `rhs_evals` are logical records, not claims of
+  physical recomputation.
 
-## Fresh verification
+Armijo decisions, fresh-zero demag, rollback, refinement, PR+, accepted
+trajectory, parity tolerances, ABI, and profiler ownership were not changed.
 
-- `COMPOSE_FILE=compose.yaml:.fullmag/task6-compose-external-network.yaml just verify-fem-relaxation-source-contract`: passed. The managed CUDA build completed the relaxation, stage-completion, and explicit-RK contracts; semantic mesh ownership reported 191 classified accesses and 64 producers.
-- `COMPOSE_FILE=compose.yaml:.fullmag/task6-compose-external-network.yaml just verify-fem-relaxation-runtime`: passed after a managed runtime rebuild. The bundle validated as `candidate-sm89` on the RTX 4080 SUPER with 1536 HYPRE bindings, and all GPU/CPU relaxation lanes completed, including GPU NCG.
-- Focused Task 7 Python contracts for run-json telemetry publication/parsing, exact NCG budget, and recipe wiring: passed.
-- Exact requested command:
+## RED evidence
 
-  `COMPOSE_FILE=compose.yaml:.fullmag/task6-compose-external-network.yaml FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP=3 FULLMAG_BENCH_RELAX_ALGORITHMS=nonlinear_cg FULLMAG_BENCH_REPEAT=5 just verify-fem-gpu-performance-regression`
+Command:
 
-  executed five CPU and five GPU rows. All 10 rows were `ok`; CPU/GPU energy and trajectory consistency passed with no failures; strict GPU residency passed. Every GPU row reported:
+```bash
+COMPOSE_FILE=compose.yaml:.fullmag/task6-compose-external-network.yaml \
+  just verify-fem-relaxation-source-contract
+```
 
-  - `executed_steps = 64`
-  - `total_rhs_evals = 65`
-  - `hot_loop_control_scalar_host_sync_count = 193`
+After adding the accounting contract and before changing NCG, the managed gate
+exited 1 with:
 
-  The canonical maximum is `3 + 3 * 64 + max(0, 65 - 128) = 195`, so all five measured rows pass the exact Task 7 sync contract. GPU wall-time p50 was 5292.427 ms versus CPU 10572.091 ms, about 2.0x CPU/GPU speedup for this run.
+```text
+FAIL: native FEM GPU nonlinear-CG must consume accepted endpoint evaluations once while publishing one logical current-state record, every normal/recovery Armijo trial exactly once, and refinement evaluations
+```
 
-## Independent pre-existing performance-gate blocker
+The initial sandboxed invocation could not access `/var/run/docker.sock`; the
+same managed command was rerun with approved Docker access and produced the
+intended RED above.
 
-The exact performance command exits 18 only on fixture/baseline identity. The current solver produces signature `20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431` with 1200 nodes and 5138 elements, while both the named fixture and accepted baseline require `83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41` for the same counts. Consequently all 10 rows report `solver_mesh_signature differs from fixture`, and the accepted baseline has no comparable signature.
+## GREEN evidence
 
-No fixture or accepted baseline was rewritten in Task 7: doing so would convert a fail-closed scientific identity gate into an unreviewed acceptance update. The generated report remains at `.fullmag/reports/fem_gpu_performance_regression.csv`; it is runtime evidence and is not staged.
+Focused Task 7 Python contracts:
 
-The standalone no-argument `scripts/test_validate_fem_relaxation_runtime_log.py` test-list runner also has a pre-existing stale reference to `test_fem_pgbb_demag_is_excluded_from_production_manifest` while the defined function is named `test_fem_pgbb_demag_is_included_in_current_production_manifest`. Task 7 focused tests were invoked directly and pass; this unrelated stale runner entry was preserved.
+```bash
+python3 -m pytest -q scripts/test_validate_fem_relaxation_runtime_log.py \
+  -k 'gpu_ncg_control_readback_budget_matches_cumulative_armijo_sync_structure or run_json_summary_publishes_cumulative_rhs_telemetry or benchmark_parses_run_json_cumulative_rhs_telemetry or fem_gpu_performance_regression_recipe_enforces_ncg_control_budget'
+```
 
-## Scope and repository hygiene
+Result: `4 passed, 111 deselected in 0.05s`.
 
-- The additional `crates/fullmag-cli/src/main.rs` change is required runtime telemetry plumbing discovered by the fail-closed measured gate; without it, `run-json` cannot supply the cumulative RHS value mandated by the Task 7 formula.
-- `.superpowers/sdd/progress.md` was pre-existing and unrelated; it was neither edited nor staged by Task 7.
-- Generated runtime bundles and benchmark reports remain untracked/ignored operational artifacts and are not part of the commit.
+Full Python test file:
+
+```bash
+python3 -m pytest -q scripts/test_validate_fem_relaxation_runtime_log.py
+```
+
+Result: `115 passed in 2.02s`.
+
+Standalone no-argument runner:
+
+```bash
+python3 scripts/test_validate_fem_relaxation_runtime_log.py
+```
+
+Result: exit 0 with 41 `ok` lines, including
+`test_fem_pgbb_demag_is_included_in_current_production_manifest`.
+
+Managed native source gate:
+
+```bash
+COMPOSE_FILE=compose.yaml:.fullmag/task6-compose-external-network.yaml \
+  just verify-fem-relaxation-source-contract
+```
+
+Result: exit 0. The semantic mesh ownership contract classified 191 accesses
+and 64 producers; the managed CUDA build rebuilt `nonlinear_cg.cpp` and the
+relaxation source, stage-completion, and explicit-RK targets completed.
+
+Managed runtime gate:
+
+```bash
+COMPOSE_FILE=compose.yaml:.fullmag/task6-compose-external-network.yaml \
+  just verify-fem-relaxation-runtime
+```
+
+Result: exit 0. It rebuilt and validated the `candidate-sm89` managed bundle
+with 1536 HYPRE bindings, executed GPU LLG/PG-BB/NCG and CPU
+LLG/PG-BB/NCG/TPI, and ended with
+`FEM relaxation runtime smoke completed`.
+
+Production-like 64-step NCG proof, one repeat:
+
+```bash
+COMPOSE_FILE=compose.yaml:.fullmag/task6-compose-external-network.yaml \
+FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP=3 \
+FULLMAG_BENCH_RELAX_ALGORITHMS=nonlinear_cg \
+FULLMAG_BENCH_REPEAT=1 \
+  just verify-fem-gpu-performance-regression
+```
+
+The managed CPU and RTX 4080 SUPER GPU rows both completed with `status=ok`,
+and CPU/GPU consistency reported `status=pass`, `failed_count=0`. The GPU row
+reported:
+
+- `executed_steps=64`
+- last-step `rhs_evals=2`
+- `total_rhs_evals=128`
+- `hot_loop_control_scalar_host_sync_count=193`
+
+The exact limit is `3 + 3*64 + max(0, 128 - 2*64) = 195`; the measured 193
+passes. The focused boundary contract additionally accepts 129 records/196
+syncs for one extra trial and 159 records/226 syncs when one step exhausts 31
+normal trials at 30 backtracks and then executes its first forced-recovery
+trial; the next sync fails in both cases.
+
+The command exits 18 only after these rows pass because current signature
+`20a1851a39da191c61cf50006e72c4b977fa31a5a4cdf2dee1e037e93640d431`
+does not match the accepted fixture/baseline signature
+`83dc036495e6f5c13d101dd94c010ee1af9b6ac560892d66411a4140172a2f41`.
+No fixture or accepted baseline was changed.
+
+## Repository hygiene and remaining concern
+
+`.superpowers/sdd/progress.md` was pre-existing, ignored, and dirty. It was not
+edited or staged. Generated runtime bundles and `.fullmag/reports` remain
+operational artifacts and are not staged.
+
+Remaining concern: the independent fixture/baseline identity mismatch still
+prevents the full performance recipe from returning zero. Updating accepted
+scientific identity is outside Task 7 and must be reviewed separately.
+
+Fix commit: created after this report is staged; the exact SHA is recorded in
+the Task 7 handoff.
