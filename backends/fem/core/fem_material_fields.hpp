@@ -54,9 +54,9 @@ void copy_plan_material_fields(Context &ctx, const fullmag_fem_plan_desc &plan);
 bool validate_material_fields(const Context &ctx, std::string &error);
 
 /*
- * Reject every elementwise Ms coefficient when the resolved native handle
- * cannot provide a common element/quadrature accessor to all later LLG,
- * relaxation, field, energy, and observable calls.
+ * Permit elementwise Ms on CPU only while every enabled owner consumes the
+ * common element/quadrature adapter (exchange, Poisson demag, and Zeeman).
+ * Other CPU owners and the GPU upload lane fail closed.
  * Elementwise A belongs only to the exchange weak form, so CPU permits it
  * with other interactions while exchange remains enabled; GPU rejects it
  * until it has an element-coefficient upload path.

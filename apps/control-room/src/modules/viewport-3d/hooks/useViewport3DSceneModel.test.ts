@@ -1977,7 +1977,7 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
-  it.each(["stale_complete", "pending", "superseded"] as const)(
+  it.each(["stale_complete", "pending"] as const)(
     "keeps topology-compatible %s field payloads in the render frame",
     (materializationState) => {
       expect(

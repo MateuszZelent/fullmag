@@ -126,7 +126,7 @@ export function observeFirstTerminalAt(
 export function isPreterminalPendingOrStaleField(meta, expectedSourceStep) {
   return Boolean(
     meta &&
-      ["pending", "stale_complete", "superseded"].includes(meta.state) &&
+      ["pending", "stale_complete"].includes(meta.state) &&
       Number.isInteger(meta.source_step) &&
       meta.source_step < expectedSourceStep,
   );

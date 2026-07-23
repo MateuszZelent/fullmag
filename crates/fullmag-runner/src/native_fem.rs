@@ -541,6 +541,7 @@ pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
     magnetic_node_mask: Arc<[bool]>,
     saturation_magnetisation_by_node: Arc<[f64]>,
+    dg0_energy_projection: Option<Arc<Dg0EnergyProjection>>,
     energy_density_terms: NativeFemEnergyDensityTerms,
     cubic_energy_density: Option<Arc<NativeFemCubicEnergyDensity>>,
     object_weights: Vec<(String, f64)>,
@@ -548,6 +549,15 @@ pub(crate) struct NativeFemBackend {
     demag_solver: Option<String>,
     demag_preconditioner: Option<String>,
     adaptive_max_error: Option<f64>,
+}
+
+#[cfg(feature = "fem-gpu")]
+#[derive(Debug)]
+struct Dg0EnergyProjection {
+    nodes: Arc<[[f64; 3]]>,
+    elements: Arc<[[u32; 4]]>,
+    magnetic_elements: Arc<[bool]>,
+    saturation_magnetisation_by_element: Arc<[f64]>,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1192,10 +1202,15 @@ fn build_native_fem_energy_density_preview_field(
     request: &LivePreviewRequest,
     values: &[f64],
     active_mask: Vec<bool>,
+    conservative_dg0_energy: bool,
 ) -> LivePreviewField {
     let mut field =
         build_mesh_scalar_preview_field_with_active_mask(request, values, Some(active_mask));
-    field.spatial_kind = "fem_nodal_visualization_projection".to_string();
+    field.spatial_kind = if conservative_dg0_energy {
+        "fem_nodal_conservative_tetra_projection".to_string()
+    } else {
+        "fem_nodal_visualization_projection".to_string()
+    };
     field
 }
 
@@ -1228,9 +1243,10 @@ unsafe impl Send for NativeFemFieldSnapshot {}
 pub(crate) struct NativeFemEnergyDensitySnapshot {
     request: LivePreviewRequest,
     magnetization: NativeFemFieldSnapshot,
-    terms: Vec<(f64, NativeFemFieldSnapshot)>,
+    terms: Vec<(bool, f64, NativeFemFieldSnapshot)>,
     cubic_energy_density: Option<Arc<NativeFemCubicEnergyDensity>>,
     saturation_magnetisation_by_node: Arc<[f64]>,
+    dg0_energy_projection: Option<Arc<Dg0EnergyProjection>>,
     active_mask: Arc<[bool]>,
     node_count: usize,
 }
@@ -1564,6 +1580,25 @@ impl NativeFemBackend {
             });
         }
         let saturation_magnetisation_by_node = resolved_saturation_magnetisation_by_node(plan)?;
+        let dg0_energy_projection =
+            if plan.enable_exchange && plan.use_consistent_mass == Some(true) {
+                plan.ms_element_field.as_ref().map(|values| {
+                    Arc::new(Dg0EnergyProjection {
+                        nodes: plan.mesh.nodes.clone().into(),
+                        elements: plan.mesh.elements.clone().into(),
+                        magnetic_elements: plan
+                            .mesh
+                            .element_markers
+                            .iter()
+                            .map(|marker| *marker != 0)
+                            .collect::<Vec<_>>()
+                            .into(),
+                        saturation_magnetisation_by_element: values.clone().into(),
+                    })
+                })
+            } else {
+                None
+            };
         let cubic_energy_density = resolved_cubic_energy_density(plan)?;
         let nodes_flat: Vec<f64> = plan
             .mesh
@@ -2178,6 +2213,7 @@ impl NativeFemBackend {
                 .unwrap_or_else(|| vec![true; plan.mesh.nodes.len()])
                 .into(),
             saturation_magnetisation_by_node: saturation_magnetisation_by_node.into(),
+            dg0_energy_projection,
             energy_density_terms: NativeFemEnergyDensityTerms::from_plan(plan),
             cubic_energy_density,
             object_weights: if plan.object_segments.is_empty() {
@@ -3182,6 +3218,7 @@ impl NativeFemBackend {
         let mut snapshots = Vec::with_capacity(terms.len());
         for (field, prefactor) in terms {
             snapshots.push((
+                self.dg0_energy_projection.is_some(),
                 prefactor,
                 self.begin_field_snapshot(field, step, time, solver_dt)?,
             ));
@@ -3196,6 +3233,7 @@ impl NativeFemBackend {
                 .then(|| self.cubic_energy_density.clone())
                 .flatten(),
             saturation_magnetisation_by_node: self.saturation_magnetisation_by_node.clone(),
+            dg0_energy_projection: self.dg0_energy_projection.clone(),
             active_mask: self.magnetic_node_mask.clone(),
             node_count,
         }))
@@ -3228,11 +3266,17 @@ impl NativeFemBackend {
         request: &LivePreviewRequest,
         node_count: usize,
     ) -> Result<LivePreviewField, RunError> {
+        let conservative_dg0_energy = self.dg0_energy_projection.is_some()
+            && matches!(
+                crate::quantities::normalized_quantity_name(&request.quantity)?,
+                "eden_ex" | "eden_demag" | "eden_ext" | "eden_total"
+            );
         if let Some(values) = self.copy_energy_density_values(&request.quantity, node_count)? {
             return Ok(build_native_fem_energy_density_preview_field(
                 request,
                 &values,
                 self.magnetic_node_mask.as_ref().to_vec(),
+                conservative_dg0_energy,
             ));
         }
         let values = self.copy_field(fem_preview_observable(&request.quantity)?, node_count)?;
@@ -3262,6 +3306,16 @@ impl NativeFemBackend {
         let mut values = vec![0.0; node_count];
         for (field_name, prefactor) in terms {
             let field = self.copy_field(fem_preview_observable(field_name)?, node_count)?;
+            if let Some(projection) = self.dg0_energy_projection.as_deref() {
+                accumulate_dg0_field_dot_energy_density(
+                    &mut values,
+                    &magnetization,
+                    &field,
+                    projection,
+                    prefactor,
+                )?;
+                continue;
+            }
             accumulate_energy_density_term(
                 &mut values,
                 &magnetization,
@@ -3438,6 +3492,206 @@ fn accumulate_energy_density_term(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn tetrahedron_volume(nodes: &[[f64; 3]], element: [u32; 4]) -> Result<f64, RunError> {
+    let [a, b, c, d] = element.map(|index| {
+        nodes.get(index as usize).copied().ok_or_else(|| RunError {
+            message: format!("DG0 energy projection tetrahedron references missing node {index}"),
+        })
+    });
+    let [a, b, c, d] = [a?, b?, c?, d?];
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let ad = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+    let cross = [
+        ac[1] * ad[2] - ac[2] * ad[1],
+        ac[2] * ad[0] - ac[0] * ad[2],
+        ac[0] * ad[1] - ac[1] * ad[0],
+    ];
+    let volume = dot(ab, cross).abs() / 6.0;
+    if !volume.is_finite() || volume <= 0.0 {
+        return Err(RunError {
+            message: "DG0 energy projection requires positive finite tetrahedron volumes"
+                .to_string(),
+        });
+    }
+    Ok(volume)
+}
+
+#[cfg(all(test, feature = "fem-gpu"))]
+fn tetra_dg0_p1_dot_integral(
+    nodes: &[[f64; 3]],
+    elements: &[[u32; 4]],
+    magnetic_elements: &[bool],
+    saturation_magnetisation_by_element: &[f64],
+    left: &[[f64; 3]],
+    right: &[[f64; 3]],
+) -> Result<f64, RunError> {
+    if elements.len() != magnetic_elements.len()
+        || elements.len() != saturation_magnetisation_by_element.len()
+        || left.len() != nodes.len()
+        || right.len() != nodes.len()
+    {
+        return Err(RunError {
+            message: "DG0 energy projection topology/material/field lengths differ".to_string(),
+        });
+    }
+    let mut integral = 0.0;
+    for (element_index, element) in elements.iter().copied().enumerate() {
+        if !magnetic_elements[element_index] {
+            continue;
+        }
+        let ms = saturation_magnetisation_by_element[element_index];
+        if !ms.is_finite() || ms <= 0.0 {
+            return Err(RunError {
+                message: format!(
+                    "DG0 energy projection requires positive finite Ms on magnetic element {element_index}"
+                ),
+            });
+        }
+        let volume = tetrahedron_volume(nodes, element)?;
+        let mut left_sum = [0.0; 3];
+        let mut right_sum = [0.0; 3];
+        let mut diagonal = 0.0;
+        for node in element {
+            let node = node as usize;
+            let left_value = left.get(node).ok_or_else(|| RunError {
+                message: format!("DG0 energy projection left field omits node {node}"),
+            })?;
+            let right_value = right.get(node).ok_or_else(|| RunError {
+                message: format!("DG0 energy projection right field omits node {node}"),
+            })?;
+            diagonal += dot(*left_value, *right_value);
+            for component in 0..3 {
+                left_sum[component] += left_value[component];
+                right_sum[component] += right_value[component];
+            }
+        }
+        // Exact P1 tetra identity: integral (u . v) dV =
+        // V/20 * (sum_i u_i . v_i + (sum_i u_i) . (sum_i v_i)).
+        integral += ms * volume / 20.0 * (diagonal + dot(left_sum, right_sum));
+    }
+    Ok(integral)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn conservative_dg0_p1_dot_projection(
+    nodes: &[[f64; 3]],
+    elements: &[[u32; 4]],
+    magnetic_elements: &[bool],
+    saturation_magnetisation_by_element: &[f64],
+    left: &[[f64; 3]],
+    right: &[[f64; 3]],
+) -> Result<Vec<f64>, RunError> {
+    if elements.len() != magnetic_elements.len()
+        || elements.len() != saturation_magnetisation_by_element.len()
+        || left.len() != nodes.len()
+        || right.len() != nodes.len()
+    {
+        return Err(RunError {
+            message: "DG0 energy projection topology/material/field lengths differ".to_string(),
+        });
+    }
+    let mut nodal_energy = vec![0.0; nodes.len()];
+    let mut nodal_lumped_volume = vec![0.0; nodes.len()];
+    for (element_index, element) in elements.iter().copied().enumerate() {
+        if !magnetic_elements[element_index] {
+            continue;
+        }
+        let ms = saturation_magnetisation_by_element[element_index];
+        if !ms.is_finite() || ms <= 0.0 {
+            return Err(RunError {
+                message: format!(
+                    "DG0 energy projection requires positive finite Ms on magnetic element {element_index}"
+                ),
+            });
+        }
+        let volume = tetrahedron_volume(nodes, element)?;
+        let mut left_sum = [0.0; 3];
+        let mut right_sum = [0.0; 3];
+        let mut diagonal = 0.0;
+        for node in element {
+            let node = node as usize;
+            let left_value = left.get(node).ok_or_else(|| RunError {
+                message: format!("DG0 energy projection left field omits node {node}"),
+            })?;
+            let right_value = right.get(node).ok_or_else(|| RunError {
+                message: format!("DG0 energy projection right field omits node {node}"),
+            })?;
+            diagonal += dot(*left_value, *right_value);
+            for component in 0..3 {
+                left_sum[component] += left_value[component];
+                right_sum[component] += right_value[component];
+            }
+        }
+        let element_integral = ms * volume / 20.0 * (diagonal + dot(left_sum, right_sum));
+        for node in element {
+            let node = node as usize;
+            nodal_energy[node] += element_integral / 4.0;
+            nodal_lumped_volume[node] += volume / 4.0;
+        }
+    }
+    Ok(nodal_energy
+        .into_iter()
+        .zip(nodal_lumped_volume)
+        .map(|(energy, volume)| if volume > 0.0 { energy / volume } else { 0.0 })
+        .collect())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn accumulate_dg0_field_dot_energy_density(
+    values: &mut [f64],
+    magnetization: &[[f64; 3]],
+    field: &[[f64; 3]],
+    projection: &Dg0EnergyProjection,
+    prefactor: f64,
+) -> Result<(), RunError> {
+    if values.len() != projection.nodes.len() {
+        return Err(RunError {
+            message: "DG0 energy projection output/node lengths differ".to_string(),
+        });
+    }
+    let projected = conservative_dg0_p1_dot_projection(
+        &projection.nodes,
+        &projection.elements,
+        &projection.magnetic_elements,
+        &projection.saturation_magnetisation_by_element,
+        magnetization,
+        field,
+    )?;
+    for (value, contribution) in values.iter_mut().zip(projected) {
+        *value += prefactor * MU0 * contribution;
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "fem-gpu"))]
+fn tetra_p1_scalar_integral(
+    nodes: &[[f64; 3]],
+    elements: &[[u32; 4]],
+    magnetic_elements: &[bool],
+    values: &[f64],
+) -> Result<f64, RunError> {
+    if elements.len() != magnetic_elements.len() || values.len() != nodes.len() {
+        return Err(RunError {
+            message: "P1 scalar integration topology/field lengths differ".to_string(),
+        });
+    }
+    let mut integral = 0.0;
+    for (element_index, element) in elements.iter().copied().enumerate() {
+        if !magnetic_elements[element_index] {
+            continue;
+        }
+        let volume = tetrahedron_volume(nodes, element)?;
+        let mut sum = 0.0;
+        for node in element {
+            sum += values[node as usize];
+        }
+        integral += volume * sum / 4.0;
+    }
+    Ok(integral)
+}
+
+#[cfg(feature = "fem-gpu")]
 fn accumulate_cubic_energy_density(
     values: &mut [f64],
     magnetization: &[[f64; 3]],
@@ -3492,8 +3746,25 @@ impl NativeFemEnergyDensitySnapshot {
             });
         }
         let mut values = vec![0.0; self.node_count];
-        for (prefactor, snapshot) in self.terms {
+        let conservative_dg0_energy = self.terms.iter().any(|(conservative, _, _)| *conservative);
+        for (conservative, prefactor, snapshot) in self.terms {
             let field = snapshot.into_vector_field()?;
+            if conservative {
+                let projection = self
+                    .dg0_energy_projection
+                    .as_deref()
+                    .ok_or_else(|| RunError {
+                        message: "DG0 energy projection metadata is missing".to_string(),
+                    })?;
+                accumulate_dg0_field_dot_energy_density(
+                    &mut values,
+                    &magnetization,
+                    &field,
+                    projection,
+                    prefactor,
+                )?;
+                continue;
+            }
             accumulate_energy_density_term(
                 &mut values,
                 &magnetization,
@@ -3510,6 +3781,7 @@ impl NativeFemEnergyDensitySnapshot {
             &self.request,
             &values,
             self.active_mask.as_ref().to_vec(),
+            conservative_dg0_energy,
         ))
     }
 }
@@ -3598,6 +3870,118 @@ mod task5_energy_density_tests {
         let projected =
             project_element_scalars_to_nodes(&mesh, &[2.0, 8.0]).expect("valid DG0 projection");
         assert_eq!(projected, vec![6.0, 6.0, 6.0, 2.0, 8.0]);
+    }
+
+    #[test]
+    fn task5_dg0_field_dot_energy_terms_preserve_weak_form_energy() {
+        let nodes = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -2.0],
+        ];
+        let elements = vec![[0, 1, 2, 3], [0, 1, 2, 4]];
+        let ms_element = vec![1.0, 3.0];
+        let a = -3.0 + 2.0 * 2.0_f64.sqrt();
+        let magnetization = vec![
+            [1.0, 0.0, 0.0],
+            [a, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ];
+        let field = magnetization.clone();
+
+        let projected_ms = vec![7.0 / 3.0, 7.0 / 3.0, 7.0 / 3.0, 1.0, 3.0];
+        let old_nodal_density = magnetization
+            .iter()
+            .zip(&field)
+            .zip(&projected_ms)
+            .map(|((m, h), ms)| ms * dot(*m, *h))
+            .collect::<Vec<_>>();
+        let old_integral =
+            tetra_p1_scalar_integral(&nodes, &elements, &[true, true], &old_nodal_density)
+                .expect("old nodal projection integral");
+        let weak_form_integral = tetra_dg0_p1_dot_integral(
+            &nodes,
+            &elements,
+            &[true, true],
+            &ms_element,
+            &magnetization,
+            &field,
+        )
+        .expect("weak-form integral");
+        assert!((old_integral / weak_form_integral - 3.0).abs() < 1.0e-12);
+
+        let projected = conservative_dg0_p1_dot_projection(
+            &nodes,
+            &elements,
+            &[true, true],
+            &ms_element,
+            &magnetization,
+            &field,
+        )
+        .expect("conservative DG0 projection");
+        let projected_integral =
+            tetra_p1_scalar_integral(&nodes, &elements, &[true, true], &projected)
+                .expect("conservative projection integral");
+        assert!((projected_integral - weak_form_integral).abs() < 1.0e-14);
+
+        let demag_field = field
+            .iter()
+            .map(|value| [0.25 * value[0], value[1], value[2]])
+            .collect::<Vec<_>>();
+        let external_field = vec![[0.4, -0.2, 0.1]; nodes.len()];
+        let projection = Dg0EnergyProjection {
+            nodes: nodes.clone().into(),
+            elements: elements.clone().into(),
+            magnetic_elements: vec![true, true].into(),
+            saturation_magnetisation_by_element: ms_element.clone().into(),
+        };
+        let terms = [
+            ("exchange", field.as_slice(), -0.5),
+            ("demag", demag_field.as_slice(), -0.5),
+            ("external", external_field.as_slice(), -1.0),
+        ];
+        let mut total_values = vec![0.0; nodes.len()];
+        let mut expected_total = 0.0;
+        for (name, term_field, prefactor) in terms {
+            let expected = prefactor
+                * MU0
+                * tetra_dg0_p1_dot_integral(
+                    &nodes,
+                    &elements,
+                    &[true, true],
+                    &ms_element,
+                    &magnetization,
+                    term_field,
+                )
+                .expect("term weak-form integral");
+            let mut term_values = vec![0.0; nodes.len()];
+            accumulate_dg0_field_dot_energy_density(
+                &mut term_values,
+                &magnetization,
+                term_field,
+                &projection,
+                prefactor,
+            )
+            .expect("term conservative projection");
+            let actual = tetra_p1_scalar_integral(&nodes, &elements, &[true, true], &term_values)
+                .expect("term projected integral");
+            assert!(
+                (actual - expected).abs() < 1.0e-20,
+                "{name}: {actual} != {expected}"
+            );
+            for (total, term) in total_values.iter_mut().zip(term_values) {
+                *total += term;
+            }
+            expected_total += expected;
+        }
+        let actual_total =
+            tetra_p1_scalar_integral(&nodes, &elements, &[true, true], &total_values)
+                .expect("total projected integral");
+        assert!((actual_total - expected_total).abs() < 1.0e-20);
     }
 
     #[test]

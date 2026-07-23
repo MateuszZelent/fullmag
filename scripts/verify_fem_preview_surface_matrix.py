@@ -61,8 +61,10 @@ ENERGY_DENSITY_TO_SCALAR = {
     "eden_demag": "E_demag",
     "eden_ext": "E_ext",
     "eden_ani": "E_ani",
+    "eden_dmi": "E_dmi",
     "eden_total": "E_total",
 }
+ENERGY_QUALIFICATION = os.environ.get("FULLMAG_TASK5_ENERGY_QUALIFICATION", "")
 FULL_CACHE_TERMINAL_QUANTITIES = (
     "m",
     "H_ex",
@@ -77,6 +79,40 @@ FULL_CACHE_TERMINAL_QUANTITIES = (
     "eden_ani",
     "eden_total",
 )
+
+
+def empty_energy_proof() -> dict[str, Any]:
+    return {
+        "energy_comparisons": None,
+        "energy_fixture_cubic": None,
+        "energy_qualification": None,
+        "energy_fixture_ms_location": None,
+        "energy_fixture_regional_ms_range": None,
+        "energy_projection_locations": None,
+    }
+
+
+def matrix_csv_columns(rows: list[dict[str, Any]]) -> list[str]:
+    """Return the explicit ordered union of public evidence columns."""
+    return list(
+        dict.fromkeys(
+            column
+            for row in rows
+            for column in row
+            if not column.startswith("_")
+        )
+    )
+
+
+def matrix_csv_record(
+    row: dict[str, Any],
+    columns: list[str],
+) -> dict[str, Any]:
+    """Rectangularize an intentionally heterogeneous evidence row with nulls."""
+    return {
+        column: row[column] if column in row else None
+        for column in columns
+    }
 
 
 def require_matrix_python(python: Path = PYTHON) -> None:
@@ -132,7 +168,31 @@ def requires_terminal_full_cache_proof(mode: str) -> bool:
 
 
 def terminal_quantities_for_mode(mode: str) -> tuple[str, ...]:
-    return FULL_CACHE_TERMINAL_QUANTITIES if requires_terminal_full_cache_proof(mode) else ()
+    if not requires_terminal_full_cache_proof(mode):
+        return ()
+    if ENERGY_QUALIFICATION == "dg0_ms":
+        return tuple(
+            quantity
+            for quantity in FULL_CACHE_TERMINAL_QUANTITIES
+            if quantity not in {"H_ani_cubic", "eden_ani"}
+        )
+    if ENERGY_QUALIFICATION == "uniaxial":
+        return tuple(
+            "H_ani" if quantity == "H_ani_cubic" else quantity
+            for quantity in FULL_CACHE_TERMINAL_QUANTITIES
+        )
+    if ENERGY_QUALIFICATION == "cubic":
+        return FULL_CACHE_TERMINAL_QUANTITIES
+    without_anisotropy = tuple(
+        quantity
+        for quantity in FULL_CACHE_TERMINAL_QUANTITIES
+        if quantity not in {"H_ani_cubic", "eden_ani"}
+    )
+    if ENERGY_QUALIFICATION == "interfacial_dmi":
+        return without_anisotropy + ("H_dmi", "eden_dmi")
+    if ENERGY_QUALIFICATION == "bulk_dmi":
+        return without_anisotropy + ("H_dmi_bulk", "eden_dmi")
+    return FULL_CACHE_TERMINAL_QUANTITIES
 
 
 def requires_browser_consumed_response(mode: str, surface: str) -> bool:
@@ -932,33 +992,100 @@ def energy_density_cache_proof(
     element_markers = mesh.get("element_markers")
     nodes = mesh.get("nodes")
     ms_field = material.get("ms_field")
+    ms_element_field = backend_plan.get("ms_element_field")
     kc1_field = backend_plan.get("kc1_field")
     resolved_cubic = material.get("cubic_anisotropy_kc1") == 48e3 or (
         isinstance(kc1_field, list)
         and any(math.isclose(float(value), 48e3) for value in kc1_field)
     )
-    if not resolved_cubic:
+    if ENERGY_QUALIFICATION in {"", "cubic"} and not resolved_cubic:
         raise RuntimeError("energy fixture did not resolve cubic anisotropy into the native plan")
     if not isinstance(elements, list) or not isinstance(element_markers, list) or not isinstance(nodes, list):
         raise RuntimeError("energy comparison lacks native tetrahedral mesh topology")
-    if not isinstance(ms_field, list) or len(ms_field) != len(nodes):
-        raise RuntimeError("energy fixture did not resolve the regional Ms override as a nodal field")
-    positive_ms = [float(value) for value in ms_field if float(value) > 0.0]
-    if not positive_ms or min(positive_ms) >= max(positive_ms):
-        raise RuntimeError("regional Ms field is not spatially varying")
+    if ENERGY_QUALIFICATION == "dg0_ms":
+        if ms_field is not None:
+            raise RuntimeError("DG0 qualification acquired an illegal nodal Ms projection")
+        if not isinstance(ms_element_field, list) or len(ms_element_field) != len(elements):
+            raise RuntimeError("DG0 qualification did not reach the native plan as Ms_element_field")
+        positive_ms = [float(value) for value in ms_element_field if float(value) > 0.0]
+        if not positive_ms or min(positive_ms) >= max(positive_ms):
+            raise RuntimeError("DG0 Ms field is not spatially varying")
+    elif ENERGY_QUALIFICATION in {"uniaxial", "cubic", "interfacial_dmi", "bulk_dmi"}:
+        if ms_field is not None or ms_element_field is not None:
+            raise RuntimeError("dedicated energy qualification must use uniform scalar Ms")
+        dind = backend_plan.get("interfacial_dmi")
+        dbulk = backend_plan.get("bulk_dmi")
+        uniaxial = material.get("uniaxial_anisotropy")
+        if uniaxial is None:
+            uniaxial = material.get("uniaxial_anisotropy_ku1")
+        if ENERGY_QUALIFICATION == "uniaxial" and not (
+            isinstance(uniaxial, (int, float))
+            and float(uniaxial) != 0.0
+            and not resolved_cubic
+            and dind is None
+            and dbulk is None
+        ):
+            raise RuntimeError("uniaxial qualification did not resolve only the uniaxial operator")
+        if ENERGY_QUALIFICATION == "cubic" and not (
+            resolved_cubic and uniaxial is None and dind is None and dbulk is None
+        ):
+            raise RuntimeError("cubic qualification did not resolve only the cubic operator")
+        if ENERGY_QUALIFICATION == "interfacial_dmi" and not (
+            isinstance(dind, (int, float)) and float(dind) != 0.0 and dbulk is None
+        ):
+            raise RuntimeError("interfacial DMI qualification did not resolve only Dind")
+        if ENERGY_QUALIFICATION == "bulk_dmi" and not (
+            isinstance(dbulk, (int, float)) and float(dbulk) != 0.0 and dind is None
+        ):
+            raise RuntimeError("bulk DMI qualification did not resolve only Dbulk")
+        positive_ms = [float(material.get("saturation_magnetisation", 0.0))]
+    else:
+        if not isinstance(ms_field, list) or len(ms_field) != len(nodes):
+            raise RuntimeError("energy fixture did not resolve the regional Ms override as a nodal field")
+        positive_ms = [float(value) for value in ms_field if float(value) > 0.0]
+        if not positive_ms or min(positive_ms) >= max(positive_ms):
+            raise RuntimeError("regional Ms field is not spatially varying")
     ms_range = [min(positive_ms), max(positive_ms)]
+
+    compared_quantities = {
+        quantity: scalar
+        for quantity, scalar in ENERGY_DENSITY_TO_SCALAR.items()
+        if quantity != "eden_dmi"
+    }
+    if ENERGY_QUALIFICATION == "dg0_ms":
+        compared_quantities = {
+            quantity: ENERGY_DENSITY_TO_SCALAR[quantity]
+            for quantity in ("eden_ex", "eden_demag", "eden_ext", "eden_total")
+        }
+    elif ENERGY_QUALIFICATION in {"uniaxial", "cubic"}:
+        compared_quantities = {
+            quantity: ENERGY_DENSITY_TO_SCALAR[quantity]
+            for quantity in ("eden_ani", "eden_total")
+        }
+    elif ENERGY_QUALIFICATION in {"interfacial_dmi", "bulk_dmi"}:
+        compared_quantities = {
+            quantity: ENERGY_DENSITY_TO_SCALAR[quantity]
+            for quantity in ("eden_dmi", "eden_total")
+        }
 
     scalars = scalar_rows_by_step(output_dir)
     comparisons: dict[str, Any] = {}
-    for quantity, scalar_column in ENERGY_DENSITY_TO_SCALAR.items():
+    projection_locations: set[str] = set()
+    for quantity, scalar_column in compared_quantities.items():
         field = fields.get(quantity)
         if field is None:
             raise RuntimeError(f"missing pre-terminal cached energy field {quantity}")
         meta = field["meta"]
-        if meta.get("location") != "fem_nodal_visualization_projection":
+        expected_location = (
+            "fem_nodal_conservative_tetra_projection"
+            if ENERGY_QUALIFICATION == "dg0_ms"
+            else "fem_nodal_visualization_projection"
+        )
+        if meta.get("location") != expected_location:
             raise RuntimeError(
                 f"{quantity} hides its non-canonical projection contract: location={meta.get('location')}"
             )
+        projection_locations.add(expected_location)
         source_step = int(meta["source_step"])
         scalar_row = scalars.get(source_step)
         if scalar_row is None:
@@ -980,6 +1107,10 @@ def energy_density_cache_proof(
                 ) from error
             projected_energy += tetrahedron_volume(nodes, element) * sum(nodal_values) / 4.0
         native_energy = scalar_row[scalar_column]
+        if quantity in {"eden_ani", "eden_dmi"} and abs(native_energy) <= ENERGY_ABSOLUTE_TOLERANCE_J:
+            raise RuntimeError(
+                f"{ENERGY_QUALIFICATION} produced a zero {scalar_column} scalar energy"
+            )
         absolute_error = abs(projected_energy - native_energy)
         relative_error = absolute_error / max(abs(native_energy), ENERGY_ABSOLUTE_TOLERANCE_J)
         if absolute_error > ENERGY_ABSOLUTE_TOLERANCE_J and relative_error > ENERGY_RELATIVE_TOLERANCE:
@@ -997,9 +1128,17 @@ def energy_density_cache_proof(
         }
     return {
         "energy_comparisons": comparisons,
-        "energy_fixture_cubic": True,
+        "energy_fixture_cubic": resolved_cubic,
+        "energy_qualification": ENERGY_QUALIFICATION or "baseline_nodal_ms",
+        "energy_fixture_ms_location": (
+            "element_dg0" if ENERGY_QUALIFICATION == "dg0_ms" else
+            "uniform" if ENERGY_QUALIFICATION in {
+                "uniaxial", "cubic", "interfacial_dmi", "bulk_dmi"
+            } else
+            "nodal_p1"
+        ),
         "energy_fixture_regional_ms_range": ms_range,
-        "energy_projection_location": "fem_nodal_visualization_projection",
+        "energy_projection_locations": sorted(projection_locations),
     }
 
 
@@ -1067,19 +1206,20 @@ def common_runtime_env(
     api_port: int,
 ) -> dict[str, str]:
     env = os.environ.copy()
+    resolved_device = "cpu" if ENERGY_QUALIFICATION == "dg0_ms" else "gpu"
     env.update(
         {
             "FULLMAG_API_PORT": str(api_port),
             "FULLMAG_CPU_THREADS": "1",
             "FULLMAG_FDM_EXECUTION": "cpu",
-            "FULLMAG_FEM_EXECUTION": "gpu",
+            "FULLMAG_FEM_EXECUTION": resolved_device,
             "FULLMAG_GMSH_THREADS": "1",
             "FULLMAG_PREVIEW_EVERY_N": str(cadence),
             "FULLMAG_PREVIEW_MATRIX_MAX_STEPS": str(MATRIX_MAX_STEPS),
             "FULLMAG_PREVIEW_MATRIX_MODE": mode,
             "FULLMAG_PREVIEW_MATRIX_SURFACE": surface,
             "FULLMAG_PYTHON": str(PYTHON),
-            "FULLMAG_RELAX_DEVICE": "gpu",
+            "FULLMAG_RELAX_DEVICE": resolved_device,
             "PYTHONPATH": str(ROOT / "packages/fullmag-py/src"),
             "RAYON_NUM_THREADS": "1",
         }
@@ -1252,7 +1392,7 @@ def run_row(
                     if requires_browser_pending_state(mode, surface) and (
                         browser_proof.get("observedBeforeTerminal") is not True
                         or browser_proof.get("preterminalMaterializationState")
-                        not in {"pending", "stale_complete", "superseded"}
+                        not in {"pending", "stale_complete"}
                         or browser_proof.get("terminalFieldResponseObserved") is not True
                         or not browser_proof.get("terminalCanvasSha256")
                         or not browser_proof.get("payloadSha256")
@@ -1281,12 +1421,7 @@ def run_row(
     if requires_primary_live_proof(mode) and surface != "headless":
         primary_quantity = "H_demag" if mode in {"H_demag", "full_cache"} else "m"
         primary_live = live_fields.get(primary_quantity)
-    energy_proof: dict[str, Any] = {
-        "energy_comparisons": None,
-        "energy_fixture_cubic": None,
-        "energy_fixture_regional_ms_range": None,
-        "energy_projection_location": None,
-    }
+    energy_proof = empty_energy_proof()
     if requires_terminal_full_cache_proof(mode) and surface != "headless":
         energy_proof = energy_density_cache_proof(output_dir, terminal_cache_fields)
     h_demag_artifact: dict[str, Any] = {
@@ -1452,7 +1587,7 @@ def assert_equivalence(rows: list[dict[str, Any]]) -> dict[str, Any]:
         and (
             row.get("browser_observed_before_terminal") is not True
             or row.get("browser_preterminal_materialization_state")
-            not in {"pending", "stale_complete", "superseded"}
+            not in {"pending", "stale_complete"}
             or row.get("browser_terminal_field_response_observed") is not True
             or not row.get("browser_terminal_canvas_sha256")
             or not row.get("browser_response_payload_sha256")
@@ -1480,23 +1615,33 @@ def assert_equivalence(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if row["mode"] == "full_cache"
         and row["surface"] != "headless"
     ]
+    expected_energy_quantities = {
+        "dg0_ms": {"eden_ex", "eden_demag", "eden_ext", "eden_total"},
+        "uniaxial": {"eden_ani", "eden_total"},
+        "cubic": {"eden_ani", "eden_total"},
+        "interfacial_dmi": {"eden_dmi", "eden_total"},
+        "bulk_dmi": {"eden_dmi", "eden_total"},
+    }.get(ENERGY_QUALIFICATION, set(ENERGY_DENSITY_TO_SCALAR) - {"eden_dmi"})
     bad_energy = [
         (row["surface"], row["repeat"])
         for row in energy_rows
         if not isinstance(row.get("energy_comparisons"), dict)
-        or set(row["energy_comparisons"]) != set(ENERGY_DENSITY_TO_SCALAR)
-        or row.get("energy_fixture_cubic") is not True
+        or set(row["energy_comparisons"]) != expected_energy_quantities
+        or (
+            ENERGY_QUALIFICATION in {"", "cubic"}
+            and row.get("energy_fixture_cubic") is not True
+        )
     ]
     if bad_energy:
         raise RuntimeError(f"managed energy-density cache comparisons missing: {bad_energy}")
 
-    expected_terminal_cache = set(FULL_CACHE_TERMINAL_QUANTITIES)
+    expected_terminal_cache = set(terminal_quantities_for_mode("full_cache"))
     bad_terminal_cache = []
     terminal_cache_payloads = {
-        quantity: set() for quantity in FULL_CACHE_TERMINAL_QUANTITIES
+        quantity: set() for quantity in expected_terminal_cache
     }
     terminal_cache_masks = {
-        quantity: set() for quantity in FULL_CACHE_TERMINAL_QUANTITIES
+        quantity: set() for quantity in expected_terminal_cache
     }
     for row in energy_rows:
         fields = row.get("terminal_cache_fields")
@@ -1528,7 +1673,7 @@ def assert_equivalence(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "payloads": len(terminal_cache_payloads[quantity]),
             "masks": len(terminal_cache_masks[quantity]),
         }
-        for quantity in FULL_CACHE_TERMINAL_QUANTITIES
+        for quantity in expected_terminal_cache
         if energy_rows
         and (
             len(terminal_cache_payloads[quantity]) != 1
@@ -1802,7 +1947,7 @@ def main() -> int:
                         retention_proof.get("browser_observed_before_terminal") is not True
                         or retention_proof.get("browser_retained_frame_observed") is not True
                         or retention_proof.get("browser_retained_materialization_state")
-                        not in {"pending", "stale_complete", "superseded"}
+                        not in {"pending", "stale_complete"}
                         or not retention_proof.get("browser_retained_canvas_sha256")
                         or not retention_proof.get("browser_response_payload_sha256")
                     ):
@@ -1861,14 +2006,11 @@ def main() -> int:
         raise RuntimeError(f"matrix row count mismatch: {len(rows)} != {expected_measured_rows}")
     (report_dir / "raw_rows.json").write_text(json.dumps(rows) + "\n", encoding="utf-8")
     equivalence = assert_equivalence(rows)
-    columns = [column for column in rows[0] if not column.startswith("_")]
+    columns = matrix_csv_columns(rows)
     with (report_dir / "matrix.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
-        writer.writerows(
-            {column: row[column] for column in columns}
-            for row in rows
-        )
+        writer.writerows(matrix_csv_record(row, columns) for row in rows)
     elapsed_values = sorted(float(row["elapsed_ms"]) for row in rows)
     callback_values = sorted(
         int(row["callback_handoff_max_ns"])

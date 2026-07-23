@@ -19,9 +19,34 @@ namespace fullmag::fem {
 
 std::array<double, 3> average_magnetization_components(const Context &ctx)
 {
+    const size_t nodes = ctx.state.m_xyz.size() / 3u;
+    const auto *material = ctx.material_fields.runtime.has_value()
+        ? &ctx.material_fields.runtime.value()
+        : nullptr;
+    if (material != nullptr && material->has_elementwise_ms()) {
+        std::vector<double> unit_x(ctx.state.m_xyz.size(), 0.0);
+        std::vector<double> unit_y(ctx.state.m_xyz.size(), 0.0);
+        std::vector<double> unit_z(ctx.state.m_xyz.size(), 0.0);
+        for (size_t node = 0; node < nodes; ++node) {
+            unit_x[node * 3u + 0u] = 1.0;
+            unit_y[node * 3u + 1u] = 1.0;
+            unit_z[node * 3u + 2u] = 1.0;
+        }
+        const double weight_sum =
+            material->ms_weighted_aos3_mass_bilinear(unit_x, unit_x);
+        if (!(std::isfinite(weight_sum) && weight_sum > 0.0)) {
+            return {0.0, 0.0, 0.0};
+        }
+        const double inv = 1.0 / weight_sum;
+        return {
+            material->ms_weighted_aos3_mass_bilinear(ctx.state.m_xyz, unit_x) * inv,
+            material->ms_weighted_aos3_mass_bilinear(ctx.state.m_xyz, unit_y) * inv,
+            material->ms_weighted_aos3_mass_bilinear(ctx.state.m_xyz, unit_z) * inv,
+        };
+    }
+
     std::array<double, 3> sum{};
     double weight_sum = 0.0;
-    const size_t nodes = ctx.state.m_xyz.size() / 3u;
     const auto &lumped_volume = !ctx.integration_weights.mfem_lumped_mass.empty()
         ? ctx.integration_weights.mfem_lumped_mass
         : ctx.mesh.node_volumes;

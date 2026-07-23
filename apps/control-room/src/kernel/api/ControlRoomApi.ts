@@ -2549,7 +2549,7 @@ export class ControlRoomApi {
           query,
         },
       );
-      return ["complete", "pending", "stale_complete", "superseded"].includes(
+      return ["complete", "pending", "stale_complete", "error"].includes(
         meta.state,
       );
     } catch (error) {

@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag
-- Last updated: 2026-07-22
+- Last updated: 2026-07-23
 - Related ADRs: `docs/adr/0011-resource-first-api.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/physics/0870-active-observable-and-energy-availability.md`, `docs/physics/0880-active-effective-field-terms.md`
 
@@ -73,9 +73,47 @@ The current live FEM preview payload is a node-aligned visualization projection.
 
 - uniform `M_s`: the scalar plan value is repeated on active magnetic nodes;
 - nodal-P1 `M_s`: the resolved nodal field is used directly;
-- element-DG0/regional `M_s`: each active tetrahedron contributes `V_e / 4` to each incident node, and the nodal display coefficient is the corresponding volume-lumped weighted mean.
+- element-DG0/regional `M_s`: non-energy display coefficients use the volume-lumped nodal weighted mean, but field-derived energy densities use the conservative tetrahedral projection below.
 
-This projection is suitable for coloring and must carry `fem_nodal_visualization_projection` location/provenance. The backend scalar energies remain authoritative. Validation must independently integrate each projected term with the matching FEM lumped-volume rule and compare it with the native scalar term for qualified fixtures; passing a pointwise dot-product unit test alone is insufficient.
+For DG0 `M_s` and P1 fields `u` and `v`, the exact element contribution is
+
+```text
+integral_T M_s (u . v) dV
+  = M_s V_T / 20 * (sum_i u_i . v_i + (sum_i u_i) . (sum_i v_i)).
+```
+
+The live preview distributes one quarter of this element integral to each
+incident node and divides the accumulated numerator by the node's lumped
+volume. Therefore integrating the node-aligned payload with the usual P1
+lumped-volume rule exactly preserves the element weak-form integral, including
+the off-diagonal consistent-mass contributions. This restricted DG0 path must
+carry `fem_nodal_conservative_tetra_projection` location/provenance. Uniform and
+nodal-P1 paths carry `fem_nodal_visualization_projection`. The backend scalar
+energies remain authoritative. Validation must independently integrate each
+projected term with the matching FEM lumped-volume rule and compare it with the
+native scalar term for qualified fixtures; passing a pointwise dot-product unit
+test alone is insufficient.
+
+The production-executable DG0 scope is deliberately narrower than the general
+FEM material model. Native FEM CPU may accept element-DG0 `M_s` only when every
+active owner uses the common element/quadrature material realization. The
+qualified Task 5 slice requires enabled consistent-mass exchange. Poisson
+demag and Zeeman may be additional owners, but neither a Zeeman-only nor a
+demag-only plan promotes DG0 `M_s`. GPU DG0 material upload and CPU DG0
+combined with anisotropy, interfacial or bulk DMI, thermal, STT, Oersted, or
+magnetoelastic owners remain unsupported and must be rejected by both planner
+and native validation. There is no nodal fallback for a sharp DG0 coefficient.
+Direct native FEM relaxation algorithms also remain unsupported with
+element-DG0 `M_s`; the qualified CPU path is the ordinary time-evolution owner
+set, whose reported average magnetization must use the same DG0 mass
+integration rather than a scalar-`M_s` fallback.
+
+Uniform-`M_s` uniaxial and cubic anisotropy, and interfacial and bulk DMI
+density semantics, are qualified as four separate native GPU plans. The
+anisotropy cases prove selection of `H_ani` versus `H_ani_cubic` and
+`eden_ani` versus native `E_ani`. The DMI cases prove selection of the distinct
+`H_dmi` and `H_dmi_bulk` operators and `eden_dmi` versus native `E_dmi`. None
+of these cases implies GPU DG0 support or DG0 combined with those owners.
 
 ### 3.3 Hybrid
 
@@ -109,6 +147,7 @@ The planner should advertise density quantities only for backends that can compu
 - FDM CUDA must match FDM CPU in double precision before single precision is exposed.
 - FEM density must match FEM scalar energy under its documented quadrature rule.
 - Native FEM qualification includes separate uniaxial and cubic anisotropy activation, interfacial versus bulk DMI selection, uniform/nodal-P1/element-DG0 `M_s`, and `eden_total` versus the sum of active native scalar terms.
+- Element-DG0 `M_s` qualification uses the restricted native FEM CPU owner set above; uniform-`M_s` uniaxial, cubic, interfacial DMI, and bulk DMI qualification uses four separate native FEM GPU fixtures.
 
 ### 5.3 Regression tests
 
@@ -121,13 +160,13 @@ The planner should advertise density quantities only for backends that can compu
 
 - [ ] Python API
 - [x] ProblemIR
-- [ ] Planner
-- [ ] Capability matrix
+- [x] Planner for the bounded FEM slices
+- [x] Capability matrix
 - [ ] FDM backend
-- [ ] FEM backend
+- [x] FEM backend for the bounded CPU-DG0 and uniform-GPU slices
 - [ ] Hybrid backend
-- [ ] Outputs / observables
-- [ ] Tests / benchmarks
+- [x] Outputs / observables for the bounded FEM slices
+- [x] Tests / managed qualification for the bounded FEM slices
 - [x] Documentation
 
 ## 7. Known limits and deferred work

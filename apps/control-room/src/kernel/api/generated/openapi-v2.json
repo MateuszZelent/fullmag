@@ -4058,7 +4058,6 @@
           "complete",
           "stale_complete",
           "pending",
-          "superseded",
           "error"
         ],
         "type": "string"

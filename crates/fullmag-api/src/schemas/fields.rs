@@ -18,7 +18,6 @@ pub enum FieldMaterializationState {
     Complete,
     StaleComplete,
     Pending,
-    Superseded,
     Error,
 }
 

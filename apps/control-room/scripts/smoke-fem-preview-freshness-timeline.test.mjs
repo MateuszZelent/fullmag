@@ -212,7 +212,7 @@ describe("FEM preview browser observation timeline", () => {
     expect(observeFirstTerminalAt(first, false, 40)).toBe(10);
   });
 
-  it.each(["pending", "stale_complete", "superseded"])(
+  it.each(["pending", "stale_complete"])(
     "accepts %s as an explicit pre-terminal full-cache state",
     (state) => {
       expect(

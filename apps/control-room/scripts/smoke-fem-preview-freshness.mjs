@@ -228,7 +228,7 @@ try {
           `/v2/sessions/current/data/fields/${encodeURIComponent(selectedQuantity)}/meta`,
         );
         return value &&
-          ["pending", "stale_complete", "superseded"].includes(value.state) &&
+          ["pending", "stale_complete"].includes(value.state) &&
           value.source_step < expectedSourceStep
           ? value
           : null;

@@ -19,6 +19,50 @@ SPEC.loader.exec_module(MATRIX)
 
 
 class FemPreviewSurfaceMatrixContractTests(unittest.TestCase):
+    def test_empty_energy_proof_matches_qualified_row_schema(self) -> None:
+        proof = MATRIX.empty_energy_proof()
+
+        self.assertEqual(
+            set(proof),
+            {
+                "energy_comparisons",
+                "energy_fixture_cubic",
+                "energy_qualification",
+                "energy_fixture_ms_location",
+                "energy_fixture_regional_ms_range",
+                "energy_projection_locations",
+            },
+        )
+        self.assertNotIn("energy_projection_location", proof)
+
+    def test_matrix_csv_schema_is_the_explicit_union_of_heterogeneous_rows(self) -> None:
+        rows = [
+            {"cadence": 10, "energy_projection_locations": None},
+            {"cadence": 25, "energy_qualification": "cubic"},
+        ]
+
+        columns = MATRIX.matrix_csv_columns(rows)
+        self.assertEqual(
+            columns,
+            ["cadence", "energy_projection_locations", "energy_qualification"],
+        )
+        self.assertEqual(
+            MATRIX.matrix_csv_record(rows[0], columns),
+            {
+                "cadence": 10,
+                "energy_projection_locations": None,
+                "energy_qualification": None,
+            },
+        )
+        self.assertEqual(
+            MATRIX.matrix_csv_record(rows[1], columns),
+            {
+                "cadence": 25,
+                "energy_projection_locations": None,
+                "energy_qualification": "cubic",
+            },
+        )
+
     def test_matrix_never_retries_failed_rows(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
 
@@ -291,6 +335,36 @@ class FemPreviewSurfaceMatrixContractTests(unittest.TestCase):
                 "full_cache", "interactive_no_browser"
             )
         )
+
+    def test_dedicated_energy_qualifications_select_distinct_operator_payloads(self) -> None:
+        with mock.patch.object(MATRIX, "ENERGY_QUALIFICATION", "dg0_ms"):
+            dg0 = set(MATRIX.terminal_quantities_for_mode("full_cache"))
+            self.assertNotIn("H_ani_cubic", dg0)
+            self.assertNotIn("eden_ani", dg0)
+            env = MATRIX.common_runtime_env("full_cache", 10, "interactive_no_browser", "/tmp", 1)
+            self.assertEqual(env["FULLMAG_FEM_EXECUTION"], "cpu")
+
+        with mock.patch.object(MATRIX, "ENERGY_QUALIFICATION", "uniaxial"):
+            uniaxial = set(MATRIX.terminal_quantities_for_mode("full_cache"))
+            self.assertIn("H_ani", uniaxial)
+            self.assertNotIn("H_ani_cubic", uniaxial)
+
+        with mock.patch.object(MATRIX, "ENERGY_QUALIFICATION", "cubic"):
+            cubic = set(MATRIX.terminal_quantities_for_mode("full_cache"))
+            self.assertIn("H_ani_cubic", cubic)
+            self.assertNotIn("H_ani", cubic)
+
+        with mock.patch.object(MATRIX, "ENERGY_QUALIFICATION", "interfacial_dmi"):
+            interfacial = set(MATRIX.terminal_quantities_for_mode("full_cache"))
+            self.assertIn("H_dmi", interfacial)
+            self.assertNotIn("H_dmi_bulk", interfacial)
+            self.assertNotIn("eden_ani", interfacial)
+
+        with mock.patch.object(MATRIX, "ENERGY_QUALIFICATION", "bulk_dmi"):
+            bulk = set(MATRIX.terminal_quantities_for_mode("full_cache"))
+            self.assertIn("H_dmi_bulk", bulk)
+            self.assertNotIn("H_dmi", bulk)
+            self.assertNotIn("eden_ani", bulk)
 
 
 if __name__ == "__main__":

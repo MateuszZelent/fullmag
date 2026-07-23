@@ -759,7 +759,7 @@ fn preview_cache_is_fresher(snapshot: &SessionStateResponse, quantity_id: &str) 
     preview_cache_precedes_latest(snapshot, quantity_id)
 }
 
-fn materializer_field_freshness(
+fn materializer_request_freshness(
     snapshot: &SessionStateResponse,
     status: &fullmag_runner::LiveFieldMaterializationStatus,
 ) -> FieldFreshness {
@@ -771,7 +771,7 @@ fn materializer_field_freshness(
             FieldMaterializationState::Complete
         }
         fullmag_runner::LiveFieldMaterializationState::Superseded => {
-            FieldMaterializationState::Superseded
+            FieldMaterializationState::Pending
         }
         fullmag_runner::LiveFieldMaterializationState::Error => FieldMaterializationState::Error,
     };
@@ -784,6 +784,25 @@ fn materializer_field_freshness(
         state,
         materialization_error: status.error.clone(),
     }
+}
+
+fn completed_payload_freshness_with_materializer_status(
+    mut freshness: FieldFreshness,
+    status: &fullmag_runner::LiveFieldMaterializationStatus,
+) -> FieldFreshness {
+    match status.state {
+        fullmag_runner::LiveFieldMaterializationState::Pending
+        | fullmag_runner::LiveFieldMaterializationState::Superseded => {
+            freshness.state = FieldMaterializationState::StaleComplete;
+            freshness.materialization_error = None;
+        }
+        fullmag_runner::LiveFieldMaterializationState::Error => {
+            freshness.state = FieldMaterializationState::Error;
+            freshness.materialization_error = status.error.clone();
+        }
+        fullmag_runner::LiveFieldMaterializationState::Complete => {}
+    }
+    freshness
 }
 
 fn materializer_status<'a>(
@@ -924,17 +943,24 @@ pub async fn get_field_catalog(
         .flat_map(|state| state.latest_step.field_materialization_states.iter())
         .filter(|status| status.state != fullmag_runner::LiveFieldMaterializationState::Complete)
     {
-        let freshness = materializer_field_freshness(snapshot, status);
         if let Some(descriptor) = quantities
             .iter_mut()
             .find(|descriptor| descriptor.quantity_id == status.quantity)
         {
-            descriptor.source_step = freshness.source_step;
-            descriptor.source_revision = freshness.source_revision;
-            descriptor.stale_by_steps = freshness.stale_by_steps;
-            descriptor.state = freshness.state;
-            descriptor.materialization_error = freshness.materialization_error;
+            match status.state {
+                fullmag_runner::LiveFieldMaterializationState::Pending
+                | fullmag_runner::LiveFieldMaterializationState::Superseded => {
+                    descriptor.state = FieldMaterializationState::StaleComplete;
+                    descriptor.materialization_error = None;
+                }
+                fullmag_runner::LiveFieldMaterializationState::Error => {
+                    descriptor.state = FieldMaterializationState::Error;
+                    descriptor.materialization_error = status.error.clone();
+                }
+                fullmag_runner::LiveFieldMaterializationState::Complete => {}
+            }
         } else {
+            let freshness = materializer_request_freshness(snapshot, status);
             push_field_descriptor(
                 &mut quantities,
                 &status.quantity,
@@ -1137,11 +1163,11 @@ pub async fn get_field_meta(
         cached_field_values()
     };
 
-    let materializer_freshness = materializer_status(snapshot, quantity_id)
-        .filter(|status| status.state != fullmag_runner::LiveFieldMaterializationState::Complete)
-        .map(|status| materializer_field_freshness(snapshot, status));
+    let materializer_status = materializer_status(snapshot, quantity_id)
+        .filter(|status| status.state != fullmag_runner::LiveFieldMaterializationState::Complete);
     let Some((raw_values, grid, freshness)) = raw_values_opt else {
-        if let Some(freshness) = materializer_freshness {
+        if let Some(status) = materializer_status {
+            let freshness = materializer_request_freshness(snapshot, status);
             return Ok(Json(FieldMeta {
                 quantity_id: quantity_id.to_string(),
                 label,
@@ -1197,7 +1223,11 @@ pub async fn get_field_meta(
             quantity_id
         )));
     };
-    let freshness = materializer_freshness.unwrap_or(freshness);
+    let freshness = materializer_status
+        .map(|status| {
+            completed_payload_freshness_with_materializer_status(freshness.clone(), status)
+        })
+        .unwrap_or(freshness);
     let raw_point_count = if n_comp > 0 {
         raw_values.len() / n_comp as usize
     } else {

@@ -1,10 +1,64 @@
 # Task 5 report: materialize FEM previews outside the solver deadline
 
-Status: `IMPLEMENTED_AND_QUALIFIED`
+Status: `REMEDIATED_AWAITING_INDEPENDENT_REREVIEW`
 
 Base revision: `7599f78968ca21014685d1617eb14f3dc8a69bca`
 
 ## Outcome
+
+### Independent re-review remediation submitted 2026-07-23
+
+This implementation closes both P1 findings and the P2 finding from the independent
+re-review. The prior reviewer verdict remains reviewer-owned; this report marks the
+implementation ready for a new independent review, not accepted or complete.
+
+- The public field freshness enum is again exactly `complete | stale_complete |
+  pending | error`. `superseded` remains internal bounded-handoff telemetry. A
+  compatible retained payload stays `stale_complete` during a newer pending or
+  superseded request and preserves the retained payload's source step, revision,
+  timestamp, wall time, and statistics. A newer failure reports `error` without
+  relabelling retained values with failed-request provenance.
+- Element-DG0 `M_s` is production-reachable only on native FEM CPU ordinary time
+  evolution with consistent-mass exchange. Poisson demag and Zeeman may be added;
+  demag-only and Zeeman-only plans do not promote DG0 support. GPU DG0, direct
+  relaxation, anisotropy, DMI, thermal, STT, Oersted, and magnetoelastic DG0 plans
+  remain fail-closed.
+- DG0 field-dot energy projections now preserve the exact P1-tetrahedron weak-form
+  integral, including consistent-mass off-diagonal terms, and carry
+  `fem_nodal_conservative_tetra_projection`. Uniform and nodal-P1 previews retain
+  `fem_nodal_visualization_projection`.
+- Five separate managed fixtures reached real Python -> ProblemIR -> planner ->
+  runner execution: CPU DG0 `M_s`, and GPU uniform-`M_s` uniaxial, cubic,
+  interfacial-DMI, and bulk-DMI. Every advertised projected term and `eden_total`
+  was integrated at source step 52 and compared with its matching native scalar.
+- The exact non-`task5_`
+  `fem_preview_materialization_stays_outside_callback_deadline` regression now
+  asserts the single-owner retention contract and is explicitly run by the managed
+  review recipe. The managed runner group passed 16/16 Task 5 tests.
+- The removed `exchange_contract.cpp` assertion only searched for a stale,
+  untracked report-document sentence. The executable native
+  `fem_exchange_contract` target remains in
+  `verify-fem-material-element-ms-contract` and passed in the final native gate.
+
+All five energy runs were written under
+`.fullmag/reports/fem-preview-energy-qualification/` and passed their independent
+native-scalar comparisons:
+
+| Variant | Device / material | Projection | Compared terms | Maximum relative error |
+|---|---|---|---|---:|
+| `dg0-ms` | CPU, element-DG0 `M_s` | `fem_nodal_conservative_tetra_projection` | `eden_ex`, `eden_demag`, `eden_ext`, `eden_total` | 1.9450934198233654e-09 |
+| `uniaxial` | GPU, uniform `M_s` | `fem_nodal_visualization_projection` | `eden_ani`, `eden_total` | 3.2853607098039007e-11 |
+| `cubic` | GPU, uniform `M_s` | `fem_nodal_visualization_projection` | `eden_ani`, `eden_total` | 3.8805584161779044e-11 |
+| `interfacial-dmi` | GPU, uniform `M_s` | `fem_nodal_visualization_projection` | `eden_dmi`, `eden_total` | 2.7557566216410217e-11 |
+| `bulk-dmi` | GPU, uniform `M_s` | `fem_nodal_visualization_projection` | `eden_dmi`, `eden_total` | 4.1634656172889099e-11 |
+
+The first post-change 216-run invocation completed all row executions but failed
+during final CSV serialization because heterogeneous rows were projected through
+the first row's singular energy key. That run is preserved as RED evidence at
+`.fullmag/reports/fem-preview-surface-matrix/20260723-081559/raw_rows.json`.
+The serializer now builds an explicit ordered union of public columns and writes
+missing cells as `null`; two focused RED/GREEN contracts and the full 13/13
+verifier suite cover the schema. This failed invocation is not acceptance proof.
 
 The existing FEM preview path now owns one bounded asynchronous materializer. Solver callbacks enqueue one snapshot only when the handoff can accept it, retain the last complete compatible payload while work is pending, and account for superseded requests. Magnetization, demagnetizing field, other cached vector fields, and energy-density materialization no longer perform their heavy snapshot copy/materialization inside the solver callback deadline.
 
@@ -72,15 +126,15 @@ The v2 field resources now expose source provenance and freshness without adding
 
 ## Preview matrix evidence
 
-Authoritative report: `.fullmag/reports/fem-preview-surface-matrix/20260723-032852/summary.json`
+Authoritative post-serializer-fix report: `.fullmag/reports/fem-preview-surface-matrix/20260723-090252/summary.json`
 
 - Modes: disabled, `m`, `H_demag`, full cache.
 - Cadences: 10, 25, 50.
 - Surfaces: headless, interactive without browser, Control Room.
 - Repeats: one warmup plus five measured runs per variant.
 - Completed: 36 warmups + 180 measured = 216/216 runs.
-- Median end-to-end surface elapsed time: 9090.007 ms.
-- Production callback characterization: 60 live asynchronous rows; callback maximum 1,191,293 ns, callback plus scheduling fence maximum 1,479,260 ns, thread-CPU maximum 954,799 ns, and zero wall-time outliers. Every accepted row stayed below the 2,000,000 ns deadline.
+- Median end-to-end surface elapsed time: 9623.050 ms.
+- Production callback characterization: 60 live asynchronous rows; callback maximum 1,105,207 ns, callback plus scheduling fence maximum 1,414,746 ns, thread-CPU maximum 1,077,007 ns, and zero wall-time outliers. Every accepted row stayed below the 2,000,000 ns deadline.
 - Preview `m`: one exact payload SHA-256, `6c8dff3a5a6245440ead7e13866029cb3ad2f6dc1d1e02028341c0dc817a8b63`.
 - Preview `H_demag`: one exact payload SHA-256, `2610fdaf301c221f8200644653f6a2c24575b8fd183d71056730e287c57fef45`.
 - Both masks: exact SHA-256 `af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc`.
@@ -88,7 +142,7 @@ Authoritative report: `.fullmag/reports/fem-preview-surface-matrix/20260723-0328
 - Final durable `m` artifacts also had one exact hash, `eb2f5b65d1a3f853ff1623aeaf71e1fabc53b245ba540568a8e5d05349fafff2`, with maximum cross-surface absolute difference 0.
 - Terminal `H_demag` was checked against durable Zarr in 60 measured rows; all reported `source_step=52`, `state=complete`, and the same exact payload hash.
 - Full-cache terminal payload and mask SHA-256 values were recorded for all 12 materialized quantities. Energy comparison covered 30 managed rows.
-- The dedicated delayed-production-path retention proof preserved a pending materialization without clearing the retained browser canvas; its callback maximum was 208,640 ns.
+- The dedicated delayed-production-path retention proof preserved `stale_complete` materialization without clearing the retained browser canvas; its callback maximum was 193,395 ns.
 
 Clock/retry note: there is no retry implementation. Poll deadlines use `time.monotonic()` and elapsed measurements use `time.perf_counter()`. Preparation retains raw Unix timestamps for evidence but uses monotonic duration and revision/canonical-stage ordering. The authoritative run invoked each of its 216 rows exactly once.
 
@@ -100,16 +154,18 @@ The first canonical invocation in the restricted tool sandbox stopped before row
 
 - `env COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime`: passed after the final runtime rebuild; the exported portable bundle validator reported `bundle: valid`.
 - `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-relaxation-runtime`: passed. Source/native contracts passed; managed GPU LLG overdamped, projected-gradient BB, and nonlinear-CG lanes passed; the expected GPU tangent-plane skip remained explicit; CPU relaxation lanes including tangent-plane passed.
-- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-review-unit-contract`: passed sequentially against the validated final bundle. The final runner group passed 15/15 `task5_` tests and the backend source-layout group passed 2/2, in addition to the recipe's focused CLI/API transport, precedence, clock-adjustment, and merge contracts.
+- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-review-unit-contract`: passed sequentially against the validated final bundle. The exact non-`task5_` callback regression passed, the runner group passed 16/16 `task5_` tests, and the backend source-layout group passed 2/2, in addition to the recipe's focused CLI/API/planner transport, freshness, precedence, clock-adjustment, and merge contracts.
+- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-material-element-ms-contract`: passed the planner-aligned native material/context/element-quadrature/exchange/Zeeman/anisotropy/demag contracts and the DG0-aware step-metrics contract.
+- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-energy-qualification`: passed the verifier unit suite, managed bundle validation, static Control Room build, and all five separate native energy fixtures.
 - Managed `preview_enqueue_matrix_stays_below_solver_deadline`: passed all 60 measured samples.
-- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-surface-matrix`: passed all 216 rows with the equivalence results above; the authoritative report is `.fullmag/reports/fem-preview-surface-matrix/20260723-032852/summary.json`.
+- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-surface-matrix`: passed all 216 rows with the equivalence results above; the authoritative post-serializer-fix report is `.fullmag/reports/fem-preview-surface-matrix/20260723-090252/summary.json`.
 
 Two earlier review-gate launches are excluded from proof: the restricted-sandbox attempt could not access the Docker socket, and a concurrently launched attempt collided with the runtime exporter's clean/replacement window and exited 127 because `libfullmag_fem.so.0` was temporarily absent. No product assertion is based on either launch. The final result above was obtained only after the relaxation rebuild, a separate successful bundle validation, and a fully sequential review-gate invocation.
 
 ### Rust/API gates
 
 - `cargo test -p fullmag-cli`: 233 passed.
-- `python3 -m unittest scripts.test_verify_fem_preview_surface_matrix`: 10/10 verifier contracts passed, including the source assertion that failed matrix rows are never retried.
+- `python3 -m unittest scripts.test_verify_fem_preview_surface_matrix`: 13/13 verifier contracts passed, including no row retries, five distinct energy operator payloads, and heterogeneous CSV schema/rectangularization.
 - `python3 -m unittest scripts.test_ensure_python_recipe`: 3/3 managed-Python bootstrap contracts passed.
 - Fresh focused API tests after final OpenAPI regeneration all passed:
   - `field_vector_cache_identity_includes_session_id`
@@ -127,7 +183,7 @@ Two earlier review-gate launches are excluded from proof: the restricted-sandbox
 
 ### Control Room gates
 
-- `env TMPDIR=/tmp corepack pnpm --dir apps/control-room test`: 392 files passed, 1 skipped; 3767 tests passed, 1 skipped.
+- `env TMPDIR=/tmp corepack pnpm --dir apps/control-room test`: 392 files passed, 1 skipped; 3765 tests passed, 1 skipped.
 - `corepack pnpm --dir apps/control-room audit:compute-performance`: passed; no idle-redraw regression.
 - `corepack pnpm --dir apps/control-room typecheck`: passed.
 - `corepack pnpm --dir apps/control-room lint`: passed with zero warnings.

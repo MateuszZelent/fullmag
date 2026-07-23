@@ -351,22 +351,64 @@ void elementwise_material_runtime_support_distinguishes_a_from_ms() {
     ctx.mfem_device.device_string_override = "cpu";
     check(
         !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
-        "CPU exchange-only handle must reject elementwise Ms before a later relaxation metric can consume it");
+        "CPU elementwise Ms must reject lumped-mass exchange projection");
     check(
-        error.find("Ms_element_field") != std::string::npos &&
-            error.find("native FEM handle lifecycle fallback") != std::string::npos &&
-            error.find("resolved device 'cpu'") != std::string::npos,
-        "CPU elementwise Ms rejection must name field, lifecycle fallback, and device");
+        error.find("lumped-mass exchange projection") != std::string::npos,
+        "CPU DG0 Ms rejection must identify the missing consistent-mass prerequisite");
 
+    ctx.exchange.mfem.use_consistent_mass = true;
+    check(
+        fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "CPU consistent-mass exchange must accept elementwise Ms through the common material adapter");
+
+    ctx.demag.enabled = true;
+    ctx.zeeman.has_external_field = true;
+    check(
+        fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "CPU Poisson demag and Zeeman must accept elementwise Ms through the common material adapter");
+
+    ctx.demag.enabled = false;
+    ctx.zeeman.has_external_field = false;
     ctx.exchange.enabled = false;
     check(
         !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
-        "CPU must reject elementwise Ms when exchange is disabled");
+        "CPU handle with no qualified Ms owner must fail closed");
+    check(
+        error.find("exchange-disabled plan") != std::string::npos,
+        "CPU ownerless rejection must identify the mandatory exchange owner");
+
+    ctx.zeeman.has_external_field = true;
+    check(
+        !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error) &&
+            error.find("exchange-disabled plan") != std::string::npos,
+        "CPU Zeeman-only execution must not promote DG0 Ms without exchange");
+    ctx.zeeman.has_external_field = false;
+    ctx.demag.enabled = true;
+    check(
+        !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error) &&
+            error.find("exchange-disabled plan") != std::string::npos,
+        "CPU demag-only execution must not promote DG0 Ms without exchange");
+    ctx.demag.enabled = false;
+
+    ctx.exchange.enabled = true;
+    ctx.anisotropy.uniaxial_enabled = true;
+    check(
+        !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "CPU uniaxial anisotropy must fail closed until it consumes the common material adapter");
     check(
         error.find("Ms_element_field") != std::string::npos &&
-            error.find("native FEM handle lifecycle fallback") != std::string::npos &&
+            error.find("uniaxial anisotropy") != std::string::npos &&
             error.find("resolved device 'cpu'") != std::string::npos,
-        "CPU no-exchange elementwise-Ms rejection must name field, lifecycle fallback, and device");
+        "CPU unsupported-owner rejection must name field, owner, and device");
+
+    ctx.anisotropy.uniaxial_enabled = false;
+    ctx.dmi.interfacial_enabled = true;
+    check(
+        !fullmag::fem::validate_elementwise_ms_runtime_support(ctx, error),
+        "CPU DMI must fail closed for elementwise Ms until it consumes the common material adapter");
+    check(
+        error.find("interfacial DMI") != std::string::npos,
+        "CPU DMI rejection must identify the first unsupported owner");
 }
 
 fullmag_fem_plan_desc elementwise_material_context_plan(bool include_ms, bool include_a) {
@@ -414,6 +456,7 @@ fullmag_fem_plan_desc elementwise_material_context_plan(bool include_ms, bool in
     plan.precision = FULLMAG_FEM_PRECISION_DOUBLE;
     plan.integrator = FULLMAG_FEM_INTEGRATOR_HEUN;
     plan.enable_exchange = 1;
+    plan.use_consistent_mass = include_ms ? 1 : 0;
     plan.demag_realization = FULLMAG_FEM_DEMAG_AIRBOX_ROBIN;
     plan.initial_magnetization_xyz = initial_m;
     plan.initial_magnetization_len = 15;
@@ -442,11 +485,20 @@ void elementwise_material_context_builder_fails_closed_before_backend_initializa
         void (*configure)(fullmag_fem_plan_desc &);
     };
     const Reproducer reproducers[] = {
-        {"CPU Ms Zeeman", true, false, false, "Ms_element_field", "Zeeman", "cpu", [](fullmag_fem_plan_desc &plan) {
+        {"CPU Ms Zeeman", true, false, true, "", "", "cpu", [](fullmag_fem_plan_desc &plan) {
              plan.has_external_field = 1;
              plan.external_field_am[2] = 1.0;
          }},
-        {"CPU Ms demag", true, false, false, "Ms_element_field", "demag", "cpu", [](fullmag_fem_plan_desc &plan) {
+        {"CPU Ms missing consistent mass", true, false, false, "Ms_element_field", "lumped-mass exchange projection", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.use_consistent_mass = 0;
+         }},
+        {"CPU Ms Zeeman-only", true, false, false, "Ms_element_field", "exchange-disabled plan", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.enable_exchange = 0;
+             plan.has_external_field = 1;
+             plan.external_field_am[2] = 1.0;
+         }},
+        {"CPU Ms demag-only", true, false, false, "Ms_element_field", "exchange-disabled plan", "cpu", [](fullmag_fem_plan_desc &plan) {
+             plan.enable_exchange = 0;
              plan.enable_demag = 1;
          }},
         {"CPU Ms uniaxial anisotropy", true, false, false, "Ms_element_field", "uniaxial anisotropy", "cpu", [](fullmag_fem_plan_desc &plan) {
@@ -502,7 +554,7 @@ void elementwise_material_context_builder_fails_closed_before_backend_initializa
              plan.mel_strain_voigt = uniform_strain;
              plan.mel_strain_len = 6;
          }},
-        {"CPU Ms exchange-disabled", true, false, false, "Ms_element_field", "native FEM handle lifecycle fallback", "cpu", [](fullmag_fem_plan_desc &plan) {
+        {"CPU Ms exchange-disabled", true, false, false, "Ms_element_field", "exchange-disabled plan", "cpu", [](fullmag_fem_plan_desc &plan) {
              plan.enable_exchange = 0;
          }},
         {"CUDA Ms GPU", true, false, false, "Ms_element_field", "GPU material-state upload", "gpu", [](fullmag_fem_plan_desc &plan) {
@@ -528,6 +580,15 @@ void elementwise_material_context_builder_fails_closed_before_backend_initializa
             reproducer.include_a);
         reproducer.configure(plan);
         const bool built = fullmag::fem::build_context_from_plan(ctx, plan, error);
+        if (built != reproducer.expect_accept) {
+            std::fprintf(
+                stderr,
+                "elementwise material case '%s': expected_accept=%d built=%d error=%s\n",
+                reproducer.name,
+                reproducer.expect_accept ? 1 : 0,
+                built ? 1 : 0,
+                error.c_str());
+        }
         check(
             built == reproducer.expect_accept,
             "Context builder must match the elementwise material legality table");

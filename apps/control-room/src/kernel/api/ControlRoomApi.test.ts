@@ -1690,7 +1690,7 @@ describe("ControlRoomApi", () => {
     });
   });
 
-  it.each(["pending", "stale_complete", "superseded", "complete"] as const)(
+  it.each(["pending", "stale_complete", "error", "complete"] as const)(
     "returns a %s live-publisher miss for resource invalidation without enqueueing compute_fields",
     async (state) => {
       const calls: Array<{ method: string | undefined; url: string }> = [];

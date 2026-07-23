@@ -4092,7 +4092,7 @@ export interface components {
             window?: string;
         };
         /** @enum {string} */
-        FieldMaterializationState: "complete" | "stale_complete" | "pending" | "superseded" | "error";
+        FieldMaterializationState: "complete" | "stale_complete" | "pending" | "error";
         FieldMatrixResponse: {
             aggregation?: string | null;
             bounds: components["schemas"]["FieldSliceBounds"];

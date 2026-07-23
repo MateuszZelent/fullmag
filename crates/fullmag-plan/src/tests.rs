@@ -10520,7 +10520,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_a: false,
             gpu: false,
             configure: |fem| fem.external_field = Some([1.0, 0.0, 0.0]),
-            expected: Some(("Ms_element_field", "Zeeman interaction", "cpu")),
+            expected: None,
         },
         Case {
             name: "CPU Ms demag",
@@ -10528,7 +10528,41 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_a: false,
             gpu: false,
             configure: |fem| fem.enable_demag = true,
-            expected: Some(("Ms_element_field", "demag interaction", "cpu")),
+            expected: None,
+        },
+        Case {
+            name: "CPU Ms missing consistent mass",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| fem.use_consistent_mass = None,
+            expected: Some((
+                "Ms_element_field",
+                "lumped-mass exchange projection",
+                "cpu",
+            )),
+        },
+        Case {
+            name: "CPU Ms Zeeman-only",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| {
+                fem.enable_exchange = false;
+                fem.external_field = Some([1.0, 0.0, 0.0]);
+            },
+            expected: Some(("Ms_element_field", "exchange-disabled plan", "cpu")),
+        },
+        Case {
+            name: "CPU Ms demag-only",
+            include_ms: true,
+            include_a: false,
+            gpu: false,
+            configure: |fem| {
+                fem.enable_exchange = false;
+                fem.enable_demag = true;
+            },
+            expected: Some(("Ms_element_field", "exchange-disabled plan", "cpu")),
         },
         Case {
             name: "CPU Ms uniaxial anisotropy",
@@ -10622,11 +10656,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_a: false,
             gpu: false,
             configure: |fem| fem.enable_exchange = false,
-            expected: Some((
-                "Ms_element_field",
-                "native FEM handle lifecycle fallback",
-                "cpu",
-            )),
+            expected: Some(("Ms_element_field", "exchange-disabled plan", "cpu")),
         },
         Case {
             name: "GPU Ms upload precedes active owners",
@@ -10669,11 +10699,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             include_a: false,
             gpu: false,
             configure: |_| {},
-            expected: Some((
-                "Ms_element_field",
-                "native FEM handle lifecycle fallback",
-                "cpu",
-            )),
+            expected: None,
         },
         Case {
             name: "CPU Ms relaxation metric",
@@ -10693,7 +10719,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
             },
             expected: Some((
                 "Ms_element_field",
-                "native FEM handle lifecycle fallback",
+                "native FEM relaxation algorithms",
                 "cpu",
             )),
         },
@@ -10703,6 +10729,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
         let mut fem = base.clone();
         fem.ms_element_field = case.include_ms.then_some(vec![0.8e6]);
         fem.a_element_field = case.include_a.then_some(vec![13e-12]);
+        fem.use_consistent_mass = case.include_ms.then_some(true);
         (case.configure)(&mut fem);
 
         match (
@@ -10722,7 +10749,7 @@ fn fem_planner_elementwise_material_legality_distinguishes_a_from_ms() {
                     assert_eq!(
                         error,
                         format!(
-                            "Ms_element_field is unsupported for {term} on resolved device '{device}': this runtime has no common element/quadrature material accessor"
+                            "Ms_element_field is unsupported for {term} on resolved device '{device}': this owner does not consume the common element/quadrature material accessor"
                         ),
                         "{} must preserve the native elementwise-Ms diagnostic convention",
                         case.name
@@ -10894,6 +10921,83 @@ fn fem_cpu_exchange_preserves_nodal_ms_and_conformal_element_a_payloads() {
         fem_plan.a_element_field.as_deref(),
         Some(&[8e-12, 13e-12][..]),
         "the conformal DG0 A payload must survive planning"
+    );
+}
+
+#[test]
+fn fem_cpu_exchange_and_zeeman_plan_preserves_conformal_dg0_ms() {
+    let mut ir = fem_minimal_test_ir();
+    ir.materials[0].saturation_magnetisation = 0.7e6;
+    ir.energy_terms = vec![
+        fullmag_ir::EnergyTermIR::Exchange,
+        fullmag_ir::EnergyTermIR::Zeeman {
+            b: [0.02, 0.0, 0.0],
+        },
+    ];
+    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+        region_id: "strip:conformal_ms".to_string(),
+        owner_object: "strip".to_string(),
+        name: "conformal_ms".to_string(),
+        shape: fullmag_ir::RegionShapeIR::Box {
+            size: [0.2, 0.2, 0.2],
+            center: [0.0, 0.0, 0.0],
+        },
+        frame: fullmag_ir::RegionFrameIR::Object,
+        enabled: true,
+        priority: 20,
+        mesh_policy: None,
+        material_overrides: vec![fullmag_ir::RegionMaterialOverrideIR {
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Constant {
+                value: serde_json::json!(1.1e6),
+                unit: Some("A/m".to_string()),
+            },
+            priority: 20,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        }],
+        texture_override: None,
+        material_transition: Some(fullmag_ir::MaterialTransitionSpecIR::Sharp),
+        realization_policy: fullmag_ir::RegionRealizationPolicyIR::Conformal,
+    });
+    let domain_asset = ir
+        .geometry_assets
+        .as_mut()
+        .and_then(|assets| assets.fem_domain_mesh_asset.as_mut())
+        .expect("inline FEM domain asset");
+    let mesh = domain_asset.mesh.as_mut().expect("inline FEM mesh");
+    mesh.nodes.push([0.0, 0.0, -1.0]);
+    mesh.elements = vec![[0, 2, 1, 4], [0, 1, 2, 3]];
+    mesh.element_markers = vec![1, 2];
+    mesh.boundary_faces = vec![[0, 1, 3], [0, 2, 4]];
+    mesh.boundary_markers = vec![1, 2];
+    domain_asset
+        .object_region_markers
+        .push(fullmag_ir::FemDomainRegionMarkerIR {
+            geometry_name: "strip:conformal_ms".to_string(),
+            marker: 2,
+        });
+    ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
+
+    let planned = plan(&ir).expect(
+        "canonical CPU planner must admit conformal DG0 Ms for the qualified exchange+Zeeman owner set",
+    );
+    let BackendPlanIR::Fem(fem_plan) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert!(fem_plan.material.ms_field.is_none());
+    assert_eq!(
+        fem_plan.ms_element_field.as_deref(),
+        Some(&[0.7e6, 1.1e6][..])
+    );
+    assert!(fem_plan.enable_exchange);
+    assert_eq!(
+        fem_plan.use_consistent_mass,
+        Some(true),
+        "canonical conformal DG0 Ms planning must select consistent-mass exchange"
+    );
+    assert_eq!(
+        fem_plan.external_field,
+        Some([0.02 / crate::util::MU0, 0.0, 0.0])
     );
 }
 
@@ -11181,7 +11285,7 @@ fn fem_sharp_aex_region_requires_conformal_in_strict() {
 }
 
 #[test]
-fn fem_sharp_conformal_ms_rejects_conflicting_nodal_and_element_realizations() {
+fn fem_sharp_conformal_ms_and_aex_use_exclusive_cpu_dg0_realizations() {
     let mut ir = fem_minimal_test_ir();
     ir.materials[0].saturation_magnetisation = 0.7e6;
     ir.materials[0].exchange_stiffness = 8e-12;
@@ -11248,28 +11352,24 @@ fn fem_sharp_conformal_ms_rejects_conflicting_nodal_and_element_realizations() {
     }
     ir.validation_profile.execution_mode = fullmag_ir::ExecutionMode::Strict;
 
-    let err = plan(&ir).expect_err("conflicting sharp and nodal Ms realizations must fail");
-    assert!(
-        err.reasons.iter().any(|reason| {
-            reason.contains("Ms")
-                && reason.contains("material.ms_field")
-                && reason.contains("ms_element_field")
-        }),
-        "unexpected planner errors: {:?}",
-        err.reasons
-    );
+    let planned = plan(&ir).expect("conformal CPU Ms/Aex must remain exclusively DG0");
+    let BackendPlanIR::Fem(fem) = planned.backend_plan else {
+        panic!("expected FEM plan");
+    };
+    assert!(fem.material.ms_field.is_none());
+    assert!(fem.material.a_field.is_none());
+    assert_eq!(fem.ms_element_field.as_deref(), Some(&[0.7e6, 1.1e6][..]));
+    assert_eq!(fem.a_element_field.as_deref(), Some(&[8e-12, 13e-12][..]));
 
     ir.problem_meta.runtime_metadata.insert(
         "runtime_selection".to_string(),
         serde_json::json!({"device": "gpu"}),
     );
-    let err = plan(&ir)
-        .expect_err("conflicting sharp and nodal Ms realizations must fail on GPU requests too");
+    let err = plan(&ir).expect_err("GPU requests must still fail closed for DG0 material upload");
     assert!(
         err.reasons.iter().any(|reason| {
-            reason.contains("Ms")
-                && reason.contains("material.ms_field")
-                && reason.contains("ms_element_field")
+            reason.contains("Ms_element_field")
+                && reason.contains("GPU material-state upload")
         }),
         "unexpected planner errors: {:?}",
         err.reasons

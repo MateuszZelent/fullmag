@@ -114,17 +114,16 @@ bool validate_elementwise_ms_values(const Context &ctx, std::string &error)
     return true;
 }
 
-const char *first_elementwise_ms_cpu_owner(const Context &ctx)
+const char *first_unsupported_elementwise_ms_cpu_owner(const Context &ctx)
 {
-    // Keep this order aligned with the plan import order and the effective
-    // field/RHS owners. A native handle can later enter direct relaxation, so
-    // a plan with no active owner still cannot accept discontinuous Ms without
-    // a common quadrature accessor.
-    if (ctx.zeeman.has_external_field) {
-        return "Zeeman interaction";
+    // Keep this order aligned with the planner. Exchange, Poisson demag, and
+    // Zeeman already consume the common CPU element/quadrature adapter, but
+    // consistent-mass exchange is the required owner for DG0 Ms.
+    if (!ctx.exchange.enabled) {
+        return "exchange-disabled plan";
     }
-    if (ctx.demag.enabled) {
-        return "demag interaction";
+    if (!ctx.exchange.mfem.use_consistent_mass) {
+        return "lumped-mass exchange projection";
     }
     if (ctx.anisotropy.uniaxial_enabled) {
         return "uniaxial anisotropy";
@@ -153,7 +152,7 @@ const char *first_elementwise_ms_cpu_owner(const Context &ctx)
     if (ctx.magnetoelastic.enabled) {
         return "magnetoelastic interaction";
     }
-    return "native FEM handle lifecycle fallback";
+    return nullptr;
 }
 
 } // namespace
@@ -269,12 +268,14 @@ bool validate_elementwise_ms_runtime_support(const Context &ctx, std::string &er
     const char *device = gpu ? "gpu" : "cpu";
     if (has_ms) {
         const char *owner = gpu ? "GPU material-state upload" :
-            first_elementwise_ms_cpu_owner(ctx);
-        error = std::string("Ms_element_field") + " is unsupported for " + owner +
-            " on resolved device '" +
-            device +
-            "': this runtime has no common element/quadrature material accessor";
-        return false;
+            first_unsupported_elementwise_ms_cpu_owner(ctx);
+        if (owner != nullptr) {
+            error = std::string("Ms_element_field") + " is unsupported for " + owner +
+                " on resolved device '" +
+                device +
+                "': this owner does not consume the common element/quadrature material accessor";
+            return false;
+        }
     }
 
     // A_e enters only the exchange weak form.  Unlike Ms_e it is not read by

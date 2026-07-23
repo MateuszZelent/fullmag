@@ -24295,13 +24295,22 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
-                field_materialization_states: vec![LiveFieldMaterializationStatus {
-                    quantity: "H_demag".to_string(),
-                    source_step: 9,
-                    request_revision: 12,
-                    state: LiveFieldMaterializationState::Pending,
-                    error: None,
-                }],
+                field_materialization_states: vec![
+                    LiveFieldMaterializationStatus {
+                        quantity: "H_demag".to_string(),
+                        source_step: 9,
+                        request_revision: 12,
+                        state: LiveFieldMaterializationState::Pending,
+                        error: None,
+                    },
+                    LiveFieldMaterializationStatus {
+                        quantity: "H_dmi_bulk".to_string(),
+                        source_step: 9,
+                        request_revision: 13,
+                        state: LiveFieldMaterializationState::Pending,
+                        error: None,
+                    },
+                ],
                 preview_field: None,
                 finished: false,
             },
@@ -24327,10 +24336,58 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
         .iter()
         .find(|entry| entry["quantity_id"] == "H_demag")
         .expect("pending H_demag descriptor");
-    assert_eq!(pending["state"], "pending");
-    assert_eq!(pending["source_step"], 9);
-    assert_eq!(pending["source_revision"], 12);
+    assert_eq!(pending["state"], "stale_complete");
+    assert_eq!(pending["source_step"], 4);
+    assert_eq!(pending["source_revision"], 7);
+    assert_eq!(pending["materialized_at_unix_ms"], 1_700_000_000_456_u64);
+    assert_eq!(pending["materialization_wall_time_ns"], 80_000_000);
+    assert_eq!(pending["stale_by_steps"], 5);
     assert_eq!(pending["available"], true);
+    let pending_without_payload = catalog["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["quantity_id"] == "H_dmi_bulk")
+        .expect("pending H_dmi_bulk descriptor");
+    assert_eq!(pending_without_payload["state"], "pending");
+    assert_eq!(pending_without_payload["source_step"], 9);
+    assert_eq!(pending_without_payload["source_revision"], 13);
+    assert_eq!(pending_without_payload["available"], false);
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let status = &mut guard
+            .as_mut()
+            .expect("live session exists")
+            .live_state
+            .as_mut()
+            .expect("live state exists")
+            .latest_step
+            .field_materialization_states[0];
+        status.state = LiveFieldMaterializationState::Superseded;
+    }
+
+    let superseded_catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(superseded_catalog_response.status(), StatusCode::OK);
+    let superseded_catalog = body_json(superseded_catalog_response).await;
+    let superseded = superseded_catalog["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["quantity_id"] == "H_demag")
+        .expect("superseded H_demag descriptor");
+    assert_eq!(superseded["state"], "stale_complete");
+    assert_eq!(superseded["source_step"], 4);
+    assert_eq!(superseded["source_revision"], 7);
 
     {
         let mut guard = state.current_live_state.write().await;
@@ -24359,8 +24416,11 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
     assert_eq!(meta_response.status(), StatusCode::OK);
     let meta = body_json(meta_response).await;
     assert_eq!(meta["state"], "error");
-    assert_eq!(meta["source_step"], 9);
-    assert_eq!(meta["source_revision"], 12);
+    assert_eq!(meta["source_step"], 4);
+    assert_eq!(meta["source_revision"], 7);
+    assert_eq!(meta["materialized_at_unix_ms"], 1_700_000_000_456_u64);
+    assert_eq!(meta["materialization_wall_time_ns"], 80_000_000);
+    assert_eq!(meta["stale_by_steps"], 5);
     assert_eq!(
         meta["materialization_error"],
         "native preview snapshot failed"

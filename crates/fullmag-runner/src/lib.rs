@@ -4479,9 +4479,15 @@ mod tests {
             "cached previews must not accumulate an unbounded set of native snapshots"
         );
         assert!(
-            preview.contains("let mut last_good_field = field.clone();")
-                && preview.contains("result.last_good_field"),
-            "retained heavy preview clones must be created by the worker and only moved by the solver callback"
+            preview.contains("PreviewDestination::Active => self.active_ready = Some(result.field)")
+                && preview.contains("PreviewDestination::Cache => self.cached_ready.push(result.field)"),
+            "completed preview payloads must be moved from the worker result into the bounded solver-side handoff"
+        );
+        let removed_callback_clone = ["let mut last_good_field = field.", "clone();"].concat();
+        let removed_reader = ["result.", "last_good_field"].concat();
+        assert!(
+            !preview.contains(&removed_callback_clone) && !preview.contains(&removed_reader),
+            "the callback contract must not regress to a duplicated last-good clone/reader handoff"
         );
     }
 

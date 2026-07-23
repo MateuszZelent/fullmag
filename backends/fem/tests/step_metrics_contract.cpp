@@ -3,6 +3,7 @@
  */
 
 #include "context.hpp"
+#include "core/fem_material_runtime.hpp"
 #include "cpu/mfem/runtime/step_metrics.hpp"
 
 #include <cmath>
@@ -186,10 +187,38 @@ void fill_common_step_metrics_reports_energy_fields_torque_and_averages() {
 #endif
 }
 
+void average_magnetization_consumes_dg0_ms_without_nodal_projection() {
+    fullmag::fem::Context ctx;
+    ctx.mesh.n_nodes = 8;
+    ctx.state.m_xyz.assign(24u, 0.0);
+    for (std::size_t node = 0; node < 4u; ++node) {
+        ctx.state.m_xyz[node * 3u] = 1.0;
+    }
+    for (std::size_t node = 4u; node < 8u; ++node) {
+        ctx.state.m_xyz[node * 3u + 1u] = 1.0;
+    }
+    ctx.material_fields.Ms_element_field = {1.0, 3.0};
+    ctx.material_fields.runtime.emplace(fullmag::fem::P1TetrahedralMaterialRealization(
+        8u,
+        {
+            {{{0u, 1u, 2u, 3u}}, 1.0},
+            {{{4u, 5u, 6u, 7u}}, 1.0},
+        },
+        {0u, 1u},
+        {fullmag::fem::MaterialCoefficientLocation::element_dg0, {1.0, 3.0}},
+        {fullmag::fem::MaterialCoefficientLocation::uniform, {1.0}}));
+
+    const auto average = fullmag::fem::average_magnetization_components(ctx);
+    check_near(average[0], 0.25, 1e-15, "DG0 Ms weighted mx");
+    check_near(average[1], 0.75, 1e-15, "DG0 Ms weighted my");
+    check_near(average[2], 0.0, 1e-15, "DG0 Ms weighted mz");
+}
+
 } // namespace
 
 int main() {
     step_metrics_are_owned_by_runtime_module();
     fill_common_step_metrics_reports_energy_fields_torque_and_averages();
+    average_magnetization_consumes_dg0_ms_without_nodal_projection();
     return 0;
 }
