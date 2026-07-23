@@ -36,7 +36,7 @@
 - Produces:
 
 ```cpp
-EnergyDifference compose_direct_energy_difference(
+EnergyDifference compose_term_complete_energy_difference(
     double endpoint_residual_delta_joules,
     double endpoint_residual_operand_absolute_sum_joules,
     double direct_delta_joules,
@@ -45,6 +45,7 @@ EnergyDifference compose_direct_energy_difference(
 ```
 
 - The second argument is the sum of absolute base/trial operands used to form residual endpoint differences. It is never `abs(endpoint_residual_delta_joules)`.
+- Task 1 adds this new, explicitly named helper without changing the semantics of the existing `compose_direct_energy_difference` caller. Task 3 migrates the production CUDA caller and deletes the old helper atomically, preventing a same-signature semantic transition from compiling with misordered values.
 
 - [ ] **Step 1: Add RED tests for catastrophic cancellation and strict uphill rejection**
 
@@ -54,7 +55,7 @@ Add a manufactured test with the retained failure scale:
 const double endpoint_total = -2.0e-17;
 const double exchange_direct = -2.1037518401e-39;
 const double zeeman_direct = 7.9035597018e-49;
-const auto difference = compose_direct_energy_difference(
+const auto difference = compose_term_complete_energy_difference(
     0.0,
     0.0,
     exchange_direct + zeeman_direct,
@@ -66,7 +67,7 @@ check(strict_armijo_difference_decision(difference, -6.0314e-43) ==
           ArmijoDifferenceDecision::Accept,
       "retained GPU Zeeman failure components must satisfy strict Armijo");
 
-const auto residual = compose_direct_energy_difference(
+const auto residual = compose_term_complete_energy_difference(
     0.0,
     2.0 * std::abs(endpoint_total),
     7.9035597018e-49,
@@ -97,7 +98,7 @@ Expected: failure in the new endpoint-operand-scale contract because the old hel
 Implement:
 
 ```cpp
-inline EnergyDifference compose_direct_energy_difference(
+inline EnergyDifference compose_term_complete_energy_difference(
     double endpoint_residual_delta_joules,
     double endpoint_residual_operand_absolute_sum_joules,
     double direct_delta_joules,
@@ -116,7 +117,7 @@ inline EnergyDifference compose_direct_energy_difference(
 }
 ```
 
-Preserve fail-closed handling in `strict_armijo_difference_decision`; do not clamp, floor, or convert ambiguity to acceptance.
+Preserve the old `compose_direct_energy_difference` unchanged until its only production caller migrates in Task 3. Preserve fail-closed handling in `strict_armijo_difference_decision`; do not clamp, floor, or convert ambiguity to acceptance.
 
 - [ ] **Step 4: Update all test callers to the new semantics and run GREEN**
 
@@ -288,7 +289,7 @@ for (const auto slot : endpoint_residual_slots) {
     residual_delta += trial_term - base_term;
     residual_operand_abs += std::abs(base_term) + std::abs(trial_term);
 }
-difference = relaxation::compose_direct_energy_difference(
+difference = relaxation::compose_term_complete_energy_difference(
     residual_delta,
     residual_operand_abs,
     direct_delta,
@@ -296,7 +297,7 @@ difference = relaxation::compose_direct_energy_difference(
     scalar_term_count);
 ```
 
-Keep `trial_snapshot.total_energy_j` for published observables only. It must not determine Armijo acceptance.
+Keep `trial_snapshot.total_energy_j` for published observables only. It must not determine Armijo acceptance. In the same change, delete the now-unused legacy `compose_direct_energy_difference`; no stale cancellation-prone helper remains after Task 3.
 
 - [ ] **Step 5: Preserve refinement and diagnostics**
 
