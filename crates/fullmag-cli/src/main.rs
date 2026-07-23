@@ -186,13 +186,7 @@ fn main() -> Result<()> {
                 .map_err(|e| anyhow!("{}", e))?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "status": result.status,
-                    "total_steps": result.steps.len(),
-                    "final_energy": result.steps.last().map(|s| s.e_ex),
-                    "final_total_energy": result.steps.last().map(|s| s.e_total),
-                    "output_dir": output_dir.display().to_string(),
-                }))?
+                serde_json::to_string_pretty(&run_json_summary(&result, &output_dir))?
             );
         }
         Command::ResolveRuntimeInvocation { shell, raw_args } => {
@@ -419,6 +413,29 @@ fn launch_ui(ui: UiCli) -> Result<()> {
     );
     let _ = ui_child.wait();
     Ok(())
+}
+
+fn run_json_summary(
+    result: &fullmag_runner::RunResult,
+    output_dir: &std::path::Path,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": result.status,
+        "total_steps": result.steps.len(),
+        "final_energy": result.steps.last().map(|step| step.e_ex),
+        "final_total_energy": result.steps.last().map(|step| step.e_total),
+        "backend_create_wall_time_ns": result
+            .steps
+            .iter()
+            .map(|step| step.backend_create_wall_time_ns)
+            .find(|duration| *duration > 0),
+        "first_accepted_step_demag_solver_apply_wall_time_ns": result
+            .steps
+            .iter()
+            .map(|step| step.demag_solver_apply_wall_time_ns)
+            .find(|duration| *duration > 0),
+        "output_dir": output_dir.display().to_string(),
+    })
 }
 
 fn is_script_mode(raw_args: &[OsString]) -> bool {
@@ -796,6 +813,35 @@ mod tests {
         FemDomainRegionMarkerIR, FemHintsIR, FemPlanIR, GeometryAssetsIR, GridDimensions,
         IntegratorChoice, MaterialIR, MeshIR, RelaxationAlgorithmIR, RelaxationControlIR,
     };
+
+    #[test]
+    fn run_json_summary_reports_create_and_first_accepted_step_demag_apply_aggregate() {
+        let result = fullmag_runner::RunResult {
+            status: fullmag_runner::RunStatus::Completed,
+            steps: vec![
+                fullmag_runner::StepStats::default(),
+                fullmag_runner::StepStats {
+                    backend_create_wall_time_ns: 91,
+                    demag_solver_apply_wall_time_ns: 41,
+                    ..fullmag_runner::StepStats::default()
+                },
+                fullmag_runner::StepStats {
+                    demag_solver_apply_wall_time_ns: 99,
+                    ..fullmag_runner::StepStats::default()
+                },
+            ],
+            final_magnetization: Vec::new(),
+            completion: None,
+        };
+
+        let payload = run_json_summary(&result, std::path::Path::new("/tmp/run"));
+
+        assert_eq!(payload["backend_create_wall_time_ns"], 91);
+        assert_eq!(
+            payload["first_accepted_step_demag_solver_apply_wall_time_ns"],
+            41
+        );
+    }
 
     fn shared_domain_fem_problem() -> ProblemIR {
         let mut problem = ProblemIR::bootstrap_example();

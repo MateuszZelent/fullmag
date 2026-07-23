@@ -30,6 +30,7 @@ fn rerun_if_changed_tree(path: impl AsRef<std::path::Path>) {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=FULLMAG_CUDA_ARCHITECTURES");
     if let Ok(lib_dir) = std::env::var("FULLMAG_FEM_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", lib_dir);
         println!("cargo:rustc-link-lib=dylib=fullmag_fem");
@@ -94,6 +95,12 @@ fn main() {
             if use_mfem_stack { "ON" } else { "OFF" }
         ))
         .arg(format!("-DFULLMAG_FEM_WITH_SLEPC={}", with_slepc));
+    if let Ok(value) = std::env::var("FULLMAG_CUDA_ARCHITECTURES") {
+        let value = value.trim();
+        if !value.is_empty() {
+            configure.arg(format!("-DCMAKE_CUDA_ARCHITECTURES={value}"));
+        }
+    }
 
     let configure_status = configure
         .status()

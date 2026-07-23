@@ -410,6 +410,11 @@ pub struct StepStats {
     #[serde(default)]
     pub max_torque_T: f64,
     pub wall_time_ns: u64,
+    /// One-time wall time spent constructing the native backend/context.
+    ///
+    /// This is attached to the first accepted step produced by that backend.
+    #[serde(default)]
+    pub backend_create_wall_time_ns: u64,
     #[serde(default)]
     pub exchange_wall_time_ns: u64,
     #[serde(default)]
@@ -703,6 +708,7 @@ impl Default for StepStats {
             max_torque_Apm: 0.0,
             max_torque_T: 0.0,
             wall_time_ns: 0,
+            backend_create_wall_time_ns: 0,
             exchange_wall_time_ns: 0,
             demag_wall_time_ns: 0,
             demag_assemble_wall_time_ns: 0,
@@ -839,6 +845,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
     #[test]
     fn demag_profile_step_stats_flow_into_diagnostics() {
         let stats = StepStats {
+            backend_create_wall_time_ns: 31,
             demag_wall_time_ns: 17,
             demag_assemble_wall_time_ns: 3,
             demag_solve_wall_time_ns: 5,
@@ -852,6 +859,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
         };
 
         let diagnostics = stats.to_diagnostics();
+        assert_eq!(diagnostics.backend_create_wall_time_ns, 31);
         assert_eq!(diagnostics.demag_wall_time_ns, 17);
         assert_eq!(diagnostics.demag_assemble_wall_time_ns, 3);
         assert_eq!(diagnostics.demag_solve_wall_time_ns, 5);
@@ -1202,6 +1210,7 @@ impl StepStats {
             time: self.time,
             dt: self.dt,
             wall_time_ns: self.wall_time_ns,
+            backend_create_wall_time_ns: self.backend_create_wall_time_ns,
             exchange_wall_time_ns: self.exchange_wall_time_ns,
             demag_wall_time_ns: self.demag_wall_time_ns,
             demag_assemble_wall_time_ns: self.demag_assemble_wall_time_ns,

@@ -3285,6 +3285,86 @@ run-nanoflower-interactive-quadro:
 gpu_runtime_bin := repo_root + "/.fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu"
 gpu_runtime_manifest := repo_root + "/.fullmag/runtimes/fem-gpu-host/manifest.json"
 
+validate-fem-gpu-runtime-variant variant:
+    variant_root=".fullmag/runtimes/fem-gpu-variants/{{variant}}"; \
+      if [ ! -d "$variant_root" ]; then \
+        echo "Managed FEM runtime variant is missing: $variant_root" >&2; \
+        exit 2; \
+      fi; \
+      python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "$variant_root"
+
+select-fem-gpu-runtime-variant variant:
+    just validate-fem-gpu-runtime-variant "{{variant}}"
+    active=".fullmag/runtimes/fem-gpu-host"; \
+      if [ -e "$active" ] && [ ! -L "$active" ]; then \
+        echo "Refusing to replace non-symlink managed FEM runtime: $active" >&2; \
+        exit 2; \
+      fi; \
+      next=".fullmag/runtimes/.fem-gpu-host.next.$$"; \
+      ln -sfn "fem-gpu-variants/{{variant}}" "$next"; \
+      mv -Tf "$next" "$active"
+    python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root .fullmag/runtimes/fem-gpu-host
+
+restore-fem-gpu-runtime-variant variant:
+    just select-fem-gpu-runtime-variant "{{variant}}"
+
+build-fem-gpu-task6-runner-harness candidate_variant:
+    bash scripts/build_managed_fem_gpu_runner_harness.sh "{{candidate_variant}}"
+
+benchmark-fem-gpu-runtime-architecture-ab baseline_variant candidate_variant runner output_dir:
+    python3 scripts/analysis/benchmark_fem_gpu_runtime_architectures.py \
+      --baseline-variant "{{baseline_variant}}" \
+      --candidate-variant "{{candidate_variant}}" \
+      --runner "{{runner}}" \
+      --output-dir "{{output_dir}}"
+
+migrate-active-fem-gpu-runtime-to-variant exact_copy_variant selected_variant:
+    active=".fullmag/runtimes/fem-gpu-host"; \
+      exact_copy=".fullmag/runtimes/fem-gpu-variants/{{exact_copy_variant}}"; \
+      selected=".fullmag/runtimes/fem-gpu-variants/{{selected_variant}}"; \
+      if [ ! -d "$active" ] || [ -L "$active" ]; then \
+        echo "Active managed FEM runtime must be a directory for one-time migration: $active" >&2; \
+        exit 2; \
+      fi; \
+      if [ ! -d "$exact_copy" ]; then \
+        echo "Exact preserved FEM runtime copy is missing: $exact_copy" >&2; \
+        exit 2; \
+      fi; \
+      python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "$active" --compare-exact "$exact_copy"; \
+      just validate-fem-gpu-runtime-variant "{{selected_variant}}"; \
+      backup="${active}.directory-backup.$(date -u +%Y%m%dT%H%M%SZ)"; \
+      if [ -e "$backup" ]; then \
+        echo "Migration backup already exists: $backup" >&2; \
+        exit 2; \
+      fi; \
+      mv "$active" "$backup"; \
+      next=".fullmag/runtimes/.fem-gpu-host.next.$$"; \
+      ln -sfn "fem-gpu-variants/{{selected_variant}}" "$next"; \
+      if ! mv -Tf "$next" "$active" || ! python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root "$active"; then \
+        if [ -L "$active" ]; then mv "$active" "${active}.failed-symlink.$$"; fi; \
+        mv "$backup" "$active"; \
+        exit 2; \
+      fi; \
+      echo "Preserved original active runtime directory at: $backup"
+
+restore-active-fem-gpu-runtime-directory-backup backup_name:
+    active=".fullmag/runtimes/fem-gpu-host"; \
+      backup=".fullmag/runtimes/{{backup_name}}"; \
+      if [ ! -L "$active" ]; then \
+        echo "Active managed FEM runtime must be a symlink before directory restore: $active" >&2; \
+        exit 2; \
+      fi; \
+      if [ ! -d "$backup" ] || [ -L "$backup" ]; then \
+        echo "Managed FEM runtime directory backup is missing: $backup" >&2; \
+        exit 2; \
+      fi; \
+      previous_link="${active}.variant-link-backup.$(date -u +%Y%m%dT%H%M%SZ)"; \
+      mv "$active" "$previous_link"; \
+      mv "$backup" "$active"; \
+      test -x "$active/bin/fullmag-fem-gpu"; \
+      test -f "$active/manifest.json"; \
+      echo "Preserved previous active variant symlink at: $previous_link"
+
 run-nanoflower-interactive-quadro-gpu:
     just ensure-python
     just build fullmag-dev
@@ -3295,7 +3375,7 @@ ensure-managed-fem-runtime:
         echo "Managed FEM runtime bundle is missing or incomplete; rebuilding it now." >&2; \
         just rebuild-fem-runtime; \
     fi
-    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh scripts/lib/runtime_bundle_copy.sh Cargo.toml Cargo.lock rust-toolchain.toml \( -path \"*/.fullmag\" -o -path \"*/__pycache__\" \) -prune -o -type f ! -name \"*.pyc\" -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
+    stale_source="$(find crates/fullmag-api crates/fullmag-authoring crates/fullmag-cli crates/fullmag-runner crates/fullmag-quantities crates/fullmag-plan crates/fullmag-ir crates/fullmag-engine crates/fullmag-session crates/fullmag-fdm-demag crates/fullmag-fdm-sys crates/fullmag-fem-sys native/CMakeLists.txt native/include backends/fem backends/fdm docker/fem-gpu/Dockerfile compose.yaml scripts/export_fem_gpu_runtime.sh scripts/build_managed_fem_runtime_manifest.py scripts/inspect_cuda_architectures.py scripts/lib/runtime_bundle_copy.sh Cargo.toml Cargo.lock rust-toolchain.toml \( -path \"*/.fullmag\" -o -path \"*/__pycache__\" \) -prune -o -type f ! -name \"*.pyc\" -newer '{{gpu_runtime_manifest}}' -print -quit 2>/dev/null)"; \
     if [ -n "$stale_source" ]; then \
         echo "Managed FEM runtime bundle is stale; newer runtime source detected: $stale_source" >&2; \
         echo "Rebuilding managed FEM runtime bundle now." >&2; \

@@ -89,6 +89,9 @@ pub(crate) struct ScriptRunSummary {
     pub final_e_dmi: Option<f64>,
     pub final_e_total: Option<f64>,
     pub wall_time_ns: Option<u64>,
+    pub backend_create_wall_time_ns: Option<u64>,
+    /// First non-zero accepted-step aggregate, not a literal single solve.
+    pub first_accepted_step_demag_solver_apply_wall_time_ns: Option<u64>,
     pub exchange_wall_time_ns: Option<u64>,
     pub demag_wall_time_ns: Option<u64>,
     pub demag_assemble_wall_time_ns: Option<u64>,

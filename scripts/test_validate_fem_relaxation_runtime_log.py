@@ -1846,6 +1846,73 @@ def test_gpu_demag_single_setup_gate_requires_zero_step_setup_and_derived_reuse(
     )
 
 
+def test_startup_timing_fields_keep_backend_create_and_first_solver_apply_separate() -> None:
+    benchmark = load_benchmark_module()
+
+    assert benchmark.startup_timing_fields(
+        {
+            "backend_create_wall_time_ns": 12_500_000,
+            "first_accepted_step_demag_solver_apply_wall_time_ns": 3_250_000,
+        }
+    ) == {
+        "backend_create_wall_time_ms": 12.5,
+        "first_accepted_step_demag_solver_apply_wall_time_ms": 3.25,
+    }
+
+    base = {
+        "status": "ok",
+        "solver_mesh_signature": "mesh",
+        "backend": "fem_gpu",
+        "mesh_path": "mesh.json",
+        "scenario": "box500_airbox_exchange_demag",
+        "integrator": "heun",
+        "relaxation_algorithm": "nonlinear_cg",
+        "timestep_policy": "fixed",
+        "requested_cpu_thread_spec": "auto",
+        "requested_demag_solver": "CG",
+        "requested_demag_preconditioner": "AMG",
+    }
+    summary = benchmark.performance_distribution_summary(
+        [
+            {
+                **base,
+                "backend_create_wall_time_ms": create_ms,
+                "first_accepted_step_demag_solver_apply_wall_time_ms": apply_ms,
+            }
+            for create_ms, apply_ms in [(10, 2), (12, 3), (20, 5)]
+        ]
+    )
+    assert summary[0]["metrics"]["backend_create_wall_time_ms"]["p50"] == 12.0
+    assert (
+        summary[0]["metrics"]["first_accepted_step_demag_solver_apply_wall_time_ms"]["p95"]
+        == 5.0
+    )
+
+
+def test_benchmark_harness_can_pin_one_runner_to_a_selected_runtime_root(
+    monkeypatch, tmp_path
+) -> None:
+    runtime_root = tmp_path / "baseline-runtime"
+    runner = tmp_path / "instrumented-runner"
+    monkeypatch.setenv("FULLMAG_FEM_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("FULLMAG_BENCH_GPU_BIN", str(runner))
+
+    benchmark = load_benchmark_module()
+
+    assert benchmark.MANAGED_FEM_RUNTIME_ROOT == runtime_root
+    assert benchmark.FULLMAG_GPU == runner
+
+    runtime_root.mkdir()
+    manifest = runtime_root / "manifest.json"
+    manifest.write_text('{"schema":2}\n', encoding="utf-8")
+    assert benchmark.runtime_bundle_identity(runtime_root) == {
+        "runtime_bundle_root": str(runtime_root.resolve()),
+        "runtime_manifest_sha256": benchmark.hashlib.sha256(
+            manifest.read_bytes()
+        ).hexdigest(),
+    }
+
+
 def test_gpu_zero_global_sync_gate_uses_strict_compute_sync_audit() -> None:
     benchmark = load_benchmark_module()
     good = {

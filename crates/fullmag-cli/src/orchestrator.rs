@@ -10045,6 +10045,14 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         final_e_dmi: aggregated_steps.last().map(|step| step.e_dmi),
         final_e_total: aggregated_steps.last().map(|step| step.e_total),
         wall_time_ns: aggregated_steps.last().map(|step| step.wall_time_ns),
+        backend_create_wall_time_ns: aggregated_steps
+            .iter()
+            .map(|step| step.backend_create_wall_time_ns)
+            .find(|duration| *duration > 0),
+        first_accepted_step_demag_solver_apply_wall_time_ns: aggregated_steps
+            .iter()
+            .map(|step| step.demag_solver_apply_wall_time_ns)
+            .find(|duration| *duration > 0),
         exchange_wall_time_ns: aggregated_steps
             .last()
             .map(|step| step.exchange_wall_time_ns),

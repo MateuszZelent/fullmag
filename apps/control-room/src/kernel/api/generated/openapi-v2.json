@@ -18206,6 +18206,11 @@
             "minimum": 0,
             "type": "integer"
           },
+          "backend_create_wall_time_ns": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "delta_wall_time_ns": {
             "format": "int64",
             "minimum": 0,

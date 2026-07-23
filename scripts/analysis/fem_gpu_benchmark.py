@@ -24,9 +24,19 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BENCHMARK_DIR = REPO_ROOT / "docs" / "reports"
 CSV_PATH = BENCHMARK_DIR / "fem_gpu_benchmark_results.csv"
-FULLMAG_GPU = REPO_ROOT / ".fullmag" / "runtimes" / "fem-gpu-host" / "bin" / "fullmag-fem-gpu"
+MANAGED_FEM_RUNTIME_ROOT = Path(
+    os.environ.get(
+        "FULLMAG_FEM_RUNTIME_ROOT",
+        str(REPO_ROOT / ".fullmag" / "runtimes" / "fem-gpu-host"),
+    )
+)
+FULLMAG_GPU = Path(
+    os.environ.get(
+        "FULLMAG_BENCH_GPU_BIN",
+        str(MANAGED_FEM_RUNTIME_ROOT / "bin" / "fullmag-fem-gpu"),
+    )
+)
 FULLMAG_CPU = Path(os.environ.get("FULLMAG_BENCH_CPU_BIN", str(FULLMAG_GPU)))
-MANAGED_FEM_RUNTIME_ROOT = REPO_ROOT / ".fullmag" / "runtimes" / "fem-gpu-host"
 BENCH_SCRIPT = REPO_ROOT / "examples" / "bench_fem_gpu_long.py"
 FEM_CMAKE = REPO_ROOT / "backends" / "fem" / "CMakeLists.txt"
 GPU_RK_CUDA_SOURCE = (
@@ -236,6 +246,8 @@ RELAX_TORQUE_TOLERANCE_APM = RELAX_TORQUE_TOLERANCE_T / MU0
 FULL_RELAXATION_MAX_STEPS = 50_000
 PERFORMANCE_REGRESSION_METRICS = (
     "wall_time_ms",
+    "backend_create_wall_time_ms",
+    "first_accepted_step_demag_solver_apply_wall_time_ms",
     "demag_solver_apply_wall_time_ms",
     "demag_solve_wall_time_ms",
     "demag_assemble_wall_time_ms",
@@ -559,6 +571,15 @@ def validate_runtime_restore_manifest(path: Path) -> dict[str, object]:
                 f"got {library_path.stat().st_ino}"
             )
     return payload
+
+
+def runtime_bundle_identity(runtime_root: Path) -> dict[str, str]:
+    resolved_root = runtime_root.resolve()
+    manifest_path = resolved_root / "manifest.json"
+    return {
+        "runtime_bundle_root": str(resolved_root),
+        "runtime_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+    }
 
 
 class ThreadCountSpec:
@@ -2464,6 +2485,37 @@ def problem_ir_execution_command(
     ]
 
 
+def script_execution_command(binary: Path, run_dir: Path) -> list[str]:
+    return [
+        str(binary),
+        str(BENCH_SCRIPT),
+        "--headless",
+        "--json",
+        "--output-dir",
+        str(run_dir),
+        "--workspace-root",
+        str(run_dir / "workspace-history"),
+    ]
+
+
+def parse_script_run_summary(output: str) -> Mapping[str, object] | None:
+    decoder = json.JSONDecoder()
+    for offset, character in reversed(tuple(enumerate(output))):
+        if character != "{":
+            continue
+        try:
+            candidate, _ = decoder.raw_decode(output[offset:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(candidate, Mapping):
+            continue
+        if (
+            "workspace_dir" in candidate or "output_dir" in candidate
+        ) and "backend_create_wall_time_ns" in candidate:
+            return candidate
+    return None
+
+
 def performance_fixture_mesh_path(manifest_path: Path, resolution: str) -> Path:
     if resolution == "fine":
         name = manifest_path.name.removesuffix(".fixture.json") + ".mesh.json"
@@ -2643,6 +2695,7 @@ def run_backend(
         "dt_s": dt,
         "requested_cpu_thread_spec": thread_spec.label,
         "case_timeout_s": timeout_s,
+        **runtime_bundle_identity(MANAGED_FEM_RUNTIME_ROOT),
         **load_mesh_stats(mesh_path),
     }
     env = os.environ.copy()
@@ -2768,14 +2821,7 @@ def run_backend(
 
     with tempfile.TemporaryDirectory(prefix=f"fullmag_{backend_label.lower()}_bench_") as run_dir:
         env["FULLMAG_RUN_DIR"] = run_dir
-        command = [
-            str(binary),
-            str(BENCH_SCRIPT),
-            "--headless",
-            "--json",
-            "--output-dir",
-            str(run_dir),
-        ]
+        command = script_execution_command(binary, Path(run_dir))
         if problem_ir is not None:
             problem_ir_path = Path(run_dir) / "canonical.problem-ir.json"
             problem_ir_payload = canonical_problem_ir_bytes(problem_ir)
@@ -2825,9 +2871,26 @@ def run_backend(
     combined_output = "\n".join(
         part for part in [completed.stdout, completed.stderr] if part.strip()
     )
+    raw_case_output = env.get("FULLMAG_BENCH_RAW_CASE_OUTPUT")
+    if raw_case_output:
+        raw_path = Path(raw_case_output)
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        with raw_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"\n===== {backend_label} case =====\n")
+            handle.write(combined_output)
+            handle.write("\n")
     payload = parse_benchmark_result(combined_output)
     if payload is None:
         payload = artifact_payload
+    script_summary = parse_script_run_summary(combined_output)
+    if payload is not None and script_summary is not None:
+        payload = dict(payload)
+        for key in (
+            "backend_create_wall_time_ns",
+            "first_accepted_step_demag_solver_apply_wall_time_ns",
+        ):
+            if payload.get(key) is None:
+                payload[key] = script_summary.get(key)
     if metadata is None:
         metadata = load_metadata_from_payload(payload)
     if not final_scalar_row:
@@ -2988,6 +3051,7 @@ def run_backend(
                 "hot_loop_exchange_d2h_bytes": provenance.get(
                     "hot_loop_exchange_d2h_bytes"
                 ),
+                **startup_timing_fields(payload),
                 "hot_loop_exchange_host_sync_count": provenance.get(
                     "hot_loop_exchange_host_sync_count"
                 ),
@@ -3268,6 +3332,17 @@ def ns_to_ms(value: object) -> float | None:
         return round(float(value) / 1_000_000.0, 6)
     except (TypeError, ValueError):
         return None
+
+
+def startup_timing_fields(payload: Mapping[str, object]) -> dict[str, float | None]:
+    return {
+        "backend_create_wall_time_ms": ns_to_ms(
+            payload.get("backend_create_wall_time_ns")
+        ),
+        "first_accepted_step_demag_solver_apply_wall_time_ms": ns_to_ms(
+            payload.get("first_accepted_step_demag_solver_apply_wall_time_ns")
+        ),
+    }
 
 
 def first_present(*values: object) -> object | None:

@@ -1,5 +1,7 @@
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS deps
 
+ARG FULLMAG_CUDA_ARCHITECTURES="80-real;89-real;90-real;90-virtual"
+ARG FULLMAG_HYPRE_GPU_ARCHITECTURES="60 70 80 89 90"
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CMAKE_VERSION=3.30.5
 ENV MFEM_REF=v4.9
@@ -15,6 +17,8 @@ ENV NVCC=/usr/local/cuda/bin/nvcc
 ENV PATH=/usr/local/cuda/bin:${INSTALL_PREFIX}/bin:/root/.cargo/bin:$PATH
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${INSTALL_PREFIX}/lib:${LD_LIBRARY_PATH}
 ENV FULLMAG_FEM_MFEM_DEVICE=ceed-cuda:/gpu/cuda/shared
+ENV FULLMAG_CUDA_ARCHITECTURES=${FULLMAG_CUDA_ARCHITECTURES}
+ENV FULLMAG_HYPRE_GPU_ARCHITECTURES=${FULLMAG_HYPRE_GPU_ARCHITECTURES}
 ENV CMAKE_PREFIX_PATH=${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -56,7 +60,7 @@ RUN git clone --depth 1 --branch ${HYPRE_REF} https://github.com/hypre-space/hyp
       --enable-shared \
       --with-openmp \
       --with-cuda \
-      --with-gpu-arch="60 70 80 90" \
+      --with-gpu-arch="${FULLMAG_HYPRE_GPU_ARCHITECTURES}" \
       --without-umpire && \
     make -j"$(nproc)" && \
     make install
@@ -71,6 +75,7 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
       -DMFEM_USE_OPENMP=YES \
       -DMFEM_USE_METIS=NO \
       -DMFEM_USE_CUDA=YES \
+      -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES}" \
       -DMFEM_USE_CEED=YES \
       -DCEED_DIR=${INSTALL_PREFIX} \
       -DMFEM_USE_HYPRE=YES \
@@ -80,6 +85,7 @@ RUN cmake -S /tmp/build/mfem -B /tmp/build/mfem/build \
 
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS fem-gpu-dev
 
+ARG FULLMAG_CUDA_ARCHITECTURES="80-real;89-real;90-real;90-virtual"
 ARG NODE_VERSION=24.18.0
 ARG NODE_SHA256_AMD64=55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742
 ARG NODE_SHA256_ARM64=58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6
@@ -93,6 +99,7 @@ ENV PATH=/usr/local/cuda/bin:/root/.cargo/bin:${PNPM_HOME}:${INSTALL_PREFIX}/bin
 ENV CMAKE_PREFIX_PATH=${INSTALL_PREFIX}:${CMAKE_PREFIX_PATH}
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${INSTALL_PREFIX}/lib:${LD_LIBRARY_PATH}
 ENV FULLMAG_FEM_MFEM_DEVICE=ceed-cuda:/gpu/cuda/shared
+ENV FULLMAG_CUDA_ARCHITECTURES=${FULLMAG_CUDA_ARCHITECTURES}
 # Build contract: require MFEM stack, CUDA backend, and libCEED so that
 # `cargo build --features fem-gpu` inside this container never silently
 # produces a stub backend.

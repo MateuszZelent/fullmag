@@ -199,6 +199,8 @@ pub struct SolverProfileStepSample {
     pub time: f64,
     pub dt: f64,
     pub total_ns: u64,
+    #[serde(default)]
+    pub backend_create_wall_time_ns: u64,
     pub phase_sum_ns: u64,
     pub missing_ns: u64,
     pub phases: Vec<SolverProfilePhaseSample>,
@@ -284,6 +286,7 @@ impl SolverProfileStepSample {
             time: stats.time,
             dt: stats.dt,
             total_ns,
+            backend_create_wall_time_ns: stats.backend_create_wall_time_ns,
             phase_sum_ns,
             missing_ns: total_ns.saturating_sub(phase_sum_ns),
             phases: vec![

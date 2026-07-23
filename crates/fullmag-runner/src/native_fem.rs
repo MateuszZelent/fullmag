@@ -549,6 +549,7 @@ pub(crate) struct NativeFemBackend {
     demag_solver: Option<String>,
     demag_preconditioner: Option<String>,
     adaptive_max_error: Option<f64>,
+    backend_create_wall_time_ns: Option<u64>,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -1544,6 +1545,7 @@ impl NativeFemBackend {
         plan: &fullmag_ir::FemPlanIR,
         eager_initial_effective_field: bool,
     ) -> Result<Self, RunError> {
+        let backend_create_started = std::time::Instant::now();
         configure_managed_openmpi_environment();
         let inferred_element_markers = normalized_native_runtime_element_markers(plan)?;
         let runtime_plan;
@@ -2242,8 +2244,19 @@ impl NativeFemBackend {
                 .as_ref()
                 .filter(|adaptive| adaptive.rtol == 0.0)
                 .map(|adaptive| adaptive.atol),
+            backend_create_wall_time_ns: Some(
+                backend_create_started
+                    .elapsed()
+                    .as_nanos()
+                    .min(u128::from(u64::MAX)) as u64,
+            ),
         };
         Ok(backend)
+    }
+
+    fn attach_backend_create_timing(&mut self, stats: &mut StepStats) {
+        stats.backend_create_wall_time_ns =
+            self.backend_create_wall_time_ns.take().unwrap_or_default();
     }
 
     fn apply_demag_solver_policy_to_step_stats(&self, stats: &mut StepStats) {
@@ -2554,6 +2567,7 @@ impl NativeFemBackend {
             ..StepStats::default()
         };
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
+        self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {
@@ -2822,6 +2836,7 @@ impl NativeFemBackend {
             ..StepStats::default()
         };
         self.apply_demag_solver_policy_to_step_stats(&mut step_stats);
+        self.attach_backend_create_timing(&mut step_stats);
         self.attach_transfer_audit(&mut step_stats)?;
         step_stats.per_object_scalars =
             if self.object_weights.len() == 1 && self.object_weights[0].0 == "free" {

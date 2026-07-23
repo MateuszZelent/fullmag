@@ -104,6 +104,8 @@ pub struct SolverProfileStepSampleResource {
     pub time: f64,
     pub dt: f64,
     pub total_ns: u64,
+    #[serde(default)]
+    pub backend_create_wall_time_ns: u64,
     pub phase_sum_ns: u64,
     pub missing_ns: u64,
     pub phases: Vec<SolverProfilePhaseResource>,
@@ -312,6 +314,7 @@ mod compatibility_tests {
             "sample_kinds",
             "phase_windows",
             "step_update_deep_clone_count",
+            "backend_create_wall_time_ns",
         ] {
             object.remove(key);
         }
@@ -319,6 +322,7 @@ mod compatibility_tests {
         assert_eq!(decoded.span_step_count, 0);
         assert!(decoded.phase_windows.is_empty());
         assert_eq!(decoded.step_update_deep_clone_count, 0);
+        assert_eq!(decoded.backend_create_wall_time_ns, 0);
     }
 }
 
