@@ -224,7 +224,7 @@ MIN_CONVERGED_DEMAG_POLICIES_FOR_BEST = 2
 DEFAULT_GPU_CONTROL_READBACK_BASE = 3
 DEFAULT_GPU_CONTROL_READBACK_PER_STEP = 4
 DEFAULT_GPU_LLG_CONTROL_READBACK_PER_STEP = 0
-DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP = 11
+DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP = 4
 DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP = 3
 DEFAULT_GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT = 2
 DEFAULT_DEMAG_AMG_RELAX_TYPE = 18
@@ -3835,6 +3835,25 @@ def gpu_strict_residency_failures(results: list[dict[str, object]]) -> list[str]
     return failures
 
 
+def expected_control_sync_budget(
+    algorithm: str,
+    executed_steps: int,
+    total_rhs_evals: int,
+    initial_syncs: int,
+) -> int:
+    per_step = {
+        "projected_gradient_bb": 4,
+        "nonlinear_cg": 3,
+    }.get(algorithm)
+    if per_step is None:
+        raise ValueError(f"unsupported direct-minimizer algorithm: {algorithm}")
+    return (
+        initial_syncs
+        + per_step * executed_steps
+        + max(0, total_rhs_evals - 2 * executed_steps)
+    )
+
+
 def gpu_control_readback_budget_failures(
     results: list[dict[str, object]],
     *,
@@ -3883,21 +3902,23 @@ def gpu_control_readback_budget_failures(
                     "missing total_rhs_evals"
                 )
                 continue
-            if algorithm == "nonlinear_cg":
-                additional_attempt_budget = max(
-                    0, total_rhs_evals - 2 * max(0, executed_steps)
-                )
-            else:
-                additional_attempt_budget = max(
-                    0,
-                    total_rhs_evals - 2 * max(0, executed_steps),
-                )
-                additional_attempt_budget *= 3
-        allowed = (
-            algorithm_base
-            + algorithm_per_step * max(0, executed_steps)
-            + additional_attempt_budget
-        )
+            allowed = expected_control_sync_budget(
+                str(algorithm),
+                max(0, executed_steps),
+                total_rhs_evals,
+                algorithm_base,
+            )
+            additional_attempt_budget = (
+                allowed
+                - algorithm_base
+                - algorithm_per_step * max(0, executed_steps)
+            )
+        else:
+            allowed = (
+                algorithm_base
+                + algorithm_per_step * max(0, executed_steps)
+                + additional_attempt_budget
+            )
         if control_sync > allowed:
             failures.append(
                 f"case={case} fem_gpu control-readback budget exceeded: "

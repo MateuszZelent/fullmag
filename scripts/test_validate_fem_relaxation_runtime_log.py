@@ -2869,37 +2869,84 @@ def test_fem_gpu_performance_regression_recipe_enforces_ncg_control_budget() -> 
     )
 
 
-def test_gpu_pgbb_control_readback_budget_matches_direct_difference_sync_structure() -> None:
+def test_gpu_pgbb_control_readback_budget_matches_cumulative_armijo_sync_structure() -> None:
     benchmark = load_benchmark_module()
     row = {
         "backend": "fem_gpu",
         "status": "ok",
         "scenario": "box500_airbox_exchange_demag",
         "relaxation_algorithm": "projected_gradient_bb",
-        "executed_steps": 1,
-        "total_rhs_evals": 2,
+        "executed_steps": 64,
+        "total_rhs_evals": 128,
         "rejected_attempts": 0,
-        "hot_loop_control_scalar_host_sync_count": 11,
+        "hot_loop_control_scalar_host_sync_count": 259,
     }
     common = {
-        "base": 0,
+        "base": 3,
         "per_step": 4,
         "llg_per_step": 0,
         "ncg_per_step": 3,
         "per_rejected_attempt": 2,
     }
 
-    assert benchmark.DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP == 11
+    assert benchmark.DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP == 4
+    assert benchmark.expected_control_sync_budget(
+        "projected_gradient_bb", 64, 128, 3
+    ) == 259
     assert benchmark.gpu_control_readback_budget_failures(
-        [row], pgbb_per_step=11, **common
+        [row], pgbb_per_step=4, **common
     ) == []
     assert benchmark.gpu_control_readback_budget_failures(
-        [row], pgbb_per_step=10, **common
-    )
-    assert benchmark.gpu_control_readback_budget_failures(
-        [{**row, "hot_loop_control_scalar_host_sync_count": 12}],
-        pgbb_per_step=11,
+        [{**row, "hot_loop_control_scalar_host_sync_count": 260}],
+        pgbb_per_step=4,
         **common,
+    )
+
+    extra_trial_row = {
+        **row,
+        "total_rhs_evals": 129,
+        "rejected_attempts": 1,
+        "hot_loop_control_scalar_host_sync_count": 260,
+    }
+    assert benchmark.expected_control_sync_budget(
+        "projected_gradient_bb", 64, 129, 3
+    ) == 260
+    assert benchmark.gpu_control_readback_budget_failures(
+        [extra_trial_row], pgbb_per_step=4, **common
+    ) == []
+    assert benchmark.gpu_control_readback_budget_failures(
+        [{**extra_trial_row, "hot_loop_control_scalar_host_sync_count": 261}],
+        pgbb_per_step=4,
+        **common,
+    )
+
+    source = (REPO_ROOT / "scripts" / "analysis" / "fem_gpu_benchmark.py").read_text(
+        encoding="utf-8"
+    )
+    helper_start = source.index("def expected_control_sync_budget(")
+    helper_end = source.index("\ndef ", helper_start + 1)
+    helper_source = source[helper_start:helper_end]
+    assert "total_rhs_evals - 2 * executed_steps" in helper_source
+    assert source.count("total_rhs_evals - 2 * executed_steps") == 1
+    assert "additional_attempt_budget *= 3" not in source
+
+
+def test_fem_relaxation_production_recipe_enforces_pgbb_control_budget_and_repeat() -> None:
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    recipe_start = justfile.index("verify-fem-relaxation-production-benchmark:")
+    recipe_end = justfile.index("\nverify-fem-", recipe_start + 1)
+    recipe = justfile[recipe_start:recipe_end]
+
+    assert (
+        'FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-4}"'
+        in recipe
+    )
+    assert 'FULLMAG_BENCH_REPEAT="${FULLMAG_BENCH_REPEAT:-5}"' in recipe
+    assert '--repeat "$FULLMAG_BENCH_REPEAT"' in recipe
+    assert "--require-gpu-control-readback-budget" in recipe
+    assert (
+        '--gpu-pgbb-control-readback-per-step "$FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP"'
+        in recipe
     )
 
 
@@ -2971,7 +3018,8 @@ def main() -> int:
         test_benchmark_parses_run_json_cumulative_rhs_telemetry,
         test_gpu_ncg_control_readback_budget_matches_cumulative_armijo_sync_structure,
         test_fem_gpu_performance_regression_recipe_enforces_ncg_control_budget,
-        test_gpu_pgbb_control_readback_budget_matches_direct_difference_sync_structure,
+        test_gpu_pgbb_control_readback_budget_matches_cumulative_armijo_sync_structure,
+        test_fem_relaxation_production_recipe_enforces_pgbb_control_budget_and_repeat,
         test_direct_minimizer_benchmark_uses_qualified_demag_tolerance,
         test_fem_pgbb_demag_is_included_in_current_production_manifest,
         test_cpu_gpu_consistency_preflight_reports_unavailable_native_fem_gpu,

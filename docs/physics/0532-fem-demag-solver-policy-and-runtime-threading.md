@@ -334,6 +334,44 @@ only control-readback accounting and diagnostic reuse; fresh-zero demag,
 direct-energy refinement, finite checks, rollback, PR+, energy definitions,
 and accepted trajectories retain their existing contracts.
 
+Update 2026-07-23 canonical PG-BB four-sync accounting: each accepted PG-BB
+step has four baseline control-scalar host synchronizations. The first is one
+packed `GpuPgbbCurrentMetrics` readback containing the current energy-term
+snapshot, volume-metric tangent-gradient norm, energy-metric projected-gradient
+norm, and device-produced finite/nonnegative flags. The second is the direct
+Armijo difference batch, which also owns the trial energy snapshot; PG-BB does
+not read a standalone trial total before this batch. Accepted BB curvature is
+the third synchronization and final observable statistics are the fourth.
+Every Armijo trial after the first adds exactly one direct-difference batch.
+The benchmark script owns this formula once for both direct minimizers:
+
+`initial_syncs + per_step * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`,
+
+with `per_step = 4` for PG-BB and `per_step = 3` for nonlinear-CG. PG-BB
+`rhs_evals` uses the same logical-record semantics: one current record, every
+normal Armijo trial exactly once, and any direct-energy refinement evaluations
+additively. The packed readback and trial-snapshot reuse do not change Armijo,
+BB1/BB2 reset policy, fresh-zero demag, rollback, energy monotonicity, ABI, or
+opt-in profiler ownership.
+
+The required five-repeat production preset on 2026-07-23 produced 110 rows:
+95 completed and 15 failed before a benchmark result. Every one of the 50
+completed GPU PG-BB rows satisfied the canonical bound with a margin of three
+syncs; representative cumulative records were 32 steps / 71 RHS / 135 syncs
+(bound 138), 32 / 91 / 155 (bound 158), and 32 / 64 / 128 (bound 131).
+The preset did not provide complete CPU/GPU-consistency evidence because CPU
+exchange-only and CPU exchange-plus-uniaxial, and GPU exchange-plus-Zeeman,
+each exhausted their unchanged PG-BB Armijo search in all five repeats. A
+one-repeat comparison against the immutable pre-Task-8 managed runtime
+reproduced the same three failure classes. In particular, GPU Zeeman failed
+both before and after Task 8 with finite current metrics and a positive direct
+energy increment after 20 backtracks, not through the new finite-flag check.
+Consequently the four-sync implementation is production-executed for the 50
+completed GPU rows, but the full preset remains unvalidated until those
+pre-existing Armijo cases are qualified separately. The Task 8 constraint to
+preserve Armijo, BB, and restart semantics forbids treating a tolerance or
+fixture change as part of this synchronization remediation.
+
 Update 2026-06-05 direct-minimizer effective-field path: GPU
 `projected_gradient_bb` and `nonlinear_cg` now call the device-resident
 effective-field pipeline directly instead of the full RK RHS helper. This

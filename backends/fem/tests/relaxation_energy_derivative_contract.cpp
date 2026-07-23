@@ -842,6 +842,74 @@ std::vector<double> copy_vector_from_device(const double *device, size_t size)
     return value;
 }
 
+void cuda_pgbb_current_metrics_finite_flags_cover_all_packed_inputs()
+{
+    double *d_energy_terms = copy_to_device(
+        std::vector<double>{1.0e-20, -2.0e-20, 3.0e-20});
+    double *d_gradient_norm_sq = copy_to_device(std::vector<double>{4.0});
+    double *d_projected_gradient_norm_sq =
+        copy_to_device(std::vector<double>{5.0});
+    double *d_finite_flags =
+        copy_to_device(std::vector<double>{0.0, 0.0, 0.0});
+
+    fullmag::fem::fullmag_cuda_relax_pgbb_current_metrics_finite_flags(
+        d_energy_terms,
+        3,
+        d_gradient_norm_sq,
+        d_projected_gradient_norm_sq,
+        d_finite_flags);
+    check_cuda(cudaGetLastError(), "CUDA PG-BB current metrics flags launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA PG-BB current metrics flags synchronize");
+    check(
+        copy_vector_from_device(d_finite_flags, 3) ==
+            std::vector<double>({1.0, 1.0, 1.0}),
+        "packed PG-BB current metrics must mark finite energy terms and nonnegative norms valid");
+
+    const std::vector<double> invalid_energy_terms = {
+        1.0, std::numeric_limits<double>::quiet_NaN(), 3.0};
+    const double invalid_gradient_norm_sq = -1.0;
+    const double invalid_projected_gradient_norm_sq =
+        std::numeric_limits<double>::infinity();
+    check_cuda(
+        cudaMemcpy(
+            d_energy_terms,
+            invalid_energy_terms.data(),
+            invalid_energy_terms.size() * sizeof(double),
+            cudaMemcpyHostToDevice),
+        "cudaMemcpy invalid PG-BB energy terms host-to-device");
+    check_cuda(
+        cudaMemcpy(
+            d_gradient_norm_sq,
+            &invalid_gradient_norm_sq,
+            sizeof(double),
+            cudaMemcpyHostToDevice),
+        "cudaMemcpy invalid PG-BB gradient norm host-to-device");
+    check_cuda(
+        cudaMemcpy(
+            d_projected_gradient_norm_sq,
+            &invalid_projected_gradient_norm_sq,
+            sizeof(double),
+            cudaMemcpyHostToDevice),
+        "cudaMemcpy invalid PG-BB projected-gradient norm host-to-device");
+    fullmag::fem::fullmag_cuda_relax_pgbb_current_metrics_finite_flags(
+        d_energy_terms,
+        3,
+        d_gradient_norm_sq,
+        d_projected_gradient_norm_sq,
+        d_finite_flags);
+    check_cuda(cudaGetLastError(), "CUDA PG-BB invalid current metrics flags launch");
+    check_cuda(cudaDeviceSynchronize(), "CUDA PG-BB invalid current metrics flags synchronize");
+    check(
+        copy_vector_from_device(d_finite_flags, 3) ==
+            std::vector<double>({0.0, 0.0, 0.0}),
+        "packed PG-BB current metrics must independently reject non-finite energy terms, negative norms, and non-finite projected-gradient norms");
+
+    cudaFree(d_energy_terms);
+    cudaFree(d_gradient_norm_sq);
+    cudaFree(d_projected_gradient_norm_sq);
+    cudaFree(d_finite_flags);
+}
+
 void cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration()
 {
     constexpr int calibration_node_count = 3;
@@ -1212,6 +1280,7 @@ int main()
         }
     }
 #if FULLMAG_HAS_CUDA_RUNTIME
+    cuda_pgbb_current_metrics_finite_flags_cover_all_packed_inputs();
     cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration();
 #endif
     check(

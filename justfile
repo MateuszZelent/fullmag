@@ -156,7 +156,7 @@ verify-fdm-pbc-production:
 verify-fem-relaxation-source-contract:
     bash scripts/verify_fem_mesh_hot_loop_source_contract.sh
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_relaxation_source_contract fem_stage_completion_contract fem_rk_explicit_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_stage_completion_contract && native/build/backends/fem/fem_rk_explicit_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake --build native/build --target fem_relaxation_source_contract fem_relaxation_energy_derivative_contract fem_stage_completion_contract fem_rk_explicit_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_relaxation_source_contract && native/build/backends/fem/fem_relaxation_energy_derivative_contract && native/build/backends/fem/fem_stage_completion_contract && native/build/backends/fem/fem_rk_explicit_contract'
 
 verify-fem-dependency-stack-contract:
     docker compose --profile fem-gpu run --rm \
@@ -2442,13 +2442,14 @@ verify-fem-relaxation-production-benchmark:
       -e FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC="${FULLMAG_BENCH_BEST_DEMAG_POLICY_METRIC:-demag_solver_apply_wall_time_ms}" \
       -e FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS="${FULLMAG_BENCH_MAX_DEMAG_SOLVER_APPLY_MS:-}" \
       -e FULLMAG_BENCH_STEPS="${FULLMAG_BENCH_STEPS:-32}" \
+      -e FULLMAG_BENCH_REPEAT="${FULLMAG_BENCH_REPEAT:-5}" \
       -e FULLMAG_BENCH_CASE_TIMEOUT_S="${FULLMAG_BENCH_CASE_TIMEOUT_S:-600}" \
       -e FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL="${FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL:-1e-6}" \
       -e FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J="${FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J:-1e-30}" \
       -e FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL="${FULLMAG_BENCH_CPU_GPU_TORQUE_RTOL:-1e-6}" \
       -e FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP:-3}" \
       -e FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP:-0}" \
-      -e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-11}" \
+      -e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-4}" \
       -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-3}" \
       -e FULLMAG_BENCH_MIN_SOLVER_NODES="${FULLMAG_BENCH_MIN_SOLVER_NODES:-50}" \
       -e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_production_benchmark.csv}" \
@@ -2479,6 +2480,7 @@ verify-fem-relaxation-production-benchmark:
         --require-demag-single-setup \
         --require-zero-strict-gpu-global-sync \
         --steps "$FULLMAG_BENCH_STEPS" \
+        --repeat "$FULLMAG_BENCH_REPEAT" \
         --case-timeout-s "$FULLMAG_BENCH_CASE_TIMEOUT_S" \
         --cpu-gpu-energy-rtol "$FULLMAG_BENCH_CPU_GPU_ENERGY_RTOL" \
         --cpu-gpu-energy-atol "$FULLMAG_BENCH_CPU_GPU_ENERGY_ATOL_J" \

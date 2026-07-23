@@ -226,6 +226,29 @@ __global__ void energy_weighted_dot_kernel(
     }
 }
 
+__global__ void pgbb_current_metrics_finite_flags_kernel(
+    const double *energy_terms,
+    int energy_term_count,
+    const double *gradient_norm_sq,
+    const double *projected_gradient_norm_sq,
+    double *finite_flags)
+{
+    bool energy_finite = true;
+    for (int slot = 0; slot < energy_term_count; ++slot) {
+        energy_finite = energy_finite && isfinite(energy_terms[slot]);
+    }
+    finite_flags[0] = energy_finite ? 1.0 : 0.0;
+    finite_flags[1] =
+        isfinite(gradient_norm_sq[0]) && gradient_norm_sq[0] >= 0.0
+            ? 1.0
+            : 0.0;
+    finite_flags[2] =
+        isfinite(projected_gradient_norm_sq[0]) &&
+            projected_gradient_norm_sq[0] >= 0.0
+            ? 1.0
+            : 0.0;
+}
+
 __global__ void retract_field_kernel(
     const double *mx,
     const double *my,
@@ -854,6 +877,22 @@ void fullmag_cuda_relax_energy_weighted_dot_blocks(
     const int blocks = (n + kBlockSize - 1) / kBlockSize;
     energy_weighted_dot_kernel<<<blocks, kBlockSize, 0, stream>>>(
         ax, ay, az, bx, by, bz, ms, lumped_mass, magnetic_node_mask, block_dot, n);
+}
+
+void fullmag_cuda_relax_pgbb_current_metrics_finite_flags(
+    const double *energy_terms,
+    int energy_term_count,
+    const double *gradient_norm_sq,
+    const double *projected_gradient_norm_sq,
+    double *finite_flags,
+    cudaStream_t stream)
+{
+    pgbb_current_metrics_finite_flags_kernel<<<1, 1, 0, stream>>>(
+        energy_terms,
+        energy_term_count,
+        gradient_norm_sq,
+        projected_gradient_norm_sq,
+        finite_flags);
 }
 
 void fullmag_cuda_relax_retract_field(

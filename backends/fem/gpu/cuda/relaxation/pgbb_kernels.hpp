@@ -55,6 +55,14 @@ void fullmag_cuda_relax_energy_weighted_dot_blocks(
     int n,
     cudaStream_t stream = nullptr);
 
+void fullmag_cuda_relax_pgbb_current_metrics_finite_flags(
+    const double *energy_terms,
+    int energy_term_count,
+    const double *gradient_norm_sq,
+    const double *projected_gradient_norm_sq,
+    double *finite_flags,
+    cudaStream_t stream = nullptr);
+
 void fullmag_cuda_relax_retract_field(
     const double *mx,
     const double *my,

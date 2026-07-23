@@ -22,6 +22,27 @@ struct GpuDirectEnergySnapshot {
     std::array<double, kGpuFinalScalarSlots> terms_j{};
 };
 
+static constexpr size_t kGpuPgbbCurrentGradientNormSlot =
+    kGpuFinalScalarSlots;
+static constexpr size_t kGpuPgbbCurrentProjectedGradientNormSlot =
+    kGpuPgbbCurrentGradientNormSlot + 1u;
+static constexpr size_t kGpuPgbbCurrentFiniteFlagsSlot =
+    kGpuPgbbCurrentProjectedGradientNormSlot + 1u;
+static constexpr size_t kGpuPgbbCurrentPackedScalarCount =
+    kGpuPgbbCurrentFiniteFlagsSlot + 3u;
+static_assert(
+    kGpuPgbbCurrentPackedScalarCount <= FEM_GPU_SCALAR_RESULT_SLOTS,
+    "GPU PG-BB packed current metrics must fit in the shared scalar result buffer");
+
+struct GpuPgbbCurrentMetrics {
+    GpuDirectEnergySnapshot energy_snapshot{};
+    double gradient_norm_sq = 0.0;
+    double projected_gradient_norm_sq = 0.0;
+    bool energy_snapshot_finite = false;
+    bool gradient_norm_finite = false;
+    bool projected_gradient_norm_finite = false;
+};
+
 struct GpuDirectArmijoResult {
     relaxation::EnergyDifference difference{};
     GpuDirectEnergySnapshot trial_snapshot{};
@@ -48,6 +69,12 @@ bool gpu_direct_energy_snapshot(
     Context &ctx,
     cudaStream_t stream,
     GpuDirectEnergySnapshot &snapshot,
+    std::string &reason);
+
+bool gpu_unpack_pgbb_current_metrics(
+    const Context &ctx,
+    const std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> &packed_scalars,
+    GpuPgbbCurrentMetrics &metrics,
     std::string &reason);
 
 bool gpu_direct_armijo_evaluate(

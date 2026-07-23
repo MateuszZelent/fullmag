@@ -976,6 +976,22 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
     const std::string runner_algorithm =
         read_text_file(repo_root() / "crates" / "fullmag-runner" / "src" /
                        "fem" / "relax" / "algorithm.rs");
+    const auto pgbb_current_metrics_start = pgbb_source.find(
+        "bool gpu_relax_compute_current_metrics(");
+    const auto pgbb_current_metrics_end =
+        pgbb_current_metrics_start == std::string::npos
+            ? std::string::npos
+            : pgbb_source.find(
+                  "bool gpu_relax_restore_previous_magnetization(",
+                  pgbb_current_metrics_start);
+    const std::string pgbb_current_metrics =
+        pgbb_current_metrics_start == std::string::npos
+            ? std::string()
+            : pgbb_source.substr(
+                  pgbb_current_metrics_start,
+                  pgbb_current_metrics_end == std::string::npos
+                      ? std::string::npos
+                      : pgbb_current_metrics_end - pgbb_current_metrics_start);
 
     check(
         cmake.find("gpu/cuda/relaxation/pgbb.cpp") != std::string::npos &&
@@ -986,6 +1002,20 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
         "native FEM GPU projected-gradient BB and shared direct-energy sources must be built by the native FEM CMake target");
     check(
         direct_energy_header.find("struct GpuDirectEnergySnapshot") !=
+                std::string::npos &&
+            direct_energy_header.find("struct GpuPgbbCurrentMetrics") !=
+                std::string::npos &&
+            direct_energy_header.find("GpuDirectEnergySnapshot energy_snapshot") !=
+                std::string::npos &&
+            direct_energy_header.find("double gradient_norm_sq") !=
+                std::string::npos &&
+            direct_energy_header.find("double projected_gradient_norm_sq") !=
+                std::string::npos &&
+            direct_energy_header.find("bool energy_snapshot_finite") !=
+                std::string::npos &&
+            direct_energy_header.find("bool gradient_norm_finite") !=
+                std::string::npos &&
+            direct_energy_header.find("bool projected_gradient_norm_finite") !=
                 std::string::npos &&
             direct_energy_header.find("struct GpuDirectArmijoResult") !=
                 std::string::npos &&
@@ -998,6 +1028,20 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
             nonlinear_cg_source.find("gpu_direct_armijo_evaluate(") !=
                 std::string::npos,
         "native FEM GPU direct minimizers must use the shared direct energy-increment owner for Armijo decisions");
+    check(
+        kernels_header.find(
+            "fullmag_cuda_relax_pgbb_current_metrics_finite_flags(") !=
+                std::string::npos &&
+            kernels_source.find(
+                "pgbb_current_metrics_finite_flags_kernel") !=
+                std::string::npos &&
+            kernels_source.find("isfinite(energy_terms[slot])") !=
+                std::string::npos &&
+            kernels_source.find("gradient_norm_sq[0] >= 0.0") !=
+                std::string::npos &&
+            kernels_source.find("projected_gradient_norm_sq[0] >= 0.0") !=
+                std::string::npos,
+        "native FEM GPU projected-gradient BB must generate current energy/gradient finite flags on device for the packed current-state readback");
     check(
         direct_energy_source.find("kDirectEnergyTailSlots = 5") !=
                 std::string::npos &&
@@ -1117,17 +1161,48 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU projected-gradient BB preflight must require rollback backup scratch before line-search trials");
     check(
-        pgbb_source.find("gpu_relax_compute_effective_field_and_energy(") !=
+        pgbb_current_metrics.find(
+            "gpu_rk_compute_effective_field_for_magnetization_fresh_demag(") !=
                 std::string::npos &&
-            pgbb_source.find("gpu_rk_compute_effective_field_for_magnetization_fresh_demag(") !=
+            pgbb_current_metrics.find("gpu_rk_reduce_final_energy_terms(") !=
+                std::string::npos &&
+            pgbb_current_metrics.find(
+                "fullmag_cuda_relax_pgbb_current_metrics_finite_flags(") !=
+                std::string::npos &&
+            pgbb_current_metrics.find("gpu_rk_read_control_scalar_results(") !=
+                std::string::npos &&
+            pgbb_current_metrics.find(
+                "gpu_rk_read_control_scalar_results(",
+                pgbb_current_metrics.find("gpu_rk_read_control_scalar_results(") + 1u) ==
+                std::string::npos &&
+            pgbb_current_metrics.find("gpu_direct_energy_snapshot(") ==
+                std::string::npos &&
+            pgbb_source.find("gpu_relax_compute_effective_field_and_energy(") ==
+                std::string::npos &&
+            pgbb_source.find(
+                "gpu_relax_compute_effective_field_and_energy_terms(") !=
                 std::string::npos &&
             pgbb_source.find("gpu_rk_compute_rhs_for_magnetization(") ==
                 std::string::npos &&
             pgbb_source.find("fullmag_cuda_relax_retract_field(") !=
                 std::string::npos &&
             pgbb_source.find("kArmijoCoefficient") != std::string::npos &&
-            pgbb_source.find("trial_energy <=") != std::string::npos,
-        "native FEM GPU projected-gradient BB must own a device-resident Armijo accepted-step loop");
+            pgbb_source.find(
+                "last_trial_energy_j =\n            armijo_result.trial_snapshot.total_energy_j;") !=
+                std::string::npos,
+        "native FEM GPU projected-gradient BB must batch its current snapshot/gradient metrics into one readback and reuse the direct Armijo trial snapshot without a standalone trial-total readback");
+    check(
+        pgbb_source.find("uint32_t logical_rhs_evaluations = 1u;") !=
+                std::string::npos &&
+            pgbb_source.find("logical_rhs_evaluations += 1u;") !=
+                std::string::npos &&
+            pgbb_source.find("refinement_rhs_evaluations +=") !=
+                std::string::npos &&
+            pgbb_source.find(
+                "logical_rhs_evaluations + refinement_rhs_evaluations") !=
+                std::string::npos &&
+            pgbb_source.find("backtracks + 2u") == std::string::npos,
+        "native FEM GPU projected-gradient BB must publish two nominal logical RHS records per accepted step, every additional Armijo trial once, and direct-energy refinements additively");
     check(
         gpu_rk_rhs_runtime.find(
             "gpu_rk_compute_demag_for_device_stage_fresh(ctx, m, stream, reason)") !=
@@ -1200,17 +1275,15 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos,
         "native FEM GPU projected-gradient BB must update BB1/BB2 step size from device-reduced curvature");
     check(
-        pgbb_source.find("GPU projected-gradient BB produced non-finite total energy") !=
+        direct_energy_source.find("GPU projected-gradient BB produced non-finite total energy") !=
                 std::string::npos &&
-            pgbb_source.find("!std::isfinite(total_energy)") !=
+            direct_energy_source.find("!metrics.energy_snapshot_finite") !=
                 std::string::npos,
         "native FEM GPU projected-gradient BB must report non-finite energy failures explicitly");
     check(
-        pgbb_source.find("GPU projected-gradient BB produced a non-finite or negative tangent-gradient norm") !=
+        direct_energy_source.find("GPU projected-gradient BB produced a non-finite or negative tangent-gradient norm") !=
                 std::string::npos &&
-            pgbb_source.find("!std::isfinite(gradient_norm_sq)") !=
-                std::string::npos &&
-            pgbb_source.find("gradient_norm_sq < 0.0") !=
+            direct_energy_source.find("!metrics.gradient_norm_finite") !=
                 std::string::npos,
         "native FEM GPU projected-gradient BB must reject invalid tangent-gradient reductions before Armijo");
     check(
@@ -1603,12 +1676,12 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
         direct_energy_source.find(
             "auto &trial = result.trial_snapshot;") !=
                 std::string::npos &&
-            direct_energy_source.find(
-                "std::copy_n(scalars.begin(), kGpuFinalScalarSlots, trial.terms_j.begin());") !=
-                std::string::npos &&
-            direct_energy_source.find(
-                "trial.total_energy_j += trial.terms_j[") !=
-                std::string::npos &&
+            (direct_energy_source.find(
+                 "std::copy_n(scalars.begin(), kGpuFinalScalarSlots, trial.terms_j.begin());") !=
+                 std::string::npos ||
+             direct_energy_source.find(
+                 "unpack_energy_snapshot(") !=
+                 std::string::npos) &&
             ncg_source.find(
             "last_trial_energy_j =\n                armijo_result.trial_snapshot.total_energy_j;") !=
                 std::string::npos &&

@@ -69,6 +69,37 @@ bool reduce_scalar_sum(
     return cuda_launch_ok(operation, reason);
 }
 
+bool unpack_energy_snapshot(
+    const Context &ctx,
+    const double *energy_terms,
+    GpuDirectEnergySnapshot &snapshot,
+    const char *non_finite_reason,
+    std::string &reason)
+{
+    std::copy_n(energy_terms, kGpuFinalScalarSlots, snapshot.terms_j.begin());
+    snapshot.total_energy_j = 0.0;
+    const auto add = [&](GpuFinalScalarSlot slot, bool enabled) {
+        if (enabled) {
+            snapshot.total_energy_j +=
+                snapshot.terms_j[static_cast<size_t>(slot)];
+        }
+    };
+    add(GpuFinalScalarSlot::ExchangeEnergy, true);
+    add(GpuFinalScalarSlot::DemagEnergy, ctx.demag.enabled);
+    add(GpuFinalScalarSlot::ExternalEnergy, ctx.zeeman.has_external_field);
+    add(GpuFinalScalarSlot::DriveEnergy, !ctx.zeeman.regional_drives.empty());
+    add(GpuFinalScalarSlot::AnisotropyEnergy, ctx.anisotropy.uniaxial_enabled);
+    add(GpuFinalScalarSlot::CubicAnisotropyEnergy, ctx.anisotropy.cubic_enabled);
+    add(GpuFinalScalarSlot::DmiEnergy, ctx.dmi.interfacial_enabled);
+    add(GpuFinalScalarSlot::BulkDmiEnergy, ctx.dmi.bulk_enabled);
+    add(GpuFinalScalarSlot::MagnetoelasticEnergy, ctx.magnetoelastic.enabled);
+    if (!std::isfinite(snapshot.total_energy_j)) {
+        reason = non_finite_reason;
+        return false;
+    }
+    return true;
+}
+
 bool direct_difference(
     Context &ctx,
     cudaStream_t stream,
@@ -168,24 +199,12 @@ bool direct_difference(
             scalars.data(), read_count, reason)) {
         return false;
     }
-    std::copy_n(scalars.begin(), kGpuFinalScalarSlots, trial.terms_j.begin());
-    trial.total_energy_j = 0.0;
-    const auto add_term = [&](GpuFinalScalarSlot slot, bool enabled) {
-        if (enabled) {
-            trial.total_energy_j += trial.terms_j[static_cast<size_t>(slot)];
-        }
-    };
-    add_term(GpuFinalScalarSlot::ExchangeEnergy, true);
-    add_term(GpuFinalScalarSlot::DemagEnergy, ctx.demag.enabled);
-    add_term(GpuFinalScalarSlot::ExternalEnergy, ctx.zeeman.has_external_field);
-    add_term(GpuFinalScalarSlot::DriveEnergy, !ctx.zeeman.regional_drives.empty());
-    add_term(GpuFinalScalarSlot::AnisotropyEnergy, ctx.anisotropy.uniaxial_enabled);
-    add_term(GpuFinalScalarSlot::CubicAnisotropyEnergy, ctx.anisotropy.cubic_enabled);
-    add_term(GpuFinalScalarSlot::DmiEnergy, ctx.dmi.interfacial_enabled);
-    add_term(GpuFinalScalarSlot::BulkDmiEnergy, ctx.dmi.bulk_enabled);
-    add_term(GpuFinalScalarSlot::MagnetoelasticEnergy, ctx.magnetoelastic.enabled);
-    if (!std::isfinite(trial.total_energy_j)) {
-        reason = "GPU direct minimizer produced non-finite trial energy";
+    if (!unpack_energy_snapshot(
+            ctx,
+            scalars.data(),
+            trial,
+            "GPU direct minimizer produced non-finite trial energy",
+            reason)) {
         return false;
     }
     const double exchange_delta =
@@ -283,30 +302,55 @@ bool gpu_direct_energy_snapshot(
     GpuDirectEnergySnapshot &snapshot,
     std::string &reason)
 {
+    std::array<double, kGpuFinalScalarSlots> energy_terms{};
     if (!gpu_rk_read_control_scalar_results(
             ctx, stream,
             "cudaMemcpyAsync GPU direct minimizer energy terms device->host",
-            snapshot.terms_j.data(), snapshot.terms_j.size(), reason)) {
+            energy_terms.data(), energy_terms.size(), reason)) {
         return false;
     }
-    snapshot.total_energy_j = 0.0;
-    const auto add = [&](GpuFinalScalarSlot slot, bool enabled) {
-        if (enabled) {
-            snapshot.total_energy_j +=
-                snapshot.terms_j[static_cast<size_t>(slot)];
+    return unpack_energy_snapshot(
+        ctx,
+        energy_terms.data(),
+        snapshot,
+        "GPU direct minimizer produced non-finite snapshot energy",
+        reason);
+}
+
+bool gpu_unpack_pgbb_current_metrics(
+    const Context &ctx,
+    const std::array<double, FEM_GPU_SCALAR_RESULT_SLOTS> &packed_scalars,
+    GpuPgbbCurrentMetrics &metrics,
+    std::string &reason)
+{
+    metrics.energy_snapshot_finite =
+        packed_scalars[kGpuPgbbCurrentFiniteFlagsSlot] != 0.0;
+    metrics.gradient_norm_finite =
+        packed_scalars[kGpuPgbbCurrentFiniteFlagsSlot + 1u] != 0.0;
+    metrics.projected_gradient_norm_finite =
+        packed_scalars[kGpuPgbbCurrentFiniteFlagsSlot + 2u] != 0.0;
+    metrics.gradient_norm_sq =
+        packed_scalars[kGpuPgbbCurrentGradientNormSlot];
+    metrics.projected_gradient_norm_sq =
+        packed_scalars[kGpuPgbbCurrentProjectedGradientNormSlot];
+    if (!metrics.energy_snapshot_finite ||
+        !unpack_energy_snapshot(
+            ctx,
+            packed_scalars.data(),
+            metrics.energy_snapshot,
+            "GPU projected-gradient BB produced non-finite total energy",
+            reason)) {
+        if (reason.empty()) {
+            reason = "GPU projected-gradient BB produced non-finite total energy";
         }
-    };
-    add(GpuFinalScalarSlot::ExchangeEnergy, true);
-    add(GpuFinalScalarSlot::DemagEnergy, ctx.demag.enabled);
-    add(GpuFinalScalarSlot::ExternalEnergy, ctx.zeeman.has_external_field);
-    add(GpuFinalScalarSlot::DriveEnergy, !ctx.zeeman.regional_drives.empty());
-    add(GpuFinalScalarSlot::AnisotropyEnergy, ctx.anisotropy.uniaxial_enabled);
-    add(GpuFinalScalarSlot::CubicAnisotropyEnergy, ctx.anisotropy.cubic_enabled);
-    add(GpuFinalScalarSlot::DmiEnergy, ctx.dmi.interfacial_enabled);
-    add(GpuFinalScalarSlot::BulkDmiEnergy, ctx.dmi.bulk_enabled);
-    add(GpuFinalScalarSlot::MagnetoelasticEnergy, ctx.magnetoelastic.enabled);
-    if (!std::isfinite(snapshot.total_energy_j)) {
-        reason = "GPU direct minimizer produced non-finite snapshot energy";
+        return false;
+    }
+    if (!metrics.gradient_norm_finite) {
+        reason = "GPU projected-gradient BB produced a non-finite or negative tangent-gradient norm";
+        return false;
+    }
+    if (!metrics.projected_gradient_norm_finite) {
+        reason = "GPU projected-gradient BB produced a non-finite or negative J A/m energy-metric tangent-gradient norm";
         return false;
     }
     return true;
