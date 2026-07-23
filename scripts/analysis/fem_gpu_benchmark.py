@@ -621,6 +621,24 @@ def nonnegative_int_arg(value: str) -> int:
     return parsed
 
 
+def canonical_pgbb_control_readback_per_step_arg(value: str) -> int:
+    parsed = nonnegative_int_arg(value)
+    if parsed != DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP:
+        raise argparse.ArgumentTypeError(
+            "PG-BB control-readback budget must be 4"
+        )
+    return parsed
+
+
+def canonical_ncg_control_readback_per_step_arg(value: str) -> int:
+    parsed = nonnegative_int_arg(value)
+    if parsed != DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP:
+        raise argparse.ArgumentTypeError(
+            "NCG control-readback budget must be 3"
+        )
+    return parsed
+
+
 def physical_core_count() -> int:
     cpuinfo = Path("/proc/cpuinfo")
     if cpuinfo.exists():
@@ -1113,15 +1131,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--gpu-pgbb-control-readback-per-step",
-        type=nonnegative_int_arg,
+        type=canonical_pgbb_control_readback_per_step_arg,
         default=DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP,
-        help="Allowed FEM GPU hot-loop control-scalar readbacks per projected-gradient BB executed step",
+        help="Canonical FEM GPU PG-BB hot-loop control-scalar readbacks per executed step (must be 4)",
     )
     parser.add_argument(
         "--gpu-ncg-control-readback-per-step",
-        type=nonnegative_int_arg,
+        type=canonical_ncg_control_readback_per_step_arg,
         default=DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP,
-        help="Allowed FEM GPU hot-loop control-scalar readbacks per nonlinear-CG executed step",
+        help="Canonical FEM GPU NCG hot-loop control-scalar readbacks per executed step (must be 3)",
     )
     parser.add_argument(
         "--gpu-control-readback-per-rejected-attempt",
@@ -3842,8 +3860,8 @@ def expected_control_sync_budget(
     initial_syncs: int,
 ) -> int:
     per_step = {
-        "projected_gradient_bb": 4,
-        "nonlinear_cg": 3,
+        "projected_gradient_bb": DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP,
+        "nonlinear_cg": DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP,
     }.get(algorithm)
     if per_step is None:
         raise ValueError(f"unsupported direct-minimizer algorithm: {algorithm}")
@@ -3864,6 +3882,11 @@ def gpu_control_readback_budget_failures(
     ncg_per_step: int,
     per_rejected_attempt: int,
 ) -> list[str]:
+    if pgbb_per_step != DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP:
+        raise ValueError("PG-BB control-readback budget must be 4")
+    if ncg_per_step != DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP:
+        raise ValueError("NCG control-readback budget must be 3")
+
     failures: list[str] = []
     for row in results:
         if row.get("backend") != "fem_gpu" or row.get("status") != "ok":
@@ -3891,9 +3914,9 @@ def gpu_control_readback_budget_failures(
             algorithm_base = 0
             algorithm_per_step = llg_per_step
         elif algorithm == "projected_gradient_bb":
-            algorithm_per_step = pgbb_per_step
+            algorithm_per_step = DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP
         elif algorithm == "nonlinear_cg":
-            algorithm_per_step = ncg_per_step
+            algorithm_per_step = DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP
         if algorithm in {"projected_gradient_bb", "nonlinear_cg"}:
             total_rhs_evals = as_int(row.get("total_rhs_evals"))
             if total_rhs_evals is None:
@@ -3908,10 +3931,11 @@ def gpu_control_readback_budget_failures(
                 total_rhs_evals,
                 algorithm_base,
             )
-            additional_attempt_budget = (
+            additional_attempt_budget = max(
+                0,
                 allowed
-                - algorithm_base
-                - algorithm_per_step * max(0, executed_steps)
+                    - algorithm_base
+                    - algorithm_per_step * max(0, executed_steps),
             )
         else:
             allowed = (

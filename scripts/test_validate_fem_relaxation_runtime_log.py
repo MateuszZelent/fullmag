@@ -2801,7 +2801,7 @@ def test_gpu_ncg_control_readback_budget_matches_cumulative_armijo_sync_structur
         "base": 3,
         "per_step": 3,
         "llg_per_step": 0,
-        "pgbb_per_step": 3,
+        "pgbb_per_step": 4,
         "per_rejected_attempt": 2,
     }
 
@@ -2950,6 +2950,57 @@ def test_fem_relaxation_production_recipe_enforces_pgbb_control_budget_and_repea
     )
 
 
+def test_direct_minimizer_control_readback_budgets_are_immutable() -> None:
+    benchmark = load_benchmark_module()
+
+    with pytest.raises(
+        benchmark.argparse.ArgumentTypeError,
+        match="PG-BB control-readback budget must be 4",
+    ):
+        benchmark.canonical_pgbb_control_readback_per_step_arg("5")
+    with pytest.raises(
+        benchmark.argparse.ArgumentTypeError,
+        match="NCG control-readback budget must be 3",
+    ):
+        benchmark.canonical_ncg_control_readback_per_step_arg("2")
+    with pytest.raises(SystemExit):
+        benchmark.parse_args(["--gpu-pgbb-control-readback-per-step", "5"])
+    with pytest.raises(SystemExit):
+        benchmark.parse_args(["--gpu-ncg-control-readback-per-step", "2"])
+
+    row = {
+        "backend": "fem_gpu",
+        "status": "ok",
+        "scenario": "box500_airbox_exchange_demag",
+        "relaxation_algorithm": "projected_gradient_bb",
+        "executed_steps": 2,
+        "total_rhs_evals": 3,
+        "rejected_attempts": 0,
+        "hot_loop_control_scalar_host_sync_count": 12,
+    }
+    with pytest.raises(ValueError, match="PG-BB control-readback budget must be 4"):
+        benchmark.gpu_control_readback_budget_failures(
+            [row],
+            base=3,
+            per_step=4,
+            llg_per_step=0,
+            pgbb_per_step=5,
+            ncg_per_step=3,
+            per_rejected_attempt=2,
+        )
+    failures = benchmark.gpu_control_readback_budget_failures(
+        [row],
+        base=3,
+        per_step=4,
+        llg_per_step=0,
+        pgbb_per_step=4,
+        ncg_per_step=3,
+        per_rejected_attempt=2,
+    )
+    assert len(failures) == 1
+    assert "additional_attempt_budget=0" in failures[0]
+
+
 def test_direct_minimizer_benchmark_uses_qualified_demag_tolerance() -> None:
     benchmark = load_benchmark_module()
     for algorithm in (
@@ -3020,6 +3071,7 @@ def main() -> int:
         test_fem_gpu_performance_regression_recipe_enforces_ncg_control_budget,
         test_gpu_pgbb_control_readback_budget_matches_cumulative_armijo_sync_structure,
         test_fem_relaxation_production_recipe_enforces_pgbb_control_budget_and_repeat,
+        test_direct_minimizer_control_readback_budgets_are_immutable,
         test_direct_minimizer_benchmark_uses_qualified_demag_tolerance,
         test_fem_pgbb_demag_is_included_in_current_production_manifest,
         test_cpu_gpu_consistency_preflight_reports_unavailable_native_fem_gpu,

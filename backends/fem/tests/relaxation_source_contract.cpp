@@ -992,6 +992,33 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                   pgbb_current_metrics_end == std::string::npos
                       ? std::string::npos
                       : pgbb_current_metrics_end - pgbb_current_metrics_start);
+    const auto pgbb_helpers_start = pgbb_source.find("namespace {");
+    const auto pgbb_helpers_end =
+        pgbb_helpers_start == std::string::npos
+            ? std::string::npos
+            : pgbb_source.find("} // namespace", pgbb_helpers_start);
+    const std::string pgbb_helpers =
+        pgbb_helpers_start == std::string::npos
+            ? std::string()
+            : pgbb_source.substr(
+                  pgbb_helpers_start,
+                  pgbb_helpers_end == std::string::npos
+                      ? std::string::npos
+                      : pgbb_helpers_end - pgbb_helpers_start);
+    const auto pgbb_step_start =
+        pgbb_source.find("int gpu_relax_projected_gradient_bb_step(");
+    const auto pgbb_step_end =
+        pgbb_step_start == std::string::npos
+            ? std::string::npos
+            : pgbb_source.find("#else", pgbb_step_start);
+    const std::string pgbb_step =
+        pgbb_step_start == std::string::npos
+            ? std::string()
+            : pgbb_source.substr(
+                  pgbb_step_start,
+                  pgbb_step_end == std::string::npos
+                      ? std::string::npos
+                      : pgbb_step_end - pgbb_step_start);
 
     check(
         cmake.find("gpu/cuda/relaxation/pgbb.cpp") != std::string::npos &&
@@ -1203,6 +1230,20 @@ void gpu_relaxation_pgbb_building_blocks_live_under_native_cuda() {
                 std::string::npos &&
             pgbb_source.find("backtracks + 2u") == std::string::npos,
         "native FEM GPU projected-gradient BB must publish two nominal logical RHS records per accepted step, every additional Armijo trial once, and direct-energy refinements additively");
+    check(
+        !pgbb_helpers.empty() &&
+            !pgbb_step.empty() &&
+            pgbb_helpers.find(
+                "gpu_relax_retry_pgbb_line_search_with_reset") ==
+                std::string::npos &&
+            pgbb_helpers.find(
+                "gpu_relax_retry_pgbb_line_search_with_raw_gradient_restart") ==
+                std::string::npos &&
+            pgbb_helpers.find("gpu_direct_energy_snapshot(") ==
+                std::string::npos &&
+            pgbb_step.find("gpu_direct_energy_snapshot(") ==
+                std::string::npos,
+        "native FEM GPU PG-BB helper and accepted-step regions must not retain stale recovery implementations or standalone trial-total readbacks");
     check(
         gpu_rk_rhs_runtime.find(
             "gpu_rk_compute_demag_for_device_stage_fresh(ctx, m, stream, reason)") !=
