@@ -126,6 +126,10 @@ bool build_context_from_plan(
     if (!validate_elementwise_ms_runtime_support(ctx, error)) {
         return false;
     }
+    if (!ctx.base_plan.precession_enabled && has_relax_stop_criteria(ctx) &&
+        !validate_elementwise_ms_relaxation_support(ctx, error)) {
+        return false;
+    }
 
     if (!validate_periodic_plan_compatibility(ctx, error)) {
         return false;

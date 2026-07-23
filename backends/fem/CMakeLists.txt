@@ -823,6 +823,14 @@ target_include_directories(fem_material_fields_contract PRIVATE
 )
 add_test(NAME fem_material_fields_contract COMMAND fem_material_fields_contract)
 
+add_executable(fem_element_dg0_workflow_contract tests/element_dg0_workflow_contract.cpp)
+target_link_libraries(fem_element_dg0_workflow_contract PRIVATE fullmag_fem)
+target_include_directories(fem_element_dg0_workflow_contract PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+add_test(NAME fem_element_dg0_workflow_contract COMMAND fem_element_dg0_workflow_contract)
+
 add_executable(
     fem_element_quadrature_material_contract
     tests/fem_element_quadrature_material_contract.cpp

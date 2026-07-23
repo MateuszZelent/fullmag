@@ -491,7 +491,7 @@
         "optional Poisson demag and Zeeman with the same DG0 material owner",
         "conservative node-aligned energy projection preserving tetrahedral weak-form integrals"
       ],
-      "notes": "The bounded CPU lane requires exchange enabled with use_consistent_mass=true. Poisson demag and Zeeman may be added, but demag-only and Zeeman-only plans do not promote DG0 Ms. Anisotropy, interfacial or bulk DMI, thermal, STT, Oersted, magnetoelastic coupling, direct native relaxation, and every FEM GPU DG0 plan reject before execution. There is no nodal fallback for the sharp coefficient."
+      "notes": "The bounded CPU lane requires exchange enabled with use_consistent_mass=true. Poisson demag and Zeeman may be added, but demag-only and Zeeman-only plans do not promote DG0 Ms. Anisotropy, interfacial or bulk DMI, thermal, STT, Oersted, magnetoelastic coupling, direct native relaxation, and every FEM GPU DG0 plan reject before execution. Direct relaxation rejects at both planner and native ABI boundaries. DG0 step statistics use a direct allocation-free material-weighted reduction. There is no nodal fallback for the sharp coefficient."
     },
     {
       "id": "fem_preview_energy_density_bounded",

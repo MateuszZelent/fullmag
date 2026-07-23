@@ -1,8 +1,74 @@
 # Task 5 report: materialize FEM previews outside the solver deadline
 
-Status: `REMEDIATED_AWAITING_INDEPENDENT_REREVIEW`
+Status: `READY_FOR_REREVIEW`
 
 Base revision: `7599f78968ca21014685d1617eb14f3dc8a69bca`
+
+## Native ABI and DG0 step-metrics remediation submitted 2026-07-23
+
+This follow-up closes the two findings in the independent re-review at
+`156322e8f1c5cfaeb88386734a90ff326c457538`. It does not change the reviewer-owned
+`CHANGES_REQUIRED` verdict; it submits new implementation and evidence for another
+independent review.
+
+### TDD evidence
+
+- P1 RED: `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-material-element-ms-contract`
+  built the new public-ABI fixture, executed the ordinary CPU RK positive case, and
+  then stopped with `FAIL: DG0 direct relaxation must fail unavailable` (exit 1).
+  An earlier compile-only harness failure due to a missing `<cstdint>` include was
+  corrected before this behavioral RED and is not counted as defect evidence.
+- P2 RED: `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-dg0-step-metrics-contract`
+  stopped with `FAIL: DG0 average magnetization must not heap-allocate` (exit 1).
+  Allocation counting was enabled only around
+  `average_magnetization_components(ctx)` after Context and material-adapter setup.
+- P1/P2 GREEN: the same focused step-metrics command and the complete managed
+  material command both returned exit 0. The ABI fixture proves ordinary CPU RK
+  remains executable, PG-BB/nonlinear-CG/tangent-plane calls on a reusable handle
+  return `FULLMAG_FEM_ERR_UNAVAILABLE`, and an LLG-overdamped DG0 plan rejects at
+  backend creation.
+
+### Implementation
+
+- One material-owned guard now enforces the element-DG0 `M_s` relaxation
+  restriction at LLG-overdamped Context construction, the pure-damping RK entry,
+  and the common direct-relaxation dispatcher. The dispatcher guard covers PG-BB,
+  nonlinear-CG, and tangent-plane implicit without adding workflow state to
+  `Context`.
+- DG0 average magnetization now performs one active-element traversal and returns
+  the three `M_s`-weighted component integrals plus their denominator. It allocates
+  no unit fields, no mesh-sized scratch, and performs no repeated mass-bilinear
+  traversals on the accepted-step hot path.
+
+### Fresh verification
+
+- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-dg0-step-metrics-contract`:
+  passed the numeric and zero-allocation assertions.
+- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-material-element-ms-contract`:
+  passed the new ABI workflow contract and all existing material/context/
+  interaction/step-metrics contracts.
+- `env COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime`: detected the
+  stale native source, rebuilt/exported the runtime, and the final validator
+  reported `{"bundle":"valid","runtime":"fem-gpu-host"}`.
+- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-review-unit-contract`:
+  passed all focused API/CLI/planner tests, the exact callback regression (1/1),
+  the runner Task 5 group (16/16), and backend source-layout tests (2/2).
+- `.fullmag/local/python/bin/python -m unittest scripts/test_verify_fem_preview_surface_matrix.py`:
+  13/13 passed.
+- `env COMPOSE_PROJECT_NAME=fullmag just build-static-control-room`: passed the
+  production build; its generated `next-env.d.ts` change was reverted.
+- Focused ordinary-time DG0 energy qualification passed at source step 52 under
+  `.fullmag/reports/fem-preview-energy-qualification/dg0-ms-native-relax-remediation`.
+  The element-DG0 range was `400000..800000 A/m`, projection was
+  `fem_nodal_conservative_tetra_projection`, and maximum relative error was
+  `1.9450934198233654e-9` across exchange, demag, external, and total comparisons.
+
+The 216-row GPU preview matrix was deliberately not rerun. This follow-up changes
+only native CPU relaxation legality and CPU DG0 step statistics; `native_fem.rs`,
+the preview handoff/materializer, API, Control Room consumers, and GPU preview
+operators are unchanged. The new native ABI/allocation tests and focused real CPU
+DG0 artifact are the relevant proof. The earlier 216-row artifact remains prior
+preview-path evidence and is not presented as fresh proof for this remediation.
 
 ## Outcome
 

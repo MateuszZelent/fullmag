@@ -63,4 +63,10 @@ bool validate_material_fields(const Context &ctx, std::string &error);
  */
 bool validate_elementwise_ms_runtime_support(const Context &ctx, std::string &error);
 
+/*
+ * Reject element-DG0 Ms at a native relaxation boundary.  The planner owns
+ * the public legality decision, but reusable ABI handles must fail closed too.
+ */
+bool validate_elementwise_ms_relaxation_support(const Context &ctx, std::string &error);
+
 } // namespace fullmag::fem

@@ -106,7 +106,25 @@ and native validation. There is no nodal fallback for a sharp DG0 coefficient.
 Direct native FEM relaxation algorithms also remain unsupported with
 element-DG0 `M_s`; the qualified CPU path is the ordinary time-evolution owner
 set, whose reported average magnetization must use the same DG0 mass
-integration rather than a scalar-`M_s` fallback.
+integration rather than a scalar-`M_s` fallback. This workflow restriction is
+enforced twice: by canonical planning and again at the native ABI/runtime
+boundary. A reusable ordinary-time handle must reject PG-BB, nonlinear-CG, and
+tangent-plane relaxation calls, while an LLG-overdamped plan must reject before
+its first RK relaxation step. The ordinary explicit-RK time-evolution call on
+the same qualified CPU exchange/consistent-mass material lane remains legal.
+
+The DG0 average-magnetization observable is
+
+```text
+<m> = (integral_Omega_m M_s m dV) / (integral_Omega_m M_s dV).
+```
+
+For P1 `m` and element-DG0 `M_s`, each active tetrahedron contributes
+`M_s V_T (sum_i m_i) / 4` to the vector numerator and `M_s V_T` to the
+denominator. Native step statistics must accumulate all four values in one
+direct element traversal. Constructing nodal unit fields, projecting DG0
+`M_s`, or allocating mesh-sized scratch vectors per accepted step is not a
+qualified realization.
 
 Uniform-`M_s` uniaxial and cubic anisotropy, and interfacial and bulk DMI
 density semantics, are qualified as four separate native GPU plans. The
@@ -148,6 +166,7 @@ The planner should advertise density quantities only for backends that can compu
 - FEM density must match FEM scalar energy under its documented quadrature rule.
 - Native FEM qualification includes separate uniaxial and cubic anisotropy activation, interfacial versus bulk DMI selection, uniform/nodal-P1/element-DG0 `M_s`, and `eden_total` versus the sum of active native scalar terms.
 - Element-DG0 `M_s` qualification uses the restricted native FEM CPU owner set above; uniform-`M_s` uniaxial, cubic, interfacial DMI, and bulk DMI qualification uses four separate native FEM GPU fixtures.
+- Native ABI regressions must prove fail-closed DG0 behavior for every relaxation route and continued ordinary CPU RK execution. A hot-path allocation regression must prove the DG0 average-magnetization reduction performs no heap allocation per call.
 
 ### 5.3 Regression tests
 

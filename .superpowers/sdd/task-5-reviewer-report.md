@@ -1,62 +1,12 @@
 # Task 5 independent re-review after remediation
 
-Reviewed range: `7599f78968ca21014685d1617eb14f3dc8a69bca..09f00cce7c21f7943079525f96f72198d3038374`
+Reviewed range: `7599f78968ca21014685d1617eb14f3dc8a69bca..156322e8f1c5cfaeb88386734a90ff326c457538`
 
 Task 5 implementation commit: `ad67da90cfa678c750a4bc1f1dabb4ca73483ae8`
 
-Remediation commit: `09f00cce7c21f7943079525f96f72198d3038374`
+Remediation commits: `09f00cce7c21f7943079525f96f72198d3038374`, `156322e8f1c5cfaeb88386734a90ff326c457538`
 
-## Remediation submission 2026-07-23
-
-`IMPLEMENTER_STATUS: READY_FOR_INDEPENDENT_REREVIEW`
-
-The verdicts below are the prior independent review and remain reviewer-owned.
-This submission records implementation evidence for a fresh review; it does not
-self-approve or replace those verdicts.
-
-- Public freshness is again the canonical four-state enum. Internal supersession
-  is not exposed, retained values keep retained source provenance, and focused API
-  and Control Room regressions cover pending, superseded, and error combinations.
-- CPU element-DG0 `M_s` is planner- and native-reachable only for ordinary time
-  evolution with mandatory consistent-mass exchange and optional Poisson demag or
-  Zeeman. GPU DG0 and every unsupported owner combination remain fail-closed.
-- DG0 field-dot preview energies use the exact conservative P1 tetrahedron
-  weak-form projection. Five independent managed fixtures qualify CPU DG0 plus GPU
-  uniaxial, cubic, interfacial DMI, and bulk DMI against native scalar terms.
-- The stale non-`task5_` callback test was repaired and explicitly added to the
-  managed review recipe. The recipe passed the exact callback test and 16/16
-  Task 5 runner tests.
-- The removed exchange source assertion checked only for a sentence in an absent,
-  untracked report file. No executable exchange coverage was removed:
-  `fem_exchange_contract` remains part of the managed native material gate and
-  passed there.
-
-The first post-change matrix invocation completed all 216 executions but failed
-its heterogeneous-row CSV write with `KeyError: 'energy_projection_location'`.
-Its 180 measured rows are preserved at
-`.fullmag/reports/fem-preview-surface-matrix/20260723-081559/raw_rows.json` and are
-RED evidence only. The serializer now uses the explicit union of row columns and
-null-fills missing cells; focused serializer contracts and the complete 13/13
-verifier unit suite pass. The fresh post-fix matrix then exited 0 with 36 warmups
-and 180 measured rows; its authoritative artifact is
-`.fullmag/reports/fem-preview-surface-matrix/20260723-090252/summary.json`.
-
-Submission gates recorded by the implementer:
-
-- `verify-fem-preview-review-unit-contract`: passed, including the exact callback
-  regression and 16/16 `task5_` runner tests.
-- `verify-fem-material-element-ms-contract`: passed every executable native target,
-  including exchange and DG0-aware step metrics.
-- `verify-fem-preview-energy-qualification`: passed all five separate managed
-  CPU/GPU energy fixtures.
-- The fresh canonical matrix passed 216/216 invocations with callback maximum
-  1,105,207 ns, callback-plus-fence maximum 1,414,746 ns, thread-CPU maximum
-  1,077,007 ns, 60 live asynchronous rows, 30 energy-comparison rows, and zero
-  wall-time outliers.
-- Control Room typecheck, zero-warning lint, 392-file/3765-test suite, and API
-  hygiene passed. React Doctor remains unrun: its sandboxed package fetch failed
-  with `EAI_AGAIN`, and the required escalation was rejected because it would run
-  an unpinned third-party package.
+Review date: 2026-07-23
 
 ## Verdicts
 
@@ -64,109 +14,297 @@ Submission gates recorded by the implementer:
 
 `QUALITY_VERDICT: CHANGES_REQUIRED`
 
-The remediation closes the original callback-measurement, live-magnetization provenance, cross-session cache identity, worker-failure isolation, and duplicate `last_good` ownership defects. The bounded CUDA snapshot implementation and the corrected matrix are credible production-executable evidence for the exercised GPU fixture. Acceptance is still blocked by a public freshness/provenance contract violation, incomplete native energy-density qualification relative to the newly canonical note, and a failing runner test hidden by the managed review recipe's name filter.
+The remediation closes all three findings from the preceding review at the
+planner/API/preview-evidence level. Public freshness is again the canonical
+four-state contract with retained-payload provenance; the bounded CPU DG0 lane
+is production-executable through the planner; DG0 field-dot energy densities
+use a conservative P1 tetrahedral weak-form projection and match native scalar
+energies; the stale callback contract is explicitly included in the managed
+recipe; the heterogeneous matrix serializer is rectangular; and the removed
+exchange assertion checked stale documentation presence rather than executable
+physics.
+
+Approval is still blocked by two newly identified implementation defects. The
+native ABI does not enforce the same `ordinary time evolution only` restriction
+as the planner and can enter a native relaxation algorithm through an already
+accepted DG0 handle. Separately, the DG0 step-statistics path allocates and
+zeroes three `3*N` vectors on every accepted CPU step. The first is a semantic
+fail-closed gap; the second is a solver-hot-path performance regression.
 
 ## Required findings
 
-### [P1] Public field freshness conflates request state with retained-payload provenance and adds an unauthorized fifth state
+### [P1] Native relaxation entry bypasses the planner's DG0 workflow restriction
 
 Files:
 
-- `docs/adr/0011-resource-first-api.md:127-138`
-- `docs/specs/resource-first-control-room-api-v2.md:223-245`
-- `.superpowers/sdd/task-5-brief.md:65-78`
-- `crates/fullmag-api/src/schemas/fields.rs:15-23`
-- `crates/fullmag-api/src/router_v2/handlers/data/fields.rs:762-785`
-- `crates/fullmag-api/src/router_v2/handlers/data/fields.rs:920-950`
-- `crates/fullmag-api/src/router_v2/handlers/data/fields.rs:1140-1200`
-- `crates/fullmag-api/src/router_v2/tests.rs:24298-24370`
-- `apps/control-room/src/kernel/api/generated/openapi-v2-types.ts:4095`
-- `apps/control-room/src/modules/viewport-3d/hooks/useViewport3DSceneModel.ts:1575`
+- `crates/fullmag-plan/src/fem.rs:79-93`
+- `crates/fullmag-plan/src/tests.rs:10697-10724`
+- `backends/fem/core/fem_material_fields.cpp:117-155`
+- `backends/fem/core/fem_material_fields.cpp:268-279`
+- `backends/fem/src/api.cpp:2705-2727`
 
-The canonical resource contract has exactly four public states: `complete | stale_complete | pending | error`. It defines `pending` as no complete payload being available and requires a compatible retained payload to remain `stale_complete`. The implementation instead publishes internal queue state directly, adds public `superseded`, and overwrites an existing descriptor/meta object's `source_step` and `source_revision` with the newer request identity.
+The planner correctly rejects `Ms_element_field` whenever
+`FemPlanIR.relaxation` is present (`fem.rs:91-93`). Its regression explicitly
+expects a reusable non-relaxation CPU handle to be accepted and an authored
+PG-BB relaxation plan to be rejected (`tests.rs:10697-10724`).
 
-This makes the returned metadata cease to describe the returned field. The API regression at lines 24298-24370 intentionally constructs a retained complete `H_demag` payload, injects a step-9 pending request, then expects `available=true`, `state=pending`, `source_step=9`, and readable statistics from the older payload. `get_field_meta` performs the same replacement through `materializer_freshness.unwrap_or(freshness)`. A client therefore receives old values labelled with the unmaterialized request's provenance. The same problem applies to `superseded`, and the generated OpenAPI/UI now normalize the spec drift instead of detecting it.
+The native validator has no equivalent workflow predicate. It accepts every CPU
+handle with exchange enabled, consistent mass enabled, and no unsupported local
+owner (`fem_material_fields.cpp:117-155,268-279`). Once accepted,
+`fullmag_fem_backend_relax_step` calls `run_backend_relaxation_step` without
+checking `Ms_element_field` or any qualified workflow mode
+(`api.cpp:2705-2727`). A direct native/Rust backend caller can therefore execute
+the unqualified DG0 relaxation path that the planner deliberately rejects.
+There is no native regression proving rejection at this boundary.
 
-Required change: keep `LiveFieldMaterializationState::Superseded` as internal bounded-handoff telemetry. Public catalog/meta must describe the payload actually returned: retain its source step/revision/timestamp and expose `stale_complete` while a newer request is pending or superseded. `pending` may be used only when there is no complete compatible payload. Define the retained-payload/error combination explicitly without replacing payload provenance, regenerate OpenAPI/types, remove `superseded` from the public enum, and invert the current API/UI regressions to assert the canonical four-state semantics.
+Required change: carry an explicit qualified workflow/operation mode into the
+native context, or guard every native relaxation entry point against
+element-DG0 `M_s`. Add managed native tests showing that ordinary CPU RK
+time evolution with consistent-mass exchange still executes, while PG-BB,
+nonlinear-CG, and the LLG-overdamped relaxation route fail closed unless and
+until separately qualified. Planner rejection alone is insufficient for a
+native contract.
 
-### [P1] The promised native energy-density qualification is still incomplete and its DG0 branch is unreachable in a production plan
-
-Files:
-
-- `docs/physics/0890-energy-density-observables.md:54-78`
-- `docs/physics/0890-energy-density-observables.md:98-111`
-- `docs/plans/2026-07-22-task-5-preview-review-remediation.md:5-10`
-- `crates/fullmag-runner/src/native_fem.rs:1078-1187`
-- `crates/fullmag-runner/src/native_fem.rs:3517-3620`
-- `crates/fullmag-plan/src/fem.rs:128-143`
-- `examples/fem_preview_surface_matrix.py:44-63`
-- `scripts/verify_fem_preview_surface_matrix.py:923-1003`
-
-The cubic term and volume-lumped DG0 projection helper repair the original formula-level defect, and the payload is truthfully labelled `fem_nodal_visualization_projection`. But the canonical note now requires native qualification of separate uniaxial/cubic activation, interfacial/bulk DMI selection, uniform/nodal-P1/element-DG0 `M_s`, and `eden_total` against native scalar terms. The remediation plan likewise requires native DG0/regional-Ms regressions.
-
-The managed 30-row comparison exercises one nodal `material.ms_field` fixture with cubic anisotropy, exchange, demag, and external field. The verifier explicitly rejects the fixture unless `material.ms_field` exists; it does not require `ms_element_field`. The fixture has no DMI. DG0 is covered only by the pure two-tetrahedron helper test. More importantly, `elementwise_material_legality_error` rejects every `ms_element_field` plan on both CPU and GPU, so the new production preview branch that reads `plan.ms_element_field` cannot be reached through the current planner/runtime path.
-
-Required change: either qualify a production-executable DG0 plan and add managed scalar-density comparisons for DG0 plus separate interfacial/bulk DMI cases, or revise the physics note/capability contract to mark DG0 preview materialization unsupported and remove unreachable support claims/code. Do not count a nodal regional override or a helper-only projection test as DG0 production qualification.
-
-## Code-quality finding
-
-### [P2] A runner contract test fails, but the managed Task 5 recipe filters it out
+### [P2] DG0 average magnetization allocates three full vectors on every CPU step
 
 Files:
 
-- `crates/fullmag-runner/src/lib.rs:4453-4485`
-- `crates/fullmag-runner/src/fem/relax/preview.rs`
-- `justfile:2038-2050`
-- `.superpowers/sdd/task-5-report.md:99-105`
+- `backends/fem/cpu/mfem/runtime/step_metrics.cpp:20-45`
+- `backends/fem/cpu/mfem/runtime/step_metrics.cpp:105-136`
+- `backends/fem/cpu/mfem/integrators/rk_explicit_step.cpp:446`
 
-`fem_preview_materialization_stays_outside_callback_deadline` still requires the removed duplicate-retention strings `let mut last_good_field = field.clone();` and `result.last_good_field`. The current preview implementation intentionally has neither. Running that exact test against the managed runtime libraries fails at `crates/fullmag-runner/src/lib.rs:4481` with exit 101.
+For elementwise `M_s`, `average_magnetization_components` constructs and
+zero-initializes `unit_x`, `unit_y`, and `unit_z`, each with
+`ctx.state.m_xyz.size()` doubles, then fills them and performs four material
+mass-bilinear traversals. `fill_common_step_metrics` calls this helper for every
+accepted step, including the production DG0 RK path. Thus the new lane adds
+three heap allocations and `9*N` double initialization writes per step before
+the reductions themselves.
 
-The managed recipe runs only tests matching `task5_`, so this older non-prefixed Task 5 contract is silently excluded while the report cites 15/15 runner tests. This is not merely absent coverage: the repository's runner suite is red for the reviewed source.
+This violates the native FEM hot-path rule and scales memory traffic with mesh
+size. The small qualification mesh does not expose the production cost.
 
-Required change: update or delete the stale source assertion so it checks the new single-owner retention contract, then run at least the full `fullmag-runner` test target (or a managed recipe that explicitly includes this test) instead of relying only on the `task5_` filter.
+Required change: make the DG0 reduction allocation-free. For example, add a
+material-adapter reduction that integrates the three components and denominator
+directly in one element traversal, or precompute immutable basis/denominator
+workspace during context initialization and reuse it. Add a contract or
+allocation/performance regression proving no per-step heap allocation in the
+DG0 step-statistics path.
 
-## Original-finding closure audit
+## Closure of the three previous findings
 
-### Closed
+### 1. Canonical freshness and retained payload provenance: closed
 
-1. **Real callback/live/browser evidence:** the verifier now reads pre-terminal production solver-profile samples rather than timing `PendingFemPreviewJob::Test`. All 90 enabled interactive measured rows carry production callback samples; 60 primary live rows prove a pre-terminal async field. The Control Room smoke hashes the binary response observed on the page's own request and checks a live WebGL canvas. The dedicated 80 ms run checks retained pending/stale display.
-2. **Live `m` provenance:** `FemLiveMagnetizationPayload` carries source step/revision/materialization timing. CLI ingestion stores it in canonical `latest_fields`; scalar-only frames preserve the older capture identity. The API regression expects step 4 to remain `stale_complete` at live step 9.
-3. **Session-scoped caches/ETags:** session identity is present in vector, scalar projection, empty-mask projection, scalar-slice, and arrow-slice keys/ETags, with focused cross-session regressions.
-4. **Optional materializer failures:** worker and terminal failures become explicit materialization status without aborting the solver; focused runner/API tests cover error publication and retained payload readability.
-5. **Duplicate `last_good` clone:** the unused runner-side full-field clone/map was removed. Retention remains owned by the downstream CLI/API caches.
+- `FieldMaterializationState` contains exactly `complete`, `stale_complete`,
+  `pending`, and `error` (`crates/fullmag-api/src/schemas/fields.rs:15-22`).
+- Internal `Superseded` maps to public `pending` only when there is no completed
+  payload (`fields.rs:762-786`). Pending or superseded work over a retained
+  payload changes only its public state to `stale_complete`; error keeps the
+  retained payload identity while exposing the failure (`fields.rs:789-805`).
+- Catalog mutation no longer overwrites retained source identity
+  (`fields.rs:939-978`), and meta construction applies the request state only
+  after payload provenance has been selected (`fields.rs:1166-1230`).
+- The API regression proves: retained step 4/revision 7 remains available and
+  `stale_complete` while step 9 is pending; no-payload pending reports step
+  9/revision 13 and `available=false`; internal supersession retains step 4;
+  error retains step/time/duration and readable statistics
+  (`crates/fullmag-api/src/router_v2/tests.rs:24246-24431`).
+- Generated TypeScript exposes the same four-state union. No public
+  `superseded` state remains.
 
-### Partially closed
+### 2. Planner/native CPU DG0 reachability and energy semantics: closed for ordinary time evolution
 
-1. **Energy density:** cubic composition, per-node `M_s`, masking, and projection location were repaired. DG0 and DMI production qualification remains open as described above.
-2. **Behavioral tests versus source checks:** production matrix coverage is materially stronger, but the stale failing source-contract test and filtered recipe remain open.
-3. **Materializer freshness:** internal pending/superseded/error state is now real and failure-isolated, but projecting it directly into public payload freshness introduces the P1 contract/provenance defect above.
+- Planner legality requires CPU, exchange, `use_consistent_mass=true`, no
+  relaxation, and no anisotropy/DMI/thermal/STT/Oersted/magnetoelastic owner.
+  Poisson demag and Zeeman remain valid additional consumers
+  (`crates/fullmag-plan/src/fem.rs:79-149`).
+- Native handle validation mirrors the exchange/consistent-mass and unsupported
+  owner checks; GPU remains rejected
+  (`backends/fem/core/fem_material_fields.cpp:117-155,268-279`).
+- Both targeted planner regressions passed during this re-review:
+  `fem_cpu_exchange_and_zeeman_plan_preserves_conformal_dg0_ms` and
+  `fem_planner_elementwise_material_legality_distinguishes_a_from_ms`.
+- The managed DG0 artifact is genuine native CPU execution: metadata records
+  `execution_engine=fem_cpu_native`, `mfem_device=cpu`,
+  `use_consistent_mass=true`, no nodal `ms_field`, element-DG0 values spanning
+  `400000..800000 A/m`, Poisson-Robin demag, and ordinary `study.run`.
 
-## Bounded callback and CUDA-path audit
+The remaining native relaxation bypass is the separate P1 finding above; it
+does not invalidate the exercised ordinary-time DG0 artifact.
 
-- The handoff remains bounded to one worker job, staged descriptors, a finite queue/cache cycle, and an eight-slot preallocated native snapshot pool.
-- Solver callback code stages/dispatches work and does not call field `wait` or synchronous `copy_live_preview_field` for async energy/cache requests.
-- GPU snapshot creation enqueues device-to-device staging and pinned-host `cudaMemcpy2DAsync` on the persistent I/O stream. `wait_snapshot_payload` remains worker-side. The compute/I/O ordering uses events; the scheduling fence is outside the callback and is measured separately.
-- The authoritative artifact reports callback max 1,191,293 ns, thread-CPU max 954,799 ns, schedule-fence max 988,911 ns, and callback-plus-fence max 1,479,260 ns against the 2,000,000 ns deadline. No measured wall outlier was recorded.
+### 3. Conservative weak-form energy projection and independent scalar oracles: closed
 
-No callback D2H wait or approximately 79 ms callback spike was found in the reviewed production path. This conclusion is limited to the exercised device/fixture and does not waive the public freshness or energy-qualification findings.
+- The implementation uses the exact P1 tetrahedron identity
+  `V/20 * (sum_i u_i.v_i + (sum_i u_i).(sum_i v_i))`, distributes each
+  element integral conservatively to the four nodes, and labels the result
+  `fem_nodal_conservative_tetra_projection`
+  (`crates/fullmag-runner/src/native_fem.rs:3521-3637`).
+- The same conservative path is used for exchange, demag, external, and total
+  field-dot densities in asynchronous snapshot materialization
+  (`native_fem.rs:3737-3785`).
+- The focused test constructs a case where the old projected-`M_s` formula is
+  wrong by a factor of three and proves conservative integrals independently
+  for exchange, demag, external, and total terms
+  (`native_fem.rs:3876-3975`).
+- Five separate managed artifacts compare API-integrated projected density at
+  source step 52 against native scalar rows:
 
-## 216-run matrix assessment
+  | Variant | Independent terms | Maximum relative error |
+  |---|---|---:|
+  | CPU element-DG0 `M_s` | `eden_ex`, `eden_demag`, `eden_ext`, `eden_total` | `1.9450934198233654e-9` |
+  | GPU uniaxial | `eden_ani`, `eden_total` | `3.2853607098039007e-11` |
+  | GPU cubic | `eden_ani`, `eden_total` | `3.8805584161779044e-11` |
+  | GPU interfacial DMI | `eden_dmi`, `eden_total` | `2.7557566216410217e-11` |
+  | GPU bulk DMI | `eden_dmi`, `eden_total` | `4.16346561728891e-11` |
 
-Authoritative artifact: `.fullmag/reports/fem-preview-surface-matrix/20260723-032852/summary.json`
+  Evidence is under
+  `.fullmag/reports/fem-preview-energy-qualification/*/{raw_rows.json,outputs}`.
+  The DMI/anisotropy terms are nonzero and the terminal cache contains the
+  correct distinct native field owner for each fixture.
 
-- Shape is correct: 4 modes x 3 cadences x 3 surfaces x (1 warmup + 5 measured) = 36 warmups + 180 measured = 216 matrix rows.
-- The source contains one direct `run_row` call per row and no per-row retry loop. Polls use `time.monotonic()` and elapsed measurements use `time.perf_counter()`.
-- Interactive production evidence is substantive: 90 enabled interactive rows have real callback samples, 60 primary-field rows prove pre-terminal async publication, all 45 enabled Control Room rows observe a pre-terminal browser state/response, and 30 full-cache interactive rows compare integrated projected energy against native scalar columns.
-- The 60 headless rows prove actual GPU provenance and 52 scalar steps, not live preview publication. This is an appropriate no-consumer headless invariant, but it must not be described as headless exercise of the async preview callback.
-- Payload/mask equality for `m` and `H_demag`, terminal Zarr `H_demag`, full-cache quantity inventory, and the dedicated retained-frame run are internally consistent with the raw rows.
-- The matrix qualifies this bounded nodal/cubic fixture. It does not qualify DG0 or DMI energy semantics and therefore is not by itself full closure of the canonical energy note.
+## Additional remediation audit
 
-## Verification performed during re-review
+### Stale callback test inclusion: closed
 
-- `git diff --check 7599f78968ca21014685d1617eb14f3dc8a69bca..09f00cce7c21f7943079525f96f72198d3038374`: passed.
-- `python3 -m unittest scripts.test_verify_fem_preview_surface_matrix`: 10/10 passed.
-- Mechanical audit of `summary.json`, `raw_rows.json`, `matrix.csv`, and `retention_proof.json`: counts and reported extrema match the artifacts.
-- Exact runner diagnostic using the exported managed FEM libraries: `cargo +nightly test -p fullmag-runner --features fem-gpu fem_preview_materialization_stays_outside_callback_deadline -- --nocapture`: failed, 0 passed / 1 failed / 773 filtered, at line 4481.
-- An attempt to run that exact test through the identified Docker-backed recipe environment did not reach compilation/test execution because Docker reported `all predefined address pools have been fully subnetted`. The failing Rust test result above is therefore diagnostic host execution against managed libraries, not new managed runtime qualification. Existing managed success claims are assessed from the submitted artifacts and source.
+`fem_preview_materialization_stays_outside_callback_deadline` now asserts the
+single bounded handoff/retention owner and no longer requires the removed
+duplicate `last_good` clone. `justfile:2051-2055` defines an exact managed gate
+for this test and also invokes it explicitly before the `task5_` filter in the
+review-unit recipe. The old hidden-red-test defect is removed.
 
-The pre-existing unrelated modification to `.superpowers/sdd/progress.md` was preserved and not reviewed as part of this range.
+### Matrix serializer schema: closed
+
+`matrix_csv_columns` builds the ordered union of public keys and
+`matrix_csv_record` fills absent heterogeneous cells with `None`
+(`scripts/verify_fem_preview_surface_matrix.py:95-115`). The writer uses that
+explicit schema (`:2005-2013`). During re-review:
+
+- `python3 -m unittest scripts.test_verify_fem_preview_surface_matrix`: 13/13
+  passed.
+- The final `matrix.csv` parsed as 180 data rows, 59 columns, every row
+  rectangular, with the header exactly equal to the ordered union of public
+  `raw_rows.json` keys.
+
+### Removed documentation-presence assertion: accepted
+
+The deleted function in `backends/fem/tests/exchange_contract.cpp` only searched
+an old prose progress report for fixed phrases. It did not execute exchange
+physics or validate an operator result. `fem_exchange_contract` and its native
+directional-derivative/runtime coverage remain in the managed material gate.
+Removing this stale presence assertion does not reduce executable coverage.
+
+## Final matrix assessment
+
+Authoritative artifact:
+`.fullmag/reports/fem-preview-surface-matrix/20260723-090252/summary.json`
+
+- Shape: four modes x three cadences x three surfaces x one warm-up plus five
+  measured executions = 36 warm-ups + 180 measured executions.
+- Surfaces: `headless`, `interactive_no_browser`, `control_room`; modes:
+  `disabled`, `m`, `H_demag`, `full_cache`; cadences: 10, 25, 50.
+- Callback deadline: 2,000,000 ns. Observed production callback maximum:
+  1,105,207 ns; callback-thread CPU maximum: 1,077,007 ns;
+  callback-plus-fence maximum: 1,414,746 ns; wall outliers: zero.
+- 60 rows prove live asynchronous publication; 30 rows contain managed energy
+  comparisons; terminal payload/mask hashes are stable across surfaces.
+- Browser retention proof reports `stale_complete`, with a retained canvas hash
+  and callback maximum 193,395 ns.
+- The artifact is internally consistent with `raw_rows.json`, `matrix.csv`,
+  `retention_proof.json`, `api.log`, and per-run outputs. It is accepted as
+  production-executable evidence for the bounded fixtures, not as evidence that
+  the native ABI fail-closed gap or large-mesh allocation issue is absent.
+
+## Verification performed during this re-review
+
+- `git diff --check 7599f78968ca21014685d1617eb14f3dc8a69bca..156322e8f1c5cfaeb88386734a90ff326c457538`: passed.
+- `python3 -m unittest scripts.test_verify_fem_preview_surface_matrix`: 13/13
+  passed.
+- Targeted `fullmag-plan` tests listed above: 2/2 passed.
+- Mechanical JSON/CSV inspection of the final 09:02:52 matrix and all five
+  energy-qualification artifact sets: passed.
+- Exact managed callback gate attempted with
+  `just verify-fem-preview-callback-source-contract`: did not reach test
+  execution because Docker failed to create the Compose network with
+  `all predefined address pools have been fully subnetted`.
+- Host diagnostic of the same Rust test also did not reach test execution:
+  `fullmag-fem-sys` stopped because host `cmake` is absent. This host path is
+  diagnostic only and is not counted as native proof.
+
+The Docker failure is an environment limitation, not a product-test failure.
+Official Docker guidance lists removing confirmed-unused networks, tearing down
+stale Compose projects, reusing an external network, or configuring address
+pools as remedies. No shared Docker network was pruned or reconfigured during
+this review because that would mutate unrelated agent state.
+
+The pre-existing modification to `.superpowers/sdd/progress.md` was preserved.
+No production code was modified and no commit was created by this review.
+
+## Implementer response to required findings (2026-07-23)
+
+Submission status: `READY_FOR_REREVIEW`
+
+This section records the implementation response and fresh evidence. It does not
+alter the independent `SPEC_VERDICT: CHANGES_REQUIRED` or
+`QUALITY_VERDICT: CHANGES_REQUIRED` above; only a new independent review may do
+that.
+
+### P1 response: native relaxation now fails closed
+
+- A single material-owned guard rejects element-DG0 `M_s` at the native
+  relaxation boundary without adding workflow state to `Context`.
+- LLG-overdamped plans reject during Context construction and are guarded again
+  at the pure-damping RK entry. The common direct-relaxation dispatcher rejects
+  before PG-BB, nonlinear-CG, or tangent-plane implicit execution.
+- The new public-ABI fixture first proves that ordinary CPU RK with exchange and
+  consistent mass executes, then exercises all three direct algorithms on the
+  same reusable handle and exercises LLG-overdamped backend creation.
+
+RED command and result:
+
+```text
+env COMPOSE_PROJECT_NAME=fullmag just verify-fem-material-element-ms-contract
+FAIL: DG0 direct relaxation must fail unavailable
+exit 1
+```
+
+GREEN command and result: the same command returned exit 0 after all existing
+material/context/interaction contracts and the new ABI fixture ran.
+
+### P2 response: DG0 step-statistics reduction is allocation-free
+
+- `average_magnetization_components` no longer creates three `3*N` unit vectors
+  or invokes four mass-bilinear traversals.
+- The material realization and adapter expose one direct active-element reduction
+  returning three weighted component integrals plus the denominator.
+- The allocation regression constructs Context/material state before enabling its
+  counter, then measures only the actual average helper call and asserts zero heap
+  allocations plus the expected `(0.25, 0.75, 0.0)` value.
+
+RED command and result:
+
+```text
+env COMPOSE_PROJECT_NAME=fullmag just verify-fem-dg0-step-metrics-contract
+FAIL: DG0 average magnetization must not heap-allocate
+exit 1
+```
+
+GREEN result: the same command returned exit 0.
+
+### Fresh integration evidence
+
+- Managed runtime rebuild/export: exit 0 and final `bundle: valid`.
+- Managed review-unit recipe: exit 0; callback 1/1, Task 5 runner 16/16,
+  backend source-layout 2/2, and all focused API/CLI/planner tests passed.
+- Focused real CPU ordinary-time DG0 energy artifact:
+  `.fullmag/reports/fem-preview-energy-qualification/dg0-ms-native-relax-remediation`.
+  It reached source step 52 with element-DG0 `M_s=400000..800000 A/m`; exchange,
+  demag, external, and total projected integrals matched native scalars with a
+  maximum relative error of `1.9450934198233654e-9`.
+- Capability JSON parsed successfully and its Markdown/JSON DG0 notes both state
+  native ABI enforcement plus allocation-free material-weighted statistics.
+
+The canonical 216-row preview matrix was not rerun because this response does not
+modify `native_fem.rs`, preview scheduling/materialization, API, frontend, or GPU
+preview operators. The bounded native ABI test, allocation counter, rebuilt
+managed bundle, review-unit recipe, and focused real CPU DG0 energy fixture are
+the relevant new evidence.

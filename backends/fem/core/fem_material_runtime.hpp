@@ -28,6 +28,8 @@ public:
     Aos3MassBilinearTermwiseResult ms_weighted_aos3_mass_bilinear_termwise(
         const std::vector<double> &left_aos3_nodal_values,
         const std::vector<double> &right_aos3_nodal_values) const;
+    MsWeightedAos3AverageReduction ms_weighted_aos3_average_reduction(
+        const std::vector<double> &aos3_nodal_values) const;
 
 private:
     P1TetrahedralMaterialRealization realization_;

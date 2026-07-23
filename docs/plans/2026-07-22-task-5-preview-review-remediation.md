@@ -50,3 +50,21 @@
 - [x] Run managed runtime rebuild/validation, the review-unit contract, the separate energy-qualification gate, API/frontend quality gates, and the canonical matrix when implementation changes can affect it.
 - [x] Update `.superpowers/sdd/task-5-report.md` with exact RED/GREEN commands, artifacts, limits, and failures that are not proof.
 - [x] Inspect `git diff --cached --name-only` in a separate command, exclude `.superpowers/sdd/progress.md`, and commit only Task 5 re-review closure.
+
+### Task 13: Enforce the DG0 workflow restriction at native relaxation boundaries
+
+- [x] Add a public-ABI native RED regression proving an ordinary CPU RK handle executes while the same handle rejects PG-BB, nonlinear-CG, and tangent-plane calls, and an LLG-overdamped DG0 plan rejects before execution.
+- [x] Add one common material-owned fail-closed guard without new workflow state in `Context`; invoke it from context construction, the LLG/relax-stop RK route, and the direct-relaxation dispatcher.
+- [x] Run the new exact managed native contract GREEN and retain the ordinary-time positive fixture.
+
+### Task 14: Remove DG0 step-statistics heap allocation
+
+- [x] Add a RED allocation-counting regression around `average_magnetization_components` that observes the existing three mesh-sized allocations.
+- [x] Add a material-adapter one-pass reduction for the three weighted component integrals and denominator, then remove nodal unit-vector construction and repeated bilinear traversals.
+- [x] Run the value and allocation-free native contracts GREEN.
+
+### Task 15: Final native remediation proof and delivery
+
+- [x] Run the managed native material/DG0 workflow gate, ordinary-time DG0 fixture, DG0 energy qualification, and review-unit gate; do not rerun the unrelated 216-row GPU preview matrix.
+- [x] Update both Task 5 reports with exact RED/GREEN evidence and preserve the independent reviewer verdict.
+- [x] Revert incidental generated/frontend files, inspect staged names separately, exclude `.superpowers/sdd/progress.md`, and commit only the native remediation.

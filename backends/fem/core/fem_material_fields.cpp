@@ -295,4 +295,14 @@ bool validate_elementwise_ms_runtime_support(const Context &ctx, std::string &er
     return true;
 }
 
+bool validate_elementwise_ms_relaxation_support(const Context &ctx, std::string &error) {
+    if (ctx.material_fields.Ms_element_field.empty()) {
+        return true;
+    }
+    error =
+        "Ms_element_field is unsupported for native FEM relaxation: "
+        "element-DG0 Ms is qualified only for ordinary explicit-RK time evolution";
+    return false;
+}
+
 } // namespace fullmag::fem

@@ -11,6 +11,7 @@
 #include "cpu/mfem/runtime/backend_step.hpp"
 
 #include "context.hpp"
+#include "core/fem_material_fields.hpp"
 #include "cpu/mfem/integrators/rk_explicit.hpp"
 #include "cpu/mfem/integrators/rk_explicit_step.hpp"
 #include "cpu/mfem/integrators/rk_step_failure_injection.hpp"
@@ -204,6 +205,10 @@ int run_backend_step(
     std::string &error)
 {
 #if FULLMAG_HAS_MFEM_STACK
+    if (!ctx.base_plan.precession_enabled && has_relax_stop_criteria(ctx) &&
+        !validate_elementwise_ms_relaxation_support(ctx, error)) {
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
     double active_dt = dt_seconds;
     uint32_t energy_rejections = 0;
     for (;;) {
@@ -284,6 +289,9 @@ int run_backend_relaxation_step(
 {
 #if FULLMAG_HAS_MFEM_STACK
     error.clear();
+    if (!validate_elementwise_ms_relaxation_support(ctx, error)) {
+        return FULLMAG_FEM_ERR_UNAVAILABLE;
+    }
     ctx.interrupt.step_interrupted = false;
     ctx.transfer_audit.audit.reset_step_violation();
     if (ctx.gpu_state.device.lifecycle.allocated &&
