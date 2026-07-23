@@ -1,5 +1,15 @@
 # FEM CPU PG-BB Armijo Plateau Diagnostic - 2026-07-03
 
+> Superseded remediation (2026-07-23): the historical proposal in this
+> diagnostic to accept energy changes inside a fixed/relative noise window is
+> not the production contract. FEM direct minimizers retain strict Armijo and
+> never accept a resolved uphill increment. The approved remediation uses
+> term-complete direct discrete increments and operand-scale forward-error
+> bounds as specified in
+> `docs/superpowers/specs/2026-07-23-fem-direct-armijo-energy-increments-design.md`.
+> Numerical stagnation remains failed/non-converged after rollback when the
+> strict decision cannot be resolved.
+
 ## Scope
 
 This report diagnoses the interactive Fullmag failure:

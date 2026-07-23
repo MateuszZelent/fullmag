@@ -372,6 +372,16 @@ pre-existing Armijo cases are qualified separately. The Task 8 constraint to
 preserve Armijo, BB, and restart semantics forbids treating a tolerance or
 fixture change as part of this synchronization remediation.
 
+Update 2026-07-23 direct-increment remediation decision: the failed cases were
+traced to cancellation-prone endpoint-energy composition, not to a need for a
+looser line search. CPU exchange receives a polarized direct discrete
+increment, while CUDA classifies each final energy slot exactly once as direct
+or explicit endpoint residual. Residual uncertainty is derived from endpoint
+operand magnitudes. The strict Armijo inequality and four-sync PG-BB contract
+remain unchanged. The full preset must be rerun against an identity-pinned
+final native library; the earlier 95/110 artifact is diagnostic evidence only,
+not final qualification.
+
 Update 2026-06-05 direct-minimizer effective-field path: GPU
 `projected_gradient_bb` and `nonlinear_cg` now call the device-resident
 effective-field pipeline directly instead of the full RK RHS helper. This

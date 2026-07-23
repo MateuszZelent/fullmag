@@ -460,6 +460,43 @@ increase. This intentionally removes the former
 was scale dependent and whose relative branch still changed the physical
 monotonicity contract.
 
+#### 3.2.1 Term-complete direct increments
+
+The phrase "directly reduced increment" requires a term-complete numerical
+contract. Every enabled discrete energy term is classified exactly once as a
+direct increment or an explicit endpoint residual. A directly replaced term
+must not also participate in endpoint-total subtraction. Any endpoint residual
+must carry a subtraction-error scale derived from the magnitudes of its base
+and trial operands, not from the already cancelled residual.
+
+For the symmetric discrete CPU exchange operator `K_A`, PG-BB evaluates
+
+\[
+\Delta E_{\mathrm{ex}}=(m_1-m_0)^T K_A(m_1+m_0),
+\]
+
+using the same energy normalization and SI-joule convention as the canonical
+exchange owner. This polarized identity remains accurate near an exchange
+nullspace where separately accumulated endpoint energies cannot resolve the
+descent. The reduction also reports a componentwise absolute-term sum for its
+forward-error bound.
+
+The CUDA direct-increment batch classifies every `GpuFinalScalarSlot`.
+Exchange, local, drive, DMI, and polarized demag terms covered by direct
+identities are excluded from the endpoint residual. Any term without a
+qualified direct owner uses an explicit termwise endpoint difference with an
+operand-scale bound, or fails closed when neither route is supported. This
+prevents cancellation of a physical `1e-39 J` decrement by unrelated endpoint
+totals of order `1e-17 J`.
+
+The Armijo inequality, `c1`, BB1/BB2, restart, fresh-zero demag, rollback, and
+torque/energy tolerances do not change. A resolved uphill interval is rejected.
+An interval overlapping the Armijo threshold is refined by a supported
+uncertain owner or fails as numerical stagnation/non-convergence after state
+restoration. No energy noise window or absolute raw-gradient threshold is
+introduced. The authoritative design and qualification contract is
+`docs/superpowers/specs/2026-07-23-fem-direct-armijo-energy-increments-design.md`.
+
 For Poisson demag, with endpoint fields from deterministic fresh solves, the
 direct increment uses the polarized quadratic identity
 
