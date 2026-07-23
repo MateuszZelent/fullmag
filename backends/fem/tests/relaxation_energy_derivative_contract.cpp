@@ -5,6 +5,7 @@
 #include "context.hpp"
 #include "cpu/mfem/interactions/demag_poisson_energy.hpp"
 #include "cpu/mfem/interactions/anisotropy_uniaxial.hpp"
+#include "cpu/mfem/interactions/exchange_energy_difference.hpp"
 #include "cpu/mfem/interactions/zeeman_energy.hpp"
 #include "cpu/mfem/relaxation/relaxation_math.hpp"
 #include "fem_common.hpp"
@@ -134,6 +135,131 @@ void term_complete_composition_preserves_endpoint_operand_uncertainty()
         strict_armijo_difference_decision(uphill, -5.0e-49) ==
             ArmijoDifferenceDecision::Reject,
         "term-complete composition must reject a resolved uphill increment");
+}
+
+struct PolarizedExchangeOracle {
+    long double value = 0.0L;
+    long double absolute_term_sum = 0.0L;
+    std::vector<double> difference;
+    std::vector<double> applied_sum;
+};
+
+PolarizedExchangeOracle polarized_exchange_long_double_oracle(
+    const std::vector<std::vector<long double>> &matrix,
+    const std::vector<double> &base,
+    const std::vector<double> &trial)
+{
+    check(
+        !matrix.empty() && matrix.size() == base.size() &&
+            trial.size() == base.size(),
+        "polarized exchange oracle dimensions must agree");
+    PolarizedExchangeOracle oracle;
+    oracle.difference.resize(base.size());
+    oracle.applied_sum.resize(base.size());
+    for (size_t row = 0; row < matrix.size(); ++row) {
+        check(
+            matrix[row].size() == matrix.size(),
+            "polarized exchange oracle matrix must be square");
+        const long double difference =
+            static_cast<long double>(trial[row]) -
+            static_cast<long double>(base[row]);
+        long double applied_sum = 0.0L;
+        for (size_t column = 0; column < matrix.size(); ++column) {
+            applied_sum += matrix[row][column] *
+                (static_cast<long double>(trial[column]) +
+                 static_cast<long double>(base[column]));
+        }
+        const long double term = difference * applied_sum;
+        oracle.value += term;
+        oracle.absolute_term_sum += std::abs(term);
+        oracle.difference[row] = static_cast<double>(difference);
+        oracle.applied_sum[row] = static_cast<double>(applied_sum);
+    }
+    return oracle;
+}
+
+long double quadratic_energy_long_double(
+    const std::vector<std::vector<long double>> &matrix,
+    const std::vector<double> &state)
+{
+    long double energy = 0.0L;
+    for (size_t row = 0; row < matrix.size(); ++row) {
+        long double applied = 0.0L;
+        for (size_t column = 0; column < matrix.size(); ++column) {
+            applied += matrix[row][column] *
+                static_cast<long double>(state[column]);
+        }
+        energy += static_cast<long double>(state[row]) * applied;
+    }
+    return energy;
+}
+
+void polarized_exchange_difference_matches_long_double_and_endpoint_oracles()
+{
+    using fullmag::fem::polarized_exchange_difference_from_applied_sum;
+
+    const std::vector<std::vector<long double>> matrix = {
+        {2.0L, -1.0L, 0.0L},
+        {-1.0L, 2.0L, -1.0L},
+        {0.0L, -1.0L, 1.0L},
+    };
+    const std::vector<double> base = {0.25, -0.5, 0.75};
+    const std::vector<double> trial = {0.375, -0.25, 0.625};
+    const auto oracle = polarized_exchange_long_double_oracle(
+        matrix, base, trial);
+    const auto actual = polarized_exchange_difference_from_applied_sum(
+        oracle.difference.data(), oracle.applied_sum.data(), oracle.difference.size());
+    const long double endpoint_delta =
+        quadratic_energy_long_double(matrix, trial) -
+        quadratic_energy_long_double(matrix, base);
+    const long double tolerance =
+        8.0L * static_cast<long double>(std::numeric_limits<double>::epsilon()) *
+        std::max(1.0L, oracle.absolute_term_sum);
+    check(
+        std::abs(static_cast<long double>(actual.delta_joules) - oracle.value) <=
+            tolerance,
+        "production polarized exchange accumulation must match its long-double oracle");
+    check(
+        std::abs(static_cast<long double>(actual.absolute_term_sum_joules) -
+                 oracle.absolute_term_sum) <= tolerance,
+        "production polarized exchange accumulation must retain the long-double absolute-term sum");
+    check(
+        std::abs(static_cast<long double>(actual.delta_joules) - endpoint_delta) <=
+            tolerance,
+        "polarized exchange difference must match m^T K_A m endpoint subtraction at resolvable scale");
+
+    const std::vector<std::vector<long double>> near_nullspace_matrix = {
+        {1.0L, 0.0L},
+        {0.0L, 1.0e-12L},
+    };
+    const std::vector<double> near_nullspace_base = {1.0, 1.0e-3};
+    const std::vector<double> near_nullspace_trial = {1.0, 1.0e-3 - 1.0e-9};
+    const auto near_nullspace = polarized_exchange_long_double_oracle(
+        near_nullspace_matrix, near_nullspace_base, near_nullspace_trial);
+    const double endpoint_base = static_cast<double>(
+        quadratic_energy_long_double(near_nullspace_matrix, near_nullspace_base));
+    const double endpoint_trial = static_cast<double>(
+        quadratic_energy_long_double(near_nullspace_matrix, near_nullspace_trial));
+    check(
+        endpoint_trial == endpoint_base,
+        "near-nullspace fixture must hide its decrement in binary64 endpoint energies");
+    const auto retained = polarized_exchange_difference_from_applied_sum(
+        near_nullspace.difference.data(),
+        near_nullspace.applied_sum.data(),
+        near_nullspace.difference.size());
+    check(
+        near_nullspace.value < 0.0L && retained.delta_joules < 0.0 &&
+            std::isfinite(retained.delta_joules),
+        "production polarized exchange accumulation must retain a finite negative near-nullspace increment");
+
+    const double nonfinite[] = {std::numeric_limits<double>::quiet_NaN()};
+    const auto invalid = polarized_exchange_difference_from_applied_sum(
+        nonfinite, nonfinite, 1u);
+    check(
+        std::isnan(invalid.delta_joules) &&
+            std::isnan(invalid.absolute_term_sum_joules) &&
+            std::isnan(invalid.roundoff_bound_joules),
+        "production polarized exchange accumulation must fail closed on non-finite terms");
 }
 
 std::array<double, 3> normalized(std::array<double, 3> value)
@@ -1315,6 +1441,7 @@ int main()
 {
     direct_increment_composition_does_not_subtract_replaced_terms_twice();
     term_complete_composition_preserves_endpoint_operand_uncertainty();
+    polarized_exchange_difference_matches_long_double_and_endpoint_oracles();
     analytic_absolute_term_sum_resolves_component_cancellation();
     cpu_energy_weight_uses_nodal_ms_and_uniform_fallback();
     dimension_aware_reduction_guards_are_scale_relative();

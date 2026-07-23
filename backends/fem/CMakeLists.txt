@@ -93,6 +93,7 @@ set(FEM_SOURCES
     cpu/mfem/interactions/dmi_workspace.cpp
     cpu/mfem/interactions/effective_field.cpp
     cpu/mfem/interactions/exchange.cpp
+    cpu/mfem/interactions/exchange_energy_difference.cpp
     cpu/mfem/interactions/exchange_fallback.cpp
     cpu/mfem/interactions/exchange_field.cpp
     cpu/mfem/interactions/exchange_legacy_gpu_upload.cpp

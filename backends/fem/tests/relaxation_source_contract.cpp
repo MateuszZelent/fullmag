@@ -99,6 +99,102 @@ void term_complete_energy_difference_preserves_atomic_migration() {
         "Task 1 must leave the production CUDA Armijo caller on the legacy helper until Task 3");
 }
 
+void cpu_pgbb_exchange_difference_owner_is_focused_and_term_complete() {
+    const std::filesystem::path root = fem_source_root();
+    const std::filesystem::path header_path = root / "cpu" / "mfem" /
+        "interactions" / "exchange_energy_difference.hpp";
+    const std::filesystem::path source_path = root / "cpu" / "mfem" /
+        "interactions" / "exchange_energy_difference.cpp";
+    check(
+        std::filesystem::exists(header_path) && std::filesystem::exists(source_path),
+        "CPU/MFEM polarized exchange difference must have a focused interaction owner");
+    const std::string header = read_text_file(header_path);
+    const std::string source = read_text_file(source_path);
+    const std::string cmake = read_text_file(root / "CMakeLists.txt");
+    const std::string projected_gradient = read_text_file(
+        root / "cpu" / "mfem" / "relaxation" / "projected_gradient_bb.cpp");
+    const auto count_occurrences = [](const std::string &text, const std::string &needle) {
+        size_t count = 0u;
+        size_t position = 0u;
+        while ((position = text.find(needle, position)) != std::string::npos) {
+            ++count;
+            position += needle.size();
+        }
+        return count;
+    };
+
+    check(
+        header.find("polarized_exchange_difference_from_applied_sum(") !=
+                std::string::npos &&
+            header.find("exchange_energy_difference(") != std::string::npos &&
+            cmake.find("cpu/mfem/interactions/exchange_energy_difference.cpp") !=
+                std::string::npos,
+        "CPU/MFEM exchange difference helper and owner must be production-built");
+    check(
+        source.find("exchange_form->Mult(sum, applied)") != std::string::npos &&
+            source.find("polarized_exchange_difference_from_applied_sum(") !=
+                std::string::npos &&
+            source.find("audited_host_write(") != std::string::npos &&
+            source.find("audited_host_read(") != std::string::npos &&
+            source.find("mfem::Device::IsEnabled()") != std::string::npos &&
+            source.find("poll_interrupt(ctx)") != std::string::npos &&
+            source.find("TransferAuditScope exchange_audit_scope(") !=
+                std::string::npos &&
+            source.find("TransferAuditScopeKind::ExchangeInterop") !=
+                std::string::npos,
+        "CPU/MFEM exchange difference must use the assembled form with audited MFEM access, interruption, and one exchange interop scope");
+    check(
+        source.find("apply_exchange_component_mass_projection") ==
+                std::string::npos &&
+            source.find("ctx.exchange.h_xyz") == std::string::npos,
+        "CPU/MFEM exchange difference must not derive its identity from mass-projected H_ex");
+    check(
+        count_occurrences(
+            projected_gradient,
+            "const auto exchange = exchange_energy_difference(") == 1u &&
+            count_occurrences(
+                projected_gradient,
+                "demag_poisson_energy_difference_from_endpoint_fields(") == 1u &&
+            count_occurrences(
+                projected_gradient,
+                "zeeman_energy_difference_from_field(") == 1u &&
+            count_occurrences(
+                projected_gradient,
+                "uniaxial_anisotropy_energy_difference(") == 1u &&
+            projected_gradient.find("trial_stats.exchange_energy_joules") ==
+                std::string::npos &&
+            projected_gradient.find("current_stats.exchange_energy_joules") ==
+                std::string::npos,
+        "CPU PG-BB must own direct demag, Zeeman, uniaxial, and exchange increments exactly once without exchange endpoint subtraction");
+    check(
+        projected_gradient.find("residual_operand_abs +=") != std::string::npos &&
+            projected_gradient.find("std::abs(base) + std::abs(trial)") !=
+                std::string::npos &&
+            projected_gradient.find("current_stats.dmi_energy_joules") !=
+                std::string::npos &&
+            projected_gradient.find("trial_stats.dmi_energy_joules") !=
+                std::string::npos &&
+            projected_gradient.find("current_stats.magnetoelastic_energy_joules") !=
+                std::string::npos &&
+            projected_gradient.find("trial_stats.magnetoelastic_energy_joules") !=
+                std::string::npos &&
+            projected_gradient.find("current_cubic_energy") != std::string::npos &&
+            projected_gradient.find("trial_cubic_energy") != std::string::npos &&
+            projected_gradient.find("std::abs(residual_delta)") ==
+                std::string::npos,
+        "CPU PG-BB residual DMI, magnetoelastic, and cubic terms must retain explicit base/trial operand scales");
+    check(
+        projected_gradient.find("demag.roundoff_bound_joules +") !=
+                std::string::npos &&
+            projected_gradient.find("zeeman.roundoff_bound_joules +") !=
+                std::string::npos &&
+            projected_gradient.find("uniaxial.roundoff_bound_joules +") !=
+                std::string::npos &&
+            projected_gradient.find("exchange.roundoff_bound_joules +") !=
+                std::string::npos,
+        "CPU PG-BB must sum independent direct-owner roundoff bounds");
+}
+
 void c_abi_exposes_native_relaxation_step() {
     const std::filesystem::path root = fem_source_root();
     const std::string public_header =
@@ -2164,6 +2260,7 @@ void fem_relaxation_benchmark_recipes_prepare_required_binaries() {
 int main() {
     native_relaxation_algorithms_live_under_mfem_relaxation();
     term_complete_energy_difference_preserves_atomic_migration();
+    cpu_pgbb_exchange_difference_owner_is_focused_and_term_complete();
     c_abi_exposes_native_relaxation_step();
     runner_does_not_claim_production_fem_minimizer_ownership();
     gpu_relaxation_pgbb_building_blocks_live_under_native_cuda();
