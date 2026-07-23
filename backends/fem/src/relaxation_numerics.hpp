@@ -72,6 +72,24 @@ struct EnergyDifference {
     double roundoff_bound_joules = 0.0;
 };
 
+inline EnergyDifference compose_term_complete_energy_difference(
+    double endpoint_residual_delta_joules,
+    double endpoint_residual_operand_absolute_sum_joules,
+    double direct_delta_joules,
+    double direct_absolute_term_sum_joules,
+    std::size_t scalar_term_count)
+{
+    const double absolute_term_sum_joules =
+        endpoint_residual_operand_absolute_sum_joules +
+        direct_absolute_term_sum_joules;
+    return {
+        endpoint_residual_delta_joules + direct_delta_joules,
+        absolute_term_sum_joules,
+        reduction_roundoff_bound(scalar_term_count) *
+            absolute_term_sum_joules,
+    };
+}
+
 inline EnergyDifference compose_direct_energy_difference(
     double endpoint_total_delta_joules,
     double endpoint_replaced_delta_joules,

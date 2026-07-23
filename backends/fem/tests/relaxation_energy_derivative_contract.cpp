@@ -77,6 +77,65 @@ void direct_increment_composition_does_not_subtract_replaced_terms_twice()
         "direct Armijo composition must retain the residual absolute scale");
 }
 
+void term_complete_composition_preserves_endpoint_operand_uncertainty()
+{
+    using fullmag::fem::relaxation::ArmijoDifferenceDecision;
+    using fullmag::fem::relaxation::compose_term_complete_energy_difference;
+    using fullmag::fem::relaxation::reduction_roundoff_bound;
+    using fullmag::fem::relaxation::strict_armijo_difference_decision;
+
+    const double endpoint_total = -2.0e-17;
+    const double exchange_direct = -2.1037518401e-39;
+    const double zeeman_direct = 7.9035597018e-49;
+    const auto difference = compose_term_complete_energy_difference(
+        0.0,
+        0.0,
+        exchange_direct + zeeman_direct,
+        std::abs(exchange_direct) + std::abs(zeeman_direct),
+        96u);
+    check(
+        difference.delta_joules < -2.103751e-39,
+        "term-complete composition must retain the descending exchange increment");
+    check(
+        strict_armijo_difference_decision(difference, -6.0314e-43) ==
+            ArmijoDifferenceDecision::Accept,
+        "retained GPU exchange-plus-Zeeman failure components must satisfy strict Armijo");
+
+    const double endpoint_residual_operand_absolute_sum =
+        2.0 * std::abs(endpoint_total);
+    const auto residual = compose_term_complete_energy_difference(
+        0.0,
+        endpoint_residual_operand_absolute_sum,
+        zeeman_direct,
+        std::abs(zeeman_direct),
+        96u);
+    const double endpoint_ulp = std::abs(
+        std::nextafter(endpoint_total, std::numeric_limits<double>::infinity()) -
+        endpoint_total);
+    check(
+        residual.absolute_term_sum_joules >=
+            endpoint_residual_operand_absolute_sum,
+        "term-complete composition must retain the endpoint operands in its absolute scale");
+    check(
+        residual.roundoff_bound_joules >=
+            reduction_roundoff_bound(96u) *
+                endpoint_residual_operand_absolute_sum &&
+            residual.roundoff_bound_joules > endpoint_ulp &&
+            residual.roundoff_bound_joules > 1.0e-33,
+        "endpoint residual operand scale must produce a conservative subtraction bound");
+
+    const auto uphill = compose_term_complete_energy_difference(
+        0.0,
+        0.0,
+        zeeman_direct,
+        std::abs(zeeman_direct),
+        96u);
+    check(
+        strict_armijo_difference_decision(uphill, -5.0e-49) ==
+            ArmijoDifferenceDecision::Reject,
+        "term-complete composition must reject a resolved uphill increment");
+}
+
 std::array<double, 3> normalized(std::array<double, 3> value)
 {
     const double norm = std::sqrt(
@@ -1255,6 +1314,7 @@ void cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration()
 int main()
 {
     direct_increment_composition_does_not_subtract_replaced_terms_twice();
+    term_complete_composition_preserves_endpoint_operand_uncertainty();
     analytic_absolute_term_sum_resolves_component_cancellation();
     cpu_energy_weight_uses_nodal_ms_and_uniform_fallback();
     dimension_aware_reduction_guards_are_scale_relative();

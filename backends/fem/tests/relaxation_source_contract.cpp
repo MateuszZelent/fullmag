@@ -44,6 +44,61 @@ void native_relaxation_algorithms_live_under_mfem_relaxation() {
         "native FEM tangent-plane implicit relaxation must have dedicated native files");
 }
 
+void term_complete_energy_difference_preserves_atomic_migration() {
+    const std::filesystem::path root = fem_source_root();
+    const std::string relaxation_numerics =
+        read_text_file(root / "src" / "relaxation_numerics.hpp");
+    const std::string direct_energy_source = read_text_file(
+        root / "gpu" / "cuda" / "relaxation" / "direct_energy_increment.cpp");
+    const auto term_complete_start = relaxation_numerics.find(
+        "inline EnergyDifference compose_term_complete_energy_difference(");
+    const auto legacy_start = relaxation_numerics.find(
+        "inline EnergyDifference compose_direct_energy_difference(");
+    const std::string term_complete =
+        term_complete_start == std::string::npos
+            ? std::string()
+            : relaxation_numerics.substr(
+                  term_complete_start,
+                  legacy_start == std::string::npos
+                      ? std::string::npos
+                      : legacy_start - term_complete_start);
+
+    check(
+        !term_complete.empty() &&
+            term_complete.find(
+                "double endpoint_residual_operand_absolute_sum_joules") !=
+                std::string::npos &&
+            term_complete.find(
+                "endpoint_residual_operand_absolute_sum_joules +") !=
+                std::string::npos &&
+            term_complete.find("direct_absolute_term_sum_joules") !=
+                std::string::npos &&
+            term_complete.find(
+                "std::abs(endpoint_residual_delta_joules)") ==
+                std::string::npos,
+        "term-complete FEM Armijo composition must use explicit endpoint operand magnitudes instead of the cancelled residual delta");
+    check(
+        legacy_start != std::string::npos &&
+            relaxation_numerics.find(
+                "double endpoint_total_delta_joules,", legacy_start) !=
+                std::string::npos &&
+            relaxation_numerics.find(
+                "endpoint_total_delta_joules - endpoint_replaced_delta_joules;",
+                legacy_start) != std::string::npos &&
+            relaxation_numerics.find(
+                "std::abs(residual_delta_joules) +", legacy_start) !=
+                std::string::npos,
+        "Task 1 must preserve the legacy direct-energy helper until its production caller migrates atomically");
+    check(
+        direct_energy_source.find(
+            "difference = relaxation::compose_direct_energy_difference(") !=
+                std::string::npos &&
+            direct_energy_source.find(
+                "compose_term_complete_energy_difference(") ==
+                std::string::npos,
+        "Task 1 must leave the production CUDA Armijo caller on the legacy helper until Task 3");
+}
+
 void c_abi_exposes_native_relaxation_step() {
     const std::filesystem::path root = fem_source_root();
     const std::string public_header =
@@ -2108,6 +2163,7 @@ void fem_relaxation_benchmark_recipes_prepare_required_binaries() {
 
 int main() {
     native_relaxation_algorithms_live_under_mfem_relaxation();
+    term_complete_energy_difference_preserves_atomic_migration();
     c_abi_exposes_native_relaxation_step();
     runner_does_not_claim_production_fem_minimizer_ownership();
     gpu_relaxation_pgbb_building_blocks_live_under_native_cuda();
