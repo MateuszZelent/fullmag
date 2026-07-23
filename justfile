@@ -2449,7 +2449,7 @@ verify-fem-relaxation-production-benchmark:
       -e FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP:-3}" \
       -e FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP:-0}" \
       -e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-11}" \
-      -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-4}" \
+      -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-3}" \
       -e FULLMAG_BENCH_MIN_SOLVER_NODES="${FULLMAG_BENCH_MIN_SOLVER_NODES:-50}" \
       -e FULLMAG_BENCH_OUTPUT="${FULLMAG_BENCH_OUTPUT:-.fullmag/reports/fullmag_relaxation_production_benchmark.csv}" \
       -e FULLMAG_BENCH_SUMMARY="${FULLMAG_BENCH_SUMMARY:-.fullmag/reports/fullmag_relaxation_production_benchmark_summary.json}" \
@@ -2582,6 +2582,8 @@ verify-fem-gpu-performance-regression:
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_BENCH_DOMAIN_HMAX=50e-9 \
       -e FULLMAG_BENCH_AIRBOX_HMAX=100e-9 \
+      -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-3}" \
+      -e FULLMAG_BENCH_REPEAT="${FULLMAG_BENCH_REPEAT:-5}" \
       fem-gpu bash -lc 'cd /workspace && set -euo pipefail; \
         python3 -c '"'"'import csv,json,subprocess; from pathlib import Path; environment=json.loads(Path("benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json").read_text()); row=next(csv.reader([subprocess.check_output(["nvidia-smi", "--query-gpu=uuid,name,compute_cap", "--format=csv,noheader"], text=True).splitlines()[0]], skipinitialspace=True)); actual={"uuid": row[0].strip(), "name": row[1].strip(), "compute_capability": row[2].strip()}; expected=environment["gpu"]; mismatches=[key for key in ("uuid", "name", "compute_capability") if str(actual[key]) != str(expected[key])]; assert not mismatches, f"GPU identity differs from accepted baseline: {mismatches}; expected={expected}; actual={actual}"'"'"'; \
         python3 scripts/analysis/fem_gpu_benchmark.py \
@@ -2596,7 +2598,7 @@ verify-fem-gpu-performance-regression:
           --fixture-environment benchmarks/fem-gpu/accepted/rtx4080-sm89/environment.json \
           --require-fixture-identity \
           --gpu-warmup \
-          --repeat 5 \
+          --repeat "$FULLMAG_BENCH_REPEAT" \
           --reuse-generated-domain-mesh \
           --require-stable-solver-mesh \
           --accepted-baseline benchmarks/fem-gpu/accepted/rtx4080-sm89/benchmark.csv \
@@ -2605,6 +2607,8 @@ verify-fem-gpu-performance-regression:
           --require-demag-converged \
           --require-cpu-gpu-consistency \
           --require-gpu-strict-residency \
+          --require-gpu-control-readback-budget \
+          --gpu-ncg-control-readback-per-step "$FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP" \
           --output .fullmag/reports/fem_gpu_performance_regression.csv \
           --cpu-gpu-summary-output .fullmag/reports/fem_gpu_performance_regression_summary.json'
 
@@ -2680,7 +2684,7 @@ verify-fem-gpu-demag-performance-benchmark:
       -e FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_CONTROL_READBACK_PER_STEP:-4}" \
       -e FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_LLG_CONTROL_READBACK_PER_STEP:-0}" \
       -e FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_PGBB_CONTROL_READBACK_PER_STEP:-4}" \
-      -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-4}" \
+      -e FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-3}" \
       -e FULLMAG_BENCH_MIN_SOLVER_NODES="${FULLMAG_BENCH_MIN_SOLVER_NODES:-800}" \
       -e FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP="${FULLMAG_BENCH_MIN_GPU_DEMAG_TOTAL_SPEEDUP:-2}" \
       -e FULLMAG_BENCH_ACCEPTED_BASELINE="${FULLMAG_BENCH_ACCEPTED_BASELINE:-}" \

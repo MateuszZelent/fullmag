@@ -225,7 +225,7 @@ DEFAULT_GPU_CONTROL_READBACK_BASE = 3
 DEFAULT_GPU_CONTROL_READBACK_PER_STEP = 4
 DEFAULT_GPU_LLG_CONTROL_READBACK_PER_STEP = 0
 DEFAULT_GPU_PGBB_CONTROL_READBACK_PER_STEP = 11
-DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP = 4
+DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP = 3
 DEFAULT_GPU_CONTROL_READBACK_PER_REJECTED_ATTEMPT = 2
 DEFAULT_DEMAG_AMG_RELAX_TYPE = 18
 DEFAULT_DEMAG_AMG_COARSENING = 8
@@ -2111,7 +2111,11 @@ def parse_cli_json_summary(output: str) -> dict[str, object] | None:
         if (
             isinstance(payload, dict)
             and "status" in payload
-            and ("artifact_dir" in payload or "session_id" in payload)
+            and (
+                "artifact_dir" in payload
+                or "session_id" in payload
+                or "output_dir" in payload
+            )
         ):
             normalized = dict(payload)
             if "executed_steps" not in normalized and "total_steps" in normalized:
@@ -3880,11 +3884,8 @@ def gpu_control_readback_budget_failures(
                 )
                 continue
             if algorithm == "nonlinear_cg":
-                nominal_evaluations = max(0, executed_steps) + (
-                    1 if executed_steps > 0 else 0
-                )
-                additional_attempt_budget = 3 * max(
-                    0, total_rhs_evals - nominal_evaluations
+                additional_attempt_budget = max(
+                    0, total_rhs_evals - 2 * max(0, executed_steps)
                 )
             else:
                 additional_attempt_budget = max(

@@ -434,6 +434,12 @@ fn run_json_summary(
             .iter()
             .map(|step| step.demag_solver_apply_wall_time_ns)
             .find(|duration| *duration > 0),
+        "rhs_evals": result.steps.last().map(|step| step.rhs_evals),
+        "total_rhs_evals": result
+            .steps
+            .iter()
+            .map(|step| u64::from(step.rhs_evals))
+            .sum::<u64>(),
         "output_dir": output_dir.display().to_string(),
     })
 }
@@ -823,10 +829,12 @@ mod tests {
                 fullmag_runner::StepStats {
                     backend_create_wall_time_ns: 91,
                     demag_solver_apply_wall_time_ns: 41,
+                    rhs_evals: 2,
                     ..fullmag_runner::StepStats::default()
                 },
                 fullmag_runner::StepStats {
                     demag_solver_apply_wall_time_ns: 99,
+                    rhs_evals: 3,
                     ..fullmag_runner::StepStats::default()
                 },
             ],
@@ -841,6 +849,8 @@ mod tests {
             payload["first_accepted_step_demag_solver_apply_wall_time_ns"],
             41
         );
+        assert_eq!(payload["rhs_evals"], 3);
+        assert_eq!(payload["total_rhs_evals"], 5);
     }
 
     fn shared_domain_fem_problem() -> ProblemIR {

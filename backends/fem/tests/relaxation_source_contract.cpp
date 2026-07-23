@@ -1466,6 +1466,10 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
         read_text_file(relaxation_root / "nonlinear_cg.hpp");
     const std::string ncg_source =
         read_text_file(relaxation_root / "nonlinear_cg.cpp");
+    const std::string direct_energy_header =
+        read_text_file(relaxation_root / "direct_energy_increment.hpp");
+    const std::string direct_energy_source =
+        read_text_file(relaxation_root / "direct_energy_increment.cpp");
     const std::string relaxation_numerics =
         read_text_file(root / "src" / "relaxation_numerics.hpp");
     const std::string scalar_readback_header =
@@ -1488,6 +1492,21 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
         read_text_file(state_root / "gpu_state.hpp");
     const std::string gpu_state_source =
         read_text_file(state_root / "gpu_state.cpp");
+    const auto compute_terms_start = direct_energy_source.find(
+        "bool gpu_relax_compute_effective_field_and_energy_terms(");
+    const auto compute_terms_end =
+        compute_terms_start == std::string::npos
+            ? std::string::npos
+            : direct_energy_source.find(
+                  "bool gpu_direct_energy_snapshot(", compute_terms_start);
+    const std::string compute_terms =
+        compute_terms_start == std::string::npos
+            ? std::string()
+            : direct_energy_source.substr(
+                  compute_terms_start,
+                  compute_terms_end == std::string::npos
+                      ? std::string::npos
+                      : compute_terms_end - compute_terms_start);
 
     check(
         cmake.find("gpu/cuda/relaxation/relaxation_memory.cpp") !=
@@ -1523,9 +1542,28 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
                 std::string::npos,
         "native FEM GPU nonlinear-CG preflight must reject meshes too large for int-indexed CUDA kernels");
     check(
-        ncg_source.find("gpu_relax_compute_effective_field_and_energy(") !=
+        direct_energy_header.find(
+            "bool gpu_relax_compute_effective_field_and_energy_terms(") !=
                 std::string::npos &&
-            ncg_source.find("gpu_rk_compute_effective_field_for_magnetization_fresh_demag(") !=
+            compute_terms.find(
+                "gpu_rk_compute_effective_field_for_magnetization_fresh_demag(") !=
+                std::string::npos &&
+            compute_terms.find("gpu_rk_reduce_final_energy_terms(") !=
+                std::string::npos &&
+            compute_terms.find("gpu.reductions.scalar_result") !=
+                std::string::npos &&
+            compute_terms.find("gpu_rk_reduce_total_energy_scalar(") ==
+                std::string::npos &&
+            compute_terms.find("gpu_rk_read_control_scalar_result(") ==
+                std::string::npos &&
+            compute_terms.find("gpu_rk_read_control_scalar_results(") ==
+                std::string::npos &&
+            compute_terms.find("cudaMemcpy") == std::string::npos,
+        "native FEM GPU direct minimizers must expose a fresh-demag effective-field/energy-term compute helper without a host scalar readback");
+    check(
+        ncg_source.find("gpu_relax_compute_effective_field_and_energy_terms(") !=
+                std::string::npos &&
+            ncg_source.find("gpu_relax_compute_effective_field_and_energy(") ==
                 std::string::npos &&
             ncg_source.find("gpu_rk_compute_rhs_for_magnetization(") ==
                 std::string::npos &&
@@ -1545,6 +1583,16 @@ void gpu_relaxation_ncg_direction_state_is_device_persistent() {
             ncg_source.find("ArmijoDifferenceDecision::Accept") !=
                 std::string::npos,
         "native FEM GPU nonlinear-CG must own a device-resident Armijo/PR+ accepted-step loop with static periodic trial projection");
+    check(
+        ncg_source.find(
+            "last_trial_energy_j =\n                armijo_result.trial_snapshot.total_energy_j;") !=
+                std::string::npos &&
+            ncg_source.find(
+                "last_trial_energy_j =\n            armijo_result.trial_snapshot.total_energy_j;") !=
+                std::string::npos &&
+            ncg_source.find(
+                "gpu_copy_scalar_to_host") == std::string::npos,
+        "native FEM GPU nonlinear-CG normal and recovery Armijo trials must reuse the batched trial snapshot total for diagnostics without a separate scalar readback");
     check(
         scalar_readback_header.find("gpu_rk_read_control_scalar_result(") !=
                 std::string::npos &&

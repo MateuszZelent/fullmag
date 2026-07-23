@@ -309,6 +309,23 @@ validated `p dot g = -||g||_E^2` and `||p||_V^2 = ||g||_V^2` scalars instead of
 re-reducing and synchronizing them. This keeps each additional recovery trial
 represented by its energy evaluation in `total_rhs_evals`.
 
+Update 2026-07-23 canonical nonlinear-CG three-sync accounting: each accepted
+step has three control-scalar host synchronizations: the current
+energy/gradient/direction batch, the first direct Armijo energy batch, and the
+accepted final-stats/PR+ batch. Trial effective-field and final energy-term
+computation remains device-side; nonlinear-CG takes the trial total energy from
+`GpuDirectArmijoResult::trial_snapshot` instead of performing a separate total
+energy readback before the Armijo batch. Each Armijo trial after the first adds
+exactly one synchronization, including forced-restart recovery trials. The
+exact cumulative limit is therefore
+
+`initial_syncs + 3 * executed_steps + max(0, total_rhs_evals - 2 * executed_steps)`.
+
+No separate direction-recovery allowance is part of this budget. This changes
+only control-readback accounting and diagnostic reuse; fresh-zero demag,
+direct-energy refinement, finite checks, rollback, PR+, energy definitions,
+and accepted trajectories retain their existing contracts.
+
 Update 2026-06-05 direct-minimizer effective-field path: GPU
 `projected_gradient_bb` and `nonlinear_cg` now call the device-resident
 effective-field pipeline directly instead of the full RK RHS helper. This

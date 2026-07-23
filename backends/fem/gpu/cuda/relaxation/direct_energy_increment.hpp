@@ -37,6 +37,13 @@ struct GpuDirectArmijoResult {
     uint32_t refinement_rhs_evaluations = 0;
 };
 
+bool gpu_relax_compute_effective_field_and_energy_terms(
+    Context &ctx,
+    cudaStream_t stream,
+    int node_count,
+    int block_count,
+    std::string &reason);
+
 bool gpu_direct_energy_snapshot(
     Context &ctx,
     cudaStream_t stream,

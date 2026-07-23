@@ -243,16 +243,7 @@ bool compute_fresh_snapshot(
     GpuDirectEnergySnapshot &snapshot,
     std::string &reason)
 {
-    auto &gpu = ctx.gpu_state.device;
-    if (!gpu_rk_compute_effective_field_for_magnetization_fresh_demag(
-            ctx,
-            gpu.magnetization.m,
-            stream,
-            node_count,
-            ctx.state.current_time,
-            "launch GPU direct minimizer refined h_eff accumulation",
-            reason) ||
-        !gpu_rk_reduce_final_energy_terms(
+    if (!gpu_relax_compute_effective_field_and_energy_terms(
             ctx, stream, node_count, block_count, reason) ||
         !gpu_direct_energy_snapshot(ctx, stream, snapshot, reason)) {
         return false;
@@ -261,6 +252,30 @@ bool compute_fresh_snapshot(
 }
 
 } // namespace
+
+bool gpu_relax_compute_effective_field_and_energy_terms(
+    Context &ctx,
+    cudaStream_t stream,
+    int node_count,
+    int block_count,
+    std::string &reason)
+{
+    auto &gpu = ctx.gpu_state.device;
+    if (!gpu_rk_compute_effective_field_for_magnetization_fresh_demag(
+            ctx,
+            gpu.magnetization.m,
+            stream,
+            node_count,
+            ctx.state.current_time,
+            "launch GPU direct minimizer h_eff accumulation",
+            reason)) {
+        return false;
+    }
+    // The final energy-term reduction leaves its slots in
+    // gpu.reductions.scalar_result for the caller's batched Armijo readback.
+    return gpu_rk_reduce_final_energy_terms(
+        ctx, stream, node_count, block_count, reason);
+}
 
 bool gpu_direct_energy_snapshot(
     Context &ctx,

@@ -10,6 +10,7 @@
 #include "fem_common.hpp"
 #include "src/relaxation_numerics.hpp"
 #if FULLMAG_HAS_CUDA_RUNTIME
+#include "gpu/cuda/relaxation/direct_energy_increment.hpp"
 #include "gpu/cuda/relaxation/pgbb_kernels.hpp"
 #endif
 
@@ -807,6 +808,17 @@ void transported_bb_secant_lives_in_the_accepted_tangent_space()
 }
 
 #if FULLMAG_HAS_CUDA_RUNTIME
+void direct_armijo_result_carries_the_trial_total_energy()
+{
+    fullmag::fem::GpuDirectArmijoResult result{};
+    const double trial_total_energy_j = std::nextafter(
+        1.0e-20, -std::numeric_limits<double>::infinity());
+    result.trial_snapshot.total_energy_j = trial_total_energy_j;
+    check(
+        result.trial_snapshot.total_energy_j == trial_total_energy_j,
+        "GPU direct Armijo result must preserve the exact trial total energy used by NCG diagnostics and accepted-endpoint publication");
+}
+
 void check_cuda(cudaError_t status, const char *message)
 {
     check(status == cudaSuccess, std::string(message) + ": " + cudaGetErrorString(status));
@@ -1212,6 +1224,7 @@ int main()
         }
     }
 #if FULLMAG_HAS_CUDA_RUNTIME
+    direct_armijo_result_carries_the_trial_total_energy();
     cuda_heterogeneous_nodal_ms_pgbb_ncg_calibration();
 #endif
     check(

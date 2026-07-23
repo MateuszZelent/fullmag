@@ -407,6 +407,40 @@ def test_run_json_artifacts_supply_authoritative_benchmark_payload(tmp_path) -> 
     }
 
 
+def test_run_json_summary_publishes_cumulative_rhs_telemetry() -> None:
+    source = (REPO_ROOT / "crates" / "fullmag-cli" / "src" / "main.rs").read_text(
+        encoding="utf-8"
+    )
+    function_start = source.index("fn run_json_summary(")
+    function_end = source.index("fn is_script_mode(", function_start)
+    function_source = source[function_start:function_end]
+
+    assert '"rhs_evals"' in function_source
+    assert '"total_rhs_evals"' in function_source
+    assert ".steps" in function_source
+    assert ".sum::<u64>()" in function_source
+
+
+def test_benchmark_parses_run_json_cumulative_rhs_telemetry() -> None:
+    benchmark = load_benchmark_module()
+    output = json.dumps(
+        {
+            "status": "completed",
+            "total_steps": 64,
+            "rhs_evals": 1,
+            "total_rhs_evals": 64,
+            "output_dir": "/tmp/run",
+        }
+    )
+
+    payload = benchmark.parse_benchmark_result(output)
+
+    assert payload is not None
+    assert payload["executed_steps"] == 64
+    assert payload["rhs_evals"] == 1
+    assert payload["total_rhs_evals"] == 64
+
+
 def test_fixture_generation_uses_runtime_realized_mesh_signature() -> None:
     benchmark = load_benchmark_module()
 
@@ -2750,7 +2784,7 @@ exit 0
         assert (preserved_log_dir / "gpu_llg_overdamped.log").exists()
 
 
-def test_gpu_ncg_control_readback_budget_covers_conditional_direction_read() -> None:
+def test_gpu_ncg_control_readback_budget_matches_cumulative_armijo_sync_structure() -> None:
     benchmark = load_benchmark_module()
     row = {
         "backend": "fem_gpu",
@@ -2758,25 +2792,60 @@ def test_gpu_ncg_control_readback_budget_covers_conditional_direction_read() -> 
         "scenario": "box500_airbox_exchange_demag_anis_uniaxial",
         "relaxation_algorithm": "nonlinear_cg",
         "executed_steps": 32,
-        "total_rhs_evals": 63,
+        "total_rhs_evals": 64,
         "rejected_attempts": 0,
-        "hot_loop_control_scalar_host_sync_count": 189,
+        "hot_loop_control_scalar_host_sync_count": 99,
     }
     common = {
         "base": 3,
-        "per_step": 4,
+        "per_step": 3,
         "llg_per_step": 0,
         "pgbb_per_step": 3,
         "per_rejected_attempt": 2,
     }
 
+    assert benchmark.DEFAULT_GPU_NCG_CONTROL_READBACK_PER_STEP == 3
     assert benchmark.gpu_control_readback_budget_failures(
-        [row], ncg_per_step=4, **common
+        [row], ncg_per_step=3, **common
     ) == []
     assert benchmark.gpu_control_readback_budget_failures(
-        [{**row, "hot_loop_control_scalar_host_sync_count": 222}],
-        ncg_per_step=4,
+        [{**row, "hot_loop_control_scalar_host_sync_count": 100}],
+        ncg_per_step=3,
         **common,
+    )
+    extra_trial_row = {
+        **row,
+        "total_rhs_evals": 66,
+        "hot_loop_control_scalar_host_sync_count": 101,
+    }
+    assert benchmark.gpu_control_readback_budget_failures(
+        [extra_trial_row], ncg_per_step=3, **common
+    ) == []
+    assert benchmark.gpu_control_readback_budget_failures(
+        [{**extra_trial_row, "hot_loop_control_scalar_host_sync_count": 102}],
+        ncg_per_step=3,
+        **common,
+    )
+
+
+def test_fem_gpu_performance_regression_recipe_enforces_ncg_control_budget() -> None:
+    justfile = (REPO_ROOT / "justfile").read_text(encoding="utf-8")
+    recipe_start = justfile.index("verify-fem-gpu-performance-regression:")
+    recipe_end = justfile.index(
+        "\ncapture-fem-gpu-pre-remediation-performance-baseline:", recipe_start
+    )
+    recipe = justfile[recipe_start:recipe_end]
+
+    assert (
+        'FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP="${FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP:-3}"'
+        in recipe
+    )
+    assert 'FULLMAG_BENCH_REPEAT="${FULLMAG_BENCH_REPEAT:-5}"' in recipe
+    assert '--repeat "$FULLMAG_BENCH_REPEAT"' in recipe
+    assert "--require-gpu-control-readback-budget" in recipe
+    assert (
+        '--gpu-ncg-control-readback-per-step "$FULLMAG_BENCH_GPU_NCG_CONTROL_READBACK_PER_STEP"'
+        in recipe
     )
 
 
@@ -2878,7 +2947,10 @@ def main() -> int:
         test_direct_minimizer_consistency_requires_coverage_not_identical_trajectory,
         test_llg_consistency_still_rejects_numeric_mismatch,
         test_stt_oersted_has_no_relaxation_consistency_manifest,
-        test_gpu_ncg_control_readback_budget_covers_conditional_direction_read,
+        test_run_json_summary_publishes_cumulative_rhs_telemetry,
+        test_benchmark_parses_run_json_cumulative_rhs_telemetry,
+        test_gpu_ncg_control_readback_budget_matches_cumulative_armijo_sync_structure,
+        test_fem_gpu_performance_regression_recipe_enforces_ncg_control_budget,
         test_gpu_pgbb_control_readback_budget_matches_direct_difference_sync_structure,
         test_direct_minimizer_benchmark_uses_qualified_demag_tolerance,
         test_fem_pgbb_demag_is_excluded_from_production_manifest,
