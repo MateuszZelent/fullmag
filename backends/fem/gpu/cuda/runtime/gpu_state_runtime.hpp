@@ -8,9 +8,11 @@
  */
 
 #include "gpu/cuda/state/gpu_state.hpp"
+#include "gpu/cuda/transfer/snapshot_pool.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -34,19 +36,17 @@ struct LegacyGpuExchangeRuntimeState {
 };
 
 /*
- * Runtime state for CUDA stream/event and pinned snapshot handles.
+ * Runtime state for CUDA streams and persistent snapshot resources.
  *
  * CUDA-capable native FEM execution creates high-priority compute and
- * low-priority I/O streams plus a compute event. Snapshot staging uses a
- * double-buffered pinned host allocation tracked here.
+ * low-priority I/O streams plus a compute event. Snapshot submission leases
+ * preallocated staging, pinned-host, and event resources from a bounded pool.
  */
 struct CudaRuntimeState {
     void *compute_stream = nullptr;
     void *io_stream = nullptr;
     void *compute_event = nullptr;
-    void *pinned_snapshot[2] = {nullptr, nullptr};
-    size_t pinned_snapshot_bytes = 0;
-    int active_snapshot_buffer = 0;
+    std::shared_ptr<FemGpuSnapshotPoolState> snapshot_pool{};
 };
 
 struct GpuRkPhaseTimingRuntimeState {

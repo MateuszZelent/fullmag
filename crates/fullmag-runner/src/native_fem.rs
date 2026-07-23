@@ -540,9 +540,9 @@ fn fem_preview_observable(quantity: &str) -> Result<ffi::fullmag_fem_observable,
 pub(crate) struct NativeFemBackend {
     handle: *mut ffi::fullmag_fem_backend,
     magnetic_node_mask: Arc<[bool]>,
-    saturation_magnetisation: f64,
     saturation_magnetisation_by_node: Arc<[f64]>,
     energy_density_terms: NativeFemEnergyDensityTerms,
+    cubic_energy_density: Option<Arc<NativeFemCubicEnergyDensity>>,
     object_weights: Vec<(String, f64)>,
     object_node_indices: Vec<(String, Vec<u32>)>,
     demag_solver: Option<String>,
@@ -884,8 +884,10 @@ struct NativeFemEnergyDensityTerms {
     exchange: bool,
     demag: bool,
     external: bool,
-    anisotropy: bool,
-    dmi: bool,
+    uniaxial_anisotropy: bool,
+    cubic_anisotropy: bool,
+    interfacial_dmi: bool,
+    bulk_dmi: bool,
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -895,33 +897,306 @@ impl NativeFemEnergyDensityTerms {
             exchange: plan.enable_exchange,
             demag: plan.enable_demag,
             external: plan.external_field.is_some(),
-            anisotropy: native_fem_plan_has_anisotropy(plan),
-            dmi: native_fem_plan_has_dmi(plan),
+            uniaxial_anisotropy: native_fem_plan_has_uniaxial_anisotropy(plan),
+            cubic_anisotropy: native_fem_plan_has_cubic_anisotropy(plan),
+            interfacial_dmi: plan.interfacial_dmi.is_some()
+                || plan
+                    .dind_field
+                    .as_ref()
+                    .is_some_and(|values| !values.is_empty()),
+            bulk_dmi: plan.bulk_dmi.is_some()
+                || plan
+                    .dbulk_field
+                    .as_ref()
+                    .is_some_and(|values| !values.is_empty()),
         }
+    }
+
+    fn observables_for(&self, quantity: &str) -> Option<Vec<(&'static str, f64)>> {
+        let mut terms = Vec::new();
+        match quantity {
+            "eden_ex" => terms.push(("H_ex", -0.5)),
+            "eden_demag" => terms.push(("H_demag", -0.5)),
+            "eden_ext" => terms.push(("H_ext", -1.0)),
+            "eden_ani" => {
+                if self.uniaxial_anisotropy {
+                    terms.push(("H_ani", -0.5));
+                }
+            }
+            "eden_dmi" => {
+                if self.interfacial_dmi {
+                    terms.push(("H_dmi", -0.5));
+                }
+                if self.bulk_dmi {
+                    terms.push(("H_dmi_bulk", -0.5));
+                }
+            }
+            "eden_total" => {
+                if self.exchange {
+                    terms.push(("H_ex", -0.5));
+                }
+                if self.demag {
+                    terms.push(("H_demag", -0.5));
+                }
+                if self.external {
+                    terms.push(("H_ext", -1.0));
+                }
+                if self.uniaxial_anisotropy {
+                    terms.push(("H_ani", -0.5));
+                }
+                if self.interfacial_dmi {
+                    terms.push(("H_dmi", -0.5));
+                }
+                if self.bulk_dmi {
+                    terms.push(("H_dmi_bulk", -0.5));
+                }
+            }
+            _ => return None,
+        }
+        Some(terms)
+    }
+
+    fn includes_cubic(&self, quantity: &str) -> bool {
+        self.cubic_anisotropy && matches!(quantity, "eden_ani" | "eden_total")
     }
 }
 
 #[cfg(feature = "fem-gpu")]
-fn native_fem_plan_has_anisotropy(plan: &fullmag_ir::FemPlanIR) -> bool {
-    plan.material.uniaxial_anisotropy.is_some()
-        || plan.material.uniaxial_anisotropy_k2.is_some()
-        || plan.material.cubic_anisotropy_kc1.is_some()
-        || plan.material.cubic_anisotropy_kc2.is_some()
-        || plan.material.cubic_anisotropy_kc3.is_some()
+#[derive(Debug)]
+struct NativeFemCubicEnergyDensity {
+    kc1_by_node: Arc<[f64]>,
+    kc2_by_node: Arc<[f64]>,
+    kc3_by_node: Arc<[f64]>,
+    axis1: [f64; 3],
+    axis2: [f64; 3],
 }
 
 #[cfg(feature = "fem-gpu")]
-fn native_fem_plan_has_dmi(plan: &fullmag_ir::FemPlanIR) -> bool {
-    plan.interfacial_dmi.is_some()
-        || plan.bulk_dmi.is_some()
+fn resolved_nodal_material_coefficient(
+    name: &str,
+    uniform: f64,
+    field: Option<&[f64]>,
+    node_count: usize,
+) -> Result<Arc<[f64]>, RunError> {
+    let values = match field {
+        Some(values) if values.len() != node_count => {
+            return Err(RunError {
+                message: format!(
+                    "native FEM nodal {name} field has {} values for {node_count} mesh nodes",
+                    values.len()
+                ),
+            });
+        }
+        Some(values) => values.to_vec(),
+        None => vec![uniform; node_count],
+    };
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(RunError {
+            message: format!("native FEM resolved nodal {name} values must be finite"),
+        });
+    }
+    Ok(values.into())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn resolved_cubic_energy_density(
+    plan: &fullmag_ir::FemPlanIR,
+) -> Result<Option<Arc<NativeFemCubicEnergyDensity>>, RunError> {
+    if !native_fem_plan_has_cubic_anisotropy(plan) {
+        return Ok(None);
+    }
+    let node_count = plan.mesh.nodes.len();
+    Ok(Some(Arc::new(NativeFemCubicEnergyDensity {
+        kc1_by_node: resolved_nodal_material_coefficient(
+            "Kc1",
+            plan.material.cubic_anisotropy_kc1.unwrap_or(0.0),
+            plan.material.kc1_field.as_deref(),
+            node_count,
+        )?,
+        kc2_by_node: resolved_nodal_material_coefficient(
+            "Kc2",
+            plan.material.cubic_anisotropy_kc2.unwrap_or(0.0),
+            plan.material.kc2_field.as_deref(),
+            node_count,
+        )?,
+        kc3_by_node: resolved_nodal_material_coefficient(
+            "Kc3",
+            plan.material.cubic_anisotropy_kc3.unwrap_or(0.0),
+            plan.material.kc3_field.as_deref(),
+            node_count,
+        )?,
+        axis1: plan
+            .material
+            .cubic_anisotropy_axis1
+            .unwrap_or([1.0, 0.0, 0.0]),
+        axis2: plan
+            .material
+            .cubic_anisotropy_axis2
+            .unwrap_or([0.0, 1.0, 0.0]),
+    })))
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_plan_has_uniaxial_anisotropy(plan: &fullmag_ir::FemPlanIR) -> bool {
+    plan.material.uniaxial_anisotropy.is_some()
+        || plan.material.uniaxial_anisotropy_k2.is_some()
         || plan
-            .dind_field
+            .material
+            .ku_field
             .as_ref()
             .is_some_and(|values| !values.is_empty())
         || plan
-            .dbulk_field
+            .material
+            .ku2_field
             .as_ref()
             .is_some_and(|values| !values.is_empty())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn native_fem_plan_has_cubic_anisotropy(plan: &fullmag_ir::FemPlanIR) -> bool {
+    plan.material.cubic_anisotropy_kc1.is_some()
+        || plan.material.cubic_anisotropy_kc2.is_some()
+        || plan.material.cubic_anisotropy_kc3.is_some()
+        || plan
+            .material
+            .kc1_field
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+        || plan
+            .material
+            .kc2_field
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+        || plan
+            .material
+            .kc3_field
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn project_element_scalars_to_nodes(
+    mesh: &fullmag_ir::MeshIR,
+    element_values: &[f64],
+) -> Result<Vec<f64>, RunError> {
+    if element_values.len() != mesh.elements.len() {
+        return Err(RunError {
+            message: format!(
+                "native FEM DG0 projection received {} coefficients for {} elements",
+                element_values.len(),
+                mesh.elements.len()
+            ),
+        });
+    }
+    let mixed_air_domain = mesh.element_markers.iter().any(|marker| *marker == 0)
+        && mesh.element_markers.iter().any(|marker| *marker != 0);
+    let mut weighted_values = vec![0.0; mesh.nodes.len()];
+    let mut lumped_volumes = vec![0.0; mesh.nodes.len()];
+    for (element_index, (element, value)) in mesh.elements.iter().zip(element_values).enumerate() {
+        if mixed_air_domain
+            && mesh
+                .element_markers
+                .get(element_index)
+                .is_some_and(|marker| *marker == 0)
+        {
+            continue;
+        }
+        if !value.is_finite() || *value < 0.0 {
+            return Err(RunError {
+                message: format!(
+                    "native FEM DG0 projection coefficient at element {element_index} must be finite and non-negative"
+                ),
+            });
+        }
+        let [a, b, c, d] = element.map(|index| {
+            mesh.nodes
+                .get(index as usize)
+                .copied()
+                .ok_or_else(|| RunError {
+                    message: format!(
+                        "native FEM DG0 projection element {element_index} references missing node {index}"
+                    ),
+                })
+        });
+        let (a, b, c, d) = (a?, b?, c?, d?);
+        let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let ad = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+        let cross = [
+            ac[1] * ad[2] - ac[2] * ad[1],
+            ac[2] * ad[0] - ac[0] * ad[2],
+            ac[0] * ad[1] - ac[1] * ad[0],
+        ];
+        let volume = (ab[0] * cross[0] + ab[1] * cross[1] + ab[2] * cross[2]).abs() / 6.0;
+        if !volume.is_finite() || volume <= 0.0 {
+            return Err(RunError {
+                message: format!(
+                    "native FEM DG0 projection element {element_index} has non-positive volume"
+                ),
+            });
+        }
+        let lumped_volume = volume * 0.25;
+        for node_index in element {
+            let node_index = *node_index as usize;
+            weighted_values[node_index] += lumped_volume * *value;
+            lumped_volumes[node_index] += lumped_volume;
+        }
+    }
+    Ok(weighted_values
+        .into_iter()
+        .zip(lumped_volumes)
+        .map(|(weighted_value, lumped_volume)| {
+            if lumped_volume > 0.0 {
+                weighted_value / lumped_volume
+            } else {
+                0.0
+            }
+        })
+        .collect())
+}
+
+#[cfg(feature = "fem-gpu")]
+fn resolved_saturation_magnetisation_by_node(
+    plan: &fullmag_ir::FemPlanIR,
+) -> Result<Vec<f64>, RunError> {
+    let values = if let Some(element_values) = plan.ms_element_field.as_deref() {
+        project_element_scalars_to_nodes(&plan.mesh, element_values)?
+    } else if let Some(node_values) = plan.material.ms_field.as_ref() {
+        if node_values.len() != plan.mesh.nodes.len() {
+            return Err(RunError {
+                message: format!(
+                    "native FEM nodal Ms field has {} values for {} mesh nodes",
+                    node_values.len(),
+                    plan.mesh.nodes.len()
+                ),
+            });
+        }
+        node_values.clone()
+    } else {
+        vec![plan.material.saturation_magnetisation; plan.mesh.nodes.len()]
+    };
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return Err(RunError {
+            message: "native FEM resolved nodal Ms values must be finite and non-negative"
+                .to_string(),
+        });
+    }
+    Ok(values)
+}
+
+#[cfg(feature = "fem-gpu")]
+fn build_native_fem_energy_density_preview_field(
+    request: &LivePreviewRequest,
+    values: &[f64],
+    active_mask: Vec<bool>,
+) -> LivePreviewField {
+    let mut field =
+        build_mesh_scalar_preview_field_with_active_mask(request, values, Some(active_mask));
+    field.spatial_kind = "fem_nodal_visualization_projection".to_string();
+    field
 }
 
 #[cfg(feature = "fem-gpu")]
@@ -954,6 +1229,7 @@ pub(crate) struct NativeFemEnergyDensitySnapshot {
     request: LivePreviewRequest,
     magnetization: NativeFemFieldSnapshot,
     terms: Vec<(f64, NativeFemFieldSnapshot)>,
+    cubic_energy_density: Option<Arc<NativeFemCubicEnergyDensity>>,
     saturation_magnetisation_by_node: Arc<[f64]>,
     active_mask: Arc<[bool]>,
     node_count: usize,
@@ -1287,6 +1563,8 @@ impl NativeFemBackend {
                 message: single_precision_rejection(plan).to_string(),
             });
         }
+        let saturation_magnetisation_by_node = resolved_saturation_magnetisation_by_node(plan)?;
+        let cubic_energy_density = resolved_cubic_energy_density(plan)?;
         let nodes_flat: Vec<f64> = plan
             .mesh
             .nodes
@@ -1899,16 +2177,9 @@ impl NativeFemBackend {
             magnetic_node_mask: mesh_quantity_active_mask("m", &plan.mesh)
                 .unwrap_or_else(|| vec![true; plan.mesh.nodes.len()])
                 .into(),
-            saturation_magnetisation: plan.material.saturation_magnetisation,
-            saturation_magnetisation_by_node: plan
-                .material
-                .ms_field
-                .clone()
-                .unwrap_or_else(|| {
-                    vec![plan.material.saturation_magnetisation; plan.mesh.nodes.len()]
-                })
-                .into(),
+            saturation_magnetisation_by_node: saturation_magnetisation_by_node.into(),
             energy_density_terms: NativeFemEnergyDensityTerms::from_plan(plan),
+            cubic_energy_density,
             object_weights: if plan.object_segments.is_empty() {
                 vec![("free".to_string(), 1.0)]
             } else {
@@ -2904,33 +3175,8 @@ impl NativeFemBackend {
         solver_dt: f64,
     ) -> Result<Option<NativeFemEnergyDensitySnapshot>, RunError> {
         let quantity = crate::quantities::normalized_quantity_name(&request.quantity)?;
-        let terms: Vec<(&str, f64)> = match quantity {
-            "eden_ex" => vec![("H_ex", -0.5)],
-            "eden_demag" => vec![("H_demag", -0.5)],
-            "eden_ext" => vec![("H_ext", -1.0)],
-            "eden_ani" => vec![("H_ani", -0.5)],
-            "eden_dmi" => vec![("H_dmi", -0.5), ("H_dmi_bulk", -0.5)],
-            "eden_total" => {
-                let mut terms = Vec::new();
-                if self.energy_density_terms.exchange {
-                    terms.push(("H_ex", -0.5));
-                }
-                if self.energy_density_terms.demag {
-                    terms.push(("H_demag", -0.5));
-                }
-                if self.energy_density_terms.external {
-                    terms.push(("H_ext", -1.0));
-                }
-                if self.energy_density_terms.anisotropy {
-                    terms.push(("H_ani", -0.5));
-                }
-                if self.energy_density_terms.dmi {
-                    terms.push(("H_dmi", -0.5));
-                    terms.push(("H_dmi_bulk", -0.5));
-                }
-                terms
-            }
-            _ => return Ok(None),
+        let Some(terms) = self.energy_density_terms.observables_for(quantity) else {
+            return Ok(None);
         };
         let magnetization = self.begin_field_snapshot("m", step, time, solver_dt)?;
         let mut snapshots = Vec::with_capacity(terms.len());
@@ -2944,6 +3190,11 @@ impl NativeFemBackend {
             request: request.clone(),
             magnetization,
             terms: snapshots,
+            cubic_energy_density: self
+                .energy_density_terms
+                .includes_cubic(quantity)
+                .then(|| self.cubic_energy_density.clone())
+                .flatten(),
             saturation_magnetisation_by_node: self.saturation_magnetisation_by_node.clone(),
             active_mask: self.magnetic_node_mask.clone(),
             node_count,
@@ -2978,10 +3229,10 @@ impl NativeFemBackend {
         node_count: usize,
     ) -> Result<LivePreviewField, RunError> {
         if let Some(values) = self.copy_energy_density_values(&request.quantity, node_count)? {
-            return Ok(build_mesh_scalar_preview_field_with_active_mask(
+            return Ok(build_native_fem_energy_density_preview_field(
                 request,
                 &values,
-                Some(self.magnetic_node_mask.as_ref().to_vec()),
+                self.magnetic_node_mask.as_ref().to_vec(),
             ));
         }
         let values = self.copy_field(fem_preview_observable(&request.quantity)?, node_count)?;
@@ -3001,89 +3252,40 @@ impl NativeFemBackend {
         node_count: usize,
     ) -> Result<Option<Vec<f64>>, RunError> {
         let quantity = crate::quantities::normalized_quantity_name(quantity)?;
-        let values = match quantity {
-            "eden_ex" => self.copy_field_energy_density(
-                ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EX,
-                node_count,
-                -0.5,
-            )?,
-            "eden_demag" => self.copy_field_energy_density(
-                ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DEMAG,
-                node_count,
-                -0.5,
-            )?,
-            "eden_ext" => self.copy_field_energy_density(
-                ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EXT,
-                node_count,
-                -1.0,
-            )?,
-            "eden_ani" => self.copy_field_energy_density(
-                ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_ANI,
-                node_count,
-                -0.5,
-            )?,
-            "eden_dmi" => {
-                let mut values = self.copy_field_energy_density(
-                    ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI,
-                    node_count,
-                    -0.5,
-                )?;
-                let bulk = self.copy_field_energy_density(
-                    ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DMI_BULK,
-                    node_count,
-                    -0.5,
-                )?;
-                for (value, bulk_value) in values.iter_mut().zip(bulk) {
-                    *value += bulk_value;
-                }
-                values
-            }
-            "eden_total" => {
-                let mut total = vec![0.0; node_count];
-                let terms = [
-                    (self.energy_density_terms.exchange, "eden_ex"),
-                    (self.energy_density_terms.demag, "eden_demag"),
-                    (self.energy_density_terms.external, "eden_ext"),
-                    (self.energy_density_terms.anisotropy, "eden_ani"),
-                    (self.energy_density_terms.dmi, "eden_dmi"),
-                ];
-                for (_, term) in terms.into_iter().filter(|(enabled, _)| *enabled) {
-                    if let Some(values) = self.copy_energy_density_values(term, node_count)? {
-                        for (accum, value) in total.iter_mut().zip(values) {
-                            *accum += value;
-                        }
-                    }
-                }
-                total
-            }
-            _ => return Ok(None),
+        let Some(terms) = self.energy_density_terms.observables_for(quantity) else {
+            return Ok(None);
         };
-        Ok(Some(values))
-    }
-
-    fn copy_field_energy_density(
-        &self,
-        observable: ffi::fullmag_fem_observable,
-        node_count: usize,
-        prefactor: f64,
-    ) -> Result<Vec<f64>, RunError> {
         let magnetization = self.copy_field(
             ffi::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_M,
             node_count,
         )?;
-        let field = self.copy_field(observable, node_count)?;
-        Ok(magnetization
-            .iter()
-            .zip(field.iter())
-            .enumerate()
-            .map(|(index, (m, h))| {
-                if !self.magnetic_node_mask.get(index).copied().unwrap_or(true) {
-                    0.0
-                } else {
-                    prefactor * MU0 * self.saturation_magnetisation * dot(*m, *h)
-                }
-            })
-            .collect())
+        let mut values = vec![0.0; node_count];
+        for (field_name, prefactor) in terms {
+            let field = self.copy_field(fem_preview_observable(field_name)?, node_count)?;
+            accumulate_energy_density_term(
+                &mut values,
+                &magnetization,
+                &field,
+                &self.saturation_magnetisation_by_node,
+                &self.magnetic_node_mask,
+                prefactor,
+            )?;
+        }
+        if self.energy_density_terms.includes_cubic(quantity) {
+            let cubic = self
+                .cubic_energy_density
+                .as_deref()
+                .ok_or_else(|| RunError {
+                    message: "native FEM cubic energy-density configuration is missing".to_string(),
+                })?;
+            accumulate_cubic_energy_density(
+                &mut values,
+                &magnetization,
+                cubic,
+                &self.magnetic_node_mask,
+            )?;
+        }
+        Ok(Some(values))
     }
 
     pub fn device_info(&self) -> Result<DeviceInfo, RunError> {
@@ -3106,9 +3308,7 @@ impl NativeFemBackend {
         Ok(DeviceInfo::from_ffi(info))
     }
 
-    fn stage_completion_snapshot_ffi(
-        &self,
-    ) -> Result<ffi::fullmag_fem_stage_completion, RunError> {
+    fn stage_completion_snapshot_ffi(&self) -> Result<ffi::fullmag_fem_stage_completion, RunError> {
         let mut completion = ffi::fullmag_fem_stage_completion {
             has_reason: 0,
             reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE as i32,
@@ -3158,11 +3358,6 @@ impl NativeFemBackend {
 
 #[cfg(feature = "fem-gpu")]
 impl NativeFemPreviewSnapshot {
-    #[allow(dead_code)]
-    pub(crate) fn is_ready(&self) -> bool {
-        unsafe { ffi::fullmag_fem_preview_snapshot_ready(self.handle) != 0 }
-    }
-
     pub fn into_live_preview_field(mut self) -> Result<LivePreviewField, RunError> {
         let mut data: *const std::ffi::c_void = ptr::null();
         let mut len_bytes = 0u64;
@@ -3243,6 +3438,48 @@ fn accumulate_energy_density_term(
 }
 
 #[cfg(feature = "fem-gpu")]
+fn accumulate_cubic_energy_density(
+    values: &mut [f64],
+    magnetization: &[[f64; 3]],
+    cubic: &NativeFemCubicEnergyDensity,
+    active_mask: &[bool],
+) -> Result<(), RunError> {
+    let node_count = values.len();
+    if magnetization.len() != node_count
+        || cubic.kc1_by_node.len() != node_count
+        || cubic.kc2_by_node.len() != node_count
+        || cubic.kc3_by_node.len() != node_count
+        || active_mask.len() != node_count
+    {
+        return Err(RunError {
+            message: "native FEM cubic energy-density snapshot returned mismatched node count"
+                .to_string(),
+        });
+    }
+    let axis3 = [
+        cubic.axis1[1] * cubic.axis2[2] - cubic.axis1[2] * cubic.axis2[1],
+        cubic.axis1[2] * cubic.axis2[0] - cubic.axis1[0] * cubic.axis2[2],
+        cubic.axis1[0] * cubic.axis2[1] - cubic.axis1[1] * cubic.axis2[0],
+    ];
+    for index in 0..node_count {
+        if !active_mask[index] {
+            continue;
+        }
+        let m1 = dot(magnetization[index], cubic.axis1);
+        let m2 = dot(magnetization[index], cubic.axis2);
+        let m3 = dot(magnetization[index], axis3);
+        let m1_sq = m1 * m1;
+        let m2_sq = m2 * m2;
+        let m3_sq = m3 * m3;
+        let sigma = m1_sq * m2_sq + m2_sq * m3_sq + m1_sq * m3_sq;
+        values[index] += cubic.kc1_by_node[index] * sigma
+            + cubic.kc2_by_node[index] * m1_sq * m2_sq * m3_sq
+            + cubic.kc3_by_node[index] * sigma * sigma;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "fem-gpu")]
 impl NativeFemEnergyDensitySnapshot {
     pub fn into_live_preview_field(self) -> Result<LivePreviewField, RunError> {
         let magnetization = self.magnetization.into_vector_field()?;
@@ -3266,10 +3503,13 @@ impl NativeFemEnergyDensitySnapshot {
                 prefactor,
             )?;
         }
-        Ok(build_mesh_scalar_preview_field_with_active_mask(
+        if let Some(cubic) = self.cubic_energy_density.as_deref() {
+            accumulate_cubic_energy_density(&mut values, &magnetization, cubic, &self.active_mask)?;
+        }
+        Ok(build_native_fem_energy_density_preview_field(
             &self.request,
             &values,
-            Some(self.active_mask.as_ref().to_vec()),
+            self.active_mask.as_ref().to_vec(),
         ))
     }
 }
@@ -3277,6 +3517,88 @@ impl NativeFemEnergyDensitySnapshot {
 #[cfg(all(test, feature = "fem-gpu"))]
 mod task5_energy_density_tests {
     use super::*;
+
+    #[test]
+    fn task5_energy_density_terms_keep_distinct_native_operators() {
+        let terms = NativeFemEnergyDensityTerms {
+            exchange: true,
+            demag: true,
+            external: true,
+            uniaxial_anisotropy: true,
+            cubic_anisotropy: true,
+            interfacial_dmi: true,
+            bulk_dmi: true,
+        };
+
+        assert_eq!(
+            terms.observables_for("eden_ani"),
+            Some(vec![("H_ani", -0.5)])
+        );
+        assert!(terms.includes_cubic("eden_ani"));
+        assert_eq!(
+            terms.observables_for("eden_dmi"),
+            Some(vec![("H_dmi", -0.5), ("H_dmi_bulk", -0.5)])
+        );
+        assert_eq!(
+            terms.observables_for("eden_total"),
+            Some(vec![
+                ("H_ex", -0.5),
+                ("H_demag", -0.5),
+                ("H_ext", -1.0),
+                ("H_ani", -0.5),
+                ("H_dmi", -0.5),
+                ("H_dmi_bulk", -0.5),
+            ])
+        );
+        assert!(terms.includes_cubic("eden_total"));
+    }
+
+    #[test]
+    fn task5_cubic_energy_density_uses_native_kc1_kc2_kc3_polynomial() {
+        let cubic = NativeFemCubicEnergyDensity {
+            kc1_by_node: vec![2.0, 11.0].into(),
+            kc2_by_node: vec![3.0, 13.0].into(),
+            kc3_by_node: vec![5.0, 17.0].into(),
+            axis1: [1.0, 0.0, 0.0],
+            axis2: [0.0, 1.0, 0.0],
+        };
+        let mut values = vec![0.0, 23.0];
+        accumulate_cubic_energy_density(
+            &mut values,
+            &[[0.5, 0.5, std::f64::consts::FRAC_1_SQRT_2], [1.0, 0.0, 0.0]],
+            &cubic,
+            &[true, false],
+        )
+        .expect("cubic energy density");
+
+        assert!((values[0] - 1.20703125).abs() < 1.0e-14, "{values:?}");
+        assert_eq!(values[1], 23.0, "nonmagnetic node must remain masked");
+    }
+
+    #[test]
+    fn task5_dg0_ms_projection_is_volume_lumped_at_shared_nodes() {
+        let mesh = fullmag_ir::MeshIR {
+            mesh_name: "two-tetrahedra".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+                [0.0, 0.0, 2.0],
+            ],
+            elements: vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+            element_markers: vec![1, 2],
+            boundary_faces: Vec::new(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            per_domain_quality: Default::default(),
+        };
+
+        let projected =
+            project_element_scalars_to_nodes(&mesh, &[2.0, 8.0]).expect("valid DG0 projection");
+        assert_eq!(projected, vec![6.0, 6.0, 6.0, 2.0, 8.0]);
+    }
 
     #[test]
     fn async_energy_density_uses_per_node_ms_and_preserves_mask() {
@@ -3300,10 +3622,6 @@ mod task5_energy_density_tests {
 
 #[cfg(feature = "fem-gpu")]
 impl NativeFemFieldSnapshot {
-    pub(crate) fn is_ready(&self) -> bool {
-        unsafe { ffi::fullmag_fem_field_snapshot_ready(self.handle) != 0 }
-    }
-
     fn wait_payload(
         &mut self,
     ) -> Result<(*const std::ffi::c_void, u64, NativeFemFieldSnapshotInfo), RunError> {
@@ -3693,6 +4011,38 @@ mod tests {
             mfem_device_string: None,
             use_consistent_mass: None,
         }
+    }
+
+    #[test]
+    fn task5_energy_density_terms_follow_resolved_spatial_operator_contracts() {
+        let mut plan = make_test_plan();
+        plan.enable_exchange = false;
+        plan.external_field = None;
+        plan.material.ku_field = Some(vec![1.0; plan.mesh.nodes.len()]);
+        plan.material.kc2_field = Some(vec![2.0; plan.mesh.nodes.len()]);
+        plan.dind_field = Some(vec![3.0; plan.mesh.nodes.len()]);
+        plan.dbulk_field = Some(vec![4.0; plan.mesh.nodes.len()]);
+
+        let terms = NativeFemEnergyDensityTerms::from_plan(&plan);
+        assert_eq!(
+            terms.observables_for("eden_total"),
+            Some(vec![("H_ani", -0.5), ("H_dmi", -0.5), ("H_dmi_bulk", -0.5),])
+        );
+        assert!(terms.includes_cubic("eden_total"));
+    }
+
+    #[test]
+    fn task5_dg0_ms_contract_takes_precedence_over_nodal_and_uniform_ms() {
+        let mut plan = make_test_plan();
+        plan.material.saturation_magnetisation = 1.0;
+        plan.material.ms_field = Some(vec![3.0; plan.mesh.nodes.len()]);
+        plan.ms_element_field = Some(vec![7.0]);
+
+        let values = resolved_saturation_magnetisation_by_node(&plan).expect("resolved DG0 Ms");
+        assert!(
+            values.iter().all(|value| (*value - 7.0).abs() < 1.0e-12),
+            "DG0 Ms must take precedence over nodal and uniform Ms: {values:?}"
+        );
     }
 
     #[test]

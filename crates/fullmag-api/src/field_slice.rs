@@ -1773,6 +1773,7 @@ fn build_arrows_fdm(
 /// Build the raw ETag token for a slice resource.
 pub fn slice_etag_token(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     q: &ResolvedSliceQuery,
@@ -1789,7 +1790,7 @@ pub fn slice_etag_token(
         .map(|w| format!("world:{}", w.to_bits()))
         .unwrap_or_else(|| format!("norm:{}", q.cut_norm.to_bits()));
     format!(
-        "fmsl:{quantity_id}:{field_revision}:{domain_generation_id}:{}:{cut_key}:{}x{}:{comp_str}:arrows={}:every={}:max={}:v2",
+        "fmsl:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{}:{cut_key}:{}x{}:{comp_str}:arrows={}:every={}:max={}:v3",
         q.plane.as_str(),
         q.x_size,
         q.y_size,

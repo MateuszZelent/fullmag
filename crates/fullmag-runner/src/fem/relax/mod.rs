@@ -31,8 +31,8 @@ use fullmag_ir::{FemPlanIR, OutputIR};
 
 use crate::artifact_pipeline::ArtifactPipelineSender;
 use crate::dispatch::{execute_fem, execute_fem_with_context, FemEngine};
-use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
 use crate::types::FemStageExecutionContext;
+use crate::types::{ExecutedRun, LiveStepConsumer, RunError};
 
 use super::engine::FemEngineKind;
 

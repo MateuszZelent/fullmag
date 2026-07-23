@@ -1281,6 +1281,7 @@ dependencies = [
  "fullmag-ir",
  "fullmag-plan",
  "fullmag-quantities",
+ "libc",
  "nalgebra",
  "num-complex",
  "rayon",

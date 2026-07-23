@@ -45,8 +45,17 @@ body = study.geometry(fm.Box(120e-9, 80e-9, 20e-9), name="body")
 body.Ms = 800e3
 body.Aex = 13e-12
 body.alpha = 0.5
+body.Kc1 = 48e3
 body.m = fm.texture.random(seed=7)
 body.mesh(maximum_element_size=40e-9, order=1)
+
+# A regional Ms override forces the native plan to use a non-uniform material
+# coefficient while remaining inside the production-executable nodal contract.
+lower_ms = body.add_region(
+    "lower_ms",
+    fm.Box(size=(40e-9, 40e-9, 20e-9)),
+)
+lower_ms.material.Ms = 400e3
 
 study.build_domain_mesh()
 study.exchange()

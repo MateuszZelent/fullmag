@@ -14,8 +14,7 @@ pub(crate) use convergence::{
     approximate_max_torque, effective_max_torque_apm, llg_overdamped_uses_pure_damping,
     relaxation_converged, relaxation_stop_criteria_satisfied, resolve_stage_completion,
     EnergyPlateauRangeJ, RelaxationCompletionMetrics, RelaxationEnergyPlateauWindow,
-    RelaxationTorqueConfirmation,
-    RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS,
+    RelaxationTorqueConfirmation, RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS,
 };
 pub(crate) use direct_minimizer_reference::{execute_nonlinear_cg, execute_projected_gradient_bb};
 pub(crate) use provenance::NATIVE_LLG_TIME_INTEGRATOR_REALIZATION;

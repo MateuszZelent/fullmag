@@ -1,6 +1,6 @@
 # Task 5 report: materialize FEM previews outside the solver deadline
 
-Status: `IMPLEMENTED_AND_QUALIFIED_WITH_BASELINE_CONCERNS`
+Status: `IMPLEMENTED_AND_QUALIFIED`
 
 Base revision: `7599f78968ca21014685d1617eb14f3dc8a69bca`
 
@@ -64,39 +64,53 @@ The v2 field resources now expose source provenance and freshness without adding
 6. Early matrix runs exposed final `H_demag` reporting step 0 and selecting stale storage. Terminal stamping and newest-source selection make every accepted row report source step 52.
 7. Interactive shutdown exposed post-solver idle refresh replacing the terminal field. Monotonic per-quantity reconciliation now rejects provenance regression.
 8. Full API verification exposed legacy latest-field metadata and invalid live `m` being treated as current/pending. Focused regressions now pass.
+9. Independent review found that headless and interactive execution did not enter the first GPU demag solve with the same fresh-initial-guess intent. Headless now calls the same native `begin_stage` contract, and interactive snapshotting preserves the pending fresh-demag intent through the pre-solve snapshot. A native snapshot contract and a four-way profiler-off/on A/B run prove exact terminal `m`, `H_demag`, and step-1 scalar parity.
+10. Independent review found that a backward host wall-clock adjustment could abort script preparation even though ordering and duration already use monotonic state. Preparation now preserves the raw observed Unix timestamp, exposes a bounded `clock_adjustment` diagnostic, and continues to derive duration and ordering from monotonic/revision state. Focused CLI and v2 API RED/GREEN contracts cover a 32-second backward adjustment.
+11. The Python preflight could select a resolved interpreter path outside the canonical managed environment and the verifier still contained a one-row startup-clock retry. Interpreter identity now preserves the selected symlink path and checks `sys.prefix` before imports. The retry path was deleted completely; the verifier source contract asserts that every row calls `run_row` exactly once.
+12. Final diff audit removed the temporary `FULLMAG_TASK5_STAGE_TRACE` and `FULLMAG_PREVIEW_TRACE` diagnostics. No environment lookup, diagnostic hashing, or trace output remains in runtime or solver hot paths; the opt-in bounded solver profiler remains the only performance instrumentation.
+13. The final relaxation source gate detected an exact-inventory hash change. A base/current multiset audit showed unchanged counts (191 `.fem_mesh` accesses and 64 mesh producers) and only one-for-one rustfmt statement wrapping changes: two API test assertions plus five existing stage-owner/test producers. No production mesh access or producer was added, removed, moved into a callback/loop, or associated with D2H/synchronization. The exact golden hashes were updated to the audited inventory and the semantic source gate was rerun.
 
 ## Preview matrix evidence
 
-Authoritative report: `.fullmag/reports/fem-preview-surface-matrix/20260722-021728/summary.json`
+Authoritative report: `.fullmag/reports/fem-preview-surface-matrix/20260723-032852/summary.json`
 
 - Modes: disabled, `m`, `H_demag`, full cache.
 - Cadences: 10, 25, 50.
 - Surfaces: headless, interactive without browser, Control Room.
 - Repeats: one warmup plus five measured runs per variant.
 - Completed: 36 warmups + 180 measured = 216/216 runs.
-- Median end-to-end surface elapsed time: 5909.333 ms.
-- Enqueue characterization: 60 measured callback samples; every sample below 2 ms, non-disabled p50 values were approximately 41-61 microseconds, and the maximum was approximately 108 microseconds. No approximately 79-80 ms worker delay appeared in the callback.
-- Preview `m`: one exact payload SHA-256, `9e5197ada6d825b13a3fc34a9e4532e7b6dd878e9fa86eb987c48b1748bb73b4`.
-- Preview `H_demag`: one exact payload SHA-256, `25ce5f9b8c04ecfa32678c5947a63b634993d6178022a30680b464e3bd3b0e6d`.
+- Median end-to-end surface elapsed time: 9090.007 ms.
+- Production callback characterization: 60 live asynchronous rows; callback maximum 1,191,293 ns, callback plus scheduling fence maximum 1,479,260 ns, thread-CPU maximum 954,799 ns, and zero wall-time outliers. Every accepted row stayed below the 2,000,000 ns deadline.
+- Preview `m`: one exact payload SHA-256, `6c8dff3a5a6245440ead7e13866029cb3ad2f6dc1d1e02028341c0dc817a8b63`.
+- Preview `H_demag`: one exact payload SHA-256, `2610fdaf301c221f8200644653f6a2c24575b8fd183d71056730e287c57fef45`.
 - Both masks: exact SHA-256 `af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc`.
 - Cross-surface raw preview differences for both quantities: max absolute 0, max scaled relative 0, max ULP 0.
-- Final durable `m` artifacts had two exact hashes across surfaces with maximum absolute difference `6.253331186201194e-13`. This is reported separately and did not weaken the exact preview-resource gate.
-- Every focused post-fix `H_demag` Control Room run reported terminal `source_step=52` and the same exact payload hash.
+- Final durable `m` artifacts also had one exact hash, `eb2f5b65d1a3f853ff1623aeaf71e1fabc53b245ba540568a8e5d05349fafff2`, with maximum cross-surface absolute difference 0.
+- Terminal `H_demag` was checked against durable Zarr in 60 measured rows; all reported `source_step=52`, `state=complete`, and the same exact payload hash.
+- Full-cache terminal payload and mask SHA-256 values were recorded for all 12 materialized quantities. Energy comparison covered 30 managed rows.
+- The dedicated delayed-production-path retention proof preserved a pending materialization without clearing the retained browser canvas; its callback maximum was 208,640 ns.
 
-Clock/retry note: the accepted 216-row run used no `clock-retry` row. Poll deadlines use `time.monotonic()` and elapsed measurements use `time.perf_counter()`. The verifier allows one explicitly labelled retry only for the known host-clock startup regression; none was consumed in the authoritative run. The report directory date is 2026-07-22 because the full workflow crossed midnight after starting on 2026-07-21.
+Clock/retry note: there is no retry implementation. Poll deadlines use `time.monotonic()` and elapsed measurements use `time.perf_counter()`. Preparation retains raw Unix timestamps for evidence but uses monotonic duration and revision/canonical-stage ordering. The authoritative run invoked each of its 216 rows exactly once.
+
+The first canonical invocation in the restricted tool sandbox stopped before row 1 because the API listener bind returned `EPERM`; its preserved diagnostic is `.fullmag/reports/fem-preview-surface-matrix/20260723-032805/api.log`. The exact canonical command was then executed with permission to bind the local API/browser listener. This was a whole-workflow environment restart, not a row retry. An earlier pre-remediation run at `.fullmag/reports/fem-preview-surface-matrix/20260723-021635/` stopped after 107 measured rows when the host wall clock moved backwards by 32.508 seconds; that failure produced the monotonic clock-adjustment contracts above and was not continued or retried.
 
 ## Verification
 
 ### Managed/native gates
 
-- `just rebuild-fem-runtime`: passed; release runtime exported and portable bundle validated.
+- `env COMPOSE_PROJECT_NAME=fullmag just ensure-managed-fem-runtime`: passed after the final runtime rebuild; the exported portable bundle validator reported `bundle: valid`.
 - `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-relaxation-runtime`: passed. Source/native contracts passed; managed GPU LLG overdamped, projected-gradient BB, and nonlinear-CG lanes passed; the expected GPU tangent-plane skip remained explicit; CPU relaxation lanes including tangent-plane passed.
+- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-review-unit-contract`: passed sequentially against the validated final bundle. The final runner group passed 15/15 `task5_` tests and the backend source-layout group passed 2/2, in addition to the recipe's focused CLI/API transport, precedence, clock-adjustment, and merge contracts.
 - Managed `preview_enqueue_matrix_stays_below_solver_deadline`: passed all 60 measured samples.
-- `just verify-fem-preview-surface-matrix`: passed all 216 rows with the equivalence results above.
+- `env COMPOSE_PROJECT_NAME=fullmag just verify-fem-preview-surface-matrix`: passed all 216 rows with the equivalence results above; the authoritative report is `.fullmag/reports/fem-preview-surface-matrix/20260723-032852/summary.json`.
+
+Two earlier review-gate launches are excluded from proof: the restricted-sandbox attempt could not access the Docker socket, and a concurrently launched attempt collided with the runtime exporter's clean/replacement window and exited 127 because `libfullmag_fem.so.0` was temporarily absent. No product assertion is based on either launch. The final result above was obtained only after the relaxation rebuild, a separate successful bundle validation, and a fully sequential review-gate invocation.
 
 ### Rust/API gates
 
 - `cargo test -p fullmag-cli`: 233 passed.
+- `python3 -m unittest scripts.test_verify_fem_preview_surface_matrix`: 10/10 verifier contracts passed, including the source assertion that failed matrix rows are never retried.
+- `python3 -m unittest scripts.test_ensure_python_recipe`: 3/3 managed-Python bootstrap contracts passed.
 - Fresh focused API tests after final OpenAPI regeneration all passed:
   - `field_vector_cache_identity_includes_session_id`
   - `v2_field_catalog_rejects_non_finite_live_magnetization`
@@ -113,7 +127,7 @@ Clock/retry note: the accepted 216-row run used no `clock-retry` row. Poll deadl
 
 ### Control Room gates
 
-- `corepack pnpm --dir apps/control-room test`: 390 files passed, 1 skipped; 3736 tests passed, 1 skipped.
+- `env TMPDIR=/tmp corepack pnpm --dir apps/control-room test`: 392 files passed, 1 skipped; 3767 tests passed, 1 skipped.
 - `corepack pnpm --dir apps/control-room audit:compute-performance`: passed; no idle-redraw regression.
 - `corepack pnpm --dir apps/control-room typecheck`: passed.
 - `corepack pnpm --dir apps/control-room lint`: passed with zero warnings.
@@ -122,6 +136,7 @@ Clock/retry note: the accepted 216-row run used no `clock-retry` row. Poll deadl
 - Static Control Room production build: passed.
 - OpenAPI managed-binary output versus generated JSON: byte-for-byte `cmp` passed; TypeScript types and generated client regenerated successfully.
 - `python3 -m py_compile` for the fixture/verifier, `node --check` for the browser smoke, and `git diff --check`: passed.
+- Final source audit found no `FULLMAG_TASK5_STAGE_TRACE` or `FULLMAG_PREVIEW_TRACE` markers and no production row-retry helper or `clock-retry` path. `apps/control-room/next-env.d.ts` has no Task 5 diff.
 
 React Doctor could not run: the sandboxed `npx` attempt failed with `EAI_AGAIN`, and escalation was rejected because it would execute an unpinned third-party package. No dependency was installed.
 

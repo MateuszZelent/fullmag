@@ -377,6 +377,8 @@ impl LocalLiveWorkspace {
         step: u64,
         recorded_callback_wall_time_ns: u64,
         callback_wall_time_ns: u64,
+        recorded_callback_thread_cpu_time_ns: u64,
+        callback_thread_cpu_time_ns: u64,
         sampled: bool,
         record_start: Instant,
     ) {
@@ -388,6 +390,8 @@ impl LocalLiveWorkspace {
                 step,
                 recorded_callback_wall_time_ns,
                 callback_wall_time_ns,
+                recorded_callback_thread_cpu_time_ns,
+                callback_thread_cpu_time_ns,
             );
         }
         self.emit_completed_solver_profile_sample(step, sampled, record_start);
@@ -879,6 +883,7 @@ fn merge_pending_publish_payload(
     mut incoming: CurrentLiveSnapshotPayload,
     should_merge_pending: bool,
 ) {
+    let incoming_preview_fields = incoming.preview_fields.clone();
     let allow_previous_preview = should_merge_pending && !incoming.clear_preview_cache;
     let merged_preview_fields = if incoming.clear_preview_cache {
         incoming.preview_fields.clone()
@@ -920,6 +925,10 @@ fn merge_pending_publish_payload(
             incoming_has_magnetization_preview,
             current_fem_mesh_counts,
         );
+        canonicalize_carried_active_preview(
+            &mut incoming_state.latest_step,
+            incoming_preview_fields.as_deref(),
+        );
     } else if let (Some(existing_state), None) =
         (slot.live_state.as_ref(), incoming.live_state.as_ref())
     {
@@ -935,6 +944,27 @@ fn merge_pending_publish_payload(
     *slot = incoming;
     slot.preview_fields = merged_preview_fields;
     slot.clear_preview_cache = clear_preview_cache;
+}
+
+fn canonicalize_carried_active_preview(
+    latest_step: &mut LiveStepView,
+    incoming_preview_fields: Option<&[fullmag_runner::LivePreviewField]>,
+) {
+    let Some(active) = latest_step.preview_field.as_mut() else {
+        return;
+    };
+    let Some(terminal) = incoming_preview_fields
+        .unwrap_or_default()
+        .iter()
+        .find(|field| field.quantity == active.quantity)
+    else {
+        return;
+    };
+    let active_generation = (active.source_step, active.source_revision);
+    let terminal_generation = (terminal.source_step, terminal.source_revision);
+    if terminal_generation >= active_generation {
+        *active = terminal.clone();
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1934,14 +1964,22 @@ mod tests {
             wall_time_ns: 1,
             ..fullmag_runner::StepStats::default()
         });
-        workspace.finish_solver_profile_callback(1, 0, 1, first_sampled, first_record_start);
+        workspace.finish_solver_profile_callback(1, 0, 1, 0, 0, first_sampled, first_record_start);
         let second_record_start = Instant::now();
         let second_sampled = workspace.record_solver_profile_step(&fullmag_runner::StepStats {
             step: 2,
             wall_time_ns: 1,
             ..fullmag_runner::StepStats::default()
         });
-        workspace.finish_solver_profile_callback(2, 0, 1, second_sampled, second_record_start);
+        workspace.finish_solver_profile_callback(
+            2,
+            0,
+            1,
+            0,
+            0,
+            second_sampled,
+            second_record_start,
+        );
         let snapshot = workspace.snapshot().solver_profile.snapshot();
         assert_eq!(snapshot.latest_samples.len(), 2);
         assert!(snapshot.overhead.last_persist_wall_time_ns > 0);
@@ -2005,7 +2043,15 @@ mod tests {
             wall_time_ns: 10,
             ..fullmag_runner::StepStats::default()
         });
-        workspace.finish_solver_profile_callback(1, 1, 2, disabled_sampled, disabled_record_start);
+        workspace.finish_solver_profile_callback(
+            1,
+            1,
+            2,
+            0,
+            0,
+            disabled_sampled,
+            disabled_record_start,
+        );
         workspace.record_heartbeat_seed_deep_clone();
         workspace.record_heartbeat_worker_deep_clone();
         let disabled_after = workspace.snapshot().solver_profile.snapshot();
@@ -2029,7 +2075,15 @@ mod tests {
             orchestration_wall_time_ns: 1,
             ..fullmag_runner::StepStats::default()
         });
-        workspace.finish_solver_profile_callback(1, 1, 2, sparse_sampled, sparse_record_start);
+        workspace.finish_solver_profile_callback(
+            1,
+            1,
+            2,
+            0,
+            0,
+            sparse_sampled,
+            sparse_record_start,
+        );
         std::thread::sleep(std::time::Duration::from_millis(40));
         assert_eq!(
             publisher.diagnostics_snapshot().publish_count,
@@ -2043,7 +2097,7 @@ mod tests {
             orchestration_wall_time_ns: 1,
             ..fullmag_runner::StepStats::default()
         });
-        workspace.finish_solver_profile_callback(2, 1, 2, sampled, sampled_record_start);
+        workspace.finish_solver_profile_callback(2, 1, 2, 0, 0, sampled, sampled_record_start);
         wait_for_publish_count(&publisher, enabled_publishes + 1);
         let sampled_publishes = publisher.diagnostics_snapshot().publish_count;
 
@@ -2092,7 +2146,7 @@ mod tests {
             ..fullmag_runner::StepStats::default()
         });
         assert!(sampled);
-        workspace.finish_solver_profile_callback(1, 10, 25, sampled, record_start);
+        workspace.finish_solver_profile_callback(1, 10, 25, 0, 0, sampled, record_start);
         wait_for_publish_count(&publisher, 1);
 
         let profile_file = artifact_dir
@@ -2539,6 +2593,40 @@ mod tests {
             slot.preview_fields.as_ref().map(|fields| fields.len()),
             Some(1)
         );
+    }
+
+    #[test]
+    fn merge_pending_publish_payload_canonicalizes_carried_active_from_terminal_cache() {
+        let mut carried_active = preview_field("H_demag", 7, 0.0);
+        carried_active.source_step = 52;
+        carried_active.materialized_at_unix_ms = 1_700_000_000_200;
+        let mut terminal = preview_field("H_demag", 7, 52.0);
+        terminal.source_step = 52;
+        terminal.materialized_at_unix_ms = carried_active.materialized_at_unix_ms;
+
+        let mut slot = payload_with_live_step(52, Some(carried_active), None, None, None);
+        let incoming = payload_with_live_step(52, None, None, None, Some(vec![terminal.clone()]));
+
+        merge_pending_publish_payload(&mut slot, incoming, true);
+
+        let active = slot
+            .live_state
+            .as_ref()
+            .and_then(|state| state.latest_step.preview_field.as_ref())
+            .expect("terminal cache should canonicalize the carried active field");
+        assert_eq!(active.vector_field_values, terminal.vector_field_values);
+        assert_eq!(active.source_step, terminal.source_step);
+        assert_eq!(active.source_revision, terminal.source_revision);
+        assert_eq!(
+            active.materialized_at_unix_ms,
+            terminal.materialized_at_unix_ms
+        );
+        let cached = slot
+            .preview_fields
+            .as_ref()
+            .and_then(|fields| fields.iter().find(|field| field.quantity == "H_demag"))
+            .expect("terminal H_demag cache entry");
+        assert_eq!(cached.vector_field_values, terminal.vector_field_values);
     }
 
     #[test]
@@ -3221,6 +3309,7 @@ pub(crate) fn bootstrap_live_state(status: &str) -> LiveStateManifest {
             fem_mesh_generation_id: None,
             magnetization: None,
             per_object_scalars: Default::default(),
+            field_materialization_states: Vec::new(),
             preview_field: None,
             finished: false,
         },

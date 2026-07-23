@@ -27,8 +27,7 @@ use crate::preview::{
 use crate::quantities::normalized_quantity_name;
 use crate::relaxation::{
     apply_energy_minimizer_provenance, execute_nonlinear_cg, execute_projected_gradient_bb,
-    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
-    RelaxationTorqueConfirmation,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
     CPU_SOA_DIRECT_MINIMIZER_REALIZATION,
 };
 use crate::scalar_metrics::{

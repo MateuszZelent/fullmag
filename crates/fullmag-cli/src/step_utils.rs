@@ -377,6 +377,7 @@ pub(crate) fn live_state_manifest_from_update(
             fem_mesh_generation_id: update.fem_mesh_generation_id.take(),
             magnetization: update.magnetization.take(),
             per_object_scalars: update.stats.per_object_scalars.clone(),
+            field_materialization_states: update.stats.field_materialization_states.clone(),
             preview_field: update.preview_field.take(),
             finished: update.finished,
         },

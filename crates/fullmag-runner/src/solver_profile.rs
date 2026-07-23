@@ -9,6 +9,36 @@ const DEFAULT_SAMPLE_EVERY: u64 = 1;
 const DEFAULT_MAX_SAMPLES: usize = 128;
 const MAX_PROFILE_SAMPLES: usize = 4096;
 
+#[cfg(unix)]
+pub fn current_thread_cpu_time_ns() -> Option<u64> {
+    let mut value = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    // SAFETY: clock_gettime initializes the pointed-to timespec when it succeeds.
+    if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, value.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: the successful clock_gettime call above initialized the value.
+    let value = unsafe { value.assume_init() };
+    let seconds = u64::try_from(value.tv_sec).ok()?;
+    let nanoseconds = u64::try_from(value.tv_nsec).ok()?;
+    Some(
+        seconds
+            .saturating_mul(1_000_000_000)
+            .saturating_add(nanoseconds),
+    )
+}
+
+#[cfg(not(unix))]
+pub fn current_thread_cpu_time_ns() -> Option<u64> {
+    None
+}
+
+pub fn elapsed_current_thread_cpu_ns(started: Option<u64>) -> u64 {
+    started
+        .zip(current_thread_cpu_time_ns())
+        .map(|(started, finished)| finished.saturating_sub(started))
+        .unwrap_or(0)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SolverProfileConfig {
     #[serde(default)]
@@ -230,6 +260,7 @@ impl SolverProfileStepSample {
             .saturating_add(stats.native_ffi_overhead_wall_time_ns)
             .saturating_add(stats.preview_wall_time_ns)
             .saturating_add(stats.cached_preview_wall_time_ns)
+            .saturating_add(stats.preview_schedule_fence_wall_time_ns)
             .saturating_add(stats.field_copy_wall_time_ns)
             .saturating_add(stats.artifact_enqueue_block_wall_time_ns)
             .saturating_add(stats.finalization_wall_time_ns)
@@ -335,6 +366,96 @@ impl SolverProfileStepSample {
                     "cached_preview",
                     "Cached preview",
                     stats.cached_preview_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_harvest_query",
+                    "Preview harvest query",
+                    stats.preview_harvest_query_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_result_promotion",
+                    "Preview result promotion",
+                    stats.preview_result_promotion_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_can_accept",
+                    "Preview capacity check",
+                    stats.preview_can_accept_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_vector_snapshot_schedule",
+                    "Preview vector snapshot schedule",
+                    stats.preview_vector_snapshot_schedule_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_energy_snapshot_schedule",
+                    "Preview energy snapshot schedule",
+                    stats.preview_energy_snapshot_schedule_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_queue_coalescing",
+                    "Preview queue coalescing",
+                    stats.preview_queue_coalescing_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_submit",
+                    "Preview job submit",
+                    stats.preview_submit_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_submit_stage",
+                    "Preview submit staging",
+                    stats.preview_submit_stage_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_submit_descriptor",
+                    "Preview submit descriptor",
+                    stats.preview_submit_descriptor_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_submit_channel_alloc",
+                    "Preview submit channel allocation",
+                    stats.preview_submit_channel_alloc_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_submit_try_send",
+                    "Preview submit channel send",
+                    stats.preview_submit_try_send_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_submit_bookkeeping",
+                    "Preview submit bookkeeping",
+                    stats.preview_submit_bookkeeping_wall_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_submit_thread_cpu",
+                    "Preview submit thread CPU",
+                    stats.preview_submit_thread_cpu_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_callback_thread_cpu",
+                    "Preview callback thread CPU",
+                    stats.preview_callback_thread_cpu_time_ns,
+                    total_ns,
+                ),
+                phase(
+                    "preview_schedule_fence",
+                    "Preview schedule fence",
+                    stats.preview_schedule_fence_wall_time_ns,
                     total_ns,
                 ),
                 phase(
@@ -545,7 +666,10 @@ fn sample_kinds(stats: &StepStats, gap_total_ns: u64) -> Vec<SolverProfileSample
     if stats.publisher_replace_wall_time_ns > 0 {
         kinds.push(SolverProfileSampleKind::Publish);
     }
-    if stats.preview_wall_time_ns > 0 || stats.cached_preview_wall_time_ns > 0 {
+    if stats.preview_wall_time_ns > 0
+        || stats.cached_preview_wall_time_ns > 0
+        || stats.preview_schedule_fence_wall_time_ns > 0
+    {
         kinds.push(SolverProfileSampleKind::Preview);
     }
     if stats.finalization_wall_time_ns > 0 {
@@ -1030,9 +1154,13 @@ impl SolverProfileState {
         step: u64,
         recorded_callback_wall_time_ns: u64,
         callback_wall_time_ns: u64,
+        recorded_callback_thread_cpu_time_ns: u64,
+        callback_thread_cpu_time_ns: u64,
     ) {
         let delta = callback_wall_time_ns.saturating_sub(recorded_callback_wall_time_ns);
-        if delta == 0 {
+        let thread_cpu_delta =
+            callback_thread_cpu_time_ns.saturating_sub(recorded_callback_thread_cpu_time_ns);
+        if delta == 0 && thread_cpu_delta == 0 {
             return;
         }
         if self.pending_window.step_count > 0 && self.pending_window.last_step == step {
@@ -1048,6 +1176,15 @@ impl SolverProfileState {
             {
                 window.sum_wall_time_ns = window.sum_wall_time_ns.saturating_add(delta);
                 window.max_wall_time_ns = window.max_wall_time_ns.max(callback_wall_time_ns);
+            }
+            if let Some(window) = self
+                .pending_window
+                .phase_windows
+                .iter_mut()
+                .find(|phase| phase.id == "preview_callback_thread_cpu")
+            {
+                window.sum_wall_time_ns = window.sum_wall_time_ns.saturating_add(thread_cpu_delta);
+                window.max_wall_time_ns = window.max_wall_time_ns.max(callback_thread_cpu_time_ns);
             }
             self.revision = self.revision.wrapping_add(1);
             return;
@@ -1067,6 +1204,13 @@ impl SolverProfileState {
         {
             phase.wall_time_ns = callback_wall_time_ns;
         }
+        if let Some(phase) = sample
+            .phases
+            .iter_mut()
+            .find(|phase| phase.id == "preview_callback_thread_cpu")
+        {
+            phase.wall_time_ns = callback_thread_cpu_time_ns;
+        }
         sample.total_ns = sample.total_ns.saturating_add(delta);
         sample.phase_sum_ns = sample.phase_sum_ns.saturating_add(delta);
         sample.profiled_step_total_ns = sample.profiled_step_total_ns.saturating_add(delta);
@@ -1079,6 +1223,15 @@ impl SolverProfileState {
         {
             window.sum_wall_time_ns = window.sum_wall_time_ns.saturating_add(delta);
             window.max_wall_time_ns = window.max_wall_time_ns.max(callback_wall_time_ns);
+            window.mean_wall_time_ns = window.sum_wall_time_ns / sample.span_step_count.max(1);
+        }
+        if let Some(window) = sample
+            .phase_windows
+            .iter_mut()
+            .find(|phase| phase.id == "preview_callback_thread_cpu")
+        {
+            window.sum_wall_time_ns = window.sum_wall_time_ns.saturating_add(thread_cpu_delta);
+            window.max_wall_time_ns = window.max_wall_time_ns.max(callback_thread_cpu_time_ns);
             window.mean_wall_time_ns = window.sum_wall_time_ns / sample.span_step_count.max(1);
         }
         for phase in sample
@@ -1227,7 +1380,10 @@ fn format_bytes(value: u64) -> String {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{native_solver_wall_time_ns, phase_time, SolverProfileConfig, SolverProfileState};
+    use super::{
+        native_solver_wall_time_ns, phase_time, SolverProfileConfig, SolverProfileState,
+        SolverProfileStepSample,
+    };
     use crate::types::StepStats;
 
     fn enabled_profile(sample_every: u64) -> SolverProfileState {
@@ -1352,6 +1508,51 @@ mod tests {
         assert_eq!(sample.span_step_count, 1);
         assert_eq!(sample.span_monotonic_wall_time_ns, 7_000_000);
         assert_eq!(sample.unprofiled_gap_total_ns, 0);
+    }
+
+    #[test]
+    fn preview_handoff_subphases_are_exposed() {
+        let sample = SolverProfileStepSample::from_step_stats(&StepStats {
+            wall_time_ns: 1_000,
+            preview_wall_time_ns: 700,
+            preview_harvest_query_wall_time_ns: 11,
+            preview_result_promotion_wall_time_ns: 13,
+            preview_can_accept_wall_time_ns: 17,
+            preview_vector_snapshot_schedule_wall_time_ns: 19,
+            preview_energy_snapshot_schedule_wall_time_ns: 23,
+            preview_queue_coalescing_wall_time_ns: 29,
+            preview_submit_wall_time_ns: 31,
+            preview_submit_stage_wall_time_ns: 3,
+            preview_submit_descriptor_wall_time_ns: 5,
+            preview_submit_channel_alloc_wall_time_ns: 7,
+            preview_submit_try_send_wall_time_ns: 11,
+            preview_submit_bookkeeping_wall_time_ns: 13,
+            preview_submit_thread_cpu_time_ns: 17,
+            preview_callback_thread_cpu_time_ns: 19,
+            preview_schedule_fence_wall_time_ns: 37,
+            ..StepStats::default()
+        });
+
+        let phases = sample
+            .phases
+            .iter()
+            .map(|phase| (phase.id.as_str(), phase.wall_time_ns))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(phases["preview_harvest_query"], 11);
+        assert_eq!(phases["preview_result_promotion"], 13);
+        assert_eq!(phases["preview_can_accept"], 17);
+        assert_eq!(phases["preview_vector_snapshot_schedule"], 19);
+        assert_eq!(phases["preview_energy_snapshot_schedule"], 23);
+        assert_eq!(phases["preview_queue_coalescing"], 29);
+        assert_eq!(phases["preview_submit"], 31);
+        assert_eq!(phases["preview_submit_stage"], 3);
+        assert_eq!(phases["preview_submit_descriptor"], 5);
+        assert_eq!(phases["preview_submit_channel_alloc"], 7);
+        assert_eq!(phases["preview_submit_try_send"], 11);
+        assert_eq!(phases["preview_submit_bookkeeping"], 13);
+        assert_eq!(phases["preview_submit_thread_cpu"], 17);
+        assert_eq!(phases["preview_callback_thread_cpu"], 19);
+        assert_eq!(phases["preview_schedule_fence"], 37);
     }
 
     #[test]
@@ -1481,14 +1682,19 @@ mod tests {
                     step: 4,
                     wall_time_ns: 20,
                     orchestration_wall_time_ns: 5,
+                    preview_callback_thread_cpu_time_ns: 7,
                     ..StepStats::default()
                 },
                 Instant::now(),
             )
             .unwrap();
-        profile.amend_latest_callback_return(4, 5, 11);
+        profile.amend_latest_callback_return(4, 5, 11, 7, 13);
         let sample = profile.snapshot().latest_samples.pop().unwrap();
         assert_eq!(phase_time(&sample.phases, "orchestration"), 11);
+        assert_eq!(
+            phase_time(&sample.phases, "preview_callback_thread_cpu"),
+            13
+        );
         assert_eq!(sample.profiled_step_total_ns, 26);
         assert_eq!(sample.span_monotonic_wall_time_ns, 26);
         assert_eq!(sample.unprofiled_gap_total_ns, 0);
@@ -1514,12 +1720,13 @@ mod tests {
                     step: 1,
                     wall_time_ns: 20,
                     orchestration_wall_time_ns: 5,
+                    preview_callback_thread_cpu_time_ns: 7,
                     ..StepStats::default()
                 },
                 start,
             )
             .is_none());
-        profile.amend_latest_callback_return(1, 5, 11);
+        profile.amend_latest_callback_return(1, 5, 11, 7, 13);
         let sample = profile
             .record_step_at(
                 &StepStats {
@@ -1531,6 +1738,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(sample.profiled_step_total_ns, 36);
+        assert_eq!(
+            sample
+                .phase_windows
+                .iter()
+                .find(|window| window.id == "preview_callback_thread_cpu")
+                .unwrap()
+                .sum_wall_time_ns,
+            13
+        );
         assert_eq!(sample.unprofiled_gap_total_ns, 0);
         assert_eq!(
             sample

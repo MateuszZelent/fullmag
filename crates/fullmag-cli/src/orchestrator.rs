@@ -1207,6 +1207,8 @@ fn drain_solver_profile_commands(
 struct SolverProfileCallbackRecord {
     step: u64,
     recorded_callback_wall_time_ns: u64,
+    callback_thread_cpu_started_ns: Option<u64>,
+    recorded_callback_thread_cpu_time_ns: u64,
     sampled: bool,
     record_start: Instant,
 }
@@ -1221,6 +1223,10 @@ fn begin_solver_profile_step_with_orchestration(
     };
     let orchestration_wall_time_ns = callback_start.elapsed().as_nanos() as u64;
     stats.orchestration_wall_time_ns = orchestration_wall_time_ns;
+    let callback_thread_cpu_started_ns = stats.preview_callback_thread_cpu_started_ns;
+    let callback_thread_cpu_time_ns =
+        fullmag_runner::elapsed_current_thread_cpu_ns(callback_thread_cpu_started_ns);
+    stats.preview_callback_thread_cpu_time_ns = callback_thread_cpu_time_ns;
     stats.wall_time_ns = stats
         .wall_time_ns
         .saturating_add(orchestration_wall_time_ns);
@@ -1229,6 +1235,8 @@ fn begin_solver_profile_step_with_orchestration(
     Some(SolverProfileCallbackRecord {
         step: stats.step,
         recorded_callback_wall_time_ns: orchestration_wall_time_ns,
+        callback_thread_cpu_started_ns,
+        recorded_callback_thread_cpu_time_ns: callback_thread_cpu_time_ns,
         sampled,
         record_start,
     })
@@ -1243,10 +1251,14 @@ fn finish_solver_profile_step_with_orchestration(
         return;
     };
     let callback_wall_time_ns = saturating_nanos_u64(callback_start.elapsed());
+    let callback_thread_cpu_time_ns =
+        fullmag_runner::elapsed_current_thread_cpu_ns(record.callback_thread_cpu_started_ns);
     live_workspace.finish_solver_profile_callback(
         record.step,
         record.recorded_callback_wall_time_ns,
         callback_wall_time_ns,
+        record.recorded_callback_thread_cpu_time_ns,
+        callback_thread_cpu_time_ns,
         record.sampled,
         record.record_start,
     );
@@ -1294,11 +1306,9 @@ fn apply_live_step_update_to_workspace_state(
     };
     state.run = running_run_manifest_from_update(run_id, session_id, artifact_dir, &update);
     let previous_magnetization = state.live_state.latest_step.magnetization.take();
-    let previous_fem_mesh_generation_id = state
-        .live_state
-        .latest_step
-        .fem_mesh_generation_id
-        .take();
+    let previous_fem_mesh_generation_id =
+        state.live_state.latest_step.fem_mesh_generation_id.take();
+    let incoming_has_magnetization = ingest_magnetization_field_from_update(state, &mut update);
     let incoming_has_magnetization_preview = step_update_has_magnetization_preview(&update);
     crate::live_workspace::ingest_preview_fields_from_update(state, &mut update);
     apply_hysteresis_progress_to_stage_execution(state, &update);
@@ -1323,7 +1333,10 @@ fn apply_live_step_update_to_workspace_state(
         finished: update.finished,
     };
     state.live_state = live_state_manifest_from_update(update);
-    if state.live_state.latest_step.magnetization.is_none() && !incoming_has_magnetization_preview {
+    if state.live_state.latest_step.magnetization.is_none()
+        && !incoming_has_magnetization
+        && !incoming_has_magnetization_preview
+    {
         state.live_state.latest_step.magnetization = previous_magnetization;
     }
     if state
@@ -1335,6 +1348,49 @@ fn apply_live_step_update_to_workspace_state(
         state.live_state.latest_step.fem_mesh_generation_id = previous_fem_mesh_generation_id;
     }
     remainder
+}
+
+fn ingest_magnetization_field_from_update(
+    state: &mut LocalLiveWorkspaceState,
+    update: &mut fullmag_runner::StepUpdate,
+) -> bool {
+    let Some(values) = update.magnetization.take() else {
+        return false;
+    };
+    let source_step = update
+        .stats
+        .magnetization_source_step
+        .unwrap_or(update.stats.step);
+    let source_revision = update
+        .stats
+        .magnetization_source_revision
+        .unwrap_or(source_step);
+    let materialized_at_unix_ms = update
+        .stats
+        .magnetization_materialized_at_unix_ms
+        .unwrap_or_else(current_unix_millis_u64);
+    let materialization_wall_time_ns = update
+        .stats
+        .magnetization_materialization_wall_time_ns
+        .unwrap_or(update.stats.field_copy_wall_time_ns);
+    state.latest_fields.insert(
+        "m".to_string(),
+        serde_json::json!({
+            "quantity": "m",
+            "unit": "1",
+            "values": values,
+            "source_step": source_step,
+            "source_revision": source_revision,
+            "materialized_at_unix_ms": materialized_at_unix_ms,
+            "materialization_wall_time_ns": materialization_wall_time_ns,
+            "layout": {
+                "grid_cells": update.grid,
+                "spatial_kind": "mesh",
+                "quantity_domain": "magnetic_only",
+            }
+        }),
+    );
+    true
 }
 
 fn preserve_frequency_response_progress_scalars_from_live_state(
@@ -5320,6 +5376,7 @@ fn wait_for_solve_prompt(backend_plan: &BackendPlanIR) -> &'static str {
 enum WaitForSolveCommandAction {
     RefreshFields,
     RefreshEnergies,
+    ConfigureProfiler,
     StartSolver,
     Remesh,
     Stop,
@@ -5330,6 +5387,7 @@ fn classify_wait_for_solve_command(kind: &str) -> WaitForSolveCommandAction {
     match kind {
         "compute_fields" => WaitForSolveCommandAction::RefreshFields,
         "compute_energies" => WaitForSolveCommandAction::RefreshEnergies,
+        "set_solver_profile" => WaitForSolveCommandAction::ConfigureProfiler,
         "solve" | "compute" | "run" => WaitForSolveCommandAction::StartSolver,
         "remesh" => WaitForSolveCommandAction::Remesh,
         "stop" => WaitForSolveCommandAction::Stop,
@@ -7475,6 +7533,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         Err(error) => live_workspace
                             .push_log("error", format!("Compute energies failed: {}", error)),
                     }
+                    continue;
+                }
+                WaitForSolveCommandAction::ConfigureProfiler => {
+                    apply_solver_profile_command(&live_workspace, &cmd);
                     continue;
                 }
                 WaitForSolveCommandAction::StartSolver => {
@@ -12262,7 +12324,10 @@ mod tests {
                     .as_ptr();
             });
             callback_durations.push(started.elapsed());
-            assert_eq!(observed_ptr, retained_ptr, "thin ingest must preserve Vec ownership");
+            assert_eq!(
+                observed_ptr, retained_ptr,
+                "thin ingest must preserve Vec ownership"
+            );
         }
 
         callback_durations.sort_unstable();
@@ -12275,10 +12340,8 @@ mod tests {
             "production-preview-ingest",
             |_, _| Ok(()),
         );
-        let workspace = crate::live_workspace::LocalLiveWorkspace::new(
-            test_workspace_state(),
-            publisher,
-        );
+        let workspace =
+            crate::live_workspace::LocalLiveWorkspace::new(test_workspace_state(), publisher);
         let mut callback_durations = Vec::new();
 
         for step in 1..=5 {
@@ -12310,7 +12373,10 @@ mod tests {
                 assert!(state.latest_fields.is_empty());
             });
             callback_durations.push(started.elapsed());
-            assert_eq!(observed_ptr, input_ptr, "preview Vec must move into pending cache");
+            assert_eq!(
+                observed_ptr, input_ptr,
+                "preview Vec must move into pending cache"
+            );
         }
 
         callback_durations.sort_unstable();
@@ -12336,9 +12402,11 @@ mod tests {
         assert_eq!(state.live_state.latest_step.magnetization, None);
         let delta = state.publish_delta();
         assert_eq!(
-            delta.preview_fields.as_ref().and_then(|fields| fields.first()).map(
-                |field| field.vector_field_values.as_slice()
-            ),
+            delta
+                .preview_fields
+                .as_ref()
+                .and_then(|fields| fields.first())
+                .map(|field| field.vector_field_values.as_slice()),
             Some(&[0.0, 0.0, -1.0][..])
         );
     }
@@ -13135,6 +13203,10 @@ mod tests {
         assert_eq!(
             classify_wait_for_solve_command("compute_fields"),
             WaitForSolveCommandAction::RefreshFields
+        );
+        assert_eq!(
+            classify_wait_for_solve_command("set_solver_profile"),
+            WaitForSolveCommandAction::ConfigureProfiler
         );
         assert_eq!(
             classify_wait_for_solve_command("run"),

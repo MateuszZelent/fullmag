@@ -478,6 +478,7 @@ use utoipa::OpenApi;
         crate::schemas::preparation::PreparationStageStatus,
         crate::schemas::preparation::PreparationLogLevel,
         crate::schemas::preparation::PreparationExecutionSummary,
+        crate::schemas::preparation::PreparationClockAdjustment,
         crate::schemas::preparation::PreparationProgressStage,
         crate::schemas::preparation::PreparationLogEntryResource,
         crate::schemas::preparation::PreparationFailureResource,

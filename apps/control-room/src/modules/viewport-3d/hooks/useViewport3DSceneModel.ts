@@ -1571,7 +1571,8 @@ export function resolveViewport3DResourceFrameState({
       visiblePayloadAvailable &&
       (status === "stale" ||
         materializationState === "stale_complete" ||
-        materializationState === "pending")
+        materializationState === "pending" ||
+        materializationState === "superseded")
         ? "ready"
         : status,
   };

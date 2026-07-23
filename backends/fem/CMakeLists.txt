@@ -57,6 +57,7 @@ set(FEM_SOURCES
     gpu/cuda/state/runtime_coefficients_memory.cpp
     gpu/cuda/state/runtime_coefficients_upload.cpp
     gpu/cuda/transfer/component_transfer.cpp
+    gpu/cuda/transfer/snapshot_pool.cpp
     gpu/cuda/transfer/transfer_audit.cpp
     cpu/mfem/interactions/anisotropy.cpp
     cpu/mfem/interactions/anisotropy_cubic.cpp

@@ -166,6 +166,13 @@ pub enum PreparationLogLevel {
     Error,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreparationClockAdjustment {
+    pub observed_at_unix_ms: u64,
+    pub stage_started_at_unix_ms: u64,
+    pub backward_delta_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreparationStage {
     pub id: PreparationStageId,
@@ -175,6 +182,8 @@ pub struct PreparationStage {
     pub started_at_unix_ms: Option<u64>,
     pub completed_at_unix_ms: Option<u64>,
     pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_adjustment: Option<PreparationClockAdjustment>,
     pub progress_percent: Option<u8>,
     pub progress_label: Option<String>,
 }
@@ -205,11 +214,6 @@ pub enum PreparationTransitionError {
         stage_id: PreparationStageId,
         status: PreparationStageStatus,
     },
-    TimestampPrecedesStageStart {
-        stage_id: PreparationStageId,
-        timestamp_unix_ms: u64,
-        started_at_unix_ms: u64,
-    },
     ProgressPercentOutOfRange {
         stage_id: PreparationStageId,
         progress_percent: u8,
@@ -235,14 +239,6 @@ impl fmt::Display for PreparationTransitionError {
             Self::InvalidTerminalTransition { stage_id, status } => {
                 write!(formatter, "cannot transition {stage_id:?} from {status:?}")
             }
-            Self::TimestampPrecedesStageStart {
-                stage_id,
-                timestamp_unix_ms,
-                started_at_unix_ms,
-            } => write!(
-                formatter,
-                "timestamp {timestamp_unix_ms} precedes {stage_id:?} start {started_at_unix_ms}"
-            ),
             Self::ProgressPercentOutOfRange {
                 stage_id,
                 progress_percent,
@@ -314,6 +310,7 @@ impl SimulationPreparationState {
                     started_at_unix_ms: None,
                     completed_at_unix_ms: None,
                     duration_ms: None,
+                    clock_adjustment: None,
                     progress_percent: None,
                     progress_label: None,
                 })
@@ -403,11 +400,11 @@ impl SimulationPreparationState {
             });
         }
         self.ensure_active(stage_id)?;
-        self.ensure_timestamp_not_before_start(stage_id, timestamp_unix_ms)?;
-
         let before = self.semantic_snapshot();
+        let clock_adjustment = self.clock_adjustment(stage_id, timestamp_unix_ms);
         let duration_ms = self.stage_duration_ms();
         let stage = self.stage_mut(stage_id);
+        Self::record_clock_adjustment(stage, clock_adjustment);
         stage.progress_percent = Some(progress_percent);
         stage.progress_label = Some(progress_label.into());
         stage.duration_ms = Some(duration_ms);
@@ -422,11 +419,11 @@ impl SimulationPreparationState {
         detail: impl Into<String>,
     ) -> Result<(), PreparationTransitionError> {
         self.ensure_active(stage_id)?;
-        self.ensure_timestamp_not_before_start(stage_id, timestamp_unix_ms)?;
-
         let before = self.semantic_snapshot();
+        let clock_adjustment = self.clock_adjustment(stage_id, timestamp_unix_ms);
         let duration_ms = self.stage_duration_ms();
         let stage = self.stage_mut(stage_id);
+        Self::record_clock_adjustment(stage, clock_adjustment);
         stage.status = PreparationStageStatus::Completed;
         stage.completed_at_unix_ms = Some(timestamp_unix_ms);
         stage.duration_ms = Some(duration_ms);
@@ -603,11 +600,11 @@ impl SimulationPreparationState {
         summary: impl Into<String>,
     ) -> Result<(), PreparationTransitionError> {
         self.ensure_active(stage_id)?;
-        self.ensure_timestamp_not_before_start(stage_id, timestamp_unix_ms)?;
-
         let before = self.semantic_snapshot();
+        let clock_adjustment = self.clock_adjustment(stage_id, timestamp_unix_ms);
         let duration_ms = self.stage_duration_ms();
         let stage = self.stage_mut(stage_id);
+        Self::record_clock_adjustment(stage, clock_adjustment);
         stage.status = PreparationStageStatus::Failed;
         stage.completed_at_unix_ms = Some(timestamp_unix_ms);
         stage.duration_ms = Some(duration_ms);
@@ -731,23 +728,33 @@ impl SimulationPreparationState {
         Ok(())
     }
 
-    fn ensure_timestamp_not_before_start(
+    fn clock_adjustment(
         &self,
         stage_id: PreparationStageId,
         timestamp_unix_ms: u64,
-    ) -> Result<(), PreparationTransitionError> {
+    ) -> Option<PreparationClockAdjustment> {
         let started_at_unix_ms = self
             .stage(stage_id)
             .started_at_unix_ms
             .unwrap_or(timestamp_unix_ms);
-        if timestamp_unix_ms < started_at_unix_ms {
-            return Err(PreparationTransitionError::TimestampPrecedesStageStart {
-                stage_id,
-                timestamp_unix_ms,
-                started_at_unix_ms,
-            });
+        (timestamp_unix_ms < started_at_unix_ms).then(|| PreparationClockAdjustment {
+            observed_at_unix_ms: timestamp_unix_ms,
+            stage_started_at_unix_ms: started_at_unix_ms,
+            backward_delta_ms: started_at_unix_ms - timestamp_unix_ms,
+        })
+    }
+
+    fn record_clock_adjustment(
+        stage: &mut PreparationStage,
+        adjustment: Option<PreparationClockAdjustment>,
+    ) {
+        if adjustment.as_ref().is_some_and(|candidate| {
+            stage.clock_adjustment.as_ref().map_or(true, |current| {
+                candidate.backward_delta_ms > current.backward_delta_ms
+            })
+        }) {
+            stage.clock_adjustment = adjustment;
         }
-        Ok(())
     }
 
     fn stage_duration_ms(&self) -> u64 {
@@ -900,6 +907,48 @@ mod tests {
             state.failure.as_ref().unwrap().stage_id,
             PreparationStageId::Meshing
         );
+    }
+
+    #[test]
+    fn backward_wall_clock_adjustment_preserves_raw_time_and_monotonic_ordering() {
+        let clock = ManualMonotonicClock::new(0);
+        let mut state = SimulationPreparationState::new_with_monotonic_clock(
+            "prep-clock-adjustment",
+            40_000,
+            clock.clone(),
+        );
+        state
+            .begin_stage(
+                PreparationStageId::ScriptMaterialization,
+                40_000,
+                "Materializing script",
+            )
+            .unwrap();
+        let revision_before_completion = state.revision;
+        clock.advance_ms(1_250);
+
+        state
+            .complete_stage(
+                PreparationStageId::ScriptMaterialization,
+                8_000,
+                "Script materialized",
+            )
+            .expect("a 32 second wall-clock rollback must not abort preparation");
+
+        let stage = state.stage(PreparationStageId::ScriptMaterialization);
+        assert_eq!(stage.status, PreparationStageStatus::Completed);
+        assert_eq!(stage.completed_at_unix_ms, Some(8_000));
+        assert_eq!(stage.duration_ms, Some(1_250));
+        assert_eq!(
+            stage.clock_adjustment,
+            Some(PreparationClockAdjustment {
+                observed_at_unix_ms: 8_000,
+                stage_started_at_unix_ms: 40_000,
+                backward_delta_ms: 32_000,
+            })
+        );
+        assert_eq!(state.active_stage_id, None);
+        assert!(state.revision > revision_before_completion);
     }
 
     #[test]

@@ -106,12 +106,8 @@ impl RelaxationTorqueConfirmation {
         damping: f64,
         pure_damping_rhs: bool,
     ) -> bool {
-        let max_torque = effective_max_torque_apm(
-            stats,
-            gyromagnetic_ratio,
-            damping,
-            pure_damping_rhs,
-        );
+        let max_torque =
+            effective_max_torque_apm(stats, gyromagnetic_ratio, damping, pure_damping_rhs);
         self.observe(control, energy_plateau_range_j, max_torque)
     }
 
@@ -121,13 +117,9 @@ impl RelaxationTorqueConfirmation {
         energy_plateau_range_j: Option<EnergyPlateauRangeJ>,
         max_torque_apm: f64,
     ) -> bool {
-        if relaxation_stop_criteria_satisfied(
-            control,
-            energy_plateau_range_j,
-            max_torque_apm,
-        ) {
-            self.consecutive_samples = (self.consecutive_samples + 1)
-                .min(RELAXATION_TORQUE_CONFIRMATION_STEPS);
+        if relaxation_stop_criteria_satisfied(control, energy_plateau_range_j, max_torque_apm) {
+            self.consecutive_samples =
+                (self.consecutive_samples + 1).min(RELAXATION_TORQUE_CONFIRMATION_STEPS);
         } else {
             self.consecutive_samples = 0;
         }

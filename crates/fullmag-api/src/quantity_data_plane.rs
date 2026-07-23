@@ -339,6 +339,7 @@ pub(crate) fn projection_cache_key(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn scalar_projection_cache_key(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     plane: &str,
@@ -353,7 +354,7 @@ pub(crate) fn scalar_projection_cache_key(
     tile_size: Option<u32>,
 ) -> String {
     format!(
-        "fmvp-proj-scalar:{quantity_id}:{field_revision}:{domain_generation_id}:{plane}:{x_size}:{y_size}:{component}:{reduction}:{air}:{samples}:tile={tx},{ty},{ts}:v1",
+        "fmvp-proj-scalar:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{plane}:{x_size}:{y_size}:{component}:{reduction}:{air}:{samples}:tile={tx},{ty},{ts}:v2",
         air = u8::from(include_air_as_zero),
         tx = tile_x.map_or_else(|| "full".to_string(), |value| value.to_string()),
         ty = tile_y.map_or_else(|| "full".to_string(), |value| value.to_string()),
@@ -364,6 +365,7 @@ pub(crate) fn scalar_projection_cache_key(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn projection_empty_mask_cache_key(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     plane: &str,
@@ -378,7 +380,7 @@ pub(crate) fn projection_empty_mask_cache_key(
     tile_size: Option<u32>,
 ) -> String {
     format!(
-        "fmvp-proj-empty-mask:{quantity_id}:{field_revision}:{domain_generation_id}:{plane}:{x_size}:{y_size}:{component}:{reduction}:{air}:{samples}:tile={tx},{ty},{ts}:v1",
+        "fmvp-proj-empty-mask:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{plane}:{x_size}:{y_size}:{component}:{reduction}:{air}:{samples}:tile={tx},{ty},{ts}:v2",
         air = u8::from(include_air_as_zero),
         tx = tile_x.map_or_else(|| "full".to_string(), |value| value.to_string()),
         ty = tile_y.map_or_else(|| "full".to_string(), |value| value.to_string()),
@@ -388,10 +390,11 @@ pub(crate) fn projection_empty_mask_cache_key(
 
 /// Slice cache key.
 ///
-/// Format: `fmvp-slice:{quantity_id}:{field_revision}:{domain_gen}:{plane}:{cut_key}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v2`
+/// Format: `fmvp-slice:{quantity_id}:{session_id}:{field_revision}:{domain_gen}:{plane}:{cut_key}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v3`
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn slice_cache_key(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     plane: &str,
@@ -404,7 +407,7 @@ pub(crate) fn slice_cache_key(
     max_arrows: u32,
 ) -> String {
     format!(
-        "fmvp-slice:{quantity_id}:{field_revision}:{domain_generation_id}:{plane}:{cut_key}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v2",
+        "fmvp-slice:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{plane}:{cut_key}:{x_size}:{y_size}:{component}:{arrows}:{arrow_every}:{max_arrows}:v3",
         arrows = u8::from(include_arrows),
     )
 }
@@ -619,6 +622,7 @@ mod tests {
     fn slice_cache_key_format() {
         let key = slice_cache_key(
             "m",
+            "session-17",
             7,
             42,
             "xy",
@@ -630,7 +634,65 @@ mod tests {
             4,
             20_000,
         );
-        assert!(key.starts_with("fmvp-slice:m:7:42:xy:norm:"));
+        assert!(key.starts_with("fmvp-slice:m:session-17:7:42:xy:norm:"));
+    }
+
+    #[test]
+    fn every_session_scoped_projection_and_slice_key_binds_session_identity() {
+        let scalar = scalar_projection_cache_key(
+            "m",
+            "session-17",
+            7,
+            42,
+            "xy",
+            16,
+            16,
+            "magnitude",
+            "mean",
+            false,
+            4,
+            None,
+            None,
+            None,
+        );
+        let empty = projection_empty_mask_cache_key(
+            "m",
+            "session-17",
+            7,
+            42,
+            "xy",
+            16,
+            16,
+            "magnitude",
+            "mean",
+            false,
+            4,
+            None,
+            None,
+            None,
+        );
+        let slice = slice_cache_key(
+            "m",
+            "session-17",
+            7,
+            42,
+            "xy",
+            "norm:0",
+            16,
+            16,
+            "magnitude",
+            true,
+            4,
+            100,
+        );
+
+        for key in [scalar, empty, slice] {
+            assert!(
+                key.contains("session-17"),
+                "session-scoped cache key is missing session identity: {key}"
+            );
+            assert!(!key.ends_with("v1") && !key.ends_with("v2") || key.contains("proj-"));
+        }
     }
 
     #[test]

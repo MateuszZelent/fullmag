@@ -52,7 +52,10 @@ use crate::router_v2::handlers::sessions::status::{
     field_quantity_revision,
 };
 use crate::schemas::fields::*;
-use crate::session::current_artifact_dir;
+use crate::session::{
+    current_artifact_dir, latest_field_source_precedence, preview_cache_precedes_latest,
+    preview_field_source_precedence,
+};
 use crate::types::AppState;
 use crate::types::SessionStateResponse;
 use fullmag_quantities::{normalize_quantity_id, quantity_spec};
@@ -671,7 +674,7 @@ fn field_vector_binary_header_counts(binary: &[u8]) -> (u8, usize, usize) {
 
 // ── Catalog ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct FieldFreshness {
     source_step: u64,
     source_revision: u64,
@@ -679,6 +682,7 @@ struct FieldFreshness {
     stale_by_steps: u64,
     materialization_wall_time_ns: u64,
     state: FieldMaterializationState,
+    materialization_error: Option<String>,
 }
 
 fn completed_field_freshness(
@@ -700,6 +704,7 @@ fn completed_field_freshness(
         } else {
             FieldMaterializationState::StaleComplete
         },
+        materialization_error: None,
     }
 }
 
@@ -714,29 +719,15 @@ fn current_source_step(snapshot: &SessionStateResponse) -> u64 {
 fn latest_json_field_freshness(
     snapshot: &SessionStateResponse,
     value: &serde_json::Value,
-    quantity_id: &str,
+    _quantity_id: &str,
 ) -> FieldFreshness {
+    let precedence = latest_field_source_precedence(snapshot, value);
     let current_step = current_source_step(snapshot);
     completed_field_freshness(
         current_step,
-        value
-            .get("source_step")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0),
-        value
-            .get("source_revision")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_else(|| field_quantity_revision(snapshot, quantity_id)),
-        value
-            .get("materialized_at_unix_ms")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or_else(|| {
-                snapshot
-                    .live_state
-                    .as_ref()
-                    .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
-                    .unwrap_or(0)
-            }),
+        precedence.source_step,
+        precedence.source_revision,
+        precedence.materialized_at_unix_ms,
         value
             .get("materialization_wall_time_ns")
             .and_then(serde_json::Value::as_u64)
@@ -748,36 +739,67 @@ fn preview_field_freshness(
     snapshot: &SessionStateResponse,
     field: &fullmag_runner::LivePreviewField,
 ) -> FieldFreshness {
+    let precedence = preview_field_source_precedence(field);
     completed_field_freshness(
         current_source_step(snapshot),
-        field.source_step,
-        field.source_revision,
-        field.materialized_at_unix_ms,
+        precedence.source_step,
+        precedence.source_revision,
+        precedence.materialized_at_unix_ms,
         field.materialization_wall_time_ns,
     )
 }
 
 fn preview_cache_is_fresher(snapshot: &SessionStateResponse, quantity_id: &str) -> bool {
-    let Some(preview) = snapshot.preview_cache.get(quantity_id) else {
+    if snapshot.preview_cache.get(quantity_id).is_none() {
         return false;
-    };
-    let Some(latest) = snapshot.latest_fields.get(quantity_id) else {
+    }
+    if snapshot.latest_fields.get(quantity_id).is_none() {
         return true;
-    };
-    let preview = preview_field_freshness(snapshot, preview);
-    let latest = latest_json_field_freshness(snapshot, latest, quantity_id);
-    (
-        preview.source_step,
-        preview.source_revision,
-        preview.materialized_at_unix_ms,
-    ) > (
-        latest.source_step,
-        latest.source_revision,
-        latest.materialized_at_unix_ms,
-    )
+    }
+    preview_cache_precedes_latest(snapshot, quantity_id)
 }
 
-fn pending_field_freshness(snapshot: &SessionStateResponse) -> FieldFreshness {
+fn materializer_field_freshness(
+    snapshot: &SessionStateResponse,
+    status: &fullmag_runner::LiveFieldMaterializationStatus,
+) -> FieldFreshness {
+    let state = match status.state {
+        fullmag_runner::LiveFieldMaterializationState::Pending => {
+            FieldMaterializationState::Pending
+        }
+        fullmag_runner::LiveFieldMaterializationState::Complete => {
+            FieldMaterializationState::Complete
+        }
+        fullmag_runner::LiveFieldMaterializationState::Superseded => {
+            FieldMaterializationState::Superseded
+        }
+        fullmag_runner::LiveFieldMaterializationState::Error => FieldMaterializationState::Error,
+    };
+    FieldFreshness {
+        source_step: status.source_step,
+        source_revision: status.request_revision,
+        materialized_at_unix_ms: 0,
+        stale_by_steps: current_source_step(snapshot).saturating_sub(status.source_step),
+        materialization_wall_time_ns: 0,
+        state,
+        materialization_error: status.error.clone(),
+    }
+}
+
+fn materializer_status<'a>(
+    snapshot: &'a SessionStateResponse,
+    quantity_id: &str,
+) -> Option<&'a fullmag_runner::LiveFieldMaterializationStatus> {
+    snapshot
+        .live_state
+        .as_ref()?
+        .latest_step
+        .field_materialization_states
+        .iter()
+        .find(|status| status.quantity == quantity_id)
+}
+
+fn legacy_pending_field_freshness(snapshot: &SessionStateResponse) -> FieldFreshness {
     FieldFreshness {
         source_step: current_source_step(snapshot),
         source_revision: snapshot.display_selection.revision,
@@ -785,6 +807,7 @@ fn pending_field_freshness(snapshot: &SessionStateResponse) -> FieldFreshness {
         stale_by_steps: 0,
         materialization_wall_time_ns: 0,
         state: FieldMaterializationState::Pending,
+        materialization_error: None,
     }
 }
 
@@ -833,6 +856,7 @@ pub async fn get_field_catalog(
             &mut quantities,
             qid,
             quantity_unit(qid),
+            None,
             field_quantity_revision(snapshot, qid),
             gen_id,
             latest_json_field_freshness(snapshot, value, qid),
@@ -854,6 +878,10 @@ pub async fn get_field_catalog(
             &mut quantities,
             qid,
             &field.unit,
+            field
+                .spatial_kind
+                .starts_with("fem_")
+                .then_some(field.spatial_kind.as_str()),
             field_quantity_revision(snapshot, qid),
             gen_id,
             preview_field_freshness(snapshot, field),
@@ -861,12 +889,17 @@ pub async fn get_field_catalog(
         );
     }
 
-    if live_magnetization_available(snapshot) {
+    if live_magnetization_available(snapshot)
+        && !quantities
+            .iter()
+            .any(|quantity| quantity.quantity_id == "m")
+    {
         quantities.retain(|quantity| quantity.quantity_id != "m");
         push_field_descriptor(
             &mut quantities,
             "m",
             quantity_unit("m"),
+            None,
             field_quantity_revision(snapshot, "m"),
             gen_id,
             completed_field_freshness(
@@ -884,10 +917,46 @@ pub async fn get_field_catalog(
         );
     }
 
+    for status in snapshot
+        .live_state
+        .as_ref()
+        .into_iter()
+        .flat_map(|state| state.latest_step.field_materialization_states.iter())
+        .filter(|status| status.state != fullmag_runner::LiveFieldMaterializationState::Complete)
+    {
+        let freshness = materializer_field_freshness(snapshot, status);
+        if let Some(descriptor) = quantities
+            .iter_mut()
+            .find(|descriptor| descriptor.quantity_id == status.quantity)
+        {
+            descriptor.source_step = freshness.source_step;
+            descriptor.source_revision = freshness.source_revision;
+            descriptor.stale_by_steps = freshness.stale_by_steps;
+            descriptor.state = freshness.state;
+            descriptor.materialization_error = freshness.materialization_error;
+        } else {
+            push_field_descriptor(
+                &mut quantities,
+                &status.quantity,
+                quantity_unit(&status.quantity),
+                snapshot
+                    .preview_cache
+                    .get(&status.quantity)
+                    .filter(|field| field.spatial_kind.starts_with("fem_"))
+                    .map(|field| field.spatial_kind.as_str()),
+                field_quantity_revision(snapshot, &status.quantity),
+                gen_id,
+                freshness,
+                false,
+            );
+        }
+    }
+
     let selected_quantity = canonical_quantity_id(&snapshot.display_selection.selection.quantity);
     if !quantities
         .iter()
         .any(|quantity| quantity.quantity_id == selected_quantity.as_ref())
+        && !is_fem_runtime(snapshot)
         && snapshot
             .live_state
             .as_ref()
@@ -898,9 +967,10 @@ pub async fn get_field_catalog(
             &mut quantities,
             selected_quantity.as_ref(),
             quantity_unit(selected_quantity.as_ref()),
+            None,
             field_quantity_revision(snapshot, selected_quantity.as_ref()),
             gen_id,
-            pending_field_freshness(snapshot),
+            legacy_pending_field_freshness(snapshot),
             false,
         );
     }
@@ -955,7 +1025,12 @@ pub async fn get_field_meta(
         .map(|s| s.shape.as_api_kind().to_string())
         .unwrap_or_else(|| "vector_field".into());
     let unit = quantity_unit(quantity_id).to_string();
-    let location = quantity_spatial_domain(quantity_id).to_string();
+    let location = snapshot
+        .preview_cache
+        .get(quantity_id)
+        .filter(|field| field.spatial_kind.starts_with("fem_"))
+        .map(|field| field.spatial_kind.clone())
+        .unwrap_or_else(|| quantity_spatial_domain(quantity_id).to_string());
     let component = parse_component(query.component.as_deref(), n_comp as usize)?;
 
     let gen_id = domain_generation_id(snapshot);
@@ -1039,8 +1114,8 @@ pub async fn get_field_meta(
             ),
         ))
     } else if quantity_id == "m" {
-        live_magnetization_values(snapshot)
-            .map(|(values, grid)| {
+        cached_field_values().or_else(|| {
+            live_magnetization_values(snapshot).map(|(values, grid)| {
                 (
                     values,
                     grid,
@@ -1057,23 +1132,16 @@ pub async fn get_field_meta(
                     ),
                 )
             })
-            .or_else(cached_field_values)
+        })
     } else {
         cached_field_values()
     };
 
+    let materializer_freshness = materializer_status(snapshot, quantity_id)
+        .filter(|status| status.state != fullmag_runner::LiveFieldMaterializationState::Complete)
+        .map(|status| materializer_field_freshness(snapshot, status));
     let Some((raw_values, grid, freshness)) = raw_values_opt else {
-        let selected_quantity =
-            canonical_quantity_id(&snapshot.display_selection.selection.quantity);
-        if requested_snapshot_id.is_none()
-            && selected_quantity.as_ref() == quantity_id
-            && snapshot
-                .live_state
-                .as_ref()
-                .is_some_and(|state| state.status == "running")
-            && !(quantity_id == "m" && invalid_live_magnetization_is_present(snapshot))
-        {
-            let freshness = pending_field_freshness(snapshot);
+        if let Some(freshness) = materializer_freshness {
             return Ok(Json(FieldMeta {
                 quantity_id: quantity_id.to_string(),
                 label,
@@ -1090,6 +1158,38 @@ pub async fn get_field_meta(
                 stale_by_steps: freshness.stale_by_steps,
                 materialization_wall_time_ns: freshness.materialization_wall_time_ns,
                 state: freshness.state,
+                materialization_error: freshness.materialization_error,
+            }));
+        }
+        let selected_quantity =
+            canonical_quantity_id(&snapshot.display_selection.selection.quantity);
+        if requested_snapshot_id.is_none()
+            && selected_quantity.as_ref() == quantity_id
+            && !is_fem_runtime(snapshot)
+            && snapshot
+                .live_state
+                .as_ref()
+                .is_some_and(|state| state.status == "running")
+            && !(quantity_id == "m" && invalid_live_magnetization_is_present(snapshot))
+        {
+            let freshness = legacy_pending_field_freshness(snapshot);
+            return Ok(Json(FieldMeta {
+                quantity_id: quantity_id.to_string(),
+                label,
+                kind,
+                components: n_comp,
+                location,
+                unit,
+                field_revision: field_quantity_revision(snapshot, quantity_id),
+                domain_generation_id: gen_id,
+                stats: None,
+                source_step: freshness.source_step,
+                source_revision: freshness.source_revision,
+                materialized_at_unix_ms: freshness.materialized_at_unix_ms,
+                stale_by_steps: freshness.stale_by_steps,
+                materialization_wall_time_ns: freshness.materialization_wall_time_ns,
+                state: freshness.state,
+                materialization_error: freshness.materialization_error,
             }));
         }
         return Err(ApiError::not_found(format!(
@@ -1097,6 +1197,7 @@ pub async fn get_field_meta(
             quantity_id
         )));
     };
+    let freshness = materializer_freshness.unwrap_or(freshness);
     let raw_point_count = if n_comp > 0 {
         raw_values.len() / n_comp as usize
     } else {
@@ -1138,6 +1239,7 @@ pub async fn get_field_meta(
         stale_by_steps: freshness.stale_by_steps,
         materialization_wall_time_ns: freshness.materialization_wall_time_ns,
         state: freshness.state,
+        materialization_error: freshness.materialization_error,
     }))
 }
 
@@ -1190,6 +1292,7 @@ fn push_field_descriptor(
     quantities: &mut Vec<FieldDescriptor>,
     quantity_id: &str,
     unit: &str,
+    location: Option<&str>,
     field_revision: u64,
     domain_generation_id: u64,
     freshness: FieldFreshness,
@@ -1206,7 +1309,9 @@ fn push_field_descriptor(
             .map(|s| s.shape.as_api_kind().to_string())
             .unwrap_or_else(|| "vector_field".into()),
         components: n_comp,
-        location: quantity_spatial_domain(quantity_id).to_string(),
+        location: location
+            .unwrap_or_else(|| quantity_spatial_domain(quantity_id))
+            .to_string(),
         unit: unit.to_string(),
         field_revision,
         domain_generation_id,
@@ -1217,6 +1322,7 @@ fn push_field_descriptor(
         stale_by_steps: freshness.stale_by_steps,
         materialization_wall_time_ns: freshness.materialization_wall_time_ns,
         state: freshness.state,
+        materialization_error: freshness.materialization_error,
     });
 }
 
@@ -3178,13 +3284,14 @@ fn component_label(c: &ComponentSelection) -> String {
 
 fn projection_etag_token(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     q: &crate::field_slice::ResolvedProjectionQuery,
     sampling_method: &str,
 ) -> String {
     format!(
-        "fmpr:{quantity_id}:{field_revision}:{domain_generation_id}:method={sampling_method}:{}:{}x{}:{}:{}:air={}:samples={}:adaptive={}:tol={}:min_samples={}:tile={},{},{}:v3",
+        "fmpr:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:method={sampling_method}:{}:{}x{}:{}:{}:air={}:samples={}:adaptive={}:tol={}:min_samples={}:tile={},{},{}:v4",
         q.plane.as_str(),
         q.full_x_size,
         q.full_y_size,
@@ -3689,6 +3796,7 @@ fn matrix_response_from_projection(
 
 fn matrix_etag_token(
     quantity_id: &str,
+    session_id: &str,
     field_revision: u64,
     domain_generation_id: u64,
     plane: SlicePlane,
@@ -3700,7 +3808,7 @@ fn matrix_etag_token(
     extra: &str,
 ) -> String {
     format!(
-        "fmmatrix:{quantity_id}:{field_revision}:{domain_generation_id}:{}:{mode}:{component}:{color_mode}:{x_size}x{y_size}:{extra}:v1",
+        "fmmatrix:{quantity_id}:{session_id}:{field_revision}:{domain_generation_id}:{}:{mode}:{component}:{color_mode}:{x_size}x{y_size}:{extra}:v2",
         plane.as_str()
     )
 }
@@ -3755,6 +3863,7 @@ async fn build_slice_matrix(
 
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id = domain_generation_id(snapshot);
+    let session_id = snapshot.session.session_id.clone();
     let fdm_field = extract_fdm_field(snapshot, quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
     let fem_field = extract_fem_field(snapshot, quantity_id, n_comp);
@@ -3818,6 +3927,7 @@ async fn build_slice_matrix(
     );
     let hash = matrix_hash(&matrix_etag_token(
         quantity_id,
+        &session_id,
         field_revision,
         gen_id,
         query.plane,
@@ -3899,6 +4009,7 @@ async fn build_projection_matrix(
     let resolved = resolve_projection_query(&projection_query_from_matrix(query), n_comp)?;
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id = domain_generation_id(snapshot);
+    let session_id = snapshot.session.session_id.clone();
     let fdm_field = extract_fdm_field(snapshot, quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
     let fem_field = extract_fem_field(snapshot, quantity_id, n_comp);
@@ -3915,6 +4026,7 @@ async fn build_projection_matrix(
     );
     let hash = matrix_hash(&matrix_etag_token(
         quantity_id,
+        &session_id,
         field_revision,
         gen_id,
         query.plane,
@@ -3967,6 +4079,7 @@ pub async fn get_field_projection_meta(
     let resolved = resolve_projection_query(&query, n_comp)?;
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id = domain_generation_id(snapshot);
+    let session_id = snapshot.session.session_id.clone();
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
     let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
@@ -3977,6 +4090,7 @@ pub async fn get_field_projection_meta(
         projection_error_estimate(&fdm_field, fem_field.as_ref(), &resolved, &projection)?;
     let etag_token = projection_etag_token(
         &quantity_id,
+        &session_id,
         field_revision,
         gen_id,
         &resolved,
@@ -4111,6 +4225,7 @@ pub async fn get_field_projection_scalar(
     let resolved = resolve_projection_query(&query, n_comp)?;
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id = domain_generation_id(snapshot);
+    let session_id = snapshot.session.session_id.clone();
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
     let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
@@ -4132,6 +4247,7 @@ pub async fn get_field_projection_scalar(
     );
     let cache_key = scalar_projection_cache_key(
         &quantity_id,
+        &session_id,
         field_revision,
         gen_id,
         resolved.plane.as_str(),
@@ -4147,6 +4263,7 @@ pub async fn get_field_projection_scalar(
     );
     let etag_token = projection_etag_token(
         &quantity_id,
+        &session_id,
         field_revision,
         gen_id,
         &resolved,
@@ -4290,6 +4407,7 @@ pub async fn get_field_projection_empty_mask(
     let resolved = resolve_projection_query(&query, n_comp)?;
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id = domain_generation_id(snapshot);
+    let session_id = snapshot.session.session_id.clone();
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
     let fem_field = extract_fem_field(snapshot, &quantity_id, n_comp);
@@ -4311,6 +4429,7 @@ pub async fn get_field_projection_empty_mask(
     );
     let cache_key = projection_empty_mask_cache_key(
         &quantity_id,
+        &session_id,
         field_revision,
         gen_id,
         resolved.plane.as_str(),
@@ -4326,6 +4445,7 @@ pub async fn get_field_projection_empty_mask(
     );
     let etag_token = projection_etag_token(
         &quantity_id,
+        &session_id,
         field_revision,
         gen_id,
         &resolved,
@@ -4679,6 +4799,7 @@ pub async fn get_field_slice_meta(
 
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id = domain_generation_id(snapshot);
+    let session_id = snapshot.session.session_id.clone();
 
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
@@ -4711,7 +4832,8 @@ pub async fn get_field_slice_meta(
         resolved.cut_norm,
     );
 
-    let scalar_etag_token = slice_etag_token(&quantity_id, field_revision, gen_id, &resolved);
+    let scalar_etag_token =
+        slice_etag_token(&quantity_id, &session_id, field_revision, gen_id, &resolved);
     let scalar_etag = crate::router_v2::handlers::shared::stable_strong_etag(&scalar_etag_token);
 
     let meta_etag_token = format!("meta:{}", scalar_etag_token);
@@ -4722,7 +4844,13 @@ pub async fn get_field_slice_meta(
     arrows_query.include_arrows = true;
     let arrows_etag_token = format!(
         "arrows:{}",
-        slice_etag_token(&quantity_id, field_revision, gen_id, &arrows_query)
+        slice_etag_token(
+            &quantity_id,
+            &session_id,
+            field_revision,
+            gen_id,
+            &arrows_query,
+        )
     );
     let arrows_etag = crate::router_v2::handlers::shared::stable_strong_etag(&arrows_etag_token);
 
@@ -4861,6 +4989,7 @@ pub async fn get_field_slice_scalar(
     }
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id = domain_generation_id(snapshot);
+    let session_id = snapshot.session.session_id.clone();
 
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
@@ -4869,6 +4998,7 @@ pub async fn get_field_slice_scalar(
     let component = component_label(&resolved.component);
     let cache_key = slice_cache_key(
         &quantity_id,
+        &session_id,
         field_revision,
         gen_id,
         resolved.plane.as_str(),
@@ -4880,7 +5010,7 @@ pub async fn get_field_slice_scalar(
         resolved.arrow_every,
         resolved.max_arrows,
     );
-    let etag_token = slice_etag_token(&quantity_id, field_revision, gen_id, &resolved);
+    let etag_token = slice_etag_token(&quantity_id, &session_id, field_revision, gen_id, &resolved);
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&etag_token);
 
     drop(guard);
@@ -4985,6 +5115,7 @@ pub async fn get_field_slice_arrows(
     }
     let field_revision = field_quantity_revision(snapshot, &quantity_id);
     let gen_id = domain_generation_id(snapshot);
+    let session_id = snapshot.session.session_id.clone();
 
     let fdm_field = extract_fdm_field(snapshot, &quantity_id, n_comp)
         .ok_or_else(|| ApiError::not_found(format!("field '{}' not available", quantity_id)))?;
@@ -4992,6 +5123,7 @@ pub async fn get_field_slice_arrows(
 
     let cache_key = slice_cache_key(
         &quantity_id,
+        &session_id,
         field_revision,
         gen_id,
         resolved.plane.as_str(),
@@ -5005,7 +5137,7 @@ pub async fn get_field_slice_arrows(
     );
     let etag_token = format!(
         "arrows:{}",
-        slice_etag_token(&quantity_id, field_revision, gen_id, &resolved)
+        slice_etag_token(&quantity_id, &session_id, field_revision, gen_id, &resolved)
     );
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&etag_token);
 

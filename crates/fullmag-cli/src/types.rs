@@ -225,6 +225,8 @@ pub(crate) struct LiveStepView {
     pub magnetization: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_materialization_states: Vec<fullmag_runner::LiveFieldMaterializationStatus>,
     /// **Deprecated (Q17):** Preview fields flow through `preview_fields`
     /// in `CurrentLiveSnapshotPayload`, not inside the step view.
     pub preview_field: Option<fullmag_runner::LivePreviewField>,
@@ -901,6 +903,7 @@ impl CurrentLiveLatestFields {
     pub fn insert(&mut self, quantity: String, value: serde_json::Value) {
         self.0.insert(quantity, value);
     }
+
 }
 
 #[derive(Debug, Clone, Default)]

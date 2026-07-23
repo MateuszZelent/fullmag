@@ -352,11 +352,7 @@ fn planar_sampling_fem_plane_preserves_nanometer_scale_tetrahedra() {
             v_min_m: 0.0,
             v_max_m: 2.0 * nm,
         },
-        ..explicit_frame(
-            [0.0, 0.0, 2.0 * nm],
-            [1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0],
-        )
+        ..explicit_frame([0.0, 0.0, 2.0 * nm], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
     };
     let result = PlanarSamplingEngine::sample_fem(
         &field,
@@ -571,11 +567,9 @@ fn planar_sampling_surface_preserves_nanometer_scale_boundary_measure() {
     )
     .unwrap();
 
-    assert!(
-        result
-            .occupancy
-            .iter()
-            .any(|occupancy| *occupancy != Occupancy::Empty)
-    );
+    assert!(result
+        .occupancy
+        .iter()
+        .any(|occupancy| *occupancy != Occupancy::Empty));
     assert!(result.meta.occupied_measure > 0.0);
 }

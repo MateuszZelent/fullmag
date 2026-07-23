@@ -212,9 +212,8 @@ impl InteractiveRuntime {
     ) -> Result<RunResult, RunError> {
         crate::require_resolved_runtime_sampling(problem, plan)?;
         if matches!(problem.study, StudyIR::Hysteresis { .. }) {
-            let stage_asset = crate::types::StageFemMeshAsset::build_from_backend_plan(
-                &plan.backend_plan,
-            );
+            let stage_asset =
+                crate::types::StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
             let result = crate::hysteresis::run_planned_hysteresis_with_live_preview(
                 problem,
                 plan,

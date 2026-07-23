@@ -24,9 +24,9 @@ use crate::schemas::hysteresis::{
     HysteresisStorageEstimateSchema,
 };
 use crate::schemas::preparation::{
-    PreparationExecutionSummary, PreparationFailureResource, PreparationLogEntryResource,
-    PreparationLogLevel, PreparationProgressStage, PreparationStageId, PreparationStageStatus,
-    PreparationStatus, SimulationPreparationResource,
+    PreparationClockAdjustment, PreparationExecutionSummary, PreparationFailureResource,
+    PreparationLogEntryResource, PreparationLogLevel, PreparationProgressStage, PreparationStageId,
+    PreparationStageStatus, PreparationStatus, SimulationPreparationResource,
 };
 use crate::schemas::relaxation::{
     canonical_torque_apm, torque_t_from_apm, RelaxationAlgorithm, StageMetricKind, StageMetricUnit,
@@ -125,6 +125,13 @@ pub async fn get_simulation_preparation(
                 started_at_unix_ms: stage.started_at_unix_ms,
                 completed_at_unix_ms: stage.completed_at_unix_ms,
                 duration_ms: stage.duration_ms,
+                clock_adjustment: stage.clock_adjustment.as_ref().map(|adjustment| {
+                    PreparationClockAdjustment {
+                        observed_at_unix_ms: adjustment.observed_at_unix_ms,
+                        stage_started_at_unix_ms: adjustment.stage_started_at_unix_ms,
+                        backward_delta_ms: adjustment.backward_delta_ms,
+                    }
+                }),
                 progress_percent: stage.progress_percent,
                 progress_label: stage
                     .progress_label

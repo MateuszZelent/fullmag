@@ -144,28 +144,50 @@ pub(crate) fn stage_completion_from_ffi(
     }
 
     let reason = match completion.reason {
-        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE as i32 => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_TORQUE as i32 =>
+        {
             StageStopReason::Torque
         }
-        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY as i32 => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_ENERGY as i32 =>
+        {
             StageStopReason::Energy
         }
-        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS as i32 => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS
+                as i32 =>
+        {
             StageStopReason::MaxSteps
         }
-        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME as i32 => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PSEUDOTIME
+                as i32 =>
+        {
             StageStopReason::MaxPseudotime
         }
-        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME as i32 => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_PHYSICAL_TIME
+                as i32 =>
+        {
             StageStopReason::MaxPhysicalTime
         }
-        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED as i32 => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_USER_CANCELLED
+                as i32 =>
+        {
             StageStopReason::UserCancelled
         }
-        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR as i32 => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR
+                as i32 =>
+        {
             StageStopReason::BackendError
         }
-        x if x == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT as i32 => {
+        x if x
+            == ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT
+                as i32 =>
+        {
             StageStopReason::Gradient
         }
         _ => StageStopReason::BackendError,
@@ -258,7 +280,8 @@ mod tests {
     fn stage_completion_from_ffi_maps_max_steps_as_non_converged() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS as i32,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_MAX_STEPS
+                as i32,
             has_metric_name: 1,
             metric_name: metric_name("steps"),
             metric_value: 50_000.0,
@@ -277,7 +300,8 @@ mod tests {
     fn stage_completion_from_ffi_maps_backend_error_as_failed() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR as i32,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_BACKEND_ERROR
+                as i32,
             has_metric_name: 0,
             metric_name: [0; 64],
             metric_value: 0.0,
@@ -318,7 +342,8 @@ mod tests {
     fn stage_completion_from_ffi_maps_gradient_completion() {
         let completion = stage_completion_from_ffi(ffi::fullmag_fem_stage_completion {
             has_reason: 1,
-            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT as i32,
+            reason: ffi::fullmag_fem_stage_stop_reason::FULLMAG_FEM_STAGE_STOP_REASON_GRADIENT
+                as i32,
             has_metric_name: 1,
             metric_name: metric_name("tangent_gradient_norm_sq"),
             metric_value: 0.0,

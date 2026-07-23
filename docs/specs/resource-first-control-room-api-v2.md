@@ -153,6 +153,14 @@ inclusive range `0..100`, monotonic-derived stage durations, requested and
 resolved execution summaries, at most 200 bounded safe log entries, and an
 optional safe failure with a diagnostics correlation id.
 
+Stage ordering is defined by the aggregate `revision` and canonical stage
+sequence, not by Unix wall-clock ordering. If the system wall clock moves
+backward while a stage is active, the transition continues, `duration_ms`
+remains monotonic-derived, the raw observed Unix timestamp is preserved, and
+the stage exposes `clock_adjustment` with the observed timestamp, stage-start
+timestamp, and backward delta. The runtime must not silently clamp or retry a
+preparation transition after a wall-clock adjustment.
+
 `GET /v2/sessions/current/status` exposes only
 `resources.simulation_preparation_revision`; it does not copy preparation
 content. Detailed mesh state remains owned by `meshing/builds/current`, and

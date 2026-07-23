@@ -22,6 +22,7 @@
 #include "cpu/mfem/runtime/mfem_device.hpp"
 #include "cpu/mfem/runtime/mfem_host_access.hpp"
 #include "fem_common.hpp"
+#include "gpu/cuda/transfer/snapshot_pool.hpp"
 
 #include <mfem.hpp>
 
@@ -542,6 +543,10 @@ void context_destroy_mfem(Context &ctx)
     ctx.gpu_state.legacy_exchange.lumped_mass_ready = false;
 
 #if FULLMAG_HAS_CUDA_RUNTIME
+    if (ctx.gpu_state.cuda.io_stream != nullptr) {
+        cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.io_stream));
+    }
+    ctx.gpu_state.cuda.snapshot_pool.reset();
     if (ctx.gpu_state.cuda.compute_stream != nullptr) {
         cudaStreamDestroy(reinterpret_cast<cudaStream_t>(ctx.gpu_state.cuda.compute_stream));
         ctx.gpu_state.cuda.compute_stream = nullptr;
@@ -554,13 +559,6 @@ void context_destroy_mfem(Context &ctx)
         cudaEventDestroy(reinterpret_cast<cudaEvent_t>(ctx.gpu_state.cuda.compute_event));
         ctx.gpu_state.cuda.compute_event = nullptr;
     }
-    for (auto &buf : ctx.gpu_state.cuda.pinned_snapshot) {
-        if (buf != nullptr) {
-            cudaFreeHost(buf);
-            buf = nullptr;
-        }
-    }
-    ctx.gpu_state.cuda.pinned_snapshot_bytes = 0;
 #endif
 }
 #endif

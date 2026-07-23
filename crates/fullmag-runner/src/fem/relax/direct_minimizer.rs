@@ -15,9 +15,10 @@ use crate::interactive_runtime::{
 use crate::native_fem::NativeFemBackend;
 use crate::relaxation::direct_minimizer::direct_minimizer_step_budget;
 use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
+use crate::solver_profile::{current_thread_cpu_time_ns, elapsed_current_thread_cpu_ns};
 use crate::types::{LiveStepConsumer, RunError, RunStatus, StepAction, StepStats, StepUpdate};
 
-use super::preview::{FemLiveMagnetizationHandoff, FemPreviewHandoff};
+use super::preview::FemPreviewHandoff;
 use super::scalars::ensure_fem_object_scalars;
 
 pub(crate) struct DirectMinimizerExecution {
@@ -25,6 +26,7 @@ pub(crate) struct DirectMinimizerExecution {
     pub(crate) backend_completion: Option<fullmag_ir::StageCompletionIR>,
     pub(crate) cancelled: bool,
     pub(crate) paused: bool,
+    pub(crate) preview_handoff: FemPreviewHandoff,
 }
 
 pub(crate) fn execute_direct_minimizer(
@@ -47,7 +49,6 @@ pub(crate) fn execute_direct_minimizer(
     let mut accepted_steps = 0u64;
     let mut last_cached_preview_revision = last_preview_revision;
     let mut preview_handoff = FemPreviewHandoff::default();
-    let mut live_magnetization_handoff = FemLiveMagnetizationHandoff::default();
 
     while accepted_steps < direct_minimizer_step_budget(control) {
         if live
@@ -64,6 +65,8 @@ pub(crate) fn execute_direct_minimizer(
                     let preview_targets_global_scalar =
                         display_is_global_scalar(&display_selection);
                     let mut live_stats = current_stats.clone();
+                    let preview_callback_cpu_started = current_thread_cpu_time_ns();
+                    preview_handoff.reset_timings();
                     let preview_start = std::time::Instant::now();
                     let preview_field = if preview_due && !preview_targets_global_scalar {
                         let request = display_selection.preview_request();
@@ -106,21 +109,33 @@ pub(crate) fn execute_direct_minimizer(
                             current_stats.dt,
                         )?
                     };
+                    let magnetization_payload =
+                        preview_handoff.request_magnetization(node_count, current_stats.step)?;
+                    preview_handoff.dispatch_staged(backend);
                     live_stats.preview_superseded_count = preview_handoff.take_superseded_count();
+                    live_stats.field_materialization_states =
+                        preview_handoff.materialization_states();
+                    preview_handoff.take_timings().record_into(&mut live_stats);
                     live_stats.cached_preview_wall_time_ns =
                         cached_start.elapsed().as_nanos() as u64;
                     let live_preview_wall_time_ns = live_stats
                         .preview_wall_time_ns
                         .saturating_add(live_stats.cached_preview_wall_time_ns);
-                    let magnetization_payload =
-                        live_magnetization_handoff.request_magnetization(backend, node_count)?;
-                    let (magnetization, field_copy_wall_time_ns, field_copy_bytes) =
-                        match magnetization_payload {
-                            Some((payload, wall_time_ns, bytes)) => {
-                                (Some(payload), wall_time_ns, bytes)
-                            }
-                            None => (None, 0, 0),
-                        };
+                    let field_copy_wall_time_ns = magnetization_payload
+                        .as_ref()
+                        .map_or(0, |payload| payload.materialization_wall_time_ns);
+                    let field_copy_bytes = magnetization_payload
+                        .as_ref()
+                        .map_or(0, |payload| payload.field_copy_bytes);
+                    let magnetization = magnetization_payload.map(|payload| {
+                        live_stats.magnetization_source_step = Some(payload.source_step);
+                        live_stats.magnetization_source_revision = Some(payload.source_revision);
+                        live_stats.magnetization_materialized_at_unix_ms =
+                            Some(payload.materialized_at_unix_ms);
+                        live_stats.magnetization_materialization_wall_time_ns =
+                            Some(payload.materialization_wall_time_ns);
+                        payload.values
+                    });
                     live_stats.field_copy_wall_time_ns = live_stats
                         .field_copy_wall_time_ns
                         .saturating_add(field_copy_wall_time_ns);
@@ -130,6 +145,10 @@ pub(crate) fn execute_direct_minimizer(
                         .wall_time_ns
                         .saturating_add(live_preview_wall_time_ns)
                         .saturating_add(field_copy_wall_time_ns);
+                    live_stats.preview_callback_thread_cpu_time_ns =
+                        elapsed_current_thread_cpu_ns(preview_callback_cpu_started);
+                    live_stats.preview_callback_thread_cpu_started_ns =
+                        preview_callback_cpu_started;
                     let action = (live.on_step)(StepUpdate {
                         stats: live_stats,
                         grid: live.grid,
@@ -166,6 +185,7 @@ pub(crate) fn execute_direct_minimizer(
             }
         }
 
+        let preview_schedule_fence_wall_time_ns = preview_handoff.flush_schedule_fence();
         if paused {
             break;
         }
@@ -174,6 +194,10 @@ pub(crate) fn execute_direct_minimizer(
             cancelled = true;
             break;
         };
+        accepted_stats.preview_schedule_fence_wall_time_ns = preview_schedule_fence_wall_time_ns;
+        accepted_stats.wall_time_ns = accepted_stats
+            .wall_time_ns
+            .saturating_add(preview_schedule_fence_wall_time_ns);
         accepted_steps += 1;
         ensure_fem_object_scalars(&mut accepted_stats, plan);
 
@@ -196,23 +220,31 @@ pub(crate) fn execute_direct_minimizer(
                 .as_ref()
                 .is_some_and(display_is_global_scalar);
             let mut live_stats = current_stats.clone();
-            let magnetization = if current_stats.step % heavy_payload_every == 0 {
-                live_magnetization_handoff.request_magnetization(backend, node_count)?
-            } else {
-                live_magnetization_handoff.poll_completed(node_count)?
-            };
-            let magnetization =
-                if let Some((payload, field_copy_wall_time_ns, field_copy_bytes)) = magnetization {
-                    live_stats.field_copy_wall_time_ns = live_stats
-                        .field_copy_wall_time_ns
-                        .saturating_add(field_copy_wall_time_ns);
-                    live_stats.field_copy_bytes =
-                        live_stats.field_copy_bytes.saturating_add(field_copy_bytes);
-                    Some(payload)
-                } else {
-                    None
-                };
+            let preview_callback_cpu_started = current_thread_cpu_time_ns();
+            preview_handoff.reset_timings();
             let preview_start = std::time::Instant::now();
+            let magnetization = if current_stats.step % heavy_payload_every == 0 {
+                preview_handoff.request_magnetization(node_count, current_stats.step)?
+            } else {
+                preview_handoff.poll_magnetization()?
+            };
+            let magnetization = if let Some(payload) = magnetization {
+                live_stats.field_copy_wall_time_ns = live_stats
+                    .field_copy_wall_time_ns
+                    .saturating_add(payload.materialization_wall_time_ns);
+                live_stats.field_copy_bytes = live_stats
+                    .field_copy_bytes
+                    .saturating_add(payload.field_copy_bytes);
+                live_stats.magnetization_source_step = Some(payload.source_step);
+                live_stats.magnetization_source_revision = Some(payload.source_revision);
+                live_stats.magnetization_materialized_at_unix_ms =
+                    Some(payload.materialized_at_unix_ms);
+                live_stats.magnetization_materialization_wall_time_ns =
+                    Some(payload.materialization_wall_time_ns);
+                Some(payload.values)
+            } else {
+                None
+            };
             let preview_field = if preview_due && !preview_targets_global_scalar {
                 let selection = display_selection.as_ref().expect("checked preview_due");
                 let request = selection.preview_request();
@@ -269,7 +301,10 @@ pub(crate) fn execute_direct_minimizer(
                     current_stats.dt,
                 )?
             };
+            preview_handoff.dispatch_staged(backend);
             live_stats.preview_superseded_count = preview_handoff.take_superseded_count();
+            live_stats.field_materialization_states = preview_handoff.materialization_states();
+            preview_handoff.take_timings().record_into(&mut live_stats);
             live_stats.cached_preview_wall_time_ns = cached_start.elapsed().as_nanos() as u64;
             let live_preview_wall_time_ns = live_stats
                 .preview_wall_time_ns
@@ -278,6 +313,9 @@ pub(crate) fn execute_direct_minimizer(
                 .wall_time_ns
                 .saturating_add(live_preview_wall_time_ns)
                 .saturating_add(live_stats.field_copy_wall_time_ns);
+            live_stats.preview_callback_thread_cpu_time_ns =
+                elapsed_current_thread_cpu_ns(preview_callback_cpu_started);
+            live_stats.preview_callback_thread_cpu_started_ns = preview_callback_cpu_started;
             let action = (live.on_step)(StepUpdate {
                 stats: live_stats,
                 grid: live.grid,
@@ -346,6 +384,7 @@ pub(crate) fn execute_direct_minimizer(
         backend_completion,
         cancelled,
         paused,
+        preview_handoff,
     })
 }
 

@@ -37,6 +37,7 @@
 #include "gpu/cuda/interactions/zeeman/regional_field_kernels.cuh"
 #include "gpu/cuda/state/gpu_state.hpp"
 #include "gpu/cuda/transfer/component_transfer.hpp"
+#include "gpu/cuda/transfer/snapshot_pool.hpp"
 #include "gpu/cuda/transfer/transfer_audit.hpp"
 
 #if FULLMAG_HAS_CUDA_RUNTIME
@@ -46,8 +47,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
-#include <cstring>
 #include <limits>
+#include <memory>
 #include <new>
 #include <string>
 #include <vector>
@@ -274,48 +275,30 @@ struct FemSnapshotPayload {
     void *ready_event = nullptr;
     void *staging_done_event = nullptr;
     void *done_event = nullptr;
+    std::shared_ptr<fullmag::fem::FemGpuSnapshotPoolState> pool{};
+    size_t pool_slot = fullmag::fem::kFemGpuSnapshotPoolCapacity;
     bool needs_wait = false;
     fullmag_fem_snapshot_desc desc{};
 };
 
 void destroy_snapshot_payload(FemSnapshotPayload &snapshot)
 {
-#if FULLMAG_HAS_CUDA_RUNTIME
-    if (snapshot.done_event != nullptr) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
-        snapshot.done_event = nullptr;
+    if (snapshot.pool) {
+        fullmag::fem::gpu_snapshot_pool_release(
+            *snapshot.pool,
+            snapshot.pool_slot,
+            !snapshot.needs_wait);
+        snapshot.pool.reset();
+        snapshot.pool_slot = fullmag::fem::kFemGpuSnapshotPoolCapacity;
     }
-    if (snapshot.staging_done_event != nullptr) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.staging_done_event));
-        snapshot.staging_done_event = nullptr;
-    }
-    if (snapshot.ready_event != nullptr) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.ready_event));
-        snapshot.ready_event = nullptr;
-    }
-    if (snapshot.stream != nullptr) {
-        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(snapshot.stream));
-        snapshot.stream = nullptr;
-    }
-    if (snapshot.host_aos != nullptr) {
-        cudaFreeHost(snapshot.host_aos);
-        snapshot.host_aos = nullptr;
-    }
-    if (snapshot.staging.x != nullptr) {
-        cudaFree(snapshot.staging.x);
-        snapshot.staging.x = nullptr;
-    }
-    if (snapshot.staging.y != nullptr) {
-        cudaFree(snapshot.staging.y);
-        snapshot.staging.y = nullptr;
-    }
-    if (snapshot.staging.z != nullptr) {
-        cudaFree(snapshot.staging.z);
-        snapshot.staging.z = nullptr;
-    }
-#else
-    (void)snapshot;
-#endif
+    snapshot.host_aos = nullptr;
+    snapshot.host_aos_len_bytes = 0;
+    snapshot.staging = {};
+    snapshot.stream = nullptr;
+    snapshot.ready_event = nullptr;
+    snapshot.staging_done_event = nullptr;
+    snapshot.done_event = nullptr;
+    snapshot.needs_wait = false;
 }
 
 const fullmag::fem::FemGpuComponentField *gpu_snapshot_source_field(
@@ -421,41 +404,70 @@ bool schedule_gpu_snapshot_payload(
     const size_t component_bytes = static_cast<size_t>(node_count) * sizeof(double);
     snapshot.host_aos_len_bytes = component_bytes * 3u;
 
-    auto fail = [&](const char *label, cudaError_t err) -> bool {
-        handle.last_error = std::string(label) + ": " + cudaGetErrorString(err);
+    auto &cuda_runtime = context.gpu_state.cuda;
+    if (cuda_runtime.compute_stream == nullptr || cuda_runtime.io_stream == nullptr ||
+        !cuda_runtime.snapshot_pool) {
+        handle.last_error = "FEM GPU snapshot requires initialized compute and I/O streams";
+        return false;
+    }
+    fullmag::fem::FemGpuSnapshotPoolLease lease{};
+    if (!fullmag::fem::gpu_snapshot_pool_acquire(
+            *cuda_runtime.snapshot_pool,
+            lease,
+            handle.last_error)) {
+        return false;
+    }
+    snapshot.pool = cuda_runtime.snapshot_pool;
+    snapshot.pool_slot = lease.slot_index;
+    snapshot.host_aos = lease.host_aos;
+    snapshot.staging = lease.staging;
+    snapshot.stream = cuda_runtime.io_stream;
+    snapshot.ready_event = lease.ready_event;
+    snapshot.staging_done_event = lease.staging_done_event;
+    snapshot.done_event = lease.done_event;
+    if (cuda_runtime.snapshot_pool->component_bytes != component_bytes ||
+        cuda_runtime.snapshot_pool->host_aos_bytes != snapshot.host_aos_len_bytes) {
+        handle.last_error = "FEM GPU snapshot pool size does not match backend node count";
         destroy_snapshot_payload(snapshot);
         return false;
+    }
+
+    auto io_stream = reinterpret_cast<cudaStream_t>(snapshot.stream);
+    auto ready_event = reinterpret_cast<cudaEvent_t>(snapshot.ready_event);
+    auto staging_done_event =
+        reinterpret_cast<cudaEvent_t>(snapshot.staging_done_event);
+    auto done_event = reinterpret_cast<cudaEvent_t>(snapshot.done_event);
+    auto cleanup_failed_submission = [&]() {
+        const cudaError_t record_status = cudaEventRecord(done_event, io_stream);
+        if (record_status == cudaSuccess) {
+            snapshot.needs_wait = true;
+            destroy_snapshot_payload(snapshot);
+            return;
+        }
+        const cudaError_t stream_status = cudaStreamSynchronize(io_stream);
+        if (stream_status == cudaSuccess || cudaDeviceSynchronize() == cudaSuccess) {
+            snapshot.needs_wait = false;
+            destroy_snapshot_payload(snapshot);
+            return;
+        }
+        // Preserve safety after an unrecoverable CUDA failure: do not return
+        // this slot to the pool because queued work may still reference it.
+        snapshot.pool.reset();
+        snapshot.pool_slot = fullmag::fem::kFemGpuSnapshotPoolCapacity;
+        snapshot.needs_wait = false;
+        destroy_snapshot_payload(snapshot);
     };
-
-    cudaError_t err = cudaMalloc(&snapshot.staging.x, component_bytes);
-    if (err != cudaSuccess) return fail("cudaMalloc(FEM snapshot.x)", err);
-    err = cudaMalloc(&snapshot.staging.y, component_bytes);
-    if (err != cudaSuccess) return fail("cudaMalloc(FEM snapshot.y)", err);
-    err = cudaMalloc(&snapshot.staging.z, component_bytes);
-    if (err != cudaSuccess) return fail("cudaMalloc(FEM snapshot.z)", err);
-
-    err = cudaHostAlloc(&snapshot.host_aos, snapshot.host_aos_len_bytes, cudaHostAllocDefault);
-    if (err != cudaSuccess) return fail("cudaHostAlloc(FEM snapshot.host_aos)", err);
-
-    cudaStream_t io_stream{};
-    err = cudaStreamCreateWithFlags(&io_stream, cudaStreamNonBlocking);
-    if (err != cudaSuccess) return fail("cudaStreamCreate(FEM snapshot.io_stream)", err);
-    snapshot.stream = reinterpret_cast<void *>(io_stream);
-
-    cudaEvent_t ready_event{};
-    err = cudaEventCreateWithFlags(&ready_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) return fail("cudaEventCreate(FEM snapshot.ready_event)", err);
-    snapshot.ready_event = reinterpret_cast<void *>(ready_event);
-
-    cudaEvent_t staging_done_event{};
-    err = cudaEventCreateWithFlags(&staging_done_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) return fail("cudaEventCreate(FEM snapshot.staging_done_event)", err);
-    snapshot.staging_done_event = reinterpret_cast<void *>(staging_done_event);
-
-    cudaEvent_t done_event{};
-    err = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) return fail("cudaEventCreate(FEM snapshot.done_event)", err);
-    snapshot.done_event = reinterpret_cast<void *>(done_event);
+    auto fail = [&](const char *label, cudaError_t status) -> bool {
+        handle.last_error = std::string(label) + ": " + cudaGetErrorString(status);
+        cleanup_failed_submission();
+        return false;
+    };
+    auto fail_message = [&](const char *message) -> bool {
+        handle.last_error = message;
+        cleanup_failed_submission();
+        return false;
+    };
+    cudaError_t err = cudaSuccess;
 
     cudaStream_t compute_stream =
         reinterpret_cast<cudaStream_t>(context.gpu_state.cuda.compute_stream);
@@ -485,10 +497,8 @@ bool schedule_gpu_snapshot_payload(
         if (h_demag_full.x == nullptr || h_demag_full.y == nullptr ||
             h_demag_full.z == nullptr || h_demag_magnetic.x == nullptr ||
             h_demag_magnetic.y == nullptr || h_demag_magnetic.z == nullptr) {
-            handle.last_error =
-                "FEM GPU full-domain H_eff snapshot requires allocated demag component buffers";
-            destroy_snapshot_payload(snapshot);
-            return false;
+            return fail_message(
+                "FEM GPU full-domain H_eff snapshot requires allocated demag component buffers");
         }
         fullmag::fem::fullmag_cuda_apply_full_domain_demag_correction(
             h_demag_full.x,

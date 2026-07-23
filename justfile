@@ -14,7 +14,9 @@ help:
 
 ensure-python:
     mkdir -p "{{repo_root}}/.fullmag/local"
-    if [ ! -x "{{repo_python}}" ]; then python3 -m venv "{{repo_root}}/.fullmag/local/python"; fi
+    if [ ! -x "{{repo_python}}" ]; then if ! python3 -m venv "{{repo_root}}/.fullmag/local/python"; then echo "cannot create the Fullmag Python environment; install the Python venv/ensurepip package for this interpreter" >&2; exit 1; fi; fi
+    if ! "{{repo_python}}" -m pip --version >/dev/null 2>&1; then if ! "{{repo_python}}" -m ensurepip --upgrade; then python3 scripts/bootstrap_fullmag_python_pip.py "{{repo_python}}" --wheel-dir /usr/share/python-wheels || { echo "cannot bootstrap pip in the Fullmag Python environment; install the Python venv/ensurepip package for this interpreter" >&2; exit 1; }; fi; fi
+    if ! "{{repo_python}}" -m pip --version >/dev/null 2>&1; then echo "cannot bootstrap pip in the Fullmag Python environment; ensurepip completed without a usable pip module" >&2; exit 1; fi
     "{{repo_python}}" -m pip install 'numpy>=1.24' 'scipy>=1.10' 'gmsh>=4.12' 'meshio>=5.3' 'trimesh>=4.2' 'h5py>=3.8' 'zarr>=2.18,<3' 'rich>=13.7' 'matplotlib>=3.7'
 
 build target="fullmag" cpu_only="0":
@@ -2019,9 +2021,33 @@ verify-fem-relaxation-runtime:
 
 verify-fem-preview-surface-matrix:
     if [ -z "${FULLMAG_MATRIX_PYTHON:-}" ]; then just ensure-python; fi
+    matrix_python="${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}"; FULLMAG_MATRIX_PYTHON="$matrix_python" "$matrix_python" -m unittest scripts/test_verify_fem_preview_surface_matrix.py
     just ensure-managed-fem-runtime
     just build-static-control-room
-    "${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}" scripts/verify_fem_preview_surface_matrix.py
+    matrix_python="${FULLMAG_MATRIX_PYTHON:-{{repo_python}}}"; FULLMAG_MATRIX_PYTHON="$matrix_python" "$matrix_python" scripts/verify_fem_preview_surface_matrix.py
+
+verify-fem-preview-json-roundtrip-contract:
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api terminal_preview_json_transport_preserves_f64_bits -- --nocapture'
+
+verify-fem-preparation-clock-contract:
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli simulation_preparation::tests::backward_wall_clock_adjustment_preserves_raw_time_and_monotonic_ordering -- --exact --nocapture'
+
+verify-fem-preparation-api-contract:
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api router_v2::tests::simulation_preparation_preserves_backward_clock_adjustment_evidence -- --exact --nocapture'
+
+verify-fem-preview-review-unit-contract:
+    just verify-fem-preview-json-roundtrip-contract
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli wait_for_solve_command_classification_handles_compute_fields_and_run -- --nocapture'
+    just verify-fem-preparation-clock-contract
+    just verify-fem-preparation-api-contract
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api v2_energy_density_meta_exposes_fem_nodal_projection_location -- --nocapture'
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api snapshot_terminal_cache_wins_equal_provenance_conflict_with_active_preview -- --nocapture'
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api field_frame_terminal_cache_wins_equal_provenance_conflict_with_runtime_preview -- --nocapture'
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api effective_field_source_tracks_shared_latest_preview_precedence_without_revision_churn -- --nocapture'
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api field_frame_terminal_cache_wins_equal_generation_in_vector_route_body -- --nocapture'
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-api cached_preview_merge_is_idempotent_and_accepts_only_newer_generation -- --nocapture'
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-cli merge_pending_publish_payload_canonicalizes_carried_active_from_terminal_cache -- --nocapture'
+    docker compose --profile fem-gpu run --rm --no-deps fem-gpu bash -lc 'FULLMAG_USE_MFEM_STACK=ON cargo +nightly test -p fullmag-runner --features fem-gpu task5_ -- --nocapture'
 
 verify-fem-relaxation-convergence:
     FULLMAG_RELAX_MAX_STEPS="${FULLMAG_RELAX_MAX_STEPS:-16}" \

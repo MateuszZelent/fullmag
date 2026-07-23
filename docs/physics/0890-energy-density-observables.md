@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag
-- Last updated: 2026-05-26
+- Last updated: 2026-07-22
 - Related ADRs: `docs/adr/0011-resource-first-api.md`
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/physics/0870-active-observable-and-energy-availability.md`, `docs/physics/0880-active-effective-field-terms.md`
 
@@ -28,6 +28,8 @@ epsilon_ext   = -1.0 * mu0 * M_s * dot(m, H_ext)
 ```
 
 Anisotropy and coupled terms must use the same local energy model used by the backend scalar energy. They must not be redefined in the browser. `eden_total` is the pointwise sum of the active, available density terms.
+
+For native FEM, `eden_ani` is the sum of every resolved anisotropy operator, including both uniaxial (`H_ani`) and cubic (`H_ani_cubic`) contributions. The term set for `eden_total` is resolved once from the same plan flags and material fields passed to the native backend; the preview path must not maintain a narrower, independently guessed term list.
 
 The scalar consistency invariant is:
 
@@ -55,6 +57,7 @@ For uniform FDM cells this is `sum(epsilon_i[cell] * cell_volume)`. For FEM this
 - `eden_total` includes only terms available in the resolved backend snapshot.
 - FDM density is cell-centered.
 - FEM density is element/quadrature-owned; nodal or surface coloring is a visualization projection, not the canonical physical location.
+- A sharp regional `M_s` realization remains element-DG0. A nodal visualization payload may use a volume-lumped projection of that DG0 coefficient, but it must be labelled as a nodal visualization projection and must not be presented as the canonical FEM density location.
 
 ## 3. Numerical interpretation
 
@@ -64,7 +67,15 @@ FDM CPU computes energy densities from the same field buffers used for scalar en
 
 ### 3.2 FEM
 
-FEM backends must expose element or quadrature density according to the operator contract. Native FEM CPU already has local energy-cache concepts; those should be the source for density publication. A viewport projection may resample to nodes or faces, but the API metadata must preserve the canonical location.
+FEM backends must expose element or quadrature density according to the operator contract. Native FEM CPU already has local energy-cache concepts; those should be the source for density publication. A viewport projection may resample to nodes or faces, but the API metadata must preserve the projection provenance.
+
+The current live FEM preview payload is a node-aligned visualization projection. Its coefficient realization is resolved as follows:
+
+- uniform `M_s`: the scalar plan value is repeated on active magnetic nodes;
+- nodal-P1 `M_s`: the resolved nodal field is used directly;
+- element-DG0/regional `M_s`: each active tetrahedron contributes `V_e / 4` to each incident node, and the nodal display coefficient is the corresponding volume-lumped weighted mean.
+
+This projection is suitable for coloring and must carry `fem_nodal_visualization_projection` location/provenance. The backend scalar energies remain authoritative. Validation must independently integrate each projected term with the matching FEM lumped-volume rule and compare it with the native scalar term for qualified fixtures; passing a pointwise dot-product unit test alone is insufficient.
 
 ### 3.3 Hybrid
 
@@ -97,6 +108,7 @@ The planner should advertise density quantities only for backends that can compu
 - FDM CPU is the first reference path.
 - FDM CUDA must match FDM CPU in double precision before single precision is exposed.
 - FEM density must match FEM scalar energy under its documented quadrature rule.
+- Native FEM qualification includes separate uniaxial and cubic anisotropy activation, interfacial versus bulk DMI selection, uniform/nodal-P1/element-DG0 `M_s`, and `eden_total` versus the sum of active native scalar terms.
 
 ### 5.3 Regression tests
 
@@ -120,7 +132,7 @@ The planner should advertise density quantities only for backends that can compu
 
 ## 7. Known limits and deferred work
 
-- CUDA density kernels and FEM element/quadrature publication are staged after the CPU/data-plane contract.
+- Canonical FEM element/quadrature density publication remains deferred. Until then, the live node-aligned payload is explicitly a visualization projection and backend scalar energies remain authoritative.
 - `eden_*` scalar fields are not global scalar history columns; scalar history remains owned by `data/scalars` and solver-energy resources.
 - Energy density visualization is scalar coloring, not vector glyph rendering.
 

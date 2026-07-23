@@ -269,20 +269,22 @@ pub use runtime_registry::{
     RuntimeRegistry,
 };
 pub use solver_profile::{
-    LivePublisherDiagnostics, RateMetric, SolverProfileAggregates, SolverProfileConfig,
-    SolverProfileOverheadDiagnostics, SolverProfilePhaseSample, SolverProfileSnapshot,
-    SolverProfileState, SolverProfileStepSample, SolverProfileThreading, SolverRateDiagnostics,
+    current_thread_cpu_time_ns, elapsed_current_thread_cpu_ns, LivePublisherDiagnostics,
+    RateMetric, SolverProfileAggregates, SolverProfileConfig, SolverProfileOverheadDiagnostics,
+    SolverProfilePhaseSample, SolverProfileSnapshot, SolverProfileState, SolverProfileStepSample,
+    SolverProfileThreading, SolverRateDiagnostics,
 };
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
-    fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, ExecutionProvenance,
-    FemEigenRunResult, FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload,
-    InitialTimestepReason, LegacyDtPolicy, LivePreviewField, LivePreviewRequest,
-    LiveVectorFieldSnapshot, LlgTimestepCapabilityId, LlgTimestepQualificationId,
-    RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy, RunError, RunResult,
-    RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset, StageFemMeshIdentity,
-    StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice, TimestepExecutionIdentity,
-    TimestepPolicyProvenance, TimestepValidationState,
+    fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
+    ExecutionProvenance, FemEigenRunResult,
+    FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
+    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
+    LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
+    LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
+    RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset,
+    StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice,
+    TimestepExecutionIdentity, TimestepPolicyProvenance, TimestepValidationState,
 };
 
 use crate::capabilities::{
@@ -1563,10 +1565,9 @@ pub fn run_planned_problem(
             dispatch::execute_fem_eigen(engine, fem, &plan.output_plan.outputs)
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
-            let stage_context = types::FemStageExecutionContext::from_backend_plan(
-                &plan.backend_plan,
-            )
-            .expect("FEM stage context");
+            let stage_context =
+                types::FemStageExecutionContext::from_backend_plan(&plan.backend_plan)
+                    .expect("FEM stage context");
             frequency_response::execute_fem_frequency_response_validation_with_context(
                 response,
                 &stage_context,
@@ -1891,7 +1892,9 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
             let mut progress_callback = |progress| {
                 on_step(fem_eigen_progress_update(
                     progress,
-                    fem_stage_context.as_ref().and_then(|context| context.generation_id()),
+                    fem_stage_context
+                        .as_ref()
+                        .and_then(|context| context.generation_id()),
                 ))
             };
             dispatch::execute_fem_eigen_with_progress(
@@ -1963,12 +1966,17 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
         wall_time_ns: 0,
         ..StepStats::default()
     });
-    let final_m: Vec<f64> = executed
-        .result
-        .final_magnetization
-        .iter()
-        .flat_map(|v| v.iter().copied())
-        .collect();
+    let final_m = match &plan.backend_plan {
+        BackendPlanIR::Fem(_) => None,
+        _ => Some(
+            executed
+                .result
+                .final_magnetization
+                .iter()
+                .flat_map(|v| v.iter().copied())
+                .collect(),
+        ),
+    };
     let final_grid = match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => [fdm.grid.cells[0], fdm.grid.cells[1], fdm.grid.cells[2]],
         BackendPlanIR::FdmMultilayer(fdm) => [
@@ -1986,7 +1994,7 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
         fem_mesh_generation_id: fem_stage_context
             .as_ref()
             .and_then(|context| context.generation_id()),
-        magnetization: Some(final_m),
+        magnetization: final_m,
         preview_field: None,
         cached_preview_fields: None,
         hysteresis_field_m_t: None,
@@ -2252,7 +2260,9 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             let mut progress_callback = |progress| {
                 on_step(fem_eigen_progress_update(
                     progress,
-                    fem_stage_context.as_ref().and_then(|context| context.generation_id()),
+                    fem_stage_context
+                        .as_ref()
+                        .and_then(|context| context.generation_id()),
                 ))
             };
             dispatch::execute_fem_eigen_with_progress(
@@ -2729,7 +2739,9 @@ pub fn create_planned_interactive_runtime_with_stage_fem_mesh_asset(
             problem, fdm,
         )?),
         BackendPlanIR::Fem(fem) => Box::new(InteractiveFemPreviewRuntime::create_from_plan(
-            problem, fem, stage_fem_mesh_asset,
+            problem,
+            fem,
+            stage_fem_mesh_asset,
         )?),
         _ => {
             return Err(RunError {
@@ -4388,10 +4400,6 @@ mod tests {
             "preview snapshots must use the native FEM wait ABI"
         );
         assert!(
-            source.contains("fullmag_fem_preview_snapshot_ready"),
-            "preview snapshots must expose a nonblocking readiness ABI for live handoff"
-        );
-        assert!(
             source.contains("fullmag_fem_preview_snapshot_destroy"),
             "preview snapshots must destroy native FEM snapshot handles"
         );
@@ -4511,17 +4519,13 @@ mod tests {
             "field snapshots must use the native FEM wait ABI"
         );
         assert!(
-            source.contains("fullmag_fem_field_snapshot_ready"),
-            "field snapshots must expose a nonblocking readiness ABI for live handoff"
-        );
-        assert!(
             source.contains("fullmag_fem_field_snapshot_destroy"),
             "field snapshots must destroy native FEM snapshot handles"
         );
     }
 
     #[test]
-    fn fem_live_magnetization_uses_nonblocking_snapshot_handoff() {
+    fn fem_live_magnetization_uses_bounded_deferred_snapshot_handoff() {
         for path in [
             "/src/fem/relax/direct_minimizer.rs",
             "/src/fem/relax/llg_overdamped.rs",
@@ -4529,16 +4533,20 @@ mod tests {
             let source = fs::read_to_string(format!("{}{}", env!("CARGO_MANIFEST_DIR"), path))
                 .expect("read FEM relaxation source");
             assert!(
-                source.contains("FemLiveMagnetizationHandoff::default()"),
-                "{path} must keep live magnetization snapshot state across solver steps"
+                source.contains("FemPreviewHandoff::default()"),
+                "{path} must keep the bounded snapshot frame state across solver steps"
             );
             assert!(
-                source.contains("live_magnetization_handoff.request_magnetization"),
-                "{path} must start magnetization snapshots through the handoff boundary"
+                source.contains("preview_handoff.request_magnetization"),
+                "{path} must stage magnetization capture through the shared handoff boundary"
             );
             assert!(
-                source.contains("live_magnetization_handoff.poll_completed"),
-                "{path} must poll completed magnetization snapshots without blocking"
+                source.contains("preview_handoff.poll_magnetization"),
+                "{path} must poll completed magnetization payloads without blocking"
+            );
+            assert!(
+                source.contains("preview_handoff.flush_schedule_fence()"),
+                "{path} must fence native enqueue before the next solver mutation"
             );
             assert!(
                 !source.contains(
@@ -4554,12 +4562,16 @@ mod tests {
         ))
         .expect("read fem/relax/preview.rs");
         assert!(
-            preview.contains("struct FemLiveMagnetizationHandoff"),
-            "fem/relax/preview.rs must own live magnetization handoff state"
+            preview.contains("struct DeferredFemSnapshotFrame"),
+            "fem/relax/preview.rs must own one bounded deferred snapshot frame"
         );
         assert!(
-            preview.contains("snapshot.is_ready()"),
-            "live magnetization handoff must use the nonblocking native readiness check"
+            preview.contains("schedule_tx.send(())"),
+            "snapshot worker must acknowledge native enqueue before materialization"
+        );
+        assert!(
+            preview.contains("fn flush_schedule(&mut self) -> u64"),
+            "solver must expose the exact-step pre-mutation schedule fence"
         );
     }
 
@@ -4570,9 +4582,14 @@ mod tests {
             "/../../backends/fem/src/api.cpp"
         ))
         .expect("read native FEM api.cpp");
+        let pool = fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../backends/fem/gpu/cuda/transfer/snapshot_pool.cpp"
+        ))
+        .expect("read native FEM snapshot_pool.cpp");
         assert!(
-            source.contains("cudaHostAlloc(&snapshot.host_aos"),
-            "native FEM GPU snapshots must allocate pinned host storage"
+            pool.contains("cudaHostAlloc(&slot.host_aos"),
+            "native FEM GPU snapshot pool must preallocate pinned host storage"
         );
         assert!(
             source.contains("cudaMemcpyAsync(\n        snapshot.staging.x"),
@@ -4657,9 +4674,9 @@ mod tests {
             "fem/relax/preview.rs must own native FEM relaxation cached-preview helpers"
         );
         assert!(
-            module.contains("pub(crate) fn build_fem_final_cached_preview_fields")
+            module.contains("pub(crate) fn finalize_terminal_cache")
                 && module.contains("quantity_ids.push(display_selection.selection.quantity.as_str())"),
-            "fem/relax/preview.rs must own final cached-preview flushing that includes the active vector field"
+            "fem/relax/preview.rs must own bounded asynchronous terminal cache flushing that includes the active vector field"
         );
         assert!(
             module.contains("field_materialization_quantity_ids()"),
@@ -4719,9 +4736,27 @@ mod tests {
             "FEM relaxation finalization must use the resolved engine for cached-preview flushes"
         );
         assert!(
-            finalize.contains("build_fem_final_cached_preview_fields(")
+            finalize.contains("preview_handoff.finalize_pending_until(")
+                && finalize.contains("preview_handoff.finalize_terminal_cache(")
+                && !finalize.contains("build_fem_final_cached_preview_fields(")
                 && !finalize.contains("build_fem_cached_preview_fields("),
-            "FEM relaxation finalization must flush active and inactive cached preview fields"
+            "FEM relaxation finalization must drain and publish active/inactive fields through the bounded asynchronous handoff"
+        );
+        assert!(
+            finalize.contains("if pending_preview_completed {")
+                && finalize.contains("preview_handoff.take_terminal_publication("),
+            "an expired terminal drain must publish explicit errors without retrying backend scheduling"
+        );
+        assert!(
+            module.contains("self.finish_terminal_publication(fields, magnetization,")
+                && finalize.contains("*last_step = live_stats.clone();"),
+            "terminal FEM payloads, materialization states, and provenance must survive the later finished=true update"
+        );
+        let runner = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("read runner lib.rs");
+        assert!(
+            runner.contains("BackendPlanIR::Fem(_) => None,"),
+            "the generic finished=true update must not mask asynchronous FEM terminal magnetization with a synchronous final-m copy"
         );
     }
 

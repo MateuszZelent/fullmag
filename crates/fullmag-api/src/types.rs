@@ -509,6 +509,8 @@ pub(crate) struct StepUpdateView {
     pub magnetization: Option<Vec<f64>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_object_scalars: HashMap<String, HashMap<String, f64>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_materialization_states: Vec<fullmag_runner::LiveFieldMaterializationStatus>,
     /// **Deprecated (Q17):** Never serialized to the frontend
     /// (`#[serde(skip_serializing)]`). Internal-only cache for preview
     /// rebuild; will be removed once preview pipeline is fully quantities-based.
@@ -659,6 +661,13 @@ pub(crate) struct SimulationPreparationSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SimulationPreparationClockAdjustmentSnapshot {
+    pub observed_at_unix_ms: u64,
+    pub stage_started_at_unix_ms: u64,
+    pub backward_delta_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct SimulationPreparationStageSnapshot {
     pub id: String,
     pub label: String,
@@ -667,6 +676,8 @@ pub(crate) struct SimulationPreparationStageSnapshot {
     pub started_at_unix_ms: Option<u64>,
     pub completed_at_unix_ms: Option<u64>,
     pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub clock_adjustment: Option<SimulationPreparationClockAdjustmentSnapshot>,
     pub progress_percent: Option<u8>,
     pub progress_label: Option<String>,
 }
@@ -1590,6 +1601,7 @@ mod tests {
             fem_mesh: None,
             magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             per_object_scalars: Default::default(),
+            field_materialization_states: Vec::new(),
             preview_field: None,
             finished: false,
         };

@@ -4034,6 +4034,7 @@ export interface components {
             kind: string;
             label: string;
             location: string;
+            materialization_error?: string | null;
             /** Format: int64 */
             materialization_wall_time_ns: number;
             /** Format: int64 */
@@ -4091,7 +4092,7 @@ export interface components {
             window?: string;
         };
         /** @enum {string} */
-        FieldMaterializationState: "complete" | "stale_complete" | "pending" | "error";
+        FieldMaterializationState: "complete" | "stale_complete" | "pending" | "superseded" | "error";
         FieldMatrixResponse: {
             aggregation?: string | null;
             bounds: components["schemas"]["FieldSliceBounds"];
@@ -4132,6 +4133,7 @@ export interface components {
             kind: string;
             label: string;
             location: string;
+            materialization_error?: string | null;
             /** Format: int64 */
             materialization_wall_time_ns: number;
             /** Format: int64 */
@@ -6511,6 +6513,14 @@ export interface components {
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             view_scope: components["schemas"]["PlanarViewScopeState"];
         };
+        PreparationClockAdjustment: {
+            /** Format: int64 */
+            backward_delta_ms: number;
+            /** Format: int64 */
+            observed_at_unix_ms: number;
+            /** Format: int64 */
+            stage_started_at_unix_ms: number;
+        };
         PreparationExecutionSummary: {
             backend?: string | null;
             device?: string | null;
@@ -6536,6 +6546,7 @@ export interface components {
         /** @enum {string} */
         PreparationLogLevel: "info" | "warning" | "error";
         PreparationProgressStage: {
+            clock_adjustment?: null | components["schemas"]["PreparationClockAdjustment"];
             /** Format: int64 */
             completed_at_unix_ms?: number | null;
             detail: string;

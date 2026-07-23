@@ -1658,6 +1658,15 @@ describe("ControlRoomApi", () => {
             headers: { etag: '"field-1"', ...contractHeaders },
           });
         }
+        if (requestUrl.includes("/v2/sessions/current/data/fields/H_demag/meta")) {
+          return jsonResponse(
+            { message: "field 'H_demag' not available in memory" },
+            { status: 404 },
+          );
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/solver/status")) {
+          return jsonResponse({ is_busy: false, runtime_state: "waiting_for_compute" });
+        }
         throw new Error(`Unexpected request ${requestUrl}`);
       },
     });
@@ -1679,6 +1688,94 @@ describe("ControlRoomApi", () => {
       reason: "field_on_demand",
       target: { kind: "study" },
     });
+  });
+
+  it.each(["pending", "stale_complete", "superseded", "complete"] as const)(
+    "returns a %s live-publisher miss for resource invalidation without enqueueing compute_fields",
+    async (state) => {
+      const calls: Array<{ method: string | undefined; url: string }> = [];
+      let vectorRequests = 0;
+      const api = new ControlRoomApi({
+        baseUrl: "http://127.0.0.1:8765",
+        fetchImpl: async (url, init) => {
+          calls.push({ method: init?.method, url: String(url) });
+          const requestUrl = String(url);
+          if (
+            requestUrl.includes(
+              "/v2/sessions/current/data/fields/H_demag/samples/vector",
+            )
+          ) {
+            vectorRequests += 1;
+            if (vectorRequests === 1) {
+              return new Response(null, {
+                headers: contractHeaders,
+                status: 204,
+              });
+            }
+            return binaryResponse(makeFieldVectorBuffer(), {
+              headers: { etag: '"field-live"', ...contractHeaders },
+            });
+          }
+          if (requestUrl.includes("/v2/sessions/current/data/fields/H_demag/meta")) {
+            return jsonResponse({ state });
+          }
+          throw new Error(`Unexpected request ${requestUrl}`);
+        },
+      });
+
+      const result = await api.data.fields.vector("H_demag", {
+        component: "full",
+        scope_id: "body",
+        scope_kind: "part",
+      });
+
+      expect(result.status).toBe("not-applicable");
+      expect(vectorRequests).toBe(1);
+      expect(
+        calls.filter((call) =>
+          call.url.endsWith("/v2/sessions/current/simulation/commands"),
+        ),
+      ).toHaveLength(0);
+    },
+  );
+
+  it("leaves a not-yet-published field to an active solver without enqueueing compute_fields", async () => {
+    const calls: Array<{ method: string | undefined; url: string }> = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        const requestUrl = String(url);
+        calls.push({ method: init?.method, url: requestUrl });
+        if (requestUrl.includes("/data/fields/H_demag/samples/vector")) {
+          return new Response(null, { headers: contractHeaders, status: 204 });
+        }
+        if (requestUrl.includes("/data/fields/H_demag/meta")) {
+          return jsonResponse(
+            { message: "field 'H_demag' not available in memory" },
+            { status: 404 },
+          );
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/solver/status")) {
+          return jsonResponse({ is_busy: true, runtime_state: "running" });
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+
+    await expect(
+      api.data.fields.vector("H_demag", {
+        component: "full",
+        scope_id: "body",
+        scope_kind: "part",
+      }),
+    ).resolves.toMatchObject({ status: "not-applicable" });
+    expect(
+      calls.filter(
+        (call) =>
+          call.method === "POST" &&
+          call.url.endsWith("/v2/sessions/current/simulation/commands"),
+      ),
+    ).toHaveLength(0);
   });
 
   it("loads scalar windows through the v2 data facade", async () => {

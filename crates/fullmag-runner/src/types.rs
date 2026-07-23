@@ -355,6 +355,25 @@ pub struct SolverAttemptRecord {
     pub estimator_order: i32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveFieldMaterializationState {
+    Pending,
+    Complete,
+    Superseded,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveFieldMaterializationStatus {
+    pub quantity: String,
+    pub source_step: u64,
+    pub request_revision: u64,
+    pub state: LiveFieldMaterializationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(non_snake_case)]
 pub struct StepStats {
@@ -448,9 +467,72 @@ pub struct StepStats {
     /// Wall-clock time spent on cached (non-active) preview field copies (ns).
     #[serde(default)]
     pub cached_preview_wall_time_ns: u64,
+    /// Nonblocking worker-completion query time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_harvest_query_wall_time_ns: u64,
+    /// Completed preview result promotion into active/cache-ready ownership (ns).
+    #[serde(default)]
+    pub preview_result_promotion_wall_time_ns: u64,
+    /// Bounded-worker capacity checks inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_can_accept_wall_time_ns: u64,
+    /// Native vector-field snapshot scheduling time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_vector_snapshot_schedule_wall_time_ns: u64,
+    /// Native energy-density snapshot scheduling time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_energy_snapshot_schedule_wall_time_ns: u64,
+    /// Cache-cycle request coalescing time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_queue_coalescing_wall_time_ns: u64,
+    /// Bounded materializer job submission time inside the preview handoff (ns).
+    #[serde(default)]
+    pub preview_submit_wall_time_ns: u64,
+    /// Time spent staging a deferred preview request for submission (ns).
+    #[serde(default)]
+    pub preview_submit_stage_wall_time_ns: u64,
+    /// Time spent constructing submission descriptors and identities (ns).
+    #[serde(default)]
+    pub preview_submit_descriptor_wall_time_ns: u64,
+    /// Time spent allocating per-submission acknowledgement channels (ns).
+    #[serde(default)]
+    pub preview_submit_channel_alloc_wall_time_ns: u64,
+    /// Time spent in the nonblocking worker-channel send (ns).
+    #[serde(default)]
+    pub preview_submit_try_send_wall_time_ns: u64,
+    /// Time spent recording submission ownership and failure state (ns).
+    #[serde(default)]
+    pub preview_submit_bookkeeping_wall_time_ns: u64,
+    /// Calling-thread CPU time consumed by preview submission (ns).
+    #[serde(default)]
+    pub preview_submit_thread_cpu_time_ns: u64,
+    /// Calling-thread CPU time consumed by the full preview callback (ns).
+    #[serde(default)]
+    pub preview_callback_thread_cpu_time_ns: u64,
+    /// Internal absolute thread-CPU timestamp carried across the synchronous runner callback.
+    #[serde(skip)]
+    pub preview_callback_thread_cpu_started_ns: Option<u64>,
+    /// Pre-step wait for the scheduler to enqueue exact-step native snapshots (ns).
+    #[serde(default)]
+    pub preview_schedule_fence_wall_time_ns: u64,
     /// Preview requests deliberately superseded while the bounded worker was busy.
     #[serde(default)]
     pub preview_superseded_count: u64,
+    /// Bounded materializer ownership/state for each requested live field quantity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_materialization_states: Vec<LiveFieldMaterializationStatus>,
+    /// Capture step for the optional live magnetization payload in the enclosing StepUpdate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_source_step: Option<u64>,
+    /// Monotonic capture revision for the optional live magnetization payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_source_revision: Option<u64>,
+    /// Wall-clock completion time for the optional live magnetization payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_materialized_at_unix_ms: Option<u64>,
+    /// Snapshot completion/copy duration for the optional live magnetization payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetization_materialization_wall_time_ns: Option<u64>,
     /// Wall-clock time spent in synchronous runner/CLI live callback orchestration (ns).
     #[serde(default)]
     pub orchestration_wall_time_ns: u64,
@@ -648,7 +730,28 @@ impl Default for StepStats {
             native_ffi_overhead_wall_time_ns: 0,
             preview_wall_time_ns: 0,
             cached_preview_wall_time_ns: 0,
+            preview_harvest_query_wall_time_ns: 0,
+            preview_result_promotion_wall_time_ns: 0,
+            preview_can_accept_wall_time_ns: 0,
+            preview_vector_snapshot_schedule_wall_time_ns: 0,
+            preview_energy_snapshot_schedule_wall_time_ns: 0,
+            preview_queue_coalescing_wall_time_ns: 0,
+            preview_submit_wall_time_ns: 0,
+            preview_submit_stage_wall_time_ns: 0,
+            preview_submit_descriptor_wall_time_ns: 0,
+            preview_submit_channel_alloc_wall_time_ns: 0,
+            preview_submit_try_send_wall_time_ns: 0,
+            preview_submit_bookkeeping_wall_time_ns: 0,
+            preview_submit_thread_cpu_time_ns: 0,
+            preview_callback_thread_cpu_time_ns: 0,
+            preview_callback_thread_cpu_started_ns: None,
+            preview_schedule_fence_wall_time_ns: 0,
             preview_superseded_count: 0,
+            field_materialization_states: Vec::new(),
+            magnetization_source_step: None,
+            magnetization_source_revision: None,
+            magnetization_materialized_at_unix_ms: None,
+            magnetization_materialization_wall_time_ns: None,
             orchestration_wall_time_ns: 0,
             mesh_payload_wall_time_ns: 0,
             step_update_deep_clone_count: 0,
@@ -1357,6 +1460,15 @@ pub struct LivePreviewField {
     /// ANY original cell in its block is active).  `None` means all cells active.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_mask: Option<Vec<bool>>,
+}
+
+/// SHA-256 over the canonical little-endian `f64` preview payload bytes.
+pub fn live_preview_values_sha256(values: &[f64]) -> String {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    digest_hex(&hasher.finalize())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2764,7 +2876,10 @@ mod tests {
         let stage_generation = stage_asset.identity.generation_id().to_string();
         let stage_mesh = &stage_asset.payload;
         for _ in 0..12 {
-            assert_eq!(Some(stage_generation.as_str()), stage_mesh.generation_id.as_deref());
+            assert_eq!(
+                Some(stage_generation.as_str()),
+                stage_mesh.generation_id.as_deref()
+            );
         }
         assert_eq!(fem_mesh_payload_build_count(), 1);
         assert_eq!(fem_mesh_fingerprint_count(), 1);
@@ -2792,9 +2907,8 @@ mod tests {
 
         let stage_asset = StageFemMeshAsset::build_from_fem_plan(&plan);
         let initialization_payload = stage_asset.payload.clone();
-        let stage_context = super::FemStageExecutionContext::from_mesh_identity(
-            stage_asset.identity.clone(),
-        );
+        let stage_context =
+            super::FemStageExecutionContext::from_mesh_identity(stage_asset.identity.clone());
 
         for _ in 0..16 {
             assert_eq!(
@@ -2814,7 +2928,10 @@ mod tests {
 
         let (mesh, context) = crate::interactive_runtime::reuse_stage_fem_mesh_asset(&stage_asset);
 
-        assert_eq!(mesh.generation_id.as_deref(), context.generation_id().as_deref());
+        assert_eq!(
+            mesh.generation_id.as_deref(),
+            context.generation_id().as_deref()
+        );
         assert_eq!(fem_mesh_payload_build_count(), 1);
         assert_eq!(fem_mesh_fingerprint_count(), 1);
     }
@@ -2832,12 +2949,14 @@ mod tests {
             .generation_id
             .as_deref()
             .expect("published remesh generation");
-        let context = super::FemStageExecutionContext::from_mesh_identity(
-            remeshed_asset.identity.clone(),
-        );
+        let context =
+            super::FemStageExecutionContext::from_mesh_identity(remeshed_asset.identity.clone());
         for step in 0..8 {
             let update = StepUpdate {
-                stats: StepStats { step, ..StepStats::default() },
+                stats: StepStats {
+                    step,
+                    ..StepStats::default()
+                },
                 grid: [0, 0, 0],
                 fem_mesh_generation_id: context.generation_id(),
                 magnetization: None,
@@ -2851,7 +2970,10 @@ mod tests {
                 scalar_row_due: false,
                 finished: step == 7,
             };
-            assert_eq!(update.fem_mesh_generation_id.as_deref(), Some(published_generation));
+            assert_eq!(
+                update.fem_mesh_generation_id.as_deref(),
+                Some(published_generation)
+            );
         }
         assert_eq!(fem_mesh_payload_build_count(), 1);
         assert_eq!(fem_mesh_fingerprint_count(), 1);

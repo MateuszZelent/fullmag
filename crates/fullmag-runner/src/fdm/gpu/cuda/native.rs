@@ -3688,9 +3688,8 @@ mod exact_metric_contract_tests {
             .expect("dynamic native stats implementation");
 
         assert!(
-            dynamic_stats.contains(
-                "e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules"
-            ),
+            dynamic_stats
+                .contains("e_ani: stats.anisotropy_energy_joules + stats.cubic_energy_joules"),
             "dynamic native stats must include cubic anisotropy in e_ani"
         );
         assert!(

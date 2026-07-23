@@ -114,8 +114,7 @@ fn fdm_term_scopes(profile: FdmCapabilityProfile, cuda: bool) -> BTreeMap<String
     let mut scopes = BTreeMap::from([
         (
             "thermal".to_string(),
-            "single_grid; fixed_timestep; adaptive=unsupported; H_therm=unmaterialized"
-                .to_string(),
+            "single_grid; fixed_timestep; adaptive=unsupported; H_therm=unmaterialized".to_string(),
         ),
         (
             "sot".to_string(),
@@ -414,10 +413,7 @@ mod tests {
     #[test]
     fn frequency_response_and_two_way_magnetoelasticity_are_explicitly_deferred() {
         let capabilities = [
-            capabilities_for_fdm_engine(
-                FdmEngine::CpuReference,
-                FdmCapabilityProfile::SingleGrid,
-            ),
+            capabilities_for_fdm_engine(FdmEngine::CpuReference, FdmCapabilityProfile::SingleGrid),
             capabilities_for_fdm_engine(FdmEngine::CudaFdm, FdmCapabilityProfile::SingleGrid),
             capabilities_for_fem_engine(FemEngine::CpuNative),
             capabilities_for_fem_engine(FemEngine::NativeGpu),
@@ -458,7 +454,8 @@ mod tests {
     #[test]
     fn multilayer_fdm_catalog_excludes_terms_the_planner_rejects() {
         for engine in [FdmEngine::CpuReference, FdmEngine::CudaFdm] {
-            let capabilities = capabilities_for_fdm_engine(engine, FdmCapabilityProfile::Multilayer);
+            let capabilities =
+                capabilities_for_fdm_engine(engine, FdmCapabilityProfile::Multilayer);
             for term in [
                 "thermal",
                 "stt",
@@ -468,7 +465,10 @@ mod tests {
                 "magnetoelastic",
             ] {
                 assert!(
-                    !capabilities.supported_terms.iter().any(|candidate| candidate == term),
+                    !capabilities
+                        .supported_terms
+                        .iter()
+                        .any(|candidate| candidate == term),
                     "{} must not advertise '{term}' for a public multilayer FDM plan",
                     capabilities.engine_id.as_str(),
                 );
@@ -483,7 +483,10 @@ mod tests {
                 capabilities_for_fdm_engine(engine, FdmCapabilityProfile::SingleGrid);
             for term in ["thermal", "stt", "sot", "oersted"] {
                 assert!(
-                    capabilities.supported_terms.iter().any(|candidate| candidate == term),
+                    capabilities
+                        .supported_terms
+                        .iter()
+                        .any(|candidate| candidate == term),
                     "{} must advertise its executable single-grid '{term}' path",
                     capabilities.engine_id.as_str(),
                 );

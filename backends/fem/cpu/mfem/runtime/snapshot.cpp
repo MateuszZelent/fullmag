@@ -42,6 +42,27 @@ bool strict_gpu_snapshot_path(const fullmag::fem::Context &ctx)
     return ctx.gpu_state.device.lifecycle.allocated;
 }
 
+class ScopedFreshDemagInitialGuessIntent {
+public:
+    explicit ScopedFreshDemagInitialGuessIntent(fullmag::fem::Context &ctx)
+        : ctx_(ctx), saved_(ctx.poisson_demag.fresh_initial_guess_required)
+    {
+    }
+
+    ~ScopedFreshDemagInitialGuessIntent()
+    {
+        ctx_.poisson_demag.fresh_initial_guess_required = saved_;
+    }
+
+    ScopedFreshDemagInitialGuessIntent(const ScopedFreshDemagInitialGuessIntent &) = delete;
+    ScopedFreshDemagInitialGuessIntent &operator=(
+        const ScopedFreshDemagInitialGuessIntent &) = delete;
+
+private:
+    fullmag::fem::Context &ctx_;
+    bool saved_;
+};
+
 bool download_gpu_snapshot_fields(fullmag::fem::Context &ctx, std::string &error)
 {
     auto &gpu = ctx.gpu_state.device;
@@ -119,9 +140,17 @@ bool context_snapshot_stats_mfem(
         return false;
     }
     if (strict_gpu_snapshot_path(ctx)) {
-        if (!gpu_rk_snapshot_current_state(ctx, stats, error)) {
-            error = "strict FEM GPU snapshot failed: " + error;
-            return false;
+        {
+            // Snapshot RHS assembly intentionally refreshes observable fields,
+            // reduction results, and reusable RK workspace. Those values are
+            // snapshot outputs or are overwritten by the first solver stage.
+            // The pending fresh Poisson guess is solver-control intent, so an
+            // observation must preserve it on both success and failure.
+            ScopedFreshDemagInitialGuessIntent fresh_demag_intent(ctx);
+            if (!gpu_rk_snapshot_current_state(ctx, stats, error)) {
+                error = "strict FEM GPU snapshot failed: " + error;
+                return false;
+            }
         }
         if (!download_gpu_snapshot_fields(ctx, error)) {
             return false;

@@ -186,10 +186,9 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
         runtime_header.find("void *compute_stream") != std::string::npos &&
             runtime_header.find("void *io_stream") != std::string::npos &&
             runtime_header.find("void *compute_event") != std::string::npos &&
-            runtime_header.find("void *pinned_snapshot[2]") != std::string::npos &&
-            runtime_header.find("size_t pinned_snapshot_bytes") != std::string::npos &&
-            runtime_header.find("int active_snapshot_buffer") != std::string::npos,
-        "CUDA runtime state must own streams, compute event, and pinned snapshot buffers");
+            runtime_header.find("std::shared_ptr<FemGpuSnapshotPoolState> snapshot_pool") !=
+                std::string::npos,
+        "CUDA runtime state must own streams, compute event, and the bounded snapshot pool");
     check(
         runtime_header.find("CudaRuntimeState cuda") != std::string::npos,
         "GPU-state runtime owner must store CUDA stream/snapshot state");
@@ -200,9 +199,7 @@ void gpu_state_bootstrap_is_owned_by_runtime_module() {
              "void *compute_stream",
              "void *io_stream",
              "void *compute_event",
-             "void *pinned_snapshot[2]",
-             "size_t pinned_snapshot_bytes",
-             "int active_snapshot_buffer",
+             "std::shared_ptr<FemGpuSnapshotPoolState> snapshot_pool",
          }) {
         check(
             context_header.find(flat_cuda_field) == std::string::npos,

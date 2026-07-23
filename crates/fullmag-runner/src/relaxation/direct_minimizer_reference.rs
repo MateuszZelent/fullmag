@@ -15,9 +15,7 @@ use crate::relaxation::convergence::{
     effective_max_torque_apm, relaxation_converged, EnergyPlateauRangeJ,
     RELAXATION_ENERGY_PLATEAU_WINDOW_STEPS,
 };
-use crate::relaxation::convergence::{
-    RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
-};
+use crate::relaxation::convergence::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
 #[cfg(test)]
 use crate::relaxation::provenance::apply_energy_minimizer_provenance;
 #[cfg(test)]

@@ -48,10 +48,10 @@ use crate::relaxation::apply_energy_minimizer_provenance;
 use crate::relaxation::direct_minimizer::direct_minimizer_control;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::llg_overdamped_uses_pure_damping;
-#[cfg(feature = "cuda")]
-use crate::relaxation::RelaxationTorqueConfirmation;
 #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
 use crate::relaxation::RelaxationEnergyPlateauWindow;
+#[cfg(feature = "cuda")]
+use crate::relaxation::RelaxationTorqueConfirmation;
 use crate::runtime_registry::RuntimeRegistry;
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
@@ -5324,6 +5324,7 @@ fn execute_native_fem(
 
     let mut backend =
         NativeFemBackend::create_with_initial_effective_field(plan, needs_initial_snapshot)?;
+    backend.begin_stage(plan.time_stage.start_time_s)?;
     let device_info = backend.device_info()?;
     let gpu_state_info = backend.gpu_state_info()?;
     let gpu_rk_plan_info = backend.gpu_rk_plan_info()?;
@@ -5473,6 +5474,7 @@ fn execute_native_fem(
     let last_preview_revision: Option<u64> = None;
     let cancelled: bool;
     let paused: bool;
+    let preview_handoff: crate::fem::relax::preview::FemPreviewHandoff;
 
     if let Some(native_step_control) = native_relaxation_step {
         let outcome = crate::fem::relax::direct_minimizer::execute_direct_minimizer(
@@ -5492,6 +5494,7 @@ fn execute_native_fem(
         backend_completion = outcome.backend_completion;
         cancelled = outcome.cancelled;
         paused = outcome.paused;
+        preview_handoff = outcome.preview_handoff;
     } else {
         let dt = provenance
             .timestep_policy
@@ -5522,6 +5525,7 @@ fn execute_native_fem(
         backend_completion = outcome.backend_completion;
         cancelled = outcome.cancelled;
         paused = outcome.paused;
+        preview_handoff = outcome.preview_handoff;
     }
 
     crate::fem::relax::finalize::finalize_native_fem_relaxation(
@@ -5540,6 +5544,7 @@ fn execute_native_fem(
             backend_completion,
             cancelled,
             paused,
+            preview_handoff,
         },
     )
 }

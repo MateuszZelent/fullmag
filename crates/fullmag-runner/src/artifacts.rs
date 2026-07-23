@@ -1045,11 +1045,9 @@ pub(crate) fn write_artifacts(
     let material_field_assets = write_material_field_artifacts(output_dir, plan)?;
     let mut execution_provenance_json =
         serde_json::to_value(&execution_provenance).expect("ExecutionProvenance must serialize");
-    if let Some(thermal) = thermal_execution_provenance(
-        plan,
-        &executed.result.steps,
-        &execution_provenance,
-    ) {
+    if let Some(thermal) =
+        thermal_execution_provenance(plan, &executed.result.steps, &execution_provenance)
+    {
         execution_provenance_json
             .as_object_mut()
             .expect("ExecutionProvenance must serialize to an object")

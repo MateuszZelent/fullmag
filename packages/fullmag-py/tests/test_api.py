@@ -2800,6 +2800,19 @@ class ProblemApiTests(unittest.TestCase):
         self.assertEqual(builder["problem"]["universe"]["airbox_growth_rate"], 1.4)
         self.assertEqual(builder["problem"]["universe"]["airbox_grading"], "linear")
 
+    def test_study_magnet_handle_lowers_uniform_cubic_anisotropy(self) -> None:
+        fm.reset()
+        study = fm.study("study_cubic_anisotropy")
+        body = study.geometry(fm.Box(size=(20e-9, 10e-9, 5e-9)), name="body")
+        body.Ms = 800e3
+        body.Aex = 13e-12
+        body.Kc1 = 48e3
+
+        problem = flat_world._build_problem()
+
+        self.assertEqual(problem.magnets[0].material.Kc1, 48e3)
+        self.assertEqual(problem.to_ir()["materials"][0]["cubic_anisotropy_kc1"], 48e3)
+
     def test_load_problem_from_study_script_preserves_universe_metadata(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)

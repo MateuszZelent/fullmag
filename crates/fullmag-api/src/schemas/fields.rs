@@ -18,6 +18,7 @@ pub enum FieldMaterializationState {
     Complete,
     StaleComplete,
     Pending,
+    Superseded,
     Error,
 }
 
@@ -40,6 +41,8 @@ pub struct FieldDescriptor {
     pub stale_by_steps: u64,
     pub materialization_wall_time_ns: u64,
     pub state: FieldMaterializationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialization_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -61,6 +64,8 @@ pub struct FieldMeta {
     pub stale_by_steps: u64,
     pub materialization_wall_time_ns: u64,
     pub state: FieldMaterializationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialization_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

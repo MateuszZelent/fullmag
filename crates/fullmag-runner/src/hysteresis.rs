@@ -526,8 +526,8 @@ pub(crate) fn run_planned_hysteresis_with_live_preview(
             message: "Expected Hysteresis study stage".to_string(),
         });
     };
-    let fem_mesh_generation_id = fem_mesh_identity
-        .map(|identity| identity.generation_id().to_string());
+    let fem_mesh_generation_id =
+        fem_mesh_identity.map(|identity| identity.generation_id().to_string());
 
     let u_H = hysteresis_field_axis(orientation.as_ref(), *direction);
     let u_meas = hysteresis_measurement_axis(measurement_axis, u_H, plan)?;
@@ -6377,9 +6377,7 @@ mod tests {
                 Some(expected_generation.as_str())
             );
             let _retry_context = crate::types::FemStageExecutionContext::from_mesh_identity(
-                crate::types::StageFemMeshIdentity::from_generation_id(
-                    expected_generation.clone(),
-                ),
+                crate::types::StageFemMeshIdentity::from_generation_id(expected_generation.clone()),
             );
         }
         assert_eq!(crate::types::fem_mesh_fingerprint_count(), 1);

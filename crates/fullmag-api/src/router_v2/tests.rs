@@ -26,13 +26,13 @@ use crate::schemas::realtime::{
 };
 use crate::types::{
     AppState, CommandCompletionState, CommandLifecycleState, CurrentDisplaySelection,
-    CurrentLiveSnapshotRequest, CurrentWorkspaceLayout, CurrentWorkspaceRibbon,
-    CurrentWorkspaceSelection, DisplayPresentationState, LatestFields, LiveState, RunManifest,
-    RuntimeLifecycleState, RuntimeStatusView, ScalarRow, SessionCommand, SessionManifest,
-    SessionStateResponse, SimulationPreparationFailureSnapshot,
-    SimulationPreparationLogEntrySnapshot, SimulationPreparationSnapshot,
-    SimulationPreparationStageSnapshot, StageExecutionRecord, StageExecutionState,
-    StageLifecycleState, StepUpdateView, TrackedCommandRecord,
+    CurrentLiveFieldFrameRequest, CurrentLiveSnapshotRequest, CurrentWorkspaceLayout,
+    CurrentWorkspaceRibbon, CurrentWorkspaceSelection, DisplayPresentationState, LatestFields,
+    LiveState, RunManifest, RuntimeLifecycleState, RuntimeStatusView, ScalarRow, SessionCommand,
+    SessionManifest, SessionStateResponse, SimulationPreparationClockAdjustmentSnapshot,
+    SimulationPreparationFailureSnapshot, SimulationPreparationLogEntrySnapshot,
+    SimulationPreparationSnapshot, SimulationPreparationStageSnapshot, StageExecutionRecord,
+    StageExecutionState, StageLifecycleState, StepUpdateView, TrackedCommandRecord,
 };
 use crate::uuid_v4_hex;
 use fullmag_runner::eigen::{
@@ -782,6 +782,7 @@ fn simulation_preparation_fixture(status: &str) -> SimulationPreparationSnapshot
                 completed_at_unix_ms: (stage_status == "completed")
                     .then_some(1_700_000_000_090 + index as u64 * 100),
                 duration_ms: (stage_status != "pending").then_some(90),
+                clock_adjustment: None,
                 progress_percent: (status == "running" && id == "meshing").then_some(63),
                 progress_label: (status == "running" && id == "meshing")
                     .then(|| "142580 / 226318 elements".to_string()),
@@ -1052,6 +1053,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -1554,6 +1556,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -2162,6 +2165,7 @@ async fn domain_meta_uses_fdm_physical_cell_size_for_grid_and_bounds() {
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -2360,6 +2364,7 @@ async fn domain_meta_accepts_planar_fdm_zero_spacing_axis() {
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -2688,6 +2693,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                         fem_mesh: None,
                         magnetization: None,
                         per_object_scalars: Default::default(),
+                        field_materialization_states: Vec::new(),
                         preview_field: Some(LivePreviewField {
                             config_revision: 4,
                             source_step: 0,
@@ -2755,6 +2761,127 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
     assert_eq!(vector.status(), StatusCode::OK);
     let vector_bytes = body_bytes(vector).await;
     assert_eq!(&vector_bytes[..4], b"FMVP");
+}
+
+#[tokio::test]
+async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body() {
+    let state = test_app_state_with_live_session().await;
+    let terminal_values = vec![1.0, 2.0, 52.0, 4.0, 5.0, 52.0];
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        let runtime_preview = LivePreviewField {
+            config_revision: 7,
+            source_step: 52,
+            source_revision: 7,
+            materialized_at_unix_ms: 1_700_000_000_200,
+            materialization_wall_time_ns: 100,
+            quantity: "H_demag".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "fem_nodes".to_string(),
+            quantity_domain: "node".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![0.0; 6],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        };
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                "field_revision": 7,
+                "source_step": 52,
+                "source_revision": 7,
+                "materialized_at_unix_ms": 1_700_000_000_200_u64,
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("stale latest H_demag field");
+        snapshot
+            .field_quantity_revisions
+            .insert("H_demag".to_string(), 7);
+        snapshot.field_samples_revision = 7;
+        crate::session::merge_cached_preview_fields(
+            &mut snapshot.preview_cache,
+            vec![runtime_preview.clone()],
+        );
+    }
+
+    let app = build_v2_router().with_state(state.clone());
+    let stale_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_response.status(), StatusCode::OK);
+    let stale_etag = stale_response
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("stale response ETag")
+        .clone();
+    let stale_bytes = body_bytes(stale_response).await;
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        let mut terminal_preview = snapshot
+            .preview_cache
+            .get("H_demag")
+            .expect("runtime preview")
+            .clone();
+        terminal_preview.materialized_at_unix_ms += 1;
+        terminal_preview.vector_field_values = terminal_values.clone();
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_field_frame(
+            snapshot,
+            CurrentLiveFieldFrameRequest {
+                session_id,
+                latest_fields: None,
+                preview_fields: Some(vec![terminal_preview]),
+                clear_preview_cache: false,
+            },
+        )
+        .expect("terminal field frame should apply");
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let terminal_etag = response
+        .headers()
+        .get(axum::http::header::ETAG)
+        .expect("terminal response ETag")
+        .clone();
+    let bytes = body_bytes(response).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_ne!(
+        terminal_etag, stale_etag,
+        "terminal field must publish a new ETag"
+    );
+    assert_ne!(
+        bytes, stale_bytes,
+        "prefilled projection cache must be invalidated by revision"
+    );
+    assert_eq!(decode_fmvp_payload_f64(&bytes), terminal_values);
 }
 
 #[tokio::test]
@@ -14085,6 +14212,7 @@ async fn commands_endpoint_keeps_compute_enabled_during_wait_for_compute_gate() 
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -15276,6 +15404,43 @@ async fn simulation_preparation_returns_active_projection() {
 }
 
 #[tokio::test]
+async fn simulation_preparation_preserves_backward_clock_adjustment_evidence() {
+    let mut preparation = simulation_preparation_fixture("running");
+    preparation.stages[1].completed_at_unix_ms = Some(1_700_000_000_068);
+    preparation.stages[1].clock_adjustment = Some(SimulationPreparationClockAdjustmentSnapshot {
+        observed_at_unix_ms: 1_700_000_000_068,
+        stage_started_at_unix_ms: 1_700_000_032_068,
+        backward_delta_ms: 32_000,
+    });
+    let state = test_app_state_with_simulation_preparation_snapshot(preparation).await;
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/simulation/preparation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(
+        body["stages"][1]["completed_at_unix_ms"],
+        1_700_000_000_068u64
+    );
+    assert_eq!(
+        body["stages"][1]["clock_adjustment"],
+        serde_json::json!({
+            "backward_delta_ms": 32_000,
+            "observed_at_unix_ms": 1_700_000_000_068u64,
+            "stage_started_at_unix_ms": 1_700_000_032_068u64,
+        })
+    );
+}
+
+#[tokio::test]
 async fn simulation_preparation_returns_ready_projection() {
     let state = test_app_state_with_simulation_preparation("ready").await;
     let app = build_v2_router().with_state(state);
@@ -15859,6 +16024,7 @@ async fn stage_execution_endpoint_projects_frequency_response_live_progress() {
                         ("demag_periodic_airbox_k0".into(), 1.0),
                     ]),
                 )]),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -17793,6 +17959,7 @@ async fn solver_status_does_not_infer_convergence_from_finished_sample() {
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: true,
             },
@@ -17885,6 +18052,7 @@ async fn solver_status_endpoint_prefers_waiting_for_compute_gate_over_stale_live
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -18027,6 +18195,7 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
                         ("e_total".to_string(), 65.0),
                     ]),
                 )]),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -18140,6 +18309,7 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
                     5.0, 0.0, 0.0,
                 ]),
                 per_object_scalars: HashMap::new(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -20163,6 +20333,7 @@ async fn test_router_with_live_magnetization() -> axum::Router {
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -22927,6 +23098,7 @@ async fn field_meta_component_query_uses_live_magnetization_before_stale_latest_
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -23390,6 +23562,7 @@ async fn v2_field_catalog_rejects_non_finite_live_magnetization() {
                 fem_mesh: None,
                 magnetization: Some(vec![f64::NAN, 0.0, 0.0]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -23469,6 +23642,7 @@ async fn v2_field_catalog_rejects_fem_live_magnetization_with_wrong_point_count(
                     0.0, 0.0, 1.0,
                 ]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -23558,6 +23732,7 @@ async fn v2_field_vector_accepts_fem_live_magnetization_on_magnetic_nodes() {
                     -1.0, 0.0, 0.0,
                 ]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -23627,6 +23802,7 @@ async fn v2_field_vector_prefers_live_magnetization_over_stale_latest_field() {
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -23814,6 +23990,7 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -23857,6 +24034,76 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
     assert_eq!(meta["materialized_at_unix_ms"], 1_700_000_000_456_u64);
     assert_eq!(meta["stale_by_steps"], 5);
     assert_eq!(meta["materialization_wall_time_ns"], 80_000_000);
+    assert_eq!(meta["state"], "stale_complete");
+}
+
+#[tokio::test]
+async fn v2_live_magnetization_preserves_capture_step_across_scalar_only_frames() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 25;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[0.0, 0.0, -1.0], [0.0, -1.0, 0.0]],
+                "source_step": 4,
+                "source_revision": 11,
+                "materialized_at_unix_ms": 1_700_000_000_456_u64,
+                "materialization_wall_time_ns": 80_000_000_u64,
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("captured magnetization field should deserialize");
+        snapshot.live_state = Some(
+            serde_json::from_value(serde_json::json!({
+                "status": "running",
+                "updated_at_unix_ms": 1_700_000_000_789_u64,
+                "latest_step": {
+                    "step": 9,
+                    "time": 3.0e-9,
+                    "dt": 1.0e-13,
+                    "e_ex": 0.0,
+                    "e_demag": 0.0,
+                    "e_ext": 0.0,
+                    "e_ani": 0.0,
+                    "e_dmi": 0.0,
+                    "e_total": 0.0,
+                    "max_dm_dt": 0.0,
+                    "max_h_eff": 0.0,
+                    "max_h_demag": 0.0,
+                    "max_torque_Apm": 0.0,
+                    "max_torque_T": 0.0,
+                    "wall_time_ns": 100,
+                    "grid": [2, 1, 1],
+                    "magnetization": [0.0, 0.0, -1.0, 0.0, -1.0, 0.0],
+                    "magnetization_source_step": 4,
+                    "magnetization_source_revision": 11,
+                    "magnetization_materialized_at_unix_ms": 1_700_000_000_456_u64,
+                    "magnetization_materialization_wall_time_ns": 80_000_000_u64,
+                    "finished": false
+                }
+            }))
+            .expect("live state with carried magnetization provenance should deserialize"),
+        );
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["source_step"], 4);
+    assert_eq!(meta["source_revision"], 11);
+    assert_eq!(meta["materialized_at_unix_ms"], 1_700_000_000_456_u64);
+    assert_eq!(meta["materialization_wall_time_ns"], 80_000_000_u64);
+    assert_eq!(meta["stale_by_steps"], 5);
     assert_eq!(meta["state"], "stale_complete");
 }
 
@@ -23927,6 +24174,7 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
                 fem_mesh: None,
                 magnetization: None,
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: true,
             },
@@ -23995,6 +24243,227 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
 }
 
 #[tokio::test]
+async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and_last_good_data() {
+    use fullmag_runner::{LiveFieldMaterializationState, LiveFieldMaterializationStatus};
+
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 3,
+            source_step: 4,
+            source_revision: 7,
+            materialized_at_unix_ms: 1_700_000_000_456,
+            materialization_wall_time_ns: 80_000_000,
+            quantity: "H_demag".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "magnetic_only".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 9,
+                time: 9.0e-12,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                field_materialization_states: vec![LiveFieldMaterializationStatus {
+                    quantity: "H_demag".to_string(),
+                    source_step: 9,
+                    request_revision: 12,
+                    state: LiveFieldMaterializationState::Pending,
+                    error: None,
+                }],
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state.clone());
+
+    let catalog_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let pending = catalog["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["quantity_id"] == "H_demag")
+        .expect("pending H_demag descriptor");
+    assert_eq!(pending["state"], "pending");
+    assert_eq!(pending["source_step"], 9);
+    assert_eq!(pending["source_revision"], 12);
+    assert_eq!(pending["available"], true);
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let status = &mut guard
+            .as_mut()
+            .expect("live session exists")
+            .live_state
+            .as_mut()
+            .expect("live state exists")
+            .latest_step
+            .field_materialization_states[0];
+        status.state = LiveFieldMaterializationState::Error;
+        status.error = Some("native preview snapshot failed".to_string());
+    }
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["state"], "error");
+    assert_eq!(meta["source_step"], 9);
+    assert_eq!(meta["source_revision"], 12);
+    assert_eq!(
+        meta["materialization_error"],
+        "native preview snapshot failed"
+    );
+    assert!(
+        meta["stats"].is_object(),
+        "last-good payload must remain readable"
+    );
+
+    let vector_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?format=bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector_response.status(), StatusCode::OK);
+
+    let status_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(status_response).await["solver"]["state"],
+        "running"
+    );
+}
+
+#[tokio::test]
+async fn v2_energy_density_meta_exposes_fem_nodal_projection_location() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 3,
+            source_step: 4,
+            source_revision: 7,
+            materialized_at_unix_ms: 1_700_000_000_456,
+            materialization_wall_time_ns: 80_000,
+            quantity: "eden_ex".to_string(),
+            unit: "J/m^3".to_string(),
+            spatial_kind: "fem_nodal_visualization_projection".to_string(),
+            quantity_domain: "magnetic_only".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![1.0, 2.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: Some(vec![true, true]),
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_ex/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(meta_response).await["location"],
+        "fem_nodal_visualization_projection"
+    );
+
+    let catalog_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog_response.status(), StatusCode::OK);
+    let catalog = body_json(catalog_response).await;
+    let descriptor = catalog["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["quantity_id"] == "eden_ex")
+        .expect("eden_ex field descriptor");
+    assert_eq!(descriptor["location"], "fem_nodal_visualization_projection");
+}
+
+#[tokio::test]
 async fn topological_charge_reports_empty_support_when_m_field_exists_without_usable_fdm_plane_or_object_mesh(
 ) {
     let state = test_app_state_with_live_session().await;
@@ -24029,6 +24498,7 @@ async fn topological_charge_reports_empty_support_when_m_field_exists_without_us
                     0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
                 ]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -24096,6 +24566,7 @@ async fn topological_charge_computes_uniform_fdm_grid_without_fem_mesh() {
                     0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
                 ]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -24177,6 +24648,7 @@ async fn topological_charge_cache_key_tracks_field_revision() {
                     0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0,
                 ]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -24299,6 +24771,7 @@ async fn topological_charge_default_fdm_support_uses_one_midplane_of_thinnest_ax
                 fem_mesh: None,
                 magnetization: Some(uniform_3d_m),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },
@@ -25725,6 +26198,87 @@ async fn field_vector_cache_identity_includes_session_id() {
     assert_eq!(second.status(), StatusCode::OK);
     let second_bytes = body_bytes(second).await;
     assert_ne!(second_bytes, first_bytes);
+}
+
+#[tokio::test]
+async fn projection_and_slice_etags_are_scoped_to_session_identity() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.state_version = 11;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 2.0, 2.0]
+                ],
+                "layout": { "grid_cells": [2, 2, 1] }
+            }
+        }))
+        .expect("mock latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let paths = [
+        "/v2/sessions/current/data/fields/m/projection/scalar?plane=xy&component=x&reduction=sum&samples=1&x_size=2&y_size=2",
+        "/v2/sessions/current/data/fields/m/projection/empty-mask?plane=xy&component=x&reduction=sum&samples=1&x_size=2&y_size=2",
+        "/v2/sessions/current/data/fields/m/samples/slice/scalar?plane=xy&component=x",
+        "/v2/sessions/current/data/fields/m/samples/slice/arrows?plane=xy&include_arrows=true",
+    ];
+
+    let mut first_etags = Vec::new();
+    for path in paths {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "initial request: {path}");
+        first_etags.push(
+            response
+                .headers()
+                .get("etag")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_else(|| panic!("missing ETag for {path}"))
+                .to_string(),
+        );
+    }
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        guard
+            .as_mut()
+            .expect("live session exists")
+            .session
+            .session_id = "replacement-session".to_string();
+    }
+
+    for (path, old_etag) in paths.into_iter().zip(first_etags) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("if-none-match", &old_etag)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "replacement session must not reuse stale ETag for {path}",
+        );
+        let new_etag = response
+            .headers()
+            .get("etag")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_else(|| panic!("missing replacement-session ETag for {path}"));
+        assert_ne!(new_etag, old_etag, "session identity must affect {path}");
+    }
 }
 
 #[tokio::test]

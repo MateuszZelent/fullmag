@@ -24,8 +24,7 @@ use crate::fdm::artifacts::select_state_observable_field;
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
-    RelaxationTorqueConfirmation,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,

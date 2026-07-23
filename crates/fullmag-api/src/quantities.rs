@@ -220,6 +220,7 @@ mod tests {
                 fem_mesh: None,
                 magnetization: Some(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
                 per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
                 preview_field: None,
                 finished: false,
             },

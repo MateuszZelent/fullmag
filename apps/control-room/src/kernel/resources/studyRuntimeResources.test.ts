@@ -290,7 +290,7 @@ describe("study runtime command resource bundles", () => {
     } as const;
 
     expect(fieldMetaFreshnessRevision(base as never)).toBe(
-      "12:stale_complete:7:40:10:1700000000000:80000000",
+      "12:stale_complete:7:40:10:1700000000000:80000000:",
     );
     expect(
       fieldMetaFreshnessRevision({
@@ -300,6 +300,15 @@ describe("study runtime command resource bundles", () => {
         state: "complete",
       } as never),
     ).not.toBe(fieldMetaFreshnessRevision(base as never));
+    expect(
+      fieldMetaFreshnessRevision({
+        ...base,
+        materialization_error: "native preview snapshot failed",
+        state: "error",
+      } as never),
+    ).toBe(
+      "12:error:7:40:10:1700000000000:80000000:native preview snapshot failed",
+    );
   });
 
   it("builds hysteresis execution tree resource keys with include flags", () => {

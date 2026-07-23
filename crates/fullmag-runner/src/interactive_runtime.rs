@@ -25,8 +25,7 @@ use crate::quantities::{
     active_fdm_preview_quantities, active_fem_preview_quantities, normalized_quantity_name,
 };
 use crate::relaxation::{
-    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow,
-    RelaxationTorqueConfirmation,
+    llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
 use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
@@ -4473,7 +4472,10 @@ fn cpu_execution_provenance(plan: &FdmPlanIR) -> Result<ExecutionProvenance, Run
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,
-        resolved_integrator: plan.integrator.map(crate::integrator_choice_name).map(str::to_string),
+        resolved_integrator: plan
+            .integrator
+            .map(crate::integrator_choice_name)
+            .map(str::to_string),
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,
@@ -4565,7 +4567,10 @@ fn cuda_execution_provenance(
         ignored_terms: Vec::new(),
         random_seed: None,
         requested_integrator: None,
-        resolved_integrator: plan.integrator.map(crate::integrator_choice_name).map(str::to_string),
+        resolved_integrator: plan
+            .integrator
+            .map(crate::integrator_choice_name)
+            .map(str::to_string),
         requested_energy_minimizer: None,
         resolved_energy_minimizer: None,
         energy_minimizer_realization: None,

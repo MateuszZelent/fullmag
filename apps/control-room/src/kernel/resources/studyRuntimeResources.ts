@@ -1763,6 +1763,7 @@ export function fieldMetaFreshnessRevision(
     data.stale_by_steps,
     data.materialized_at_unix_ms,
     data.materialization_wall_time_ns,
+    data.materialization_error ?? "",
   ].join(":");
 }
 
